@@ -8,6 +8,8 @@
 # connection fields.
 { lib }:
 let
+  inherit (import ./contract.nix { inherit lib; }) mkContract;
+
   isString = builtins.isString;
 
   # Accept either a plain extension name or `{ name; version; }`.
@@ -68,60 +70,19 @@ let
     };
   };
 
-  # Return a list of validation errors for `out`. When `all` is true, require
-  # optional fields as well.
-  problemsWith =
-    all: out:
-    builtins.concatMap (
-      field:
-      let
-        f = fields.${field};
-      in
-      if !(out ? ${field}) then
-        lib.optional (all || f.required) "${field} is missing (${f.shape})"
-      else if !(f.test out.${field}) then
-        [ "${field} is not ${f.shape}" ]
-      else
-        [ ]
-    ) (builtins.attrNames fields);
-
-  here = "kix/lib/vocab/postgres-database.nix";
+  contract = mkContract {
+    name = "Postgres database";
+    alias = "database";
+    here = "kix/lib/vocab/postgres-database.nix";
+    inherit fields;
+  };
 in
 {
-  alias = "database";
-  inherit fields;
-
-  # Return the contract violations a consumer reports for `out`.
-  problems = problemsWith false;
-
-  # Validate a provider's `root.out` and return it, or throw if any field is
-  # missing or malformed.
-  check =
-    who: out:
-    let
-      found = problemsWith true out;
-    in
-    if found == [ ] then
-      out
-    else
-      throw "${who}: root.out does not honour the Postgres database contract: ${lib.concatStringsSep "; " found} (${here})";
-
-  # Return dependency assertions that validate `dep.out` against the contract.
-  # Dependency assertions run after `build`, so missing attributes that `build`
-  # evaluates directly will fail earlier with a missing-attribute error.
-  assertions =
-    who: dep:
-    let
-      found = problemsWith false (dep.out or { });
-      meta = dep._meta or { };
-      provider =
-        if meta ? namespaceName && meta ? instanceName then
-          "${meta.namespaceName}/${meta.instanceName}"
-        else
-          "the instance it resolved to";
-    in
-    lib.optional (found != [ ]) {
-      assertion = false;
-      message = "${who}: deps.database resolved to ${provider}, whose out does not honour the Postgres database contract: ${lib.concatStringsSep "; " found}. Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another database with deps.database = ref.<ns>.<instance> (${here}).";
-    };
+  inherit (contract)
+    alias
+    fields
+    problems
+    check
+    assertions
+    ;
 }

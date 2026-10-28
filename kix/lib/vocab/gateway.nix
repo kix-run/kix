@@ -7,6 +7,8 @@
 # `gatewayRef`.
 { lib }:
 let
+  inherit (import ./contract.nix { inherit lib; }) mkContract;
+
   isString = builtins.isString;
   isStringAttrs = v: builtins.isAttrs v && lib.all isString (builtins.attrValues v);
 
@@ -47,61 +49,27 @@ let
     };
   };
 
-  # Return a list of validation errors for `out`. When `all` is true, require
-  # optional fields as well.
-  problemsWith =
-    all: out:
-    builtins.concatMap (
-      field:
-      let
-        f = fields.${field};
-      in
-      if !(out ? ${field}) then
-        lib.optional (all || f.required) "${field} is missing (${f.shape})"
-      else if !(f.test out.${field}) then
-        [ "${field} is not ${f.shape}" ]
-      else
-        [ ]
-    ) (builtins.attrNames fields)
+  contract = mkContract {
+    name = "gateway";
+    alias = "gateway";
+    here = "kix/lib/vocab/gateway.nix";
+    inherit fields;
     # A network policy requires both selector and namespace.
-    ++ lib.optional (
-      (out.podSelector or null == null) != (out.podNamespace or null == null)
-    ) "podSelector and podNamespace must both be set or both be null";
-
-  here = "kix/lib/vocab/gateway.nix";
-
-  providerOf =
-    dep:
-    let
-      meta = dep._meta or { };
-    in
-    if meta ? namespaceName && meta ? instanceName then
-      "${meta.namespaceName}/${meta.instanceName}"
-    else
-      "the instance it resolved to";
-
-  consumerMessage =
-    who: dep: found:
-    "${who}: deps.gateway resolved to ${providerOf dep}, whose out does not honour the gateway contract: ${lib.concatStringsSep "; " found}. Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another gateway with deps.gateway = ref.<ns>.<instance> (${here}).";
+    extraProblems =
+      out:
+      lib.optional (
+        (out.podSelector or null == null) != (out.podNamespace or null == null)
+      ) "podSelector and podNamespace must both be set or both be null";
+  };
 in
 {
-  alias = "gateway";
-  inherit fields;
-
-  # Return the contract violations a consumer reports for `out`.
-  problems = problemsWith false;
-
-  # Validate a provider's `root.out` and return it, or throw if any field is
-  # missing or malformed.
-  check =
-    who: out:
-    let
-      found = problemsWith true out;
-    in
-    if found == [ ] then
-      out
-    else
-      throw "${who}: root.out does not honour the gateway contract: ${lib.concatStringsSep "; " found} (${here})";
+  inherit (contract)
+    alias
+    fields
+    problems
+    check
+    require
+    ;
 
   # Return true when `dep` declares the `gateway` alias or publishes
   # `gatewayRef`. Because dependencies can also resolve by instance name,
@@ -113,13 +81,4 @@ in
       aliases = (meta.aliases or [ ]) ++ ((meta.packageMeta or { }).defaultAliases or [ ]);
     in
     (dep.out or { }) ? gatewayRef || builtins.elem "gateway" aliases;
-
-  # Validate a consumer's `gateway` dependency and return `dep`, or throw if
-  # any required field is missing or any present field is malformed.
-  require =
-    who: dep:
-    let
-      found = problemsWith false (dep.out or { });
-    in
-    if found == [ ] then dep else throw (consumerMessage who dep found);
 }
