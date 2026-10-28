@@ -871,6 +871,45 @@ in
                   podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
                 };
               }
+              // lib.optionalAttrs (kind == "SGCluster") {
+                # Count `spec.instances` pods, lowered to
+                # `spec.autoscaling.minInstances` when horizontal autoscaling is
+                # active (`mode` is `"all"`, the default, or `"horizontal"`) and to
+                # 1 when replicas initialize from a newly created backup. Only the
+                # pod count is reported because container resources live on the
+                # referenced `SGInstanceProfile`.
+                runsAtLeast =
+                  cr:
+                  let
+                    spec = cr.spec or { };
+                    autoscaling = spec.autoscaling or null;
+                    scales =
+                      autoscaling != null
+                      && builtins.elem (autoscaling.mode or "all") [
+                        "all"
+                        "horizontal"
+                      ];
+                    fromNewBackup = (spec.replication.initialization.mode or null) == "FromNewlyCreatedBackup";
+                    pods = lib.foldl' lib.min (spec.instances or 0) (
+                      lib.optional scales (autoscaling.minInstances or 0) ++ lib.optional fromNewBackup 1
+                    );
+                  in
+                  [
+                    {
+                      inherit pods;
+                      resources = { };
+                    }
+                  ];
+              }
+              // lib.optionalAttrs (kind == "SGDistributedLogs") {
+                # Count the single-instance `SGCluster` created for distributed logs.
+                runsAtLeast = _: [
+                  {
+                    pods = 1;
+                    resources = { };
+                  }
+                ];
+              }
               // lib.optionalAttrs (kind == "SGObjectStorage") {
                 # No pod dials the endpoint for the SGObjectStorage; the
                 # SGCluster that references it carries the address on.

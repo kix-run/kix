@@ -436,6 +436,19 @@ in
               endpoint = "terminate";
               podSelector = cr: runnerSelector cr.metadata.name;
             };
+            # Count the minimum idle runner pods (`spec.minRunners`, default 0,
+            # capped by `spec.maxRunners`), sized by the `runner` container in
+            # `spec.template`. Sidecar containers (such as `dind`) are omitted,
+            # and the listener pod runs in the controller's namespace rather
+            # than the runner set's namespace.
+            runsAtLeast = cr: [
+              {
+                pods = lib.min (cr.spec.minRunners or 0) (cr.spec.maxRunners or (cr.spec.minRunners or 0));
+                resources =
+                  (lib.findFirst (c: (c.name or null) == "runner") { } (cr.spec.template.spec.containers or [ ]))
+                  .resources or { };
+              }
+            ];
           };
           ephemeralRunnerSets = scope.mkCRD { spec = vendored "ephemeralrunnersets"; };
           ephemeralRunners = scope.mkCRD { spec = vendored "ephemeralrunners"; };

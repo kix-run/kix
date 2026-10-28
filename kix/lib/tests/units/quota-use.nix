@@ -1,6 +1,6 @@
-# Unit tests for namespace ResourceQuota usage calculation (`vocab/quota-use.nix`)
-# and `buildCluster` quota assertions, including custom resources with
-# `runsAtLeast` (`cnpg-operator` Cluster).
+# Unit tests for namespace ResourceQuota usage calculation (`vocab/quota-use.nix`),
+# `buildCluster` quota assertions, and the `runsAtLeast` declarations on
+# operator packages (`quota-use-<package>`).
 
 {
   lib,
@@ -60,6 +60,34 @@ let
       ];
       inherit resources;
     };
+
+  mi = 1024 * 1024;
+  gi = 1024 * mi;
+
+  # Evaluate the `runsAtLeast` declaration on the CRD at `path` in `package`
+  # against `manifest`.
+  declaredUse =
+    {
+      package,
+      path,
+      modules ? [ ],
+    }:
+    manifest:
+    let
+      cluster = mkCluster ([ { instances.ops.operator.package = package; } ] ++ modules);
+      handle = lib.getAttrFromPath path cluster.instances.ops.operator.raw;
+    in
+    q.useOf {
+      inherit manifest;
+      declared = (handle.out.cr { }).runsAtLeast;
+    };
+
+  cr = spec: {
+    metadata.name = "x";
+    inherit spec;
+  };
+
+  named = name: resources: [ { inherit name resources; } ];
 
   appPackage = replicas: {
     meta.version = "test";
@@ -328,4 +356,387 @@ in
     in
     (evalFails (cnpg "4Gi") && builtins.deepSeq (manifests (cnpg "6Gi")) true)
     || throw "the Cluster's runsAtLeast was not counted";
+  # Verify `runsAtLeast` for `ClickHouseInstallation` and
+  # `ClickHouseKeeperInstallation`: shards * replicas per cluster, sized by the
+  # `clickhouse` / `clickhouse-keeper` container in the cluster's pod template,
+  # or pods-only when shards override the template.
+  quota-use-clickhouse-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/clickhouse-operator;
+          path = [
+            "crds"
+            part
+          ];
+          modules = [
+            {
+              instances.ops.credentials = {
+                package = import ../../../packages/secret;
+                config.stringData = {
+                  username = "operator";
+                  password = "test";
+                };
+              };
+            }
+          ];
+        };
+      chi = use "clickHouseInstallations";
+      chk = use "clickHouseKeeperInstallations";
+      templates.podTemplates = [
+        {
+          name = "server";
+          spec.containers = named "clickhouse" { limits.memory = "1Gi"; };
+        }
+      ];
+      installation = chi (cr {
+        defaults.templates.podTemplate = "server";
+        inherit templates;
+        configuration.clusters = [
+          {
+            name = "a";
+            layout = {
+              shardsCount = 2;
+              replicasCount = 3;
+            };
+          }
+          {
+            name = "b";
+            layout.shards = [
+              { }
+              { templates.podTemplate = "other"; }
+            ];
+          }
+        ];
+      });
+      keeper = chk (cr {
+        defaults.templates.podTemplate = "keeper";
+        templates.podTemplates = [
+          {
+            name = "keeper";
+            spec.containers = named "clickhouse-keeper" { requests.cpu = "250m"; };
+          }
+        ];
+        configuration.clusters = [
+          {
+            name = "k";
+            layout.replicasCount = 3;
+          }
+        ];
+      });
+    in
+    (
+      installation == {
+        pods = 8;
+        "requests.memory" = 6 * gi;
+        "limits.memory" = 6 * gi;
+      }
+      &&
+        keeper == {
+          pods = 3;
+          "requests.cpu" = 750;
+        }
+      && chi (cr { }) == { pods = 1; }
+      &&
+        chi (cr {
+          stop = "yes";
+        }) == { }
+      && chk (cr { }) == { pods = 1; }
+    )
+    || throw "unexpected ClickHouse use: ${builtins.toJSON { inherit installation keeper; }}";
+
+  # Verify `runsAtLeast` for `SGCluster` (`spec.instances`, lowered by
+  # horizontal autoscaling `minInstances` or backup initialization) and
+  # `SGDistributedLogs` (1 pod).
+  quota-use-stackgres-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/stackgres-operator;
+          path = [
+            "crds"
+            part
+          ];
+        };
+      sg = use "sgClusters";
+    in
+    (
+      sg (cr {
+        instances = 3;
+      }) == {
+        pods = 3;
+      }
+      &&
+        sg (cr {
+          instances = 3;
+          autoscaling.minInstances = 2;
+        }) == {
+          pods = 2;
+        }
+      &&
+        sg (cr {
+          instances = 3;
+          autoscaling = {
+            mode = "vertical";
+            minInstances = 1;
+          };
+        }) == {
+          pods = 3;
+        }
+      &&
+        sg (cr {
+          instances = 3;
+          replication.initialization.mode = "FromNewlyCreatedBackup";
+        }) == {
+          pods = 1;
+        }
+      && use "sgDistributedLogs" (cr { }) == { pods = 1; }
+    )
+    || throw "unexpected SGCluster use";
+
+  # Verify `runsAtLeast` for `Prometheus`, `PrometheusAgent`, `Alertmanager`,
+  # and `ThanosRuler`, including the 200Mi default memory request on
+  # Alertmanager and ThanosRuler and DaemonSet-mode skipping on PrometheusAgent.
+  quota-use-prometheus-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/prometheus-operator;
+          path = [
+            "crds"
+            part
+          ];
+        };
+      prometheus = use "prometheuses";
+      sharded = prometheus (cr {
+        replicas = 2;
+        shards = 2;
+        resources.requests.memory = "1Gi";
+        containers = named "prometheus" { limits.cpu = "1"; };
+      });
+    in
+    (
+      sharded == {
+        pods = 4;
+        "requests.memory" = 4 * gi;
+        "requests.cpu" = 4000;
+        "limits.cpu" = 4000;
+      }
+      && prometheus (cr { }) == { pods = 1; }
+      &&
+        prometheus (cr {
+          paused = true;
+        }) == { }
+      &&
+        use "alertmanagers" (cr { }) == {
+          pods = 1;
+          "requests.memory" = 200 * mi;
+        }
+      &&
+        use "thanosRulers" (cr {
+          replicas = 2;
+          resources.requests.memory = "1Gi";
+        }) == {
+          pods = 2;
+          "requests.memory" = 2 * gi;
+        }
+      &&
+        use "prometheusAgents" (cr {
+          mode = "DaemonSet";
+        }) == { }
+    )
+    || throw "unexpected Prometheus use: ${builtins.toJSON sharded}";
+
+  # Verify `runsAtLeast` for `VMCluster`, `VMAgent`, and single-component
+  # VictoriaMetrics CRDs, including HPA `minReplicas`, VPA pods-only fallback,
+  # and `daemonSetMode` skipping.
+  quota-use-victoria-metrics-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/victoria-metrics-operator;
+          path = [
+            "crds"
+            part
+          ];
+        };
+      cluster = use "vmClusters" (cr {
+        vmstorage = {
+          replicaCount = 2;
+          resources.requests.memory = "1Gi";
+        };
+        vmselect = {
+          replicaCount = 5;
+          hpa = {
+            minReplicas = 2;
+            maxReplicas = 5;
+          };
+          resources.requests.cpu = "500m";
+        };
+        vminsert = {
+          vpa.updatePolicy.updateMode = "Auto";
+          resources.requests.cpu = "1";
+        };
+      });
+      agent = use "vmAgents";
+    in
+    (
+      cluster == {
+        pods = 5;
+        "requests.memory" = 2 * gi;
+        "requests.cpu" = 1000;
+      }
+      &&
+        agent (cr {
+          replicaCount = 2;
+          shardCount = 3;
+        }) == {
+          pods = 6;
+        }
+      && agent (cr { }) == { pods = 1; }
+      &&
+        agent (cr {
+          daemonSetMode = true;
+        }) == { }
+      && use "vmClusters" (cr { }) == { }
+      &&
+        use "vmAlertmanagers" (cr {
+          replicaCount = 3;
+        }) == {
+          pods = 3;
+        }
+    )
+    || throw "unexpected VictoriaMetrics use: ${builtins.toJSON cluster}";
+
+  # Verify `runsAtLeast` for `AutoscalingRunnerSet` (`minRunners` capped by
+  # `maxRunners`, sized by the `runner` container).
+  quota-use-arc =
+    let
+      use = declaredUse {
+        package = import ../../../packages/arc;
+        path = [
+          "crds"
+          "autoscalingRunnerSets"
+        ];
+      };
+      runners = use (cr {
+        minRunners = 3;
+        maxRunners = 2;
+        template.spec.containers = named "runner" { requests.cpu = "1"; };
+      });
+    in
+    (
+      runners == {
+        pods = 2;
+        "requests.cpu" = 2000;
+      }
+      && use (cr { }) == { pods = 0; }
+    )
+    || throw "unexpected runner set use: ${builtins.toJSON runners}";
+
+  # Verify `runsAtLeast` for `RabbitmqCluster`, including StatefulSet overrides,
+  # CRD schema default resources, and `rabbitmq.com/pauseReconciliation`.
+  quota-use-rabbitmq-operator =
+    let
+      use = declaredUse {
+        package = import ../../../packages/rabbitmq-operator;
+        path = [
+          "crds"
+          "rabbitmqClusters"
+        ];
+        modules = [
+          { instances.cert-manager.cert-manager.package = import ../../../packages/cert-manager; }
+        ];
+      };
+    in
+    (
+      use (cr {
+        replicas = 3;
+        resources.requests.memory = "1Gi";
+        override.statefulSet.spec = {
+          replicas = 2;
+          template.spec.containers = named "rabbitmq" { requests.cpu = "500m"; };
+        };
+      }) == {
+        pods = 2;
+        "requests.memory" = 2 * gi;
+        "requests.cpu" = 1000;
+      }
+      &&
+        use (cr { }) == {
+          pods = 1;
+          "requests.cpu" = 1000;
+          "requests.memory" = 2 * gi;
+          "limits.cpu" = 2000;
+          "limits.memory" = 2 * gi;
+        }
+      &&
+        use {
+          metadata.labels."rabbitmq.com/pauseReconciliation" = "true";
+          spec = { };
+        } == { }
+    )
+    || throw "unexpected RabbitmqCluster use";
+
+  # Verify `runsAtLeast` for KubeVirt `VirtualMachine` across `runStrategy` and
+  # `running` states.
+  quota-use-kubevirt =
+    let
+      use = declaredUse {
+        package = import ../../../packages/kubevirt;
+        path = [
+          "crds"
+          "virtualMachines"
+        ];
+      };
+    in
+    (
+      use (cr {
+        runStrategy = "Always";
+      }) == {
+        pods = 1;
+      }
+      &&
+        use (cr {
+          running = true;
+        }) == {
+          pods = 1;
+        }
+      &&
+        use (cr {
+          runStrategy = "Halted";
+        }) == {
+          pods = 0;
+        }
+      && use (cr { }) == { pods = 0; }
+    )
+    || throw "unexpected VirtualMachine use";
+
+  # Verify `runsAtLeast` for CloudNativePG `Pooler` (`spec.instances`, sized by
+  # the `pgbouncer` container in `spec.template`).
+  quota-use-cnpg-operator-pooler =
+    let
+      use = declaredUse {
+        package = operatorPackage;
+        path = [
+          "crds"
+          "poolers"
+        ];
+      };
+    in
+    (
+      use (cr {
+        instances = 2;
+        template.spec.containers = named "pgbouncer" { requests.cpu = "100m"; };
+      }) == {
+        pods = 2;
+        "requests.cpu" = 200;
+      }
+      && use (cr { }) == { pods = 1; }
+    )
+    || throw "unexpected Pooler use";
 }

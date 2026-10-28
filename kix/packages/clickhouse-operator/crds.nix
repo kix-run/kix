@@ -70,6 +70,70 @@ let
     else
       { endpoint = "conduct"; };
 
+  # Return the minimum pod groups for an installation CR. Each cluster
+  # runs `layout.shardsCount` * `layout.replicasCount` pods (each at
+  # least 1 and at least the length of `layout.shards` or
+  # `layout.replicas`), defaulting to a single 1x1 cluster when
+  # `spec.configuration.clusters` is empty. When `spec.stop` or
+  # `spec.suspend` is truthy, the operator runs no pods.
+  #
+  # Pod resources come from the `def.container` container in the
+  # cluster's `templates.podTemplate` (falling back to
+  # `spec.defaults.templates.podTemplate`). If any shard, replica, or
+  # host overrides `templates`, or if `spec.templates.hostTemplates` is
+  # non-empty, only the pod count is reported because hosts may use
+  # different pod templates. Sidecar containers and external
+  # `ClickHouseInstallationTemplate` resources are not included.
+  runsAtLeastFor =
+    def: cr:
+    let
+      spec = cr.spec or { };
+      off =
+        v:
+        builtins.elem (lib.toLower (toString v)) [
+          ""
+          "0"
+          "false"
+          "no"
+          "off"
+          "disable"
+          "disabled"
+        ];
+      podTemplate =
+        templateName:
+        lib.findFirst (t: (t.name or null) == templateName) null (spec.templates.podTemplates or [ ]);
+      containerOf =
+        template:
+        lib.findFirst (c: (c.name or null) == def.container) { } (
+          if template == null then [ ] else template.spec.containers or [ ]
+        );
+      podsOf =
+        cluster:
+        let
+          layout = cluster.layout or { };
+          shards = layout.shards or [ ];
+          replicas = layout.replicas or [ ];
+          nested =
+            shards
+            ++ replicas
+            ++ builtins.concatMap (s: s.replicas or [ ]) shards
+            ++ builtins.concatMap (r: r.shards or [ ]) replicas;
+          ownTemplates =
+            builtins.any (e: e ? templates) nested || (spec.templates.hostTemplates or [ ]) != [ ];
+          templateName = cluster.templates.podTemplate or spec.defaults.templates.podTemplate or null;
+        in
+        {
+          pods =
+            lib.max 1 (lib.max (layout.shardsCount or 0) (builtins.length shards))
+            * lib.max 1 (lib.max (layout.replicasCount or 0) (builtins.length replicas));
+          resources = if ownTemplates then { } else (containerOf (podTemplate templateName)).resources or { };
+        };
+      clusters = spec.configuration.clusters or [ ];
+    in
+    lib.optionals (off (spec.stop or null) && off (spec.suspend or null)) (
+      map podsOf (if clusters == [ ] then [ { } ] else clusters)
+    );
+
   # The file is the whole upstream CRD document. A missing file is an error
   # and not a fall back to the stub, because the point is that these kinds
   # are checked.
@@ -133,7 +197,10 @@ let
         // {
           factBehavior = factBehaviorFor def;
         }
-        // lib.optionalAttrs def.operand { readiness = operandReadiness; }
+        // lib.optionalAttrs def.operand {
+          readiness = operandReadiness;
+          runsAtLeast = runsAtLeastFor def;
+        }
       )
     );
 in

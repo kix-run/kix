@@ -338,8 +338,14 @@ in
         };
 
         crds.rabbitmqClusters = gate (
+          let
+            crdSpec = (readJSON ./crds/rabbitmqclusters.rabbitmq.com.json).spec;
+            defaultResources =
+              (builtins.head crdSpec.versions)
+              .schema.openAPIV3Schema.properties.spec.properties.resources.default;
+          in
           scope.mkCRD {
-            spec = (readJSON ./crds/rabbitmqclusters.rabbitmq.com.json).spec;
+            spec = crdSpec;
             # The condition carries no observedGeneration, so the deploy
             # judges it by status.observedGeneration, which the operator
             # advances only after a reconcile succeeds
@@ -350,6 +356,25 @@ in
               type = "AllReplicasReady";
               status = "True";
             };
+            # Count `spec.replicas` server pods (default 1), or
+            # `spec.override.statefulSet.spec.replicas` when set, unless
+            # reconciliation is paused via the
+            # `rabbitmq.com/pauseReconciliation = "true"` label. Pod resources
+            # start from `spec.resources` (or the CRD schema default when unset)
+            # and merge any `rabbitmq` container override from the StatefulSet
+            # spec.
+            runsAtLeast =
+              cr:
+              let
+                spec = cr.spec or { };
+                sts = spec.override.statefulSet.spec or { };
+                patch = lib.findFirst (c: (c.name or null) == "rabbitmq") { } (sts.template.spec.containers or [ ]);
+                paused = (cr.metadata.labels or { })."rabbitmq.com/pauseReconciliation" or null == "true";
+              in
+              lib.optional (!paused) {
+                pods = sts.replicas or spec.replicas or 1;
+                resources = lib.recursiveUpdate (spec.resources or defaultResources) (patch.resources or { });
+              };
           }
         );
 

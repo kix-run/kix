@@ -83,8 +83,52 @@ let
     };
   };
 
+  # Compute the minimum pod count and container resources for a
+  # VictoriaMetrics component. Uses `hpa.minReplicas` (default 1) when an
+  # HPA is configured, or `replicaCount` (default 1) otherwise. Pod
+  # resources merge `app.resources` with any matching `container` entry in
+  # `app.containers`, unless a VPA is configured (which can scale requests
+  # lower, so only pods are counted). Operator-sized sidecars such as
+  # `config-reloader` are omitted.
+  replicasOf =
+    app: if (app.hpa or null) != null then app.hpa.minReplicas or 1 else app.replicaCount or 1;
+  appGroup =
+    container: pods: app:
+    let
+      patch = lib.findFirst (c: (c.name or null) == container) { } (app.containers or [ ]);
+    in
+    {
+      inherit pods;
+      resources =
+        if (app.vpa or null) != null then
+          { }
+        else
+          lib.recursiveUpdate (app.resources or { }) (patch.resources or { });
+    };
+  unlessPaused = cr: groups: lib.optionals (!(cr.spec.paused or false)) groups;
+  singleApp = container: cr: unlessPaused cr [ (appGroup container (replicasOf cr.spec) cr.spec) ];
+
   kindExtras = {
     VMCluster = {
+      # Count one pod group for each configured component (`vmstorage`,
+      # `vmselect`, and `vminsert`), omitting the optional `requestsLoadBalancer`.
+      runsAtLeast =
+        cr:
+        unlessPaused cr (
+          builtins.concatMap
+            (
+              name:
+              let
+                app = cr.spec.${name} or null;
+              in
+              lib.optional (app != null) (appGroup name (replicasOf app) app)
+            )
+            [
+              "vmstorage"
+              "vmselect"
+              "vminsert"
+            ]
+        );
       factBehavior.endpoint = "conduct";
       printerColumns = [
         {
@@ -100,9 +144,32 @@ let
       ]
       ++ ageColumn;
     };
-    VMAgent.factBehavior = operandFactBehavior "vmagent";
-    VMAlert.factBehavior = operandFactBehavior "vmalert";
-    VMAlertmanager.factBehavior = operandFactBehavior "vmalertmanager";
+    VMAgent = {
+      factBehavior = operandFactBehavior "vmagent";
+      # Count `replicaCount` pods per shard (`shardCount`, default 1, or
+      # `hpa.minReplicas` when an HPA scales the shards). Skip
+      # `daemonSetMode` because the pod count depends on cluster nodes.
+      runsAtLeast =
+        cr:
+        let
+          spec = cr.spec or { };
+          shards =
+            if (spec.hpa or null) != null then spec.hpa.minReplicas or 1 else lib.max 1 (spec.shardCount or 1);
+        in
+        lib.optionals (!(spec.daemonSetMode or false)) (
+          unlessPaused cr [ (appGroup "vmagent" ((spec.replicaCount or 1) * shards) spec) ]
+        );
+    };
+    VMAlert = {
+      factBehavior = operandFactBehavior "vmalert";
+      runsAtLeast = singleApp "vmalert";
+    };
+    VMAlertmanager = {
+      factBehavior = operandFactBehavior "vmalertmanager";
+      runsAtLeast = singleApp "alertmanager";
+    };
+    VMSingle.runsAtLeast = singleApp "vmsingle";
+    VMAuth.runsAtLeast = singleApp "vmauth";
   };
 
   # The operator's health convention: a VM CR is ready when
@@ -199,6 +266,9 @@ let
       }
       // lib.optionalAttrs (extras ? factBehavior) {
         inherit (extras) factBehavior;
+      }
+      // lib.optionalAttrs (extras ? runsAtLeast) {
+        inherit (extras) runsAtLeast;
       }
     );
 

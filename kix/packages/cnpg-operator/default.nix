@@ -384,7 +384,21 @@ in
         # A ScheduledBackup and a Pooler report no conditions; a Pooler's
         # consumers wait on its Service's endpoints instead.
         scheduledBackups = gate (scope.mkCRD { spec = vendored "scheduledbackups.${group}.json"; });
-        poolers = gate (scope.mkCRD { spec = vendored "poolers.${group}.json"; });
+        poolers = gate (
+          scope.mkCRD {
+            spec = vendored "poolers.${group}.json";
+            # Count one PgBouncer pod per `spec.instances` (default 1),
+            # sized by the `pgbouncer` container of `spec.template`.
+            runsAtLeast = cr: [
+              {
+                pods = cr.spec.instances or 1;
+                resources =
+                  (lib.findFirst (c: (c.name or null) == "pgbouncer") { } (cr.spec.template.spec.containers or [ ]))
+                  .resources or { };
+              }
+            ];
+          }
+        );
         failoverQuorums = scope.mkCRD { spec = vendored "failoverquorums.${group}.json"; };
         clusters = gate (
           scope.mkCRD {

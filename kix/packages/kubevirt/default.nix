@@ -608,6 +608,30 @@ in
           plural = "virtualmachines";
           version = "v1";
           installedBy = self.kubevirtCR;
+          # Count one `virt-launcher` pod when the VM is configured to run
+          # (`spec.runStrategy` is `Always` or `RerunOnFailure`, or
+          # `spec.running` is `true`). Only the pod count is reported because
+          # hugepages or a referenced instance type can change the launcher
+          # pod's resource requests.
+          runsAtLeast =
+            cr:
+            let
+              spec = cr.spec or { };
+              runs =
+                if spec ? runStrategy then
+                  builtins.elem spec.runStrategy [
+                    "Always"
+                    "RerunOnFailure"
+                  ]
+                else
+                  spec.running or false;
+            in
+            [
+              {
+                pods = if runs then 1 else 0;
+                resources = { };
+              }
+            ];
         };
       };
 

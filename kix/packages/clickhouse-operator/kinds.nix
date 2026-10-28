@@ -47,6 +47,8 @@ in
       operand = true;
       # The label the operator stamps on every pod of an installation.
       operandLabel = "clickhouse.altinity.com/chi";
+      # Container name the operator expects in pod templates.
+      container = "clickhouse";
     };
     clickHouseKeeperInstallations = {
       kind = "ClickHouseKeeperInstallation";
@@ -57,6 +59,7 @@ in
       access = reconciled;
       operand = true;
       operandLabel = "clickhouse-keeper.altinity.com/chk";
+      container = "clickhouse-keeper";
     };
     clickHouseInstallationTemplates = {
       kind = "ClickHouseInstallationTemplate";
