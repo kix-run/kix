@@ -39,7 +39,6 @@ in
             "pod-security.kubernetes.io/enforce" = podSecurity;
           };
         inherit annotations;
-        requires = lib.optional (resourceQuota != null) ns.quota ++ builtins.attrValues ns.netpols;
       };
 
       quota =
@@ -48,7 +47,7 @@ in
             apiVersion = "v1";
             kind = "ResourceQuota";
             name = "${name}-quota";
-            namespace = name;
+            namespace = ns.inside;
             labels = managedBy;
             spec.hard = resourceQuota;
           }
@@ -61,14 +60,27 @@ in
           apiVersion = "networking.k8s.io/v1";
           kind = "NetworkPolicy";
           name = "${name}-${polName}";
-          namespace = name;
+          namespace = ns.inside;
           labels = managedBy;
           spec = pol;
         }
       ) networkPolicies;
 
+      # The namespace as the quota's and policies' `namespace`: its name, and
+      # an edge to the Namespace, so they are applied after it.
+      inside = {
+        inherit name;
+        inherit (ns.resource) outPath;
+      };
+
       root = ns.resource;
-      inherit name;
+      # Objects placed in this namespace take its name, and with it an edge
+      # to the quota and policies, so pods start after them.
+      name = builtins.appendContext name (
+        builtins.foldl' (acc: r: acc // builtins.getContext "${r}") { } (
+          lib.optional (ns.quota != null) ns.quota ++ builtins.attrValues ns.netpols
+        )
+      );
       outPath = ns.resource.outPath;
     });
 }
