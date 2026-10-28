@@ -417,6 +417,16 @@ edge but NO netpol hole. Consequences when authoring:
   Cluster) can still read as ready from its previous status right after
   a spec change.
 
+- **Declare `runsAtLeast` on CRDs whose operator always runs pods.** When an operator always runs pods
+  for a custom resource, declare them on `scope.mkCRD` or `scope.mkCRDRef`:
+  `runsAtLeast = cr: [ { pods = cr.spec.instances or 1; resources = cr.spec.resources or { }; } ]`,
+  with one entry per group of identical pods and `resources` shaped like a single
+  container's `resources` (see `cnpg-operator` for `Cluster`). Only include the
+  minimum pods the operator always runs: the build fails when a namespace's
+  minimum usage exceeds a ResourceQuota. If a CRD sets `factBehavior.endpoint = "terminate"`
+  without `runsAtLeast`, its custom resources are listed as `Not counted` in
+  quota failure messages.
+
 ### Composition helpers (kix.*)
 
 #### Mount helpers

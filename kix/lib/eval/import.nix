@@ -392,6 +392,7 @@ rec {
         "crdScope"
         "factBehavior"
         "readiness"
+        "runsAtLeast"
       ];
       who = "Import instance '${namespaceName}/${instanceName}'";
       checkCrdEntry =

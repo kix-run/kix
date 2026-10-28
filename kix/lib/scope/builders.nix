@@ -782,6 +782,7 @@ in
               factBehavior
               readiness
               ;
+            runsAtLeast = attrs.runsAtLeast or null;
           };
         in
         crdResource

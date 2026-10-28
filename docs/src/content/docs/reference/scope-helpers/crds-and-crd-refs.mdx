@@ -42,6 +42,7 @@ Accepted optional fields are:
 | `ownership.cede` | CRD fields that another manager may own, commonly `spec.versions` or conversion-webhook fields. It has the same behavior as on [`mkResource`](/docs/reference/scope-helpers/mkresource/#field-ownership). |
 | `readiness` | Readiness rule stamped on every custom resource made from this declaration. Use either `{ path; equals; }` or `{ condition = { type; status; }; }`. |
 | `factBehavior` | Whether custom resources of this kind conduct endpoint facts or terminate them in operator-created pods. |
+| `runsAtLeast` | Function `cr: [ { pods; resources; } ]` returning the minimum pods the operator always runs for a custom resource. Each entry describes a group of `pods` identical pods and a single pod's container `resources` (`requests` and `limits`). Kix counts these pods when checking the namespace's [ResourceQuotas](/docs/reference/cluster-module/namespaces/#quota-check). |
 
 `readiness` describes the custom resources, not the CRD. The deploy engine
 handles the CRD's own availability through the CRD barrier.
@@ -74,6 +75,7 @@ widgetCrd = scope.mkCRDRef {
 | `installedBy` | `null` | Resource, or list of resources, that installs the CRD. The CRD marker waits for them. |
 | `readiness` | `null` | Default readiness rule for custom resources. |
 | `factBehavior` | `null` | Endpoint fact behavior for this custom kind. |
+| `runsAtLeast` | `null` | Minimum pods the operator always runs for a custom resource, with the same shape as on `mkCRD`. |
 
 Kix does not install the CRD, so it cannot read the served versions from a
 spec. A missing `version` fails the build. Check the versions on a live

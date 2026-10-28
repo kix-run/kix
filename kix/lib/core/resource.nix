@@ -167,6 +167,10 @@ rec {
       # Per-kind endpoint fact behavior from the CRD declaration or
       # `cluster.factBehavior`. Null falls back to `facts.conducts`.
       factBehavior ? null,
+      # Function `cr: [ { pods; resources; } ]` from the CRD declaration, or
+      # null. `buildCluster` calls it on the rendered manifest to check
+      # namespace ResourceQuotas.
+      runsAtLeast ? null,
       # Field paths (`ownership.cede = [ "spec.versions" "webhooks[*].rules" ]`)
       # that another controller takes over after creation. When a subsequent
       # apply hits a field-ownership conflict limited to these paths, deploy
@@ -564,7 +568,7 @@ rec {
 
         # The netpol instance processor uses podSelector and absorbed endpoint
         # facts to derive policies for pods created by custom controllers.
-        inherit factBehavior;
+        inherit factBehavior runsAtLeast;
         absorbedEndpointFacts = _absorbedEndpointFacts;
 
         rawManifest = rawManifestStamped;
@@ -783,6 +787,11 @@ rec {
       extraRequires ? [ ],
       # Validated behavior to pass to each CR for endpoint fact handling.
       factBehavior ? null,
+      # Function `cr: [ { pods; resources; } ]` returning the minimum pods the
+      # operator always runs for a CR. Each entry describes a group of
+      # identical pods and a single pod's container `resources`. Passed to
+      # each CR so `buildCluster` can check namespace ResourceQuotas.
+      runsAtLeast ? null,
       # Readiness check stamped as `kix.run/readiness` on each CR (`{ path; equals; }`,
       # `{ path; notEquals; }`, or `{ condition = { type; status; }; }`) for
       # operators that do not use standard `Ready` or `Available` conditions.
@@ -819,6 +828,7 @@ rec {
           requires = (args.requires or [ ]) ++ [ crdOrRef ] ++ extraRequires;
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
+        // lib.optionalAttrs (runsAtLeast != null) { inherit runsAtLeast; }
         // lib.optionalAttrs (_validatedReadiness != null) {
           annotations = (args.annotations or { }) // {
             ${kixKeys.readiness} = builtins.toJSON _validatedReadiness;
@@ -903,6 +913,8 @@ rec {
       # Readiness condition stamped on each CR as kix.run/readiness and
       # validated while evaluating the declaring instance.
       readiness ? null,
+      # Minimum pods the operator always runs for each CR; see mkCRDBuilders.
+      runsAtLeast ? null,
     }:
     let
       declaration = "${site} in ${namespaceName}/${instanceName}";
@@ -975,6 +987,7 @@ rec {
         crdOrRef = marker;
         factBehavior = _validatedBehavior;
         readiness = _validatedReadiness;
+        inherit runsAtLeast;
         version = _validatedVersion;
         servedVersions = _validatedServed;
         crdScope = _validatedScope;
