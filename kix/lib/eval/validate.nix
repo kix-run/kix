@@ -19,6 +19,8 @@
 let
   kixAnnotations = import ../core/annotations.nix;
   helpers = import ./helpers.nix { inherit lib; };
+  validateCrds = import ./validate-crds.nix { inherit lib; };
+  validateKeys = import ./validate-keys.nix { inherit lib; };
   kixKeys = kixAnnotations.keys;
 in
 rec {
@@ -740,95 +742,24 @@ rec {
           ]
       ) workloads;
 
-      # --- 18. Namespaced kinds carry a namespace ---
-      # A namespaced resource without `metadata.namespace` is stored in the
-      # default namespace by the API server while the CLI tracks it as
-      # cluster-scoped, breaking diff and prune. Check built-in namespaced kinds
-      # and custom kinds declared as `Namespaced` by a CRD or CRD ref marker in
-      # the build.
+      # --- 18 & 21. Namespaced kinds and custom resource declarations ---
 
-      builtInNamespacedKinds = {
-        "" = [
-          "ConfigMap"
-          "Endpoints"
-          "Event"
-          "LimitRange"
-          "PersistentVolumeClaim"
-          "Pod"
-          "PodTemplate"
-          "ReplicationController"
-          "ResourceQuota"
-          "Secret"
-          "Service"
-          "ServiceAccount"
-        ];
-        "apps" = [
-          "ControllerRevision"
-          "DaemonSet"
-          "Deployment"
-          "ReplicaSet"
-          "StatefulSet"
-        ];
-        "autoscaling" = [ "HorizontalPodAutoscaler" ];
-        "batch" = [
-          "CronJob"
-          "Job"
-        ];
-        "coordination.k8s.io" = [ "Lease" ];
-        "discovery.k8s.io" = [ "EndpointSlice" ];
-        "events.k8s.io" = [ "Event" ];
-        "networking.k8s.io" = [
-          "Ingress"
-          "NetworkPolicy"
-        ];
-        "policy" = [ "PodDisruptionBudget" ];
-        "rbac.authorization.k8s.io" = [
-          "Role"
-          "RoleBinding"
-        ];
-        "storage.k8s.io" = [ "CSIStorageCapacity" ];
-      };
-
-      namespacedCustomKinds =
-        builtins.listToAttrs (
-          map
-            (crd: {
-              name = "${crd.spec.group}/${crd.spec.names.kind}";
-              value = true;
-            })
-            (
-              builtins.filter (
-                r: r.kind == "CustomResourceDefinition" && (r.spec.scope or "") == "Namespaced"
-              ) resources
-            )
-        )
-        // builtins.listToAttrs (
-          map (d: {
-            name = "${d.group}/${d.kind}";
-            value = true;
-          }) (builtins.filter (d: d.scope == "Namespaced") crdRefDecls)
-        );
-
-      isNamespacedKind =
-        r:
-        let
-          group = groupOf (r.apiVersion or "");
-        in
-        builtins.elem r.kind (builtInNamespacedKinds.${group} or [ ])
-        || namespacedCustomKinds ? "${group}/${r.kind}";
-
-      missingNamespaceFailures = map (
-        r:
-        "${r.kind} ${r.metadata.name or "unnamed"} (${r.apiVersion or ""}) is a namespaced kind but has no metadata.namespace. Create it with a namespaced scope (scope.mkResource) rather than scope.mkClusterResource, or set metadata.namespace"
-      ) (builtins.filter (r: !(r.metadata ? namespace) && isNamespacedKind r) resources);
+      inherit
+        (validateCrds.checkCrds {
+          inherit
+            resources
+            entries
+            dependencyClosure
+            ;
+        })
+        missingNamespaceFailures
+        customResourceFailures
+        ;
 
       # --- 19. PersistentVolumeClaim references ---
       # A pod that mounts a claim that does not exist stays Pending.
 
       safeList = v: if builtins.isList v then v else [ ];
-      # Helm charts can render `data: null`, whereas Nix's `or` only handles
-      # missing attributes.
-      attrNamesOf = v: if builtins.isAttrs v then builtins.attrNames v else [ ];
 
       claimFailures = builtins.concatMap (
         w:
@@ -915,373 +846,16 @@ rec {
           ) (safeList ((getPodSpec w).volumes or [ ]))
         ) workloads;
 
-      # --- 21. Custom resources depend on a declaration of their kind ---
-      # Every resource outside the built-in API groups must depend (via
-      # `kix.run/depends-on`) on a CustomResourceDefinition, CRD ref marker, or
-      # APIService that serves its group, kind, and version.
-
-      builtInGroups = [
-        ""
-        "apps"
-        "batch"
-        "autoscaling"
-        "policy"
-        "networking.k8s.io"
-        "rbac.authorization.k8s.io"
-        "storage.k8s.io"
-        "scheduling.k8s.io"
-        "admissionregistration.k8s.io"
-        "apiextensions.k8s.io"
-        "apiregistration.k8s.io"
-        "coordination.k8s.io"
-        "discovery.k8s.io"
-        "events.k8s.io"
-        "node.k8s.io"
-        "certificates.k8s.io"
-        "flowcontrol.apiserver.k8s.io"
-        "resource.k8s.io"
-        "authentication.k8s.io"
-        "authorization.k8s.io"
-        "internal.apiserver.k8s.io"
-        "storagemigration.k8s.io"
-        kixAnnotations.group
-      ];
-
-      versionOf =
-        apiVersion:
-        let
-          parts = lib.splitString "/" apiVersion;
-        in
-        lib.last parts;
-
-      crdDecls = builtins.concatMap (
-        e:
-        if e.r.kind == "CustomResourceDefinition" then
-          [
-            {
-              group = e.r.spec.group or "";
-              kind = e.r.spec.names.kind or "";
-              served = map (v: v.name) (
-                builtins.filter (v: v.served or true) (safeList (e.r.spec.versions or [ ]))
-              );
-              scope = e.r.spec.scope or "Namespaced";
-              text = "CustomResourceDefinition ${e.r.metadata.name or "unnamed"}";
-              inherit e;
-            }
-          ]
-        else
-          [ ]
-      ) entries;
-
-      crdRefDecls = builtins.concatMap (
-        e:
-        let
-          anns = e.r.metadata.annotations or { };
-          crdName = anns.${kixKeys.importName} or "";
-          dot = lib.splitString "." crdName;
-        in
-        if e.r.kind == "PackageInstance" && anns ? ${kixKeys.crdKind} then
-          [
-            {
-              group = builtins.concatStringsSep "." (builtins.tail dot);
-              kind = anns.${kixKeys.crdKind};
-              served = splitList anns.${kixKeys.crdServedVersions};
-              scope = anns.${kixKeys.crdScope} or "Namespaced";
-              text = "the CRD ref ${e.r.metadata.name} for ${crdName}";
-              inherit e;
-            }
-          ]
-        else
-          [ ]
-      ) entries;
-
-      apiServiceDecls = builtins.concatMap (
-        e:
-        let
-          anns = e.r.metadata.annotations or { };
-          fromName =
-            name:
-            let
-              parts = lib.splitString "." name;
-            in
-            {
-              version = builtins.head parts;
-              group = builtins.concatStringsSep "." (builtins.tail parts);
-            };
-          decl = gv: text: {
-            inherit (gv) group;
-            kind = null;
-            served = [ gv.version ];
-            scope = null;
-            inherit text e;
-          };
-        in
-        if e.r.kind == "APIService" then
-          [
-            (decl {
-              group = e.r.spec.group or "";
-              version = e.r.spec.version or "";
-            } "APIService ${e.r.metadata.name or "unnamed"}")
-          ]
-        else if e.r.kind == "PackageInstance" && (anns.${kixKeys.importKind} or null) == "APIService" then
-          [
-            (decl (fromName
-              anns.${kixKeys.importName}
-            ) "the import of APIService ${anns.${kixKeys.importName}} (${e.r.metadata.name})")
-          ]
-        else
-          [ ]
-      ) entries;
-
-      kindDecls = crdDecls ++ crdRefDecls ++ apiServiceDecls;
-
-      customResourceFailures = builtins.concatMap (
-        e:
-        let
-          r = e.r;
-          apiVersion = r.apiVersion or "";
-          group = groupOf apiVersion;
-          version = versionOf apiVersion;
-          matching = builtins.filter (d: d.group == group && (d.kind == null || d.kind == r.kind)) kindDecls;
-          closure = dependencyClosure e;
-          reachable = builtins.filter (d: d.e.hash != null && closure ? ${d.e.hash}) matching;
-          provider = d: if d.e.owner == null then "" else " (instance ${d.e.owner})";
-          chartSentence = "If a Helm chart renders it (a values toggle), turn the toggle off and build it with the owner's builder in a package of your own; a chart resource cannot take the dependency.";
-        in
-        if builtins.elem group builtInGroups then
-          [ ]
-        else if matching == [ ] then
-          [
-            "${describe r} (${apiVersion}${
-              lib.optionalString (e.owner != null) ", instance ${e.owner}"
-            }) has no CustomResourceDefinition in the cluster build, so the apiserver would reject it at apply. Take the package that installs the CRD as a dependency and build the resource with its builder (scope.mkCR dep.out.crds.<Kind>, or dep.out.mk<Kind> where it exists), vendor the CRD as JSON and build it with scope.mkCRD (scripts/vendor-crds.py fetches upstream CRDs), or declare a CRD installed outside Kix with scope.mkCRDRef { group = \"${group}\"; kind = \"${r.kind}\"; version = \"${version}\"; ... } and build with scope.mkCR. ${chartSentence}"
-          ]
-        else if reachable == [ ] then
-          let
-            own = builtins.filter (d: e.owner != null && d.e.owner == e.owner) matching;
-            d = builtins.head matching;
-          in
-          if own != [ ] then
-            [
-              "${describe r}${instanceClause e.owner} does not depend on ${(builtins.head own).text}, which the same instance declares, so the deploy can apply it before the CRD is served. Build it with scope.mkCR from that declaration, or list the declaration in its requires."
-            ]
-          else
-            [
-              "${describe r}${instanceClause e.owner} does not depend on ${d.text}${provider d}, which declares its kind, so the deploy can apply it before the CRD is served. Take ${
-                if d.e.owner == null then "that instance" else d.e.owner
-              } as a dependency${
-                lib.optionalString (e.owner != null) " of ${e.owner}"
-              } and build the resource with its builder, which adds the dependency. ${chartSentence}"
-            ]
-        else if builtins.any (d: builtins.elem version d.served) reachable then
-          [ ]
-        else
-          let
-            d = builtins.head reachable;
-          in
-          [
-            "${describe r} uses ${apiVersion}, but ${d.text}${provider d} serves ${builtins.concatStringsSep ", " d.served} for ${group}/${r.kind}. Use a served version, or correct the declaration."
-          ]
-      ) entries;
-
       # --- 22. Named Secret and ConfigMap keys ---
-      # Validate that env vars, volume `items`, and `subPath` mounts reference
-      # keys that exist on their target Secret or ConfigMap. Known keys come
-      # from `kix.run/secret-keys` on `scope.mkSecret`,
-      # `kix.run/import-secret-keys` on Secret refs, and `data` or `binaryData`
-      # on ConfigMaps. Skip optional references, `kix.untrackedRef` names,
-      # Secret resources without `kix.run/secret-keys`, and resources that cede
-      # their data fields.
 
-      cedesData =
-        r:
-        builtins.any (
-          p: lib.hasPrefix "data" p || lib.hasPrefix "binaryData" p || lib.hasPrefix "stringData" p
-        ) (splitList ((r.metadata.annotations or { }).${kixKeys.cedeFields} or ""));
-
-      # Return `{ keys }` when the target's keys are known,
-      # `{ noKeysListed = true }` for a Secret ref without declared keys, or
-      # null when unchecked.
-      declaredKeys =
-        objKind: ns: name:
-        let
-          id = "${objKind}/${ns}/${name}";
-          r = byId.${id};
-          anns = r.metadata.annotations or { };
-          refAnns = importIds.${id};
-        in
-        if externalNames ? "${ns}/${name}" then
-          null
-        else if byId ? ${id} then
-          if cedesData r then
-            null
-          else if objKind == "Secret" then
-            if anns ? ${kixKeys.secretKeys} then { keys = splitList anns.${kixKeys.secretKeys}; } else null
-          else
-            {
-              keys = attrNamesOf (r.data or null) ++ attrNamesOf (r.binaryData or null);
-            }
-        else if objKind == "Secret" && importIds ? ${id} then
-          if refAnns ? ${kixKeys.importSecretKeys} then
-            { keys = splitList refAnns.${kixKeys.importSecretKeys}; }
-          else
-            { noKeysListed = true; }
-        else
-          null;
-
-      keyReadsOf =
-        w:
-        let
-          ps = getPodSpec w;
-          containers = safeList (ps.containers or [ ]) ++ safeList (ps.initContainers or [ ]);
-          volumes = safeList (ps.volumes or [ ]);
-          volumesByName = builtins.listToAttrs (
-            map (v: {
-              name = v.name or "";
-              value = v;
-            }) volumes
-          );
-          itemReads =
-            objKind: obj: items: where:
-            map (it: {
-              inherit objKind obj where;
-              key = it.key;
-              subPath = null;
-            }) (builtins.filter (it: it ? key) (safeList items));
-
-          envReads = builtins.concatMap (
-            c:
-            builtins.concatMap (
-              ev:
-              let
-                read =
-                  objKind: ref:
-                  if ref == null || (ref.optional or false) || !(ref ? name) || !(ref ? key) then
-                    [ ]
-                  else
-                    [
-                      {
-                        inherit objKind;
-                        obj = ref.name;
-                        key = ref.key;
-                        where = "env ${ev.name or "?"} of container ${c.name or "?"}";
-                        subPath = null;
-                      }
-                    ];
-              in
-              read "Secret" (ev.valueFrom.secretKeyRef or null)
-              ++ read "ConfigMap" (ev.valueFrom.configMapKeyRef or null)
-            ) (safeList (c.env or [ ]))
-          ) containers;
-
-          volumeReads = builtins.concatMap (
-            v:
-            let
-              where = "volume ${v.name or "?"} items";
-              sec = v.secret or null;
-              cm = v.configMap or null;
-              sources = safeList ((v.projected or { }).sources or [ ]);
-            in
-            (
-              if sec != null && !(sec.optional or false) && sec ? secretName then
-                itemReads "Secret" sec.secretName (sec.items or [ ]) where
-              else
-                [ ]
-            )
-            ++ (
-              if cm != null && !(cm.optional or false) && cm ? name then
-                itemReads "ConfigMap" cm.name (cm.items or [ ]) where
-              else
-                [ ]
-            )
-            ++ builtins.concatMap (
-              s:
-              let
-                ps' = s.secret or null;
-                pc = s.configMap or null;
-              in
-              (
-                if ps' != null && !(ps'.optional or false) && ps' ? name then
-                  itemReads "Secret" ps'.name (ps'.items or [ ]) where
-                else
-                  [ ]
-              )
-              ++ (
-                if pc != null && !(pc.optional or false) && pc ? name then
-                  itemReads "ConfigMap" pc.name (pc.items or [ ]) where
-                else
-                  [ ]
-              )
-            ) sources
-          ) volumes;
-
-          # A subPath into a Secret or ConfigMap volume without `items`
-          # names a key by its first path segment.
-          subPathReads = builtins.concatMap (
-            c:
-            builtins.concatMap (
-              m:
-              let
-                v = volumesByName.${m.name or ""} or { };
-                sub = m.subPath or "";
-                key = builtins.head (lib.splitString "/" sub);
-                read = objKind: obj: {
-                  inherit objKind obj key;
-                  where = "container ${c.name or "?"}";
-                  subPath = {
-                    inherit sub;
-                    mountPath = m.mountPath or "?";
-                  };
-                };
-                noItems = src: safeList (src.items or [ ]) == [ ];
-              in
-              if sub == "" then
-                [ ]
-              else if
-                v ? secret && !(v.secret.optional or false) && v.secret ? secretName && noItems v.secret
-              then
-                [ (read "Secret" v.secret.secretName) ]
-              else if
-                v ? configMap && !(v.configMap.optional or false) && v.configMap ? name && noItems v.configMap
-              then
-                [ (read "ConfigMap" v.configMap.name) ]
-              else
-                [ ]
-            ) (safeList (c.volumeMounts or [ ]))
-          ) containers;
-        in
-        envReads ++ volumeReads ++ subPathReads;
-
-      keyFailures = builtins.concatMap (
-        w:
-        let
-          ns = nsOf w;
-          who = "${w.kind} ${ns}/${w.metadata.name}";
-        in
-        builtins.concatMap (
-          read:
-          let
-            decl = declaredKeys read.objKind ns read.obj;
-            listText = keys: if keys == [ ] then "no keys" else "keys ${builtins.concatStringsSep ", " keys}";
-          in
-          if decl == null then
-            [ ]
-          else if decl ? noKeysListed then
-            [
-              "${who} reads key '${read.key}' of Secret '${read.obj}' (${read.where}), whose scope.mkSecretRef declares no keys, so the deploy cannot check the Secret holds it. List the keys the pod reads in keys."
-            ]
-          else if builtins.elem read.key decl.keys then
-            [ ]
-          else if read.subPath != null then
-            [
-              "${who} mounts subPath '${read.subPath.sub}' of ${read.objKind} '${read.obj}' at ${read.subPath.mountPath} (${read.where}), and ${read.objKind} '${read.obj}' declares ${listText decl.keys}, not '${read.key}'. The kubelet would mount an empty directory there: the container fails to start if its image has a file at ${read.subPath.mountPath}, and otherwise reads a directory instead of the file. Add the key to the ${read.objKind}, or mount a declared one."
-            ]
-          else
-            [
-              "${who} reads key '${read.key}' of ${read.objKind} '${read.obj}' (${read.where}), which declares ${listText decl.keys}. The container would not start. Add the key to the ${read.objKind}, or read a declared one."
-            ]
-        ) (lib.unique (keyReadsOf w))
-      ) workloads;
+      keyFailures = validateKeys.checkKeyReads {
+        inherit
+          workloads
+          byId
+          importIds
+          externalNames
+          ;
+      };
 
       # --- 23. One default per cluster ---
       # The apiserver accepts one PriorityClass with globalDefault. For
