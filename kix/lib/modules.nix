@@ -681,38 +681,98 @@ in
         lib.types.submodule {
           options = {
             namespaces = lib.mkOption {
-              type = lib.types.listOf lib.types.str;
-              example = [
-                "acme-*"
-                "reports"
-              ];
-              description = ''
-                The namespaces the consumer may create and use, as patterns:
-                an exact name, a prefix such as "acme-*", or "*" for every
-                namespace that is not this cluster's. This cluster's
-                namespaces are those its build renders into, and
-                `reservedNamespaces`. One consumer may hold "*"; no two
-                consumers' other patterns may match the same namespace.
-              '';
-            };
-            podSecurity = lib.mkOption {
-              type = lib.types.nullOr (
-                lib.types.enum [
-                  "privileged"
-                  "baseline"
-                  "restricted"
-                ]
+              type = lib.types.attrsOf (
+                lib.types.submodule {
+                  options = {
+                    podSecurity = lib.mkOption {
+                      type = lib.types.nullOr (
+                        lib.types.enum [
+                          "privileged"
+                          "baseline"
+                          "restricted"
+                        ]
+                      );
+                      default = null;
+                      description = "The Pod Security level of the namespaces this entry grants.";
+                    };
+                    quota = lib.mkOption {
+                      type = lib.types.attrsOf lib.types.str;
+                      default = { };
+                      example = {
+                        pods = "4";
+                        "requests.cpu" = "500m";
+                      };
+                      description = ''
+                        The ResourceQuota `hard` limits of each namespace this
+                        entry grants, with Kubernetes' key names. Each
+                        namespace gets its own quota of these limits.
+                      '';
+                    };
+                    max = lib.mkOption {
+                      type = lib.types.nullOr lib.types.ints.positive;
+                      default = null;
+                      description = ''
+                        The most namespaces matching this pattern the
+                        consumer may create, exact names inside it included.
+                        Only on a pattern. The consumer's build fails when it
+                        renders more.
+                      '';
+                    };
+                    secrets = lib.mkOption {
+                      type = lib.types.listOf (
+                        lib.types.submodule {
+                          options = {
+                            name = lib.mkOption { type = lib.types.str; };
+                            keys = lib.mkOption {
+                              type = lib.types.listOf lib.types.str;
+                              default = [ ];
+                            };
+                            type = lib.mkOption {
+                              type = lib.types.str;
+                              default = "Opaque";
+                            };
+                          };
+                        }
+                      );
+                      default = [ ];
+                      description = ''
+                        Secrets present in this namespace for the consumer to
+                        use. Only on an exact name. The interface lists them
+                        by name, keys, and type. Kix does not create them:
+                        this cluster's own instances do, for example the
+                        reflector package, or a package that mints a
+                        credential per consumer.
+                      '';
+                    };
+                  };
+                }
               );
-              default = null;
-              description = "The Pod Security level of every namespace the consumer creates.";
-            };
-            resourceQuota = lib.mkOption {
-              type = lib.types.nullOr lib.types.anything;
-              default = null;
-              example = {
-                pods = "20";
-              };
-              description = "The ResourceQuota `hard` limits of every namespace the consumer creates.";
+              example = lib.literalExpression ''
+                {
+                  "acme-*" = {
+                    podSecurity = "restricted";
+                    quota = { pods = "4"; "requests.memory" = "512Mi"; };
+                    max = 3;
+                  };
+                  acme-db.quota."requests.memory" = "2Gi";
+                  reports = { };
+                }
+              '';
+              description = ''
+                The namespaces the consumer may create and use, each key with
+                the settings of the namespaces it grants. A key is an exact
+                name, a prefix such as "acme-*", or "*" for every namespace
+                that is not this cluster's. This cluster's namespaces are
+                those its build renders into, and `reservedNamespaces`. One
+                consumer may hold "*". A consumer's own patterns may not
+                overlap, and no two consumers' keys may match the same
+                namespace.
+
+                A namespace takes the settings of the pattern that matches
+                it, then those of its exact name on top: the exact name's
+                `podSecurity` replaces the pattern's, and its `quota` keys
+                replace the pattern's keys of the same name.
+              '';
             };
             services = lib.mkOption {
               type = lib.types.listOf lib.types.str;
@@ -722,33 +782,6 @@ in
                 Instances of this cluster the consumer may use, as
                 "namespace/instance". Each reaches the consumer as a
                 `kix.mkImport` with the instance's `out` and roles.
-              '';
-            };
-            secrets = lib.mkOption {
-              type = lib.types.listOf (
-                lib.types.submodule {
-                  options = {
-                    name = lib.mkOption { type = lib.types.str; };
-                    namespace = lib.mkOption { type = lib.types.str; };
-                    keys = lib.mkOption {
-                      type = lib.types.listOf lib.types.str;
-                      default = [ ];
-                    };
-                    type = lib.mkOption {
-                      type = lib.types.str;
-                      default = "Opaque";
-                    };
-                  };
-                }
-              );
-              default = [ ];
-              description = ''
-                Secrets present in the consumer's namespaces for it to use,
-                each in an exact namespace one of its patterns matches.
-                The interface lists them by name, namespace, keys, and type.
-                Kix does not create them: this cluster's own instances do,
-                for example the reflector package, or a package that mints a
-                credential per consumer.
               '';
             };
             clusterScoped = lib.mkOption {

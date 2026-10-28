@@ -92,9 +92,11 @@ kix.buildCluster {
       instances.platform.api.package = apiPackage;
 
       consumers.acme = {
-        namespaces = [ "acme-*" ];
-        resourceQuota.pods = "20";
-        podSecurity = "baseline";
+        namespaces."acme-*" = {
+          podSecurity = "baseline";
+          quota.pods = "20";
+          max = 5;
+        };
         services = [ "platform/api" ];
       };
     }

@@ -1,6 +1,7 @@
 # Tests for a platform cluster and the consumer clusters it hosts
 # (eval/consumers.nix). The platform `prod` grants consumer `acme` the
-# namespaces `acme-*`, the service dbns/db, a Secret and a ClusterRole, and
+# namespaces `acme-*`, a Secret in acme-app, the service dbns/db and a
+# ClusterRole, and
 # writes acme's interface file. The consumer, a cluster it names `acme-prod`,
 # loads the copy checked in as ./consumers/prod.json, which must equal what
 # the platform writes.
@@ -23,20 +24,22 @@ let
 
   grant = {
     consumers.acme = {
-      namespaces = [ "acme-*" ];
-      resourceQuota.pods = "10";
-      podSecurity = "restricted";
+      namespaces = {
+        "acme-*" = {
+          podSecurity = "restricted";
+          quota.pods = "10";
+        };
+        acme-app.secrets = [
+          {
+            name = "postgres";
+            keys = [
+              "password"
+              "user"
+            ];
+          }
+        ];
+      };
       services = [ "dbns/db" ];
-      secrets = [
-        {
-          name = "postgres";
-          namespace = "acme-app";
-          keys = [
-            "password"
-            "user"
-          ];
-        }
-      ];
       clusterScoped = [
         {
           kind = "ClusterRole";
@@ -80,8 +83,7 @@ let
       };
   };
 
-  # A consumer cluster built from `file`, with `modules` beside it. The
-  # patterns hold no exact name, so the imports' namespace is named.
+  # A consumer cluster built from `file`, with `modules` beside it.
   consumerWith =
     {
       name ? "acme-prod",
@@ -151,7 +153,7 @@ in
       db = i.services."dbns/db";
     in
     (
-      i.version == 1
+      i.version == 2
       && i.platform == "prod"
       && i.consumer == "acme"
       && !(i ? slice)
@@ -159,35 +161,40 @@ in
       && i.facts.networkPolicy == false
       &&
         i.namespaces == {
-          patterns = [ "acme-*" ];
-          podSecurity = "restricted";
-          resourceQuota = {
-            pods = "10";
+          "acme-*" = {
+            podSecurity = "restricted";
+            quota.pods = "10";
+            max = null;
+            secrets = [ ];
           };
-          platform = [
-            "appns"
-            "dbns"
-            "dns"
-            "kube-system"
-          ];
-          claimed = [ ];
+          acme-app = {
+            podSecurity = null;
+            quota = { };
+            max = null;
+            secrets = [
+              {
+                name = "postgres";
+                keys = [
+                  "password"
+                  "user"
+                ];
+                type = "Opaque";
+              }
+            ];
+          };
         }
+      &&
+        i.platformNamespaces == [
+          "appns"
+          "dbns"
+          "dns"
+          "kube-system"
+        ]
+      && i.claimedNamespaces == [ ]
       && db.namespace == "dbns"
       && db.instance == "db"
       && db.out.fqdn == "db.dbns.svc.cluster.local"
       && !(db.out ? url)
-      &&
-        i.secrets == [
-          {
-            name = "postgres";
-            namespace = "acme-app";
-            keys = [
-              "password"
-              "user"
-            ];
-            type = "Opaque";
-          }
-        ]
       &&
         i.clusterScoped == [
           {
@@ -250,11 +257,11 @@ in
   lib-consumers-platform-namespace-not-grantable =
     refused (platformWith [
       grant
-      { consumers.acme.namespaces = [ "appns" ]; }
+      { consumers.acme.namespaces.appns = { }; }
     ])
     && refused (platformWith [
       grant
-      { consumers.acme.namespaces = [ "kube-system" ]; }
+      { consumers.acme.namespaces.kube-system = { }; }
     ])
     || throw "a namespace the platform uses or reserves was granted";
 
@@ -262,13 +269,13 @@ in
     refused (platformWith [
       grant
       {
-        consumers.acme.namespaces = [ "*" ];
-        consumers.globex.namespaces = [ "*" ];
+        consumers.acme.namespaces."*" = { };
+        consumers.globex.namespaces."*" = { };
       }
     ])
     && !refused (platformWith [
       grant
-      { consumers.globex.namespaces = [ "*" ]; }
+      { consumers.globex.namespaces."*" = { }; }
     ])
     || throw "two consumers held \"*\", or one could not";
 
@@ -279,18 +286,19 @@ in
       cluster = platformWith [
         grant
         {
-          consumers.globex.namespaces = [ "*" ];
-          consumers.initech.namespaces = [
-            "reports"
-            "initech-*"
-          ];
+          consumers.globex.namespaces."*" = { };
+          consumers.initech.namespaces = {
+            reports = { };
+            "initech-*" = { };
+          };
         }
       ];
-      claimedOf = c: (builtins.fromJSON (builtins.readFile cluster.interfaces.${c})).namespaces.claimed;
+      claimedOf = c: (builtins.fromJSON (builtins.readFile cluster.interfaces.${c})).claimedNamespaces;
     in
     (
       claimedOf "globex" == [
         "acme-*"
+        "acme-app"
         "initech-*"
         "reports"
       ]
@@ -306,14 +314,9 @@ in
         platformWith [
           grant
           {
-            consumers.globex = {
-              namespaces = [ "*" ];
-              secrets = [
-                {
-                  name = "token";
-                  inherit namespace;
-                }
-              ];
+            consumers.globex.namespaces = {
+              "*" = { };
+              ${namespace}.secrets = [ { name = "token"; } ];
             };
           }
         ];
@@ -327,7 +330,7 @@ in
         patterns:
         platformWith [
           grant
-          { consumers.globex.namespaces = patterns; }
+          { consumers.globex.namespaces = lib.genAttrs patterns (_: { }); }
         ];
     in
     (
@@ -341,7 +344,7 @@ in
   lib-consumers-pattern-syntax-refused =
     refused (platformWith [
       grant
-      { consumers.acme.namespaces = [ "acme-*-app" ]; }
+      { consumers.acme.namespaces."acme-*-app" = { }; }
     ])
     || throw "a pattern with '*' inside was accepted";
 
@@ -349,12 +352,7 @@ in
     refused (platformWith [
       grant
       {
-        consumers.acme.secrets = lib.mkForce [
-          {
-            name = "postgres";
-            namespace = "dbns";
-          }
-        ];
+        consumers.acme.namespaces.dbns.secrets = [ { name = "postgres"; } ];
       }
     ])
     || throw "a Secret in a platform namespace was granted";
@@ -452,22 +450,14 @@ in
   # with none, the consumer must name the namespace.
   lib-consumers-imports-namespace =
     let
-      exact = fixtureWith (
-        i:
-        i
-        // {
-          namespaces = i.namespaces // {
-            patterns = [ "acme-app" ];
-          };
-        }
-      );
+      patternsOnly = fixtureWith (i: i // { namespaces = removeAttrs i.namespaces [ "acme-app" ]; });
       built = eval.buildCluster {
         name = "acme-prod";
-        modules = [ (eval.interface exact) ];
+        modules = [ (eval.interface fixture) ];
       };
       unnamed = eval.buildCluster {
         name = "acme-prod";
-        modules = [ (eval.interface fixture) ];
+        modules = [ (eval.interface patternsOnly) ];
       };
     in
     (built.instances.acme-app.db.out.fqdn == "db.dbns.svc.cluster.local" && evalFails unnamed)
@@ -503,9 +493,7 @@ in
             i:
             i
             // {
-              namespaces = i.namespaces // {
-                patterns = [ "*" ];
-              };
+              namespaces."*" = i.namespaces."acme-*";
             }
           );
         }
@@ -524,10 +512,8 @@ in
             i:
             i
             // {
-              namespaces = i.namespaces // {
-                patterns = [ "*" ];
-                claimed = [ "globex-*" ];
-              };
+              namespaces."*" = i.namespaces."acme-*";
+              claimedNamespaces = [ "globex-*" ];
             }
           );
         } modules;
@@ -543,8 +529,8 @@ in
     || throw "the \"*\" holder built into another consumer's namespace";
 
   lib-consumers-unknown-version-refused =
-    evalFails (consumerWith { file = fixtureWith (i: i // { version = 2; }); } [ ])
-    || throw "an interface of version 2 was loaded";
+    evalFails (consumerWith { file = fixtureWith (i: i // { version = 1; }); } [ ])
+    || throw "an interface of version 1 was loaded";
 
   # The fixture's namespaces enforce "restricted": echo-server's pods break
   # it, so the build refuses them; a container that meets it builds.
@@ -578,7 +564,9 @@ in
             i
             // {
               namespaces = i.namespaces // {
-                podSecurity = level;
+                "acme-*" = i.namespaces."acme-*" // {
+                  podSecurity = level;
+                };
               };
             }
           );
@@ -595,4 +583,105 @@ in
       )
     )
     || throw "the check did not follow the interface's level";
+
+  # An exact name inside a pattern adjusts that namespace: its quota keys
+  # join the pattern's and its level replaces the pattern's. Other
+  # namespaces the pattern matches keep the pattern's settings.
+  lib-consumers-exact-name-adjusts-its-namespace =
+    let
+      cluster =
+        consumerWith
+          {
+            file = fixtureWith (
+              i:
+              i
+              // {
+                namespaces = i.namespaces // {
+                  acme-app = i.namespaces.acme-app // {
+                    podSecurity = "baseline";
+                    quota."requests.memory" = "2Gi";
+                  };
+                };
+              }
+            );
+          }
+          [
+            { instances.acme-other.extra.package = mkCmPackage { name = "extra"; }; }
+          ];
+      ms = manifests cluster;
+      hardOf = ns: (builtins.head (named "ResourceQuota" "${ns}-quota" ms)).spec.hard;
+      levelOf =
+        ns: (builtins.head (named "Namespace" ns ms)).metadata.labels."pod-security.kubernetes.io/enforce";
+    in
+    (
+      hardOf "acme-app" == {
+        pods = "10";
+        "requests.memory" = "2Gi";
+      }
+      && hardOf "acme-other" == { pods = "10"; }
+      && levelOf "acme-app" == "baseline"
+      && levelOf "acme-other" == "restricted"
+    )
+    || throw "unexpected settings: acme-app ${builtins.toJSON (hardOf "acme-app")}, acme-other ${builtins.toJSON (hardOf "acme-other")}";
+
+  lib-consumers-secret-under-pattern-refused =
+    refused (platformWith [
+      grant
+      { consumers.acme.namespaces."acme-*".secrets = [ { name = "token"; } ]; }
+    ])
+    || throw "a Secret under a pattern was granted";
+
+  lib-consumers-max-on-exact-name-refused =
+    refused (platformWith [
+      grant
+      { consumers.acme.namespaces.acme-app.max = 2; }
+    ])
+    && !refused (platformWith [
+      grant
+      { consumers.acme.namespaces."acme-*".max = 2; }
+    ])
+    || throw "max on an exact name was granted, or max on a pattern refused";
+
+  # One consumer's patterns may not match the same namespace; an exact name
+  # inside a pattern may.
+  lib-consumers-own-overlapping-patterns-refused =
+    refused (platformWith [
+      grant
+      { consumers.acme.namespaces."acme-app-*" = { }; }
+    ])
+    && refused (platformWith [
+      grant
+      { consumers.acme.namespaces."*" = { }; }
+    ])
+    && !refused (platformWith [
+      grant
+      { consumers.acme.namespaces.acme-reports = { }; }
+    ])
+    || throw "overlapping patterns of one consumer were granted, or an exact name inside one refused";
+
+  # `max` counts every namespace the build renders that matches the
+  # pattern, exact names inside it included.
+  lib-consumers-max-exceeded-refused =
+    let
+      limited = consumerWith {
+        file = fixtureWith (
+          i:
+          i
+          // {
+            namespaces = i.namespaces // {
+              "acme-*" = i.namespaces."acme-*" // {
+                max = 1;
+              };
+            };
+          }
+        );
+      };
+    in
+    (
+      evalFails (limited [
+        { instances.acme-other.extra.package = mkCmPackage { name = "extra"; }; }
+      ])
+      && builtins.deepSeq (manifests (limited [ ])) true
+    )
+    || throw "a build with more namespaces than max allows was built, or one within it was not";
 }

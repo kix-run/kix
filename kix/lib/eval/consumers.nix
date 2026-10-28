@@ -3,15 +3,17 @@
 # They share data only: the platform's build writes one interface file per
 # consumer, and the consumer's build loads a copy of it with `kix.interface`.
 #
-# A consumer's namespaces are patterns (`acme-*`, `reports`, `*`). The
-# platform's namespaces are those its build renders into plus its
-# `reservedNamespaces`; a consumer may use any namespace one of its patterns
-# matches and that is not the platform's. One consumer may hold `*`: every
-# namespace that is not the platform's and that no other consumer's pattern
-# matches. Its interface lists those other patterns as `claimed`, without
-# the consumers' names. The consumer renders its own
-# namespaces, and each carries the consumer's label, Pod Security level and
-# quota.
+# A consumer's namespaces are a map from pattern (`acme-*`, `reports`, `*`)
+# to the settings of the namespaces it grants: Pod Security level, quota,
+# `max` on a pattern, Secrets on an exact name. An exact name inside a
+# pattern adjusts that one namespace's settings. The platform's namespaces
+# are those its build renders into plus its `reservedNamespaces`; a consumer
+# may use any namespace one of its keys matches and that is not the
+# platform's. One consumer may hold `*`: every namespace that is not the
+# platform's and that no other consumer's key matches. Its interface lists
+# those other keys as `claimedNamespaces`, without the consumers' names. The
+# consumer renders its own namespaces, and each carries the consumer's label
+# and its settings' Pod Security level and quota.
 #
 # `platform` checks a cluster's `consumers`, renders the ingress rules to
 # granted services, and writes the interface files. `interface` is the
@@ -27,7 +29,7 @@
 }:
 
 let
-  version = 1;
+  version = 2;
 
   kixAnnotations = import ../core/annotations.nix;
   consumerLabel = kixAnnotations.keys.consumerLabel;
@@ -131,15 +133,15 @@ let
     else
       v;
 
-  # The other consumers' patterns, which the `*` holder may not use. Empty
-  # for a consumer without `*`: its patterns overlap no one else's.
+  # The other consumers' keys, which the `*` holder may not use. Empty for
+  # a consumer without `*`: its keys overlap no one else's.
   claimedBy =
     consumers: consumer:
-    if builtins.elem "*" consumers.${consumer}.namespaces then
+    if consumers.${consumer}.namespaces ? "*" then
       lib.unique (
         builtins.sort builtins.lessThan (
           builtins.filter (p: p != "*") (
-            lib.concatMap (c: consumers.${c}.namespaces) (
+            lib.concatMap (c: builtins.attrNames consumers.${c}.namespaces) (
               builtins.filter (c: c != consumer) (builtins.attrNames consumers)
             )
           )
@@ -149,9 +151,9 @@ let
       [ ];
 
   # Refusals, as messages, of the platform's grants: names, patterns, `*`
-  # held once, no two consumers' patterns overlapping, no exact pattern on
-  # a platform namespace, and delivered Secrets in the consumer's own
-  # namespaces.
+  # held once, no two consumers' keys overlapping, no two of one consumer's
+  # patterns overlapping, no exact name of a platform namespace, `max` on
+  # patterns only, and Secrets on exact names only.
   grantRefusals =
     {
       name,
@@ -159,14 +161,10 @@ let
       platformNamespaces,
     }:
     let
-      owns =
-        consumer: c: ns:
-        !(builtins.elem ns platformNamespaces)
-        && builtins.any (p: matches p ns) c.namespaces
-        && !(builtins.any (p: matches p ns) (claimedBy consumers consumer));
       names = builtins.attrNames consumers;
-      wildcards = builtins.filter (c: builtins.elem "*" consumers.${c}.namespaces) names;
-      pairs = lib.concatMap (a: map (b: { inherit a b; }) (builtins.filter (b: a < b) names)) names;
+      keysOf = c: builtins.attrNames consumers.${c}.namespaces;
+      wildcards = builtins.filter (c: consumers.${c}.namespaces ? "*") names;
+      pairsOf = xs: lib.concatMap (a: map (b: { inherit a b; }) (builtins.filter (b: a < b) xs)) xs;
       overlapsOf =
         { a, b }:
         lib.concatMap (
@@ -174,37 +172,48 @@ let
           map (
             pb:
             "consumers.${a} and consumers.${b} both match namespaces '${pa}' and '${pb}'. Give each consumer namespaces of its own."
-          ) (builtins.filter (pb: pb != "*" && pa != "*" && overlap pa pb) consumers.${b}.namespaces)
-        ) consumers.${a}.namespaces;
+          ) (builtins.filter (pb: pb != "*" && pa != "*" && overlap pa pb) (keysOf b))
+        ) (keysOf a);
       ofConsumer =
         consumer: c:
         let
           who = "consumers.${consumer}";
+          keys = builtins.attrNames c.namespaces;
+          patterns = builtins.filter (p: p == "*" || isGlob p) keys;
+          exact = builtins.filter (p: !(p == "*" || isGlob p)) keys;
         in
         lib.optional (
           !isDnsLabel consumer
         ) "${who}: the consumer name must be a DNS label (lower-case letters, digits and '-')."
         ++
-          lib.optional (c.namespaces == [ ])
-            "${who}.namespaces is empty, so the consumer has nowhere to put its objects. Give it a pattern such as \"${consumer}-*\"."
+          lib.optional (c.namespaces == { })
+            "${who}.namespaces is empty, so the consumer has nowhere to put its objects. Give it a pattern such as \"${consumer}-*\" = { }."
         ++ map (
           p:
           "${who}.namespaces: '${p}' is not a namespace pattern. Use an exact name, a prefix such as \"${consumer}-*\", or \"*\"."
-        ) (builtins.filter (p: !isPattern p) c.namespaces)
+        ) (builtins.filter (p: !isPattern p) keys)
         ++ map (
           p:
           "${who}.namespaces: '${p}' is a namespace cluster '${name}' uses itself. A consumer's namespace holds only the consumer's objects."
-        ) (builtins.filter (p: !isGlob p && p != "*" && builtins.elem p platformNamespaces) c.namespaces)
+        ) (builtins.filter (p: builtins.elem p platformNamespaces) exact)
         ++ map (
-          s:
-          "${who}.secrets: Secret '${s.name}' is in namespace '${s.namespace}', which is not one of the consumer's namespaces (${builtins.concatStringsSep ", " c.namespaces}, not cluster '${name}''s own nor another consumer's)."
-        ) (builtins.filter (s: !(owns consumer c s.namespace)) c.secrets);
+          { a, b }:
+          "${who}.namespaces: '${a}' and '${b}' can match the same namespace. Give each namespace one pattern; an exact name inside a pattern may adjust its settings."
+        ) (builtins.filter ({ a, b }: a == "*" || b == "*" || overlap a b) (pairsOf patterns))
+        ++ map (
+          p:
+          "${who}.namespaces.${p}.max: '${p}' is an exact name, so it is one namespace. Set `max` on a pattern."
+        ) (builtins.filter (p: c.namespaces.${p}.max != null) exact)
+        ++ map (
+          p:
+          "${who}.namespaces.\"${p}\".secrets: '${p}' is a pattern, and a Secret lives in one namespace. List the Secret under the exact name of its namespace."
+        ) (builtins.filter (p: c.namespaces.${p}.secrets != [ ]) patterns);
     in
     lib.concatLists (lib.mapAttrsToList ofConsumer consumers)
     ++
       lib.optional (builtins.length wildcards > 1)
         "consumers ${builtins.concatStringsSep " and " wildcards} each hold namespaces \"*\". One consumer may hold \"*\"; give the others patterns of their own."
-    ++ lib.concatMap overlapsOf pairs;
+    ++ lib.concatMap overlapsOf (pairsOf names);
 in
 {
   inherit isKixOwn grantRefusals;
@@ -313,12 +322,12 @@ in
           capabilities = cfg.cluster.capabilities;
           networkPolicy = cfg.networkPolicy.enable or false;
         };
-        namespaces = {
-          patterns = c.namespaces;
-          inherit (c) podSecurity resourceQuota;
-          platform = platformNamespaces;
-          claimed = claimedBy consumers consumer;
-        };
+        namespaces = lib.mapAttrs (_: n: {
+          inherit (n) podSecurity quota max;
+          secrets = map (s: { inherit (s) name keys type; }) n.secrets;
+        }) c.namespaces;
+        inherit platformNamespaces;
+        claimedNamespaces = claimedBy consumers consumer;
         services = builtins.listToAttrs (
           map (
             key:
@@ -333,14 +342,6 @@ in
             }
           ) c.services
         );
-        secrets = map (s: {
-          inherit (s)
-            name
-            namespace
-            keys
-            type
-            ;
-        }) c.secrets;
         clusterScoped = map (o: { inherit (o) kind name; }) c.clusterScoped;
         secretsRecipient = cfg.secretsRecipient;
       };
@@ -367,7 +368,8 @@ in
   # `kix.interface { file = ./kix-interface/prod.json; importNamespace = "acme-app"; }`:
   # a cluster module that builds this cluster as the consumer the file
   # describes. Each granted service becomes an import in `importNamespace`,
-  # by default the first exact name among the consumer's patterns.
+  # by default the first exact name, in alphabetical order, among the
+  # consumer's namespaces.
   interface =
     arg:
     { lib, ... }:
@@ -378,14 +380,14 @@ in
       facts = data.facts or { };
       # Every capability as a default, so the cluster's own setting wins.
       defaults = v: if builtins.isAttrs v then lib.mapAttrs (_: defaults) v else lib.mkDefault v;
-      exact = builtins.filter (p: !isGlob p && p != "*") (data.namespaces.patterns or [ ]);
+      exact = builtins.filter (p: !isGlob p && p != "*") (builtins.attrNames (data.namespaces or { }));
       home =
         if builtins.isAttrs arg && arg ? importNamespace then
           arg.importNamespace
         else if exact != [ ] then
           builtins.head exact
         else
-          throw "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " data.namespaces.patterns}), so kix does not know where to put the imports of its services. Name one: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
+          throw "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " (builtins.attrNames data.namespaces)}), so kix does not know where to put the imports of its services. Name one: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
       imports = lib.mapAttrsToList (key: svc: {
         inherit key;
         inherit (svc) instance;
@@ -431,6 +433,8 @@ in
       loaded = builtins.attrValues cfg.interfaces;
       data = builtins.head loaded;
       grant = data.namespaces;
+      keys = builtins.attrNames grant;
+      patterns = builtins.filter (p: p == "*" || isGlob p) keys;
       allowedScoped = map (o: "${o.kind}/${o.name}") data.clusterScoped;
       who =
         m:
@@ -439,18 +443,40 @@ in
         }${plain m.metadata.name}";
       whose =
         ns:
-        if builtins.elem ns grant.platform then
+        if builtins.elem ns data.platformNamespaces then
           "is ${data.platform}'s"
-        else if !(builtins.any (p: matches p ns) grant.patterns) then
-          "matches none of your namespaces (${builtins.concatStringsSep ", " grant.patterns})"
+        else if !(builtins.any (p: matches p ns) keys) then
+          "matches none of your namespaces (${builtins.concatStringsSep ", " keys})"
         else
           let
-            by = builtins.filter (p: matches p ns) grant.claimed;
+            by = builtins.filter (p: matches p ns) data.claimedNamespaces;
           in
           if by != [ ] then
             "another consumer of ${data.platform} uses (it matches '${builtins.head by}')"
           else
             null;
+
+      # The settings of namespace `ns`: those of the pattern that matches
+      # it, then those of its exact name on top. The platform's build
+      # refuses overlapping patterns, so at most one matches.
+      settingsOf =
+        ns:
+        let
+          pattern = lib.findFirst (p: matches p ns) null patterns;
+          base =
+            if pattern == null then
+              {
+                podSecurity = null;
+                quota = { };
+              }
+            else
+              grant.${pattern};
+          own = grant.${ns} or { };
+        in
+        {
+          podSecurity = if (own.podSecurity or null) != null then own.podSecurity else base.podSecurity;
+          quota = base.quota // (own.quota or { });
+        };
 
       # Refuse what the grant does not allow, before anything is deployed.
       refusalOf =
@@ -474,6 +500,24 @@ in
           }."
         else
           null;
+
+      # Each pattern with a `max` that more of the build's Namespaces match.
+      overMax =
+        manifests:
+        let
+          namespaces = map (m: plain m.metadata.name) (
+            builtins.filter (m: plain (m.kind or "") == "Namespace") manifests
+          );
+        in
+        lib.concatMap (
+          p:
+          let
+            max = grant.${p}.max or null;
+            found = builtins.filter (matches p) namespaces;
+          in
+          lib.optional (max != null && builtins.length found > max)
+            "the build renders ${toString (builtins.length found)} namespaces matching '${p}' (${builtins.concatStringsSep ", " found}), and ${data.platform}'s interface allows at most ${toString max}."
+        ) patterns;
     in
     if loaded == [ ] then
       null
@@ -481,23 +525,26 @@ in
       throw "kix: cluster '${name}' loads interfaces of ${builtins.concatStringsSep " and " (builtins.attrNames cfg.interfaces)}. A cluster is one platform's consumer; load one interface."
     else
       {
-        # A namespace's own configuration, with the consumer's label, and
+        # Namespace `ns`'s own configuration, with the consumer's label, and
         # the platform's Pod Security level and quota where it sets them.
         stamp =
-          own:
+          ns: own:
+          let
+            settings = settingsOf ns;
+          in
           own
           // {
             labels = (own.labels or { }) // {
               ${consumerLabel} = data.consumer;
             };
           }
-          // lib.optionalAttrs (grant.podSecurity != null) { inherit (grant) podSecurity; }
-          // lib.optionalAttrs (grant.resourceQuota != null) { inherit (grant) resourceQuota; };
+          // lib.optionalAttrs (settings.podSecurity != null) { inherit (settings) podSecurity; }
+          // lib.optionalAttrs (settings.quota != { }) { resourceQuota = settings.quota; };
 
-        # Where the Pod Security level of the consumer's namespaces comes
-        # from, for the build's messages; null when the interface sets none.
-        podSecuritySource =
-          if grant.podSecurity != null then "set by ${data.platform}'s interface" else null;
+        # Where the Pod Security level of namespace `ns` comes from, for the
+        # build's messages; null when the interface sets none for it.
+        podSecuritySourceOf =
+          ns: if (settingsOf ns).podSecurity != null then "set by ${data.platform}'s interface" else null;
 
         recordInterfaces.${data.platform} = {
           inherit (data) consumer;
@@ -511,6 +558,6 @@ in
           map (message: {
             assertion = false;
             message = "kix: ${message}";
-          }) (builtins.filter (r: r != null) (map refusalOf manifests));
+          }) (builtins.filter (r: r != null) (map refusalOf manifests) ++ overMax manifests);
       };
 }
