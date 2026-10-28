@@ -1,17 +1,12 @@
 # Amazon EKS flavor.
 #
-# Managed control plane. aws-vpc-cni gives pods real VPC IPs, and the cni
-# role is environment-owned (exclusive). LoadBalancer works via the in-tree
-# cloud provider (CLBs) or the AWS Load Balancer Controller addon (NLB/ALB),
-# so the role is shadowable. No ingress controller is included.
+# EKS provides a managed control plane, `aws-vpc-cni` (exclusive), CoreDNS,
+# and cloud load balancing via the in-tree controller or the AWS Load Balancer
+# Controller add-on (shadowable).
 #
-# Storage: EKS creates no StorageClass a cluster can rely on. The EBS CSI
-# driver is an add-on (https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html),
-# no gp3 class exists until somebody creates one, and EKS Auto Mode creates
-# none. The storageClasses role is therefore vacant: a cluster declares its
-# class as a managed instance or as its own import.
-#
-# Platform imports: DNS (coredns, managed by EKS).
+# EKS does not create a usable default StorageClass out of the box (the EBS CSI
+# driver is a separate add-on), so `storageClasses` is `absent` and clusters
+# declare their own storage class or import.
 
 {
   config,
@@ -29,7 +24,7 @@
     };
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "absent";
-    # EKS does not deploy metrics-server; it is an optional community add-on.
+    # EKS does not install metrics-server by default.
     metricsApi.binding = lib.mkDefault "absent";
     loadBalancer = {
       binding = lib.mkDefault "shadowable";
@@ -37,18 +32,17 @@
     };
   };
 
-  # Amazon Linux 2023 nodes turn discard_unpacked_layers on. A nodeadm
-  # config that turns it off sets this to false.
+  # Amazon Linux 2023 nodes enable `discard_unpacked_layers` by default.
+  # Override this to false when a `nodeadm` config disables it.
   cluster.containerd.discardUnpackedLayers = lib.mkDefault true;
 
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
-    nodeAutoscaling = lib.mkDefault false; # Karpenter / cluster-autoscaler must be installed
+    nodeAutoscaling = lib.mkDefault false; # requires Karpenter or cluster-autoscaler
     privilegedContainers = lib.mkDefault true;
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {

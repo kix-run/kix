@@ -1,9 +1,7 @@
-# The option contract (eval/options.nix) over a package rather than an
-# options set. Phase 1 is called the way instance evaluation calls it: at
-# each availability level the package can run at (every level up to its
-# `meta.availability.max`) with the `kix` an instance at that level
-# receives, so an option default that depends on the level is checked at
-# each one. A package that does not take `availability` is checked once.
+# Check a package's options against the option contract (eval/options.nix).
+# Evaluate phase 1 at each availability level up to `meta.availability.max`
+# so option defaults that depend on the level are checked at each one.
+# Packages that do not accept `availability` are checked once.
 {
   lib,
   kixlib,
@@ -15,10 +13,8 @@
 let
   availabilityLib = import ../core/availability.nix { inherit lib; };
 
-  # `levels`, the availability levels checked, and `violations`, one entry
-  # per violation as optionContractViolations returns them with `levels`
-  # naming the levels it occurs at. `scope` is the phase-1 scope; a default
-  # that reads `scope.instanceName` sees its value.
+  # Return the checked availability `levels` and deduplicated option contract
+  # `violations`, annotated with the levels where each violation occurs.
   analyse =
     {
       package,
@@ -86,12 +82,11 @@ let
     };
 in
 {
-  # The violations of `analyse`, for a caller that reports them itself.
+  # Return the option contract violations for `package`.
   packageOptionViolations = args: (analyse args).violations;
 
-  # Throws when the package breaks the option contract at any level, with
-  # one line per violation; a violation that does not occur at every level
-  # names the levels it occurs at. Returns null otherwise.
+  # Throw if `package` violates the option contract at any supported
+  # availability level, or return null.
   checkPackageOptions =
     args@{ package, ... }:
     let

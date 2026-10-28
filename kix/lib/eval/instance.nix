@@ -54,8 +54,8 @@ in
       clusterCtx ? { },
       annotationDomainIndex ? { },
       factBehaviorOverrides ? { },
-      # nsName -> instName -> bool: whether the instance renders. Read by
-      # import instances, whose extraDeps may name another instance.
+      # Report whether namespace/instance renders. Read by import instances
+      # whose extraDeps may name another instance.
       isInstanceActive,
     }@args:
 
@@ -87,8 +87,6 @@ in
           inherit where;
         };
 
-        # The helper set this instance's package receives, in its option
-        # defaults and its build functions alike.
         packageKix = kixlib // {
           availability =
             kixlib.availability
@@ -123,12 +121,10 @@ in
             let
               dnsInst = allInstances.${_dnsResolution.namespace}.${_dnsResolution.instanceName};
             in
-            # Do not add the DNS provider's root as its own dependency.
             if _dnsResolution.namespace == namespaceName && _dnsResolution.instanceName == instanceName then
               null
-            # Depend on the provider's root resource, not on its PackageInstance
-            # (`dnsInst.root`). An import has no parts; its marker is its only
-            # resource, so its `root` is the dependency.
+            # Depend on the provider's root resource rather than its PackageInstance (`dnsInst.root`).
+            # Import instances have no parts, so their marker in `root` is the only resource to depend on.
             else if dnsInst ? raw then
               dnsInst.raw.root.resource or dnsInst.raw.root
             else if dnsInst ? root then
@@ -142,16 +138,13 @@ in
           else
             clusterCtx.findRoleProvider "network-policy-enforcer";
 
-        # Do not expose the enforcer to its own package scope.
         _isSelfEnforcer =
           _enforcerProvider != null
           && _enforcerProvider.ns == namespaceName
           && _enforcerProvider.inst == instanceName;
 
-        # scope.networkPolicyEnforcer is available only when policy generation
-        # is enabled, a provider exists, and this is not the provider instance.
-        # The plugin declares networkPolicy.enable, so clusters without the
-        # plugin use the false default.
+        # The netpol plugin declares networkPolicy.enable, so clusters without
+        # the plugin default to false.
         _netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
 
         _networkPolicyEnforcer =
@@ -195,7 +188,7 @@ in
           inherit (clusterConfig) clusterDomain;
           capabilities = clusterConfig.cluster.capabilities or { };
           inherit factBehaviorOverrides;
-          # Lazy: settled by the outer fixpoint before the first mkWorkload forces it.
+          # The outer fixpoint settles this value before the first mkWorkload call forces it.
           edgeAnalysis = _edgeAnalysis;
         };
 
@@ -249,9 +242,6 @@ in
               hasDefault = isOptional;
             };
           in
-          # `targets` holds one entry per instance the dependency names: one,
-          # or several for a list override. `value` is what the package
-          # receives.
           if resolution.found && !(resolution.direct or false) then
             acc
             // {
@@ -335,8 +325,8 @@ in
         parts = lib.fix (
           self:
           let
-            # mergeCollide compares key sets only, so the fixpoint stays lazy.
-            # partsOverlays below keep `//`: replacing a part is their purpose.
+            # mergeCollide compares key sets only, keeping the fixpoint lazy.
+            # partsOverlays use `//` so they can replace existing parts.
             merged = builtins.foldl' (
               acc: fn:
               helpers.mergeCollide
@@ -383,11 +373,8 @@ in
           r: r._injectedResources or [ ]
         ) _partResourcesFromParts;
 
-        # collectTypedAttrs excludes root. Require the root resource to also
-        # appear under a named part so it is included in the manifest set:
-        #
-        #   claim = scope.mkResource { ... };
-        #   root  = claim;
+        # collectTypedAttrs excludes root, so the root resource must also be
+        # assigned to a named part to be included in the manifest set.
         _rootRendersCheck =
           let
             plainPath = r: builtins.unsafeDiscardStringContext r.outPath;
@@ -544,17 +531,17 @@ in
             availability
             ;
           cluster = clusterCtx;
-          # Use the forward closure only; processor output depends on this
-          # context and would introduce recursion.
+          # Check only the forward closure because processor output is added to
+          # inverseDeps and would cause infinite recursion.
           forwardReachable = r: builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) forwardPaths;
         };
         processorResults = map (p: p processorCtx) instanceProcessors;
         processorResources = builtins.concatMap (r: r.resources or [ ]) processorResults;
         processorWarnings = builtins.concatMap (r: r.warnings or [ ]) processorResults;
 
-        # Record each dependency as "namespace/instance" with its evaluated
-        # view. resolvedDepMeta covers DI; directly wired deps expose their
-        # identity through _meta.
+        # Record each dependency as "namespace/instance" with its evaluated view.
+        # resolvedDepMeta covers auto-resolved dependencies, while directly
+        # wired dependencies expose their identity through _meta.
         directDepLinks =
           map (depTarget: {
             id = "${depTarget.resolution.namespace}/${depTarget.resolution.instanceName}";
@@ -577,8 +564,7 @@ in
           ) (builtins.attrValues deps);
 
         # Follow _depLinks transitively so annotation-domain checks recognize
-        # declarers reached through another dependency. The seen set handles
-        # shared dependencies and cycles.
+        # declarers reached through another dependency.
         transitiveDepTargets =
           let
             go =
@@ -601,8 +587,6 @@ in
         scorecardEnabled = (scorecardConfig.enable or false) && (scorecardConfig.rules or { }) != { };
         owner = packageMeta.owner or null;
 
-        # Score the complete instance output: package parts, resources injected
-        # by the scope, and resources derived by processors.
         shippedResources = allPartResources ++ processorResources;
 
         scorecardManifestFindings =
@@ -641,8 +625,6 @@ in
                 ;
               config = evaluatedConfig;
               meta = packageMeta;
-              # annotationDomainOwnership accepts declarers from direct and
-              # transitive dependencies, identified as "namespace/instance".
               resolvedDepTargets = transitiveDepTargets;
               knownAnnotationDomains = scorecardConfig.knownAnnotationDomains or [ ];
               ruleDefaults = scorecardConfig.ruleDefaults or { };

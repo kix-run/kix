@@ -1,31 +1,28 @@
-# Scrape policies: the network path from each Prometheus server to the
-# targets of the ServiceMonitors, PodMonitors, and Alertmanagers it selects.
+# Derive network policies for the scrape paths from each Prometheus server to
+# its selected ServiceMonitors, PodMonitors, and Alertmanagers.
 #
-# The path is a cluster-wide label join, so the netpol cluster processor runs
-# it after every instance is built. A Prometheus CR selects monitors by
-# `serviceMonitorSelector`/`podMonitorSelector` and their namespace selectors;
-# a ServiceMonitor selects Services by label, and a PodMonitor selects pods.
-# None of these carry endpoint facts, and the scraper pods usually run in a
-# different namespace from the monitor, so the per-workload derivation cannot
-# see the connection.
+# The netpol cluster processor runs this pass after all instances are built
+# because scrape discovery is a cluster-wide label join. A Prometheus CR
+# selects monitors by label and namespace selectors, while ServiceMonitors
+# and PodMonitors select Services and pods by label. Those selectors carry no
+# endpoint facts and often cross namespaces, so per-workload edge analysis
+# cannot see the connection.
 #
-# The scraper pods are named by the Prometheus CRD's `factBehavior.podSelector`,
-# which the prometheus-operator package declares. Targets are resolved against
-# the resources Kix built: Services, ServiceRef markers, and workloads (pod
-# labels, named container ports, `hostNetwork`). A Service over pods Kix did
-# not build gets an egress rule for its selector, which does not reach pods on
-# the host network. A monitor whose Service Kix does not render (the kubelet)
-# gets no rule.
+# Scraper pods are identified by `factBehavior.podSelector` on the Prometheus
+# CRD. Targets are resolved against rendered Services, ServiceRef markers,
+# and workloads. A Service backed by pods outside Kix still gets a selector
+# egress rule on the pod network, while a monitor targeting an unrendered
+# Service without a ServiceRef marker gets no rule.
 #
-# Some scrape paths cannot be derived: a Prometheus CR whose CRD names no
-# server pods, a PodMonitor selector with matchExpressions, and a target port
-# that is a name no Kix container declares (an egress rule needs a number).
-# These are `breakages`: errors under default deny, where the scrape would
-# otherwise be dropped, and warnings without it.
+# Unresolvable scrape paths include Prometheus resources without a
+# `podSelector`, PodMonitor selectors that use `matchExpressions`, and named
+# target ports that no rendered container declares. Under default deny these
+# are build errors because the scrape traffic would be blocked. When default
+# deny is disabled they are reported as warnings.
 #
-# Without default deny, a target ingress policy would be the first ingress
-# policy on its pods and close them to every other client. Target ingress is
-# then emitted only for targets whose pods another policy already isolates
+# When default deny is disabled, adding the first ingress policy to a target
+# pod would block all other callers. Target ingress policies are therefore
+# emitted only when another policy already isolates all of the target's pods
 # for ingress.
 
 { lib }:
@@ -39,13 +36,13 @@ let
   groupOf = r: lib.head (lib.splitString "/" (r.rawManifest.apiVersion or ""));
   isMonitoringKind = kind: r: (r.kind or "") == kind && groupOf r == monitoringGroup;
 
-  # Attribute names and object names cannot use a value's string context.
+  # Strip string context so a value can be used in attribute and resource names.
   plain = s: builtins.unsafeDiscardStringContext (toString s);
 
   nsOfRaw = raw: raw.metadata.namespace or null;
 
-  # metav1.LabelSelector: every matchLabels pair and every matchExpression
-  # must hold. `{}` matches everything.
+  # Return true when `labels` satisfies a Kubernetes `metav1.LabelSelector`.
+  # An empty selector matches every label set.
   matchesSelector =
     selector: labels:
     let
@@ -75,15 +72,11 @@ in
 {
   inherit matchesSelector;
 
-  # Returns { egressPolicies, ingressPolicies, warnings, errors }.
-  # `resources` are the sealed resources of every active instance;
-  # `nsResources` maps each Kix namespace to its Namespace resource, and
-  # `realNsNames` lists the ones default deny covers. Policies land only in
-  # Kix namespaces. `enforced` is `{ ingress; egress; }`, the directions the
-  # cluster enforces. `extraPolicies` are policies the cluster processor
-  # emits itself (platform intents), which count when deciding whether a
-  # target is already isolated. `errors` is non-empty only under
-  # `defaultDeny`.
+  # Derive `{ egressPolicies, ingressPolicies, warnings, errors }` for all
+  # Prometheus instances in Kix-managed namespaces. `extraPolicies` supplies
+  # additional cluster-level policies (such as platform intents) that count
+  # when checking whether target pods are already isolated for ingress.
+  # `errors` is populated only when `defaultDeny` is enabled.
   derive =
     {
       resources,
@@ -103,9 +96,8 @@ in
           "kubernetes.io/metadata.name" = ns;
         };
 
-      # Services and ServiceRef markers, as { namespace, name, labels,
-      # selector, ports }. A Service without a selector has no pods Kix can
-      # name, so it is left out.
+      # Collect Services with pod selectors and ServiceRef markers as
+      # `{ namespace, name, labels, selector, ports }`.
       services = builtins.concatMap (
         r:
         let
@@ -163,11 +155,10 @@ in
           w: w.namespace == namespace && matchesSelector { matchLabels = podSelector; } w.podLabels
         ) workloads;
 
-      # A port name resolves through the container ports of the Kix workloads
-      # behind the selector, to every number they declare it with: a Service
-      # targetPort name resolves per pod, so two workloads may give it two
-      # numbers. It stays a name when no workload declares it, which is the
-      # case for pods an operator creates.
+      # Resolve a port name against the container ports of the backing workloads.
+      # Multiple workloads behind one selector may map the same port name to
+      # different numbers. Keep the port name unchanged when no workload in the
+      # build declares it.
       resolvePort =
         backing: port:
         if isNumeric port then
@@ -182,9 +173,9 @@ in
           in
           if hits == [ ] then [ port ] else hits;
 
-      # One target: pods by selector in a namespace, with the pod ports a
-      # scrape reaches. `key` is the readable part of the policy name; `id`
-      # is unique per target within a namespace and keys deduplication.
+      # Build a scrape target record for pods matching `podSelector` in
+      # `namespace`. `key` forms the human-readable policy name segment, and
+      # `id` deduplicates targets within a namespace.
       mkTarget =
         {
           key,
@@ -207,14 +198,13 @@ in
           ports = map (port: { inherit port protocol; }) (
             lib.unique (builtins.concatMap (resolvePort backing) ports)
           );
-          # Kix knows the pods' network and labels only for pods it built;
-          # unknown pods are taken to be on the pod network, and
-          # `podLabelSets` is empty for them.
+          # Only workloads built by Kix have known `hostNetwork` and pod labels.
+          # Pods created at runtime by an operator default to the pod network
+          # with an empty `podLabelSets`.
           hostNetwork = backing != [ ] && builtins.all (w: w.hostNetwork) backing;
           podLabelSets = map (w: w.podLabels) backing;
         };
 
-      # Pod port of a Service port, before name resolution.
       podPortOf = sp: sp.targetPort or sp.port;
 
       serviceTarget =
@@ -227,10 +217,9 @@ in
           ports = podPorts;
         };
 
-      # Namespaces a monitor looks in: `any`, `matchNames`, or its own. `any`
-      # covers every Kix namespace, including ones that hold only custom
-      # resources whose operator creates the pods, and the namespaces of
-      # ServiceRef markers outside Kix.
+      # Return the namespaces selected by a monitor's `namespaceSelector`. When
+      # `any = true`, include all Kix namespaces and any external namespaces
+      # referenced by ServiceRef markers.
       monitorNamespaces =
         mon:
         let
@@ -278,9 +267,8 @@ in
           lib.optional (ports != [ ]) (serviceTarget svc ports)
         ) matched;
 
-      # A PodMonitor names pods directly. Only `matchLabels` becomes a policy
-      # selector, so a selector with matchExpressions is skipped and reported
-      # by `podMonitorBreakage`.
+      # Build scrape targets for a PodMonitor. Skip monitors whose selector uses
+      # `matchExpressions`, which `podMonitorBreakage` reports separately.
       podMonitorTargets =
         mon:
         let
@@ -335,9 +323,10 @@ in
         podMonitor = builtins.filter (isMonitoringKind "PodMonitor") resources;
       };
 
-      # Prometheus selector semantics: a null monitor selector selects no
-      # monitors and `{}` selects all; a null namespace selector means the
-      # Prometheus's own namespace and `{}` means every namespace.
+      # Return true when a Prometheus resource selects a monitor. A null monitor
+      # selector matches nothing while `{}` matches all monitors. A null
+      # namespace selector matches only the Prometheus namespace while `{}`
+      # matches every namespace.
       selects =
         prom: prefix: mon:
         let
@@ -359,11 +348,10 @@ in
         "Prometheus ${plain (nsOfRaw r.rawManifest)}/${plain r.rawManifest.metadata.name}: the Prometheus CRD declares no factBehavior.podSelector, so Kix cannot name the server pods and derives no scrape policy for them. Under default deny the server reaches no target. Set cluster.factBehavior.\"monitoring.coreos.com/Prometheus\" to { endpoint = \"terminate\"; podSelector = <the server pods' labels>; }."
       ) (builtins.filter (r: !hasPodSelector r) prometheuses);
 
-      # Policies that isolate the pods they select for ingress, for the check
-      # without default deny: an enforcer policy with an ingress section, and
-      # a Kubernetes NetworkPolicy whose policyTypes include Ingress (absent
-      # policyTypes include it). `namespaces.<ns>.networkPolicies` reach the
-      # check through `nsResources`.
+      # Return true when a policy isolates its selected pods for ingress. This
+      # includes enforcer policies with `ingress` or `ingressDeny` rules and
+      # Kubernetes NetworkPolicies whose `policyTypes` include `Ingress` (the
+      # default when `policyTypes` is omitted).
       isolatesIngress =
         r:
         let
@@ -381,11 +369,8 @@ in
         resources ++ extraPolicies ++ namespacePolicies
       );
 
-      # The pod selectors of the isolating policies that apply in a
-      # namespace. A cluster-wide policy names the namespace with Cilium's
-      # `k8s:io.kubernetes.pod.namespace` label, if at all, so
-      # `withNamespace` adds that label to the pod labels a selector is
-      # matched against.
+      # Return the pod selectors of all ingress-isolating policies that apply in
+      # `namespace`, including cluster-wide policies.
       isolatingSelectorsIn =
         namespace:
         builtins.concatMap (
@@ -397,11 +382,13 @@ in
           in
           lib.optional (selector != null && (policyNs == null || plain policyNs == plain namespace)) selector
         ) isolatingPolicies;
+      # Add Cilium's namespace label so cluster-wide policy selectors can match
+      # on `k8s:io.kubernetes.pod.namespace`.
       withNamespace =
         namespace: labels: labels // { "k8s:io.kubernetes.pod.namespace" = plain namespace; };
 
-      # A selector holds for every pod whose labels include `labels` only
-      # when each key it reads is one of them and it matches them.
+      # Return true when `selector` matches `labels` and only inspects keys
+      # present in `labels`, guaranteeing that any pod carrying `labels` matches.
       selectorImplied =
         selector: labels:
         builtins.all (k: labels ? ${k}) (
@@ -410,15 +397,12 @@ in
         )
         && matchesSelector selector labels;
 
-      # "all", "some", or "none" of the target's pods are already isolated
-      # for ingress. "some" means the target ingress would isolate pods that
-      # no other policy isolates. A policy selects pods by their own labels,
-      # which can carry more than the target's selector, so each pod Kix
-      # built behind the target is checked. Pods Kix did not build are known
-      # by `podSelector` alone: a policy isolates all of them only when
-      # `podSelector` implies its selector, and one that matches
-      # `podSelector` without implying it (a NotIn or DoesNotExist on a key
-      # outside it) may isolate only some.
+      # Return whether "all", "some", or "none" of a target's pods are already
+      # isolated for ingress by another policy. For Kix-built workloads, check
+      # each pod's full label set. For external pods known only by `podSelector`,
+      # treat them as "all" only when `podSelector` implies the policy selector,
+      # and as "some" when the policy selector could depend on labels outside
+      # `podSelector`.
       isolationOf =
         t:
         let
@@ -543,9 +527,9 @@ in
             builtins.filter (t: isolationOf t == "some") ingressCandidates
           );
 
-          # The hash keeps names distinct where the readable parts join
-          # ambiguously (Prometheus `c` in `a-b` and `b-c` in `a`) and for
-          # same-named PodMonitors in different namespaces.
+          # Build a unique ingress policy name for a scrape target, appending a
+          # hash to disambiguate colliding namespace, Prometheus, and monitor
+          # names.
           ingressPolicyName =
             t:
             let

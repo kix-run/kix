@@ -1,15 +1,9 @@
-# Talos flavor.
+# Talos Linux flavor.
 #
-# No SSH, no shell, no package manager. All OS config is declarative via
-# machineconfig YAML applied through talosctl. Kernel modules (NVIDIA, etc.)
-# require custom system extensions baked at image build time.
-#
-# Ships Flannel by default, with an exclusive environment-owned cni role. When
-# replacing it with Cilium (common in production: `cni.name = "none"` in
-# the machineconfig), override `cluster.roles.cni.binding = "absent"` and
-# add a managed CNI instance. No default StorageClass or LoadBalancer.
-#
-# Platform imports: DNS (coredns, bundled). No default storage.
+# Talos ships Flannel CNI (exclusive) and CoreDNS by default, with no default
+# StorageClass, LoadBalancer, or metrics-server. When `cni.name = "none"` is set
+# in the Talos machine configuration, override `cluster.roles.cni.binding =
+# "absent"` to deploy a managed CNI such as Cilium.
 
 {
   config,
@@ -26,15 +20,15 @@
       provider = lib.mkDefault "flannel";
     };
     dns.binding = lib.mkDefault "shadowable";
-    storageClasses.binding = lib.mkDefault "absent"; # no default StorageClass
+    storageClasses.binding = lib.mkDefault "absent";
     loadBalancer.binding = lib.mkDefault "absent";
-    metricsApi.binding = lib.mkDefault "absent"; # Talos installs no metrics-server
+    metricsApi.binding = lib.mkDefault "absent";
   };
 
-  # Talos keeps CRI registry hosts under /etc/cri/conf.d/hosts and turns
-  # discard_unpacked_layers on. A machine config that adds
-  # /etc/cri/conf.d/20-customization.part with discard_unpacked_layers =
-  # false sets this to false.
+  # Talos stores CRI registry hosts under `/etc/cri/conf.d/hosts` and enables
+  # `discard_unpacked_layers` by default. Set `discardUnpackedLayers = false`
+  # when the machine config disables `discard_unpacked_layers` in
+  # `/etc/cri/conf.d/20-customization.part`.
   cluster.containerd = {
     registryConfigPath = lib.mkDefault "/etc/cri/conf.d/hosts";
     discardUnpackedLayers = lib.mkDefault true;
@@ -47,7 +41,6 @@
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {

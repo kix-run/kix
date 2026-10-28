@@ -1,26 +1,20 @@
-# Read image references from a pin file or an attrset. The returned interface is:
+# Load and validate image references from a JSON pin file or an attrset.
 #
-#     .get <key>   the pin, shape-checked, ready for kix.image.ref
-#     .ref <key>   sugar for `kix.image.ref (get key)`
-#     .keys        every pin name in the file
-#     .all         every pin, shape-checked
-#     .instances   instance pins, shape-checked: "<namespace>/<instance>" to
-#                  an attrset from option path (`image`, `server.image`) to pin
-#     .file        the pin file as a string, or null for an attrset
+# Returns an attrset with:
+#   .get <key>   return a validated pin attrset for `kix.image.ref`
+#   .ref <key>   render `kix.image.ref (get key)`
+#   .keys        list all named image pin keys
+#   .all         validate and return all named image pins
+#   .instances   validate and return per-instance option pins (version 2)
+#   .file        path to the pin file as a string, or null for an attrset
 #
-# `get` validates the entry and reports the command for adding a missing key.
+# `images` holds pins that a cluster reads by name with `get`. `instances`
+# holds pins that `kix.buildCluster { pins = ...; }` applies automatically to
+# matching `<namespace>/<instance>` option paths (`eval/resolve.nix`).
 #
-# `images` holds pins a cluster reads by name with `get`. `instances` holds
-# pins `kix.buildCluster { pins = ...; }` applies itself, each as a
-# definition of that instance's option whose file is the pin file
-# (eval/resolve.nix). A file with `instances` declares version 2.
-#
-# Pin files use JSON so Kix can rewrite registry values as data without
-# evaluating them as Nix. The evaluation cache includes JSON files in its
-# input fingerprint (`cli/kix/src/eval/cache.rs`).
-#
-# Shape validation does not verify a digest against a registry. Use
-# `kix pin check` for registry verification.
+# Pin files use JSON so the CLI can update image digests without evaluating
+# Nix. Shape validation does not query a registry. Use `kix pin check` to
+# verify digests against registries.
 { lib, image }:
 
 source:
@@ -28,8 +22,9 @@ let
   isPath = builtins.isPath source;
   parsed = if isPath then builtins.fromJSON (builtins.readFile source) else source;
 
-  # Flake path literals evaluate to store paths. Show the last two components
-  # in errors so they identify the source file rather than its store copy.
+  # Flake path literals evaluate to store paths. Show the last two path
+  # components in errors so they identify the source file rather than its store
+  # hash.
   where =
     if isPath then
       let
@@ -40,14 +35,13 @@ let
     else
       "the pins attrset";
 
-  # Version 1 has `images` only; version 2 adds `instances`. Reject any
-  # other version before interpreting its fields.
+  # Version 1 supports `images` only. Version 2 adds `instances`.
   SCHEMA_VERSIONS = [
     1
     2
   ];
 
-  # Accept the kix pin envelope and a bare map of image pins without it.
+  # Accept either the versioned pin envelope or a bare attrset of image pins.
   isEnvelope = parsed ? version || parsed ? images || parsed ? instances;
   version = parsed.version or 1;
 
@@ -66,8 +60,8 @@ let
     "instances"
   ];
 
-  # Refused rather than ignored: a field this Kix does not know may be one a
-  # newer Kix acts on, as `instances` is to a Kix that reads only version 1.
+  # Reject unknown top-level fields so an older Kix never silently ignores
+  # fields introduced by a newer schema version.
   unknownEnvelopeFields = builtins.filter (f: !(builtins.elem f envelopeFields)) (
     builtins.attrNames parsed
   );
@@ -82,19 +76,14 @@ let
 
   rawInstances = if isEnvelope then builtins.seq raw (checkedEnvelope.instances or { }) else { };
 
-  # The image reference grammar of the OCI distribution spec
-  # (distribution/reference): an optional registry host and port, then
-  # lower-case path components; a tag of at most 128 word characters,
-  # dots, and dashes. `kix pin` checks the same grammar
-  # (cli/kix/src/pins/mod.rs).
+  # Match the OCI distribution reference grammar (`distribution/reference`)
+  # enforced by `kix pin` (`cli/kix/src/pins/mod.rs`).
   pathComponent = "[a-z0-9]+(([.]|_|__|-+)[a-z0-9]+)*";
   hostComponent = "([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])";
   host = "(${hostComponent}([.]${hostComponent})*|[[][0-9a-fA-F:]+[]])(:[0-9]+)?";
   repositoryRe = "(${host}/)?${pathComponent}(/${pathComponent})*";
   tagRe = "[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}";
 
-  # repository and tag are required. digest, provenance fields, and the
-  # user-maintained note remain optional.
   known = [
     "repository"
     "tag"
@@ -105,8 +94,8 @@ let
     "note"
   ];
 
-  # `label` names the entry in errors; `setArgs` are the `kix pin set`
-  # arguments that rewrite it.
+  # Validate a single pin entry. `label` names the entry in error messages and
+  # `setArgs` formats the `kix pin set` command hint.
   checkShapeAs =
     label: setArgs: pin:
     let
@@ -138,9 +127,8 @@ let
     else if !digestOk then
       throw "kix.pins: ${label} in ${where} has a digest that is not sha256: followed by 64 hexadecimal characters: '${digest}'. Re-resolve it with `kix pin set ${setArgs}`."
     else
-      # A pin states its digest, null when unresolved. Left out, the image
-      # option would keep the package's digest whenever the tags match, even
-      # under a different repository (vocab/compose.nix, the `digest` default).
+      # Set `digest` explicitly (even when null) so an unresolved pin overrides
+      # the package's default digest when their tags happen to match.
       pin // { inherit digest; };
 
   checkShape = key: checkShapeAs "pin '${key}'" key;
@@ -158,8 +146,7 @@ let
         Add it with:
           kix pin set ${key} --repository <registry/repository> --tag <tag> --init
       '';
-  # An instance key names one instance; an option path names an option of
-  # its package, dot-separated.
+  # Validate the option-path map for a single `<namespace>/<instance>` entry.
   checkInstance =
     instance: byOption:
     if builtins.match "[^/]+/[^/]+" instance == null then

@@ -1,8 +1,6 @@
 { lib }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ./annotations.nix;
   kixKeys = kixAnnotations.keys;
   resource = import ./resource.nix { inherit lib; };
@@ -63,37 +61,28 @@ in
       };
     };
 
-  # The cluster's deploy record, and the root of its Merkle tree.
+  # Build the cluster's Activation resource, which serves as the root of its
+  # store reference graph.
   #
-  # The record references `index`, kix-packages.json, which references every
-  # file it lists. So the record's closure is the whole build, an import
-  # marker no object uses included, its store hash covers everything, and
-  # "the activation hash changed" means "something changed". `instances`,
-  # built from every PackageInstance's `out.name`, carries each instance's
-  # identity context, which is why the record lands in the last wave: the
-  # position is the dependency, not a choice.
+  # Referencing `index` (`kix-packages.json`) pulls every built manifest and
+  # import marker into the Activation's store closure so any change alters the
+  # Activation hash. `instances` carries each `PackageInstance.out.name`
+  # context, which places the Activation in the final deployment wave.
   #
-  # The engine does not wait for that wave to create the record. It applies
-  # this same stamped manifest at the start of the run, so a deploy that stops
-  # part way still leaves something that says what it was attempting
-  # (kixpkgs#82); the last-wave apply is then an unchanged re-assertion. On a
-  # cluster's first deploy the record's own CRD is in this plan, so the create
-  # waits for the CRD barrier rather than the first wave. Keep the two in
-  # step: whatever the engine creates must be exactly this manifest.
+  # The deploy engine also applies this exact manifest at the start of a run
+  # (or right after the CRD wave on a first deploy) to record in-progress
+  # deployments.
   mkActivation =
     {
       name,
       instances,
       index,
       extraDeps ? [ ],
-      # The clusters this one hosts: consumer name -> { interface; },
-      # `interface` the store path of its interface file as a plain string.
-      # The record references each file in `interfaceFiles`, so they are in
-      # its closure and in every bundle of it.
+      # Hosted consumer clusters (`consumer -> { interface = <store-path>; }`).
+      # `interfaceFiles` adds each file to the Activation's store closure.
       consumers ? { },
       interfaceFiles ? [ ],
-      # The interface files this cluster is built against: platform cluster
-      # name -> { consumer; path; sha256; }.
+      # Platform interfaces this cluster builds against (`platform -> { consumer; path; sha256; }`).
       interfaces ? { },
     }:
     mkResource {
@@ -108,8 +97,6 @@ in
       extraDeps = extraDeps;
       storeReferences = [ index ] ++ interfaceFiles;
       namespace = clusterScoped;
-      # Each key only when set, so a cluster without consumers or
-      # interfaces keeps its record, and its name, as before.
       extra.spec = {
         inherit instances;
       }

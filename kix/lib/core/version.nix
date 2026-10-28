@@ -1,15 +1,11 @@
-# Version strings for meta.version, meta.k8s, meta.compatibleWith and
-# k8sVersion.
+# Parse and compare version strings for `meta.version`, `meta.k8s`,
+# `meta.compatibleWith`, and `k8sVersion`.
 #
-# Grammar: an optional "v", numbers separated by dots, an optional
-# "-suffix" and an optional "+build". A "-suffix" is a prerelease only when
-# its first identifier is one of `prereleaseTags`, optionally followed by
-# digits ("rc1"), as Kubernetes tags them. Any other suffix ("-gke.1209000",
-# "-eks-7f9249a", "-cf", Helm's "-0") is a vendor build tag and is ignored
-# like "+build". Semver 2.0 would treat those as prereleases.
-#
-# Internal to kix/lib: meta.nix, modules.nix and kix/package-eval.nix import
-# this file directly.
+# Versions consist of an optional leading `v`, dot-separated numbers, an
+# optional `-suffix`, and an optional `+build`. A `-suffix` is treated as a
+# prerelease only when its first identifier starts with a tag in
+# `prereleaseTags` (such as `rc1`). Other suffixes (such as `-gke.1209000`,
+# `-eks-7f9249a`, or `-0`) are vendor build tags and are ignored like `+build`.
 { lib }:
 
 let
@@ -22,10 +18,10 @@ let
     "preview"
   ];
 
-  # builtins.match result indices: 0 core, 3 suffix without "-", 5 build.
+  # Capture groups: 0 = core numbers, 3 = suffix without "-", 5 = build.
   grammar = "[vV]?([0-9]+(\\.[0-9]+)*)(-([0-9A-Za-z.-]+))?(\\+([0-9A-Za-z.-]+))?";
 
-  # "rc10" splits into [ "rc" "10" ] so that rc2 sorts before rc10.
+  # Split "rc10" into [ "rc" "10" ] so rc2 sorts before rc10.
   prereleaseOf =
     suffix:
     let
@@ -76,7 +72,7 @@ let
     else
       0;
 
-  # Numeric comparison of two cores, the shorter padded with zeros.
+  # Compare two numeric core lists, padding the shorter list with zeros.
   compareCore =
     a: b:
     let
@@ -98,8 +94,8 @@ let
 
   isNumeric = s: builtins.match "[0-9]+" s != null;
 
-  # Semver 2.0 §11 precedence for two prerelease identifier lists. An empty
-  # list is a release, which sorts after every prerelease of the same core.
+  # Compare two prerelease identifier lists using SemVer 2.0 precedence, where
+  # an empty list (a release) sorts after any prerelease.
   comparePre =
     a: b:
     if a == [ ] && b == [ ] then
@@ -143,12 +139,11 @@ let
     in
     if c != 0 then c else comparePre a.pre b.pre;
 
-  # Ordering: -1, 0 or 1. Throws when either side is not a version.
+  # Compare two version strings and return -1, 0, or 1.
   compare = a: b: compareParsed (parse a) (parse b);
 
-  # Compares version `v` against `constraint` at the constraint's precision:
-  # "1.30.4" equals "1.30", and "1.31" against "1.31.2" is unknown (null).
-  # A prerelease decides only when both cores have the same length.
+  # Compare `v` against `constraint` at the constraint's precision, returning
+  # null when `v` is less precise than `constraint` and matches its prefix.
   compareAtPrecision =
     v: constraint:
     let
@@ -173,8 +168,8 @@ let
       in
       if c != 0 then c else null;
 
-  # true, false, or null when `v` is less precise than `constraint` and
-  # agrees with it as far as it goes.
+  # Return true or false, or null when `v` is less precise than `constraint`
+  # and matches its prefix.
   atLeast =
     v: constraint:
     let

@@ -4,9 +4,8 @@
 }:
 
 let
-  # Per-channel result contracts. Every hook result is shape-checked at the
-  # call site; unknown keys throw with the hook's full name so a typo'd key
-  # fails loudly instead of being silently ignored.
+  # Allowed result keys per hook channel. `collectHooks` validates each hook's
+  # return value against this map so misspelled keys fail immediately.
   channelResultKeys = {
     workloadInterceptors = [
       "requires"
@@ -29,10 +28,10 @@ let
 in
 
 rec {
-  # Map namespace and instance to roles and import state from peeked meta,
-  # no fixpoint). Role names are validated against the registry here, so a
-  # typo'd `meta.roles` entry throws with the declaring instance named
-  # instead of silently never matching (the meta.provides failure mode).
+  # Map each namespace and instance to its roles and import state from peeked
+  # metadata without forcing the instance fixpoint. Validate role names against
+  # the registry here so an unknown `meta.roles` entry fails immediately with
+  # the declaring instance named.
   buildRolesIndex =
     { instances, peekedMetas }:
     lib.mapAttrs (
@@ -46,15 +45,13 @@ rec {
       }) nsInsts
     ) instances;
 
-  # Map domains to namespace and instance from peeked `meta.annotationDomains`.
-  # (v2_discussions/128 mechanism 2). An operator package declares the
-  # annotation domains it manages (e.g. reflector declares
-  # "reflector.v1.k8s.emberstack.com"); the scorecard's
-  # `architecture.annotationDomainOwnership` rule lints consumers against
-  # this index. Unlike roles, the vocabulary is open because domains are foreign
-  # identifiers owned by upstream operators, so the declarer itself is the
-  # registry. Two declarers of one domain is a duplicate-symbol error
-  # (eagerly forced by buildCluster, same spirit as checkRoleBindings).
+  # Map each annotation domain in `meta.annotationDomains` to its declaring
+  # namespace and instance. Operator packages declare the annotation domains
+  # they manage (for example, `reflector.v1.k8s.emberstack.com`), and the
+  # scorecard's `architecture.annotationDomainOwnership` rule checks consumers
+  # against this index. Because annotation domains are upstream operator
+  # identifiers, the declarations themselves form the registry and duplicate
+  # declarers of the same domain fail immediately.
   buildAnnotationDomainIndex =
     { instances, peekedMetas }:
     builtins.foldl'
@@ -144,11 +141,11 @@ rec {
       ) (builtins.attrNames rolesIndex.${nsName})
     ) (builtins.attrNames rolesIndex);
 
-  # Resolve a role to its provider. Managed instances are strong symbols,
-  # imports weak (mirrors the DI managed-over-import filter). Two strong
-  # providers never coexist, whether both are managed or one is the
-  # environment (binding = "exclusive"). Returns { ns, inst, isImport } or
-  # null; the out-contract wrapper lives at the cluster.nix call site.
+  # Resolve a role to its provider `{ ns, inst, isImport }`, or null when none
+  # is declared. Managed instances take precedence over imports. Reject
+  # multiple managed providers, multiple import providers when no managed
+  # provider exists, or any managed provider when the environment binding is
+  # `"exclusive"`.
   findRoleProvider =
     {
       role,
@@ -201,10 +198,9 @@ rec {
         null
     );
 
-  # Eager refusal pass, seq-forced by buildCluster: exclusive-binding
-  # conflicts and duplicate strong providers throw even when nothing looks
-  # the role up this eval (a broken combination must not compile just
-  # because its consumer is absent). Also validates cluster.roles keys.
+  # Validate all `cluster.roles` keys and force provider resolution for every
+  # known role so exclusive-binding conflicts and duplicate providers fail even
+  # when no consumer requests the role.
   checkRoleBindings =
     {
       clusterRoles,
@@ -223,11 +219,10 @@ rec {
       builtins.foldl' (acc: l: builtins.seq l acc) null lookups
     );
 
-  # Hook execution order is priority ascending, then name, rather than bare
-  # attribute-name order. A hook is either a plain function (priority 1000)
-  # or { priority ? 1000; fn; }. This order is a contract: for
-  # clusterProcessors it determines Activation extraDeps order, which is
-  # content-addressed into the manifest set.
+  # Collect and sort hooks for `channel` by ascending priority, then by name.
+  # Each hook is either a function (default priority 1000) or
+  # `{ priority ? 1000; fn; }`. For `clusterProcessors`, this order determines
+  # the Activation `extraDeps` order and manifest hashes.
   collectHooks =
     config: channel:
     let
@@ -280,9 +275,7 @@ rec {
     in
     map (h: ctx: checkResult h.name (h.fn ctx)) sorted;
 
-  # Force each check in order. A check is any lazy value that throws its own
-  # error message on failure and evaluates to anything (conventionally null)
-  # on success, so validators retain their messages instead of
-  # being squeezed into an assertion/message pair.
+  # Force each check in order. Each check is a lazy value that throws its own
+  # error message on failure and evaluates to null on success.
   runChecks = checks: builtins.foldl' (acc: c: builtins.seq c acc) null checks;
 }

@@ -327,9 +327,8 @@ in
           _availability = workloadAvailability;
         };
 
-      # The `availability` argument of a workload builder: an attrset whose
-      # only key is `max`, a ceiling for this workload alone. Returns the
-      # checked ceiling or null.
+      # Validate the `availability` argument of a workload builder and return its
+      # `max` ceiling, or null when unset.
       workloadCeilingOf =
         kind: attrs:
         let
@@ -551,7 +550,6 @@ in
 
           workloadCeiling = workloadCeilingOf kind attrs;
 
-          # Copy the Job selector to its metadata labels.
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -822,10 +820,9 @@ in
           extra ? { },
         }:
         let
-          # Keys with a value in the manifest itself.
           valuedKeys = builtins.attrNames (stringData // (extra.data or { }) // (extra.stringData or { }));
 
-          # Keys the Secret's type makes public.
+          # Keys that are public by definition of the Secret type.
           typePlainKeys =
             {
               "kubernetes.io/basic-auth" = [ "username" ];
@@ -870,9 +867,9 @@ in
             else
               throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: key(s) ${builtins.concatStringsSep ", " unvalued} have no value and there is no SOPS source, so the Secret would be created without them and a pod that reads them would not start. Give the values in stringData, set source to a SOPS file that holds them, or use scope.mkSecretRef when something outside Kix creates this Secret.";
 
-          # Where each key's value comes from. A declared key with no value
-          # here is filled by the SOPS source at deploy, or, for a
-          # service-account-token Secret, by Kubernetes.
+          # Return the value source for a declared key. Keys without an inline
+          # value are populated by SOPS at deploy time, or by Kubernetes for
+          # service-account tokens.
           sourceOf =
             k:
             if builtins.elem k valuedKeys then
@@ -894,8 +891,7 @@ in
             else
               builtins.path {
                 path = source;
-                # A toFile-style name cannot carry string context; baseNameOf
-                # and unsafeDiscardStringContext keep it plain.
+                # `builtins.path` requires a store path name without string context.
                 name = baseNameOf (builtins.unsafeDiscardStringContext (toString source));
               };
 
@@ -943,12 +939,10 @@ in
         in
         resource // { out = resource.out // secretHelpers; };
 
-      # A Secret something outside Kix creates. `keys` lists the keys pods
-      # read by name; the deploy waits until the live Secret holds each of
-      # them. `keys = [ ]` fits only a Secret pods use whole (envFrom, a
-      # volume without items): the deploy checks only that it exists, and
-      # the cluster build refuses a pod that reads one of its keys by name
-      # (check 22).
+      # Reference a Secret created outside Kix. `keys` lists the keys that pods
+      # read by name, and deployment waits until the live Secret contains each of
+      # them. Use `keys = [ ]` only when pods mount or import the whole Secret
+      # without referencing individual keys.
       mkSecretRef =
         {
           name,
@@ -1007,11 +1001,10 @@ in
           name,
           selector,
           ports,
-          # metadata.labels the external Service carries (an operator's
-          # `operated-prometheus: "true"`, for example). A ServiceMonitor
-          # selects Services by these, so a self-monitor over a ref builds
-          # its selector from `out.labels`; the monitorSelectorMatchesService
-          # rule reads them off the marker.
+          # `metadata.labels` on the external Service, such as an operator's
+          # `operated-prometheus = "true"`. ServiceMonitors select Services by
+          # these labels, so monitors targeting this ref use `out.labels` and
+          # `monitorSelectorMatchesService` reads them from the marker.
           labels ? { },
           requires ? [ ],
         }:
@@ -1036,16 +1029,14 @@ in
           resourceCtx = builtins.getContext "${marker}";
           attachCtx = value: builtins.appendContext (toString value) resourceCtx;
 
-          # The ref knows selector and ports, so mint the endpoint fact
-          # from the declaration, same channel as a managed Service's seal
+          # Mint an endpoint fact from the declared selector and ports so network
+          # policy analysis treats the ref like a managed Service.
           endpointFactCtx = k8s.facts.mkFact "endpoint" {
             inherit name selector ports;
             namespace = namespaceName;
           };
           attachConnectCtx = value: builtins.appendContext (toString value) (resourceCtx // endpointFactCtx);
 
-          # Same form as a rendered Service's out.fqdn (core/resource.nix):
-          # the short `.svc` form resolved only through the pod's search path.
           fqdn = "${name}.${namespaceName}.svc.${clusterDomain}";
         in
         marker
@@ -1059,8 +1050,8 @@ in
             port = attachConnectCtx (toString (builtins.head ports).port);
             ports = ports;
             inherit selector;
-            # Values carry the marker's context so a monitor built from them
-            # depends on the ref, as one built from out.selector used to.
+            # Attach the marker's string context so monitors built from
+            # `out.labels` depend on the ref.
             labels = lib.mapAttrs (_: v: attachCtx v) labels;
           };
         };

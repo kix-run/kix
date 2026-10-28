@@ -1,16 +1,11 @@
-# Built-in scorecard rules: Security
-#
-# Checks for container security context, host access, cluster-wide RBAC,
-# image hygiene, and namespace-level network policies.
-#
-# See v2_discussions/60_scorecard_rules_design.md §Built-in rule library.
+# Built-in scorecard rules for secret sources, container security contexts,
+# host access, cluster-wide RBAC, image references, and network policies.
 
 { lib }:
 
 let
   kixKeys = (import ../core/annotations.nix).keys;
 
-  # Extract all containers (regular + init) from a workload resource.
   listOr = v: if v == null then [ ] else v;
 
   getContainers =
@@ -18,12 +13,12 @@ let
     let
       podSpec = resource.spec.template.spec or { };
     in
-    # A chart-rendered pod spec can carry `initContainers: null`; the rules
-    # see the manifest before the null is stripped at emission.
+    # Helm charts can render `initContainers: null`, and scorecard rules inspect
+    # manifests before null fields are stripped.
     listOr (podSpec.containers or [ ]) ++ listOr (podSpec.initContainers or [ ]);
 
-  # Container securityContext fields override the pod securityContext. Use the
-  # pod value when the container does not set the field.
+  # Return the effective `securityContext` field for a container, falling back
+  # to the pod-level `securityContext`.
   effectiveSecurity =
     resource: container: field:
     let
@@ -46,9 +41,7 @@ let
     in
     (flag == true) || (flag == null && uid != null && uid != 0);
 
-  # A package opts out of a structural rule with a declared grant
-  # (kix/lib/unsafe.nix), which `architecture.unsafeGrants` then lists in
-  # every build, so the exception stays visible in review.
+  # Return true when the package declares `grant` in `meta.unsafe`.
   holdsGrant = meta: grant: builtins.elem grant (meta.unsafe or [ ]);
 
   isWorkload =
@@ -60,23 +53,19 @@ let
       "Job"
     ];
 
-  # A scope.mkSecretRef marker: the Secret is created outside Kix.
+  # Return true when `resource` is an import marker produced by `scope.mkSecretRef`.
   isSecretRefMarker =
     resource:
     (resource.kind or "") == "PackageInstance"
     && (resource.metadata.annotations or { }).${kixKeys.mode} or null == "import"
     && (resource.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret";
 
-  # A chart may render `data: null` for an empty block.
   attrsOr = v: if builtins.isAttrs v then v else { };
 
-  # Where each key of a rendered Secret comes from, as { key = source; }.
-  # A key with a value in `data` or `stringData` is inline (or plain when
-  # the `kix.run/secret-sources` stamp says so), whatever else the stamp
-  # claims, so a stamp on a resource scope.mkSecret did not build cannot
-  # hide a value. The stamp supplies the source of every other key. An
-  # inline key of a Secret classified `configuration` counts as
-  # `configuration`.
+  # Return `{ <key> = <source>; }` for each key in a Secret. Keys present in
+  # `data` or `stringData` are always treated as `inline` (or `plain` when
+  # stamped as non-credential) so a forged `kix.run/secret-sources` annotation
+  # on a raw Secret cannot disguise inline values.
   secretKeySources =
     resource:
     let
@@ -117,9 +106,8 @@ let
   };
 in
 {
-  # Applies only when the cluster lists the sources it accepts
-  # (`cluster.secrets.accept`); a cluster that says nothing accepts every
-  # source. A key marked plain is never reported.
+  # Check Secret value sources when `cluster.secrets.accept` is configured.
+  # Keys marked `plain` are non-credential values and are always allowed.
   secretSource = {
     description = "Secret values come only from the sources the cluster accepts";
     level = "manifest";
@@ -272,10 +260,9 @@ in
       violations;
   };
 
-  # A ClusterRoleBinding to the built-in `cluster-admin`, or a ClusterRole
-  # with a rule whose apiGroups, resources, and verbs all contain "*" (the
-  # same reach under another name). A namespaced RoleBinding and a wildcard
-  # limited to one API group are not checked.
+  # Reject ClusterRoleBindings to `cluster-admin` and ClusterRoles that grant
+  # `*` on `apiGroups`, `resources`, and `verbs`. Namespaced RoleBindings and
+  # wildcards scoped to specific API groups are allowed.
   noClusterAdmin = {
     description = "No ClusterRoleBinding may grant cluster-admin, and no ClusterRole may grant every verb on every resource";
     level = "manifest";
@@ -376,7 +363,6 @@ in
     check =
       { resource, ... }:
       let
-        # label is user-facing text; pattern is the regular expression.
         patterns = [
           {
             pattern = "REPLACE_ME";
@@ -410,7 +396,6 @@ in
             pattern = "XXX";
             label = "the placeholder XXX";
           }
-          # Match the start of an unexpanded ${...} variable.
           {
             pattern = "[$][{]";
             label = "an unexpanded variable";
@@ -442,8 +427,8 @@ in
       {
         resources,
         namespaceName,
-        # NetworkPolicy plus the kinds the cluster's enforcer emits; the
-        # rule runner reads them from the network-policy-enforcer role.
+        # Policy kinds accepted as namespace network policies, populated from
+        # the cluster's `network-policy-enforcer` provider.
         networkPolicyKinds ? [ "NetworkPolicy" ],
         ...
       }:

@@ -1,31 +1,32 @@
-# The Kubernetes Pod Security Standards, checked on a rendered pod template.
+# Check rendered pod templates against the Kubernetes Pod Security Standards
+# (https://kubernetes.io/docs/concepts/security/pod-security-standards/).
 #
-# A namespace labelled `pod-security.kubernetes.io/enforce` makes Kubernetes
-# refuse every pod that breaks its level. `violations` finds those pods in
-# the build: it takes a level and a manifest, and lists each field of the
-# manifest's pod template that the level refuses, with the value to set.
+# When a namespace sets `pod-security.kubernetes.io/enforce`, Kubernetes
+# rejects pods that violate that level. `violations` inspects a manifest's pod
+# template at a given level and returns each disallowed field with the value
+# to set.
 #
-# Covered, from https://kubernetes.io/docs/concepts/security/pod-security-standards/:
-#   baseline: host namespaces, privileged containers, Windows HostProcess,
-#     hostPath volumes, host ports, added capabilities beyond the baseline
-#     set, an Unconfined seccomp profile, and a /proc mount other than
-#     Default.
-#   restricted (and baseline): volume types, allowPrivilegeEscalation,
-#     runAsNonRoot, runAsUser 0, a seccomp profile, and capabilities.
-# Not covered: AppArmor, SELinux options, sysctls, and the restricted
-# exemptions for a pod with `spec.os.name: windows`. Admission still
-# refuses those at deploy.
+# Checked fields:
+#   - baseline: host namespaces, privileged containers, Windows HostProcess,
+#     hostPath volumes, host ports, capabilities outside the baseline set,
+#     Unconfined seccomp profiles, and non-Default /proc mounts.
+#   - restricted (in addition to baseline): volume types,
+#     allowPrivilegeEscalation, runAsNonRoot, runAsUser 0, seccomp profiles,
+#     and capabilities.
+#
+# AppArmor, SELinux options, sysctls, and Windows restricted-level exemptions
+# (`spec.os.name: windows`) are not checked here and remain enforced by
+# cluster admission at deploy time.
 
 { lib }:
 
 let
-  # A chart can render `securityContext: null` or `volumes: null`; Nix's `or`
-  # handles a missing attribute only.
+  # Helm charts can render `securityContext: null` or `volumes: null`.
+  # Nix's `or` operator only falls back when an attribute is missing.
   attrsOr = v: if builtins.isAttrs v then v else { };
   listOr = v: if builtins.isList v then v else [ ];
   plain = v: builtins.unsafeDiscardStringContext (toString v);
 
-  # The API group of each kind that carries a pod template.
   podKinds = {
     Pod = "";
     ReplicationController = "";
@@ -44,8 +45,7 @@ let
     in
     if builtins.length parts > 1 then builtins.head parts else "";
 
-  # The pod spec a manifest creates pods from, or null for a manifest that
-  # creates none.
+  # Extract the pod spec from a workload or Pod manifest, or return null.
   podSpecOf =
     m:
     let
@@ -89,9 +89,6 @@ let
     "secret"
   ];
 
-  # Each check takes the pod spec and returns violations as
-  # { where; problem; }: `where` names the pod or one container, `problem`
-  # names the field and says what to set.
   podWhere = "pod";
 
   containersOf =
@@ -174,8 +171,8 @@ let
       ) (builtins.filter (p: (p.hostPort or 0) != 0) (listOr (c.ports or null)))
     );
 
-  # The fields `baseline` already reports are left out here, so a field is
-  # reported once.
+  # Check restricted-only fields so `baseline pod ++ restricted pod` does not
+  # duplicate findings.
   restricted =
     pod:
     let
@@ -248,9 +245,8 @@ in
 {
   inherit podSpecOf;
 
-  # The violations of `manifest`'s pod template at `level` ("privileged",
-  # "baseline", or "restricted"), as [ { where; problem; } ]. Empty for a
-  # manifest that creates no pods.
+  # Return Pod Security Standards violations for `manifest` at `level`
+  # ("privileged", "baseline", or "restricted") as `[ { where, problem } ]`.
   violations =
     level: manifest:
     let

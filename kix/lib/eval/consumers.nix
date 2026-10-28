@@ -1,25 +1,21 @@
-# Two Kix clusters on one Kubernetes cluster: a platform and the consumers
-# it hosts. Each builds alone, from its own code, under a name of its own.
-# They share data only: the platform's build writes one interface file per
-# consumer, and the consumer's build loads a copy of it with `kix.interface`.
+# Support platform and consumer Kix clusters on the same Kubernetes cluster.
+# Each cluster evaluates independently under its own name. The platform build
+# writes one JSON interface file per consumer, and each consumer build loads
+# its interface file with `kix.interface`.
 #
-# A consumer's namespaces are a map from pattern (`acme-*`, `reports`, `*`)
-# to the settings of the namespaces it grants: Pod Security level, quota,
-# `max` on a pattern, Secrets on an exact name. An exact name inside a
-# pattern adjusts that one namespace's settings. The platform's namespaces
-# are those its build renders into plus its `reservedNamespaces`; a consumer
-# may use any namespace one of its keys matches and that is not the
-# platform's. One consumer may hold `*`: every namespace that is not the
-# platform's and that no other consumer's key matches. Its interface lists
-# those other keys as `claimedNamespaces`, without the consumers' names. The
-# consumer renders its own namespaces, and each carries the consumer's label
-# and its settings' Pod Security level and quota.
+# Each consumer's `namespaces` grant maps patterns (`acme-*`, `reports`, `*`) to
+# namespace settings (Pod Security level, quota, `max` on patterns, and Secrets
+# on exact names). An exact name within a pattern overrides that namespace's
+# settings. A consumer may use any namespace matching one of its patterns except
+# namespaces the platform renders or lists in `reservedNamespaces`. At most one
+# consumer may hold `*`, which grants every namespace not owned by the platform
+# or matched by another consumer's pattern (recorded in `claimedNamespaces`).
 #
-# `platform` checks a cluster's `consumers`, renders the ingress rules to
-# granted services, and writes the interface files. `interface` is the
-# loader. `consumer` is what buildCluster does with a loaded interface: it
-# stamps the consumer's namespaces, refuses objects outside the grant, and
-# records the file in the Activation record.
+# `platform` validates `consumers`, generates ingress policies for granted
+# services, and writes the interface files. `interface` loads an interface file
+# as a cluster module. `consumer` stamps the consumer's namespaces, rejects
+# resources outside the grant, and records the interface in the Activation
+# resource.
 
 {
   lib,
@@ -36,11 +32,10 @@ let
 
   plain = v: builtins.unsafeDiscardStringContext (toString v);
 
-  # The hash of an interface file as the platform's build writes it:
-  # compact JSON with sorted keys. A copy reformatted by an editor hashes the
-  # same as the platform's own file. Both records carry it, so `kix status`
-  # on a consumer can tell whether it was built against what the platform
-  # publishes now.
+  # Hash the normalized JSON of an interface file so reformatted copies match
+  # the file written by the platform build. Both Activation records store this
+  # hash so `kix status` can verify whether a consumer matches the current
+  # platform interface.
   interfaceHash =
     file: builtins.hashString "sha256" (builtins.toJSON (builtins.fromJSON (builtins.readFile file)));
 
@@ -54,14 +49,14 @@ let
     in
     if builtins.length parts > 1 then builtins.head parts else "";
 
-  # A namespace pattern: `*`, a prefix glob `x-*`, or an exact name.
   isGlob = p: p != "*" && lib.hasSuffix "*" p;
   prefixOf = lib.removeSuffix "*";
   isPattern =
     p:
     p == "*" || (isGlob p && builtins.match "[a-z0-9][-a-z0-9]*" (prefixOf p) != null) || isDnsLabel p;
   matches = p: ns: p == "*" || (if isGlob p then lib.hasPrefix (prefixOf p) ns else p == ns);
-  # Whether some namespace could match both `a` and `b`, neither of them `*`.
+  # Return true when some namespace could match both non-wildcard patterns `a`
+  # and `b`.
   overlap =
     a: b:
     if isGlob a && isGlob b then
@@ -73,8 +68,8 @@ let
     else
       a == b;
 
-  # Objects every Kix cluster renders for itself: its Activation record and
-  # the CRDs of kix's own kinds. Neither grant nor platform checks apply.
+  # Return true for Kix's own cluster-level resources (its Activation record
+  # and Kix CRDs), which bypass consumer grant and platform checks.
   isKixOwn =
     m:
     let
@@ -90,21 +85,20 @@ let
       ]
     );
 
-  # A string context entry that carries no content into the interface: a
-  # fact token, an inert marker, or the identity of a resource this cluster
-  # renders (`k8s-*`, the context every `out` value of a resource carries).
+  # Return true for string context entries that carry only Kix tracking
+  # metadata (fact tokens, markers, or `k8s-*` resource identity paths) rather
+  # than store file content.
   isInertContext =
     path: ctx:
     k8s.facts.isFactPath path
     || k8s.markers.isMarkerPath path
     || ((ctx.path or false) && lib.hasPrefix "k8s-" (k8s.markers.pathName path));
 
-  # `out` as plain JSON data. Functions, kix's own handles (anything with a
-  # `_type`) and `identityHash` are dropped: the hash changes with every
-  # edit of the platform's object and tells the consumer nothing. A string
-  # that refers to a store path in any other way, a SOPS file or a rendered
-  # configuration file, is refused, naming the field, since its content is
-  # the platform's.
+  # Convert `out` to plain JSON data for an interface file. Drop functions,
+  # typed Kix handles, and `identityHash` (which changes on every edit to the
+  # platform object). Reject strings that reference store paths such as SOPS
+  # secrets or rendered config files so platform store paths do not leak into
+  # the interface.
   plainOut =
     field: v:
     if builtins.isFunction v then
@@ -133,8 +127,8 @@ let
     else
       v;
 
-  # The other consumers' keys, which the `*` holder may not use. Empty for
-  # a consumer without `*`: its keys overlap no one else's.
+  # Return the namespace patterns claimed by other consumers when `consumer`
+  # holds `*`, or an empty list otherwise.
   claimedBy =
     consumers: consumer:
     if consumers.${consumer}.namespaces ? "*" then
@@ -150,10 +144,10 @@ let
     else
       [ ];
 
-  # Refusals, as messages, of the platform's grants: names, patterns, `*`
-  # held once, no two consumers' keys overlapping, no two of one consumer's
-  # patterns overlapping, no exact name of a platform namespace, `max` on
-  # patterns only, and Secrets on exact names only.
+  # Validate consumer grants and return any error messages. Checks consumer
+  # names, namespace patterns, single `*` ownership, non-overlapping patterns
+  # within and across consumers, reserved platform namespaces, `max` on patterns
+  # only, and `secrets` on exact namespace names only.
   grantRefusals =
     {
       name,
@@ -218,8 +212,8 @@ in
 {
   inherit isKixOwn grantRefusals;
 
-  # What the platform cluster `name` renders for its consumers, and the
-  # interface file of each.
+  # Build the resources and interface files that platform cluster `name`
+  # produces for its consumers.
   platform =
     {
       name,
@@ -257,8 +251,6 @@ in
           {
             inherit ns inst;
             out = clusterInstances.${ns}.${inst}.out or { };
-            # The instance's root object as rendered: a Service's own pod
-            # selector and ports, for the ingress policy.
             root =
               let
                 r = clusterInstances.${ns}.${inst}.raw.root or { };
@@ -267,10 +259,10 @@ in
             roles = (peekedMetas.${ns}.${inst}).roles or [ ];
           };
 
-      # Lets the consumer's pods reach a granted service: from every
-      # namespace carrying the consumer's label. Only when the cluster
-      # enforces network policy: on a cluster that does not, an allow policy
-      # would isolate the service's pods from everyone else.
+      # Generate ingress NetworkPolicies allowing consumer namespaces to reach
+      # granted Services. Emit these policies only when `networkPolicy.enable`
+      # is true; otherwise an allow policy would isolate the Service's pods from
+      # other traffic.
       ingressPolicies =
         if !(cfg.networkPolicy.enable or false) then
           [ ]
@@ -364,12 +356,11 @@ in
         interfaceFiles = builtins.attrValues files;
       };
 
-  # `kix.interface ./kix-interface/prod.json`, or
-  # `kix.interface { file = ./kix-interface/prod.json; importNamespace = "acme-app"; }`:
-  # a cluster module that builds this cluster as the consumer the file
-  # describes. Each granted service becomes an import in `importNamespace`,
-  # by default the first exact name, in alphabetical order, among the
-  # consumer's namespaces.
+  # Load a platform interface file (`kix.interface ./path.json` or
+  # `kix.interface { file = ./path.json; importNamespace = "acme-app"; }`) and
+  # return a cluster module for the consumer. Each granted service becomes an
+  # import in `importNamespace`, which defaults to the alphabetically first
+  # exact namespace name in the grant.
   interface =
     arg:
     { lib, ... }:
@@ -378,7 +369,8 @@ in
       data = builtins.fromJSON (builtins.readFile file);
       where = instancePinsLib.relativeFile (toString file);
       facts = data.facts or { };
-      # Every capability as a default, so the cluster's own setting wins.
+      # Set every capability with `mkDefault` so the consumer cluster can
+      # override it.
       defaults = v: if builtins.isAttrs v then lib.mapAttrs (_: defaults) v else lib.mkDefault v;
       exact = builtins.filter (p: !isGlob p && p != "*") (builtins.attrNames (data.namespaces or { }));
       home =
@@ -421,8 +413,8 @@ in
         };
       };
 
-  # What buildCluster `name` does with the interfaces in `cfg.interfaces`:
-  # null when it loads none.
+  # Enforce a loaded platform interface on consumer cluster `name`, or return
+  # null when `cfg.interfaces` is empty.
   consumer =
     {
       name,
@@ -456,9 +448,9 @@ in
           else
             null;
 
-      # The settings of namespace `ns`: those of the pattern that matches
-      # it, then those of its exact name on top. The platform's build
-      # refuses overlapping patterns, so at most one matches.
+      # Resolve settings for namespace `ns` by overlaying exact-name settings on
+      # top of the matching pattern's settings. Platform validation rejects
+      # overlapping patterns, so at most one pattern matches.
       settingsOf =
         ns:
         let
@@ -478,7 +470,8 @@ in
           quota = base.quota // (own.quota or { });
         };
 
-      # Refuse what the grant does not allow, before anything is deployed.
+      # Return an error message if manifest `m` falls outside the platform's
+      # grant, or null if allowed.
       refusalOf =
         m:
         let
@@ -501,7 +494,8 @@ in
         else
           null;
 
-      # Each pattern with a `max` that more of the build's Namespaces match.
+      # Return an error message for each pattern whose `max` namespace count is
+      # exceeded by `manifests`.
       overMax =
         manifests:
         let
@@ -525,8 +519,8 @@ in
       throw "kix: cluster '${name}' loads interfaces of ${builtins.concatStringsSep " and " (builtins.attrNames cfg.interfaces)}. A cluster is one platform's consumer; load one interface."
     else
       {
-        # Namespace `ns`'s own configuration, with the consumer's label, and
-        # the platform's Pod Security level and quota where it sets them.
+        # Stamp namespace `ns` with the consumer label and any Pod Security
+        # level or quota from the platform interface.
         stamp =
           ns: own:
           let
@@ -541,8 +535,8 @@ in
           // lib.optionalAttrs (settings.podSecurity != null) { inherit (settings) podSecurity; }
           // lib.optionalAttrs (settings.quota != { }) { resourceQuota = settings.quota; };
 
-        # Where the Pod Security level of namespace `ns` comes from, for the
-        # build's messages; null when the interface sets none for it.
+        # Describe the interface source of `ns`'s Pod Security level for error
+        # messages, or return null when the interface does not set one.
         podSecuritySourceOf =
           ns: if (settingsOf ns).podSecurity != null then "set by ${data.platform}'s interface" else null;
 
@@ -552,7 +546,8 @@ in
           sha256 = interfaceHash data.file;
         };
 
-        # The refusals of the build, as assertions.
+        # Convert grant violations across `manifests` into failed build
+        # assertions.
         assertionsFor =
           manifests:
           map (message: {

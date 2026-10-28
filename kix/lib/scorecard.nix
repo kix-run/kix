@@ -74,10 +74,8 @@ let
     error = 2;
   };
 
-  # The lower of a resolved severity and the cluster's cap. The cap is
-  # what lets the scorecard run by default: every finding is printed at
-  # its resolved level or below, and the build fails only where the
-  # cluster has raised the cap to error.
+  # Clamp `severity` to `maxSeverity` so scorecard rules can run by default
+  # without failing the build unless the cluster sets `maxSeverity = "error"`.
   capSeverity =
     maxSeverity: severity:
     if severity == null || severityRank.${severity} <= severityRank.${maxSeverity} then
@@ -209,7 +207,6 @@ rec {
       maxSeverity ? "error",
       owner ? null,
       meta ? { },
-      # `cluster.secrets.accept`, for security.secretSource.
       acceptedSecretSources ? null,
     }:
     let
@@ -270,8 +267,7 @@ rec {
       ruleOverrides ? { },
       maxSeverity ? "error",
       owner ? null,
-      # Inputs for architecture.annotationDomainOwnership: domain declarers,
-      # dependency identities as "namespace/instance", and known domains.
+      # Inputs for the architecture.annotationDomainOwnership rule.
       annotationDomainIndex ? { },
       resolvedDepTargets ? [ ],
       knownAnnotationDomains ? [ ],
@@ -331,9 +327,8 @@ rec {
       ruleDefaults ? { },
       ruleOverrides ? { },
       maxSeverity ? "error",
-      # Kinds that count as a network policy in this cluster: the Kubernetes
-      # NetworkPolicy plus whatever the network-policy-enforcer provider
-      # emits. The caller reads the provider so no rule names an enforcer.
+      # Resource kinds that count as a network policy in this cluster,
+      # including kinds emitted by the active network-policy-enforcer provider.
       networkPolicyKinds ? [ "NetworkPolicy" ],
     }:
     let
@@ -385,9 +380,8 @@ rec {
       ruleDefaults ? { },
       ruleOverrides ? { },
       maxSeverity ? "error",
-      # "<namespace>/<name>" → { creatorNamed; } for every name a package
-      # declared external with kix.untrackedRef. Collected before string
-      # context is stripped, which is the only point it can be read at.
+      # Map of "<namespace>/<name>" to `{ creatorNamed; }` for external names
+      # declared with `kix.untrackedRef`, collected before string context is stripped.
       externalNames ? { },
     }:
     let
@@ -443,9 +437,8 @@ rec {
         builtins.foldl' (
           acc: f:
           let
-            # A cluster-level rule copies `metadata.namespace` from a
-            # manifest that still carries string context, and an attribute
-            # name may not refer to a store path.
+            # Discard string context from manifest fields before using them as
+            # attribute names.
             value = f.${field} or null;
             key = if value == null then "unknown" else builtins.unsafeDiscardStringContext value;
           in

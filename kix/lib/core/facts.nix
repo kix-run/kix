@@ -13,11 +13,11 @@
 # Deployment ordering uses the separately retained resource identity context.
 #
 # core/resource.nix attaches endpoint facts to address outputs. Conducting
-# resources forward absorbed facts through their outputs: a ConfigMap can
+# resources forward absorbed facts through their outputs so a ConfigMap can
 # pass an endpoint fact to a workload that mounts it. Terminating resources
-# consume those facts without forwarding them; their endpoint use determines
-# network policy and DNS dependencies. terminatorKinds supplies the defaults,
-# which a resource's factBehavior declaration can override.
+# consume those facts without forwarding them, and their endpoint use
+# determines network policy and DNS dependencies. `terminatorKinds` supplies
+# the defaults, which a resource's `factBehavior` declaration can override.
 
 { lib }:
 
@@ -60,9 +60,8 @@ rec {
 
   conducts = kind: !(builtins.elem kind terminatorKinds);
 
-  # Shape check for a factBehavior declaration ({ endpoint; podSelector? }),
-  # shared by the CRD-declaration site (mkCRD/mkCRDRef args) and the
-  # cluster.factBehavior override. `source` names the declarer in errors.
+  # Validate a `factBehavior` declaration (`{ endpoint; podSelector?; podNamespace?; }`)
+  # from `mkCRD`, `mkCRDRef`, or `cluster.factBehavior`.
   validateBehavior =
     source: kindKey: entry:
     let
@@ -107,9 +106,8 @@ rec {
     in
     builtins.seq _enum (builtins.seq _sel (builtins.seq _ns entry));
 
-  # Custom API groups need factBehavior from their CRD declaration or a
-  # cluster override keyed by "group/Kind". Groups without a dot, *.k8s.io,
-  # and Kix's own group are exempt from this check.
+  # Return true when `apiVersion` belongs to a custom API group outside
+  # `*.k8s.io` and Kix's own group.
   isForeignGroup =
     apiVersion:
     let
@@ -163,8 +161,8 @@ rec {
     rest = lib.filterAttrs (p: _: !isFactPath p) ctx;
   };
 
-  # Rebuild a string with facts removed (pre-seal strip: fact tokens must
-  # never become store references of the sealed manifest).
+  # Rebuild a string without fact tokens so they do not become store references
+  # of the sealed manifest.
   stripFacts =
     s:
     builtins.appendContext (builtins.unsafeDiscardStringContext s) (partitionCtx (
@@ -173,17 +171,15 @@ rec {
 
   readFact = p: builtins.fromJSON (builtins.readFile p);
 
-  # Read facts carried by a string. Context keys deduplicate token paths;
-  # factsOfKind additionally filters the decoded records by kind.
+  # Decode all fact tokens carried in `s`'s string context.
   factsFromString =
     s: map readFact (builtins.filter isFactPath (builtins.attrNames (builtins.getContext s)));
 
   factsOfKind = kind: s: builtins.filter (f: f.kind == kind) (factsFromString s);
 
-  # For endpoint values used as labels or display text rather than addresses.
-  # Remove facts while preserving resource identity context for ordering.
-  # Replace each endpoint fact with a refonly record, suppressing that endpoint's
-  # observed-vs-declared lint and conservative DNS dependency at the consumer.
+  # Replace endpoint facts in `s` with `refonly` facts while preserving
+  # resource identity context for deployment ordering. Use this when an
+  # endpoint value serves as a label or display string rather than an address.
   refOnly =
     s:
     let
@@ -205,8 +201,7 @@ rec {
     in
     builtins.appendContext (builtins.unsafeDiscardStringContext s) (parts.rest // acks);
 
-  # Attach fact context to a value that lacks it, such as a bare service name:
-  # connect svc.factTokens.endpoint svc.out.name
+  # Attach `factCtx` (such as `svc.factTokens.endpoint`) to `s`.
   connect = factCtx: s: builtins.appendContext s factCtx;
 
   # Mark an output as descriptive data, such as a replica count or label.

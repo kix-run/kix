@@ -55,9 +55,8 @@ rec {
       inherit byKey;
     };
 
-  # How resolution errors name the instance whose dependency failed:
-  # "<ns>/<instance>", marked when auto-instantiation created it, since the
-  # cluster file then has no entry for it.
+  # Format an instance identifier for resolution error messages, noting
+  # auto-instantiated instances that do not appear in the cluster config.
   describeRequester =
     namespaceName: instanceName: instCfg:
     "${namespaceName}/${instanceName}${
@@ -66,8 +65,6 @@ rec {
 
   isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
 
-  # The `ref` pointers in an explicit `deps.<arg>` value: the value itself
-  # when it is a ref, the refs in a list, or none.
   refsOf =
     v:
     if isRef v then
@@ -77,15 +74,12 @@ rec {
     else
       [ ];
 
-  # The instances a resolution names, as `{ namespace; instanceName; }`.
-  # A list override (`deps.x = [ ref.a.b ref.c.d ]`) names several; any
-  # other instance resolution names one.
+  # Return the `{ namespace, instanceName }` targets for a single or list
+  # dependency resolution.
   targetsOf = resolution: resolution.targets or [ { inherit (resolution) namespace instanceName; } ];
 
-  # Refuses a `deps` entry, or an element of a list entry, that is a ref to
-  # a name `ref` covers but that no instance was created for (a shelf
-  # package nothing auto-instantiated there). `instances` are the declared
-  # instances; `mergedInstances` adds the auto-instantiated ones.
+  # Reject `deps` references that point to an `availablePackages` entry that
+  # was neither declared nor auto-instantiated.
   checkRefTargets =
     { instances, mergedInstances }:
     lib.foldlAttrs (
@@ -110,8 +104,7 @@ rec {
       ) acc nsInsts
     ) null instances;
 
-  # `requester` (from `describeRequester`) prefixes every error, so a failure
-  # names the instance that asked for the dependency.
+  # Resolve a package dependency argument against `explicitOverride` or `resolutionIndex`.
   resolveArg =
     {
       argName,
@@ -125,11 +118,9 @@ rec {
       prefix = lib.optionalString (requester != null) "${requester}: ";
     in
     if explicitOverride != null then
-      # `deps.x = ref.a.b` names an instance and resolves like the index
-      # would have, so every check an auto-resolved dep gets applies to it.
-      # A list of refs names several instances, each checked the same way,
-      # and the package receives a list of them. Any other value is bound
-      # as it is.
+      # Resolve `ref` and `[ ref ... ]` overrides with `direct = false` so they
+      # run through the same cross-namespace and meta checks as auto-resolved
+      # dependencies.
       if isRef explicitOverride then
         {
           found = true;
@@ -154,10 +145,10 @@ rec {
 
     else
       let
-        # An instance with meta.scope = "namespace" serves only its own
-        # namespace, so it is never a candidate for a requester elsewhere.
-        # Filtering before the managed-over-import preference lets an import
-        # elsewhere answer when the only managed candidates are such instances.
+        # Filter out foreign `meta.scope = "namespace"` candidates before
+        # preferring managed instances over imports. This allows a
+        # cluster-scoped import to satisfy the dependency when the only managed
+        # candidates are scoped to other namespaces.
         allCandidates = resolutionIndex.byKey.${argName} or [ ];
         isForeignNamespaced =
           c: c.namespace != requesterNamespace && (c.meta.scope or "cluster") == "namespace";
@@ -213,9 +204,8 @@ rec {
              }) declare meta.scope = \"namespace\" and serve only their own namespace."
         } Add an instance with that name or alias, or set deps.${argName} explicitly.";
 
-  # The definitions of an instance's `config` (a deferredModule value), as
-  # `{ file; value; }`. deferredModule wraps each definition in
-  # `{ _file; imports; }`; `file` is the innermost `_file`, or null.
+  # Unwrap `deferredModule` definitions into `{ file, value }` pairs,
+  # preserving the innermost `_file` for error reporting.
   extractDeferredDefs =
     deferredConfig:
     let
@@ -236,21 +226,16 @@ rec {
     in
     builtins.concatMap (extractOne null) modules;
 
-  # Priority of a `lib.mkDefault` in a package's own `config`. It sits
-  # between `lib.mkDefault` (1000) and an option's declared default (1500),
-  # so the package default replaces the declared default, and an instance or
-  # config injection replaces the package default even when it also uses
-  # `lib.mkDefault`.
+  # Priority between `lib.mkDefault` (1000) and option defaults (1500).
+  # Package `config` defaults override option defaults while yielding to
+  # instance or injected `lib.mkDefault` values.
   packageDefaultPriority = 1250;
 
   instancePinsLib = import ./instance-pins.nix { inherit lib packageDefaultPriority; };
 
-  # Moves every `lib.mkDefault` in a package's `config` to
-  # `packageDefaultPriority`, through `mkIf`, `mkMerge`, `mkOrder` and
-  # nested attrsets. Other priorities and plain values keep their meaning,
-  # so a plain value in a package's `config` conflicts with a plain instance
-  # value. `mapAttrs` keeps the rewrite lazy: a value is forced only when
-  # the module system reads it.
+  # Rewrite `lib.mkDefault` priorities in a package's `config` to
+  # `packageDefaultPriority` across `mkIf`, `mkMerge`, `mkOrder`, and nested
+  # attrsets.
   lowerPackageDefaults =
     value:
     if !builtins.isAttrs value then
@@ -275,22 +260,10 @@ rec {
       else
         value;
 
-  # `packageConfig` is the package's own `config`, a plain attrset or a
-  # module function such as `{ config, lib, ... }: { ... }`. It is one more
-  # module beside `packageOptions`, so a package can default one option
-  # from another with `lib.mkDefault` (see `packageDefaultPriority`).
-  # `packageConfigFile` names that module in module-system errors. With
-  # `namespaceName` and `instanceName`, option errors name the option as
-  # `instances.<ns>.<instance>.config.<option>`. Every module, the package's
-  # and the instance's, can take `clusterConfig` as a module argument, so a
-  # default can derive from a cluster fact such as `clusterDomain`.
-  # `packageOptions` is not checked against the option contract here;
-  # package CI checks it once per package (eval/options.nix,
-  # kix/package-eval.nix). `instancePins` is `{ file; options; }`, this
-  # instance's entry of a pin file's `instances` map (eval/instance-pins.nix).
-  #
-  # Returns `{ config; options; }`. Reading `config` runs the locked-field
-  # and instance-pin checks.
+  # Evaluate an instance's option modules, combining package options, package
+  # config defaults, dependency config injections, and instance pins. Return
+  # `{ config, options }`, where forcing `config` validates locked fields and
+  # instance pins.
   evaluateInstanceModules =
     {
       packageOptions,
@@ -347,8 +320,6 @@ rec {
       unwrapLockedAttrs =
         attrs: if builtins.isAttrs attrs then lib.mapAttrs (_: unwrapLocked) attrs else attrs;
 
-      # Each module carries the file that defined it, so a module-system
-      # error names the file that set the value.
       wrappedModules = map (
         d:
         let
@@ -377,9 +348,9 @@ rec {
         config = injection.config;
       }) configInjections;
 
-      # The package's `config` is always wrapped as a module's `config`, so
-      # a package option named `config`, `options` or `imports` is set
-      # rather than read as module structure.
+      # Wrap the package's `config` under `config = ...` so package options
+      # named `config`, `options`, or `imports` are not treated as top-level
+      # module keys.
       packageConfigModule =
         if builtins.isFunction packageConfig then
           lib.setFunctionArgs (args: {
@@ -433,11 +404,8 @@ rec {
 
   evaluateInstanceConfig = args: (evaluateInstanceModules args).config;
 
-  # `availability` is the instance's resolved level (core/availability.nix),
-  # a plain string a package may take as an argument so its option defaults
-  # can read it. `kix` is the helper set the package receives; eval/instance.nix
-  # passes one whose `availability.pick` and `atLeast` know the package
-  # ceiling.
+  # Evaluate phase 1 of a package definition, passing `scope`, `lib`, and
+  # optional `kix` and `availability` arguments.
   normalizePackage =
     {
       package,
@@ -463,8 +431,8 @@ rec {
 
   callPackagePhase1 = normalizePackage;
 
-  # A package's `build` as a list of functions. `build` is one function or a
-  # list whose entries are functions or paths to files that evaluate to one.
+  # Normalize a package's `build` attribute into a list of build functions,
+  # importing any path entries.
   buildEntriesOf =
     rawBuild:
     if builtins.isList rawBuild then
@@ -590,7 +558,6 @@ rec {
               depEnrichment = p1.depsEnrichment.${depName} or { };
               hasConfig = depEnrichment ? config;
             in
-            # A list dependency injects into each instance it names.
             if target.found && !(target.direct or false) && hasConfig then
               map (t: {
                 targetNs = t.namespace;

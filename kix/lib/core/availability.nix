@@ -1,23 +1,14 @@
-# The availability level: one word for how much
-# failure a workload must survive, and the arithmetic every consumer of it
-# shares. Design: v2_discussions/archive/145_availability_level.md.
+# Availability levels (`none`, `pod`, `node`, and `zone`) and helpers exposed
+# to packages as `kix.availability`.
 #
 #   none  downtime on any failure or update is accepted
 #   pod   a pod crash or a rolling update causes no downtime
 #   node  the loss of one node causes no downtime      (needs multiNode)
 #   zone  the loss of one zone causes no downtime      (needs two or more zones)
 #
-# The same words serve as a ceiling, the highest level a workload supports
-# (`meta.availability.max` for every workload of a package, `availability.max`
-# on one builder call). The ceiling `none` means the workload runs one pod at
-# a time; the availability plugin refuses a Deployment or StatefulSet above
-# one replica under it.
-#
-# Pure: no module system, no scope. `resolve` is called once per instance
-# by eval/instance.nix; `pick`, `atLeast` and `spreadConstraints` are what
-# packages see as `kix.availability`, with `atLeast` replaced by its
-# `underCeiling` form for an instance whose package declares
-# meta.availability.max.
+# The same levels serve as ceilings via `meta.availability.max` on a package
+# or `availability.max` on a workload builder call. A `none` ceiling restricts
+# a Deployment or StatefulSet to at most one replica.
 { lib }:
 
 let
@@ -38,9 +29,8 @@ let
     else
       i;
 
-  # A ceiling (`meta.availability.max`, or `availability.max` on a builder
-  # call) must be a level. `where` is "ns/inst" and `what` names the field,
-  # so the message points at the declaration rather than at `rank`.
+  # Validate that `value` is a known availability level, or throw an error
+  # pointing at `where` and `what`.
   checkCeiling =
     {
       value,
@@ -57,14 +47,13 @@ let
         lib.concatMapStringsSep ", " (l: "\"${l}\"") levels
       }.";
 
-  # atLeast "node" level: true for node and zone.
+  # Return true when `level` is at least `min`.
   atLeast = min: level: rank level >= rank min;
 
-  # pick level { none = 1; pod = 2; node = 2; zone = 2; }. Every level must
-  # be present so a package's mapping is complete by construction.
+  # Select the entry for `level` from `table`, requiring every availability
+  # level to be present.
   pick = level: table: builtins.seq (checkPickTable table) table.${level};
 
-  # true when `table` has every level; throws otherwise.
   checkPickTable =
     table:
     let
@@ -73,8 +62,7 @@ let
     missing == [ ]
     || throw "kix.availability.pick: table is missing ${lib.concatStringsSep ", " missing} (need every level: ${lib.concatStringsSep ", " levels})";
 
-  # A package's `meta.availability`: null, or an attrset whose only key is
-  # `max`. Returns `max` (checked later by `resolve`) or null.
+  # Extract `max` from a package's `meta.availability` attrset, or return null.
   ceilingOfMeta =
     { value, where }:
     let
@@ -89,11 +77,8 @@ let
     else
       value.max or null;
 
-  # `pick` and `atLeast` as handed to a package whose meta.availability.max
-  # is `ceiling` ("ns/inst" in `where`). `resolve` caps the level at the
-  # ceiling, so the package never sees a higher level and `pick` is
-  # unchanged. An `atLeast` threshold above the ceiling is always false, so
-  # it throws.
+  # Return `{ pick, atLeast }` scoped to `ceiling` (`meta.availability.max`).
+  # Throw when a package tests `atLeast` for a level above its own ceiling.
   underCeiling =
     { ceiling, where }:
     if ceiling == null then
@@ -113,10 +98,8 @@ let
             atLeast min level;
       };
 
-  # The largest level the substrate can honour, and whether that is known.
-  # `certain = false` when the capabilities that decide it are unknown
-  # under three-valued logic. Asking above an uncertain substrate warns;
-  # asking above a certain one is an error.
+  # Return `{ level, certain }` for the highest availability level supported by
+  # `capabilities`. `certain` is false when the deciding capabilities are null.
   substrate =
     capabilities:
     let
@@ -139,21 +122,10 @@ let
         certain = multiNode != null && zones != null;
       };
 
-  # Topology spread constraints for pods at `level`, selected by `selector`
-  # (a matchLabels set). `topology` has the shape of
-  # clusterConfig.cluster.topology: { zoneKey, hostKey, failureDomainKeys }.
-  # One constraint per failure-domain key, outermost first; a single-node
-  # cluster has no keys and gets [ ].
-  #
-  # The plugin derives spread for the workloads Kix renders. A package calls
-  # this for operator-placed operands whose custom resource takes a pod-spec
-  # spread list:
-  #
-  #   kix.availability.spreadConstraints {
-  #     level = availability;
-  #     selector = operandSelector;
-  #     topology = clusterConfig.cluster.topology;
-  #   }
+  # Build `topologySpreadConstraints` for pods at `level` selected by
+  # `selector` (`matchLabels`). Returns one constraint per failure-domain key
+  # in `topology`, or `[ ]` on a single-node cluster. Packages use this for
+  # operator-managed operands whose CRs accept pod topology spread constraints.
   spreadConstraints =
     {
       level,
@@ -161,9 +133,6 @@ let
       topology,
     }:
     let
-      # DoNotSchedule on the key the requested level names, ScheduleAnyway
-      # on the others. maxSkew = 1 allows more replicas than domains while
-      # keeping their distribution within one pod.
       whenUnsatisfiable =
         key:
         if level == "zone" && key == topology.zoneKey then
@@ -173,9 +142,8 @@ let
         else
           "ScheduleAnyway";
     in
-    # nodeTaintsPolicy = "Honor" leaves nodes the pods cannot tolerate out of
-    # the counts. Otherwise an unschedulable control-plane node can make a
-    # hard hostname constraint block further worker pods.
+    # `nodeTaintsPolicy = "Honor"` excludes tainted control-plane nodes from
+    # skew counts so a hard hostname constraint does not block worker pods.
     map (key: {
       topologyKey = key;
       maxSkew = 1;
@@ -184,17 +152,15 @@ let
       labelSelector.matchLabels = selector;
     }) topology.failureDomainKeys;
 
-  # The ladder for one instance: instance override, else cluster default;
-  # capped by the package ceiling (meta.availability.max) with a warning;
-  # refused above the substrate.
+  # Resolve an instance's effective availability level from `instanceOverride`
+  # or `clusterDefault`, cap it at `ceiling` (`meta.availability.max`), and
+  # validate it against the cluster's capabilities.
   resolve =
     {
       capabilities,
       clusterDefault,
       instanceOverride ? null,
-      # meta.availability.max as the package wrote it
       ceiling ? null,
-      # "ns/inst", for messages
       where,
     }:
     let

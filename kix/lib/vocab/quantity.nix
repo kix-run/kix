@@ -1,11 +1,11 @@
-# Kubernetes resource quantities: the option type `kix.types.quantity` and
-# the parser `kix.parseQuantity`. Both accept one grammar, so every value
-# the type accepts parses to an integer number of bytes.
+# Define the Kubernetes quantity option type (`kix.types.quantity`) and parser
+# (`kix.parseQuantity`). Both accept the same grammar so every valid option
+# value parses to a 64-bit integer.
 #
-# The grammar is a non-negative decimal (`1`, `1.5`, `.5`) with an optional
+# Accepts a non-negative decimal (`1`, `1.5`, `.5`) with an optional unit
 # suffix (`m`, `k`, `M`, `G`, `T`, `P`, `E`, `Ki`, `Mi`, `Gi`, `Ti`, `Pi`,
-# `Ei`), or a non-negative integer. Kubernetes also accepts signs and
-# exponents (`1e3`); this grammar refuses them.
+# `Ei`), or a non-negative integer. Unlike Kubernetes, this grammar rejects
+# signs and scientific notation (`1e3`).
 { lib }:
 
 let
@@ -13,8 +13,8 @@ let
 
   pow = base: n: if n == 0 then 1 else base * pow base (n - 1);
 
-  # Each suffix as a multiplier of the base unit, written as a fraction so
-  # `m` stays exact in integer arithmetic.
+  # Represent each suffix multiplier as a fraction so `m` stays exact in
+  # integer arithmetic.
   suffixes = {
     "" = {
       num = 1;
@@ -74,12 +74,10 @@ let
     };
   };
 
-  # The decimal digits of a divisor, to tell whether it fits in a 64-bit
-  # integer.
   digits = n: builtins.stringLength (toString n);
 
-  # The string form of a value, or null when the value cannot be a quantity
-  # (a negative integer, a float, an attrset). String context is discarded.
+  # Convert a non-negative integer or string to a plain string without context,
+  # or return null for other values.
   asString =
     q:
     if builtins.isInt q then
@@ -89,7 +87,8 @@ let
     else
       null;
 
-  # { whole; frac; suffix; } as strings, or null outside the grammar.
+  # Split `q` into `{ whole; frac; suffix; }`, or return null if `q` does not
+  # match the quantity grammar.
   split =
     q:
     let
@@ -120,9 +119,8 @@ let
     in
     if t == "" then 0 else lib.toIntBase10 t;
 
-  # A split quantity without the zeros that do not change its value, so
-  # "007Mi" has one significant digit and "1.500" two. `mantissa` is the
-  # digit string, `frac` the fraction digits it ends with.
+  # Strip leading and trailing zeros from a split quantity so `mantissa` and
+  # `frac` contain only significant digits.
   normalize =
     p:
     let
@@ -134,10 +132,9 @@ let
       mantissa = stripLeading (p.whole + frac);
     };
 
-  # The suffix multiplier times `scale`, as num * scale / den with common
-  # factors removed. `scale` and the suffix denominator are each 1 or 1000,
-  # so "250m" in millicores has the multiplier 1 * 1 / 1. num and scale stay
-  # separate because their product overflows for "Ei" in millicores.
+  # Combine the suffix multiplier with `scale` (`1` or `1000`), canceling common
+  # factors. Keep `num` and `scale` separate because their product overflows a
+  # 64-bit integer for `Ei` in millicores.
   factor =
     scale: suffix:
     let
@@ -150,12 +147,9 @@ let
       den = if same then 1 else mult.den;
     };
 
-  # Why `parse` cannot compute the split quantity `p` exactly in signed
-  # 64-bit integers, or null when it can. `parse` computes
-  # mantissa * num * scale / (den * 10^fraction digits), so the significant
-  # digits, that divisor, and the product mantissa * num * scale must each
-  # fit. Dividing `maxInt` first keeps the checks themselves from
-  # overflowing.
+  # Return an error message when the split quantity `p` would overflow signed
+  # 64-bit integer arithmetic in `parse`, or null when it fits. Divide `maxInt`
+  # before comparing so the bounds check itself never overflows.
   maxInt = 9223372036854775807;
   inexact =
     scale: unit: p:
@@ -179,8 +173,8 @@ let
   scaleOf = resource: if resource == "cpu" then 1000 else 1;
   unitOf = resource: if resource == "cpu" then "millicores" else "bytes";
 
-  # Why `parse resource q` would throw, or null when it parses or `q` is
-  # outside the grammar. For a caller that names the field in its own error.
+  # Return the overflow reason why `parse resource q` would throw, or null when
+  # `q` is valid or outside the grammar.
   problem =
     resource: q:
     let
@@ -188,8 +182,9 @@ let
     in
     if p == null then null else inexact (scaleOf resource) (unitOf resource) p;
 
-  # The type accepts what `parse "memory"` computes; a "cpu" value close to
-  # the limit can still fail `parse`, which then throws.
+  # Validate that `q` matches the grammar and fits in a 64-bit integer at byte
+  # scale. A CPU quantity near the 64-bit limit can still overflow when scaled
+  # to millicores in `parse`.
   valid =
     q:
     let
@@ -197,13 +192,9 @@ let
     in
     p != null && inexact 1 "bytes" p == null;
 
-  # The quantity in millicores when `resource` is "cpu", and in bytes (or
-  # the base unit) otherwise, rounded down. null outside the grammar.
-  # Throws when the value cannot be computed exactly in 64-bit integers
-  # (`problem` gives the reason).
-  #
-  #   parse "cpu" "250m"     => 250
-  #   parse "memory" "1.5Gi" => 1610612736
+  # Parse `q` into millicores when `resource` is "cpu" and into bytes (or base
+  # units) otherwise, rounded down. Return null when `q` is outside the
+  # grammar, or throw when the value overflows 64-bit integer arithmetic.
   parse =
     resource: q:
     let

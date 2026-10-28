@@ -44,7 +44,7 @@ rec {
       networkPolicyEnforcer ? null,
       peekedPackageMeta ? { },
       workloadInterceptors ? [ ],
-      # the instance's resolved availability (core/availability.nix resolve)
+      # Resolved availability for this instance from `core/availability.nix`.
       availability ? {
         level = "none";
         ceiling = null;
@@ -63,17 +63,15 @@ rec {
       };
       inherit (scopeLabels) selectorLabels instanceLabels labels;
 
-      # The policy directions the cluster enforces, `{ ingress; egress; }`
-      # from `networkPolicy.directions`, or null without an enforcer. A
-      # policy section for a direction it leaves false isolates the selected
-      # pods in a direction default deny leaves open. An enforcer is set only
-      # when the netpol plugin is enabled, so the option is defined.
+      # Policy directions enforced by the cluster (`{ ingress; egress; }`), or
+      # null when no enforcer is active. Generating a policy section for an
+      # unenforced direction would isolate pods in a direction that default deny
+      # leaves open.
       networkPolicyEnforced =
         if networkPolicyEnforcer == null then null else clusterCtx.config.networkPolicy.enforced;
 
-      # Role satisfaction for validator gates: "provided" (managed provider
-      # or environment binding), "absent" (declared vacant), "unknown"
-      # (axiom never declared). This is lazy because findRoleProvider only peeks meta.
+      # Return whether a cluster role is "provided", "absent", or "unknown".
+      # `findRoleProvider` only inspects package `meta`, so this check stays lazy.
       roleStatus =
         role:
         let
@@ -156,26 +154,23 @@ rec {
 
         mkResource = scopeMkResource;
 
-        # `subject` (a string naming what reads metrics.k8s.io) -> null.
-        # Throws when the cluster binds the metricsApi role absent and no
-        # instance provides it, and traces a warning when the binding is
-        # unknown. For a consumer that reads the API from a config file
-        # (the descheduler); scope.mkResource checks HPAs itself.
+        # Verify that the cluster serves `metrics.k8s.io` for `subject`. Packages
+        # whose workloads read the metrics API without an HPA call this directly.
         requireMetricsApi = validators.requireMetricsApi;
 
-        # Internal: the hook emission facade (see builders.nix). Not part of
-        # the package-authoring surface; hooks receive it as ctx.emit.
+        # Hook emission facade passed to hooks as `ctx.emit`. Not part of the
+        # package-authoring API.
         _emit = emit;
 
+        # Attach the ordering and endpoint-fact string context of `passengers`
+        # (implicit resource dependencies) to `value`.
         augmentEdge =
           passengers: value:
           let
             extraCtx = builtins.foldl' (
               acc: p:
               acc
-              # identity: the derivation record (ordering)
               // (if builtins.isAttrs p && p ? outPath then builtins.getContext "${p}" else { })
-              # facts: the semantic claims (netpol edges ride along too)
               // (builtins.foldl' (a: fc: a // fc) { } (builtins.attrValues (p.factTokens or { })))
             ) { } passengers;
           in
@@ -185,14 +180,10 @@ rec {
           passengers: outAttrs:
           lib.mapAttrs (_: v: if builtins.isString v then scopeObj.augmentEdge passengers v else v) outAttrs;
 
-        # The dependency's out with the context of `passengers` added to
-        # every string value, plus the Service references among its parts,
-        # keyed by name. A package that re-exports a dependency's address
-        # (stackgres-database) keeps the result as a folder part. A consumer
-        # of that address then waits for the passengers, and the network
-        # policy builder, which indexes only the typed parts of a workload's
-        # direct dependencies, finds the Service reference there and gives
-        # the consumer egress to it.
+        # Re-export `dep.out` with the string context of `passengers` (additional
+        # resources the consumer must wait for) attached to every string value.
+        # Also include any ServiceRef markers from `dep.raw` so network policy
+        # analysis sees the target Service on the re-exporting package.
         forwardEdges =
           dep: passengers:
           let
@@ -246,11 +237,8 @@ rec {
               clusterCtx
               availability
               ;
-            # Subscopes keep the edge registries but drop the DNS root:
-            # resources built through a subscope are parented into a foreign
-            # namespace for emission; DNS readiness ordering belongs to the
-            # workloads of the instance that owns the namespace, not to
-            # resources a caller plants there.
+            # Clear `dnsRoot` so resources emitted into another namespace do not
+            # inherit DNS readiness ordering from the caller's scope.
             edgeAnalysis = edgeAnalysis // {
               dnsRoot = null;
             };

@@ -15,42 +15,29 @@ compose
     compose.types
     // durations.types
     // {
-      # StorageClass fields as a submodule: kix.types.storageClass { }
-      # (vocab/storage-class.nix).
+      # Define a StorageClass submodule option (`vocab/storage-class.nix`).
       storageClass = storageClass.type;
     };
-  # Renders StorageClasses from kix.types.storageClass values and picks the
-  # class for consumers that name none (vocab/storage-class.nix).
+  # Render StorageClasses from `kix.types.storageClass` values and pick the
+  # default class for consumers that do not name one (`vocab/storage-class.nix`).
   storage.mkClasses = storageClass.mkClasses;
-  # The `out` a `database` provider publishes, with `check` for providers
-  # and `assertions` for consumers (vocab/postgres-database.nix).
+  # Validate and consume `database` provider outputs (`vocab/postgres-database.nix`).
   contracts.postgresDatabase = import ./postgres-database.nix { inherit lib; };
-  # The `out` an `otlp` provider publishes, its OTLP/gRPC and OTLP/HTTP
-  # base URLs, with `check` and `assertions` (vocab/otlp-endpoint.nix).
+  # Validate and consume `otlp` provider outputs (`vocab/otlp-endpoint.nix`).
   contracts.otlpEndpoint = import ./otlp-endpoint.nix { inherit lib; };
-  # The `out` a `gateway` provider publishes, with `check` for providers;
-  # kix.expose holds its gateway to it (vocab/gateway.nix).
+  # Validate and consume `gateway` provider outputs (`vocab/gateway.nix`).
   contracts.gateway = import ./gateway.nix { inherit lib; };
-  # The `out` an `oidcProvider` publishes, its issuer and endpoints per
-  # realm, with `check`, `assertions`, and `requireClient`
-  # (vocab/oidc-provider.nix).
+  # Validate and consume `oidcProvider` outputs (`vocab/oidc-provider.nix`).
   contracts.oidcProvider = oidcProvider;
-  # The `oidc` option of an application that signs users in through an
-  # oidcProvider: kix.options.oidc { scopes; autoLogin; }.
+  # Build the `oidc` option set for an application that signs users in through
+  # an `oidcProvider`.
   options = compose.options // {
     oidc = oidcProvider.clientOptions;
   };
-  # Map availability levels to package replica counts and quorums:
-  # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 2; }
-  # kix.availability.atLeast "node" level
-  # A workload that runs one pod at a time sets one replica and the ceiling
-  # "none" (availability.max on its builder call, or meta.availability.max
-  # for a limit of the program); more than one replica under it is an error.
-  # A package with meta.availability.max receives an atLeast that refuses a
-  # threshold above the ceiling (eval/instance.nix packageKix,
-  # core/availability.nix underCeiling).
-  # Spread for operator-placed operands: kix.availability.spreadConstraints
-  # (core/availability.nix).
+  # Map availability levels to replica counts, quorums, and topology spread
+  # constraints (`core/availability.nix`). Single-replica workloads set a
+  # ceiling of "none" via `availability.max` on the builder call or
+  # `meta.availability.max` on the package.
   availability = {
     inherit (availability)
       levels
@@ -60,18 +47,9 @@ compose
       spreadConstraints
       ;
   };
-  # The severity a scorecard rule resolves to for this cluster and
-  # namespace, after overrides and the cluster's cap, as the scorecard
-  # itself resolves it. null when the rule does not run: the scorecard is
-  # off, the rule is not in its rule set, or an override disables it.
-  # A package reads it to replace a finding its own option causes with
-  # advice specific to that option:
-  #   kix.scorecard.effectiveSeverity {
-  #     inherit clusterConfig;
-  #     rule = "security.nonRoot";
-  #     namespaceName = scope.namespaceName;
-  #     owner = "app-team";
-  #   }
+  # Resolve the effective severity of a scorecard rule for this cluster and
+  # namespace, or return null when the scorecard or rule is disabled. Packages
+  # use this to replace generic scorecard findings with option-specific advice.
   scorecard.effectiveSeverity =
     {
       clusterConfig,
@@ -95,8 +73,8 @@ compose
         maxSeverity = sc.maxSeverity or "error";
         inherit namespaceName owner;
       };
-  # Prometheus durations as seconds, and the age past which a scheduled
-  # job's last success is stale (vocab/durations.nix).
+  # Convert Prometheus durations and compute staleness thresholds for scheduled
+  # jobs (`vocab/durations.nix`).
   inherit (durations) durations schedules;
   pins = import ./pins.nix {
     inherit lib;

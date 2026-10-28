@@ -11,12 +11,10 @@ let
     inherit message;
   };
 
-  # Checks `version` against a minVersion/maxVersion constraint set.
-  # `subject` names what the version belongs to and `field` the constraint
-  # path, both for messages. A constraint that is not a version is the
-  # author's error and fails. A version that is null, not a version, or less
-  # precise than the constraint cannot be checked and warns instead, except
-  # that a null version is skipped silently when `warnWhenNull` is false.
+  # Check `version` against a `minVersion`/`maxVersion` constraint set.
+  # Non-version constraints fail as author errors. Null, non-version, or
+  # under-precise versions emit warnings instead, except that null is skipped
+  # silently when `warnWhenNull` is false.
   constraintDiagnostics =
     {
       field,
@@ -115,15 +113,15 @@ rec {
             inherit lib;
           }
           // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-          # meta must not depend on the level; the peek runs before it is resolved
+          # `meta` must not depend on `availability`, because this peek runs
+          # before the availability level is resolved.
           // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
         );
       in
       result.meta or { };
 
-  # Role names are package-intrinsic DI aliases: a role provider is always
-  # resolvable under its role name, regardless of instance-level alias
-  # overrides (which only replace defaultAliases).
+  # Return the DI aliases for an instance. Role names always remain active,
+  # while `instanceAliases` replaces `meta.defaultAliases` when non-empty.
   effectiveAliases =
     { instanceAliases, packageMeta }:
     lib.unique (
@@ -143,9 +141,8 @@ rec {
         package = availEntry.package;
         inherit kixlib;
       };
-      # Shelf packages bypass buildRolesIndex until instantiated, so validate
-      # meta.roles here so a typo'd role on a catalog entry throws instead
-      # of silently never matching a demand.
+      # Validate `meta.roles` here because `availablePackages` entries bypass
+      # `buildRolesIndex` until instantiated.
       shelfRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);
     in
     lib.unique (explicitAliases ++ shelfRoles ++ (packageMeta.defaultAliases or [ ]));
@@ -179,15 +176,12 @@ rec {
       };
 
       compat = packageMeta.compatibleWith or { };
-      # A list dependency checks each instance it names.
       compatDiags = builtins.concatMap (
         depName:
         map (
           depTarget:
           let
             dep = depTarget.instance;
-            # A managed instance carries its package's meta; an import may
-            # publish out.version.
             depVersion = dep._meta.packageMeta.version or (dep.out.version or null);
           in
           constraintDiagnostics {
@@ -220,7 +214,6 @@ rec {
             else
               builtins.filter (c: c.namespace == namespaceName && !(isSelf c)) candidates;
           scope = if isClusterWide then "(cluster-wide)" else "in namespace '${namespaceName}'";
-          # A null autoInstantiatedFor marks a declared instance.
           isAuto = c: (c.meta.autoInstantiatedFor or null) != null;
           label =
             c:
@@ -238,9 +231,8 @@ rec {
         )
       ) (packageMeta.conflictsWith or [ ]);
 
-      # Closed unsafe vocabulary (kix/lib/unsafe.nix): validate here so a
-      # typo'd grant fails the cluster even when the escaped rule never
-      # fires (e.g. `raw-pvc` granted but no PVC built this eval).
+      # Validate `meta.unsafe` grants up front so unknown grant names fail even
+      # when the corresponding rule does not fire during evaluation.
       unsafeAssertions = builtins.concatMap (
         grant:
         lib.optional (!(unsafe.registry ? ${grant})) (
@@ -338,11 +330,11 @@ rec {
       emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (map (a: a.message) failedAssertions);
     };
 
+  # Aggregate diagnostics across all instances and attach cluster- and
+  # namespace-level findings (`extraWarnings` and `extraAssertions`).
+  # `emitExtraWarnings` traces only `extraWarnings` because instance warnings
+  # are already traced during instance evaluation.
   collectClusterDiagnostics =
-    # extraWarnings/extraAssertions carry cluster- and namespace-level
-    # diagnostics (e.g. cross-resource scorecard findings) that no single
-    # instance owns. Instance-level warnings are already traced during
-    # instance eval, so emitExtraWarnings covers only the extras.
     {
       clusterName,
       allInstancesList,

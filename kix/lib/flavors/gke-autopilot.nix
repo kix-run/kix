@@ -1,21 +1,9 @@
-# GKE Autopilot flavor with managed platform restrictions.
+# GKE Autopilot flavor.
 #
-# Google manages both control plane and worker nodes. Significant restrictions:
-# - No privileged pods, hostNetwork, hostPID, hostIPC, hostPath volumes
-# - No DaemonSets (platform manages node-level daemons)
-# - Minimum resource requests enforced (0.25 vCPU, 0.5 GiB per container)
-# - Cannot deploy to kube-system
-# - Baseline PSA enforcement
-# - Mutating admission webhooks have restrictions
-#
-# cni and loadBalancer are environment-owned exclusively because Autopilot does
-# not permit user-run network infrastructure.
-#
-# Platform imports: DNS (kube-dns), storage (premium-rwo via PD CSI). GKE
-# creates the standard-rwo and premium-rwo StorageClasses with the PD CSI
-# driver (https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/gce-pd-csi-driver).
-# Note: kube-system imports use gke-managed namespace since Autopilot
-# blocks user deployments to kube-system.
+# Google manages both the control plane and worker nodes. Autopilot forbids
+# privileged containers, DaemonSets, and user deployments in `kube-system`,
+# enforces the `baseline` Pod Security Standard, and owns `cni` and
+# `loadBalancer` exclusively.
 
 {
   config,
@@ -46,16 +34,14 @@
 
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
-    nodeAutoscaling = lib.mkDefault true; # fully automatic, not configurable
-
-    # Hard restrictions
+    nodeAutoscaling = lib.mkDefault true;
     privilegedContainers = lib.mkDefault false;
     podSecurityEnforcement = lib.mkDefault "baseline";
     daemonSets = lib.mkDefault false;
   };
 
-  # Platform-provided imports. Use gke-managed namespace since Autopilot
-  # blocks user deployments to kube-system.
+  # Place platform imports in `gke-managed` because Autopilot blocks user
+  # resources in `kube-system`.
   instances.gke-managed = {
     platform-dns = {
       package = kix.mkImport {

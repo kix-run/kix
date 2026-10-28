@@ -34,18 +34,13 @@ let
     else
       [ ];
 
-  # Heuristic: does the string contain a `<name>.<ns>.svc` fragment?
-  # `builtins.match` is whole-string, so pad with `.*` on both sides.
+  # Return true when `s` contains a `<name>.<ns>.svc` DNS fragment.
   looksLikeSvcFqdn =
     s: lib.hasInfix ".svc" s && builtins.match ".*[a-zA-Z0-9-]+\\.[a-zA-Z0-9-]+\\.svc.*" s != null;
 
-  # Domains whose annotations need no declarer: Kubernetes reserves the
-  # kubernetes.io / k8s.io suffixes for core components; Kix's own domain,
-  # and the ones it has retired, are ours;
-  # helm.sh (incl. meta.helm.sh) rides on imported chart resources;
-  # kubebuilder.io is build-tooling provenance stamped on chart CRDs and
-  # consumed by nothing at runtime. Suffix-matched, so
-  # service.beta.kubernetes.io etc. pass.
+  # Annotation domains (and their subdomains) that do not require a declaring
+  # operator package. This covers standard Kubernetes domains, Kix's own
+  # domains, and Helm or Kubebuilder build metadata on imported charts.
   reservedAnnotationDomains = [
     "kubernetes.io"
     "k8s.io"
@@ -59,8 +54,8 @@ let
 
   isReservedDomain = d: builtins.any (r: d == r || lib.hasSuffix ".${r}" d) reservedAnnotationDomains;
 
-  # Annotation key → DNS-domain-shaped prefix, or null. Keys without a "/"
-  # or with a dot-less prefix ("checksum/config") are not domain-qualified.
+  # Extract the domain prefix before `/` from an annotation key, or return null
+  # when the key has no `/` or its prefix contains no dot.
   annotationKeyDomain =
     key:
     let
@@ -72,8 +67,8 @@ let
 in
 {
   # A domain-qualified annotation must use a reserved or configured domain, or
-  # a domain declared by a dependency. Inspect resource metadata annotations;
-  # pod-template annotations, labels, and container arguments are out of scope.
+  # a domain declared by a dependency. Only top-level `metadata.annotations`
+  # are inspected.
   annotationDomainOwnership = {
     description = "Annotations under an operator-managed domain require a DI dep on the declaring package";
     level = "package";
@@ -101,9 +96,8 @@ in
             )
           );
 
-        # domain → example resources carrying it (findings aggregate per
-        # domain so ten resources with one forgotten operator yield one
-        # actionable message, not ten).
+        # Group carrying resources by domain so a missing operator dependency
+        # produces one finding per domain rather than one per resource.
         domainCarriers = builtins.foldl' (
           acc: r:
           builtins.foldl' (
@@ -155,15 +149,9 @@ in
       builtins.concatLists (lib.mapAttrsToList findingFor domainCarriers);
   };
 
-  # An untracked reference says "something else creates this". A bare
-  # claim is checked by nothing: when nothing creates the object, every eval
-  # passes and a pod that mounts it waits in Init with "secret not found".
-  # List every bare claim in a build in one place, so a reviewer reads a
-  # list instead of finding them one mount at a time. A name is not listed
-  # when every reference to it in its namespace names its creator: with
-  # `kix.untrackedRef { kind; name; by; }` the referrer depends on the
-  # creator and deploy waits for the object, and with `by = "self"` held
-  # by exactly one resource in the cluster, that resource is the creator.
+  # Report `kix.untrackedRef` references that do not name a creator. References
+  # that set `by` to a resource (or `by = "self"` on a single resource) are
+  # ordered and checked during deployment, so they are excluded here.
   untrackedReferences = {
     description = "Audit: names declared external with kix.untrackedRef that do not name their creator";
     level = "cluster";
@@ -216,16 +204,8 @@ in
       }) (meta.unsafe or [ ]);
   };
 
-  # Same-kind resources selected by labels must be distinguishable when a
-  # consumer uses either resource's full label set.
-  #
-  # "Indistinguishable" is subset-or-equal, both directions: label matching
-  # means "has at least these labels", so if A's labels are a subset of
-  # B's, a selector built from A's full label set still matches B. Each
-  # resource must carry at least one (key, value) the other lacks.
-  #
-  # Check kinds commonly discovered by label. Name-selected resources such as
-  # ConfigMaps may share labels without ambiguity.
+  # Reject workloads whose `spec.selector.matchLabels` is a subset of another
+  # workload's pod template labels in the same instance.
   distinctWorkloadSelectors = {
     description = "One workload's selector must not also match another workload's pods";
     level = "package";
@@ -278,14 +258,10 @@ in
       ) selectors;
   };
 
-  # Kubernetes scopes a port name to its pod, so two workloads in one
-  # instance may legally name different numbers the same thing. Kix's
-  # consumers are wider than a pod: `kix.service.fromWorkload` resolves a
-  # name against the one workload it is handed, and cross-resource check 13
-  # matches a Service's port names against the container ports of the whole
-  # package. Anything that resolves a name without naming the workload it
-  # belongs to picks one of the two numbers by accident, and the manifest
-  # that results is valid, so nothing downstream catches it.
+  # Warn when two workloads in the same instance assign different port numbers
+  # to the same port name. Package-level helpers and cross-resource checks
+  # resolve port names across the instance, so conflicting numbers make port
+  # resolution ambiguous.
   consistentPortNames = {
     description = "One port name must mean one number across an instance's workloads";
     level = "package";
@@ -308,7 +284,7 @@ in
             r.spec.template.spec or { };
         rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
         workloads = builtins.filter (r: builtins.elem (r.kind or "") workloadKinds) resources;
-        # Every (name, number, owner) a workload's containers declare.
+        # Return `{ name, containerPort, owner }` for each named port in a workload.
         portsOf =
           r:
           let
@@ -350,6 +326,9 @@ in
       ) conflicts;
   };
 
+  # Require same-kind label-selected resources (such as Services) in one
+  # instance to have mutually non-subset label sets so label selectors can
+  # target one without matching another.
   distinctSameKindLabels = {
     description = "Same-kind label-selectable resources in one instance must be label-distinguishable";
     level = "package";
@@ -453,8 +432,8 @@ in
         matchLabels = resource.spec.selector or { };
         values = builtins.attrValues matchLabels;
         anyWithContext = builtins.any (v: builtins.isString v && builtins.getContext v != { }) values;
-        # A Service over an operator's pods has no workload to derive from;
-        # cross-resource check 4 checks the custom resource it names.
+        # Services created by `kix.operandService` target operator-managed pods
+        # and are validated against their custom resource instead of a workload.
         isOperandService = (resource.metadata.annotations or { }) ? ${kixKeys.operandOf};
       in
       if matchLabels == { } || anyWithContext || isOperandService then
@@ -526,8 +505,8 @@ in
         uniqueRefServices = builtins.attrValues (
           builtins.listToAttrs (
             map (s: {
-              # Attribute names cannot carry string context; the namespace
-              # value does (it names the Namespace resource).
+              # Strip string context from the namespace resource reference
+              # before using it in an attribute name.
               name = builtins.unsafeDiscardStringContext "${s.metadata.namespace or "?"}/${s.metadata.name}";
               value = s;
             }) refServices
@@ -545,13 +524,10 @@ in
         subsetOf =
           needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
 
-        # Both monitor kinds share prometheus-operator's namespaceSelector
-        # semantics: `any = true` selects every namespace, a non-empty
-        # matchNames lists them, and an empty selector or empty matchNames
-        # means the monitor's own namespace. `any = true` returns null,
-        # the sentinel for a target set that includes namespaces kix
-        # cannot see; the monitor is then skipped under the scoping
-        # contract above, because a missing match cannot be proven there.
+        # Return the target namespaces for a monitor, or null when `any = true`
+        # selects all namespaces (including namespaces outside Kix that this
+        # rule cannot verify). An empty selector defaults to the monitor's own
+        # namespace.
         targetNamespaces =
           mon:
           let
@@ -568,8 +544,8 @@ in
           else
             [ ];
 
-        # Count a Service only when labels and at least one endpoint port match.
-        # This distinguishes an actual duplicate scrape from a label-only match.
+        # Return true when a monitor endpoint's port matches at least one port
+        # on the Service.
         endpointHitsService =
           ep: svc:
           let
@@ -727,12 +703,9 @@ in
       }) (lib.unique offending);
   };
 
-  # A string naming cluster.local resolves only on a cluster whose
-  # clusterDomain is cluster.local. The rule is inert on such clusters.
-  # CustomResourceDefinitions are skipped: their schema text quotes example
-  # FQDNs. The configured domain is masked before matching, so a domain
-  # such as east.cluster.local is not a hit, and cluster.local counts only
-  # as whole labels (mycluster.local and cluster.localhost do not match).
+  # Reject hardcoded `cluster.local` domain references when the cluster uses a
+  # custom `clusterDomain`. Skip CustomResourceDefinitions because upstream
+  # schema descriptions often include example `cluster.local` FQDNs.
   clusterDomainLiteral = {
     description = "Rendered strings must not name cluster.local when the cluster's clusterDomain is another domain";
     level = "cluster";
@@ -747,19 +720,18 @@ in
       { allResources, clusterConfig, ... }:
       let
         domain = clusterConfig.clusterDomain;
-        # Stands in for the configured domain while matching: it is not a
-        # label character, so "x.svc.<domain>" never reads as cluster.local.
+        # Replace the configured `clusterDomain` with a non-DNS sentinel
+        # character so domains like `east.cluster.local` do not trigger false
+        # positives.
         sentinel = builtins.fromJSON ''"\u0001"'';
         masked = builtins.replaceStrings [ domain ] [ sentinel ];
 
-        # `builtins.split` output for whole-label occurrences of
-        # cluster.local, each match capturing the character on either side.
-        # The string is padded with a space at both ends so an occurrence at
-        # either end also has a non-label character beside it.
+        # Split `s` on whole-label occurrences of `cluster.local`, padding both
+        # ends so matches at the start or end of the string are captured.
         pieces = s: builtins.split "([^A-Za-z0-9-])cluster\\.local([^A-Za-z0-9-])" (" " + masked s + " ");
         hasHit = s: builtins.length (pieces s) > 1;
 
-        # Up to 80 characters either side of the first hit, on one line.
+        # Extract a single-line snippet of up to 80 characters around the first match.
         excerpt =
           s:
           let

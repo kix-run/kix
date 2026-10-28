@@ -26,8 +26,8 @@
   checkExtraDeps,
   consumersMod,
   podSecurity,
-  # The flake whose clusters these are (its `self`), or null when the caller
-  # did not say. Image sources name a file only by its path in this flake.
+  # The flake that defines these clusters (its `self`), or null when omitted.
+  # Image sources record file paths relative to this flake.
   self,
 }:
 
@@ -37,14 +37,14 @@
       name ? "cluster",
       modules,
       specialArgs ? { },
-      # The cluster's pin file, as `kix.pins` reads it. Its `instances` map
-      # is applied here; its `images` map is read by the cluster's code with
-      # `pins.get`, and names the pin a matching value came from in
-      # `imageSources`.
+      # The cluster's pin file from `kix.pins`. `buildCluster` applies its
+      # `instances` map directly. Cluster code reads its `images` map via
+      # `pins.get`, and `imageSources` matches values back to those pins.
       pins ? null,
     }:
     let
-      # Module merge stays lazy: ref thunks in config values are not forced here.
+      # Module evaluation stays lazy so `ref` thunks in config values are not
+      # forced here.
       evaluated = lib.evalModules {
         modules = [ (import ../modules.nix) ] ++ modules;
         specialArgs = {
@@ -67,15 +67,13 @@
 
       mergedInstances = lib.recursiveUpdate autoResult.autoInstances cfg.instances;
 
-      # `ref.<ns>.<inst>` is a pointer to an instance, not the instance. It
-      # is built over every name auto-instantiation could produce, which is
-      # known before auto-instantiation runs, so computeAutoInstances and the
-      # phase-1 pre-pass can both read `deps.x = ref.a.b` without recursion:
-      # the wired dep then resolves like an auto-resolved one (config
-      # injection lands on it, meta.scope and version constraints apply to
-      # it). resolveArg dereferences it. A name outside that set fails at the
-      # `ref.a.b` access; one inside it that was not created fails in
-      # _refTargetsCheck.
+      # Build `ref.<ns>.<inst>` pointers for every name auto-instantiation could
+      # produce. Because this set is known before auto-instantiation runs,
+      # `computeAutoInstances` and the phase-1 pre-pass can read `deps.x = ref.a.b`
+      # without recursion. Wired dependencies then receive config injections and
+      # `meta.scope` and version checks just like auto-resolved dependencies.
+      # `resolveArg` dereferences each pointer, while `_refTargetsCheck` rejects
+      # pointers to candidate instances that were never created.
       ref =
         lib.mapAttrs
           (
@@ -97,17 +95,16 @@
         inherit mergedInstances;
       };
 
-      # Runs over inactive instances too, so a misplaced or malformed entry
-      # fails before anything activates the instance.
+      # Validate `extraDeps` on inactive instances too so misplaced or malformed
+      # entries fail before anything activates the instance.
       _extraDepsCheck = checkExtraDeps {
         instances = cfg.instances;
         inherit mergedInstances;
       };
 
-      # An instance pin for an instance the cluster does not have would
-      # otherwise pin nothing, and say nothing. So a pin file with instance
-      # pins belongs to one cluster: a flake with several clusters gives each
-      # its own, `pins = kix.pins ./<cluster>/pins.json;`.
+      # Reject instance pins that target nonexistent instances or imports so
+      # stale pins cannot silently go unused. A pin file with instance pins
+      # belongs to a single cluster.
       _instancePinsCheck =
         if pins == null then
           null
@@ -134,7 +131,7 @@
               null
           ) null (builtins.attrNames pins.instances);
 
-      # This instance's entry of the pin file's `instances` map, or null.
+      # Return the `instances` pin entry for `<nsName>/<instName>`, or null.
       instancePinsOf =
         nsName: instName:
         let
@@ -153,7 +150,7 @@
       isSentinelNs = nsName: lib.hasPrefix "_" nsName;
       realNsNames = builtins.filter (n: !isSentinelNs n) allNsNames;
 
-      # Pod Security Standards from most to least permissive. A namespace
+      # Order Pod Security Standards from most to least permissive. A namespace
       # uses the most permissive level required by any of its instances.
       podSecurityLevels = [
         "privileged"
@@ -173,9 +170,9 @@
         else
           i;
 
-      # Set when this cluster loads a platform's interface: it is that
-      # platform's consumer, and every namespace it renders carries the
-      # interface's label, Pod Security level and quota.
+      # When this cluster loads a platform interface, stamp every rendered
+      # namespace with the interface's consumer label, Pod Security level, and
+      # quota.
       consumerSide = consumersMod.consumer { inherit name cfg self; };
       namespaceConfig =
         nsName:
@@ -252,6 +249,8 @@
         nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
       ) mergedInstances;
 
+      # Record the active instances that requested an auto-instantiated
+      # instance, or null for explicitly declared instances.
       staticMeta = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -270,8 +269,6 @@
               };
               isImport = (instCfg.package._type or "") == "kix-import";
               scope = packageMeta.scope or "cluster";
-              # Null for a declared instance; the requesters that pulled an
-              # auto-instantiated one in, for refusal messages.
               autoInstantiatedFor = instCfg._autoInstantiatedFor or null;
             };
           }
@@ -360,10 +357,10 @@
         inherit rolesIndex;
       };
 
-      # Every key (instance name or alias) of an inactive optional instance.
-      # evaluateInstance reads it for the implicit `dns` edge: an optional
-      # platform-dns import says the environment runs DNS, so a workload
-      # that finds no active DNS provider gets no edge and no warning.
+      # Collect every name and alias of inactive optional instances.
+      # `evaluateInstance` checks this set when resolving the implicit `dns`
+      # dependency so an inactive optional DNS import suppresses missing-DNS
+      # warnings when the environment provides DNS.
       inactiveOptionalKeys = builtins.listToAttrs (
         builtins.concatMap (
           nsName:
@@ -391,9 +388,9 @@
       instanceProcessors = hooks.collectHooks cfg "instanceProcessors";
       clusterProcessors = hooks.collectHooks cfg "clusterProcessors";
 
-      # Only `ref` pointers, alone or in a list, are read here. Any other explicit dep value is a
-      # foreign object the fixpoint may own, so it is bound in step 7 and
-      # never injected into.
+      # Read only `ref` pointers in phase 1. Other explicit `deps` values may
+      # come from the instance fixpoint, so they are bound during full instance
+      # evaluation and do not receive config injections.
       phase1Instances = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -637,10 +634,10 @@
         in
         if perInstance == [ ] then null else perInstance;
 
-      # Where each image option's value comes from, for
-      # `kix-image-sources.json`. Outside the Activation: nothing here
-      # reaches a manifest, so moving a value between code and a pin
-      # changes this record and leaves the Activation's name alone.
+      # Record the origin of each image option value for `kix-image-sources.json`.
+      # Keep this metadata outside the Activation resource so moving an image
+      # value between Nix code and a pin file does not change the Activation
+      # hash.
       imageSources =
         let
           pinsFile = if pins == null then null else instancePinsLib.pathInFlake self pins.file;
@@ -649,9 +646,9 @@
           version = 1;
           cluster = name;
           inherit pinsFile;
-          # Why a pin file the cluster passes has no `pinsFile`: another
-          # flake input holds it (`outside_flake`), or kix was not told the
-          # flake (`flake_unknown`). Null when there is a path, or no file.
+          # Record why `pinsFile` is null when a pin file was provided: either
+          # `self` was not passed (`flake_unknown`) or the file lives outside
+          # `self` (`outside_flake`).
           pinsFileUnknown =
             if pins == null || pins.file == null || pinsFile != null then
               null
@@ -685,8 +682,6 @@
         else
           null;
 
-      # What this cluster renders for the clusters it hosts, and their
-      # interface files. Null without `consumers`.
       platformSide =
         if cfg.consumers == { } then
           null
@@ -704,13 +699,13 @@
               ;
           };
 
-      # collectResources can encounter aliases of the same resource. Collapse
+      # `collectResources` can encounter aliases of the same resource. Collapse
       # equal store paths before checking identity collisions and writing the
       # manifest list.
       allResources = dedupeByOutPath (resourcesBeforeRecord ++ [ activation ]);
 
-      # Every resource but the Activation record, which references the
-      # interface files built from this list.
+      # Collect every resource except the Activation record, which references
+      # the package index built from these resources.
       resourcesBeforeRecord = [
         k8s.kixCRDs.packageInstance
         k8s.kixCRDs.activation
@@ -781,16 +776,13 @@
         }
       );
 
-      # The index keeps the string context of every path it lists, so it
-      # references them, and the Activation record references the index.
-      # An import marker no object uses is in no other closure: these
-      # references put it under the record's name, keep it from garbage
-      # collection, and put it in a bundle. Each instance's list holds its
-      # own PackageInstance, so the keys need no context.
+      # Preserve string context on every path in the index so the Activation
+      # record retains store references to all resources, including import
+      # markers that no other object references. Map keys can drop string
+      # context because each instance's value list already includes its own
+      # PackageInstance marker.
       packageIndex = builtins.toFile "kix-packages.json" (builtins.toJSON packageIndexContent);
 
-      # What kix-packages.json holds. An instance may name one resource under
-      # two parts (an alias), and its list gives that resource once.
       packageIndexContent = {
         cluster = name;
         packages = builtins.listToAttrs (
@@ -828,10 +820,9 @@
       outPathKey =
         r: if r ? outPath then builtins.unsafeDiscardStringContext (toString r.outPath) else "";
 
-      # A workload whose pods its namespace's Pod Security level refuses.
-      # Kubernetes admission would refuse the pods at deploy; the build
-      # refuses the workload instead, naming each field to change. One
-      # assertion per workload.
+      # Reject workloads that violate their namespace's Pod Security level so
+      # evaluation fails with field-level fixes before Kubernetes admission
+      # rejects the pods.
       podSecurityAssertions =
         let
           plain = v: builtins.unsafeDiscardStringContext (toString v);
@@ -868,12 +859,10 @@
         in
         builtins.concatMap ofInstance allInstancesList;
 
-      # A cluster-scoped object, by API group, kind and name, that more than
-      # one active instance renders. Kubernetes holds one object under that
-      # identity, so the instances would apply it over each other. Identical
-      # copies would otherwise leave allResources as one entry through
-      # dedupeByOutPath, and differing ones fail check 7 without naming the
-      # instances.
+      # Reject cluster-scoped objects rendered with the same API group, kind,
+      # and name by multiple active instances. Identical copies would otherwise
+      # be collapsed by `dedupeByOutPath`, and differing copies would fail
+      # cross-resource validation without naming the owning instances.
       sharedClusterObjectAssertions =
         let
           plain = v: builtins.unsafeDiscardStringContext (toString v);
@@ -890,8 +879,6 @@
                 )
               )
           ) allInstancesList;
-          # "ClusterRole reader (rbac.authorization.k8s.io)"; a core kind has
-          # no group.
           identity =
             m:
             let
@@ -936,9 +923,9 @@
           }
         ) shared;
 
-      # Store path -> "<ns>/<instance>" of the active instance whose parts
-      # produced it. Namespace objects, cluster hooks and the Activation have
-      # no owner.
+      # Map each resource's store path to the `<ns>/<instance>` that produced
+      # it. Namespace resources, cluster hook outputs, and the Activation
+      # record have no instance owner.
       resourceOwners = builtins.listToAttrs (
         builtins.concatMap (
           inst:
@@ -1137,8 +1124,6 @@
                         imageSources
                         ;
 
-                      # Consumer name -> the interface file this cluster
-                      # writes for it.
                       interfaces = if platformSide == null then { } else platformSide.interfaces;
 
                       diagnostics = {

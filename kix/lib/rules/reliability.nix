@@ -1,8 +1,5 @@
-# Built-in scorecard rules: Reliability
-#
-# Checks for resource limits, probes, PDB, and graceful shutdown.
-#
-# See v2_discussions/60_scorecard_rules_design.md §Built-in rule library.
+# Built-in scorecard rules for container resource bounds, probes, graceful
+# shutdown, and volume definitions.
 
 { lib }:
 
@@ -16,11 +13,10 @@ let
     let
       podSpec = resource.spec.template.spec or { };
     in
-    # A chart-rendered pod spec can carry `initContainers: null`; the rules
-    # see the manifest before the null is stripped at emission.
+    # Helm charts can render `initContainers: null`, and scorecard rules inspect
+    # manifests before null fields are stripped.
     listOr (podSpec.containers or [ ]) ++ listOr (podSpec.initContainers or [ ]);
 
-  # Only check main containers for probes (not init containers).
   getMainContainers = resource: listOr ((resource.spec.template.spec or { }).containers or [ ]);
 
   isWorkload =
@@ -32,20 +28,9 @@ let
     ];
 in
 {
-  # v2_discussions/105 §A9 / §B7: single-node clusters cannot evict to "another
-  # node", so an OOM that escapes a workload becomes a kernel-level event.
-  # `requests` and `limits` are the only thing standing between a runaway pod
-  # and a hung host. This rule is stricter than `hasResourceLimits` /
-  # `hasResourceRequests` above; it requires CPU and memory in both
-  # requests and limits on every container.
-  #
-  # Parameterization is via the scorecard override machinery rather than a
-  # bespoke flavor option:
-  #   - lift severity:  scorecard.ruleOverrides.byRule.boundedResources.severity = "error";
-  #   - disable:        scorecard.ruleOverrides.byRule.boundedResources.enabled = false;
-  #   - per-namespace:  scorecard.ruleOverrides.byNamespace."kube-system".boundedResources.severity = "info";
-  # Default severity is "warning" so an opt-in cluster surfaces findings without
-  # blocking the build during the migration toward fully-bounded workloads.
+  # Require both CPU and memory in `requests` and `limits` on every container,
+  # which is stricter than `hasResourceLimits` and `hasResourceRequests`
+  # (those pass when any resource is set).
   boundedResources = {
     description = "Every container should declare CPU+memory requests and limits";
     level = "manifest";
@@ -158,14 +143,6 @@ in
       }) missingReadiness);
   };
 
-  # hasPDB retired 2026-09-20. The availability plugin derives a
-  # PodDisruptionBudget for every multi-replica workload. The rules score the
-  # shipped set now, derived PDBs included, so the rule could be written
-  # again; it stays retired because the one case the derivation skips, a
-  # workload the package placed itself, is warned about in
-  # plugins/availability/module.nix, where the skip is decided and the
-  # reason is known.
-
   gracefulShutdown = {
     description = "Workloads should set terminationGracePeriodSeconds";
     level = "manifest";
@@ -187,14 +164,10 @@ in
         [ ];
   };
 
-  # kixpkgs#9 family: a Volume with a name but no source is rejected by the
-  # apiserver. The dangerous path is a constructor that builds the source
-  # from optional arguments that are all null: under collapse-rule
-  # normalization the source vanishes at render time while the rawManifest
-  # this rule receives still shows the key. So the check normalizes each
-  # volume exactly the way the renderer will and inspects the result,
-  # catching the constructor trap at build time instead of at apply time.
-  # Severity is "error": the manifest is unconditionally invalid.
+  # Normalize pod volumes before checking that each volume has a source. A
+  # volume source built from all-null optional fields is still present in
+  # `rawManifest`, but normalization strips it before rendering, leaving a
+  # sourceless volume that the API server rejects.
   volumeHasSource = {
     description = "Every pod volume must carry a source (emptyDir, configMap, secret, ...)";
     level = "manifest";

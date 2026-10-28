@@ -1,10 +1,11 @@
 # Derive topology spread and PodDisruptionBudgets from availability levels.
 #
-# Packages map ctx.availability to replica counts. Cluster capabilities define
-# available failure domains. The workload interceptor adds placement before
-# sealing; the instance processor adds PDBs, warns about replica shortfalls,
-# and refuses more than one replica under a `none` ceiling; the cluster
-# processor reports uncertain substrate capabilities once per cluster.
+# Packages map `ctx.availability` to replica counts, and cluster capabilities
+# define the available failure domains. The workload interceptor injects
+# topology spread constraints before sealing. The instance processor emits
+# PDBs, warns about replica shortfalls, and rejects multi-replica workloads
+# when the availability ceiling is `none`. The cluster processor warns once
+# per cluster when substrate capabilities are unknown.
 {
   config,
   lib,
@@ -46,14 +47,14 @@ let
     kind: spec:
     builtins.elem kind spreadKinds && builtins.isInt (spec.replicas or null) && spec.replicas > 1;
 
-  # The author has taken over placement for this workload: the compiler
-  # derives neither constraints nor a PDB for it (one signal, one meaning).
+  # Return true when the workload defines its own topologySpreadConstraints,
+  # which disables automatic spread and PodDisruptionBudget derivation.
   authorPlaced = spec: (spec.template.spec or { }) ? topologySpreadConstraints;
 
-  # The constraints come from core/availability.nix. For a Deployment,
-  # matchLabelKeys counts only the current revision during a rolling
-  # update; StatefulSets replace pods in place and have no
-  # pod-template-hash label.
+  # Build topology spread constraints for a workload. Deployments include
+  # `matchLabelKeys = [ "pod-template-hash" ]` so rolling updates only count
+  # the active revision, whereas StatefulSets update pods in place without
+  # that label.
   mkConstraints =
     kind: level: selector:
     map (c: c // lib.optionalAttrs (kind == "Deployment") { matchLabelKeys = [ "pod-template-hash" ]; })
@@ -66,8 +67,8 @@ let
         }
       );
 
-  # A PDB written by the author covers a workload when its selector is a
-  # subset of the workload's template labels.
+  # Return true when a PodDisruptionBudget's selector is a subset of the
+  # workload's pod template labels.
   isCoveredBy =
     workloadManifest: pdbManifest:
     let
@@ -180,22 +181,20 @@ in
     hooks.instanceProcessors.availability =
       ctx:
       let
-        # A workload sealed under its own ceiling (`availability.max` on
-        # the builder call) carries the level it was sealed at; every other
-        # resource is judged at the instance's.
+        # Return the effective availability level for a resource, using the
+        # workload's own capped level when present.
         levelOf = r: (r._availability or ctx.availability).level;
         workloads = builtins.filter (r: (r.rawManifest or { }) ? kind) ctx.allPartResources;
         manifests = map (r: r.rawManifest) workloads;
         pdbs = builtins.filter (m: m.kind == "PodDisruptionBudget") manifests;
-        # Constraints that differ from deriveConstraints are package supplied;
-        # skip PDB derivation for those workloads. A workload with no constraints
-        # still receives a PDB.
         derivedConstraints =
           r:
           let
             m = r.rawManifest;
           in
           mkConstraints m.kind (levelOf r) (m.spec.selector.matchLabels or { });
+        # Return true when a sealed workload has package-supplied spread
+        # constraints that differ from the plugin's derived constraints.
         authorPlacedSealed =
           r:
           let
@@ -275,11 +274,9 @@ in
           + "on its builder call."
         ) shortfall;
 
-        # The ceiling `none` means one pod at a time, so a Deployment or
-        # StatefulSet above one replica under it is an error. Every part
-        # resource is judged, root-reachable or not, after partsOverlays. A
-        # resource sealed without a builder (a raw mkResource in an overlay)
-        # is judged against the package ceiling in ctx.availability.
+        # Return the availability ceiling and its source for a resource, falling
+        # back to the package ceiling when the resource was not sealed by a
+        # workload builder.
         ceilingOf =
           r:
           let
@@ -292,6 +289,8 @@ in
               level = a.ceiling;
               from = a.ceilingFrom or "package";
             };
+        # Reject any Deployment or StatefulSet with more than one replica when
+        # its ceiling is `none`, including workloads modified by `partsOverlays`.
         overReplicated = builtins.filter (
           r:
           let

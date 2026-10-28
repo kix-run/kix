@@ -2,8 +2,8 @@
   lib,
   k8s,
   helm ? { },
-  # The flake whose clusters these are (its `self`): image sources name a
-  # file by its path in it. Null when the caller does not say.
+  # The flake that defines these clusters (its `self`), or null when omitted.
+  # Image sources record file paths relative to this flake.
   self ? null,
 }:
 

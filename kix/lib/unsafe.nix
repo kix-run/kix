@@ -1,15 +1,8 @@
-# The compiler's closed vocabulary of structural rules that a package may
-# explicitly opt out of.
+# Registry of `meta.unsafe` grants that let a package opt out of specific
+# structural or security rules.
 #
-# Mirrors the role registry's philosophy (eval/roles.nix): the vocabulary is
-# closed on purpose so a typo'd grant throws instead of silently never
-# matching. A package opts out with a single declared line
-# (`meta.unsafe = [ "raw-pvc" ]`); the grant is validated when the package's
-# scope is constructed and surfaced by the scorecard's
-# `architecture.unsafeGrants` audit rule, keeping unsafe grants visible in
-# review without producing a warning for the waived rule.
-#
-# Each grant requires a rule that enforces its absence.
+# Grants are validated when a package's scope is constructed and reported by
+# the `architecture.unsafeGrants` scorecard rule.
 
 { lib }:
 
@@ -79,7 +72,7 @@ rec {
 
   knownGrantsHint = "Known unsafe grants: ${builtins.concatStringsSep ", " grantNames}";
 
-  # Validate a grant name; `context` names the declaration site for the error.
+  # Return `grant` if it is in `registry`, or throw an error naming `context`.
   assertKnownGrant =
     context: grant:
     if registry ? ${grant} then

@@ -1,17 +1,10 @@
 # k3s flavor.
 #
-# Pre-installs: flannel CNI, local-path StorageClass, servicelb, traefik.
-# Flannel does not enforce NetworkPolicy. To replace it with Cilium, run
-# k3s with `--flannel-backend=none --disable-network-policy` and override
-# `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix). The
-# cilium package takes its IPAM pool from cluster.network.podCidr, which
-# defaults here to k3s's cluster-cidr.
-#
-# Platform imports: DNS (coredns, bundled), storage (local-path). k3s
-# creates the local-path StorageClass on every new cluster
-# (https://docs.k3s.io/storage). A server started with
-# `--disable local-storage` has no such class, and the import below is then
-# wrong for that cluster.
+# k3s bundles Flannel CNI, CoreDNS, the `local-path` StorageClass, ServiceLB,
+# and metrics-server. Flannel does not enforce NetworkPolicy. To replace it
+# with Cilium, start k3s with `--flannel-backend=none --disable-network-policy`
+# and set `cluster.roles.cni.binding = "absent"`. If k3s is started with
+# `--disable local-storage`, override `cluster.roles.storageClasses.binding`.
 
 {
   config,
@@ -22,7 +15,7 @@
 {
   cluster.provider = lib.mkDefault "k3s";
 
-  # k3s's default --cluster-cidr.
+  # Default `--cluster-cidr` in k3s.
   cluster.network.podCidr = lib.mkDefault "10.42.0.0/16";
 
   cluster.roles = {
@@ -36,22 +29,18 @@
       binding = lib.mkDefault "exclusive";
       provider = lib.mkDefault "servicelb (klipper)";
     };
-    # k3s deploys metrics-server as a packaged component. A server started
-    # with `--disable=metrics-server` sets the binding to "absent" and runs a
-    # metrics-server instance.
+    # Override to "absent" when k3s is started with `--disable=metrics-server`.
     metricsApi = {
       binding = lib.mkDefault "exclusive";
       provider = lib.mkDefault "metrics-server (k3s packaged component)";
     };
-    # registryMirror stays unknown: k3s embeds Spegel but runs it only with
-    # `embedded-registry: true` in the server config. A cluster that turns
-    # it on sets the binding to "exclusive", so a spegel instance is refused.
+    # Leave `registryMirror` unset by default because k3s only enables its
+    # embedded Spegel mirror when `embedded-registry: true` is configured.
   };
 
-  # k3s runs its own containerd (pkg/agent/config in k3s). Its config
-  # template does not set discard_unpacked_layers, which containerd
-  # defaults to false. k3s rewrites only the hosts.toml files it generated,
-  # so a spegel instance's files survive a restart.
+  # k3s manages its own containerd under `/var/lib/rancher/k3s/agent`, leaves
+  # `discard_unpacked_layers` false, and preserves external `hosts.toml` files
+  # across restarts.
   cluster.containerd = {
     socket = lib.mkDefault "/run/k3s/containerd/containerd.sock";
     registryConfigPath = lib.mkDefault "/var/lib/rancher/k3s/agent/etc/containerd/certs.d";
@@ -66,7 +55,6 @@
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {

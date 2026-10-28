@@ -159,24 +159,18 @@ rec {
       outputs ? { },
       requires ? [ ],
       extraDeps ? [ ],
-      # Store files the manifest's store path references without a deploy
-      # order (no `kix.run/depends-on` entry), as a store path interpolated
-      # into a field would. The Activation record references
-      # kix-packages.json this way.
+      # Store paths referenced by the sealed manifest without adding a
+      # `kix.run/depends-on` entry (such as `kix-packages.json` on Activation).
       storeReferences ? [ ],
       extra ? { },
       clusterDomain ? "cluster.local",
-      # per-kind terminate/conduct override from the factBehavior index
-      # (CRD-owner declared via meta.factBehavior, or cluster override).
-      # null = fall back to the core K8s table (facts.conducts).
+      # Per-kind endpoint fact behavior from the CRD declaration or
+      # `cluster.factBehavior`. Null falls back to `facts.conducts`.
       factBehavior ? null,
-      # Fields another controller takes over once the object exists. Kix
-      # sets them at creation; when a later apply meets a field-ownership
-      # conflict confined to these paths, deploy applies again without them
-      # and the other manager keeps them. A conflict on any other field
-      # still fails. `cede` lists paths in the apiserver's own syntax without
-      # the leading dot, `*` standing for any list element:
-      # `ownership.cede = [ "spec.versions" "webhooks[*].rules" ]`.
+      # Field paths (`ownership.cede = [ "spec.versions" "webhooks[*].rules" ]`)
+      # that another controller takes over after creation. When a subsequent
+      # apply hits a field-ownership conflict limited to these paths, deploy
+      # retries without them.
       ownership ? { },
     }:
     let
@@ -281,9 +275,8 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      # Fact tokens and markers carry metadata, not deployable resources.
-      # Exclude them from depends-on: their hashes cannot be resolved to
-      # manifests by the deploy scheduler.
+      # Exclude fact tokens and markers from `kix.run/depends-on` because their
+      # store hashes do not correspond to deployable manifests.
       implicitCtxPaths = builtins.filter (
         p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isMarkerPath p
       ) (builtins.attrNames (builtins.getContext manifestJson));
@@ -368,9 +361,8 @@ rec {
         else
           throw "kix.untrackedRef (${builtins.head selfRequired}): `by = \"self\"` is used in ${kind} '${name}' where the pod requires the object, and the pod cannot start to create it. Set `optional = true` on the reference if this ${kind} creates it; otherwise name the resource that creates it with `by`";
 
-      # Objects this manifest expects something else to have created: the
-      # untracked references that named a kind (core/markers.nix,
-      # experimental). Deploy waits for each before applying this resource.
+      # External objects declared via `kix.untrackedRef` with a `kind`, which
+      # deploy waits for before applying this resource.
       expectations = builtins.seq _selfCreatedCheck (
         builtins.seq _selfRequiredCheck (
           builtins.filter (e: e != null) (map markers.readExpectation untrackedMarkers)
@@ -791,23 +783,9 @@ rec {
       extraRequires ? [ ],
       # Validated behavior to pass to each CR for endpoint fact handling.
       factBehavior ? null,
-      # Stamp kix.run/readiness on each CR for the CLI to evaluate at deploy.
-      # Use this for operators with conditions other than Ready/Available.
-      # Three shapes:
-      #   readiness = { path = "/status/updateStatus"; equals = "operational"; }
-      #   readiness = { path = "/status/updateStatus"; notEquals = "failed"; }
-      #   readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }
-      # path is a JSON pointer into the live object; readiness requires its
-      # value to equal the string in equals, or, for a JSON boolean or
-      # number, its JSON text to equal it: `equals = "true"` matches
-      # `true`. notEquals is ready while the path is absent or holds any
-      # other value, for a resource whose status only a consumer writes
-      # when the consumer may not exist. The condition form requires an
-      # entry in status.conditions whose type and status both match. Every
-      # form waits while the operator's observedGeneration
-      # (status.observedGeneration for a path; for a condition, its own,
-      # else status.observedGeneration) is below metadata.generation, and
-      # imposes no such wait when it is absent.
+      # Readiness check stamped as `kix.run/readiness` on each CR (`{ path; equals; }`,
+      # `{ path; notEquals; }`, or `{ condition = { type; status; }; }`) for
+      # operators that do not use standard `Ready` or `Available` conditions.
       readiness ? null,
     }:
     let
@@ -868,9 +846,8 @@ rec {
       inherit cr mkCR;
     };
 
-  # A PackageInstance in import mode: a placeholder for an object Kix does
-  # not create, which the deploy waits for. `mkResource` is the caller's
-  # builder; it supplies the namespace and the labels.
+  # Build an import-mode `PackageInstance` marker that deploy waits for without
+  # creating the underlying object.
   mkImportMarker =
     { mkResource, namespaceName }:
     {
@@ -900,11 +877,8 @@ rec {
       };
     };
 
-  # A handle for a CRD that something other than Kix installs: an import
-  # marker for the CustomResourceDefinition plus the `cr`/`mkCR` builders.
-  # scope.mkCRDRef and `kix.mkImport { crds }` both build it, with their own
-  # `mkResource`, so a CR built from either handle requires the same kind of
-  # marker. `site` names the declaration in error messages.
+  # Build an import marker and `{ cr, mkCR }` builders for a CRD installed
+  # outside Kix. Used by `scope.mkCRDRef` and `kix.mkImport { crds }`.
   mkCRDRefHandle =
     {
       mkResource,
@@ -916,9 +890,7 @@ rec {
       group,
       kind,
       plural,
-      # The API version custom resources of this kind use by default.
-      # Required: Kix does not install the CRD, so it cannot read the
-      # version from a spec.
+      # Default API version for custom resources of this kind (required).
       version ? null,
       # Every API version the CRD serves for this kind that custom resources
       # may name. Must include `version`. Defaults to `[ version ]`.
@@ -969,9 +941,8 @@ rec {
           null;
       crdName = "${plural}.${group}";
       groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
-      # Per instance, as secret and service refs are: two instances in one
-      # namespace that reference the same CRD get two markers, and each
-      # marker names the instance that declared it.
+      # Scope the marker name to the declaring instance so two instances in the
+      # same namespace do not collide.
       markerName = "crd-ref-${instanceName}-${plural}-${groupSlug}";
 
       installedByList =

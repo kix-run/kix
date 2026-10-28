@@ -1,14 +1,10 @@
-# The `gateway` contract: what a package answering the `gateway` alias
-# publishes on root.out, for one Gateway API Gateway that kix.expose attaches
-# HTTPRoutes to. A consumer written against these fields runs on any
-# implementation that honours them (envoy-gateway, traefik, a kix.mkImport).
+# Define the `gateway` contract for packages that answer the `gateway` alias
+# and expose a Gateway API Gateway on `root.out` (`kix.contracts.gateway`).
 #
-# A provider package passes its out through `check`, which requires every
-# field. kix.expose holds its `gateway` dependency to the contract through
-# `require`, which requires the fields marked `required` and checks the
-# shape of the others when they are present, so a kix.mkImport stand-in may
-# publish only `gatewayRef`. Packages reach this file as
-# `kix.contracts.gateway`.
+# Provider packages call `check`, which requires every field. `kix.expose`
+# validates its `gateway` dependency with `require`, which requires only the
+# `required` fields so a `kix.mkImport` stand-in only needs to publish
+# `gatewayRef`.
 { lib }:
 let
   isString = builtins.isString;
@@ -20,8 +16,8 @@ let
       shape = "{ name; namespace; } naming the Gateway, the parentRef of every HTTPRoute";
       test = v: builtins.isAttrs v && isString (v.name or null) && isString (v.namespace or null);
     };
-    # kix.expose picks the listener a route attaches to, and from it the
-    # URL's scheme and port. Without them `exposure.url` throws.
+    # Used by `kix.expose` to select the target listener and derive the route's
+    # scheme and port. Without `listeners`, reading `exposure.url` throws.
     listeners = {
       required = false;
       shape = "the Gateway's spec.listeners, each with name, port (an integer), and protocol";
@@ -36,9 +32,9 @@ let
           && isString (l.protocol or null)
         ) v;
     };
-    # The data-plane pods, for the policy kix.expose writes so they can
-    # reach each exposed backend. Null when the package cannot know where
-    # the implementation runs them.
+    # Identifies the data-plane pods so `kix.expose` can generate an ingress
+    # network policy on each exposed backend. Set to null when the provider
+    # cannot determine where the data plane runs.
     podSelector = {
       required = false;
       shape = "the data-plane pods' labels as a non-empty attrset of strings, or null when the provider cannot tell";
@@ -51,8 +47,8 @@ let
     };
   };
 
-  # Problems with `out`, one string per field. `all` requires every field;
-  # otherwise only the required ones.
+  # Return a list of validation errors for `out`. When `all` is true, require
+  # optional fields as well.
   problemsWith =
     all: out:
     builtins.concatMap (
@@ -67,7 +63,7 @@ let
       else
         [ ]
     ) (builtins.attrNames fields)
-    # A policy needs both, so one without the other is a mistake.
+    # A network policy requires both selector and namespace.
     ++ lib.optional (
       (out.podSelector or null == null) != (out.podNamespace or null == null)
     ) "podSelector and podNamespace must both be set or both be null";
@@ -92,11 +88,11 @@ in
   alias = "gateway";
   inherit fields;
 
-  # The problems a consumer reports for `out`.
+  # Return the contract violations a consumer reports for `out`.
   problems = problemsWith false;
 
-  # For a provider: `root.out = kix.contracts.gateway.check who { ... }`.
-  # Returns `out`, or throws naming every missing or misshapen field.
+  # Validate a provider's `root.out` and return it, or throw if any field is
+  # missing or malformed.
   check =
     who: out:
     let
@@ -107,10 +103,9 @@ in
     else
       throw "${who}: root.out does not honour the gateway contract: ${lib.concatStringsSep "; " found} (${here})";
 
-  # Whether `dep` offers itself as a gateway: its out has `gatewayRef`, or
-  # the instance or its package names the `gateway` alias. A dependency
-  # argument also resolves by instance name, so an unrelated instance named
-  # `gateway` claims nothing and kix.expose ignores it.
+  # Return true when `dep` declares the `gateway` alias or publishes
+  # `gatewayRef`. Because dependencies can also resolve by instance name,
+  # `kix.expose` uses this check to ignore unrelated instances named `gateway`.
   claims =
     dep:
     let
@@ -119,8 +114,8 @@ in
     in
     (dep.out or { }) ? gatewayRef || builtins.elem "gateway" aliases;
 
-  # For kix.expose, which has no assertion hook: returns `dep`, or throws
-  # naming the provider and every missing or misshapen field.
+  # Validate a consumer's `gateway` dependency and return `dep`, or throw if
+  # any required field is missing or any present field is malformed.
   require =
     who: dep:
     let

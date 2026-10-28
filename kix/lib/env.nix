@@ -3,8 +3,8 @@
 # Per-instance overrides shallow-merge config and replace parts when supplied.
 #
 # In eval/auto.nix, non-role dependencies default to the requester's namespace.
-# An availablePackages namespace or cluster autoNamespace overrides that default;
-# role providers are shared across environments.
+# An availablePackages namespace or cluster autoNamespace overrides that default.
+# Role providers are shared across environments.
 
 { lib }:
 

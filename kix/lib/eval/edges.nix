@@ -1,31 +1,27 @@
-# Edge analysis: who dials whom, read back from typed facts.
+# Extract workload-to-Service network dependencies from typed facts and string
+# contexts.
 #
-# The primary signal is the `endpoint` fact (core/facts.nix): a Service's
-# address-shaped out fields carry a self-describing token whose payload is
-# {name, namespace, selector, ports}. Whatever a workload's manifest JSON
-# still holds in context at seal time, directly or through ConfigMaps and
-# Secrets, is the set of endpoints its pods dial.
-# `readFile` on the token replaces the old registry intersection, so edges
-# work across instances and through indirection with no collectibility or
-# fixpoint constraints.
+# The primary signal is the `endpoint` fact (`core/facts.nix`). Address-shaped
+# Service `out` fields carry a self-describing token with `{ name, namespace,
+# selector, ports }`. Any endpoint token still present in a workload's manifest
+# JSON context at seal time (directly or via ConfigMaps and Secrets) identifies
+# a Service the workload's pods connect to. Reading the token payload avoids
+# cross-instance fixpoint constraints.
 #
-# Identity hits (a Service's *store path* in context, the pre-fact signal)
-# are kept for three demoted roles:
-#   1. DNS conservatism: naming a Service is weak evidence of dialing it;
-#      an extra DNS-ordering dep is harmless, a missing one breaks startup.
-#   2. Helm workloads: the lossy chart pipeline cannot always flow address
-#      values, so `_helmNetworkDeps` workloads keep identity-derived netpol
-#      edges (conservative = extra holes, never missing ones).
-#   3. The observed-vs-declared lint: identity without a matching fact
-#      means "you name it but no address flowed": either a structural use
-#      (silence with facts.refOnly) or a missed dial (use out.fqdn, out.url,
-#      or facts.connect to create the network policy edge).
+# Service store-path references in string context (identity hits) serve three
+# secondary purposes:
+#   1. DNS ordering: referencing a Service adds a conservative DNS startup
+#      dependency even when no address token flowed.
+#   2. Helm workloads: chart rendering can strip address tokens, so workloads
+#      with `_helmNetworkDeps` also derive network policy rules from identity
+#      hits.
+#   3. Diagnostics: an identity hit without a matching `endpoint` or `refonly`
+#      fact warns when a workload references a Service without connecting to it
+#      or marking `facts.refOnly`.
 
 { k8s }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s) facts;
@@ -54,7 +50,7 @@ rec {
     && (r.rawManifest.metadata.annotations.${kixKeys.mode} or "") == "import"
     && (r.rawManifest.metadata.annotations.${kixKeys.importKind} or "") == "Service";
 
-  # Identity-keyed map from store path to Service resource.
+  # Map each Service store path to its resource.
   mkServiceRegistry =
     resources:
     builtins.foldl' (
@@ -76,8 +72,8 @@ rec {
       // {
         ${builtins.unsafeDiscardStringContext r.outPath} = {
           marker = r;
-          # Use the imported Service's name rather than the marker's; edge identity
-          # must match what the ref's endpoint fact claims
+          # Use the imported Service's name rather than the marker's so the edge
+          # key matches the endpoint fact payload.
           name = annotations.${kixKeys.importName} or r.name;
           targetSelector = builtins.fromJSON (annotations.${kixKeys.serviceSelector} or "{}");
           targetNamespace = k8s.nsOf r;
@@ -86,14 +82,11 @@ rec {
       }
     ) { } (builtins.filter isServiceRef resources);
 
-  # "ns/name"-keyed: enrichment map from fact payload back to the producing
-  # resource, when it exists in this instance's resolved deps. Only used to
-  # give netpol a `service` for CNP extraDeps. Edges through indirection or
-  # import-mode refs have service = null, and wave ordering still holds via
-  # store-DAG transitivity.
+  # Map `"<namespace>/<name>"` to the Service or import marker resource in this
+  # instance's resolved dependencies so network policies can attach `extraDeps`
+  # to the target Service. Real Services take precedence over import markers.
   mkServiceIndex =
     resources:
-    # ref markers first, real Services second (a real Service wins the key)
     builtins.foldl' (
       acc: r:
       acc
@@ -109,16 +102,16 @@ rec {
       }
     ) { } (builtins.filter isService resources);
 
-  # One edge shape for every source:
-  #   { name, targetSelector, targetNamespace, ports, service (nullable) }
+  # Analyze a serialized workload manifest and return `{ edges, dnsEdges, warnings }`,
+  # where each edge has `{ name, targetSelector, targetNamespace, ports, service }`.
   analyzeEdges =
     {
       json,
       serviceRegistry ? { },
       serviceRefRegistry ? { },
       serviceIndex ? { },
-      # helm-sourced workloads: identity hits stay netpol edges (lossy
-      # pipeline, so preserve conservative edges.)
+      # Include identity hits in network policy `edges` for Helm workloads whose
+      # chart templates may drop address tokens.
       conservative ? false,
     }:
     let
@@ -166,22 +159,19 @@ rec {
       edgeKey = e: "${e.targetNamespace}/${e.name}";
       factKeys = map edgeKey factEdges;
 
-      # deliberate non-dials, declared at the use site via facts.refOnly
       ackedKeys = map (f: "${f.payload.namespace}/${f.payload.name}") (facts.factsOfKind "refonly" json);
 
-      # identity present, no address flowed, not acknowledged
       unmatchedIdentity = builtins.filter (
         e: !(builtins.elem (edgeKey e) (factKeys ++ ackedKeys))
       ) identityEdges;
 
-      # Sort by namespace and name. Context sets are ordered by token hash,
-      # which churns whenever a payload changes; CNP rule order must not
+      # Sort by namespace and name because Nix string context is ordered by
+      # token hash, which changes whenever a payload changes.
       bySortedKey = builtins.sort (a: b: edgeKey a < edgeKey b);
     in
     {
       edges = bySortedKey (if conservative then factEdges ++ unmatchedIdentity else factEdges);
 
-      # DNS ordering is always conservative: fact edges ∪ identity hits
       dnsEdges = factEdges ++ unmatchedIdentity;
 
       warnings =

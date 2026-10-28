@@ -1,20 +1,12 @@
-# The compiler's closed vocabulary of infrastructure roles. A package claims
-# a role through `meta.roles`; everything else derives from it: the role
-# name doubles as a DI alias, the provider index is built from peeked roles,
-# and binding-mode conflicts against environment-provided roles
-# (`cluster.roles.<name>.binding`) are refused at eval.
+# Define the fixed set of cluster infrastructure roles that packages can claim
+# via `meta.roles`. Each role name also serves as a dependency alias, populates
+# the provider index, and is checked against environment role bindings
+# (`cluster.roles.<name>.binding`) at evaluation time.
 #
-# The vocabulary is closed on purpose: the old `meta.provides` was
-# free-form, so a typo'd capability silently never matched. Adding a role
-# here requires a consumer. `meta.unsafe` is the closed vocabulary for
-# structural-rule escapes, while `meta.annotationDomains` is the open
-# vocabulary for operator-owned annotation prefixes.
-#
-# Out-contracts are shallow (attribute presence on the provider's `out`).
-# They are enforced lazily on the findRoleProvider path because eager checking
-# would force provider instances out of fixpoint order. Deep contracts
-# (e.g. the 14-attr enforcer interface) stay with their consumer
-# (plugins/netpol/interface.nix).
+# Out-contracts check only top-level attribute presence on the provider's `out`
+# and run lazily through `findRoleProvider` so provider instances are not
+# forced out of fixpoint order. Consumers validate deeper interface shapes
+# (such as `plugins/netpol/interface.nix`).
 
 { lib }:
 
@@ -65,7 +57,7 @@ rec {
 
   knownRolesHint = "Known roles: ${builtins.concatStringsSep ", " roleNames}";
 
-  # Validate a role name; `context` names the declaration site for the error.
+  # Validate that `role` is a registered role name.
   assertKnownRole =
     context: role:
     if registry ? ${role} then
@@ -76,8 +68,7 @@ rec {
         + "Choose a supported role from this list. For dependency aliases, use meta.defaultAliases."
       );
 
-  # Shallow out-contract check. Returns `out` so callers can wrap lazily;
-  # throws naming both sides when a required attribute is missing.
+  # Verify that `out` contains all attributes required by `role` and return `out`.
   checkOutContract =
     {
       role,

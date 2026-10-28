@@ -64,11 +64,10 @@ rec {
     in
     go 0 attrs;
 
-  # The resources an instance renders from its parts, without its
-  # PackageInstance and hook resources. A managed instance keeps its parts
-  # under `raw`; its top-level keys are the package's `out` interface, which
-  # holds only the resources the package exports. `root` is excluded because
-  # it repeats a resource held under a named part.
+  # Return the resources rendered from an instance's parts, excluding its
+  # PackageInstance and hook resources. Managed instances store their parts
+  # under `raw` because top-level keys expose only the package's `out`
+  # interface. Exclude `root` because it aliases a named part.
   instancePartResources =
     inst:
     let

@@ -1,42 +1,23 @@
-# The Kubernetes domain Kix owns, and every annotation, label and API name
-# built on it.
+# Kix's Kubernetes domain and all annotation, label, and API names built on it.
 #
-# ## One literal
-#
-# The domain is spelled exactly once, in `domain` below. Every key is built
-# from it, so a rename is a one-line change here. The Rust half is
-# `cli/kix/src/manifest/keys.rs`, which holds the same one literal and whose
-# `no_other_file_spells_a_kix_domain` test fails if any other Nix or Rust file
-# in `kix/` or `cli/` spells a Kix domain.
-#
-# ## Using it
-#
-# Inside `kix/lib`, `import ../core/annotations.nix` (adjust the path).
-# Inside a package, the keys arrive as `kix.keys`:
-#
-#     annotations.${kix.keys.derived} = "true";
-#
-# Centralizing keys keeps helpers and checkers aligned.
+# Keep `domain` in sync with `cli/kix/src/manifest/keys.rs` (enforced by the
+# `no_other_file_spells_a_kix_domain` Rust test). Packages access these keys
+# through `kix.keys`.
 rec {
-  # The DNS domain that prefixes every key Kix stamps, and the group of the
-  # CRDs Kix owns. The one literal.
+  # DNS domain prefix for Kix annotations and labels, and the API group for
+  # Kix CRDs.
   domain = "kix.run";
 
-  # The API group of the Activation and PackageInstance CRDs. The same string
-  # as `domain`; named separately because the two roles are separate.
   group = domain;
 
-  # `group/version` of Kix's own records.
   apiVersion = "${group}/v1alpha1";
 
-  # Build a key: `key "identity-hash"`.
+  # Return a domain-prefixed annotation or label key.
   key = name: "${domain}/${name}";
 
-  # Domains Kix has stamped and retired. The scorecard keeps reserving them,
-  # so an object a previous Kix stamped, or a helm chart that copied one of
-  # its keys, is not reported as writing under a domain nobody owns. The Rust
-  # half is `DOMAINS` in `cli/kix/src/legacy_domain/`. Both go together; the
-  # checklist is in `v2_discussions/archive/137_kix_run_domain_migration.md`.
+  # Retired Kix domains kept reserved by the scorecard so legacy annotations
+  # are not flagged as unowned. Keep in sync with `DOMAINS` in
+  # `cli/kix/src/legacy_domain/`.
   legacyDomains = [ "kix.dev" ];
 
   keys = {
@@ -61,8 +42,8 @@ rec {
     deployedAt = key "deployed-at";
     # A label, not an annotation, so records list per cluster.
     clusterLabel = key "cluster";
-    # A label on each namespace a consumer cluster renders: the consumer's
-    # name. A platform's ingress rules select the consumer's namespaces by it.
+    # Label on each namespace rendered by a consumer cluster so platform
+    # ingress rules can select the consumer's namespaces.
     consumerLabel = key "consumer";
     mode = key "mode";
 
@@ -72,11 +53,9 @@ rec {
     importName = key "import-name";
     importFqdn = key "import-fqdn";
     importSecretKeys = key "import-secret-keys";
-    # On CRD ref markers only (scope.mkCRDRef, mkImport crds): the kind, the
-    # default API version (the declaration's `version`), every version the
-    # declaration says the CRD serves (`servedVersions`, comma separated,
-    # `version` among them), and the scope (`Namespaced` or `Cluster`) of the
-    # referenced CRD. Check 21 and the deploy read them.
+    # Stamped on CRD ref markers (`scope.mkCRDRef` and `mkImport` `crds`) to
+    # record the kind, default version, comma-separated served versions, and
+    # scope (`Namespaced` or `Cluster`) for check 21 and the deploy engine.
     crdKind = key "crd-kind";
     crdVersion = key "crd-version";
     crdServedVersions = key "crd-served-versions";
@@ -91,18 +70,16 @@ rec {
     rerun = key "rerun";
     # Field paths a resource cedes to another manager after creation.
     cedeFields = key "cede-fields";
-    # Objects this resource expects something else to have created
-    # (`apiVersion|Kind|name`, comma separated); deploy waits for them.
+    # Comma-separated `apiVersion|Kind|name` entries for external objects that
+    # deploy waits for before applying this resource.
     expects = key "expects";
 
     # Secrets.
     sopsSource = key "sops-source";
     contentHash = key "content-hash";
     secretKeys = key "secret-keys";
-    # Where each key's value comes from, as `key=source` pairs separated by
-    # commas (`*=controller` when a controller fills the whole Secret).
-    # Sources: inline, plain, sops, controller. The security.secretSource
-    # rule reads it.
+    # Comma-separated `key=source` pairs (`*=controller` when a controller
+    # populates the whole Secret) read by the `security.secretSource` rule.
     secretSources = key "secret-sources";
     secretType = key "secret-type";
     classification = key "classification";
@@ -121,12 +98,9 @@ rec {
 
   # Values Kix gives its own keys, where more than one module compares them.
   values = {
-    # A Job carrying `rerun = "on-change"` is never patched by the deploy
-    # engine: a changed one is deleted and created again, and under
-    # `kix deploy` and `kix rollback` so is an unchanged one whose last run
-    # failed. Stamped by `kix.healthCheck`; check 16 refuses the key on any
-    # other kind and any other value. The engine's side is `keys::RERUN` in
-    # `cli/kix/src/manifest/keys.rs`.
+    # Instructs the deploy engine to delete and recreate a Job instead of
+    # patching it when the manifest changes or the previous run failed.
+    # Stamped by `kix.healthCheck` and validated by check 16.
     rerunOnChange = "on-change";
 
     # A PackageInstance in this mode is a marker for a resource Kix

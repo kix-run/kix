@@ -1,18 +1,15 @@
-# Instance pins, and where each image option's value comes from.
+# Apply instance pins and track the origin of each image option value.
 #
 # An instance pin is an entry in a pin file's `instances` map:
-# `"<namespace>/<instance>": { "<option path>": <pin> }`. It is applied as
-# one more definition of the instance's config, from a module whose `_file`
-# is the pin file, so the module system records the pin file as the place
-# the value was defined. `check` refuses a pin that shares its option with
-# a definition in code it does not win over, and `imageSources` reads those
-# records back.
+# `"<namespace>/<instance>": { "<option path>": <pin> }`. `module` applies it as
+# an instance config definition whose `_file` is the pin file so the module
+# system records the pin file as the definition location. `check` rejects any
+# pin that shares an option with a competing definition in code, and
+# `imageSources` reads those location records back.
 { lib, packageDefaultPriority }:
 
 let
-  # Store paths of flake sources are `/nix/store/<hash>-source/<path>`.
-  # Error messages show the part after the source root. It names the file
-  # well enough for a person, whichever flake input holds it.
+  # Strip `/nix/store/<hash>-source/` from store paths for error messages.
   relativeFile =
     file:
     let
@@ -20,13 +17,10 @@ let
     in
     if m == null then file else builtins.head m;
 
-  # The path of `file` below `self`, the flake whose clusters these are, or
-  # null when the file is not inside it or `self` is not known. A path
-  # literal in a flake evaluates to a path under the flake's own store path,
-  # so the result is the file's path in the flake's repository. A file from
-  # another flake input has another store path and gets null: no path in
-  # this repository holds it, and `kix-image-sources.json` names only paths
-  # that a person or Kix Enterprise can edit in this repository.
+  # Return the path of `file` relative to flake `self`, or null when `self` is
+  # null or `file` lives outside `self` (for example, in another flake input).
+  # `kix-image-sources.json` records only paths inside `self` that can be edited
+  # in this repository.
   pathInFlake =
     self: file:
     let
@@ -38,9 +32,9 @@ let
     else
       lib.removePrefix "${root}/" f;
 
-  # The module system names a definition from a cluster module as
-  # "<file>, via option instances.<ns>.<inst>.config", and an inline module
-  # as "<unknown-file>, via option …".
+  # Extract the file path from module-system location strings such as
+  # `"<file>, via option instances.<ns>.<inst>.config"`, or return null for
+  # inline modules (`"<unknown-file>"`).
   moduleFile =
     file:
     let
@@ -49,11 +43,10 @@ let
     in
     if f == "<unknown-file>" then null else f;
 
-  # Where one definition was written: the position of its first attribute
-  # when the value is an attrset from Nix source, otherwise the module's file.
-  # Values read from JSON have no position. Positions in Kix's vocab
-  # helpers are left out: an attribute Kix adds, such as the digest `pins.get`
-  # fills in, says nothing about where the cluster set the value.
+  # Return `{ file, line }` for a module definition. When the value is an
+  # attrset from Nix source, use the position of its first attribute outside
+  # `kix/lib/vocab` (ignoring attributes synthesized by helpers such as
+  # `pins.get`). Otherwise fall back to the module's file with `line = null`.
   kixVocab = toString ../vocab;
   definitionPlace =
     def:
@@ -89,7 +82,8 @@ let
     else
       "${relativeFile p.file} line ${toString p.line}";
 
-  # An image option is a submodule option declared by `kix.options.image`.
+  # Return true when `opt` is an image submodule option declared with
+  # `kix.options.image`.
   isImageOption =
     opt:
     (builtins.tryEval (
@@ -102,9 +96,8 @@ let
       )
     )).value or false;
 
-  # Paths of the image options in an evaluated options tree. Options inside
-  # submodules are not entered: an instance pin addresses an option of the
-  # package, not an element of one.
+  # Return the attribute paths of all top-level image options in `opts` without
+  # recursing into submodules.
   imageOptionPaths =
     prefix: opts:
     builtins.concatLists (
@@ -124,8 +117,7 @@ in
 {
   inherit relativeFile pathInFlake imageOptionPaths;
 
-  # The module that applies one instance's pins. `instancePins` is
-  # `{ file; options; }`: the pin file, and option path to pin.
+  # Build the module that applies an instance's `{ file, options }` pin entries.
   module = instancePins: {
     _file = instancePins.file;
     config = lib.foldl' lib.recursiveUpdate { } (
@@ -135,24 +127,15 @@ in
     );
   };
 
-  # Throws unless each pinned option is an image option of the package and
-  # the pin is its only definition outside the package. A value in code
-  # beside the pin would otherwise merge with it field by field, or win over
-  # it at a higher priority, with no sign of which one runs.
+  # Validate that each pinned option is a declared image option on the package
+  # and has no competing definition outside the pin file. Without this check, a
+  # definition in Nix code would merge with the pin field by field or override
+  # it silently.
   #
-  # A definition whose every field has a lower priority than the pin is left
-  # out: the pin wins over it. That covers a package's defaults, such as a
-  # follower image's `tag = lib.mkDefault config.image.tag` (lowered to
-  # `packageDefaultPriority`), and a `lib.mkDefault` in cluster code. The
-  # module system keeps such a definition here because the option itself,
-  # the attrset around the field, is defined at the ordinary priority. A
-  # package's `lib.mkForce` on a field is not weaker, so it is refused: the
-  # instance would otherwise run the package's tag with the pin's digest.
-  #
-  # The declarations are checked first, against `packageOptions`: reading
-  # the evaluated `options` with a pin for an undeclared option throws the
-  # module system's own error, which does not list the options a pin can
-  # set.
+  # Ignore definitions where every field has a lower priority than the pin
+  # (such as package defaults at `packageDefaultPriority` or `lib.mkDefault` in
+  # cluster code). Check `packageOptions` before reading evaluated `options` so
+  # undeclared options report the package's available image options.
   check =
     {
       packageOptions,
@@ -184,8 +167,8 @@ in
         _: option:
         let
           defs = (lib.getAttrFromPath (lib.splitString "." option) options).definitionsWithLocations;
-          # `lib.mkOverride` wraps a field as `{ _type = "override"; priority; }`;
-          # a higher number is a weaker definition.
+          # `lib.mkOverride` wraps a field as `{ _type = "override"; priority; }`,
+          # where a numerically larger `priority` has lower precedence.
           belowPin =
             v:
             builtins.isAttrs v
@@ -208,20 +191,10 @@ in
     in
     builtins.seq declared alone;
 
-  # One record per image option of an evaluated instance: the value that
-  # runs, the package's default, and the origin of the value.
-  #
-  #   package_default  no definition above the package's own defaults
-  #   pin              the instance pin, or a cluster value equal to one of
-  #                    the file's `images` pins (read with `pins.get`)
-  #   injected         a dependency's config injection
-  #   nix_built        a value that carries a Nix string context, so it was
-  #                    derived from a build
-  #   code             any other definition in the cluster's code
-  #
-  # A value that does not evaluate is left out; evaluating the cluster
-  # reports it where it is used. Each `file` is a path in the flake `self`
-  # (`pathInFlake`), null for a file outside it.
+  # Return one provenance record per evaluable image option of an instance for
+  # `kix-image-sources.json`, classifying `origin` as `package_default`, `pin`,
+  # `injected`, `nix_built`, or `code`. Skip options whose values fail to
+  # evaluate so normal cluster evaluation reports the error at the use site.
   imageSources =
     {
       self,

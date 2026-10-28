@@ -2,10 +2,10 @@
 #
 # Instantiates prometheus-operator, prometheus, alertmanager, node-exporter,
 # kube-state-metrics, and grafana as individual native packages in
-# `monitoring.namespace`. Each component can be turned off. The packages
-# wire each other through their dependencies: Prometheus sends alerts to the
-# Alertmanager, Grafana gets both and Loki as datasources, and the default
-# rules name the scrape targets of the other instances.
+# `monitoring.namespace`. Each component can be disabled independently.
+# Prometheus routes alerts to Alertmanager, Grafana configures Prometheus,
+# Alertmanager, and Loki as datasources, and `default-rules` registers scrape
+# targets for the other instances.
 #
 # Usage:
 #   modules = [
@@ -13,8 +13,8 @@
 #     {
 #       monitoring.enabled = true;
 #       monitoring.prometheus.retention = "30d";
-#       # Grafana's administrator login: a secret with keys `admin-user`
-#       # and `admin-password`, answering the `grafanaAdmin` alias.
+#       # Provide Grafana's administrator credentials via the `grafanaAdmin`
+#       # alias with `admin-user` and `admin-password` keys.
 #       instances.monitoring-system.grafana-admin = {
 #         package = packages.secret;
 #         aliases = [ "grafanaAdmin" ];
@@ -240,8 +240,8 @@ in
             package = packages."persistent-volume-claim";
             config = {
               inherit (cfg.grafana.persistence) storageClassName;
-              # The claim's `size` option is a string; the quantity type also
-              # accepts a plain number of bytes.
+              # Convert `size` to a string because `quantity.type` also accepts
+              # integers while `persistent-volume-claim` expects a string.
               size = toString cfg.grafana.persistence.size;
             };
           };
@@ -259,12 +259,9 @@ in
             };
           };
 
-          # Grafana's optional `storage` dependency would otherwise bind
-          # Loki's claim in this namespace. A non-empty `aliases` replaces
-          # the package's `storage` alias, and nothing resolves `lokiStorage`
-          # (housekeeping/2026-10-01-no-way-to-drop-default-aliases.md).
-          # clusters/test-monitoring-loki.nix asserts that Grafana then
-          # mounts no claim.
+          # Override the package's default `storage` alias with `lokiStorage` so
+          # Grafana's optional `storage` dependency does not bind Loki's PVC
+          # when Grafana persistence is disabled.
           loki-storage = lib.mkIf cfg.loki.enabled {
             package = packages."persistent-volume-claim";
             aliases = [ "lokiStorage" ];

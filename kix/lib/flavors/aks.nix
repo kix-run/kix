@@ -1,14 +1,8 @@
 # Azure Kubernetes Service flavor.
 #
-# Managed control plane. Azure CNI gives pods VNet IPs, and the cni role is
-# environment-owned (exclusive). Azure Load Balancer provides external IPs
-# automatically (shadowable). Azure Disk CSI with snapshot support
-# pre-installed. No ingress controller by default (AGIC and nginx are
-# opt-in addons).
-#
-# Platform imports: DNS (coredns, managed by AKS), storage (managed-csi,
-# the default class the Azure Disks CSI driver creates:
-# https://learn.microsoft.com/azure/aks/azure-disk-csi).
+# AKS provides a managed control plane, Azure CNI (exclusive), Azure Load
+# Balancer (shadowable), and the Azure Disk CSI driver with `managed-csi` as
+# the default StorageClass. No ingress controller is installed by default.
 
 {
   config,
@@ -37,17 +31,17 @@
     };
   };
 
-  # The node image keeps unpacked layers, so peers can serve them.
+  # AKS node images keep unpacked containerd layers so Spegel peers can serve
+  # them.
   cluster.containerd.discardUnpackedLayers = lib.mkDefault false;
 
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
-    nodeAutoscaling = lib.mkDefault false; # available per node pool, not on by default
+    nodeAutoscaling = lib.mkDefault false; # available per node pool, off by default
     privilegedContainers = lib.mkDefault true;
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {
