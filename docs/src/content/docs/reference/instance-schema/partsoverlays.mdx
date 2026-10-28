@@ -1,4 +1,61 @@
 ---
 title: "`partsOverlays`"
-description: TODO
+description: "Override or extend an instance's evaluated parts after its package build entries run."
 ---
+
+```nix
+instances.apps.web = {
+  package = packages.web;
+  partsOverlays = [
+    (scope: self: base: {
+      deployment = base.deployment.override {
+        extra.spec.template.spec.priorityClassName = "high-priority";
+      };
+    })
+  ];
+};
+```
+
+`partsOverlays` is the instance-level escape hatch for modifying or adding
+resources when a package does not expose an option for a Kubernetes field. Each
+overlay is a function `scope: self: base: attrset` applied inside the package's
+`self` fixed point after all `build` entries have merged.
+
+## Schema
+
+| Property | Value |
+| --- | --- |
+| Type | list of functions (`scope: self: base: attrset`) |
+| Default | `[ ]` |
+| Set at | `instances.<namespace>.<name>.partsOverlays` |
+
+Multiple cluster modules can contribute `partsOverlays` to the same instance;
+Kix concatenates their lists in module order.
+
+## Arguments and evaluation order
+
+Each overlay function receives three arguments:
+
+1. `scope`: the instance's resource builder scope (`scope.mkDeployment`,
+   `scope.mkConfigMap`, `scope.namespace`, `scope.instanceName`, and so on).
+2. `self`: the final fixed point of all parts after every overlay has run. Use
+   `self` when a new part needs to reference the final state of another part.
+3. `base`: the attribute set of parts produced before this overlay runs. Use
+   `base.<part>` when replacing or overriding an existing part (`base.deployment.override { ... }`)
+   so the definition does not recurse through `self.<part>`.
+
+Kix evaluates overlays in this order:
+
+1. The package's `build` entries merge first (where duplicate part names are an
+   error).
+2. Cluster-wide `globalPartsOverlays` run in order.
+3. The instance's `partsOverlays` run in order.
+
+Unlike `build` entries, overlays merge into `base` with `//`, so an overlay may
+replace an existing part (`deployment`, `service`, `root`, or `out`) or add new
+parts alongside the package's existing parts.
+
+## Related
+
+- [Patch package output with overlays](/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/)
+- [`build`](/docs/reference/package-schema/build/)

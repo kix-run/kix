@@ -405,7 +405,7 @@
 
   {
     group = "tutorials/19-scorecards";
-    page = "/docs/tutorials/19-scorecards-and-compile-time-policy/";
+    page = "/docs/tutorials/12-scorecards-and-compile-time-policy/";
     cwd = "kix-examples/";
     offline = [
       {

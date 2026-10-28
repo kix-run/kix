@@ -209,7 +209,7 @@ afterwards.
 - **Permissions.** The server reads every kind for a backup and recreates any
   kind on a restore, including custom resources installed later, so its
   ServiceAccount is bound to `cluster-admin`. The package declares the
-  [`cluster-admin`](/docs/reference/meta/unsafe/) grant, which the scorecard
+  [`cluster-admin`](/docs/reference/package-schema/meta/#unsafe) grant, which the scorecard
   lists.
 - **Pod security.** The node agent reads pod volumes from the host as root, so
   the namespace gets the `privileged` Pod Security level.

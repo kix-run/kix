@@ -138,16 +138,6 @@
           ]
         },
         {
-          "label": "meta",
-          "items": [
-            {
-              "autogenerate": {
-                "directory": "reference/meta"
-              }
-            }
-          ]
-        },
-        {
           "label": "Instance schema",
           "items": [
             {

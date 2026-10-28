@@ -128,7 +128,6 @@ export default defineConfig({
               items: [
                 { label: 'Cluster module', items: [{ autogenerate: { directory: 'reference/cluster-module' } }] },
                 { label: 'Package schema', items: [{ autogenerate: { directory: 'reference/package-schema' } }] },
-                { label: 'meta', items: [{ autogenerate: { directory: 'reference/meta' } }] },
                 { label: 'Instance schema', items: [{ autogenerate: { directory: 'reference/instance-schema' } }] },
                 { label: 'scope helpers', items: [{ autogenerate: { directory: 'reference/scope-helpers' } }] },
                 { label: 'kix helpers', items: [{ autogenerate: { directory: 'reference/kix-helpers' } }] },
