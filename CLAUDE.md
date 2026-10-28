@@ -52,56 +52,15 @@ Two rules the skill enforces and you should honor outside it too:
 
 ## Code comments
 
-Write comments for a maintainer reading the current code without the chat or
-PR. Apply `CLAUDE.prose.md` to comments and docstrings too.
+Write for a maintainer reading the current code without the PR. Apply `CLAUDE.prose.md`.
 
-- **Add information the code cannot readily convey.** Explain a constraint,
-  invariant, external quirk, unit, ordering requirement, or reason for a
-  surprising choice. Delete comments that only narrate the next statement.
-  Prefer clearer names or smaller functions when they remove the need for an
-  explanation.
-- **Describe the current contract.** Keep bug histories, abandoned designs,
-  implementation plans, and accounts of what this patch fixed in commits or
-  discussion docs. Keep compatibility history only when it explains behavior
-  that still exists. A regression-test comment should name the triggering
-  condition and expected result.
-- **State the fact and its consequence directly.** Avoid punchlines, rhetorical
-  questions, metaphors, personification, and appeals to honesty or correctness.
-  Do not praise the implementation or defend it against an imagined reviewer.
-  Words such as "deliberately" and "by design" do not explain a reason.
-- **Use exact names and ordinary sentences.** Name the field, function, or
-  resource involved. Use established technical terms where needed; do not
-  invent shorthand that makes the reader decode a second vocabulary.
-- **Keep comments local and proportionate.** Usually one to three sentences
-  suffice for an inline comment. Put shared explanations at the owning API or
-  module, not at every caller. A module header should state its responsibility
-  and essential constraints, not retell its development. Use plain section
-  labels when they help navigation; avoid decorative banners.
-- **Preserve necessary technical detail.** Public API docs, safety invariants,
-  subtle algorithms, and compatibility workarounds may need longer explanations
-  or examples. Document inputs, outputs, errors, and side effects where callers
-  need them. Keep the reason a tempting simplification would break the code.
-  Link to deeper design material without making it necessary to understand the
-  local constraint.
-- **Verify claims against the code or a reproducer.** Scope "always", "never",
-  "safe", and "only" to the conditions actually enforced. Do not invent a
-  failure mode to justify a change. Distinguish intended behavior from a
-  guarantee, and update or remove nearby comments when behavior changes.
-
-Examples of the desired level of detail:
-
-```nix
-# Helm may emit `volumes: null`; Nix's `or` handles missing attributes only.
-safeList = v: if builtins.isList v then v else [ ];
-
-# A null digest means the image reference has not been resolved.
-digest ? null,
-```
-
-Before finishing, read the comments you added or touched. Remove repetition,
-patch narration, and unsupported claims. Preserve the facts a maintainer needs
-to change the code safely. Do not reword unrelated comments as part of a code
-change unless a comment cleanup was requested.
+- **Explain why, not what the code already says.** Document invariants, non-obvious constraints, external quirks, and public API contracts. Delete comments that just restate the next line or narrate `if`/`else` branches. Self-explanatory private helpers need no comment; otherwise keep inline comments to 1–2 sentences.
+- **Describe only the current contract.** No issue/PR numbers (`kixpkgs#...`), `v2_discussions/` or `housekeeping/` paths, deleted-code tombstones, or comparisons with old code.
+- **Write plain, natural English.**
+  - Start function comments with a verb (`# Return ...`, `# Validate ...`), never a verbless noun phrase (`# The X a Y activates, or null.`, `# Why X fails...`).
+  - One idea per sentence. Do not chain clauses with colons/semicolons or invert word order (`"an import marker no object uses included"`).
+  - No aphorisms (`"the position is the dependency, not a choice"`), private metaphors (`"passengers"`, `"witness"`, `"the shelf"`), or defensive filler (`"on purpose"`, `"by design"`).
+- **Stay accurate and scoped.** Update or delete comments when behavior changes. Do not touch unrelated comments unless asked.
 
 ## Copywriting / positioning
 
