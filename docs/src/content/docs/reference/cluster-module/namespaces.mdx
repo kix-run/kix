@@ -27,7 +27,7 @@ namespaces.apps = {
 |---|---|---|---|
 | `labels` | attribute set of strings | `{ }` | Additional Namespace labels. Kix also writes `kubernetes.io/metadata.name` and `app.kubernetes.io/managed-by`. |
 | `annotations` | attribute set of strings | `{ }` | Namespace annotations. |
-| `resourceQuota` | `null` or attribute set | `null` | Creates `ResourceQuota/<namespace>-quota` with this value as `spec.hard`. |
+| `resourceQuota` | `null` or attribute set | `null` | Creates `ResourceQuota/<namespace>-quota` with this value as `spec.hard`. The build fails if the namespace's workloads exceed the quota; see [Quota check](#quota-check). |
 | `networkPolicies` | attribute set | `{ }` | Creates one Kubernetes NetworkPolicy per entry, named `<namespace>-<entry>`, with the entry value as `spec`. |
 | `podSecurity` | `null`, `privileged`, `baseline`, or `restricted` | `null` | Sets the `pod-security.kubernetes.io/enforce` label. |
 
@@ -44,3 +44,32 @@ from package dependencies through the configured policy provider.
 
 See [`meta.podSecurity`](/docs/reference/meta/podsecurity/) for the package
 declaration.
+
+## Quota check
+
+Kubernetes enforces a ResourceQuota when pods are created at runtime. Kix
+checks quotas at build time and fails the build when the minimum resources
+required by a namespace's workloads exceed any of its quotas:
+
+| Kind | Minimum pod count |
+| --- | --- |
+| Pod | 1 pod. |
+| Deployment, ReplicaSet, StatefulSet, ReplicationController | `spec.replicas` pods, or the `minReplicas` (default 1) of a HorizontalPodAutoscaler targeting the workload. |
+| Job | `spec.parallelism` pods, capped by `spec.completions` when set. A Job with `spec.suspend: true` counts as 0 pods. |
+| Custom resource whose CRD declares [`runsAtLeast`](/docs/reference/scope-helpers/crds-and-crd-refs/) | The pod groups returned by `runsAtLeast`. |
+
+Each pod counts the sum of its regular containers' requests and limits. If a
+container sets a limit without a request, the limit is also used as the
+request (matching Kubernetes' default). Init containers are excluded so the
+computed usage never exceeds what Kubernetes charges.
+
+Kix checks `namespaces.<name>.resourceQuota`, the quota imported from a
+consumer's platform interface, and any unscoped `ResourceQuota` rendered by an
+instance in the namespace (quotas with `scopes` or `scopeSelector` are
+skipped). It compares `pods`, `requests.*`, `limits.*`, and the shorthand keys
+`cpu`, `memory`, and `ephemeral-storage` (mapped to `requests.*`). Storage and
+object-count quotas are not checked.
+
+DaemonSets, CronJobs, and custom resources without `runsAtLeast` are not
+counted. When a quota check fails, the error message lists those resources
+under `Not counted` so you can see what was excluded from the total.

@@ -859,6 +859,70 @@
         in
         builtins.concatMap ofInstance allInstancesList;
 
+      # Fail the build when the minimum pod usage in a namespace exceeds any
+      # of its unscoped ResourceQuotas (`vocab/quota-use.nix`). Checked quotas
+      # include `namespaces.<ns>.resourceQuota` (or the quota from a consumer's
+      # platform interface) and any ResourceQuota rendered by an instance in
+      # the namespace without `scopes` or `scopeSelector`.
+      quotaAssertions =
+        let
+          quotaCheck = import ../vocab/quota-use.nix { inherit lib; };
+          plain = v: builtins.unsafeDiscardStringContext (toString v);
+          ofNamespace =
+            nsName:
+            let
+              sealed = builtins.concatMap collectResources (
+                builtins.attrValues (
+                  lib.filterAttrs (instName: _: isActive nsName instName) (clusterInstances.${nsName} or { })
+                )
+              );
+              resources = map (r: r.rawManifest or { }) sealed;
+              own = (namespaceConfig nsName).resourceQuota or null;
+              quotas =
+                lib.optional (own != null) {
+                  name = "${nsName}-quota";
+                  hard = own;
+                }
+                ++
+                  map
+                    (m: {
+                      name = plain m.metadata.name;
+                      hard = m.spec.hard or { };
+                    })
+                    (
+                      builtins.filter (
+                        m:
+                        (m.kind or "") == "ResourceQuota"
+                        && !((m.spec or { }) ? scopes)
+                        && !((m.spec or { }) ? scopeSelector)
+                      ) resources
+                    );
+            in
+            lib.optionals (quotas != [ ]) (
+              quotaCheck.refusals {
+                namespace = nsName;
+                inherit quotas resources;
+                # Include custom resources that declare `runsAtLeast` or
+                # terminate endpoints in operator-managed pods (`factBehavior.endpoint == "terminate"`).
+                customResources =
+                  map
+                    (r: {
+                      manifest = r.rawManifest;
+                      runsAtLeast = r.runsAtLeast or null;
+                    })
+                    (
+                      builtins.filter (
+                        r: (r.runsAtLeast or null) != null || ((r.factBehavior or null).endpoint or null) == "terminate"
+                      ) sealed
+                    );
+              }
+            );
+        in
+        map (message: {
+          assertion = false;
+          message = "kix: ${message}";
+        }) (builtins.concatMap ofNamespace realNsNames);
+
       # Reject cluster-scoped objects rendered with the same API group, kind,
       # and name by multiple active instances. Identical copies would otherwise
       # be collapsed by `dedupeByOutPath`, and differing copies would fail
@@ -1031,6 +1095,7 @@
           crossScorecardDiag.assertions
           ++ sharedClusterObjectAssertions
           ++ podSecurityAssertions
+          ++ quotaAssertions
           ++ crossResourceAssertions
           ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };

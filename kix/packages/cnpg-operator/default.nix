@@ -395,6 +395,14 @@ in
               endpoint = "terminate";
               podSelector = cr: operandSelectors.cluster cr.metadata.name;
             };
+            # Count one instance pod per `spec.instances`, sized by
+            # `spec.resources`. Short-lived init and join Jobs are excluded.
+            runsAtLeast = cr: [
+              {
+                pods = cr.spec.instances or 1;
+                resources = cr.spec.resources or { };
+              }
+            ];
           }
         );
         databases = gate (
