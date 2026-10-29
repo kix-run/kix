@@ -1,24 +1,14 @@
-//! Promote a built cluster by updating its pin.
+//! Promote and verify container image pins in a pin file.
 //!
-//! The problem it solves is narrow and keeps recurring. Something outside the
-//! compilation unit decides an image tag: a CI build finishes, or a person
-//! decides that this build is the one that goes to production. The cluster
-//! definition has no channel for that decision, so the decision gets made by
-//! editing the definition in a working tree at deploy time and never
-//! committing it. What is committed then renders a reference that does not
-//! exist, and the first signal is ImagePullBackOff in production.
+//! `kix pin set` resolves an image tag against the registry, rejects tags that
+//! do not exist, and writes the resolved digest into a pin file. `kix pin check`
+//! verifies that every recorded digest is still present in the registry and,
+//! when `--source-rev` is given, that pinned images match the expected source
+//! revision.
 //!
-//! `kix pin set` makes the decision a commit. It asks the registry what the
-//! tag resolves to, refuses a tag that is not there, and writes the digest
-//! into a pin file. `kix pin check` asks the registry whether every recorded
-//! digest is still present, which is the check worth having on a pull
-//! request, because a digest cannot be moved and a tag can.
-//!
-//! Both work from a file path with no cluster evaluation and no flake, on
-//! purpose: the moment you most need to fix a pin is the moment evaluation is
-//! unhappy about it.
-//!
-//! Design and reasoning: `v2_discussions/archive/138_values_that_vary_per_deploy.md`.
+//! Both subcommands operate directly on the pin file without evaluating the
+//! flake, so broken or missing pins can be repaired even when Nix evaluation
+//! fails.
 
 use miette::{IntoDiagnostic, Result, miette};
 
@@ -38,12 +28,10 @@ pub fn run(command: &PinCommand, global: &GlobalArgs) -> Result<()> {
     }
 }
 
-// ----------------------------------------------------------------- kix pin set
-
 fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
-    // `--init` is the one path allowed to invent a file that is not there
-    // yet; everything else has to find one, so that a typo cannot quietly
-    // create a second pin file nothing reads.
+    // Only `--init` may create a new pin file. Without it, a mistyped path or
+    // working directory must fail rather than create a second pin file that no
+    // cluster reads.
     let located = if args.init {
         locate::locate_or_init(args.pins_file.as_deref(), &global.flake)?
     } else {
@@ -64,12 +52,11 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
 
     let key = PinKey::parse(&args.key, args.option.as_deref()).map_err(|e| miette!("{e}"))?;
     let existing = file.get(&key).cloned();
-    // A new instance pin needs no `--init`: evaluation refuses a pin for an
-    // instance the cluster does not have. A new name in `images` is read
-    // only by code, so nothing would report a misspelt one.
+    // Adding a new instance pin does not require `--init` because cluster
+    // evaluation rejects pins for unknown instances. Adding a new entry under
+    // `images` requires `--init` so a typo in the key name is caught instead
+    // of writing an unused entry.
     if existing.is_none() && !args.init && matches!(key, PinKey::Image(_)) {
-        // The remedy has to be runnable from here. A refusal whose fix needs
-        // a file the reader does not have is not a remedy.
         return Err(miette!(
             "{} has no pin named '{}'. Pins in that file: {}.\n\nAdd it with:\n  kix pin set {} --repository <registry/repository> --tag <tag> --pins-file {} --init",
             pins_file.display(),
@@ -133,12 +120,9 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         .clone()
         .or_else(|| existing.as_ref().and_then(|p| p.source_rev.clone()));
 
-    // Did anything that decides what runs actually move? `promotedBy` and
-    // `resolvedAt` are bookkeeping, and stamping them on a promotion that
-    // changed nothing would rewrite the file every time. That matters more
-    // than tidiness: a CI job re-promoting an unchanged image would produce a
-    // commit on every run, and the whole value of a pin file is that a commit
-    // in it means something moved.
+    // Skip updating `promotedBy` and `resolvedAt` when the image reference and
+    // source revision are unchanged, so re-running a CI promotion job on an
+    // unchanged image does not dirty the working tree.
     let changed = moved(
         existing.as_ref(),
         &repository,
@@ -147,10 +131,8 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         source_rev.as_deref(),
     );
 
-    // A person's note says why the entry is what it is, so it describes the
-    // image it was written for. Moving the image drops it; setting the same
-    // image again keeps it. `--note` sets a new one, and `--note ""` clears
-    // it.
+    // Notes describe a specific pinned image. Drop an existing note when the
+    // image changes unless `--note` supplies a new one; `--note ""` clears it.
     let kept_note = existing.as_ref().and_then(|p| p.note.clone());
     let dropped_note = kept_note.clone().filter(|_| changed && args.note.is_none());
     let note = match &args.note {
@@ -227,9 +209,7 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-// --------------------------------------------------------------- kix pin check
-
-/// One pin's verdict. `Ok` and `Warn` pass; `Fail` does not.
+/// Verification outcome for a single pin. `Ok` and `Warn` pass; `Fail` does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Verdict {
     Ok(String),
@@ -300,11 +280,9 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
         ));
     }
 
-    // The freshness assertion, reported separately because it is a different
-    // question. Everything above asks whether the recorded reference is real.
-    // This asks whether it is current. A promotion step that silently did not
-    // run leaves every pin real, every check green, and the cluster running
-    // old code, which is the one failure the rest of the design cannot see.
+    // Check source-revision freshness separately from registry existence: a
+    // pin whose promotion step never ran still resolves in the registry, but
+    // its recorded `sourceRev` lags behind `--source-rev`.
     let mut stale: Vec<Stale> = Vec::new();
     if let Some(want) = &args.source_rev {
         for (key, pin) in &selected {
@@ -381,8 +359,9 @@ fn judge(
         ));
     };
 
-    // By digest, not by tag. A tag that has moved is a fact worth reporting;
-    // a digest that has gone is the thing that breaks a deploy.
+    // Verify the digest first because deployments pull by digest; a missing
+    // digest breaks a deploy, whereas a moved or deleted tag only merits a
+    // warning as long as the pinned digest still exists.
     let by_digest = Reference::parse(&digest_ref).map_err(RegistryError::from);
     let digest_result = match by_digest {
         Ok(r) => runtime.block_on(client.resolve(&r)),
@@ -394,9 +373,6 @@ fn judge(
         ));
     }
 
-    // The tag is secondary. A retention job that deletes an old tag whose
-    // digest still runs must not turn a pull request red, because there is
-    // nothing the author can do about it and nothing is broken.
     match Reference::from_parts(&pin.repository, &pin.tag) {
         Ok(by_tag) => match runtime.block_on(client.resolve(&by_tag)) {
             Ok(resolved) if Some(&resolved.digest) == pin.digest.as_ref() => {
@@ -468,8 +444,6 @@ fn print_check_text(path: &str, results: &[(PinKey, Verdict)], stale: &[Stale]) 
     }
 }
 
-// ---------------------------------------------------------------- kix pin list
-
 fn list(args: &PinListArgs, global: &GlobalArgs) -> Result<()> {
     let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
     let pins_file = located.path.as_path();
@@ -515,9 +489,7 @@ fn list(args: &PinListArgs, global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------- shared
-
-/// The pin name, or the instance, as JSON output reports it.
+/// Return the image pin name or instance name for JSON output.
 fn key_of(key: &PinKey) -> &str {
     match key {
         PinKey::Image(name) => name,
@@ -525,7 +497,7 @@ fn key_of(key: &PinKey) -> &str {
     }
 }
 
-/// The option path of an instance pin, null for an `images` pin.
+/// Return the option path for an instance pin, or `None` for an `images` pin.
 fn option_of(key: &PinKey) -> Option<&str> {
     match key {
         PinKey::Image(_) => None,
@@ -542,9 +514,11 @@ fn resolve(reference: &Reference) -> Result<String> {
     Ok(resolved.digest)
 }
 
-/// Whether a promotion actually changes what runs. `promotedBy` and
-/// `resolvedAt` are excluded because they describe the
-/// promotion, not the thing promoted.
+/// Return `true` when the promoted image reference or source revision differs
+/// from `existing`.
+///
+/// Excludes `promotedBy` and `resolvedAt` because they record provenance of the
+/// promotion rather than the image being promoted.
 fn moved(
     existing: Option<&Pin>,
     repository: &str,
@@ -563,16 +537,15 @@ fn moved(
     }
 }
 
-/// Two revisions match when one is a prefix of the other, so a short sha in a
-/// pin file and a full sha from CI are the same revision.
+/// Return `true` when one Git revision string is a non-empty prefix of the other,
+/// so a short SHA in a pin file matches a full SHA from CI.
 fn revs_match(a: &str, b: &str) -> bool {
     let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
     !short.is_empty() && long.starts_with(short)
 }
 
-/// Who to record as having promoted this. CI names its run, because that is
-/// what someone reading the file six months later needs in order to find the
-/// build. A person gets user@host.
+/// Determine the default `promotedBy` identifier from CI environment variables
+/// or the local `user@host`.
 fn default_promoted_by() -> String {
     if let (Ok(workflow), Ok(run)) = (
         std::env::var("GITHUB_WORKFLOW"),
@@ -581,9 +554,6 @@ fn default_promoted_by() -> String {
     {
         return format!("ci:{workflow}#{run}");
     }
-    // Every other CI system publishes a URL for the running job, which is
-    // more useful than a name and a number anyway. GitLab, then Jenkins and
-    // the several tools that copied its variable, then Buildkite.
     for var in ["CI_JOB_URL", "BUILD_URL", "BUILDKITE_BUILD_URL"] {
         if let Ok(url) = std::env::var(var)
             && !url.is_empty()
@@ -640,8 +610,7 @@ mod tests {
             Some("sha256:aa"),
             None
         ));
-        // A moved tag, a re-resolved digest, a new repository and a new
-        // source revision are all real changes.
+        // Moving the tag, digest, repository, or source revision is a change.
         assert!(moved(
             Some(&prev),
             "reg.example/app",

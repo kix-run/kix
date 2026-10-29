@@ -1,16 +1,17 @@
-//! The JSON Schemas committed under `kix-cli/schema/`, each the schema of
-//! the type that prints the document it describes. Regenerate them with
-//! `KIX_WRITE_SCHEMAS=1 cargo test -p kix-cli schemas`, and when a change is
-//! not backward compatible, set the type's `SCHEMA_VERSION` to the day's
-//! date.
+//! Tests verifying that the committed JSON Schemas under `kix-cli/schema/`
+//! match the Rust types that produce those documents.
+//!
+//! Regenerate the schema files with `KIX_WRITE_SCHEMAS=1 cargo test -p kix-cli schemas`.
+//! When making a backward-incompatible change, update the corresponding type's
+//! `SCHEMA_VERSION` to the current date.
 
-/// Fail unless `kix-cli/schema/<file>` is `schema`, or write it there
-/// under `KIX_WRITE_SCHEMAS`.
+/// Verify that `kix-cli/schema/<file>` matches `schema`, or overwrite it when
+/// `KIX_WRITE_SCHEMAS` is set.
 fn check(file: &str, schema: schemars::Schema) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("schema")
         .join(file);
-    // Through a `Value`, whose keys are sorted, so the file is stable.
+    // Convert through `serde_json::Value` so object keys are sorted deterministically.
     let schema = serde_json::to_value(schema).unwrap();
     let generated = serde_json::to_string_pretty(&schema).unwrap() + "\n";
     if std::env::var_os("KIX_WRITE_SCHEMAS").is_some() {

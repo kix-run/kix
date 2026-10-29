@@ -106,6 +106,7 @@ impl Default for DiffConfig {
 }
 
 impl DiffConfig {
+    /// Construct a `DiffConfig` with the given side A and side B labels.
     pub fn new(a_label: impl Into<String>, b_label: impl Into<String>) -> Self {
         Self {
             ignore_paths: BTreeSet::new(),
@@ -115,7 +116,7 @@ impl DiffConfig {
         }
     }
 
-    /// This config, comparing lists in order: see [`DiffConfig::ordered`].
+    /// Return this config with list order comparison enabled; see [`DiffConfig::ordered`].
     pub(crate) fn in_order(self) -> Self {
         Self {
             ordered: true,

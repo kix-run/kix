@@ -1,11 +1,11 @@
 //! Build, plan, and deploy a cluster activation.
 //!
-//! The plan is `kix plan`'s: [`super::plan::prepare`] builds and runs
-//! [`kix::plan::Planner`], which compares the build with the closures the
-//! cluster runs by K8s identity (kind+ns+name) and identity hash, without
-//! querying the live objects. This module shows the plan, confirms, applies
-//! the dependency graph, and prunes authorized orphans in reverse dependency
-//! order.
+//! [`super::plan::prepare`] builds and runs [`kix::plan::Planner`], which
+//! compares the new build against the active cluster closures by Kubernetes
+//! identity (`kind`, `namespace`, and `name`) and identity hash without
+//! querying live objects. This module renders the plan, prompts for
+//! confirmation, applies the dependency graph, and prunes authorized orphans in
+//! reverse dependency order.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -43,7 +43,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         Some(path) => Some(load_saved_plan(path, &flags_of(&args.plan))?),
         None => None,
     };
-    // A dry run is the plan, made by the same code with the same flags.
     if args.dry_run {
         return match &saved {
             Some(s) => check_saved_plan(s, &args.plan, ctx),
@@ -66,18 +65,16 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return run_operator(args, ctx);
     }
 
-    // The apply reads the planning flags from here and never from
-    // `args.plan`, so under `--plan` it does what the reviewed plan does.
+    // When `--plan` is set, use the planning flags recorded in the saved plan
+    // rather than `args.plan`.
     let flags = saved.as_ref().map_or(flags_of(&args.plan), |s| s.flags);
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
         return Ok(());
     };
-    // A deploy decrypts the SOPS files for real, after review.
     let sops = p.sops_sources(false).map_err(|e| miette!("{e}"))?;
     p.annotate_record(&args.record_annotations)
         .map_err(|e| miette!("{e}"))?;
 
-    // Detect stateful migration pairs and require --accept-migrations.
     if !p.migration_pairs.is_empty() {
         print_migration_pairs(&p.migration_pairs);
         if !p.checked.flags().accept_migrations {
@@ -103,10 +100,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         );
     }
 
-    // The plan the deploy shows is the one `kix plan` makes: when connected
-    // and there is something to write, every write is first sent as a dry
-    // run, so what the apiserver would refuse shows before anything is
-    // applied.
+    // When connected and changes exist, run a server-side dry run so any
+    // writes the API server would reject appear in the plan before confirmation.
     let total_apply = p
         .checked
         .plan()
@@ -127,7 +122,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         print_text(&p, &doc, ctx.global.verbose > 0);
     }
 
-    // A reviewed plan that no longer matches applies nothing.
+    // Refuse to apply when a saved plan no longer matches the current plan.
     if let Some(s) = &saved {
         let mut comparison = kix::plan::saved::compare(&s.reviewed, &doc);
         comparison.plan_sha256 = Some(s.sha256.clone());
@@ -141,8 +136,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // Under `--on-error stop` the deploy would halt at the first refused
-    // write, part way through. Stopping here applies nothing instead.
+    // Under `--on-error stop`, abort before applying anything when the dry run
+    // reports a write that the cluster would reject.
     if doc.stops() && matches!(args.on_error, OnError::Stop) {
         eprintln!();
         eprintln!(
@@ -163,16 +158,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = p.build.graph().cluster_name.clone();
     let active_hash = p.baseline.active_hash().map(str::to_string);
 
-    // Imports are applied like any other resource (SSA); readiness polls the
-    // cluster for the described resource via `wait_for_import_target`, which
-    // is triggered when the import node becomes eligible under the DAG.
-
     if total_apply == 0 && p.checked.orphans().is_empty() {
-        // An unchanged plan can still owe a run: a probe Job under
-        // `kix.run/rerun` whose last run failed (the failure kept the
-        // activation from switching, so the next deploy sees the same
-        // hashes). The engine's Skip path recreates it, but only if the
-        // engine runs.
+        // Even when no resources changed, a probe Job with `kix.run/rerun`
+        // whose previous run failed must run again. Because the failed deploy
+        // did not advance the active activation, the next deploy sees identical
+        // hashes and relies on the scheduler's `Skip` path to recreate the Job.
         let has_reruns = p.checked.plan().nodes().iter().any(|n| n.rerun.is_some());
         let failed_reruns = match &p.client {
             Some(client) if has_reruns => ctx.runtime.block_on(async {
@@ -185,16 +175,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             })?,
             _ => Vec::new(),
         };
-        // Without a client here (`--current-activation`) the engine's Skip
-        // path makes the call instead: it reads the live objects itself.
+        // Under `--current-activation` there is no pre-confirm client, so let
+        // the scheduler inspect live probe Jobs during execution.
         let engine_decides = p.client.is_none() && has_reruns;
         if failed_reruns.is_empty() && !engine_decides {
-            // A folded-in record still has to be superseded, even when its
-            // closure turned out to differ from the plan only in things
-            // nothing prunes (a Namespace, the record itself). The engine
-            // never runs on this path, and `finalize_deploy` is where records
-            // are normally consumed, so do it here or report the same failed
-            // deploy on every deploy from now on.
+            // Supersede folded-in failed records even when their resources
+            // need no changes or pruning, because the scheduler will not run
+            // `finalize_deploy` on this early-return path.
             if let Some(client) = &p.client {
                 supersede_consumed(ctx, client, &p.baseline.failed().consumed);
             }
@@ -231,16 +218,14 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     print_warnings(&ctx.receipts.warnings(&receipt));
 
-    // The nodes: do they carry the labels the plan's placement rules name?
-    // Only when a connection already exists: --current-activation is the
-    // no-cluster-before-confirm mode.
+    // Check whether cluster nodes carry the labels referenced by topology
+    // spread rules when a pre-confirm client is available.
     if let Some(client) = &p.client
         && !output::quiet()
     {
         report_topology_labels(ctx, client, p.new_manifests());
     }
 
-    // Confirm before writing to the cluster.
     if !args.yes {
         if !output::is_interactive() {
             eprintln!(
@@ -278,11 +263,10 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         sops,
     ))?;
 
-    // Save activation path for next deploy's diff and for soft `kix gc`.
-    // Only when this build's record became current. A cache that names a
-    // build the cluster does not run (a run that left nodes unattempted)
-    // makes soft gc treat the current closure as garbage, and makes the next
-    // `--current-activation` plan skip the nodes this run never applied.
+    // Update the local activation cache only when this build's record became
+    // current. Caching a build whose deploy left nodes unattempted would cause
+    // soft `kix gc` to treat the live resources as garbage and the next
+    // `--current-activation` plan to skip unapplied nodes.
     if end.current
         && p.build.is_local()
         && let Err(e) =
@@ -303,19 +287,18 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 /// matches.
 const EXIT_STALE: i32 = 4;
 
-/// A reviewed plan read for `kix deploy --plan`, with the planning flags the
-/// deploy uses.
+/// Saved plan loaded for `kix deploy --plan`, paired with its resolved planning
+/// flags.
 struct SavedPlan {
     path: String,
-    /// `sha256:<hex>` of the file as read.
+    /// `sha256:<hex>` digest of the plan file.
     sha256: String,
     reviewed: kix::plan::document::Plan,
     flags: PlanFlags,
 }
 
-/// Read a saved plan and take its planning flags. Fails before any build
-/// when the plan cannot be used or the flags `given` on the command line
-/// contradict its flags.
+/// Load and verify a saved plan file, returning an error before any build if
+/// the plan cannot be used or `given` conflicts with its recorded flags.
 fn load_saved_plan(path: &std::path::Path, given: &PlanFlags) -> Result<SavedPlan> {
     let file = std::fs::File::open(path)
         .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
@@ -335,9 +318,8 @@ fn load_saved_plan(path: &std::path::Path, given: &PlanFlags) -> Result<SavedPla
     })
 }
 
-/// `kix deploy --plan <file> --dry-run`: plan again, compare, and exit 0
-/// when the reviewed plan matches or [`EXIT_STALE`] when not.
-/// The dry run always runs when connected, as `kix plan` does.
+/// Recompute the plan for `kix deploy --plan <file> --dry-run`, compare it
+/// against `saved`, and exit 0 on a match or [`EXIT_STALE`] on a mismatch.
 fn check_saved_plan(saved: &SavedPlan, args: &PlanArgs, ctx: &mut CommandContext) -> Result<()> {
     let format = output::format();
     let Some(mut p) = prepare(args, saved.flags, ctx)? else {
@@ -366,8 +348,8 @@ fn check_saved_plan(saved: &SavedPlan, args: &PlanArgs, ctx: &mut CommandContext
     if !comparison.matches {
         std::process::exit(EXIT_STALE);
     }
-    // A matching plan can still be one the deploy stops on, as `kix plan`
-    // exits 3 for: a refused write, or migrations not accepted.
+    // Exit with `EXIT_WOULD_STOP` when a matching plan still has rejected
+    // writes or unaccepted migrations, matching `kix plan`.
     let migrations_refused = !doc.migrations.items().is_empty() && !saved.flags.accept_migrations;
     if doc.stops() || migrations_refused {
         if format == crate::cli::OutputFormat::Text {
@@ -383,16 +365,16 @@ fn check_saved_plan(saved: &SavedPlan, args: &PlanArgs, ctx: &mut CommandContext
     Ok(())
 }
 
-/// How an engine run ends `kix deploy` and `kix rollback`.
+/// Outcome of a scheduler run for `kix deploy` or `kix rollback`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RunEnd {
-    /// The command exits zero. `run_deploy` returns `Ok` with failures in
-    /// the counts under `--on-error continue` and when a prune delete fails,
-    /// so `Ok` alone does not mean every operation succeeded.
+    /// Whether the command should exit 0. `run_deploy` returns `Ok` with
+    /// non-zero failure counts under `--on-error continue` or when a prune
+    /// delete fails.
     pub succeeded: bool,
-    /// The run's record became the current one. An `Err` or an `Ok` with
-    /// cancelled nodes means the engine marked the record Failed and the
-    /// previous activation stays current.
+    /// Whether the run's Activation record became current. An `Err` or any
+    /// cancelled node marks the record Failed and leaves the previous
+    /// activation current.
     pub current: bool,
 }
 
@@ -411,14 +393,13 @@ impl RunEnd {
     }
 }
 
-/// Refuse a `--current-activation` plan whose cached build is not the Active
-/// build of `cluster` in the context this run connected to.
+/// Verify that the cached build used by `--current-activation` matches the
+/// Active record of `cluster` in the connected Kubernetes context.
 ///
-/// The activation cache is keyed by cluster name alone, so another context
-/// that deploys a cluster of the same name can have written it. A plan made
-/// against that build computes another environment's objects as orphans,
-/// and the prune deletes by name. The plan has already been confirmed, so
-/// this refuses rather than planning again from the cluster's record.
+/// Because the local activation cache is keyed only by cluster name, deploying
+/// a cluster with the same name in another context can overwrite it. Planning
+/// against another environment's build would treat this cluster's resources as
+/// orphans and prune them by name.
 async fn check_cached_baseline(
     records: Option<&Records>,
     cluster: &str,
@@ -444,10 +425,9 @@ async fn check_cached_baseline(
     ))
 }
 
-/// Refuse, before anything is written, what would go wrong part way through
-/// the run: an Activation record of this name that belongs to another build,
-/// and objects the engine would refuse for a missing namespace. Deploy and
-/// rollback both run it once connected.
+/// Reject pre-flight errors before writing to the cluster: an Activation record
+/// name already used by a different build, or namespaced resources missing a
+/// namespace.
 pub(crate) async fn refuse_before_writing(
     checked: &CheckedPlan,
     records: Option<&Records>,
@@ -463,7 +443,8 @@ pub(crate) async fn refuse_before_writing(
     refuse_namespaceless(discovery, checked.plan())
 }
 
-/// Refuse a record name the cluster already has for another build.
+/// Reject an Activation record name that already exists on the cluster with a
+/// different identity hash.
 async fn refuse_name_taken(records: &Records, name: &str, hash: &str) -> Result<()> {
     if let Some(found) = records
         .identity_hash_of(name)
@@ -479,8 +460,7 @@ async fn refuse_name_taken(records: &Records, name: &str, hash: &str) -> Result<
     Ok(())
 }
 
-/// The engine would refuse each of these on its own, part way through the
-/// run; refusing here applies nothing.
+/// Reject namespaced resources in `plan` that have no `metadata.namespace`.
 fn refuse_namespaceless(
     discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
     plan: &kix::cluster::scheduler::DeployPlan,
@@ -508,13 +488,11 @@ fn refuse_namespaceless(
     ))
 }
 
-/// Mark records Superseded whose leftovers this run has nothing left to do
-/// about.
+/// Mark `consumed` failed Activation records as Superseded when a deploy
+/// returns early without running the scheduler.
 ///
-/// Only for the path that returns before the engine starts. Every other route
-/// goes through `finalize_deploy`, which does this as part of the lifecycle.
-/// Best-effort: a record that will not supersede is reported again next time,
-/// which is annoying but not wrong.
+/// Normal deploys supersede consumed records during `finalize_deploy`. Failures
+/// here are logged and retried on the next deploy.
 fn supersede_consumed(ctx: &CommandContext, client: &kube::Client, consumed: &[String]) {
     if consumed.is_empty() {
         return;
@@ -546,11 +524,11 @@ fn supersede_consumed(ctx: &CommandContext, client: &kube::Client, consumed: &[S
     }
 }
 
-/// The topology label preflight, printed above the confirmation. The
-/// compiler derives spread on cluster.topology.zoneKey and cannot see a
-/// node; under DoNotSchedule a node without the label cannot take the pod,
-/// and the first sign would be a readiness stall. One LIST of nodes here
-/// names the label instead. Warn only, never a refusal.
+/// Warn before confirmation when cluster nodes lack the labels required by
+/// `topologySpreadConstraints`.
+///
+/// The compiler cannot inspect live cluster nodes, and a missing label under
+/// `DoNotSchedule` leaves pods unschedulable until readiness times out.
 fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests: &[Value]) {
     use kix::cluster::topology::{NodesOutcome, assess, list_nodes};
 
@@ -585,10 +563,10 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
     }
 }
 
-/// Line-oriented observer for DAG-streaming deploys. Emits one line per
-/// terminal verdict or phase boundary; readiness
-/// heartbeats land on stderr with `-v`.
+/// Line-oriented observer for interactive DAG-streaming deploys.
 ///
+/// Emits one line per terminal verdict or phase boundary, and writes readiness
+/// heartbeats to stderr under `-v`.
 pub(crate) struct StreamCliObserver {
     pub(crate) verbose: bool,
 }
@@ -705,9 +683,8 @@ impl StreamCliObserver {
             },
             Verdict::Ready => match detail {
                 Some(NodeDetail::Applied(action)) => {
-                    // Skip nodes reach Ready via Applied(Unchanged); render them
-                    // as a single dim line under `-v`. Non-skip Ready events are
-                    // still announced with a terminal ✔ line below.
+                    // Skip nodes reach Ready via `Applied(Unchanged)`; print a
+                    // single dim line under `-v` instead of a green ready line.
                     if matches!(kind, TransitionKind::Skip) {
                         if self.verbose {
                             let (_, lbl) = apply_symbol(action);
@@ -788,9 +765,8 @@ impl StreamCliObserver {
                     output::red(message),
                     detail_tail,
                 );
-                // What the container wrote before it exited: a probe's
-                // FAIL lines, so the reason is on screen, not one
-                // `kubectl logs` away.
+                // Print container output captured from a failed readiness probe
+                // so the failure reason is visible without `kubectl logs`.
                 if let Some(NodeDetail::ReadinessFailed { output, .. }) = detail {
                     for line in output {
                         eprintln!("      {}", output::dim(line));
@@ -832,10 +808,8 @@ impl StreamCliObserver {
 }
 
 fn apply_symbol(action: &ApplyAction) -> (std::borrow::Cow<'static, str>, &'static str) {
-    // Apply-phase glyphs are muted because they share the screen with
-    // the terminal ✔ `ready` lines, which should own the green accent.
-    // Created: white (neutral new), Configured: yellow (changed), Skipped /
-    // Unchanged: dim grey (no-op).
+    // Keep apply-phase glyphs muted so terminal `✔ ready` lines stand out in
+    // green.
     match action {
         ApplyAction::Created => (std::borrow::Cow::Borrowed("+"), "created"),
         ApplyAction::Configured => (output::yellow("~"), "configured"),
@@ -844,10 +818,8 @@ fn apply_symbol(action: &ApplyAction) -> (std::borrow::Cow<'static, str>, &'stat
     }
 }
 
-/// `checked` is the plan, with the prune policy and conflict handling of
-/// the flags it was checked with: `args.plan`'s, or a saved plan's under
-/// `--plan`. The apply never reads `args.plan`'s flags, so it does what the
-/// plan it was compared on does.
+/// Execute the deploy plan in `checked` using the flags recorded when `checked`
+/// was built.
 #[allow(clippy::too_many_arguments)]
 async fn run_deploy_async(
     args: &DeployArgs,
@@ -861,8 +833,8 @@ async fn run_deploy_async(
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
-    // Reuse pre-established connection or create a new one. A plan made
-    // without one has not checked its orphans against other Kix clusters.
+    // Reuse the pre-confirm client when available, or connect now and filter
+    // orphans shared with other Kix clusters.
     let client = match pre_client {
         Some(c) => c,
         None => {
@@ -884,12 +856,10 @@ async fn run_deploy_async(
         .map_err(|e| miette!("{e}"))?;
     let discovery = target.discovery();
 
-    // The gate, again, here. `Baseline::of_cluster` opens the records too,
-    // but `--current-activation` reads the previous build from the local
-    // cache and never contacts the cluster before this point. Without this
-    // that flag skips the gate, and with `--prune` the deploy would compute
-    // the retired CRDs as orphans and delete them, which cascades away every
-    // Activation record on the cluster.
+    // Open `Records` again to enforce the domain migration gate. When
+    // `--current-activation` is used, planning reads the local cache without
+    // contacting the cluster, so this is the first point that blocks pruning
+    // retired CRDs and cascading their Activation records.
     let records = Records::open(target.client(), discovery)
         .map_err(|e| miette!("{e}"))?
         .into_records();
@@ -913,12 +883,10 @@ async fn run_deploy_async(
         stall: StallPolicy::from_env(),
         rerun_failed: true,
     };
-    // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
-    // the start of the run, so a process that just dies leaves it Deploying.
+    // Forward SIGINT and SIGTERM to the scheduler so an interrupted run aborts
+    // its Activation record instead of leaving it in `Deploying`.
     config.cancel.cancel_on_interrupt();
 
-    // Select the TUI, NDJSON, plain line, or colored observer from CLI flags
-    // and terminal capabilities.
     let interactive = output::is_interactive();
     let use_tui = args.tui && interactive;
     let tui_driver = if use_tui {
@@ -947,8 +915,8 @@ async fn run_deploy_async(
         None
     };
 
-    // The JSON log ends with a summary object in place of the summary line,
-    // so its stdout stays NDJSON.
+    // In JSON log mode, emit a final NDJSON summary object instead of a text
+    // summary line.
     let json_log = (tui_driver.is_none() && args.log_format == crate::cli::LogFormat::Json)
         .then(|| Arc::new(super::deploy_log::JsonObserver::new()));
     let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
@@ -968,8 +936,7 @@ async fn run_deploy_async(
         .run(target, receipt.cloned(), config, observer)
         .await;
 
-    // Tear down the TUI before the summary prints so it lands in normal
-    // scrollback below the history lines.
+    // Drop the TUI before printing the summary so it lands in normal scrollback.
     drop(tui_driver);
 
     if let Some(recorded) = kept {
@@ -1000,8 +967,8 @@ async fn run_deploy_async(
     Ok(end)
 }
 
-/// The engine's prune section: the orphans prune deletes or reports, then
-/// the ones no prune policy deletes.
+/// Format the prune header and resource list, separating deleted or reported
+/// orphans from protected orphans.
 fn render_prune_start(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -1042,9 +1009,8 @@ fn render_prune_start(resources: &[ResourceId], kept: &[ResourceId], delete: boo
     out
 }
 
-/// The last line of a deploy. Its first words say how the run ended:
-/// `complete` when nothing failed, `failed` when a resource operation did,
-/// and `stopped` when the run ended early with no failure, as on Ctrl-C.
+/// Format the final summary line for a deploy or dry run (`complete`, `failed`,
+/// or `stopped` on early cancellation).
 fn summary_line(r: &DeployResult, dry_run: bool, succeeded: bool) -> String {
     let failed_str = r.failed.to_string();
     let mut cancelled_tail = if r.cancelled > 0 {
@@ -1106,8 +1072,8 @@ fn parse_timeout(s: Option<&str>) -> Result<Duration> {
     ))
 }
 
-/// The planning flags of an operator deploy. The operator always prunes, so
-/// the objects check treats every orphan as deleted, as the operator will.
+/// Force `prune: true` for operator deploys so pre-flight checks validate all
+/// orphan deletions that the operator will perform.
 fn operator_flags(flags: PlanFlags) -> PlanFlags {
     PlanFlags {
         prune: true,
@@ -1117,9 +1083,8 @@ fn operator_flags(flags: PlanFlags) -> PlanFlags {
 }
 
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
-    // The plan and the objects check of the direct path. The operator plans
-    // again against the live objects, but a build whose plan hides an
-    // object is refused here, before it reaches the cluster.
+    // Run the same plan and pre-flight checks as a direct deploy so invalid
+    // builds are rejected before the Activation is submitted to the cluster.
     let Some(p) = prepare(&args.plan, operator_flags(flags_of(&args.plan)), ctx)? else {
         return Ok(());
     };
@@ -1140,8 +1105,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         );
         plan::print_shared(checked.shared_orphans());
     }
-    // Operator-mode is non-interactive on the operator side, so the CLI
-    // must enforce the migration gate before handing off the Activation CR.
+    // Enforce `--accept-migrations` on the CLI before delegating to the
+    // non-interactive operator.
     if !p.migration_pairs.is_empty() {
         print_migration_pairs(&p.migration_pairs);
         if !args.plan.accept_migrations {
@@ -1159,13 +1124,11 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let build = p.build;
     let result_path = build.graph().result_dir.clone();
 
-    // The receipt, same as the direct path. The operator has no source tree,
-    // so provenance is computed here and written onto the Activation when it
-    // is applied.
+    // Compute provenance on the CLI because the operator has no access to the
+    // source repository.
     let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
     print_warnings(&ctx.receipts.warnings(&receipt));
 
-    // Confirm before submitting the Activation.
     if !args.yes {
         if !output::is_interactive() {
             eprintln!(
@@ -1187,7 +1150,6 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // Apply the Activation and watch its progress.
     let global = ctx.global.clone();
     let source_path = result_path.display().to_string();
 
@@ -1231,8 +1193,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         Ok::<_, miette::Report>(reconciled)
     })?;
 
-    // Save activation path for next deploy's diff. A Degraded record is
-    // current too.
+    // Save the activation path for the next deploy's diff; both `Active` and
+    // `Degraded` records are current.
     if let Err(e) = kix::eval::store::save_activation_path(&cluster, &result_path) {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
@@ -1245,8 +1207,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-/// Render detected stateful migration pairs. The user must handle data movement before
-/// re-running deploy with --accept-migrations.
+/// Print detected stateful migration pairs that require `--accept-migrations`.
 fn print_migration_pairs(pairs: &[MigrationPair]) {
     use std::fmt::Write;
     let mut out = String::new();
@@ -1278,7 +1239,6 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     output::progress_text(&out);
 }
 
-/// Print `lines` as progress after a blank line, if there are any.
 fn print_warnings(lines: &[String]) {
     if lines.is_empty() {
         return;
@@ -1308,8 +1268,8 @@ mod tests {
         ]
     }
 
-    /// The engine's prune section under warn-only lists a Namespace orphan
-    /// as kept, apart from the orphans it reports.
+    /// Verify that the warn-only prune section lists a protected Namespace
+    /// orphan separately from reported orphans.
     #[test]
     fn prune_section_lists_kept_orphans_apart() {
         let all = orphans();
@@ -1389,7 +1349,7 @@ mod prune_flag_tests {
         );
     }
 
-    /// Reject the removed `eager` value instead of treating it as `--prune`.
+    /// Verify that `--prune-mode` rejects `eager`.
     #[test]
     fn eager_is_no_longer_a_prune_mode() {
         let err = match Cli::try_parse_from(["kix", "deploy", "x", "--prune-mode", "eager"]) {
@@ -1425,9 +1385,8 @@ mod cached_baseline_tests {
         })
     }
 
-    /// A cached build of another context's cluster `a` (hash `p9`) is
-    /// refused against this context's Active record (`a2`), and so is any
-    /// cached build when the context has no Active record for the cluster.
+    /// Verify that `check_cached_baseline` rejects a cached build whose hash
+    /// does not match the context's Active record or when no Active record exists.
     #[tokio::test]
     async fn a_cached_build_must_be_the_contexts_active_build() {
         let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
@@ -1448,8 +1407,8 @@ mod cached_baseline_tests {
         assert!(err.contains("no Active record"), "{err}");
     }
 
-    /// A record name the cluster has for another build is refused; the same
-    /// build's, or an unknown name, is not.
+    /// Verify that `refuse_name_taken` rejects an Activation name already bound
+    /// to a different build hash.
     #[tokio::test]
     async fn a_record_name_held_by_another_build_is_refused() {
         let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
@@ -1468,7 +1427,8 @@ mod cached_baseline_tests {
         assert!(err.contains("identity hash a2, this build is n1"), "{err}");
     }
 
-    /// A namespaced object without a namespace is refused before the run.
+    /// Verify that `refuse_namespaceless` rejects a namespaced resource with no
+    /// `metadata.namespace`.
     #[tokio::test]
     async fn an_object_without_its_namespace_is_refused() {
         let api = FakeApi::new([]);
@@ -1516,7 +1476,6 @@ mod run_end_tests {
         }
     }
 
-    /// A run's engine settings and its prune policy.
     struct Settings {
         config: SchedulerConfig,
         prune: PrunePolicy,
@@ -1536,7 +1495,6 @@ mod run_end_tests {
         }
     }
 
-    /// `a` fails to apply; every other node applies.
     fn ops_failing_a() -> Arc<ScriptedOps> {
         let ops = Arc::new(ScriptedOps::new());
         ops.script(
@@ -1565,9 +1523,8 @@ mod run_end_tests {
         .await
     }
 
-    /// Under `--on-error continue`, a failed node whose siblings all
-    /// applied finalizes the record (Degraded), so the build is current,
-    /// and the command exits non-zero.
+    /// Verify that under `--on-error continue`, a failed node with no cancelled
+    /// dependents marks the activation current (Degraded) and exits non-zero.
     #[tokio::test]
     async fn continue_with_a_failed_node_exits_non_zero() {
         let manifests = [deployment("a", &[]), deployment("b", &[])];
@@ -1583,9 +1540,8 @@ mod run_end_tests {
         );
     }
 
-    /// Under `--on-error continue`, a failed node cancels its dependent.
-    /// The engine marks the record Failed, so the build is not current
-    /// and the command exits non-zero.
+    /// Verify that under `--on-error continue`, a failed node that cancels a
+    /// dependent leaves the activation not current and exits non-zero.
     #[tokio::test]
     async fn continue_with_a_cancelled_dependent_is_not_current() {
         let manifests = [deployment("a", &[]), deployment("b", &["a"])];
@@ -1602,8 +1558,7 @@ mod run_end_tests {
         );
     }
 
-    /// Under the default `--on-error stop`, every node applying but a
-    /// prune delete failing still exits non-zero.
+    /// Verify that a failed prune delete causes the deploy to exit non-zero.
     #[tokio::test]
     async fn a_failed_prune_delete_exits_non_zero() {
         let ops = Arc::new(ScriptedOps::new());
@@ -1621,8 +1576,8 @@ mod run_end_tests {
         assert!(!RunEnd::of(&result).succeeded);
     }
 
-    /// Every node applies but the record will not finalize: the build is
-    /// not current and the command exits non-zero.
+    /// Verify that a finalization failure marks the run as neither succeeded nor
+    /// current.
     #[tokio::test]
     async fn a_failed_finalize_is_neither_succeeded_nor_current() {
         let ops = Arc::new(ScriptedOps::new());
@@ -1642,8 +1597,8 @@ mod run_end_tests {
         );
     }
 
-    /// A run that left a node unattempted and could not mark its record
-    /// Failed is still neither succeeded nor current.
+    /// Verify that a run with cancelled nodes whose abort also fails is neither
+    /// succeeded nor current.
     #[tokio::test]
     async fn a_failed_abort_is_neither_succeeded_nor_current() {
         let ops = ops_failing_a();
@@ -1700,8 +1655,7 @@ mod operator_tests {
     use clap::Parser;
     use kix::cluster::scheduler::PrunePolicy;
 
-    /// The operator always prunes, so an operator deploy's check holds every
-    /// delete to the plan, whatever the prune flags say.
+    /// Verify that `operator_flags` always forces `PrunePolicy::Delete`.
     #[test]
     fn an_operator_deploy_is_checked_as_one_that_prunes() {
         for extra in [&[][..], &["--prune-mode", "no"][..]] {
@@ -1715,8 +1669,8 @@ mod operator_tests {
         }
     }
 
-    /// The operator reads the build from the Nix store, and a bundle's build
-    /// is not there: with `--bundle` it would be handed a path it cannot read.
+    /// Verify that `--operator` and `--bundle` cannot be combined because the
+    /// operator reads builds from the Nix store.
     #[test]
     fn an_operator_deploy_does_not_take_a_bundle() {
         let parsed = Cli::try_parse_from([

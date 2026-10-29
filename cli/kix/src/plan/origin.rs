@@ -52,7 +52,7 @@ pub(crate) struct ThreeWay<'a> {
     /// The deployed build's manifest; `None` when the deployed build does
     /// not contain the resource, which makes every change intended.
     pub deployed: Option<&'a Value>,
-    /// The live object as compared: a server object or the kix-owned view.
+    /// The live object as compared: a server object or the Kix-owned view.
     pub live: &'a Value,
     pub new: &'a Value,
     /// The live object with its `managedFields`, for naming who made a
@@ -67,8 +67,8 @@ pub(crate) struct ThreeWay<'a> {
 }
 
 impl ThreeWay<'_> {
-    /// One label list per change in `changes`, in order, and the drifted
-    /// fields those changes touch.
+    /// Return one label list per change in `changes`, in order, along with the
+    /// drifted fields those changes touch.
     pub(crate) fn label(&self, changes: &[Difference]) -> (Vec<Vec<ChangeLabel>>, Vec<Drifted>) {
         let config = DiffConfig::new("deployed", "other");
         // Both builds: a list in another order is a change the build makes.
@@ -155,7 +155,7 @@ impl ThreeWay<'_> {
 pub struct Sides<'a> {
     /// The deployed build's manifests.
     pub deployed: &'a HashMap<ResourceId, &'a Value>,
-    /// The compared old side: the kix-owned view of the live object.
+    /// The compared old side: the Kix-owned view of the live object.
     pub live: HashMap<ResourceId, &'a Value>,
     pub new: HashMap<ResourceId, &'a Value>,
     /// The live objects with their `managedFields`.
@@ -223,7 +223,7 @@ pub fn label_builds(diff: &mut super::PackageDiff) {
     diff.labels = labels;
 }
 
-/// Whether one diff path is the other or lies under it.
+/// Return true when one diff path equals or lies under the other.
 pub(crate) fn overlaps(a: &str, b: &str) -> bool {
     let under = |child: &str, parent: &str| {
         child.len() > parent.len()
@@ -237,10 +237,10 @@ fn is_secret_value_path(path: &str) -> bool {
     ["$.data", "$.stringData"].iter().any(|f| overlaps(f, path))
 }
 
-/// The value at diff-engine path `path` (`$.spec.containers[web].image`)
-/// in `obj`. Map keys may contain dots (annotation keys), so each step takes
-/// the longest key that matches; a list element is found by the key the
-/// diff engine matched it on, or by position.
+/// Return the value at diff-engine `path` (such as
+/// `$.spec.containers[web].image`) in `obj`. Map keys may contain dots
+/// (annotation keys), so each step takes the longest matching key; list
+/// elements are matched by their diff-engine key or by position.
 pub(crate) fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
     let mut node = obj;
     let mut rest = path.strip_prefix('$')?;
@@ -278,8 +278,8 @@ pub(crate) fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
     Some(node)
 }
 
-/// `(manager, path)` for each field a manager other than Kix owns on the
-/// live object, status writes left out.
+/// Return `(manager, path)` pairs for each non-status field owned by a manager
+/// other than Kix on `live`.
 fn foreign_paths(live: &Value) -> Vec<(String, String)> {
     let Ok(obj) = serde_json::from_value::<kube::api::DynamicObject>(live.clone()) else {
         return Vec::new();
@@ -294,10 +294,10 @@ fn foreign_paths(live: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Whether a managedFields path (`spec.template.spec.containers[name=web].image`)
-/// and a diff path (`$.spec.template.spec.containers[web].image`) name
-/// overlapping fields. The two spell list keys differently, so a keyed
-/// element matches any key.
+/// Return true when a `managedFields` path (`spec.template.spec.containers[name=web].image`)
+/// and a diff path (`$.spec.template.spec.containers[web].image`) refer to
+/// overlapping fields. Because the two formats spell list keys differently, a
+/// keyed element matches any key.
 fn managed_path_overlaps(managed: &str, diff_path: &str) -> bool {
     let a = segments(managed);
     let b = segments(diff_path.strip_prefix("$.").unwrap_or(diff_path));
@@ -306,7 +306,7 @@ fn managed_path_overlaps(managed: &str, diff_path: &str) -> bool {
         .all(|(x, y)| x == y || x == "[]" || y == "[]")
 }
 
-/// Field names, with every bracketed element as `[]`.
+/// Split `path` into field names with every bracketed element replaced by `[]`.
 fn segments(path: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();

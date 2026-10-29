@@ -25,16 +25,12 @@ pub(crate) fn normalize_for_content_hash(manifest: &Value) -> Value {
     sort_keys(&v)
 }
 
-/// Blake3 hash of the canonical JSON of a normalized manifest.
+/// Compute the Blake3 hash of the canonical JSON of a normalized manifest.
 pub(crate) fn content_hash(manifest: &Value) -> String {
     let normalized = normalize_for_content_hash(manifest);
     let canonical = serde_json::to_string(&normalized).unwrap_or_default();
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }
-
-// ---------------------------------------------------------------------------
-// Internal normalization helpers
-// ---------------------------------------------------------------------------
 
 fn strip_server_metadata(v: &mut Value) {
     if let Some(meta) = v.pointer_mut("/metadata").and_then(|m| m.as_object_mut()) {
@@ -123,7 +119,7 @@ pub(crate) fn sort_keys(v: &Value) -> Value {
     }
 }
 
-/// Blake3 hash of a normalized Value (already sorted/stripped).
+/// Compute the Blake3 hash of an already normalized and key-sorted `Value`.
 pub(crate) fn hash_value(v: &Value) -> String {
     let canonical = serde_json::to_string(v).unwrap_or_default();
     blake3::hash(canonical.as_bytes()).to_hex().to_string()

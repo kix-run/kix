@@ -21,21 +21,21 @@
 //!   compressed and decompressed size, with no checksums.
 //!
 //! `zstd -d` gives the header followed by the files. The same contents give
-//! the same bytes from the same kix and libzstd.
+//! the same bytes from the same Kix and libzstd versions.
 //!
 //! The container (frames, seek table, caps, hashing) is `kix-container`'s,
 //! which `kix plan --save` files share.
 //!
 //! # What the references say
 //!
-//! The header names no record, index or cluster. They are derived from the
-//! references before any file is read:
+//! The header does not explicitly name the record, index, or cluster; they are
+//! derived from the references before any file is read:
 //!
 //! - The record is the one file no other file references. It is named
 //!   `k8s-*` and is a manifest of kind Activation in the `kix.run` group.
 //! - The index is the record's one direct reference named
 //!   `kix-packages.json`.
-//! - Every file is in the record's closure. kix/lib makes the record
+//! - Every file is in the record's closure. `kix/lib` makes the record
 //!   reference the index, and the index reference every file it lists, so
 //!   the record's store path covers the whole build.
 //! - The cluster is the record's `kix.run/cluster` label.
@@ -49,21 +49,21 @@
 //! Every reader recomputes each file's store path from its bytes, its
 //! references, and its name (`eval::store_path`), and refuses a file whose
 //! path differs. Equal paths then mean equal content, as they do for a Nix
-//! build, so the decisions kix makes by name (skip an unchanged object,
+//! build, so the decisions Kix makes by name (skip an unchanged object,
 //! prune, gc, and the Activation name) hold for bundles.
 //!
 //! # One parser
 //!
 //! Every manifest and the index are parsed with
-//! `manifest_json::parse_manifest`, the parser a result directory's are read
-//! with.
+//! `manifest_json::parse_manifest`, the same parser used when reading a Nix
+//! result directory.
 //!
 //! # Two readers
 //!
 //! [`PathsChecked::read`] is for a server that stores bundles from any
 //! tenant and never plans them. It checks the container, every store path,
 //! the roles, and the closure, and parses only the record. It counts the
-//! header's files, references and receipt bytes before it keeps the
+//! header's files, references, and receipt bytes before it keeps the
 //! header, so the parsed header stays within a few times the caps. It holds
 //! the header as read and parsed, one frame compressed and decompressed, a
 //! few words per file, and the parsed record: under 200 MiB.
@@ -71,7 +71,7 @@
 //! [`Bundle::read`] is for the agent and the CLI. It does the same, then
 //! parses every manifest and the index and gives the build's [`StoreGraph`],
 //! built by `StoreGraph::assemble` and checked by
-//! `StoreGraph::validate`, as a result directory's is. It keeps every
+//! `StoreGraph::validate`, just like a Nix result directory. It keeps every
 //! manifest parsed, so the process's memory limit bounds it.
 //!
 //! [`OpenBundle::open`] reads only the seek table and the header, for a
@@ -118,7 +118,7 @@
 //! | `PathMismatch` | names equal content |
 //! | `Roots`, `NotARecord`, `NoIndex`, `Unreachable` | one record, whose name covers every file |
 //! | `NotJson` | each check reads the value plan and deploy use |
-//! | `Build` | plan shows each object once, under one package, at the URL kix requests |
+//! | `Build` | plan shows each object once, under one package, at the URL Kix requests |
 //!
 //! # Threat model
 //!
@@ -127,7 +127,7 @@
 //! - On the agent, [`Bundle::read`] reads uploads from this cluster's
 //!   uploader. Only name-equals-content and one record matter: plan-bound
 //!   deploy refuses any write or delete the approved plan does not show,
-//!   and the agent runs kix under memory, CPU, and time limits.
+//!   and the agent runs Kix under memory, CPU, and time limits.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
@@ -241,7 +241,7 @@ impl From<FileEntry> for (String, u64, Vec<u32>) {
 }
 
 impl Header {
-    /// The index of `path` in [`Header::files`].
+    /// Return the index of `path` in [`Header::files`].
     pub fn position(&self, path: &str) -> Option<usize> {
         self.files
             .binary_search_by(|f| stream_order(&f.path, path))
@@ -256,8 +256,8 @@ impl Header {
     }
 }
 
-/// By store name, then by path, so files of one kind sit together and
-/// compress against each other.
+/// Compare store paths by store name first, then by full path, grouping files
+/// of the same kind so they compress together.
 fn stream_order(a: &str, b: &str) -> Ordering {
     let name_a = store_path::name_of(a).unwrap_or_default();
     let name_b = store_path::name_of(b).unwrap_or_default();
@@ -369,7 +369,7 @@ impl From<NotJson> for BundleError {
 }
 
 impl Contents {
-    /// The header [`Contents::write`] puts in frame 0. Fails when a path is
+    /// Build the frame 0 [`Header`] for these contents. Fails when a path is
     /// not a store path, or a file references a path that is not among the
     /// files.
     pub fn header(&self) -> io::Result<Header> {
@@ -411,10 +411,10 @@ impl Contents {
         })
     }
 
-    /// Write the bundle. The same contents give the same bytes from the
-    /// same kix and libzstd: the order is fixed, and zstd runs on one
-    /// thread at its default level. Fails on a file over
-    /// `MAX_FRAME_BYTES`, naming it.
+    /// Write the bundle to `out`. Produces deterministic output for the same
+    /// Kix and libzstd versions: the file order is fixed, and zstd runs on one
+    /// thread at its default level. Fails if any file exceeds
+    /// [`MAX_FRAME_BYTES`].
     pub fn write(&self, out: impl Write) -> io::Result<()> {
         let header = self.header()?;
         if let Some(f) = header.files.iter().find(|f| f.size > MAX_FRAME_BYTES) {
@@ -455,8 +455,8 @@ struct Roles {
 }
 
 impl<R: Read + Seek> OpenBundle<R> {
-    /// Read the seek table and the header, and derive each file's role.
-    /// Reads no file.
+    /// Read the seek table and the header, and derive each file's role
+    /// without reading file contents.
     pub fn open(input: R) -> Result<Self, BundleError> {
         let (container, header, roles) = open_container(input)?;
         Ok(OpenBundle {
@@ -466,7 +466,8 @@ impl<R: Read + Seek> OpenBundle<R> {
         })
     }
 
-    /// The bytes of the file at `path`, checked against its store path.
+    /// Read and return the bytes of the file at `path`, verifying that they
+    /// match its store path.
     pub fn file(&mut self, path: &str) -> Result<Vec<u8>, BundleError> {
         let i = self
             .header
@@ -475,7 +476,8 @@ impl<R: Read + Seek> OpenBundle<R> {
         self.file_at(i)
     }
 
-    /// Every file, with the header's fields: the whole build in memory.
+    /// Read and verify every file in the bundle, returning the complete
+    /// [`Contents`].
     pub fn contents(&mut self) -> Result<Contents, BundleError> {
         let mut files = BTreeMap::new();
         for i in 0..self.header.files.len() {
@@ -496,8 +498,8 @@ impl<R: Read + Seek> OpenBundle<R> {
         })
     }
 
-    /// The files of [`Role::Other`], by store path: the SOPS sources a
-    /// Secret may name are among them.
+    /// Read and return all [`Role::Other`] files (such as SOPS source files),
+    /// keyed by store path.
     pub fn other_files(&mut self) -> Result<HashMap<String, Vec<u8>>, BundleError> {
         let others: Vec<usize> = (0..self.header.files.len())
             .filter(|i| self.roles.of[*i] == Role::Other)
@@ -520,26 +522,25 @@ impl<R> OpenBundle<R> {
         &self.header
     }
 
-    /// The store path of the Activation record.
+    /// Return the store path of the Activation record.
     pub fn record(&self) -> &str {
         &self.header.files[self.roles.record].path
     }
 
-    /// The store path of `kix-packages.json`.
+    /// Return the store path of `kix-packages.json`.
     pub fn index(&self) -> &str {
         &self.header.files[self.roles.index].path
     }
 
-    /// The role of the file at `path`, or `None` when the bundle does not
-    /// hold `path`.
+    /// Return the [`Role`] of the file at `path`, or `None` if `path` is not
+    /// in the bundle.
     pub fn role(&self, path: &str) -> Option<Role> {
         Some(self.roles.of[self.header.position(path)?])
     }
 }
 
-/// A bundle whose every store path, role, and closure has been checked,
-/// and of whose files only the record has been parsed: what a server that
-/// stores bundles and never plans them needs.
+/// A bundle whose store paths, roles, and closure have been verified, with
+/// only the Activation record parsed.
 #[derive(Debug)]
 pub struct PathsChecked<R> {
     open: OpenBundle<R>,
@@ -548,21 +549,20 @@ pub struct PathsChecked<R> {
 }
 
 impl<R: Read + Seek> PathsChecked<R> {
-    /// Read a bundle once, in order: see the module doc for what it checks
-    /// and holds.
+    /// Read and verify the bundle's container, store paths, roles, and
+    /// closure, parsing only the Activation record.
     pub fn read(input: R) -> Result<Self, BundleError> {
         read_checked(input, |_, _, _| Ok(()))
     }
 }
 
 impl<R> PathsChecked<R> {
-    /// The record's `kix.run/cluster` label.
+    /// Return the Activation record's `kix.run/cluster` label.
     pub fn cluster(&self) -> &str {
         &self.cluster
     }
 
-    /// The SHA-256 of the bundle's bytes, lowercase hex: what `built-via`,
-    /// the deploy receipt, and a Kix Enterprise statement name it by.
+    /// Return the lowercase hex SHA-256 digest of the bundle's bytes.
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
@@ -586,9 +586,9 @@ impl<R> DerefMut for PathsChecked<R> {
 pub struct Bundle<R>(PathsChecked<R>);
 
 impl<R: Read + Seek> Bundle<R> {
-    /// Read a bundle once, in order, and give it with its build, whose
-    /// `result_dir` is `bundle:sha256:<sha256>`. See the module doc for
-    /// what it checks.
+    /// Read and verify the entire bundle, returning the bundle and its
+    /// validated [`StoreGraph`] (with `result_dir` set to
+    /// `bundle:sha256:<sha256>`).
     pub fn read(input: R) -> Result<(Self, StoreGraph), BundleError> {
         let mut manifests = HashMap::new();
         let mut index = None;
@@ -645,9 +645,8 @@ impl<R> DerefMut for Bundle<R> {
     }
 }
 
-/// Read every byte of `input` once, in order, and hash them. Check each
-/// file's store path as its frame arrives, parse the record, and pass each
-/// file to `each` with its role.
+/// Read and hash every byte of `input` in order, verifying each file's store
+/// path, parsing the Activation record, and passing each file to `each`.
 fn read_checked<R: Read + Seek>(
     input: R,
     mut each: impl FnMut(&str, Role, &[u8]) -> Result<(), BundleError>,
@@ -673,8 +672,8 @@ fn read_checked<R: Read + Seek>(
     })
 }
 
-/// Read the seek table and the header, place each file in a data frame,
-/// and derive the roles. Reads no file.
+/// Read the seek table and the header, map each file to its data frame, and
+/// derive file roles without reading file contents.
 fn open_container<R: Read + Seek>(
     mut input: R,
 ) -> Result<(Container<R>, Header, Roles), BundleError> {
@@ -694,8 +693,8 @@ fn open_container<R: Read + Seek>(
     Ok((container, header, roles))
 }
 
-/// Whether `input` is a format 1 bundle: a tar file, compressed with zstd
-/// or not, whose first entry is `kix-bundle.json`.
+/// Return whether `input` is a format 1 bundle (a tar archive, optionally
+/// zstd-compressed, starting with `kix-bundle.json`).
 fn is_format_1(input: &mut (impl Read + Seek)) -> bool {
     const FIRST_NAME: &[u8; 16] = b"kix-bundle.json\0";
     let start = (|| -> io::Result<[u8; 16]> {
@@ -888,7 +887,7 @@ fn is_manifest(path: &str) -> bool {
     store_path::name_of(path).is_some_and(|name| name.starts_with("k8s-"))
 }
 
-/// Refuse file `i` unless its store path is made from `bytes` and its
+/// Verify that file `i`'s store path matches `bytes` and its declared
 /// references.
 fn check_path(header: &Header, i: usize, bytes: &[u8]) -> Result<(), BundleError> {
     let path = &header.files[i].path;
@@ -898,9 +897,8 @@ fn check_path(header: &Header, i: usize, bytes: &[u8]) -> Result<(), BundleError
     }
 }
 
-/// The cluster the record at `path` names in its `kix.run/cluster` label,
-/// or empty when it names none. Refuses a record that is not an Activation
-/// in the `kix.run` group.
+/// Parse the Activation record at `path` and return its `kix.run/cluster`
+/// label (or an empty string if unset), rejecting non-Activation manifests.
 fn record_cluster(path: &str, bytes: &[u8]) -> Result<String, BundleError> {
     let record = parse_manifest(path, bytes)?;
     let group = record["apiVersion"]
@@ -915,9 +913,8 @@ fn record_cluster(path: &str, bytes: &[u8]) -> Result<String, BundleError> {
         .to_string())
 }
 
-/// The references of each file, by path, as [`StoreGraph`] holds a
-/// result directory's: no file's own path among them, sorted by store name
-/// in lower case, and no entry for a file with none.
+/// Build the per-file reference map expected by [`StoreGraph`], excluding
+/// self-references and sorting references by lowercase store name.
 fn ref_cache_of(header: &Header) -> HashMap<PathBuf, Vec<PathBuf>> {
     let mut ref_cache = HashMap::new();
     for (i, file) in header.files.iter().enumerate() {
@@ -943,8 +940,8 @@ fn too_large(message: impl Into<String>) -> BundleError {
     BundleError::TooLarge(message.into())
 }
 
-/// The contents of the build in `result_dir`, reading references from the
-/// Nix store (`nix path-info`). Needs Nix; reading a bundle does not.
+/// Load bundle [`Contents`] from a Nix build result directory using
+/// `nix path-info`.
 pub fn from_result_dir(
     result_dir: &Path,
     kix_rev: &str,
@@ -1022,8 +1019,8 @@ mod allocated {
     #[global_allocator]
     static COUNTING: Counting = Counting;
 
-    /// The most bytes this thread held while `f` ran, beyond what it held
-    /// when `f` started.
+    /// Run `f` and return its result along with the peak additional bytes
+    /// allocated on this thread.
     pub(super) fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
         let start = NOW.with(Cell::get);
         PEAK.with(|peak| peak.set(start));
@@ -1056,8 +1053,8 @@ mod tests {
         PathsChecked::read(Cursor::new(bytes))
     }
 
-    /// The contents of a real `kix-enterprise-test` build on stage1: 26
-    /// manifests and `kix-packages.json`.
+    /// Load the `kix-enterprise-test` fixture contents (26 manifests and
+    /// `kix-packages.json`).
     fn real() -> Contents {
         OpenBundle::open(Cursor::new(FIXTURE))
             .unwrap()
@@ -1065,8 +1062,6 @@ mod tests {
             .unwrap()
     }
 
-    /// kix-lib's tests read the same build from JSON, which they can read
-    /// without this crate. It must stay the build this bundle holds.
     #[test]
     fn the_libs_fixture_is_this_bundles_build() {
         let mut graph = read(FIXTURE).unwrap();
@@ -1081,8 +1076,8 @@ mod tests {
         bytes
     }
 
-    /// What both readers make of `contents`: each refuses it the same way,
-    /// or `Bundle::read` gives its graph.
+    /// Verify that [`PathsChecked::read`] and [`Bundle::read`] agree on
+    /// `contents`, returning the resulting [`StoreGraph`].
     fn read_both(contents: &Contents) -> Result<StoreGraph, BundleError> {
         let bytes = written(contents);
         let full = read(&bytes);
@@ -1092,7 +1087,9 @@ mod tests {
         full
     }
 
-    /// The `Build` refusal of `contents`, which `PathsChecked` accepts.
+    /// Assert that [`PathsChecked::read`] accepts `contents` while
+    /// [`Bundle::read`] rejects it with [`BundleError::Build`], returning the
+    /// error message.
     fn build_error(contents: &Contents) -> String {
         let bytes = written(contents);
         checked(&bytes).unwrap();
@@ -1226,8 +1223,8 @@ mod tests {
         })
     }
 
-    /// An import marker in the status page's namespace, as
-    /// `scope.mkCRDRef` makes one.
+    /// Build an import marker in the status page's namespace, matching
+    /// `scope.mkCRDRef`.
     fn marker(name: &str) -> Value {
         json!({
             "apiVersion": keys::API_VERSION,
@@ -1241,7 +1238,7 @@ mod tests {
         })
     }
 
-    /// Each frame of `bundle`, decompressed, frame 0 first.
+    /// Decompress and return every frame of `bundle`, starting with frame 0.
     fn frames_of(bundle: &[u8]) -> Vec<Vec<u8>> {
         let table = read_table(&mut Cursor::new(bundle), &LIMITS).unwrap();
         table
@@ -1254,8 +1251,8 @@ mod tests {
             .collect()
     }
 
-    /// A bundle file of these frames, as stored, each with its size
-    /// decompressed, and a seek table that lists them.
+    /// Assemble a seekable bundle from pre-compressed `(frame_bytes,
+    /// decompressed_size)` pairs.
     fn file_of(frames: &[(Vec<u8>, usize)]) -> Vec<u8> {
         let mut out: Vec<u8> = frames.iter().flat_map(|(f, _)| f.clone()).collect();
         let table: Vec<(u32, u32)> = frames
@@ -1266,7 +1263,7 @@ mod tests {
         out
     }
 
-    /// A bundle file of these frames, decompressed, frame 0 first.
+    /// Compress `frames` and assemble them into a seekable bundle.
     fn join(frames: &[Vec<u8>]) -> Vec<u8> {
         let stored: Vec<(Vec<u8>, usize)> = frames
             .iter()
@@ -1275,7 +1272,8 @@ mod tests {
         file_of(&stored)
     }
 
-    /// The fixture with `change` made to its header's JSON.
+    /// Return a copy of `FIXTURE` with `change` applied to its frame 0 JSON
+    /// header.
     fn with_header(change: impl FnOnce(&mut Value)) -> Vec<u8> {
         let mut frames = frames_of(FIXTURE);
         let mut header: Value = serde_json::from_slice(&frames[0]).unwrap();
@@ -1879,8 +1877,8 @@ mod tests {
         }
     }
 
-    /// Plan and deploy key objects by kind, namespace and name, without the
-    /// API group.
+    // Plan and deploy key objects by kind, namespace, and name, without the
+    // API group.
     #[test]
     fn two_manifests_of_one_object_are_refused() {
         let mut contents = real();
@@ -2001,8 +1999,8 @@ mod tests {
         assert!(message.contains("ConfigMap/a⟨U+200B⟩@"), "{message}");
     }
 
-    /// A ConfigMap of about `bytes` bytes that parses to about a hundred
-    /// times its size.
+    /// Build a ConfigMap JSON string of roughly `bytes` bytes that expands to
+    /// roughly 100x its size when parsed.
     fn configmap_of_objects(name: &str, bytes: usize) -> String {
         let chain = format!("{}0{}", r#"{"":"#.repeat(60), "}".repeat(60));
         let chains = (bytes - 1000) / (chain.len() + 1);

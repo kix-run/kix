@@ -11,23 +11,21 @@ pub use kix::text::printable;
 
 static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
 
-/// How this run prints. `main` sets it once with [`init`], before the
-/// command runs.
+/// Output routing configuration initialized once by `main` via [`init`].
 ///
-/// Where a command prints what:
-/// - its answer goes to stdout: [`result`], or `println!` for text;
-/// - warnings and errors go to stderr with `eprintln!`, even under `-q`;
-/// - progress goes through [`say!`](crate::say) or
-///   [`esay!`](crate::esay), which `-q` silences.
+/// Output streams:
+/// - Command results go to stdout via [`result`] or `println!`.
+/// - Warnings and errors go to stderr via `eprintln!`, even under `-q`.
+/// - Progress messages go through [`say!`](crate::say) or
+///   [`esay!`](crate::esay) and are suppressed by `-q`.
 #[derive(Debug, Clone, Copy)]
 pub struct Mode {
-    /// `-q`.
+    /// Suppress progress output (`-q`).
     pub quiet: bool,
-    /// `-o`, or the command's default when it is not given.
+    /// Output format from `-o`, or the command's default format.
     pub format: OutputFormat,
-    /// Stdout carries a machine-readable document that the progress lines
-    /// [`say!`](crate::say) and [`progress_text`] print must not interleave
-    /// with, so they go to stderr.
+    /// Route [`say!`](crate::say) and [`progress_text`] to stderr so progress
+    /// output does not corrupt a machine-readable document on stdout.
     pub progress_on_stderr: bool,
 }
 
@@ -38,8 +36,8 @@ pub fn init(mode: Mode) {
     MODE.get_or_init(|| mode);
 }
 
-/// This run's [`Mode`]. Before [`init`], the defaults: not quiet, text,
-/// progress on stdout.
+/// Return the current [`Mode`], or the default text mode if [`init`] has not
+/// been called.
 fn mode() -> Mode {
     MODE.get().copied().unwrap_or(Mode {
         quiet: false,
@@ -48,23 +46,23 @@ fn mode() -> Mode {
     })
 }
 
-/// Whether `-q` is set.
+/// Return whether `--quiet` (`-q`) is enabled.
 pub fn quiet() -> bool {
     mode().quiet
 }
 
-/// The output format: `-o`, or the command's default.
+/// Return the active [`OutputFormat`].
 pub fn format() -> OutputFormat {
     mode().format
 }
 
-/// Whether [`say!`](crate::say) prints to stderr.
+/// Return whether [`say!`](crate::say) routes progress lines to stderr.
 pub fn progress_on_stderr() -> bool {
     mode().progress_on_stderr
 }
 
-/// `println!` for progress lines. `-q` silences them, and they go to stderr
-/// when stdout carries a document (`kix plan -o markdown`).
+/// Print a progress line to stdout (or stderr when stdout carries a structured
+/// document), unless `-q` is set.
 #[macro_export]
 macro_rules! say {
     ($($arg:tt)*) => {
@@ -78,10 +76,9 @@ macro_rules! say {
     };
 }
 
-/// `print!` for text printed on the way to the answer, such as the plan a
-/// deploy shows before it asks: stdout, or stderr when stdout carries a
-/// machine-readable document. Unlike [`say!`](crate::say), `-q` does not
-/// silence it.
+/// Print intermediate progress text (such as the pre-deploy plan preview) to
+/// stdout, or to stderr when stdout carries a machine-readable document.
+/// Unlike [`say!`](crate::say), this is not suppressed by `-q`.
 pub fn progress_text(text: &str) {
     if progress_on_stderr() {
         eprint!("{text}");
@@ -90,8 +87,8 @@ pub fn progress_text(text: &str) {
     }
 }
 
-/// A spinner on stderr showing `msg`. `None` under `-q`, or when stderr is
-/// not a terminal.
+/// Create a stderr spinner displaying `msg`, or return `None` when `-q` is set
+/// or stderr is not a terminal.
 pub fn spinner(msg: impl Into<Cow<'static, str>>) -> Option<indicatif::ProgressBar> {
     use std::io::IsTerminal;
     if std::io::stderr().is_terminal() && !quiet() {
@@ -109,7 +106,7 @@ pub fn spinner(msg: impl Into<Cow<'static, str>>) -> Option<indicatif::ProgressB
     }
 }
 
-/// `eprintln!` for progress lines: `-q` silences them.
+/// Print a progress line to stderr unless `-q` is set.
 #[macro_export]
 macro_rules! esay {
     ($($arg:tt)*) => {
@@ -137,11 +134,10 @@ pub fn init_color(global: &GlobalArgs) {
     });
 }
 
-/// Whether colored output is enabled.
+/// Return whether colored output is enabled.
 ///
-/// Returns false if `init_color()` hasn't been called yet (e.g. during early
-/// startup errors). In normal operation, `main()` calls `init_color()` before
-/// any code path reaches here.
+/// Returns `false` if [`init_color`] has not been called yet (for example,
+/// during early startup errors).
 pub fn color_enabled() -> bool {
     *COLOR_ENABLED.get().unwrap_or(&false)
 }
@@ -186,8 +182,8 @@ pub fn bold(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// A suffix for sweep summaries naming the resource types this account
-/// may not list. Empty when there are none, so it can be appended blindly.
+/// Format a summary suffix listing resource types that the current account
+/// cannot list, or return an empty string if there are none.
 pub fn forbidden_note(forbidden: &[String]) -> String {
     if forbidden.is_empty() {
         return String::new();
@@ -209,9 +205,9 @@ pub fn is_interactive() -> bool {
 /// All command outputs must implement this trait.
 /// Ensures every command supports both human-readable and structured output.
 pub trait CommandResponse {
-    /// Human-readable formatted output.
+    /// Render human-readable text output.
     fn format_text(&self) -> String;
-    /// Machine-readable JSON value.
+    /// Serialize the response as a JSON value.
     fn as_json(&self) -> serde_json::Value;
 }
 

@@ -1,13 +1,13 @@
-//! What the planner reports as it reads the cluster and this machine's
-//! builds, as the commands that plan print it.
+//! Progress and warning output for cluster planning.
 
 use kix::manifest::keys;
 use kix::plan::PlanEvent;
 
 use crate::output;
 
-/// Print `event`. Under `-q` only a build that was found and will not
-/// load is reported: a plan made without it must show why.
+/// Print a planning `event`. Under `-q`, only warnings for builds that were
+/// found locally but failed to load are printed so the caller sees why those
+/// builds were omitted from the plan.
 pub fn print(event: PlanEvent<'_>) {
     match event {
         PlanEvent::FailedBuildUnusable { activation, error } => unusable_build(
@@ -153,8 +153,8 @@ pub fn print(event: PlanEvent<'_>) {
     }
 }
 
-/// Up to three of `names`, then how many more: a list of forty activations
-/// is a count, not a line.
+/// Format up to three items from `names`, summarizing any remainder as
+/// `and N more`.
 fn some_names<'a>(names: impl ExactSizeIterator<Item = &'a str>) -> String {
     const SHOWN: usize = 3;
     let total = names.len();
@@ -171,13 +171,14 @@ fn plural<'a>(count: usize, one: &'a str, many: &'a str) -> &'a str {
     if count == 1 { one } else { many }
 }
 
-/// What a rollback does without its current build.
+/// Warning suffix explaining how rollback proceeds when the active build
+/// cannot be loaded locally.
 const NO_CURRENT_BUILD: &str = "This rollback compares with no current build: it applies every \
     object of the target and deletes only what failed and kept deploys left. The target's \
     record keeps naming the current build, so a later prune that can read it removes its objects.";
 
-/// Say that the build of `activation` was found but will not load, and what
-/// the plan does without it.
+/// Warn that the build for `activation` could not be loaded and explain how
+/// planning proceeds without it.
 fn unusable_build(activation: &str, error: &str, without_it: &str) {
     eprintln!(
         "{} cannot use the build of activation {}: {error}. {without_it}",

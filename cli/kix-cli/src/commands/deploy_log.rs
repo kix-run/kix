@@ -1,20 +1,17 @@
-//! Non-interactive deploy observers.
+//! Provide non-interactive deploy observers.
 //!
-//! Two output modes beyond the colored [`StreamCliObserver`](super::deploy::StreamCliObserver):
+//! Two output modes exist alongside the colored [`StreamCliObserver`](super::deploy::StreamCliObserver):
 //!
-//! - [`LineObserver`]: one line per terminal verdict,
-//!   phase boundary, prune event, or finalization. No ANSI codes, no cursor
-//!   motion. Safe to pipe into `less`, CI logs, `tee`. Used automatically
-//!   when `--log-format=pretty` is requested against a non-TTY stdout.
-//! - [`JsonObserver`]: one NDJSON object per [`DeployEvent`], a
-//!   [`kix::cluster::deploy_log::Line`], flushed immediately, then one
-//!   `summary` object with the counts and whether the run succeeded. Every
-//!   object carries `type`, `elapsed_ms` and `schema_version`; consumers can
-//!   `jq -c` or pipe to log aggregators. Readiness progress events are left out, as the `line`
-//!   format leaves them out.
+//! - [`LineObserver`] prints one line per terminal verdict, phase boundary,
+//!   prune event, or finalization without ANSI codes or cursor motion. Kix uses
+//!   it automatically when `--log-format=pretty` is requested on a non-TTY stdout.
+//! - [`JsonObserver`] flushes one NDJSON [`kix::cluster::deploy_log::Line`] per
+//!   [`DeployEvent`] (excluding readiness progress events), followed by a
+//!   `summary` object with the counts and outcome. Every object carries `type`,
+//!   `elapsed_ms`, and `schema_version`.
 //!
-//! Both observers are allocation-light and do not
-//! track state beyond a `started_at` timestamp for elapsed fields.
+//! Both observers are allocation-light and track only a `started_at` timestamp
+//! for elapsed fields.
 
 use std::time::Instant;
 
@@ -179,15 +176,14 @@ pub struct JsonObserver {
 }
 
 impl JsonObserver {
-    /// An observer whose elapsed times count from now.
+    /// Create an observer that measures elapsed time from now.
     pub fn new() -> Self {
         Self {
             started_at: Instant::now(),
         }
     }
 
-    /// Print the run's last line, which stands in for the text summary
-    /// line.
+    /// Print the final summary line for the deploy run.
     pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
         println!(
@@ -206,16 +202,15 @@ impl DeployObserver for JsonObserver {
     }
 }
 
-/// `line` as one line of JSON. Through a `Value`, whose keys are sorted, as
-/// the log's keys have always been.
+/// Serialize `line` as a single JSON line with sorted keys.
 fn json_line(line: &Line) -> String {
     serde_json::to_value(line)
         .expect("a log line serializes")
         .to_string()
 }
 
-/// `LineObserver`'s lines for a `PruneStart`: the orphans prune deletes or
-/// reports, then the ones no prune policy deletes.
+/// Format `PruneStart` lines for `LineObserver`, listing deleted or reported
+/// orphans followed by protected orphans.
 fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> Vec<String> {
     let mut lines = Vec::new();
     if !resources.is_empty() {
@@ -287,8 +282,8 @@ mod tests {
         }
     }
 
-    /// Every kind of event, with every verdict and every detail, as a
-    /// deploy can send them.
+    /// Build a synthetic stream covering every `DeployEvent`, `Verdict`, and
+    /// `NodeDetail` variant.
     fn every_event() -> Vec<DeployEvent> {
         use kix::cluster::readiness::ImportTarget;
         use kix::cluster::stream::{InFlight, NodeMeta, Phase, PlanNode};
@@ -548,9 +543,7 @@ mod tests {
         ]
     }
 
-    /// The deploy log, line by line, as consumers read it. The file holds
-    /// every event of [`every_event`], then a summary. A change here breaks
-    /// whoever parses the log.
+    /// Verify that serialized deploy log lines match the golden fixture.
     #[test]
     fn the_log_lines_are_unchanged() {
         let counts = DeployResult {
@@ -567,7 +560,7 @@ mod tests {
             .chain([Line::summary(&counts, true, false, 7)])
             .map(|line| json_line(&line))
             .collect();
-        // The fixture is written along with the schemas:
+        // Regenerate the fixture alongside the schemas with
         // `KIX_WRITE_SCHEMAS=1 cargo test -p kix-cli`.
         if std::env::var_os("KIX_WRITE_SCHEMAS").is_some() {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -577,8 +570,7 @@ mod tests {
         assert_eq!(lines, GOLDEN.lines().collect::<Vec<_>>());
     }
 
-    /// A program that reads the log with these types reads every line, and
-    /// reads it whole.
+    /// Verify that every golden log line round-trips through `Line`.
     #[test]
     fn every_log_line_reads_back_as_written() {
         for text in GOLDEN.lines() {
@@ -589,8 +581,8 @@ mod tests {
 
     const GOLDEN: &str = include_str!("../../tests/fixtures/deploy-log.ndjson");
 
-    /// Under warn-only, a kept orphan is not counted or listed with the
-    /// orphans the policy reports.
+    /// Verify that warn-only mode lists protected orphans separately from
+    /// reported orphans.
     #[test]
     fn prune_lines_list_kept_orphans_apart() {
         let lines = prune_lines(

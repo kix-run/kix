@@ -7,8 +7,6 @@ use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 
-// --- Clusters ---
-
 struct ClustersResponse {
     clusters: Vec<String>,
 }
@@ -28,8 +26,6 @@ impl CommandResponse for ClustersResponse {
         serde_json::json!(self.clusters)
     }
 }
-
-// --- Packages ---
 
 struct PackageRow {
     name: String,
@@ -124,13 +120,11 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
     let show_status = cluster.is_some();
 
     if let Some(cluster_name) = cluster {
-        // Cluster-scoped: only query cluster info (has versions for everything)
         let cluster_info = ctx
             .evaluator
             .list_cluster_packages(cluster_name)
             .into_diagnostic()?;
 
-        // Add instances
         for (ns, ns_instances) in &cluster_info.instances {
             for (inst_name, inst_info) in ns_instances {
                 let status = if inst_info.is_import {
@@ -153,7 +147,6 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
             }
         }
 
-        // Add available packages (not already installed)
         for (name, avail_info) in &cluster_info.available_packages {
             rows.entry(name.clone()).or_insert_with(|| PackageRow {
                 name: name.clone(),
@@ -164,7 +157,6 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
             });
         }
     } else {
-        // Global: list all packages from the flake
         let global_packages = ctx.evaluator.list_packages().into_diagnostic()?;
 
         for (name, info) in &global_packages {

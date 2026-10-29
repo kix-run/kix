@@ -83,7 +83,7 @@ impl DefaultValue {
     }
 }
 
-/// Whether `value` at `path` means the same as the field being absent: it
+/// Check whether `value` at `path` means the same as the field being absent: it
 /// is `null`, an empty list, or the server default listed for the path.
 ///
 /// An empty object is not included. `emptyDir: {}` and many custom
@@ -104,7 +104,7 @@ fn server_default_matches(path: &str, value: &Value) -> bool {
         .any(|(suffix, default)| unkeyed.ends_with(suffix) && default.matches(value))
 }
 
-/// `$.a[x].b[0].c` becomes `$.a[].b[].c`.
+/// Strip list keys from a path so `$.a[x].b[0].c` becomes `$.a[].b[].c`.
 fn strip_list_keys(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     let mut depth = 0usize;
@@ -136,14 +136,14 @@ const QUANTITY_MAPS: &[&str] = &["limits", "requests", "hard"];
 /// Fields that hold a single resource quantity.
 const QUANTITY_FIELDS: &[&str] = &["sizeLimit"];
 
-/// Whether the member `key` of the object named `parent` holds a resource
+/// Check whether the member `key` of the object named `parent` holds a resource
 /// quantity.
 pub(crate) fn is_quantity_field(parent: &str, key: &str) -> bool {
     QUANTITY_MAPS.contains(&parent) || QUANTITY_FIELDS.contains(&key)
 }
 
-/// Whether two values are the same resource quantity, such as `1` and `"1"`,
-/// or `"500m"` and `0.5`. False when either does not parse.
+/// Check whether two values are the same resource quantity, such as `1` and `"1"`,
+/// or `"500m"` and `0.5`. Returns false when either does not parse.
 pub(crate) fn same_quantity(a: &Value, b: &Value) -> bool {
     match (quantity_nanos(a), quantity_nanos(b)) {
         (Some(x), Some(y)) => x == y,
@@ -151,8 +151,8 @@ pub(crate) fn same_quantity(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// A Kubernetes quantity in units of 10^-9, rounded up as Kubernetes rounds
-/// a quantity below one nano-unit. `None` when the value is not a quantity or
+/// Parse a Kubernetes quantity in units of 10^-9, rounded up as Kubernetes rounds
+/// a quantity below one nano-unit. Returns `None` when the value is not a quantity or
 /// the amount does not fit in an `i128`.
 fn quantity_nanos(v: &Value) -> Option<i128> {
     let text = match v {

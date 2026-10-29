@@ -28,9 +28,9 @@ use super::CommandContext;
 
 struct DiffResult {
     packages: PackageDiff,
-    /// Detected stateful migration pairs, reported without execution.
+    /// Stateful migration pairs detected between the old and new manifests.
     migration_pairs: Vec<MigrationPair>,
-    /// The document `-o json` and `-o yaml` print, made from the two above.
+    /// Plan document rendered by `-o json` and `-o yaml`.
     doc: Plan,
 }
 
@@ -40,25 +40,23 @@ impl DiffResult {
     }
 }
 
-/// What the old side of the comparison is, which bounds what the document
-/// can say.
+/// Source of the old side of a diff, which determines which sections the plan
+/// document can populate.
 enum OldSide {
-    /// A build result: every difference is the new build's.
+    /// A build result, where every difference comes from the new build.
     Build,
-    /// A manifest directory: a snapshot or an export.
+    /// A directory of rendered manifests (such as a snapshot or export).
     Manifests,
-    /// The live cluster's kix-owned view.
+    /// The live cluster's Kix-owned view.
     Live(Box<LiveSide>),
 }
 
-/// Every mode is one comparison of two store graphs. The new side is
-/// always a build, from the flake or from `--bundle`. The old side is a
-/// build when `--from` names a build result or `--from-bundle` a bundle,
-/// no build when `--bundle` is given alone, and otherwise a graph
-/// synthesized from stamped manifests: a manifest directory (`--from` a
-/// snapshot or export), or the live cluster's kix-owned view. Same
-/// renderers as the deploy plan, so what `kix diff` shows is what
-/// `kix deploy` will show.
+/// Compare two store graphs and render the diff using the deploy plan format.
+///
+/// The new side is built from the flake or loaded from `--bundle`. The old side
+/// is loaded from `--from` or `--from-bundle`, empty when `--bundle` is passed
+/// alone, or synthesized from a manifest directory or the live cluster's
+/// Kix-owned view.
 pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     let new_graph = match &args.bundle {
         Some(path) => kix_bundle::read_build(path, &[], &args.cluster)
@@ -119,8 +117,8 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         )
     };
 
-    // A plan file holds the manifests, so `--save` makes the document at
-    // `--detail manifests` and the printed one is cut down to `--detail`.
+    // Plan files always store full manifests, so `--save` builds the document at
+    // `Detail::Manifests` before trimming it to the requested `--detail` level.
     let index = ManifestIndex::new(&old_graph, &new_graph);
     let detail = match (args.detail, &args.save) {
         (_, Some(_)) | (DetailArg::Manifests, None) => Detail::Manifests(&index),
@@ -178,8 +176,8 @@ fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
 fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detail) -> DiffResult {
     let new_manifests: Vec<Value> = new.resources.values().map(|n| n.manifest.clone()).collect();
     let old_manifests: Vec<Value> = old.resources.values().map(|n| n.manifest.clone()).collect();
-    // Fail-closed: live objects that predate the lifecycle stamp carry no
-    // `kix.run/lifecycle`, and then no pairs fire.
+    // Live objects that predate the lifecycle stamp carry no `kix.run/lifecycle`,
+    // so `detect_migration_pairs` produces no pairs for them.
     let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
     let mut packages = kix::plan::diff_graphs(old, new);
     let cluster = &new.cluster_name;
@@ -264,9 +262,9 @@ fn manifests_by_rid(graph: &StoreGraph) -> HashMap<ResourceId, &Value> {
         .collect()
 }
 
-/// The deployed build, as the current record names it.
+/// The deployed build referenced by the current Activation record.
 enum Deployed {
-    /// The current record names the build being compared.
+    /// The current record matches the build being compared.
     New,
     Loaded(Box<StoreGraph>),
 }
@@ -280,10 +278,9 @@ impl Deployed {
     }
 }
 
-/// The build the current record says the cluster runs: the new build when
-/// the record's identity hash is the new build's record hash, otherwise the
-/// result directory its `kix.run/built-via` names, when it is still on this
-/// machine.
+/// Load the store graph for the build referenced by `current`, returning
+/// [`Deployed::New`] when its identity hash matches `new_graph` or loading
+/// `kix.run/built-via` when that store path still exists locally.
 fn deployed_build(
     new_graph: &StoreGraph,
     current: Option<&kube::api::DynamicObject>,
@@ -307,21 +304,20 @@ fn deployed_build(
     Some(Deployed::Loaded(Box::new(graph)))
 }
 
-/// The live side of a comparison with the cluster.
+/// Live cluster state collected for a cluster diff.
 struct LiveSide {
-    /// The kix-owned view of each compared object.
+    /// Kix-owned view of each compared object.
     manifests: Vec<Value>,
-    /// Resources of the build that `kix deploy` would refuse as
-    /// [`ApplyError::NoNamespace`].
+    /// Build resources that `kix deploy` would reject with [`ApplyError::NoNamespace`].
     namespaceless: Vec<ResourceId>,
-    /// The current record: Active or Degraded, newest.
+    /// Current Activation record (newest Active or Degraded).
     current: Option<kube::api::DynamicObject>,
-    /// Each compared object as served, `managedFields` included, for naming
-    /// who made a drift change.
+    /// Full live objects including `managedFields`, used to attribute drift to
+    /// field managers.
     managed: HashMap<ResourceId, Value>,
 }
 
-/// The live cluster's kix-owned view of `new_graph`'s Kix cluster.
+/// Fetch the live cluster's Kix-owned view for `new_graph`'s cluster.
 async fn fetch_live_manifests(
     global: &crate::cli::GlobalArgs,
     new_graph: &StoreGraph,
@@ -336,12 +332,10 @@ async fn fetch_live_manifests(
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    // The gate, which opening the records runs. Beyond the records the sweep
-    // reads, `kix diff` needs it because the live objects below are upgraded
-    // to the current domain before they are compared, which on an
-    // unmigrated cluster renames the live `activations.<retired>` CRD to the
-    // name the build uses and reports it as matching. The answer would be
-    // "in sync" about a resource that does not exist under that name.
+    // Open `Records` to run the domain migration gate. Because live objects are
+    // upgraded to the current domain before comparison, skipping the gate on an
+    // unmigrated cluster would rename the live `activations.<retired>` CRD to
+    // the new domain and falsely report it as in sync.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     crate::esay!(
@@ -349,8 +343,8 @@ async fn fetch_live_manifests(
         discovery.len()
     );
 
-    // Only this Kix cluster's objects: another cluster sharing the
-    // Kubernetes cluster is not a removal.
+    // Scope the sweep to this Kix cluster so resources belonging to another Kix
+    // cluster on the same Kubernetes cluster do not appear as removals.
     let sweep = inventory::sweep_managed(
         &client,
         &discovery,
@@ -370,8 +364,8 @@ async fn fetch_live_manifests(
         crate::esay!("{note}");
     }
 
-    // An object this build drops but another Kix cluster still deploys is
-    // kept by `kix deploy --prune`, so it is not a removal either.
+    // Exclude resources that this build drops when another Kix cluster still
+    // deploys them, matching `kix deploy --prune`.
     let in_build: HashSet<ResourceId> = new_graph
         .resources
         .values()
@@ -391,8 +385,8 @@ async fn fetch_live_manifests(
         );
     }
 
-    // The cluster keeps Superseded and Failed records beside the current one.
-    // Only the current one says which build the cluster runs.
+    // Keep only the current Activation record alongside non-record resources so
+    // Superseded and Failed records do not appear in the diff.
     let current = activation::current_record(
         compared
             .iter()
@@ -406,10 +400,8 @@ async fn fetch_live_manifests(
                 .is_some_and(|c| c.metadata.name == obj.metadata.name)
     });
 
-    // Only the fields kix's server-side apply owns, so server defaults and
-    // kix's own bookkeeping never enter the comparison. An object nothing
-    // has changed since kix applied it compares as the manifest it was
-    // applied from, so what the server filled in on that apply does not show.
+    // Compare only the fields that Kix's server-side apply owns, ignoring server
+    // defaults and Kix bookkeeping annotations.
     let built: HashMap<String, &Value> = new_graph
         .resources
         .iter()
@@ -431,7 +423,7 @@ async fn fetch_live_manifests(
             reaped.len()
         );
     }
-    // Added as they were built, so each compares as unchanged.
+    // Include reaped run-once manifests as built so they compare as unchanged.
     manifests.extend(reaped);
 
     Ok(LiveSide {
@@ -442,16 +434,14 @@ async fn fetch_live_manifests(
     })
 }
 
-/// Build manifests that declare their own deletion (a Job's
-/// `ttlSecondsAfterFinished`, or a `hook-succeeded` delete policy), are
-/// absent from `live`, and are unchanged from the build `current` records.
-/// A deploy leaves such a resource alone because its identity hash did not
-/// change, so its absence is not a resource `kix deploy` would add.
+/// Return build manifests that declare their own deletion (such as a Job with
+/// `ttlSecondsAfterFinished` or a `hook-succeeded` delete policy), are absent
+/// from `live`, and have not changed since `current` was deployed.
 ///
-/// The deployed build is known when `current` names the same build as
-/// `new_graph`, or when the activation directory its `kix.run/built-via`
-/// names is still on this machine. Otherwise nothing is returned and each
-/// such resource shows as added.
+/// Because `kix deploy` skips unchanged run-once resources, their absence from
+/// the cluster is not a pending addition when the deployed build is known
+/// (either because `current` matches `new_graph` or its `kix.run/built-via`
+/// directory still exists locally).
 fn reaped_since_deploy(
     new_graph: &StoreGraph,
     current: Option<&kube::api::DynamicObject>,
@@ -474,7 +464,7 @@ fn reaped_since_deploy(
         .collect()
 }
 
-/// Identity hashes of the resources in the build `current` records.
+/// Return the resource identity hashes recorded in `current`'s build.
 fn deployed_hashes(
     new_graph: &StoreGraph,
     current: Option<&kube::api::DynamicObject>,
@@ -530,8 +520,7 @@ fn print_text_output(result: &DiffResult) {
         );
     }
 
-    // The deploy plan renderer, always with resource-level detail: a diff
-    // exists to be read.
+    // Always render resource-level detail in `kix diff`.
     print!("{}", plan::render_package_plan(pkg, true));
 
     if let Some(a) = &pkg.activation {
@@ -557,7 +546,7 @@ fn print_text_output(result: &DiffResult) {
     }
 }
 
-/// Render detected stateful migration pairs without executing them.
+/// Print detected stateful migration pairs without executing them.
 fn print_migration_pairs(pairs: &[MigrationPair]) {
     if pairs.is_empty() {
         return;
@@ -588,8 +577,7 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
 }
 
 fn print_markdown_output(result: &DiffResult) {
-    // Shared package-level renderer. Same producer used by the deploy
-    // modal and the CI PR-comment GitHub Action so they stay in sync.
+    // Share the package-level Markdown renderer with the deploy modal and CI PR comments.
     print!("{}", plan::render_package_diff_markdown(&result.packages));
 
     if !result.migration_pairs.is_empty() {
@@ -633,8 +621,7 @@ mod tests {
     const JOB_PATH: &str = "/nix/store/jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj-k8s-Job-admission";
     const RECORD_PATH: &str = "/nix/store/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr-k8s-Activation-c";
 
-    /// A build holding a Job its TTL removes after it finishes, and the
-    /// build's record.
+    /// Build a test store graph with a TTL-reaped Job and an Activation record.
     fn build() -> StoreGraph {
         let mut graph = StoreGraph::empty("c");
         let job = json!({

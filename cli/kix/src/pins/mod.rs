@@ -1,19 +1,15 @@
-//! The committed record of what each image reference resolved to.
+//! Committed record of resolved container image digests.
 //!
-//! A pin file is JSON living next to the cluster definition that reads it.
-//! JSON rather than Nix for a reason that has nothing to do with taste:
-//! reading a Nix file means evaluating it, so reading a pin file would
-//! execute whatever the file contains, and writing one means escaping
-//! registry-supplied strings as programming-language source. Neither is
-//! a thing to do to a file a bot rewrites on every build. JSON parses inert
-//! and serialises with serde.
+//! A pin file is JSON stored alongside the cluster definition that reads it.
+//! Using JSON rather than Nix avoids evaluating code when reading a pin file
+//! and avoids escaping registry-supplied strings as Nix source when a bot
+//! rewrites the file on every build.
 //!
-//! It is also what the rest of Kix already does. `kix-packages.json`,
-//! `kix-scorecard.json`, `kix-extra-images.json`, the SBOM, the provenance
-//! and the OSCAL assessment are all JSON; YAML appears only where Kubernetes
-//! imposes it. The evaluation cache fingerprints `.nix`, `.yaml`, `.yml` and
-//! `.json` (`crate::eval::cache`), so a JSON pin file lands in the
-//! fingerprint like any other input.
+//! Using JSON also matches the rest of Kix's build outputs (`kix-packages.json`,
+//! `kix-scorecard.json`, `kix-extra-images.json`, the SBOM, the provenance,
+//! and the OSCAL assessment). The evaluation cache fingerprints `.nix`,
+//! `.yaml`, `.yml`, and `.json` (`crate::eval::cache`), so a JSON pin file is
+//! included in the cache fingerprint automatically.
 //!
 //! ```json
 //! {
@@ -88,55 +84,56 @@ const VERSION_INSTANCES: u32 = 2;
 /// The option an instance pin sets when none is named.
 pub const DEFAULT_OPTION: &str = "image";
 
-/// One image reference, as resolved at promotion time.
+/// One image reference resolved at promotion time.
 ///
-/// `deny_unknown_fields` on purpose: the Nix reader refuses a field it does
-/// not know, so the CLI has to refuse it too. Accepting it here and dropping
-/// it on the next write would delete whatever somebody added, without saying
-/// so.
+/// Uses `deny_unknown_fields` because the Nix reader rejects unknown fields.
+/// Accepting an unknown field here and dropping it on the next write would
+/// silently delete user data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pin {
-    /// Repository including the registry host. What to pull from.
+    /// Repository including the registry host.
     pub repository: String,
-    /// The tag that was asked for. Names a stream, not a build.
+    /// Tag requested before digest resolution, naming a release stream rather
+    /// than a specific build.
     pub tag: String,
-    /// The manifest digest the tag resolved to. What will actually run.
-    /// `None` means the pin has never been resolved against a registry.
+    /// Manifest digest that `tag` resolved to, or `None` when the pin has not
+    /// been resolved against a registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
-    /// Revision of the source this image was built from, when Kix knows it.
-    /// `None` for an upstream image, which has no revision in our history.
+    /// Source revision this image was built from, or `None` for upstream
+    /// images.
     #[serde(rename = "sourceRev", default, skip_serializing_if = "Option::is_none")]
     pub source_rev: Option<String>,
-    /// Who promoted it, for the record.
+    /// Identity of the actor or CI job that promoted this pin.
     #[serde(
         rename = "promotedBy",
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub promoted_by: Option<String>,
-    /// When it was resolved, RFC 3339.
+    /// RFC 3339 timestamp when the digest was resolved.
     #[serde(
         rename = "resolvedAt",
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub resolved_at: Option<String>,
-    /// A human note about this entry. Kix never reads it. `kix pin set`
-    /// drops it when it moves the entry to another image.
+    /// Human note about this entry. Kix preserves it across digest updates,
+    /// and `kix pin set` drops it when switching the entry to a different
+    /// image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
 impl Pin {
-    /// `repository:tag`, the reference to hand a registry.
+    /// Format `repository:tag` for registry requests.
     pub fn reference(&self) -> String {
         format!("{}:{}", self.repository, self.tag)
     }
 
-    /// `repository@digest` when resolved. This, not the tag, is what a
-    /// freshness check should ask the registry about.
+    /// Format `repository@digest` when a digest is present, for freshness
+    /// checks against the registry.
     pub fn digest_reference(&self) -> Option<String> {
         self.digest
             .as_ref()
@@ -144,9 +141,8 @@ impl Pin {
     }
 }
 
-/// The on-disk envelope. Separate from `PinFile` because the envelope is a
-/// serialisation detail and `PinFile` carries the path and the managed flag.
-/// Fields serialise in declaration order, which is the canonical order.
+/// On-disk JSON envelope, kept separate from `PinFile` so `PinFile` can carry
+/// the file path and managed flag. Fields serialize in declaration order.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Envelope {
@@ -159,20 +155,20 @@ struct Envelope {
     instances: BTreeMap<String, BTreeMap<String, Pin>>,
 }
 
-/// Which entry of a pin file a pin is.
+/// Key identifying an entry in a pin file.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PinKey {
-    /// An `images` pin, which the cluster's code reads with `pins.get`.
+    /// An `images` pin read with `pins.get`.
     Image(String),
-    /// An `instances` pin: `instance` is `<namespace>/<instance>`, and
-    /// `option` is an option path of its package, such as `image`.
+    /// An `instances` pin where `instance` is `<namespace>/<instance>` and
+    /// `option` is a package option path such as `image`.
     Instance { instance: String, option: String },
 }
 
 impl PinKey {
-    /// The key as `kix pin` takes it on the command line: a name, or
-    /// `<namespace>/<instance>` with `--option` for an option other than
-    /// `image`.
+    /// Parse a CLI pin key: either a plain image pin name, or
+    /// `<namespace>/<instance>` with an optional `--option` path (defaulting
+    /// to `image`).
     pub fn parse(key: &str, option: Option<&str>) -> Result<Self, String> {
         if key.contains('/') {
             check_instance_key(key)?;
@@ -193,7 +189,7 @@ impl PinKey {
         }
     }
 
-    /// The `kix pin set` arguments that name this pin.
+    /// Format the `kix pin set` CLI arguments that address this pin.
     pub fn arguments(&self) -> String {
         match self {
             Self::Image(name) => name.clone(),
@@ -283,7 +279,7 @@ impl PinFile {
         Ok(file)
     }
 
-    /// A pin file that does not exist yet.
+    /// Create an empty, managed pin file for `path`.
     pub fn empty(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
@@ -292,7 +288,7 @@ impl PinFile {
         }
     }
 
-    /// The pin `key` names, if the file has it.
+    /// Return the pin for `key`, if present.
     pub fn get(&self, key: &PinKey) -> Option<&Pin> {
         match key {
             PinKey::Image(name) => self.pins.get(name),
@@ -300,7 +296,7 @@ impl PinFile {
         }
     }
 
-    /// Add or replace the pin `key` names.
+    /// Insert or replace the pin at `key`.
     pub fn insert(&mut self, key: PinKey, pin: Pin) {
         match key {
             PinKey::Image(name) => {
@@ -315,7 +311,8 @@ impl PinFile {
         }
     }
 
-    /// Remove the pin `key` names, and an instance left with no pins.
+    /// Remove the pin at `key`, pruning the instance map entry when its last
+    /// option pin is removed.
     pub fn remove(&mut self, key: &PinKey) -> Option<Pin> {
         match key {
             PinKey::Image(name) => self.pins.remove(name),
@@ -330,7 +327,8 @@ impl PinFile {
         }
     }
 
-    /// Every pin, `images` first, each map in key order.
+    /// Iterate over every pin in key order, yielding `images` before
+    /// `instances`.
     pub fn entries(&self) -> impl Iterator<Item = (PinKey, &Pin)> {
         let images = self
             .pins
@@ -363,7 +361,7 @@ impl PinFile {
         }
     }
 
-    /// Render the canonical form. Deterministic: same pins, same bytes.
+    /// Render the canonical JSON representation.
     pub fn render(&self) -> String {
         let envelope = Envelope {
             version: if self.instances.is_empty() {
@@ -381,11 +379,12 @@ impl PinFile {
         out
     }
 
-    /// Write the canonical form, refusing to clobber a file Kix did not write
-    /// unless the caller has said to.
+    /// Write the canonical JSON representation to `self.path`, refusing to
+    /// overwrite an existing file that lacks `managedBy` unless `force` is
+    /// true.
     pub fn write(&self, force: bool) -> Result<(), PinError> {
-        // The checks a reader makes, so nothing writes a file Kix would
-        // then refuse to read.
+        // Run the same validation as `parse` so Kix never writes a file it
+        // would later refuse to read.
         check_pins(&self.pins)
             .and_then(|()| check_instances(&self.instances))
             .map_err(|detail| PinError::Invalid {
@@ -412,11 +411,10 @@ impl PinFile {
     }
 }
 
-/// Parse a pin file's text. The path is left empty for the caller to set.
+/// Parse a pin file's JSON text, leaving `path` empty for the caller to populate.
 ///
-/// Two shapes are accepted. The canonical envelope, and a bare map of image
-/// pins, which is what a file without the generated envelope looks like. A
-/// bare map is never managed, so `kix pin set` will not rewrite one without
+/// Accepts either the canonical envelope or a bare map of image pins. A bare
+/// map is marked unmanaged so `kix pin set` refuses to overwrite it without
 /// `--force`.
 fn parse_file(text: &str) -> Result<PinFile, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
@@ -431,9 +429,8 @@ fn parse_file(text: &str) -> Result<PinFile, String> {
         .iter()
         .any(|k| obj.contains_key(*k))
     {
-        // The version is checked before the shape, so a file from a newer
-        // Kix is reported as that rather than as a field this one lacks.
-        // The Nix reader refuses the same versions.
+        // Check `version` before deserializing `Envelope` so files from a newer
+        // Kix report a version mismatch rather than an unknown-field error.
         let version = obj.get("version").and_then(serde_json::Value::as_u64);
         match version {
             Some(1) | Some(2) => {}
@@ -467,8 +464,7 @@ fn parse_file(text: &str) -> Result<PinFile, String> {
     })
 }
 
-/// Turn a bare map of pins into pins, refusing anything that would render a
-/// reference Kix cannot pull.
+/// Parse and validate a bare JSON object of image pins.
 pub(crate) fn parse_pins(value: &serde_json::Value) -> Result<BTreeMap<String, Pin>, String> {
     let obj = value
         .as_object()
@@ -487,7 +483,7 @@ pub(crate) fn parse_pins(value: &serde_json::Value) -> Result<BTreeMap<String, P
     Ok(pins)
 }
 
-/// The checks that apply however the file was shaped.
+/// Validate every pin in an `images` map.
 fn check_pins(pins: &BTreeMap<String, Pin>) -> Result<(), String> {
     for (key, pin) in pins {
         check_pin(&format!("Pin '{key}'"), pin)?;
@@ -545,18 +541,17 @@ fn check_pin(label: &str, pin: &Pin) -> Result<(), String> {
     Ok(())
 }
 
-// The image reference grammar of the OCI distribution spec
-// (distribution/reference), as the Nix reader checks it in
-// kix/lib/vocab/pins.nix: an optional registry host and port, then
-// lower-case path components; a tag of at most 128 word characters, dots,
+// Image reference grammar from the OCI distribution spec
+// (`distribution/reference`), matching the Nix reader in
+// `kix/lib/vocab/pins.nix`: an optional registry host and port followed by
+// lowercase path components, and a tag of up to 128 word characters, dots,
 // and dashes.
 
-/// `[a-z0-9]+(([.]|_|__|-+)[a-z0-9]+)*`
+/// Return whether `s` matches `[a-z0-9]+(([.]|_|__|-+)[a-z0-9]+)*`.
 fn is_path_component(s: &str) -> bool {
     let alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
     let mut chars = s.chars().peekable();
     loop {
-        // A run of letters and digits, at least one.
         let mut run = 0;
         while chars.peek().is_some_and(|c| alnum(*c)) {
             chars.next();
@@ -565,7 +560,6 @@ fn is_path_component(s: &str) -> bool {
         if run == 0 {
             return false;
         }
-        // Then the end, or one separator and another run.
         let mut sep = String::new();
         while let Some(c) = chars.peek().copied().filter(|c| !alnum(*c)) {
             sep.push(c);
@@ -580,8 +574,8 @@ fn is_path_component(s: &str) -> bool {
     }
 }
 
-/// A registry host: dot-separated labels or a bracketed IPv6 address, and
-/// an optional port.
+/// Return whether `s` is a valid registry host (dot-separated labels or a
+/// bracketed IPv6 address, with an optional port).
 fn is_host(s: &str) -> bool {
     let (name, port) = match s.rsplit_once(':') {
         Some((name, port)) if !name.ends_with(':') && !port.contains(']') => (name, Some(port)),
@@ -610,7 +604,7 @@ fn is_repository(s: &str) -> bool {
     paths_ok(&parts) || (parts.len() > 1 && is_host(parts[0]) && paths_ok(&parts[1..]))
 }
 
-/// `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`
+/// Return whether `s` matches `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`.
 fn is_tag(s: &str) -> bool {
     let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut chars = s.chars();
@@ -619,7 +613,8 @@ fn is_tag(s: &str) -> bool {
         && chars.all(|c| word(c) || c == '.' || c == '-')
 }
 
-/// `<namespace>/<instance>`, as the Nix reader requires.
+/// Validate that `instance` has the `<namespace>/<instance>` form expected by
+/// the Nix reader.
 fn check_instance_key(instance: &str) -> Result<(), String> {
     match instance.split_once('/') {
         Some((ns, name)) if !ns.is_empty() && !name.is_empty() && !name.contains('/') => Ok(()),
@@ -629,7 +624,7 @@ fn check_instance_key(instance: &str) -> Result<(), String> {
     }
 }
 
-/// Dot-separated option names, as the Nix reader requires.
+/// Validate that `option` consists of dot-separated option identifiers.
 fn check_option_path(instance: &str, option: &str) -> Result<(), String> {
     let ok = option.split('.').all(|part| {
         !part.is_empty()

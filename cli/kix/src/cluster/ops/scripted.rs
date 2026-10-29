@@ -1,17 +1,16 @@
-//! A scripted [`ResourceIo`], [`DeployRecord`] and [`SecretHydrator`] for
-//! engine tests. No cluster.
+//! Scripted [`ResourceIo`], [`DeployRecord`], and [`SecretHydrator`] for
+//! engine tests without a live cluster.
 //!
-//! The rule that makes this useful: **nothing completes unless the script
-//! says so.** A fake that answers on the first poll cannot show a parked
-//! future, which is exactly how the 2026-09-07 deadlock got past the tests.
-//! Here every call is one of [`Behaviour`]: complete now, complete after a
-//! virtual delay, complete when the test opens a [`Gate`], or hang forever.
-//! Run the engine under `#[tokio::test(start_paused = true)]` and wrap it in
-//! `tokio::time::timeout`: a parked run fails at once instead of hanging,
-//! and a "ten minute" watchdog test takes milliseconds.
+//! No operation completes unless the script says so. Every call is configured
+//! with a [`Behaviour`] to complete immediately, complete after a virtual
+//! delay, complete when the test opens a [`Gate`], or hang forever. Running the
+//! engine under `#[tokio::test(start_paused = true)]` inside
+//! `tokio::time::timeout` surfaces parked futures immediately and lets
+//! multi-minute watchdog tests complete in milliseconds.
 //!
 //! The fake also records a call log with virtual timestamps and the peak
-//! number of concurrent applies, so tests can assert ordering and bounds.
+//! number of concurrent applies so tests can assert ordering and concurrency
+//! bounds.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -59,15 +58,15 @@ impl Gate {
 /// How a scripted call completes.
 #[derive(Clone, Debug)]
 pub enum Behaviour<T: Clone> {
-    /// On the first poll.
+    /// Complete on the first poll.
     Now(T),
-    /// After this much virtual time.
+    /// Complete after this much virtual time.
     After(Duration, T),
-    /// When the gate opens.
+    /// Complete when the gate opens.
     Gate(Gate, T),
-    /// Never.
+    /// Never complete.
     Hang,
-    /// Panic with this message. Models a bug in a node task.
+    /// Panic with this message to model a bug in a node task.
     Panic(String),
 }
 
@@ -105,14 +104,15 @@ pub enum Ready {
     },
 }
 
-/// Per-node script. Defaults: hydrate succeeds, apply creates, ready now.
+/// Per-node script. Defaults to hydrating cleanly, creating on apply, and
+/// reporting ready immediately.
 #[derive(Clone, Debug)]
 pub struct NodeScript {
     pub hydrate: Behaviour<Result<(), String>>,
     pub apply: Behaviour<Result<ApplyAction, ApplyFailure>>,
     pub recreate: Behaviour<Result<ApplyAction, String>>,
     pub ready: Behaviour<Ready>,
-    /// What [`ResourceIo::get_live`] answers. Default: nothing is live.
+    /// What [`ResourceIo::get_live`] answers. Defaults to `Ok(None)`.
     pub live: Behaviour<Result<Option<Value>, String>>,
 }
 
@@ -121,7 +121,8 @@ pub struct NodeScript {
 pub enum ApplyFailure {
     /// Any other error, rendered with this message.
     Other(String),
-    /// Immutable-field conflict; the engine recreates if pre-authorized.
+    /// Immutable-field conflict, which triggers an in-place recreate when
+    /// pre-authorized.
     ImmutableConflict,
 }
 
@@ -240,8 +241,8 @@ impl ScriptedOps {
         }
     }
 
-    /// Whether the engine runs against the fake as a dry run, which has no
-    /// record (see [`super::Cluster::scripted`]).
+    /// Configure whether the engine runs against this fake in dry-run mode
+    /// (without a deploy record; see [`super::Cluster::scripted`]).
     pub fn set_dry_run(&self, dry_run: bool) -> &Self {
         self.dry_run.store(dry_run, Ordering::SeqCst);
         self
@@ -257,7 +258,7 @@ impl ScriptedOps {
         self
     }
 
-    /// Script for every node not scripted individually.
+    /// Set the default script for nodes without an individual script.
     pub fn default_node(&self, script: NodeScript) -> &Self {
         *self.default_node.lock().unwrap() = script;
         self
@@ -305,12 +306,12 @@ impl ScriptedOps {
         self
     }
 
-    /// Every call so far, in order, with virtual timestamps.
+    /// Return all recorded calls in order with virtual timestamps.
     pub fn log(&self) -> Vec<Logged> {
         self.log.lock().unwrap().clone()
     }
 
-    /// Just the calls, without timestamps.
+    /// Return all recorded calls without timestamps.
     pub fn calls(&self) -> Vec<Call> {
         self.log
             .lock()
@@ -320,7 +321,7 @@ impl ScriptedOps {
             .collect()
     }
 
-    /// Virtual time of the first matching call.
+    /// Return the virtual timestamp of the first call matching `pred`.
     pub fn time_of(&self, pred: impl Fn(&Call) -> bool) -> Option<Duration> {
         self.log
             .lock()
@@ -330,7 +331,7 @@ impl ScriptedOps {
             .map(|l| l.at)
     }
 
-    /// Highest number of applies in flight at once.
+    /// Return the maximum number of concurrent applies observed.
     pub fn peak_concurrent_applies(&self) -> usize {
         self.applies_peak.load(Ordering::Relaxed)
     }

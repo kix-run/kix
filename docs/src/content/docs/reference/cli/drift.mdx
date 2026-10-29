@@ -54,12 +54,12 @@ Kix set the replica count.
 | Unreadable | `no managedFields` | `no-fieldset` | The object has no field ownership data, so the check cannot run |
 
 For a drifted resource, text output names each changed field with the field
-manager, operation and time Kubernetes recorded, in the form
+manager, operation, and time Kubernetes recorded, in the form
 `<field> taken by <manager> (<operation>) at <time>`. When no other manager
 is recorded, Kix says so.
 
 JSON output has a `resources` array (`kind`, `namespace`, `name`, `verdict`,
-`clusters`, `foreignOwners`) and a `summary` object with `inSync`, `drifted`, `unstamped`
+`clusters`, `foreignOwners`) and a `summary` object with `inSync`, `drifted`, `unstamped`,
 and `noFieldset` counts.
 
 ## Examples

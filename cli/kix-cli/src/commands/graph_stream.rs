@@ -1,10 +1,9 @@
 //! Interactive renderer for graph-streaming deploys.
 //!
-//! Replaces the wave-shaped `deploy_tui.rs` dashboard. Consumes the
-//! [`DeployEvent`] stream from the scheduler and renders a live tree grouped
-//! by kix package (default) or namespace. Fold rules collapse completed
-//! subtrees; a failure keeps its subtree expanded and pins a failure frame
-//! at the top of the viewport.
+//! Consumes the [`DeployEvent`] stream from the scheduler and renders a live
+//! tree grouped by Kix package (default) or namespace. Fold rules collapse
+//! completed subtrees; a failure keeps its subtree expanded and pins a failure
+//! frame at the top of the viewport.
 //!
 //! [`GraphStreamObserver`] forwards events over an mpsc channel without
 //! drawing or blocking. A dedicated thread owns the terminal, updates
@@ -892,10 +891,11 @@ fn render_tree_node(
     end
 }
 
-/// Like `node_line` with two extra knobs: override the glyph (used to paint
-/// `▼` on a pending parent that wraps active descendants) and append an
-/// arbitrary suffix (used for the `(+N pending)` marker on a collapsed
-/// pending-only subtree).
+/// Render a single node row with optional glyph override and suffix tail.
+///
+/// The glyph override paints `▼` on a pending parent that wraps active
+/// descendants, and the suffix appends `(+N pending)` on a collapsed
+/// pending-only subtree.
 fn node_line_with_tail(
     id: &NodeId,
     node: &NodeView,
@@ -908,9 +908,7 @@ fn node_line_with_tail(
     let (glyph, glyph_style) = match glyph_override {
         Some((unicode, ascii)) => {
             let g = if state.glyph.ascii { ascii } else { unicode };
-            // This marker means a pending parent has active work below it.
-            // only there to host something interesting below, so keep it
-            // muted and let the real work own the color.
+            // Mute the pending parent marker so active descendants own the color.
             let style = Style::default().add_modifier(Modifier::DIM);
             (g, style)
         }
@@ -1041,19 +1039,14 @@ fn compute_subtree_info(
     info
 }
 
-/// Compute intra-group depth per node: the longest chain of predecessors
-/// that also belong to this group. Cross-package predecessors are ignored
-/// here. They appear as a cross-package tail on the node row, which marks
-/// the boundary the user asked to see. Traversal happens in `plan_order`
-/// which the scheduler emits in topological order, so one pass suffices.
-/// Produce a DFS spanning-tree over the deploy DAG for display. Roots are
-/// nodes with no `incoming_for_roots` entries, typically PackageInstances
-/// that nothing else consumes. Then walk
-/// `walk_edges` downward, emitting each node exactly once at its DFS depth.
-/// Nodes reachable through multiple paths anchor under whichever root
-/// reached them first; other edges surface as the `└┄►` tail on the row.
+/// Produce a DFS spanning-tree over the deploy DAG for display.
 ///
-/// Iterative (stack-based) so deep DAGs don't blow the call stack. Edges
+/// Roots are nodes with no `incoming_for_roots` entries, typically
+/// `PackageInstance` resources that nothing else consumes. Walks `walk_edges`
+/// downward, emitting each node once at its DFS depth. Nodes reachable through
+/// multiple paths anchor under whichever root reached them first.
+///
+/// Uses an explicit stack so deep DAGs do not overflow the call stack. Edges
 /// are popped in stored order for deterministic output across runs.
 fn compute_render_tree(
     plan_order: &[NodeId],
@@ -1122,9 +1115,11 @@ fn node_label(id: &NodeId, meta: &NodeMeta) -> String {
     }
 }
 
-/// Shorter label used in the live tree. Drops the `@namespace` suffix since
-/// the parent PackageInstance row already carries that context. The
-/// scrollback history continues to use the qualified `node_label` form.
+/// Format a shorter node label for the live tree.
+///
+/// Drops the `@namespace` suffix because the parent `PackageInstance` row
+/// already carries that context. Scrollback history uses [`node_label`]
+/// instead.
 fn node_label_short(id: &NodeId, meta: &NodeMeta) -> String {
     match id {
         NodeId::Resource(rid) => {
@@ -1157,14 +1152,11 @@ fn strip_resource_prefix(msg: &str, id: &NodeId) -> String {
     msg.to_string()
 }
 
-/// Decide which rows to push into terminal scrollback on this tick.
+/// Build the rows to flush into terminal scrollback on this tick.
 ///
-/// Nom-style: every Ready resource is flushed as soon as it completes, so the
-/// live viewport only ever shows in-flight / pending / failed work. When the
-/// last resource of a package becomes Ready we also emit a one-line package
-/// summary so the user can see groups collapse as the deploy progresses.
-/// Failed subtrees are never flushed; they stay pinned in the viewport
-/// until the deploy ends.
+/// Every `Ready` resource is flushed as soon as it completes, so the live
+/// viewport shows only in-flight, pending, or failed work. Failed subtrees are
+/// never flushed and remain pinned in the viewport until the deploy ends.
 fn build_flush_lines(
     state: &ViewState,
     flushed: &mut HashSet<NodeId>,
@@ -1172,11 +1164,10 @@ fn build_flush_lines(
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
 
-    // 1. Per-resource apply flush: emit a history line the first tick after
-    //    a node's apply phase completes. `applied_action` is sticky (set in
-    //    ViewState::apply when NodeDetail::Applied arrives), so we get exactly
-    //    one scrollback line per resource even though `detail` gets overwritten
-    //    by later ReadinessProgress events.
+    // Emit an apply-phase history line on the first tick after a node's apply
+    // phase completes. `applied_action` is sticky, so each resource produces
+    // at most one apply line even when `detail` is later overwritten by
+    // `ReadinessProgress` events.
     for id in &state.plan_order {
         if apply_flushed.contains(id) {
             continue;
@@ -1187,7 +1178,6 @@ fn build_flush_lines(
         let Some(action) = node.applied_action.as_ref() else {
             continue;
         };
-        // Unchanged / Skipped are noise in scrollback; suppress.
         if matches!(action, ApplyAction::Unchanged | ApplyAction::Skipped) {
             apply_flushed.insert(id.clone());
             continue;
@@ -1196,8 +1186,7 @@ fn build_flush_lines(
         apply_flushed.insert(id.clone());
     }
 
-    // 2. Per-resource Ready flush: every Ready node that hasn't been flushed
-    //    to scrollback yet. Iterate plan_order so history stays deterministic.
+    // Flush every newly Ready node in `plan_order` so history stays deterministic.
     let mut newly_flushed: Vec<NodeId> = Vec::new();
     for id in &state.plan_order {
         if flushed.contains(id) {
@@ -1206,13 +1195,10 @@ fn build_flush_lines(
         let Some(node) = state.nodes.get(id) else {
             continue;
         };
-        // Ready is the only terminal state eligible for flush. Cancelled and
-        // Failed stay visible; Drift stays visible (§5 drift row).
+        // Cancelled, Failed, and DriftDetected nodes stay visible in the viewport.
         if !matches!(node.verdict, Verdict::Ready) {
             continue;
         }
-        // Skip nodes reach Ready via Applied(Unchanged); a ready ✔ line
-        // for an unchanged resource is pure noise.
         if matches!(node.kind, TransitionKind::Skip) {
             newly_flushed.push(id.clone());
             continue;
@@ -1227,9 +1213,10 @@ fn build_flush_lines(
     out
 }
 
-/// Scrollback line emitted when a resource completes its apply phase.
-/// Mirrors the `StreamCliObserver` apply glyphs so the TUI history and the
-/// plain-log history read the same way.
+/// Format the scrollback line emitted when a resource finishes its apply phase.
+///
+/// Uses the same apply glyphs as `StreamCliObserver` so TUI scrollback matches
+/// plain-log output.
 fn apply_history_line(
     id: &NodeId,
     node: &NodeView,
@@ -1263,8 +1250,7 @@ fn apply_history_line(
     ])
 }
 
-/// One-line history representation of a finished resource, flushed to
-/// scrollback. Example: `✔ cert-manager/Deployment/cert-manager   4.2s`.
+/// Format a one-line scrollback summary for a completed resource.
 fn resource_history_line(id: &NodeId, node: &NodeView, state: &ViewState) -> Line<'static> {
     let (glyph, glyph_style) = glyph_for(&node.verdict, state.glyph);
     let pkg_prefix = state

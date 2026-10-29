@@ -50,12 +50,11 @@ pub struct GlobalArgs {
     #[arg(long, global = true, env = "KIX_NO_CACHE", value_parser = FalseyValueParser::new())]
     pub no_cache: bool,
 
-    /// Override a flake input's URL. Mirrors `nix --override-input`.
-    /// Repeatable; takes a name and a URL each time:
-    ///   `--override-input kixpkgs path:/nix/store/...kixpkgs`
-    /// All overrides are forwarded to every underlying `nix` subprocess.
-    /// Without the flag, `KIX_OVERRIDE_INPUT` gives the names and URLs,
-    /// separated by spaces.
+    /// Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+    ///
+    /// Forwards `--override-input` to every `nix` subprocess. When this flag
+    /// is not set, Kix reads space-separated `INPUT URL` pairs from
+    /// `KIX_OVERRIDE_INPUT`.
     #[arg(
         long = "override-input",
         global = true,
@@ -67,9 +66,10 @@ pub struct GlobalArgs {
 }
 
 impl GlobalArgs {
-    /// Pair up the raw `--override-input NAME URL` tokens into `(name, url)`.
-    /// The length is even: clap checks the flag's pairs, and `main` those
-    /// read from `KIX_OVERRIDE_INPUT`.
+    /// Pair the `--override-input NAME URL` tokens into `(name, url)` tuples.
+    ///
+    /// Both clap (for the flag) and `override_input_from_env` (for
+    /// `KIX_OVERRIDE_INPUT`) guarantee an even number of elements.
     pub fn input_overrides(&self) -> Vec<(String, String)> {
         self.override_input
             .chunks_exact(2)
@@ -78,11 +78,11 @@ impl GlobalArgs {
     }
 }
 
-/// The global flags that only some commands read, each with the command
-/// paths that read it. A path covers its subcommands, and a command group
-/// counts as reading a flag when any of its subcommands does.
+/// Global flags that apply only to specific subcommands, paired with the
+/// command paths that read them. A command path covers its subcommands, and a
+/// parent command is included when any of its subcommands reads the flag.
 ///
-/// `-v`, `-q` and `--no-color` are read by every command and are not listed.
+/// `-v`, `-q`, and `--no-color` apply to every command and are omitted here.
 const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
     (
         "output",
@@ -185,13 +185,12 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// The clap command for `kix`, with each scoped global flag hidden from the
-/// `--help` of the commands that ignore it.
+/// Build the clap `Command` for `kix`, hiding scoped global flags from the
+/// `--help` output of subcommands that do not use them.
 ///
-/// A hidden flag is still accepted there, so a wrapper that passes
-/// `--flake` or `--context` ahead of every subcommand keeps working.
-/// clap_complete's generators include hidden flags, so shell completions
-/// still offer them.
+/// Hidden flags are still accepted on every subcommand so wrapper scripts can
+/// pass `--flake` or `--context` unconditionally, and shell completions still
+/// include them.
 pub fn command() -> clap::Command {
     let cmd = Cli::command();
     let globals: Vec<clap::Arg> = cmd
@@ -202,12 +201,12 @@ pub fn command() -> clap::Command {
     cmd.mut_subcommands(|sc| hide_unread_globals(sc, "", &globals))
 }
 
-/// Gives `cmd` a hidden copy of each scoped global flag it does not read.
+/// Hide each scoped global flag that `cmd` does not read.
 ///
-/// clap copies a global flag into a subcommand only when the subcommand has
-/// no argument with that id, so the hidden copy takes its place. This has to
-/// happen before `Command::build`: an argument changed after the build keeps
-/// a stale position in the parser's lookup table.
+/// Clap propagates a global flag to a subcommand only if the subcommand does
+/// not already define an argument with the same ID, so adding a hidden copy
+/// overrides the visible global definition. This must run before
+/// `Command::build` freezes the parser's argument lookup table.
 fn hide_unread_globals(cmd: clap::Command, parent: &str, globals: &[clap::Arg]) -> clap::Command {
     let path = if parent.is_empty() {
         cmd.get_name().to_string()
@@ -246,47 +245,47 @@ pub enum Command {
 
     /// Compare the build with the live cluster or a directory, read-only
     ///
-    /// Compares the build with the live cluster's kix-owned view (needs only
-    /// get and list), with a snapshot from `kix snapshot save`, or with
-    /// another build (`--from <result>`, which needs no cluster access).
-    /// Field changes are labelled as the commit's or as drift when the
-    /// deployed build is on this machine.
+    /// Compares the build against the live cluster's Kix-managed resources
+    /// (requiring only `get` and `list` permissions), a snapshot from
+    /// `kix snapshot save`, or another build (`--from <DIR>`, which requires
+    /// no cluster access). When the currently deployed build is available
+    /// locally, field changes are classified as either committed changes or
+    /// live drift.
     ///
-    /// It cannot see what only shows on the write path: admission webhooks
-    /// that refuse or change an object, field ownership conflicts with
-    /// another manager, and what the deploy itself refuses. `kix plan`
-    /// checks those with a server-side dry run.
+    /// Because `kix diff` is read-only, it cannot detect write-time effects
+    /// such as admission webhook mutations or rejections, server-side apply
+    /// ownership conflicts, or deploy-time refusals. Use `kix plan` to check
+    /// those with a server-side dry run.
     ///
-    /// Exits 2 when anything differs.
+    /// Exits 2 when any differences are found.
     Diff(DiffArgs),
 
     /// Preview a deploy as a server-side dry run
     ///
-    /// Runs the deploy pipeline with every write sent as a dry run, so the
-    /// apiserver answers for each object: the field changes it would make,
-    /// and the writes it would refuse (ownership conflicts, admission
-    /// webhooks, validation, RBAC). Also lists stateful migrations, drift
-    /// the deploy would revert, and what the prune would delete or keep.
-    /// `kix deploy` prints the same plan before it asks; `kix deploy
-    /// --dry-run` runs this command.
+    /// Runs the deploy pipeline with every write sent as a server-side dry run
+    /// so the API server reports the exact field changes it would make and any
+    /// writes it would reject (field ownership conflicts, admission webhooks,
+    /// schema validation, or RBAC). Also reports stateful migrations, live
+    /// drift that the deploy would revert, and orphaned resources that pruning
+    /// would delete or keep. `kix deploy` prints this same plan before
+    /// prompting, and `kix deploy --dry-run` runs this command.
     ///
-    /// A dry run is authorised like the write it simulates, so this needs
-    /// the deployer's permissions; `kix diff` is the read-only comparison.
-    /// No preview can say whether Pods will start.
+    /// Because dry-run writes require the same RBAC permissions as real
+    /// writes, use `kix diff` when you only have read-only access. A dry run
+    /// cannot verify whether Pods will start or pass readiness probes.
     ///
-    /// Exits 0 when the deploy would change nothing, 2 when it would change
-    /// something, and 3 when it would stop on a refused write or a stateful
-    /// migration not accepted with --accept-migrations.
+    /// Exits 0 when the deploy would make no changes, 2 when changes would be
+    /// made, and 3 when the deploy would be blocked by a rejected write or an
+    /// unacknowledged stateful migration (see `--accept-migrations`).
     Plan(PlanCommandArgs),
 
     /// Evaluate a cluster and report build-time checks and scorecard findings
     ///
-    /// Evaluation runs the constructor validators, the cross-resource checks
-    /// and every error-severity scorecard rule; a failure in any of them
-    /// reports `eval` as `fail`. The `scorecard` row counts findings at each
-    /// severity. `kix check` does not validate the rendered manifests against
-    /// Kubernetes schemas; `nix flake check` does, through the
-    /// `schema-cluster-<name>` check. Exits 1 when a row reports `fail`.
+    /// Runs constructor validators, cross-resource checks, and error-severity
+    /// scorecard rules; any failure marks the `eval` row as `fail`. The
+    /// `scorecard` row summarizes findings by severity. To validate rendered
+    /// manifests against Kubernetes schemas, run `nix flake check` (via the
+    /// `schema-cluster-<name>` check). Exits 1 when any row reports `fail`.
     Check(CheckArgs),
 
     /// Wave-based deployment with confirmation
@@ -302,19 +301,19 @@ pub enum Command {
     /// Dependency DAG visualization
     Graph(GraphArgs),
 
-    /// Build a cluster and write it as one file, a bundle
+    /// Package a built cluster into a standalone `.kixbundle` file
     ///
-    /// A bundle (`.kixbundle`) is a zstd file in the seekable format that
-    /// holds every store file of the build, with its references, so `kix plan`, `kix deploy`
-    /// and `kix graph` can read it with `--bundle` on a machine with no Nix
-    /// store. Reading a bundle recomputes every store path from its file's
-    /// bytes and refuses one that differs.
+    /// A bundle (`.kixbundle`) is a seekable zstd archive containing every
+    /// store file in the build and its references, allowing `kix plan`,
+    /// `kix deploy`, and `kix graph` to run with `--bundle` on machines
+    /// without Nix. Readers recompute every store path from its content and
+    /// references and reject any mismatch.
     Bundle(BundleArgs),
 
-    /// Summarise a cluster's rendered resources by namespace and kind
+    /// Summarize a cluster's rendered resources by namespace and kind
     Inspect(InspectArgs),
 
-    /// Garbage-collect stale kix-managed resources
+    /// Garbage-collect stale Kix-managed resources
     Gc(GcArgs),
 
     /// One-off cluster migrations
@@ -356,8 +355,7 @@ pub enum Command {
     #[command(subcommand)]
     Pin(PinCommand),
 
-    /// Any other name: the plugin `kix-NAME` from PATH, with the arguments
-    /// after the name
+    /// Run an external `kix-<NAME>` plugin from `PATH`
     #[command(external_subcommand)]
     Plugin(Vec<OsString>),
 }
@@ -402,125 +400,113 @@ impl Command {
     }
 }
 
-/// Promote a built cluster with `kix pin`.
+/// Resolve container image tags to digests and record them in a committed pin file.
 ///
-/// A cluster definition that decides an image reference at deploy time has no
-/// committed answer to "what is running", and a clean checkout of it renders
-/// something nobody meant to deploy. `kix pin` writes that decision down: it
-/// asks the registry what a tag resolves to, refuses a tag that does not
-/// exist, and records the digest in a pin file next to the cluster.
-///
-/// It needs no cluster evaluation or flake. The state in
-/// which you most need to run it is the state in which evaluation is
-/// unhappy, so it takes a file path and nothing else.
+/// `kix pin` queries the container registry for a tag's current digest, fails
+/// if the tag does not exist, and writes the resolved digest into the
+/// repository's pin file. It operates directly on the pin file without
+/// evaluating the Nix flake, so you can update or repair pins even when
+/// cluster evaluation is broken.
 #[derive(Subcommand)]
 pub enum PinCommand {
     /// Resolve a tag and write it into the pin file
     Set(PinSetArgs),
 
-    /// Verify every pin still resolves, by digest
+    /// Verify that every pin still resolves to its recorded digest
     Check(PinCheckArgs),
 
-    /// Show what a pin file holds
+    /// List all entries in a pin file
     List(PinListArgs),
 }
 
 #[derive(clap::Args)]
 pub struct PinSetArgs {
-    /// Pin name, as the cluster definition reads it (`pins.get "<key>"`), or
-    /// `<namespace>/<instance>` for an instance pin, which Kix applies to the
-    /// instance's `image` option itself
+    /// Pin key read by the cluster definition (`pins.get "<key>"`), or
+    /// `<namespace>/<instance>` to set an instance's image option directly
     pub key: String,
 
-    /// For an instance pin, the option it sets, as a path in the instance's
-    /// config such as `server.image`. Default: `image`.
+    /// Config option path to set for an instance pin (e.g., `server.image`).
+    /// Defaults to `image`.
     #[arg(long)]
     pub option: Option<String>,
 
-    /// Tag to promote to. Kept in the file because it is what a human reads.
+    /// Image tag to resolve and record alongside the digest
     #[arg(long)]
     pub tag: Option<String>,
 
-    /// Repository including the registry host. Required for a new pin;
-    /// otherwise the existing repository is kept.
+    /// Image repository, including the registry host. Required when creating a
+    /// new pin; defaults to the existing repository when updating.
     #[arg(long)]
     pub repository: Option<String>,
 
-    /// Record this digest instead of asking the registry. For an air-gapped
-    /// promotion where the digest is already known.
+    /// Record this digest directly instead of querying the registry (for
+    /// air-gapped environments)
     #[arg(long, conflicts_with = "no_resolve")]
     pub digest: Option<String>,
 
-    /// Write the pin without a digest. Honest, and weaker: nothing then
-    /// verifies that the tag exists, now or later.
+    /// Record the tag without resolving a digest from the registry
     #[arg(long)]
     pub no_resolve: bool,
 
-    /// Revision of the source this image was built from. `kix pin check
-    /// --source-rev` later asserts the promotion actually ran.
+    /// Source revision the image was built from, verified by
+    /// `kix pin check --source-rev`
     #[arg(long)]
     pub source_rev: Option<String>,
 
-    /// Who promoted it. Defaults to the CI run, or to user@host.
+    /// Identity of the promoter (defaults to the CI run or `user@host`)
     #[arg(long)]
     pub promoted_by: Option<String>,
 
-    /// A note about this entry, kept for whoever reads the file later. Kix
-    /// never reads it. Setting the same image again keeps it; moving the
-    /// entry to another image drops it, since it described the old one,
-    /// unless this sets a new one. Pass an empty string to clear one.
+    /// Free-form note stored on the pin entry. Preserved when re-pinning the
+    /// same image, cleared when switching to a different image unless a new
+    /// note is provided, or cleared explicitly with `""`.
     #[arg(long)]
     pub note: Option<String>,
 
-    /// Create the pin file, or add a pin name that is not in it yet. A new
-    /// instance pin needs no `--init`.
+    /// Create the pin file if missing, or add a new named pin (not required
+    /// for `<namespace>/<instance>` pins)
     #[arg(long)]
     pub init: bool,
 
-    /// Rewrite a pin file that `kix pin` did not write, discarding its
-    /// comments and layout.
+    /// Overwrite a pin file that was not generated by `kix pin`
     #[arg(long)]
     pub force: bool,
 
-    /// Path to the pin file. Found rather than required: Kix looks in the
-    /// working directory, then next to the flake, then for the only
-    /// `*pins.json` in the repository.
+    /// Path to the pin file. If omitted, Kix searches the working directory,
+    /// the flake directory, and the repository for a single `*pins.json` file.
     #[arg(long)]
     pub pins_file: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
 pub struct PinCheckArgs {
-    /// Check only these pins: a pin name, or `<namespace>/<instance>` for
-    /// every pin of that instance. Repeatable. Default: all of them.
+    /// Check only the specified pin key or `<namespace>/<instance>` (repeatable;
+    /// defaults to all pins)
     #[arg(long = "key")]
     pub keys: Vec<String>,
 
-    /// Fail unless every pin that records a source revision records this one.
-    /// This is what catches a promotion step that silently did not run.
+    /// Require every pin that records a source revision to match this value
     #[arg(long)]
     pub source_rev: Option<String>,
 
-    /// Treat a pin with no digest as a warning rather than a failure.
+    /// Warn instead of failing when a pin has no recorded digest
     #[arg(long)]
     pub allow_unresolved: bool,
 
-    /// Check the file's shape without contacting any registry.
+    /// Validate the pin file's structure without contacting any registry
     #[arg(long)]
     pub offline: bool,
 
-    /// Path to the pin file. Found rather than required: Kix looks in the
-    /// working directory, then next to the flake, then for the only
-    /// `*pins.json` in the repository.
+    /// Path to the pin file. If omitted, Kix searches the working directory,
+    /// the flake directory, and the repository for a single `*pins.json` file.
     #[arg(long)]
     pub pins_file: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
 pub struct PinListArgs {
-    /// Path to the pin file. Found rather than required: Kix looks in the
-    /// working directory, then next to the flake, then for the only
-    /// `*pins.json` in the repository.
+    /// Path to the pin file. If omitted, Kix searches the working directory,
+    /// the flake directory, and the repository for a single `*pins.json` file.
     #[arg(long)]
     pub pins_file: Option<PathBuf>,
 }
@@ -562,9 +548,8 @@ pub struct ComplianceAttestArgs {
     #[arg(long)]
     pub invocation_id: Option<String>,
 
-    /// Read the deploy receipt off the cluster's active Activation instead of
-    /// building. This attests what is deployed rather than what would be, and
-    /// works from a machine that has never built this cluster.
+    /// Read the deploy receipt from the cluster's active Activation resource
+    /// instead of evaluating locally, attesting what is currently deployed
     #[arg(long)]
     pub from_cluster: bool,
 }
@@ -610,19 +595,20 @@ pub struct DiffArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Compare against a directory instead of the live cluster: a previous
-    /// build result (`kix-packages.json` inside) or a manifest directory
-    /// written by `kix snapshot save` or `kix export`
+    /// Compare against a local directory instead of the live cluster: either a
+    /// previous build result (containing `kix-packages.json`) or a manifest
+    /// directory from `kix snapshot save` or `kix export`
     #[arg(long, value_name = "DIR")]
     pub from: Option<String>,
 
-    /// Read the new side from this bundle (`kix bundle`) instead of
-    /// building. Without `--from` or `--from-bundle`, the old side is no
-    /// build at all, so every resource is added and the cluster is not read
+    /// Read the target build from a `.kixbundle` file instead of evaluating.
+    /// Without `--from` or `--from-bundle`, compares against an empty baseline
+    /// without contacting the cluster.
     #[arg(long, value_name = "FILE")]
     pub bundle: Option<std::path::PathBuf>,
 
-    /// Compare against the build in this bundle instead of the live cluster
+    /// Compare against the baseline build in this `.kixbundle` file instead of
+    /// the live cluster
     #[arg(
         long,
         value_name = "FILE",
@@ -631,26 +617,26 @@ pub struct DiffArgs {
     )]
     pub from_bundle: Option<std::path::PathBuf>,
 
-    /// How much of each change `--output json` and `--output yaml` include.
-    /// Text and Markdown output are the same at every level.
+    /// Detail level for `--output json` and `--output yaml` (text and Markdown
+    /// output are unaffected)
     #[arg(long, value_enum, default_value_t = Detail::Plain)]
     pub detail: Detail,
 
-    /// Also write the comparison to this file, a `.kixplan` as `kix plan
-    /// --save` writes, whatever `--detail` and `--output` say
+    /// Write the comparison to a `.kixplan` file (same format as
+    /// `kix plan --save`), regardless of `--detail` and `--output`
     #[arg(long, value_name = "FILE")]
     pub save: Option<std::path::PathBuf>,
 }
 
-/// What the JSON and YAML of `kix diff` say about each changed resource.
+/// Detail level for changed resources in `kix diff` JSON and YAML output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Detail {
-    /// Which resources change, and how many fields of each.
+    /// Resource names and changed field counts only.
     Plain,
-    /// Also each changed field, with its old and new value.
+    /// Include each changed field with its old and new values.
     Fields,
-    /// Also the old and new manifest of each changed, added, or removed
-    /// resource.
+    /// Include the full old and new manifests for each changed, added, or
+    /// removed resource.
     Manifests,
 }
 
@@ -669,30 +655,25 @@ pub struct PlanCommandArgs {
     #[command(flatten)]
     pub plan: PlanArgs,
 
-    /// Also write the plan to this file, a `.kixplan` that `kix deploy
-    /// --plan` takes and Kix Enterprise reads: the plan with each changed
-    /// field, the build's dependency graph, and the old and new manifest of
-    /// each changed, added, or removed object, secret values hidden
+    /// Write the plan to a `.kixplan` file for `kix deploy --plan` or Kix
+    /// Enterprise. Includes changed fields, the build's dependency graph, and
+    /// full old and new manifests with Secret values redacted.
     #[arg(long, value_name = "FILE")]
     pub save: Option<std::path::PathBuf>,
 }
 
-/// What a deploy plans from: the cluster and the flags that change which
-/// objects it writes or deletes. Shared by `kix plan` and `kix deploy`, so a
-/// plan made with the same flags is the deploy's plan.
+/// Shared planning arguments for `kix plan` and `kix deploy`.
 #[derive(clap::Args, Clone, Debug)]
 pub struct PlanArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Use local activation cache instead of fetching from cluster.
+    /// Use the local activation cache instead of querying the cluster.
     ///
-    /// Plans entirely offline, so it cannot see the records of deploys that
-    /// stopped part way and will not reconcile what they left behind, and it
-    /// cannot see orphans that earlier deploys kept. A deploy records those
-    /// builds on the new activation again, so a later plain `kix deploy
-    /// --prune` or `kix gc` still deletes their orphans. `kix plan` with it
-    /// compares two builds and checks nothing with the apiserver.
+    /// Runs completely offline by comparing the new build against the locally
+    /// cached activation. Does not inspect live cluster state, in-flight or
+    /// failed deployments, or previously retained orphans, and performs no
+    /// server-side dry run.
     #[arg(long)]
     pub current_activation: bool,
 
@@ -700,10 +681,10 @@ pub struct PlanArgs {
     #[arg(long)]
     pub reconcile: bool,
 
-    /// Delete orphaned resources (in the old activation, or kept by an earlier
-    /// deploy, and not in the new one); `kix plan` sends each delete as a dry
-    /// run. Without it they are listed, kept, and recorded on the new
-    /// activation for a later `--prune` or `kix gc`
+    /// Delete orphaned resources left from the previous activation or earlier
+    /// deploys (`kix plan` dry-runs each deletion). Without this flag, orphans
+    /// are kept and recorded on the new Activation for a later `--prune` or
+    /// `kix gc`.
     #[arg(long)]
     pub prune: bool,
 
@@ -713,7 +694,7 @@ pub struct PlanArgs {
 
     /// Take ownership of fields currently owned by other field managers (SSA conflict override).
     /// Without this, conflicts surface as a 409 with the conflicting field paths and current owner.
-    /// Useful when migrating resources from kubectl/helm to kix for the first time.
+    /// Useful when migrating resources from kubectl/helm to Kix for the first time.
     #[arg(long)]
     pub force_conflicts: bool,
 
@@ -724,15 +705,14 @@ pub struct PlanArgs {
     #[arg(long)]
     pub accept_migrations: bool,
 
-    /// Read the build from this bundle (`kix bundle`) instead of building.
-    /// Every store path in it is checked against its content first
+    /// Read the target build from a `.kixbundle` file instead of evaluating,
+    /// verifying every store path against its content first
     #[arg(long, value_name = "FILE", conflicts_with = "current_activation")]
     pub bundle: Option<std::path::PathBuf>,
 
-    /// A bundle of a build the cluster's records name (the Active one, a
-    /// failed or a kept one), used where kix would otherwise look for that
-    /// build in the local Nix store. Matched by the record's identity hash.
-    /// Repeat for several
+    /// Bundle file for a previously deployed build (active, failed, or retained
+    /// orphan source) to use when its store path is not present locally.
+    /// Matched by the Activation record's identity hash; repeatable.
     #[arg(long = "deployed-bundle", value_name = "FILE", requires = "bundle")]
     pub deployed_bundles: Vec<std::path::PathBuf>,
 }
@@ -746,16 +726,16 @@ pub struct DeployArgs {
     #[arg(short, long)]
     pub yes: bool,
 
-    /// Preview only: run `kix plan` with the same flags and change nothing.
-    /// With `--plan`, check the reviewed plan still matches and exit
+    /// Preview only: run `kix plan` with the same flags and make no changes.
+    /// When combined with `--plan`, verify that the saved plan still matches
+    /// and exit.
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Deploy only if the plan made now still matches this reviewed one, a
-    /// `.kixplan` file from `kix plan --save`. The deploy uses the
-    /// plan's planning flags and exits 4, applying nothing, when the cluster,
-    /// either build, the flags, or the refusals, reverted drift, and prune
-    /// deletes it would make differ from what was reviewed
+    /// Deploy only if the current plan matches this `.kixplan` file from
+    /// `kix plan --save`. Uses the planning flags recorded in the file and
+    /// exits 4 without applying anything if the cluster state, builds, flags,
+    /// refusals, reverted drift, or prune deletions have changed.
     #[arg(
         long = "plan",
         id = "saved_plan",
@@ -764,8 +744,8 @@ pub struct DeployArgs {
     )]
     pub saved_plan: Option<std::path::PathBuf>,
 
-    /// Behavior on error: stop or continue. With `stop`, a deploy whose plan
-    /// shows a refused write stops before it applies anything
+    /// Behavior on error: `stop` or `continue`. With `stop`, a deploy whose
+    /// plan contains a refused write aborts before applying anything.
     #[arg(long, default_value = "stop")]
     pub on_error: OnError,
 
@@ -773,14 +753,14 @@ pub struct DeployArgs {
     #[arg(long, value_parser = validate_timeout)]
     pub timeout: Option<String>,
 
-    /// Delegate deployment to the kix operator instead of applying directly.
-    /// The operator reads the build from the Nix store, so not with --bundle
+    /// Delegate deployment to the Kix operator instead of applying directly
+    /// (requires the build in the cluster's Nix store; incompatible with `--bundle`)
     #[arg(long, conflicts_with = "bundle")]
     pub operator: bool,
 
-    /// Write an annotation onto this deploy's Activation record, as
-    /// KEY=VALUE. KEY may not be under `kix.run/`, a subdomain of it, or a
-    /// retired Kix domain: Kix reads those off the record. Repeat for several
+    /// Add a `KEY=VALUE` annotation to the Activation record (repeatable).
+    /// Keys under `kix.run/`, its subdomains, or retired Kix domains are
+    /// reserved and rejected.
     #[arg(
         long = "record-annotation",
         value_name = "KEY=VALUE",
@@ -794,7 +774,7 @@ pub struct DeployArgs {
     #[arg(long)]
     pub tui: bool,
 
-    /// Group the tree view by namespace instead of kix package. Only affects
+    /// Group the tree view by namespace instead of Kix package. Only affects
     /// rendering; execution order is unchanged.
     #[arg(long)]
     pub group_by_ns: bool,
@@ -837,29 +817,23 @@ pub enum OnError {
 
 #[derive(Subcommand, Debug)]
 pub enum MigrateCommand {
-    /// Move this cluster's Kix records to Kix's current API group.
+    /// Migrate this cluster's Kix records from a retired API group to `kix.run`.
     ///
-    /// Kix used to stamp its annotations and register its CRDs under a
-    /// domain we do not own. Records made before the move still sit under
-    /// the old API group, and Kix refuses to touch such a cluster until this
-    /// has run.
+    /// Copies every Activation record to the current API group with its status
+    /// history intact, verifies each copy by name and phase, removes the
+    /// operator finalizer from the old records, and deletes the old CRDs.
+    /// PackageInstance records are not copied because the next deploy
+    /// recreates them from the build.
     ///
-    /// It copies every Activation record to the new group with its history
-    /// intact, verifies each copy by name and by phase, clears the operator
-    /// finalizer from the old records, and deletes the old CRDs. PackageInstance records are not copied: the
-    /// next deploy re-creates them from the build.
+    /// If the Kix operator runs on this cluster, scale it to 0 before running
+    /// this command. An older operator watching the retired API group will
+    /// re-add its finalizer and delete active resources when the old CRDs are
+    /// removed. Before copying or deleting anything, this command clears the
+    /// old finalizers, waits briefly, and aborts if an operator re-adds them.
     ///
-    /// Scale the kix operator to 0 first if this cluster runs one. While it
-    /// watches the old API group it re-adds its finalizer to the records, and
-    /// deleting the old CRDs would then make it delete every resource in the
-    /// activation. The command tests this rather than trusting it: it clears
-    /// the finalizers, waits, and reads them back. Only a running operator
-    /// puts one back, and if one does, it stops there having copied and
-    /// deleted nothing.
-    ///
-    /// Run it once per cluster. If it is interrupted, run it again: it skips
-    /// what it already copied and repairs a copy whose status did not land.
-    /// Then upgrade the operator image, scale it back up, and deploy.
+    /// Safe to rerun if interrupted: existing copies are skipped and missing
+    /// status subresources are repaired. After migration completes, upgrade
+    /// the operator image, scale it back up, and deploy.
     Domain(MigrateArgs),
 }
 
@@ -894,39 +868,37 @@ pub struct GcArgs {
     #[arg(long)]
     pub operator: bool,
 
-    /// Also delete resources that carry the kix label but no kix.run/identity-hash.
-    /// kix never applied those, so by default --hard only reports them.
+    /// Also delete resources that carry the Kix label but no `kix.run/identity-hash`.
+    /// Kix never applied those, so by default `--hard` only reports them.
     #[arg(long)]
     pub include_unstamped: bool,
 
-    /// With --hard, also judge Kix objects that name no Activation record
-    /// on the cluster. When another Kix cluster has records here, Kix cannot
-    /// tell whose those objects are, so by default --hard only reports them.
+    /// With `--hard`, also evaluate Kix resources that reference no Activation
+    /// record on the cluster. When multiple Kix clusters share a Kubernetes
+    /// cluster, Kix cannot tell which cluster owns unattributed resources, so
+    /// by default `--hard` only reports them.
     #[arg(long, requires = "hard")]
     pub include_unattributed: bool,
 
-    /// With --hard, also judge copies of Kix objects that a controller made:
-    /// objects that carry Kix's annotations and an owner reference but no
-    /// Kix apply record. Kix did not apply them, so by default --hard only
-    /// reports them.
+    /// With `--hard`, also evaluate controller-created copies of Kix resources
+    /// (objects with Kix annotations and an `ownerReferences` entry, but no
+    /// Kix apply stamp). By default `--hard` only reports them.
     #[arg(long, requires = "hard")]
     pub include_copies: bool,
 
-    /// Always keep at least this many of the newest rollback targets
-    /// (Superseded Activation records whose deploy finished), whatever their
-    /// age. A record of a deploy that never finished is kept by age alone.
-    /// Applies in every mode. 0 keeps none.
+    /// Minimum number of newest completed (`Superseded`) Activation records to
+    /// retain as rollback targets, regardless of age (`0` retains none)
     #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MIN)]
     pub keep: usize,
 
-    /// Never keep more than this many Superseded records. Each record still
-    /// on the cluster keeps one entry in kix.run/activations on every
-    /// managed resource, and that annotation has a hard size cap.
+    /// Maximum number of `Superseded` Activation records to retain, bounding
+    /// the size of the `kix.run/activations` annotation on managed resources
     #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MAX)]
     pub keep_max: usize,
 
-    /// Beyond --keep, retire records older than this (30d, 12h, 45m; a bare
-    /// number is days). "0" or "off" disables the age rule.
+    /// Beyond `--keep`, retire records older than this duration (`30d`, `12h`,
+    /// `45m`, or a bare number of days; `0` or `off` disables age-based
+    /// retirement)
     #[arg(long, value_name = "DURATION", default_value = "30d")]
     pub keep_for: String,
 }
@@ -951,8 +923,8 @@ pub struct RollbackArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Delete orphaned resources (in the current activation, or kept by an
-    /// earlier deploy, and not in the target)
+    /// Delete orphaned resources from the current activation or earlier deploys
+    /// that are not in the rollback target
     #[arg(long)]
     pub prune: bool,
 
@@ -970,9 +942,9 @@ pub struct ExportArgs {
     #[arg(long, default_value = "./kix-export")]
     pub out: String,
 
-    /// Export mode: `exit` strips kix.run/* annotations and skips kix-internal
-    /// CRs (Activation, PackageInstance) for a neutral handoff. `audit`
-    /// preserves everything for compliance evidence.
+    /// Export mode: `exit` strips `kix.run/*` annotations and omits Kix-internal
+    /// CRs (`Activation`, `PackageInstance`) for a clean handoff; `audit`
+    /// preserves all metadata for compliance evidence.
     #[arg(long = "for", value_name = "MODE", default_value = "exit")]
     pub for_mode: ExportMode,
 
@@ -1032,9 +1004,9 @@ pub struct PortForwardArgs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ExportMode {
-    /// Neutral kix-free YAML suitable for `kubectl apply` / Flux / Argo
+    /// Plain Kubernetes YAML without Kix metadata, suitable for `kubectl apply`, Flux, or Argo
     Exit,
-    /// Preserve kix.run/* provenance annotations for audit evidence
+    /// Preserve `kix.run/*` provenance annotations for audit evidence
     Audit,
 }
 
@@ -1044,14 +1016,13 @@ pub struct HealthArgs {
     pub cluster: String,
 }
 
-/// No flake argument: the check compares live objects against the
-/// `kix.run/applied-hash` stamps written at deploy time, so it runs from any
-/// kubeconfig-only context. Uses the global `--context` and `--output` flags.
+/// Compare live cluster objects against their `kix.run/applied-hash`
+/// annotations without evaluating a flake.
 #[derive(clap::Args)]
 pub struct DriftArgs {
-    /// Check only this Kix cluster's objects, found through its Activation
-    /// records. Without it every Kix object is checked and each report names
-    /// the Kix clusters it belongs to.
+    /// Check only objects belonging to this Kix cluster (resolved via its
+    /// Activation records). When omitted, checks all Kix-managed objects and
+    /// reports their owning clusters.
     #[arg(long)]
     pub cluster: Option<String>,
 }
@@ -1104,7 +1075,7 @@ pub struct GraphArgs {
     #[arg(long)]
     pub format: Option<GraphFormat>,
 
-    /// Read the build from this bundle (`kix bundle`) instead of building
+    /// Read the target build from a `.kixbundle` file instead of evaluating
     #[arg(long, value_name = "FILE")]
     pub bundle: Option<std::path::PathBuf>,
 }
@@ -1114,8 +1085,8 @@ pub struct BundleArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Where to write the bundle [default: <CLUSTER>.kixbundle]
-    // The text is clap's help, so it keeps `<CLUSTER>` as the user reads it.
+    /// Output path for the bundle [default: <CLUSTER>.kixbundle]
+    // Preserve literal `<CLUSTER>` placeholder for clap `--help` output.
     #[allow(rustdoc::invalid_html_tags)]
     #[arg(value_name = "FILE")]
     pub file: Option<std::path::PathBuf>,
@@ -1139,8 +1110,8 @@ pub enum SnapshotCommand {
     Save(SnapshotSaveArgs),
 }
 
-/// Reads the cluster's Activation records to tell its objects from those of
-/// other Kix clusters on the same Kubernetes cluster. Needs no flake.
+/// Save live objects belonging to a single Kix cluster, identified via its
+/// Activation records without evaluating a flake.
 #[derive(clap::Args)]
 pub struct SnapshotSaveArgs {
     /// Kix cluster whose objects to save
@@ -1164,8 +1135,8 @@ fn parse_record_annotation(s: &str) -> Result<(String, String), String> {
     let (key, value) = s
         .split_once('=')
         .ok_or_else(|| format!("expected KEY=VALUE, got '{s}'"))?;
-    // Kix reads its own keys, and those of the retired domain, off the
-    // record: the identity hash, built-via, and more.
+    // Reserve Kix's own annotation domains (current and retired) for internal
+    // metadata such as identity-hash and built-via.
     if key.is_empty() || kix::manifest::keys::is_kix_domain_key(key) {
         return Err(format!(
             "'{key}' is not allowed: the key must be set and not under {}",
@@ -1266,8 +1237,8 @@ mod tests {
         assert!(long_help(&["compliance"]).contains("--context"));
     }
 
-    /// Every command, including each one that hides a global flag, still
-    /// resolves `--help` to the help flag.
+    // Verify that hiding scoped global flags does not shadow `--help` on any
+    // subcommand.
     #[test]
     fn every_command_prints_help() {
         fn paths(cmd: &clap::Command, prefix: &[String], out: &mut Vec<Vec<String>>) {

@@ -1,5 +1,5 @@
-//! `kix bundle`: write a cluster's build as one file (`kix_bundle`), which
-//! `--bundle` and `--deployed-bundle` read without Nix.
+//! Implement `kix bundle`, which writes a cluster build to a standalone
+//! `.kix.bundle` file that `--bundle` and `--deployed-bundle` can read without Nix.
 
 use std::path::PathBuf;
 
@@ -10,7 +10,7 @@ use crate::output;
 
 use super::CommandContext;
 
-/// `kix bundle <cluster> [FILE]`.
+/// Build `<cluster>` and write its bundle archive to `FILE` (or `<cluster>.kix.bundle`).
 pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
     let status = |msg: &str| {
         if !output::quiet() {

@@ -1,4 +1,4 @@
-//! Nix evaluation layer for kix.
+//! Nix evaluation layer for Kix.
 //!
 //! Provides store management, expression evaluation, flake attribute
 //! navigation, eval caching, and error translation. All Nix complexity

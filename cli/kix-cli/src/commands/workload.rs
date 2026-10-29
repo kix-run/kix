@@ -24,7 +24,7 @@ pub struct WorkloadTarget {
 }
 
 impl WorkloadTarget {
-    /// `kind/name` form used by `kubectl port-forward deployment/foo`.
+    /// Format as `kind/name` for `kubectl port-forward` (for example, `deployment/foo`).
     pub fn kubectl_ref(&self) -> String {
         format!("{}/{}", self.kind.to_lowercase(), self.name)
     }
@@ -124,7 +124,7 @@ fn resolve_workload_in_package(graph: &StoreGraph, pkg: &PackageNode) -> Result<
     ))
 }
 
-/// Extract a `WorkloadTarget` from a manifest iff its `kind` matches `want`.
+/// Extract a [`WorkloadTarget`] from `manifest` if its `kind` matches `want`.
 fn workload_from_manifest(manifest: &Value, want: &str) -> Option<WorkloadTarget> {
     let kind = manifest.pointer("/kind")?.as_str()?;
     if kind != want {

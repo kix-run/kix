@@ -12,7 +12,7 @@ after the subcommand. A command that has no use for a flag ignores it, and its
 flag wins over the variable.
 
 This page is hand-maintained. Check `GlobalArgs` and `SCOPED_GLOBALS` in
-`cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/main.rs` and
+`cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/main.rs`, and
 `cli/kix-cli/src/output.rs` when in doubt, and `cli/kix-cli/src/plugin.rs`
 for plugins.
 
@@ -33,7 +33,7 @@ for plugins.
 
 ## Which commands read which flag
 
-`-v`, `-q` and `--no-color` apply to every command. The other flags apply only
+`-v`, `-q`, and `--no-color` apply to every command. The other flags apply only
 where the table shows them; elsewhere they are accepted and have no effect.
 
 | Command | `-o` | `--context` | `--flake` | `--no-cache` | `--override-input` |
@@ -70,14 +70,14 @@ The variables that tune how Kix talks to the Kubernetes API are listed in
 Registry credentials for `kix pin` are listed on [`kix pin`](/docs/reference/cli/pin/).
 
 A variable that turns a flag on or off is off when it is empty or one of
-`false`, `f`, `no`, `n`, `off` or `0`, in any case, and on for any other value.
+`false`, `f`, `no`, `n`, `off`, or `0`, in any case, and on for any other value.
 
 ## Plugins
 
 `kix NAME ARGS...`, where NAME is not a `kix` command, runs the program
 `kix-NAME` with ARGS. Kix looks for it in the absolute directories on `PATH`,
 the way git and cargo find their external commands. A plugin can be any
-executable; NAME may hold letters, digits, `-` and `_`.
+executable; NAME may hold letters, digits, `-`, and `_`.
 
 - **Global flags go before NAME.** Kix passes them to the plugin as the
   variables in the table above, and `--no-color` as `NO_COLOR=1`. Everything

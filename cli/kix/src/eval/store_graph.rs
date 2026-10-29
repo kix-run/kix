@@ -1,4 +1,4 @@
-//! Store graph: in-memory representation of a kix cluster's Nix store DAG.
+//! Store graph: in-memory representation of a Kix cluster's Nix store DAG.
 //!
 //! Reads the result folder produced by `nix build .#cluster-<name>-activation`
 //! (containing `activation` symlink + `kix-packages.json`) and builds a
@@ -6,8 +6,6 @@
 //!
 //! Uses `nix-store -q --graph` for bulk graph loading (one subprocess call
 //! for the entire closure) instead of per-path `--references` queries.
-//!
-//! This is the Rust equivalent of `tools/lib/kix_model.py`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -53,9 +51,8 @@ pub struct PackageNode {
     pub namespace: String,
     /// From the PI manifest: spec.version
     pub version: Option<String>,
-    /// From the PI manifest: spec.lifecycle, one of "stateful", "durable",
-    /// "ephemeral", or absent. Drives migration pair detection.
-    /// See v2_discussions/67_stateful_migration_orchestration.md.
+    /// From the PI manifest: `spec.lifecycle` (`"stateful"`, `"durable"`,
+    /// `"ephemeral"`, or absent), which drives migration pair detection.
     pub lifecycle: Option<String>,
     /// Ordered list of owned resource store paths.
     pub resource_paths: Vec<PathBuf>,
@@ -90,7 +87,7 @@ pub fn store_hash(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Human-readable part of a store path (after the hash-).
+/// Return the human-readable name part of a store path (after `<hash>-`).
 pub fn store_name(path: &Path) -> String {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -99,7 +96,7 @@ pub fn store_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Check whether a store path is a kix k8s resource.
+/// Return whether a store path is a Kix Kubernetes resource (`k8s-*`).
 fn is_k8s_path(path: &Path) -> bool {
     store_name(path).starts_with("k8s-")
 }
@@ -111,13 +108,14 @@ fn read_store_file(path: &Path) -> Result<Vec<u8>, KixEvalError> {
     })
 }
 
-/// A path for a message, its hidden characters shown.
+/// Format `path` for error messages with hidden characters escaped.
 fn shown(path: &Path) -> String {
     printable(&path.to_string_lossy())
 }
 
-/// The first of `manifest`'s kind, `apiVersion` parts, name, and namespace
-/// (when it has one) that is not one URL path segment.
+/// Return the first field among `manifest`'s `kind`, `apiVersion` segments,
+/// `metadata.name`, and `metadata.namespace` (when present) that is not a
+/// valid single URL path segment.
 fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
     let segment = |s: &str| !matches!(s, "" | "." | "..") && !s.contains(['/', '%', '?', '#']);
     let text = |pointer: &str| manifest.pointer(pointer).and_then(|v| v.as_str());
@@ -138,7 +136,7 @@ fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
     .map(|(field, _)| field)
 }
 
-/// Resource label: "Kind/name".
+/// Format a `"Kind/name"` label for `manifest`.
 fn resource_label(manifest: &serde_json::Value) -> String {
     let kind = manifest
         .pointer("/kind")
@@ -213,16 +211,14 @@ impl StoreGraph {
         Ok(graph)
     }
 
-    /// Steps 4 to 6 of loading a build: read every manifest, group them by
-    /// package, and work out the cross-package dependencies. Shared by
-    /// every reader of a build, which differ only in where a file's bytes
-    /// come from (`read`). Each file is parsed here, with
-    /// [`super::manifest_json::parse_manifest`], so every reader parses
-    /// alike. A reader runs [`StoreGraph::validate`] on the result. Calls
-    /// `read` once for each path the index lists and each `k8s-` path among
-    /// the references, and fails when it fails: a build is not deployed
-    /// without a file it names.
-    /// A package that lists a path twice holds it once.
+    /// Assemble a `StoreGraph` by reading manifests via `read`, grouping them
+    /// by package, and computing cross-package dependencies.
+    ///
+    /// Shared by local and carried build loaders, which differ only in how file
+    /// bytes are read. Parses every file through
+    /// [`super::manifest_json::parse_manifest`] and deduplicates repeated
+    /// resource paths within a package. Callers must run
+    /// [`StoreGraph::validate`] on the returned graph.
     pub fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
@@ -470,28 +466,24 @@ impl StoreGraph {
         Ok(())
     }
 
-    /// Build a graph from a flat set of stamped manifests, such as live
-    /// kix-owned objects or a snapshot directory, so it can stand in
-    /// for a store graph that is not on this machine: the previous
-    /// activation when its store path is gone, or the cluster side of
-    /// `kix diff`.
+    /// Synthesize a `StoreGraph` from a flat slice of stamped manifests (such
+    /// as live Kix-owned cluster objects or a snapshot directory) so it can
+    /// stand in for a missing store graph during planning or `kix diff`.
     ///
-    /// Resources group by their stamped `kix.run/package[-namespace]`
-    /// annotations, except that a manifest matching a `reference` path joins
-    /// every reference package that lists the path: a build lists one store
-    /// path under several packages (a `secret-ref-*` marker each importer
-    /// declares), and `stamp::stamp_annotations` stamps only one of them.
-    /// A PackageInstance is a package of its own unless it is an import
-    /// marker stamped with another package; a marker the build indexes as a
-    /// package (a `kix.mkImport` platform import) is stamped `_cluster`.
-    /// Cluster-level resources (no package annotation) stay in
-    /// `resources` outside any PackageNode, the way a real graph keeps
-    /// them. Identity hashes map back onto `reference`'s store paths: a
-    /// matched resource reuses the reference path and manifest (equal hash
-    /// ⇒ identical content), so untouched packages compare path-equal and
-    /// read as unchanged; unmatched resources keep their own manifest under
-    /// a synthetic path so their diff keeps the old and new sides aligned. Versions come from
-    /// PackageInstance manifests.
+    /// Groups resources by their `kix.run/package` and
+    /// `kix.run/package-namespace` annotations, except that a manifest
+    /// matching a path in `reference` joins every reference package that lists
+    /// that path (preserving shared `secret-ref-*` and `service-ref-*` import
+    /// markers). A `PackageInstance` forms its own package unless it is an
+    /// import marker stamped with a declaring package; platform imports from
+    /// `kix.mkImport` are stamped `_cluster` and remain standalone packages.
+    /// Cluster-level resources without a package annotation stay in
+    /// `resources` outside any `PackageNode`.
+    ///
+    /// Resources whose identity hash and content match `reference` reuse the
+    /// reference store path and manifest so unchanged packages compare
+    /// path-equal. Resources that do not match keep their own manifest under a
+    /// content-addressed synthetic store path.
     pub fn synthesize(manifests: &[serde_json::Value], reference: &StoreGraph) -> StoreGraph {
         use crate::manifest::keys;
         use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
@@ -531,10 +523,9 @@ impl StoreGraph {
             HashMap::new();
 
         for (i, m) in manifests.iter().enumerate() {
-            // A manifest earns the reference path by matching it in content,
-            // not by hash alone. Between two builds the hash is the content;
-            // a live object keeps its stamp while someone changes it under
-            // kix, and that change has to stay visible.
+            // Reuse the reference path only when both the identity hash and the
+            // manifest content match, so out-of-band edits to a live object under
+            // Kix remain visible in the diff.
             let hash = ann(m, keys::IDENTITY_HASH).unwrap_or_default();
             let matched = reference_path_by_hash.get(&hash).filter(|&&p| {
                 let diff_config = crate::manifest::diff::DiffConfig::default().in_order();
@@ -742,9 +733,9 @@ mod tests {
             pi
         }
 
-        /// A build of cluster `c` with a record and the packages
-        /// `(namespace, instance)`, each listing `shared`: an import marker
-        /// or a ConfigMap.
+        /// Build a test graph of cluster `c` with an Activation record and the
+        /// given `(namespace, instance)` packages, each listing a shared import
+        /// marker or ConfigMap.
         fn build(packages: &[(&str, &str)], shared_marker: bool) -> StoreGraph {
             let mut g = StoreGraph::empty("c");
             g.activation_path = add(
@@ -863,8 +854,8 @@ mod tests {
         use crate::manifest::keys;
         use serde_json::{Value, json};
 
-        /// A stamped manifest the way a build (or the kix-owned view of a
-        /// live object) carries it.
+        /// Build a stamped manifest matching the shape produced by a build or
+        /// the Kix-owned view of a live object.
         fn stamped(
             kind: &str,
             ns: &str,
@@ -917,7 +908,7 @@ mod tests {
             })
         }
 
-        /// 32-char store hash as `store_hash` reads it back from a path.
+        /// Format a 32-character store hash from `seed`.
         fn h(seed: &str) -> String {
             format!("{seed:a<32}")
         }
@@ -981,9 +972,9 @@ mod tests {
             assert_eq!(dns.version.as_deref(), Some("2.0"));
         }
 
-        /// An unstamped PackageInstance as the library renders it. With
-        /// `import` set it is an import marker, shaped like the build's
-        /// `secret-ref-*`, `service-ref-*` and `platform-*` markers.
+        /// Build an unstamped `PackageInstance` manifest as rendered by the Nix
+        /// library, optionally configured as an import marker (`secret-ref-*`,
+        /// `service-ref-*`, or `platform-*`).
         fn rendered_pi(ns: &str, name: &str, import: Option<(&str, &str)>) -> Value {
             let mut anns = serde_json::Map::new();
             anns.insert(keys::DEPENDS_ON.into(), json!("x,requires:y"));
@@ -1023,10 +1014,8 @@ mod tests {
         /// `(store hash seed, PackageInstance, [(seed, resource)])`.
         type BuiltPackage<'a> = (&'a str, Value, Vec<(&'a str, Value)>);
 
-        /// A build graph shaped like `Build::local` makes one: each
-        /// package lists `(seed, manifest)` resources by store path, a seed
-        /// listed under two packages is one store path, every PackageInstance
-        /// is in `resources`, and `stamp_annotations` has run.
+        /// Build a stamped `StoreGraph` from `packages`, sharing store paths for
+        /// identical seeds across packages.
         fn built(packages: &[BuiltPackage]) -> StoreGraph {
             let path = |seed: &str| PathBuf::from(format!("/nix/store/{}-k8s", h(seed)));
             let mut g = StoreGraph::empty("c");
@@ -1233,8 +1222,8 @@ mod tests {
 
         #[test]
         fn same_hash_different_content_keeps_its_own_manifest() {
-            // A live object drifted under kix: the stamp is unchanged, the
-            // content is not. It must not be mistaken for the reference.
+            // A live object modified out-of-band under Kix keeps its identity
+            // hash stamp while its content differs from the reference build.
             let built = stamped(
                 "Deployment",
                 "app",

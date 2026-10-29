@@ -1,9 +1,8 @@
-//! The `nix` and `nix-store` commands kix runs against the Nix store, and
-//! the one way they run.
+//! `nix` and `nix-store` subprocess execution against the Nix store.
 //!
-//! `output` runs a command and turns any failure into a [`NixCommandError`],
-//! which names the command, its exit status and its stderr. The evaluation
-//! backend (`cli_backend`) runs its `nix eval` calls through it too.
+//! [`output`] runs a command and converts any failure into a
+//! [`NixCommandError`] that records the command line, exit status, and stderr.
+//! [`super::cli_backend`] also runs its `nix eval` calls through [`output`].
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -68,14 +67,14 @@ impl NixCommandError {
         }
     }
 
-    /// Nix's wording for a flake attribute that does not exist.
+    /// Return whether stderr matches Nix's message for a missing flake attribute.
     pub(crate) fn missing_attribute(&self) -> bool {
         self.stderr.contains("does not provide attribute")
     }
 }
 
-/// The stdout of `cmd`, or an error naming it when it does not run or
-/// exits non-zero.
+/// Run `cmd` and return its stdout, or return a [`NixCommandError`] if it
+/// fails to start or exits non-zero.
 pub(crate) fn output(cmd: &mut Command) -> Result<Vec<u8>, NixCommandError> {
     let out = cmd
         .output()
@@ -196,11 +195,11 @@ pub(crate) fn build_cluster_activation(
     Ok(path)
 }
 
-/// The direct references of every path in the closure of `root_path`, from
-/// one `nix-store -q --graph` call.
+/// Query the direct references of every path in the closure of `root_path`
+/// via `nix-store -q --graph`.
 ///
-/// A failure is an error. An empty graph would load the build with no
-/// resources, and a plan against that would prune everything.
+/// Propagates subprocess failures rather than returning an empty graph, which
+/// would cause a plan to treat all live resources as orphans.
 pub(crate) fn closure_graph(
     root_path: &Path,
 ) -> Result<HashMap<PathBuf, Vec<PathBuf>>, NixCommandError> {
@@ -239,11 +238,11 @@ pub(crate) fn closure_graph(
         let src = PathBuf::from(format!("{nix_store}{src_base}"));
         let dst = PathBuf::from(format!("{nix_store}{dst_base}"));
 
-        // Dot edges run from dependency to dependent. Store the inverse map.
+        // DOT edges point from dependency to dependent, so invert them to map
+        // each path to its dependencies.
         deps.entry(dst).or_default().push(src);
     }
 
-    // Sort references for deterministic output
     for refs in deps.values_mut() {
         refs.sort_by(|a, b| {
             store_name(a)
@@ -255,7 +254,7 @@ pub(crate) fn closure_graph(
     Ok(deps)
 }
 
-/// Every path in the closure of `path`, with its references, from
+/// Query every path in the closure of `path` and its references via
 /// `nix path-info --json --recursive`.
 pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError> {
     let out = output(
@@ -276,8 +275,8 @@ pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError
     Ok(path_info_references(&info))
 }
 
-/// `(path, references)` from `nix path-info --json`, which is an object keyed
-/// by path in Nix 2.19 and later and an array of `{path, references}` before.
+/// Extract `(path, references)` pairs from `nix path-info --json` output,
+/// supporting both the object format (Nix 2.19+) and the legacy array format.
 fn path_info_references(info: &serde_json::Value) -> Vec<(String, Vec<String>)> {
     let refs = |v: &serde_json::Value| -> Vec<String> {
         v.get("references")
@@ -311,7 +310,7 @@ pub(crate) fn add_gc_root(link: &Path, target: &Path) -> Result<(), NixCommandEr
     .map(drop)
 }
 
-/// What `nix --version` prints, or `None` when `nix` does not run.
+/// Return the output of `nix --version`, or `None` if `nix` cannot be run.
 pub fn version() -> Option<String> {
     let out = output(Command::new("nix").arg("--version")).ok()?;
     String::from_utf8(out).ok().map(|s| s.trim().to_string())
@@ -322,8 +321,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Before, any failure gave an empty graph, and the build loaded with
-    /// no resources.
     #[test]
     fn a_graph_query_that_fails_is_an_error() {
         let dir = tempfile::tempdir().unwrap();

@@ -68,7 +68,7 @@ pub struct Plan {
     pub migrations: Checked<Migration>,
     /// Fields another field manager owns that the apply would set.
     pub conflicts: Checked<Conflict>,
-    /// Writes the apiserver, an admission webhook or the deploy itself would
+    /// Writes the apiserver, an admission webhook, or the deploy itself would
     /// refuse, other than ownership conflicts.
     pub admission: Checked<AdmissionRefusal>,
     /// Fields where the live cluster differs from the deployed build and
@@ -100,7 +100,7 @@ pub struct KixBuild {
 }
 
 impl KixBuild {
-    /// The running binary, whose version is `version` (callers pass
+    /// Return the running binary's [`KixBuild`] with `version` (callers pass
     /// [`crate::VERSION`]).
     pub fn current(version: &str) -> Self {
         let store_path = std::env::current_exe()
@@ -114,7 +114,7 @@ impl KixBuild {
     }
 }
 
-/// `/nix/store/<hash>-<name>` for a path inside it.
+/// Extract `/nix/store/<hash>-<name>` from a path inside the store.
 fn store_path_of(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/nix/store/")?;
     let entry = rest.split('/').next().filter(|e| !e.is_empty())?;
@@ -164,7 +164,8 @@ pub struct DeployedBuild {
 }
 
 impl DeployedBuild {
-    /// From an Activation record's manifest. `None` when it has no name.
+    /// Build a [`DeployedBuild`] from an Activation record's manifest, or
+    /// return `None` when it has no name.
     pub fn of_record(record: &Value) -> Option<Self> {
         Some(DeployedBuild {
             activation: record.pointer("/metadata/name")?.as_str()?.to_string(),
@@ -173,7 +174,8 @@ impl DeployedBuild {
         })
     }
 
-    /// The record of `manifests`, if there is one.
+    /// Build a [`DeployedBuild`] from the Activation record in `manifests`, if
+    /// present.
     pub fn of_manifests(manifests: &[Value]) -> Option<Self> {
         lifecycle::record_of(manifests).and_then(Self::of_record)
     }
@@ -198,9 +200,9 @@ pub enum PruneModeFlag {
 }
 
 impl PlanFlags {
-    /// The prune policy the flags ask for. `--prune-mode=no` skips, plain
-    /// `deploy` reports orphans without deleting (warn-only), `--prune`
-    /// deletes.
+    /// Return the [`PrunePolicy`] requested by these flags. `--prune-mode=no`
+    /// skips pruning, default `deploy` reports orphans without deleting
+    /// (warn-only), and `--prune` deletes them.
     pub fn prune_policy(&self) -> PrunePolicy {
         match self.prune_mode.unwrap_or(PruneModeFlag::Default) {
             PruneModeFlag::No => PrunePolicy::Skip,
@@ -218,7 +220,7 @@ pub enum MadeBy {
     /// changes are what the apiserver says each write would produce.
     DryRun,
     /// `kix diff` against the live cluster or a snapshot: a read-only
-    /// comparison with the kix-owned view.
+    /// comparison with the Kix-owned view.
     LiveRead,
     /// Two builds compared, with no cluster access.
     Builds,
@@ -275,7 +277,7 @@ pub struct Packages {
     pub added: Vec<PackageEntry>,
     pub removed: Vec<PackageEntry>,
     pub changed: Vec<ChangedPackage>,
-    /// Resources outside any package (Namespaces, CRDs, cluster-scoped
+    /// Resources outside any package (Namespaces, CRDs, and cluster-scoped
     /// bundles) that differ. Keyed `_cluster`.
     pub cluster_level: Option<ChangedPackage>,
     /// The deploy record's name, old to new. `None` when both sides name the
@@ -579,8 +581,8 @@ pub enum Detail<'a> {
 }
 
 impl Plan {
-    /// A plan made by `kix`, with every check not run for `reason`,
-    /// migrations aside.
+    /// Construct a [`Plan`] made by `kix`, with all cluster checks except
+    /// migrations marked not checked for `reason`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         kix: KixBuild,
@@ -613,7 +615,8 @@ impl Plan {
         }
     }
 
-    /// Anything a deploy would change or stop on, a prune delete included.
+    /// Return true when a deploy would change or stop on anything, including a
+    /// prune delete.
     pub fn has_changes(&self) -> bool {
         let p = &self.packages;
         !p.added.is_empty()
@@ -630,9 +633,9 @@ impl Plan {
             || self.stops()
     }
 
-    /// A deploy would refuse or stop on something here: a conflict, a
-    /// refused write, or a refused prune delete. Migrations are reported
-    /// apart because `--accept-migrations` lets them through.
+    /// Return true when a deploy would stop on a conflict, a refused write, or
+    /// a refused prune delete. Migrations are excluded because
+    /// `--accept-migrations` allows them.
     pub fn stops(&self) -> bool {
         !self.conflicts.items().is_empty()
             || !self.admission.items().is_empty()
@@ -745,8 +748,8 @@ impl Packages {
 }
 
 impl PackageEntry {
-    /// `side` is the side the package exists on: new for an added package,
-    /// old for a removed one.
+    /// Construct a [`PackageEntry`] for `p` on `side` (`Side::New` for an
+    /// added package, `Side::Old` for a removed one).
     fn of(p: &PackageInfo, manifests: Option<&ManifestIndex>, side: Side) -> Self {
         PackageEntry {
             key: p.key.clone(),
@@ -823,11 +826,10 @@ impl ChangedPackage {
 }
 
 impl FieldChange {
-    /// `d` with every secret value in it hidden; `is_secret` says whether
-    /// the resource is a Secret (`types::is_secret`). Other values are shown as
-    /// the build and the cluster hold them: a password written as a literal
-    /// container `env` value, or into a ConfigMap, is not recognised as
-    /// secret.
+    /// Convert `d` into a [`FieldChange`] with secret values redacted.
+    /// `is_secret` indicates whether the resource is a Secret
+    /// (`types::is_secret`). Values outside Secret fields and `checksum/*`
+    /// annotations are shown as stored in the build and cluster.
     pub(crate) fn of(is_secret: bool, d: &Difference) -> Self {
         let change = match d.kind {
             DiffKind::MissingInB => ChangeKind::Removed,

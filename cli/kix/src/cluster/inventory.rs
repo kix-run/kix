@@ -1,6 +1,5 @@
-//! The sweep of Kix-labelled objects on a cluster: parallel LISTs with the
-//! managed-by label, then each object attributed to the Kix clusters whose
-//! records it names.
+//! Sweep Kix-labeled objects on a cluster using parallel LIST requests, then
+//! attribute each object to the Kix clusters whose records it names.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -18,10 +17,10 @@ use kube::{
 };
 use tokio::task::JoinSet;
 
-/// The managed-by label value that kix sets on all resources.
+/// The managed-by label value that Kix sets on all resources.
 pub(crate) const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by=kix";
 
-/// Fully qualified resource name for logging (e.g. "pods" or "deployments.apps").
+/// Return the fully qualified resource name for logging (e.g. "pods" or "deployments.apps").
 fn resource_fqn(ar: &ApiResource) -> String {
     if ar.group.is_empty() {
         ar.plural.clone()
@@ -30,44 +29,41 @@ fn resource_fqn(ar: &ApiResource) -> String {
     }
 }
 
-/// What the managed sweep found.
+/// Results of a cluster sweep of Kix-labeled objects.
 pub struct ManagedSweep {
-    /// Objects kix applied: each carries `kix.run/identity-hash`.
+    /// Objects Kix applied, each carrying `kix.run/identity-hash`.
     pub managed: Vec<DynamicObject>,
-    /// Objects that carry the kix label but no identity hash and no owner.
-    /// kix never applied them (someone `kubectl apply`ed a kix render, or a
-    /// pre-hash kix did). `kix gc --hard` reports them; nothing deletes them
-    /// unless asked.
+    /// Objects that carry the Kix label without an identity hash or owner.
+    /// Kix never applied them. `kix gc --hard` reports them, and nothing
+    /// deletes them unless requested.
     pub unstamped: Vec<DynamicObject>,
-    /// Stamped objects that a controller owns and that have no kix apply
-    /// entry in `managedFields`: copies a controller made of kix objects,
-    /// carrying their labels and annotations. Not kix's, and outside every
-    /// [`SweepScope`]. `kix gc --hard` reports them; nothing deletes them
-    /// unless asked.
+    /// Stamped objects owned by a controller with no Kix `Apply` entry in
+    /// `managedFields`. These are controller-created copies of Kix objects and
+    /// are excluded from every [`SweepScope`]. `kix gc --hard` reports them,
+    /// and nothing deletes them unless requested.
     pub copies: Vec<DynamicObject>,
-    /// Resource types this account may not list (403). Nothing in them is
-    /// visible to kix. Callers print this so a narrower-than-cluster view is
-    /// never mistaken for a complete one.
+    /// Resource types this account cannot list (403). Callers report these so a
+    /// partial view of the cluster is not mistaken for a complete one.
     pub forbidden: Vec<String>,
-    /// Under [`SweepScope::Cluster`]: objects left out because they belong
-    /// only to other Kix clusters, counted per owner (several owners are
-    /// joined with ", ").
+    /// Under [`SweepScope::Cluster`], objects omitted because they belong only
+    /// to other Kix clusters, counted per owner (multiple owners are joined
+    /// with `", "`).
     pub foreign: BTreeMap<String, usize>,
-    /// Under [`SweepScope::Cluster`], when another Kix cluster has records
-    /// here: objects that name no record of any cluster, so Kix cannot tell
-    /// whose they are. Left out of `managed` and `unstamped`.
+    /// Under [`SweepScope::Cluster`], when another Kix cluster has records on
+    /// the cluster, objects that name no record of any cluster. Omitted from
+    /// `managed` and `unstamped`.
     pub unattributed: Vec<DynamicObject>,
-    /// Under [`SweepScope::Records`]: objects of the named cluster that name
-    /// none of the given records, such as leftovers of Superseded builds.
+    /// Under [`SweepScope::Records`], objects of the named cluster that name
+    /// none of the given records (such as leftovers from superseded builds).
     pub other_builds: usize,
-    /// The Activation records, read after the objects. Its `cluster` is the
-    /// one the scope named, and empty under [`SweepScope::All`].
+    /// Activation records read after the object lists. Its `cluster` matches
+    /// the scope, or is empty under [`SweepScope::All`].
     pub tenancy: Tenancy,
 }
 
 impl ManagedSweep {
-    /// One line per other Kix cluster whose objects the scope left out, and
-    /// one for the unattributed objects, for a command to print.
+    /// Format summary lines describing objects omitted by `scope` for CLI
+    /// output.
     pub fn scope_notes(&self) -> Vec<String> {
         let mut notes: Vec<String> = self
             .foreign
@@ -102,25 +98,25 @@ impl ManagedSweep {
     }
 }
 
-/// Which Kix-labelled objects a sweep returns.
+/// Which Kix-labeled objects a sweep returns.
 #[derive(Debug, Clone, Copy)]
 pub enum SweepScope<'a> {
-    /// The named Kix cluster's objects, by [`attribute`]: its own and the
-    /// ones it shares with other clusters. Unattributed objects count as its
-    /// own only while no other Kix cluster has records here.
+    /// The named Kix cluster's own and shared objects, as classified by
+    /// [`attribute`]. Unattributed objects are included only when no other Kix
+    /// cluster has records on this Kubernetes cluster.
     Cluster(&'a str),
-    /// Objects naming one of `hashes` in `kix.run/activations`: the closures
-    /// of exactly those records of `cluster`, whether or not the records
-    /// still exist.
+    /// Objects naming one of `hashes` in `kix.run/activations` (the built
+    /// resources of those records of `cluster`, whether or not the records
+    /// still exist).
     Records {
         cluster: &'a str,
         hashes: &'a HashSet<String>,
     },
-    /// Every Kix-labelled object, whichever cluster deployed it.
+    /// Every Kix-labeled object, regardless of which cluster deployed it.
     All,
 }
 
-/// Whose an object is, by the record hashes it names.
+/// Ownership classification of an object by the record hashes it names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attribution {
     /// Names a record of this cluster and none of another's.
@@ -129,8 +125,8 @@ pub enum Attribution {
     Shared(Vec<String>),
     /// Names records of these other clusters only.
     Foreign(Vec<String>),
-    /// Names no record on the cluster: its hashes are all retired, it has no
-    /// `kix.run/activations`, or it was never stamped.
+    /// Names no record on the cluster because its hashes are retired, it has no
+    /// `kix.run/activations` annotation, or it was never stamped.
     Unattributed,
 }
 
@@ -227,14 +223,14 @@ pub(crate) fn split_by_records(
         .partition(|o| tenancy::named_hashes(o).any(|h| hashes.contains(h)))
 }
 
-/// Fetch every resource kix applied, in parallel: one LIST per discovered
-/// kind with the `managed-by=kix` label selector, then [`partition_sweep`].
+/// Fetch every resource Kix applied by running parallel LIST calls with the
+/// `managed-by=kix` label selector and partitioning the results with
+/// [`partition_sweep`].
 ///
-/// A 403 on a resource type is recorded, not fatal: the account simply
-/// cannot see that kind. Use [`sweep_managed`] to read the list. Any other
-/// list failure that survives the transport's retries is an error: a plan
-/// built on a partial view of the cluster is wrong in ways the user cannot
-/// see, so no caller gets one.
+/// A 403 on a resource type is recorded rather than failing the sweep (use
+/// [`sweep_managed`] to inspect `forbidden`). Any other list failure that
+/// exhausts transport retries returns an error so callers never plan against
+/// an incomplete view.
 pub async fn fetch_managed_resources(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -246,16 +242,11 @@ pub async fn fetch_managed_resources(
         .managed)
 }
 
-/// The full sweep: kix-applied objects plus the unstamped label carriers,
-/// narrowed to `scope`. The LIST selects by the managed-by label alone and
-/// [`scope_sweep`] filters client-side, since the compiler stamps no
-/// per-cluster label on ordinary objects.
+/// Sweep Kix-labeled objects and narrow the result to `scope`.
 ///
-/// The Activation records are listed after the objects, for the reason
-/// [`tenancy::read`] gives. `records` is what
-/// [`activation::Records::open`](super::activation::Records::open) returned, so
-/// the domain gate has run: on a cluster that has not migrated, no record
-/// would be found and every object would read as this cluster's.
+/// LIST selects by the `managed-by=kix` label and [`scope_sweep`] filters
+/// client-side because ordinary objects carry no per-cluster label. Activation
+/// records are listed after the objects (see [`tenancy::read`]).
 pub async fn sweep_managed(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -276,36 +267,23 @@ pub async fn sweep_managed(
     Ok(scope_sweep(sweep, scope, tenancy))
 }
 
-/// Decide what the label sweep really found.
+/// Partition `managed-by=kix` objects into Kix-managed resources, controller
+/// copies, and unstamped objects.
 ///
-/// The label only finds candidates; it does not prove kix applied an object.
-/// Controllers copy labels onto what they derive: the EndpointSlice
-/// controller mirrors a Service's labels, ReplicaSets and Pods carry their
-/// template's labels. Proof that kix applied something is its
-/// `kix.run/identity-hash` annotation, which the apply step stamps. Some
-/// controllers copy whole objects, annotations included, so a stamp on an
-/// owned object needs a second check. So:
+/// Controllers often copy labels and annotations onto derived objects (such as
+/// EndpointSlices, ReplicaSets, and Pods), so the label alone does not prove
+/// Kix applied an object:
 ///
-/// - stamped and not a copy: kix's, even when a controller has since
-///   adopted it (`managed`);
-/// - stamped, owned, and with no kix `Apply` entry in `managedFields`: a
-///   copy a controller made of a kix object. Kix sets no owner references
-///   on what it applies, and every kix apply records that entry. Kept apart
-///   in `copies` for gc to report. A stamped, unowned object without the
-///   entry stays kix's, because `kubectl apply --force-conflicts` can take
-///   every field from kix and so remove the entry;
-/// - unstamped and owned: a controller child, judged through its owner and
-///   dropped here;
-/// - unstamped and unowned: kept apart in `unstamped` for gc to report;
-/// - unstamped `Endpoints` named after a stamped Service (managed or a copy)
-///   in the same namespace: that Service's mirror. Endpoints are the
-///   pre-EndpointSlice mirror; the endpoints controller copies the Service's
-///   labels and sets no owner reference, so ownership alone cannot tell them
-///   apart. Dropped.
-///
-/// These rules replace the fixed list of "ephemeral" kinds, which made every
-/// listed kind undeployable because the apply path used the same discovery
-/// cache (kixpkgs#41).
+/// - Stamped and not a controller copy: placed in `managed`, even if a
+///   controller later adopted it.
+/// - Stamped, owned by a controller, and lacking Kix's `Apply` entry in
+///   `managedFields`: placed in `copies`. An unowned stamped object without the
+///   `Apply` entry remains in `managed` because `kubectl apply --force-conflicts`
+///   can take ownership of all fields.
+/// - Unstamped and owned by a controller: dropped as a controller child.
+/// - Unstamped `Endpoints` with the same namespace and name as a stamped
+///   `Service`: dropped as the endpoints controller's mirror.
+/// - All other unstamped, unowned objects: placed in `unstamped`.
 pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
     let (stamped, rest): (Vec<DynamicObject>, Vec<DynamicObject>) =
         objects.into_iter().partition(is_stamped);
@@ -338,7 +316,7 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
     }
 }
 
-/// Did kix's apply step stamp this object?
+/// Return whether Kix's apply step stamped `obj` with `kix.run/identity-hash`.
 pub(crate) fn is_stamped(obj: &DynamicObject) -> bool {
     obj.metadata
         .annotations
@@ -346,16 +324,15 @@ pub(crate) fn is_stamped(obj: &DynamicObject) -> bool {
         .is_some_and(|a| keys::contains_meta(a, keys::IDENTITY_HASH))
 }
 
-/// Is this stamped object a copy a controller made, rather than an object
-/// kix applied? See [`partition_sweep`]. Reads the typed
-/// `metadata.managed_fields`, which the sweep's LIST returns in full.
+/// Return whether `obj` is a controller-created copy rather than an object Kix
+/// applied (see [`partition_sweep`]).
 fn is_controller_copy(obj: &DynamicObject) -> bool {
     is_owned(obj)
         && super::fieldsv1::kix_apply_entry(obj.metadata.managed_fields.as_deref().unwrap_or(&[]))
             .is_none()
 }
 
-/// Does a controller own this object?
+/// Return whether `obj` has at least one `ownerReference`.
 pub(crate) fn is_owned(obj: &DynamicObject) -> bool {
     obj.metadata
         .owner_references
@@ -385,7 +362,7 @@ pub struct SharedOrphan {
 }
 
 impl SharedOrphan {
-    /// The line a plan prints for it.
+    /// Format the line a plan prints for this shared orphan.
     pub fn describe(&self) -> String {
         let clusters = if self.clusters.len() == 1 {
             "Kix cluster"
@@ -400,10 +377,10 @@ impl SharedOrphan {
     }
 }
 
-/// Split orphan candidates into the ones to prune and the ones another Kix
-/// cluster still deploys, judged from live objects already in hand. Kinds
-/// that [`never_pruned`] protects stay with the prunable ones: the prune
-/// already keeps and reports them.
+/// Split orphan candidates into those to prune and those still deployed by
+/// another Kix cluster, using `live` objects already in memory. Kinds
+/// protected by [`never_pruned`] stay in the prune list so the prune step can
+/// report them as kept.
 pub(crate) fn split_shared_orphans(
     orphans: Vec<ResourceId>,
     live: &[DynamicObject],
@@ -443,17 +420,13 @@ fn split_by_lookup<'a>(
     (prune, shared)
 }
 
-/// [`split_shared_orphans`] for a plan made from builds: GET each orphan
-/// candidate to read its `kix.run/activations`, then read the Tenancy of
-/// `cluster` (after the objects, for the reason [`tenancy::read`]
-/// gives).
+/// Fetch each orphan candidate from the cluster and split out resources still
+/// deployed by another Kix cluster.
 ///
-/// This decides what a plan shows. The delete itself goes through
-/// [`super::prune_guard::PruneGuard`], which checks again.
-///
-/// A candidate that is gone or whose kind is not served is prunable (the
-/// delete is then a no-op). Any other GET failure is an error: a prune that
-/// cannot read an object cannot tell whether another cluster still uses it.
+/// Used when planning from builds without a full cluster sweep. Candidates that
+/// are already gone or whose kind is not served are treated as prunable. Any
+/// other GET failure returns an error so pruning never deletes an unreadable
+/// shared object.
 pub(crate) async fn split_shared_orphans_live(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -485,8 +458,8 @@ pub(crate) async fn split_shared_orphans_live(
                 Ok::<_, FetchError>(obj.map(|o| (rid.clone(), o)))
             })
         });
-    // Keyed by the candidate's own id: an object read from `default` for a
-    // candidate without a namespace must still match that candidate.
+    // Key by the candidate's `ResourceId` so an object read from `default` for
+    // a cluster-scoped candidate still matches.
     let live: std::collections::HashMap<ResourceId, DynamicObject> =
         futures::future::try_join_all(gets)
             .await?
@@ -499,7 +472,7 @@ pub(crate) async fn split_shared_orphans_live(
     Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
 }
 
-/// What one parallel LIST pass produced.
+/// Results of a single parallel LIST pass.
 pub(crate) struct Listed {
     pub objects: Vec<DynamicObject>,
     /// Resource types that answered 403.
@@ -512,13 +485,10 @@ enum ListOutcome {
     Forbidden(String),
 }
 
-/// How many LISTs the sweep keeps in flight. One per kind is over a hundred
-/// on a real cluster, and the apiserver's priority-and-fairness answers
-/// that burst with 429s; sixteen at once still drew sixteen of them from a
-/// small cluster, eight does not. Bounded here, on spawned tasks the runtime always
-/// polls, rather than in the transport layer, where a permit held inside a
-/// future its owner had parked deadlocked `kix deploy` (see
-/// `cluster::client`). Override with `KIX_SWEEP_CONCURRENCY`.
+/// Maximum concurrent LIST requests during a sweep. Keeping this bounded on
+/// spawned tasks avoids triggering API server priority-and-fairness 429s
+/// without holding permits across parked futures. Override with
+/// `KIX_SWEEP_CONCURRENCY`.
 pub(crate) const DEFAULT_SWEEP_CONCURRENCY: usize = 8;
 /// Env var for [`DEFAULT_SWEEP_CONCURRENCY`].
 pub(crate) const SWEEP_CONCURRENCY_ENV: &str = "KIX_SWEEP_CONCURRENCY";
@@ -529,14 +499,11 @@ fn sweep_concurrency() -> usize {
         .unwrap_or(DEFAULT_SWEEP_CONCURRENCY)
 }
 
-/// Internal: run parallel LIST calls across all discovered resource types,
-/// at most [`DEFAULT_SWEEP_CONCURRENCY`] at a time.
+/// Run parallel LIST calls across all discovered resource types, up to
+/// [`DEFAULT_SWEEP_CONCURRENCY`] at a time.
 ///
-/// The transport layer already retried each LIST on 429, 5xx and
-/// connection errors, so an error here is one that outlasted the budget.
-/// It is returned, and dropping the `JoinSet` cancels the lists still in
-/// flight. Treating a failed list as empty would make `kix diff` report live
-/// resources as new during an apiserver restart.
+/// Returns any non-403 error that exhausts transport retries and cancels
+/// remaining in-flight LISTs so callers never see a partial result as empty.
 async fn fetch_parallel(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -550,7 +517,6 @@ async fn fetch_parallel(
     let limit = sweep_concurrency();
 
     for (ar, scope) in discovery {
-        // Keep the number in flight bounded: drain one before adding one.
         while set.len() >= limit {
             match set.join_next().await {
                 Some(outcome) => absorb(&mut listed, outcome)?,
@@ -558,10 +524,7 @@ async fn fetch_parallel(
             }
         }
         let api: Api<DynamicObject> = match scope {
-            Scope::Namespaced => {
-                // List across all namespaces
-                Api::all_with(client.clone(), ar)
-            }
+            Scope::Namespaced => Api::all_with(client.clone(), ar),
             Scope::Cluster => Api::all_with(client.clone(), ar),
         };
 
@@ -575,7 +538,7 @@ async fn fetch_parallel(
                     if !list.items.is_empty() {
                         tracing::debug!(resource = %fqn, count = list.items.len(), "fetched");
                     }
-                    // Inject kind/apiVersion into data (LIST responses omit them)
+                    // LIST responses omit per-item `kind` and `apiVersion`.
                     let items: Vec<DynamicObject> = list
                         .items
                         .into_iter()
@@ -593,7 +556,6 @@ async fn fetch_parallel(
                     Ok(ListOutcome::Items(items))
                 }
                 Err(e) if classify(&e) == FailureClass::Forbidden => {
-                    // RBAC: a stable fact about the account, not a fault.
                     tracing::debug!(resource = %fqn, "forbidden, recorded");
                     Ok(ListOutcome::Forbidden(fqn))
                 }
@@ -612,9 +574,7 @@ async fn fetch_parallel(
     Ok(listed)
 }
 
-/// Fold one finished LIST task into the result, or stop on its error.
-// FetchError carries a kube::Error; boxing it here would only move the
-// size to every caller's match arms.
+/// Fold one finished LIST task into `listed`, or return its error.
 #[allow(clippy::result_large_err)]
 fn absorb(
     listed: &mut Listed,
@@ -687,7 +647,7 @@ mod tests {
         v
     }
 
-    /// A `managedFields` entry by `manager` with `operation`.
+    /// Build a `managedFields` entry for `manager` and `operation`.
     fn entry(manager: &str, operation: &str) -> ManagedFieldsEntry {
         ManagedFieldsEntry {
             manager: Some(manager.into()),
@@ -696,7 +656,7 @@ mod tests {
         }
     }
 
-    /// `obj` with the `managedFields` entry a kix apply records.
+    /// Attach Kix's `Apply` `managedFields` entry to `obj`.
     fn kix_applied(mut obj: DynamicObject) -> DynamicObject {
         obj.metadata.managed_fields = Some(vec![entry(
             crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
@@ -737,8 +697,8 @@ mod tests {
 
     #[test]
     fn sweep_keeps_an_unowned_stamped_object_whose_kix_entry_is_gone() {
-        // `kubectl apply --force-conflicts` can take every field and so
-        // remove kix's apply entry; with no owner the object is still kix's.
+        // `kubectl apply --force-conflicts` can remove Kix's `Apply` entry, so
+        // an unowned stamped object remains in `managed`.
         let sweep = partition_sweep(vec![swept("ConfigMap", "ns", "taken-over", true, false)]);
         assert_eq!(names(&sweep.managed), ["ns/ConfigMap/taken-over"]);
         assert!(sweep.copies.is_empty());
@@ -794,8 +754,6 @@ mod tests {
         );
     }
 
-    // --- Scoping the sweep to one Kix cluster ---
-
     fn record(cluster: Option<&str>, hash: &str, phase: &str) -> DynamicObject {
         let mut labels = serde_json::Map::new();
         if let Some(c) = cluster {
@@ -814,8 +772,8 @@ mod tests {
         .unwrap()
     }
 
-    /// Cluster `a` has records a1 (Superseded) and a2 (Active); cluster `b`
-    /// has b0 (Superseded) and b1 (Active).
+    /// Build a [`Tenancy`] where cluster `a` has `a1` (Superseded) and `a2`
+    /// (Active), and cluster `b` has `b0` (Superseded) and `b1` (Active).
     fn two_clusters(cluster: &str) -> Tenancy {
         Tenancy::from_records(
             &[
@@ -832,7 +790,7 @@ mod tests {
         Tenancy::from_records(&[record(Some("a"), "a2", lifecycle::PHASE_ACTIVE)], "a")
     }
 
-    /// A stamped object naming `activations` (comma-separated) under `key`.
+    /// Build a stamped object naming comma-separated `activations` under `key`.
     fn named(kind: &str, ns: &str, name: &str, key: &str, activations: &str) -> DynamicObject {
         let mut obj = swept(kind, ns, name, true, false);
         if !activations.is_empty() {
@@ -957,8 +915,8 @@ mod tests {
         assert_eq!(swept_b.foreign, BTreeMap::from([("a".to_string(), 1)]));
     }
 
-    /// With one Kix cluster on the Kubernetes cluster, the scoped sweep is
-    /// the whole sweep, as before scoping existed.
+    /// When only one Kix cluster exists on the Kubernetes cluster, the scoped
+    /// sweep retains every object.
     #[test]
     fn a_single_cluster_keeps_every_object() {
         let t = one_cluster();
@@ -977,7 +935,7 @@ mod tests {
         assert!(scoped.foreign.is_empty() && scoped.unattributed.is_empty());
         assert!(scoped.scope_notes().is_empty());
 
-        // A Kubernetes cluster with no records at all: the same.
+        // A Kubernetes cluster with no Activation records behaves the same way.
         let none = Tenancy::from_records(&[], "a");
         let scoped = scope_sweep(mixed_sweep(), SweepScope::Cluster("a"), none);
         assert_eq!(scoped.managed.len(), 4);
@@ -1038,8 +996,8 @@ mod tests {
         }
     }
 
-    /// An object both clusters deploy is not pruned by either: dropping it
-    /// from one build keeps it while the other's current record names it.
+    /// An object deployed by two clusters is kept when one cluster drops it
+    /// while the other's current record still names it.
     #[test]
     fn an_orphan_another_cluster_still_deploys_is_kept() {
         let live = vec![

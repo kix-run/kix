@@ -83,13 +83,15 @@ impl SqliteCache {
         Ok(())
     }
 
-    /// Compute a source fingerprint that changes when any `.nix` file is added, removed, or modified.
+    /// Compute a source fingerprint that changes when any tracked input file is
+    /// added, removed, or modified.
     ///
     /// Uses a two-level strategy:
-    /// 1. **mtime fast path**: collect file paths + mtimes; if they match the stored snapshot, return
-    ///    the stored content hash without reading file contents.
-    /// 2. **content hash**: read all `.nix` files, compute BLAKE3 over sorted (path, content) pairs,
-    ///    store the new snapshot.
+    /// 1. **mtime fast path**: collect file paths and modification times; if
+    ///    they match the stored snapshot, return the stored content hash
+    ///    without reading file contents.
+    /// 2. **content hash**: read all tracked files, compute BLAKE3 over sorted
+    ///    `(path, content)` pairs, and store the new snapshot.
     pub(crate) fn compute_source_fingerprint(
         &self,
         flake_path: &Path,
@@ -98,12 +100,10 @@ impl SqliteCache {
         let canonical_str = canonical.to_string_lossy().to_string();
         let files = walk_nix_files(&canonical)?;
 
-        // Build current files_json
         let file_map: BTreeMap<&str, u64> = files.iter().map(|(p, m)| (p.as_str(), *m)).collect();
         let current_json = serde_json::to_string(&file_map)
             .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
 
-        // Check stored snapshot (mtime fast path)
         let stored: Option<(String, String)> = {
             let mut stmt = self
                 .conn
@@ -125,7 +125,6 @@ impl SqliteCache {
             return Ok(stored_hash);
         }
 
-        // Content hash: read all files
         tracing::debug!(flake = %canonical.display(), file_count = files.len(), "source fingerprint: computing content hash");
         let mut hasher = blake3::Hasher::new();
         for (rel_path, _) in &files {
@@ -137,7 +136,6 @@ impl SqliteCache {
         }
         let content_hash = hasher.finalize().to_hex().to_string();
 
-        // Store new snapshot
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO source_snapshot (flake_path, files_json, content_hash) VALUES (?1, ?2, ?3)",
@@ -173,16 +171,13 @@ impl SqliteCache {
     }
 }
 
-/// Recursively walk a directory collecting evaluation inputs as `(relative_path, mtime_secs)`.
+/// Walk `flake_path` recursively and collect evaluation input files as
+/// `(relative_path, mtime_secs)`.
 ///
-/// `.nix`, `.yaml`, `.yml` and `.json`, not `.nix` alone. Anything a cluster
-/// reads with `builtins.readFile` belongs here, or a change to it renders
-/// differently without invalidating the cache. `d96297d` widened the set from
-/// `.nix`; this comment claimed otherwise for long enough that a design
-/// document built an argument on it.
-///
-/// Skips `.git`, `.direnv`, `result`, and `node_modules` directories.
-/// Results are sorted by relative path for deterministic ordering.
+/// Includes `.nix`, `.yaml`, `.yml`, and `.json` files so that changes to files
+/// read via `builtins.readFile` invalidate the evaluation cache. Skips `.git`,
+/// `.direnv`, `result`, and `node_modules` directories, and sorts results by
+/// relative path for deterministic hashing.
 pub(crate) fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalError> {
     use std::time::UNIX_EPOCH;
 

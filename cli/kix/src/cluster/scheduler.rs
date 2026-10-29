@@ -1,27 +1,27 @@
 //! DAG-streaming deploy scheduler.
 //!
 //! Every node in the [`DeployPlan`] becomes ready to execute when its direct predecessors
-//! have emitted [`Verdict::Ready`]; independent subtrees stream through in
+//! have emitted [`Verdict::Ready`]. Independent subtrees stream through in
 //! parallel, bounded by [`SchedulerConfig::concurrency`].
 //!
-//! # The engine task never awaits foreign I/O while nodes are in flight
+//! # The engine task never awaits external I/O while nodes are in flight
 //!
-//! Every unit of work (a node, a discovery refresh, a checkpoint) is a task
+//! Every unit of work (a node, a discovery refresh, or a checkpoint) runs as a task
 //! spawned into one `JoinSet`, so the runtime continues polling it while the
-//! supervisor is doing. The supervisor's only awaits are its own `JoinSet`,
+//! supervisor runs. The supervisor awaits only its `JoinSet`,
 //! the cancel token, and the watchdog. Work that may block another task must
 //! remain spawned because an unpolled future makes no progress and fires no
 //! deadline.
 //!
-//! Every cluster call goes through the seams of one `ops::Cluster`: its
-//! resources, its deploy record and its secret hydrator. So the loop runs
-//! under test against `ops::scripted::ScriptedOps` with no cluster. Whether
-//! a run is dry is the `Cluster`'s to say.
+//! All cluster interactions go through [`Cluster`], which provides resource I/O,
+//! deployment record persistence, and secret hydration. Tests supply
+//! `ops::scripted::ScriptedOps` to run the scheduler without a live cluster.
+//! [`Cluster`] also determines whether a run is a dry run.
 //!
-//! `run_deploy` is private to the library. Callers reach it through a plan
-//! the library made; see its docs.
+//! `run_deploy` is private to the library and accepts only plans constructed
+//! by library entry points.
 //!
-//! The planner currently produces Apply, Skip, and Recreate transitions.
+//! The planner produces `Apply`, `Skip`, `Recreate`, and `Wait` transitions.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -48,9 +48,6 @@ use super::watchdog::{self, Progress, StallPolicy};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{self, never_pruned};
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
 /// A single resource or synthetic node paired with the work
 /// the scheduler will perform on it.
 #[derive(Debug, Clone)]
@@ -58,22 +55,22 @@ pub struct PlanNodeEntry {
     pub id: NodeId,
     pub kind: TransitionKind,
     /// The concrete change to apply. For [`TransitionKind::Skip`] this carries
-    /// the `ResourceId`; for [`TransitionKind::Apply`] and
+    /// the `ResourceId`. For [`TransitionKind::Apply`] and
     /// [`TransitionKind::Recreate`] it carries the manifest.
     pub action: ChangeAction,
     pub meta: NodeMeta,
-    /// The manifest, when it carries `kix.run/rerun`. An `Apply` with it is
-    /// tagged `Recreate`; a `Skip` with it keeps its tag but still runs a
-    /// task, because a live object that failed is recreated even though
-    /// nothing changed.
+    /// The manifest when it carries the `kix.run/rerun` annotation. A changed
+    /// resource is tagged `Recreate`. An unchanged resource keeps its `Skip`
+    /// tag, but still runs a task to recreate the live object if its previous
+    /// run failed.
     pub rerun: Option<Value>,
 }
 
-/// The planner's output, which the engine (`run_deploy`) consumes. Made
-/// only inside the library; callers read its [`DeployPlan::nodes`].
+/// The planner's output, consumed by `run_deploy`. Constructed
+/// only inside the library; callers read [`DeployPlan::nodes`].
 ///
-/// `edges` is `(dependent, predecessor)`; the dependent waits on the
-/// predecessor. Both endpoints must also appear in `nodes`.
+/// Each entry in `edges` is `(dependent, predecessor)`, where the dependent
+/// waits for the predecessor. Both endpoints must appear in `nodes`.
 #[derive(Debug, Clone, Default)]
 pub struct DeployPlan {
     pub(crate) nodes: Vec<PlanNodeEntry>,
@@ -82,19 +79,17 @@ pub struct DeployPlan {
 
 impl DeployPlan {
     /// Build a plan from the resource dependency graph and the change
-    /// actions produced by `detect_changes` / `detect_changes_live`.
+    /// actions produced by `detect_changes` or `detect_changes_live`.
     ///
-    /// Orphans are not part of the plan. They are handed to the scheduler
-    /// separately and pruned after every non-orphan node has terminated.
+    /// Orphans are excluded from the plan and passed to the scheduler
+    /// separately for pruning after all plan nodes terminate.
     ///
-    /// Fails on the first import marker the library would not have written
-    /// (see [`readiness::import_target_from_manifest`]), before anything is
-    /// applied.
+    /// Returns an error before applying anything if any import marker is
+    /// malformed (see [`readiness::import_target_from_manifest`]).
     pub(crate) fn from_graph_and_changes(
         graph: &ResourceGraph,
         changes: &[ChangeAction],
     ) -> Result<Self, readiness::MalformedMarker> {
-        // Index changes by K8s identity so we can look them up per-node.
         let mut by_id: HashMap<String, &ChangeAction> = HashMap::new();
         for action in changes {
             let rid = match action {
@@ -108,8 +103,8 @@ impl DeployPlan {
             );
         }
 
-        // On a consumer, Kix's own CRDs are its platform's to write: their
-        // nodes wait for the live CRDs instead (see `lifecycle::left_to_platform`).
+        // Consumer clusters do not apply Kix's own CRDs because the platform
+        // cluster manages them. Wait for the live CRDs instead (see `lifecycle::left_to_platform`).
         let manifests = || graph.graph.node_weights().map(|n| &n.manifest);
         let left_to_platform = lifecycle::left_to_platform(manifests());
         let platform = manifests()
@@ -141,9 +136,7 @@ impl DeployPlan {
             let action = match by_id.get(&k8s_id) {
                 Some(ChangeAction::Apply(m)) => ChangeAction::Apply((*m).clone()),
                 Some(ChangeAction::Skip(rid)) => ChangeAction::Skip(rid.clone()),
-                // A graph node without a change action is skipped.
-                // Happens for manifests that weren't in the diff input (shouldn't
-                // occur in practice, but stay defensive).
+                // Default to Skip if a graph node has no matching change action.
                 None | Some(ChangeAction::Orphan(_)) => ChangeAction::Skip(node.id.clone()),
             };
             let rerun = wants_rerun(&node.manifest).then(|| node.manifest.clone());
@@ -154,7 +147,6 @@ impl DeployPlan {
                 ChangeAction::Orphan(_) => TransitionKind::Delete,
             };
 
-            // Extract meta from the manifest.
             let meta = NodeMeta {
                 package: keys::get(&node.manifest, keys::PACKAGE).map(|s| s.to_string()),
                 namespace: (node.id.namespace != CLUSTER_SCOPED).then(|| node.id.namespace.clone()),
@@ -186,13 +178,12 @@ impl DeployPlan {
         Ok(DeployPlan { nodes, edges })
     }
 
-    /// Every node of the plan, in graph order.
+    /// Return the nodes of the plan in graph order.
     pub fn nodes(&self) -> &[PlanNodeEntry] {
         &self.nodes
     }
 
-    /// A plan that applies every manifest, for tests of what callers make
-    /// of a run.
+    /// Build a test plan that applies every manifest.
     #[cfg(any(test, feature = "test-util"))]
     pub fn applying(manifests: &[Value]) -> Self {
         let graph = ResourceGraph::from_manifests(manifests).expect("a test plan's graph");
@@ -213,72 +204,60 @@ impl DeployPlan {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
-/// What to do when a node's verdict lands on `Failed`.
+/// Policy for handling a node that reaches `Verdict::Failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnErrorPolicy {
     /// Halt the deploy immediately.
     Stop,
-    /// Continue sibling subtrees; cancel transitive dependents of the failed
+    /// Continue sibling subtrees and cancel transitive dependents of the failed
     /// node.
     Continue,
 }
 
-/// How to handle orphans after every non-orphan node terminates.
+/// Policy for handling orphaned resources after all plan nodes terminate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrunePolicy {
     /// Skip pruning entirely.
     Skip,
-    /// Report orphans but do not delete.
+    /// Report orphans but do not delete them.
     WarnOnly,
     /// Delete orphans in reverse-topological order.
     Delete,
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
-/// Default for [`SchedulerConfig::concurrency`]: max nodes in flight. Same
-/// ceiling the old wave-based readiness loop used; keeps kube's connection
-/// pool and the API server's rate limiter happy on wide clusters.
+/// Default for [`SchedulerConfig::concurrency`]: maximum nodes in flight.
+/// Bounds concurrent requests to keep the HTTP connection pool and the API
+/// server's rate limiter within safe limits on wide clusters.
 pub const CONCURRENCY: usize = 64;
 
 /// Checkpoint every N terminal verdicts to the Activation CR. Keeps write
-/// pressure modest on the apiserver while giving a crash-recovery point every
-/// few seconds under typical deploy cadence.
+/// pressure modest on the API server while recording crash-recovery progress
+/// every few seconds.
 const CHECKPOINT_BATCH: usize = 16;
 
-/// Bound on the best-effort writes the engine awaits inline after the node
-/// phase (final checkpoint, finalize). The ops layer has its own bound; this
-/// one holds whatever the implementation does.
+/// Timeout for best-effort writes awaited inline after the node phase (final
+/// checkpoint and finalization).
 const INLINE_BEST_EFFORT_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct SchedulerConfig {
     pub timeout: Duration,
     pub on_error: OnErrorPolicy,
     pub cancel: CancelToken,
-    /// Max nodes in flight. See [`CONCURRENCY`].
+    /// Maximum nodes in flight. See [`CONCURRENCY`].
     pub concurrency: usize,
-    /// When the progress watchdog warns and when it gives up.
+    /// Thresholds for progress watchdog warnings and aborts.
     pub stall: StallPolicy,
-    /// Recreate an unchanged node under `kix.run/rerun` whose live object
-    /// failed. `kix deploy` and `kix rollback` set this: a person asked for
-    /// a run and a failed probe should get its retry. The operator leaves
-    /// it off: it diffs against live objects and requeues a failed run
-    /// every 30 s, so on a degraded cluster this would delete and recreate
-    /// the probe Job forever.
+    /// Recreate an unchanged `kix.run/rerun` node if its live object failed.
+    /// `kix deploy` and `kix rollback` enable this so explicit CLI runs retry
+    /// failed probes. The operator disables this because it diffs against live
+    /// objects and requeues failed runs every 30 seconds, which would otherwise
+    /// recreate a failing probe Job in an infinite loop.
     pub rerun_failed: bool,
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
 #[derive(Error, Debug)]
 pub enum DeployError {
-    /// The run's Activation record could not be begun, so nothing was
-    /// applied.
+    /// The Activation record could not be started, so nothing was applied.
     #[error("Nothing was applied: the deployment record could not be started. {message}")]
     BeginFailed {
         message: String,
@@ -288,8 +267,8 @@ pub enum DeployError {
     #[error("deployment stopped: {count} resource operations failed")]
     NodesFailed { count: usize, partial: DeployResult },
 
-    /// Discovery could not be refreshed after a CRD landed. The run stopped
-    /// rather than continue on a stale view of which kinds exist.
+    /// API discovery could not be refreshed after a CRD was applied. The run
+    /// stopped rather than continuing with a stale view of available resource kinds.
     #[error("could not discover the resource types supported by the Kubernetes API: {message}")]
     DiscoveryFailed {
         message: String,
@@ -302,16 +281,15 @@ pub enum DeployError {
         partial: DeployResult,
     },
 
-    /// A spawned task panicked or was aborted from outside. A bug, never a
-    /// cluster condition.
+    /// A spawned task panicked or was aborted unexpectedly.
     #[error("deployment could not continue: {message}")]
     Internal {
         message: String,
         partial: DeployResult,
     },
 
-    /// Every node reached its verdict, but the Activation record could not be
-    /// finalized, so the record still reads Deploying and the previous
+    /// Every node reached a verdict, but the Activation record could not be
+    /// finalized. The record remains in `Deploying` and the previous
     /// activation stays current.
     #[error(
         "the changes were applied, but the deployment record could not be finalized: {message}. \
@@ -324,7 +302,7 @@ pub enum DeployError {
 }
 
 impl DeployError {
-    /// The counts accumulated before the run stopped.
+    /// Return the counts accumulated before the run stopped.
     pub fn partial(&self) -> &DeployResult {
         match self {
             DeployError::BeginFailed { partial, .. }
@@ -337,24 +315,20 @@ impl DeployError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
-/// Which task a `JoinSet` entry is, for accounting aborted and panicked
-/// tasks by kind.
+/// Identifies a `JoinSet` task so aborted or panicked tasks can be accounted
+/// for by kind.
 enum TaskKind {
     Node(NodeId),
     Rediscovery,
     Checkpoint,
 }
 
-/// The watchdog's name for the discovery refresh behind a CRD barrier. Not a
-/// plan node, but it is work the run waits on and must never wait on
-/// silently.
+/// Synthetic node identifier used by the watchdog while waiting for an API
+/// discovery refresh after a CRD barrier.
 static DISCOVERY_NODE: std::sync::LazyLock<NodeId> =
     std::sync::LazyLock::new(|| NodeId::Synthetic("api-discovery".into()));
 
-/// What one spawned task reports back to the supervisor.
+/// Result reported back to the supervisor by a spawned task.
 enum Done {
     Node(NodeId, NodeOutcome),
     Rediscovery(Result<(), String>),
@@ -363,30 +337,26 @@ enum Done {
 
 /// Execute a DAG-streaming deploy.
 ///
-/// The scheduler maintains a ready-queue; a node becomes ready the moment all
-/// its predecessors have emitted `Verdict::Ready`. Concurrency is bounded by
-/// [`SchedulerConfig::concurrency`]. On a node failure the failure policy
-/// either halts the whole deploy ([`OnErrorPolicy::Stop`]) or halts only
+/// The scheduler maintains a ready queue. A node becomes ready as soon as all
+/// of its predecessors emit `Verdict::Ready`. Concurrency is bounded by
+/// [`SchedulerConfig::concurrency`]. On a node failure, the error policy
+/// either halts the entire deploy ([`OnErrorPolicy::Stop`]) or cancels only
 /// transitive dependents while sibling subtrees continue
 /// ([`OnErrorPolicy::Continue`]).
 ///
-/// Dependents of a CRD wait for one discovery refresh after the CRD is Ready
-/// through the CRD barrier. Several CRDs finishing together share
-/// one refresh. A refresh that fails stops the run.
+/// Dependents of a CRD wait at a barrier until one API discovery refresh
+/// completes after the CRD becomes ready. Multiple CRDs finishing concurrently
+/// share a single refresh. A failed refresh stops the deploy.
 ///
-/// After every non-orphan node has reached a terminal verdict, orphans are
-/// pruned (in reverse-topological order of the old graph) and the Activation
-/// CR is finalized.
+/// After every plan node reaches a terminal verdict, orphans are pruned in
+/// reverse-topological order of the old graph and the Activation CR is
+/// finalized.
 ///
-/// A dry run ([`Cluster::dry_run`]) sends every write with `dryRun=All` and
-/// writes no record. It emits the same event stream, so the same renderer
-/// paints it, with two differences: readiness short-circuits to Ready,
-/// because nothing was persisted to poll for, and a failed node's
-/// dependents are still tried.
-///
-/// Private to the library, so the plan it runs is one the library made: a
-/// checked plan (`plan::CheckedPlan::run`, `plan::CheckedPlan::dry_run`) or the
-/// operator's plan from the live objects (`plan::live::LivePlan::run`).
+/// A dry run ([`Cluster::dry_run`]) sends every write with `dryRun=All`,
+/// writes no deployment record, and emits the same event stream for rendering.
+/// Because dry runs persist nothing, readiness checks short-circuit to
+/// `Ready` and dependents of failed nodes are still tried so all validation
+/// errors surface in a single preview.
 pub(crate) async fn run_deploy(
     cluster: Cluster,
     plan: DeployPlan,
@@ -406,9 +376,9 @@ pub(crate) async fn run_deploy(
         observer,
     );
 
-    // The watchdog is its own task with its own timer, so it runs even if
-    // the run has a bug that parks it. It reports through the observer and
-    // stops the run through the cancel token; it never touches the cluster.
+    // Run the watchdog on its own task and timer so it fires even if the
+    // scheduler loop stalls. It reports through the observer and cancels the
+    // run via the cancel token without touching the cluster.
     let _watchdog = AbortOnDrop(tokio::spawn(watchdog::run(
         config.stall,
         run.progress.clone(),
@@ -416,8 +386,8 @@ pub(crate) async fn run_deploy(
         run.observer.clone(),
     )));
 
-    // Publish the plan skeleton so renderers can paint the tree before any
-    // node has executed.
+    // Publish the plan skeleton so renderers can draw the tree before any
+    // node executes.
     run.emit(DeployEvent::PlanComputed {
         nodes: plan.to_plan_nodes(),
         edges: plan.edges.clone(),
@@ -434,13 +404,11 @@ pub(crate) async fn run_deploy(
     run.finalize(orphans_left).await
 }
 
-/// One run of [`run_deploy`]: what it writes through, the node phase's
-/// bookkeeping, and the counts so far. Each phase is a method, called in
-/// order.
+/// State for a single execution of [`run_deploy`].
 struct Run<'a> {
     config: &'a SchedulerConfig,
-    /// What the build drops, and the old build's manifests, which order the
-    /// prune.
+    /// Orphaned resource IDs and the previous build's manifests used to order
+    /// pruning.
     orphan_rids: &'a [ResourceId],
     old_manifests: &'a [Value],
     prune: PrunePolicy,
@@ -454,27 +422,26 @@ struct Run<'a> {
 
     state: SchedulerState,
     tasks: JoinSet<Done>,
-    // Which task is which, so an aborted or panicked task can be accounted
-    // for by kind: an aborted node is a Cancelled verdict, a panicked
-    // checkpoint is a best-effort failure, a panicked node is a bug.
+    // Maps Tokio task IDs to their role so aborted or panicked tasks can be
+    // handled appropriately.
     kinds: HashMap<tokio::task::Id, TaskKind>,
     nodes_in_flight: usize,
     barrier: CrdBarrier,
     checkpoints: Checkpoints,
-    // Set when the cancel token fires: every task is aborted and the loop
-    // drains their results before the run returns `Cancelled`.
+    // Set when the cancel token fires. All tasks are aborted and drained before
+    // returning `DeployError::Cancelled`.
     cancelling: bool,
-    /// Set by a stop-worthy failure under on_error=Stop, a failed discovery
-    /// refresh, or a cancel.
+    /// Set when the deploy is stopping due to `OnErrorPolicy::Stop`, a failed
+    /// discovery refresh, or cancellation.
     halting: bool,
     halting_reason: Option<String>,
     discovery_failed: Option<String>,
-    // Unchanged resources still belong to this activation; they just have
-    // nothing to apply. Collected here, stamped in one pass once every node is
-    // terminal (see `DeployRecord::stamp_unchanged`).
+    // Unchanged resources still belong to this activation and are stamped in a
+    // batch after all nodes terminate (see `DeployRecord::stamp_unchanged`).
     skipped: Vec<ResourceId>,
-    /// Orphans an immutable-conflict recovery deleted and created again.
-    /// They are this build's now, so the prune leaves them.
+    /// Orphans that were deleted and recreated during immutable-conflict
+    /// recovery. Excluded from post-deploy pruning because they now belong to
+    /// the new build.
     consumed_orphans: HashSet<ResourceId>,
 }
 
@@ -536,23 +503,20 @@ impl<'a> Run<'a> {
         self.observer.on_event(&event);
     }
 
-    /// The counts so far, for the error that ends the run.
+    /// Take the accumulated counts for an error return.
     fn partial(&mut self) -> DeployResult {
         std::mem::take(&mut self.result)
     }
 
-    /// Begin the Activation record. A record that cannot be begun stops the
-    /// run before anything is applied.
+    /// Begin the Activation record, stopping the run before any resource is
+    /// applied if the record cannot be written.
     async fn begin(&mut self) -> Result<(), DeployError> {
-        // Nothing is in flight yet, so awaiting this inline parks nobody. It is
-        // still bounded: the watchdog only watches nodes.
+        // No nodes are in flight yet, so awaiting inline cannot block node tasks.
         let Some(record) = &self.record else {
             return Ok(());
         };
         match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin()).await {
             Ok(Ok(())) => {}
-            // There is a record to write and it cannot be written; nothing
-            // has been applied yet, so stop here.
             Ok(Err(e)) => {
                 let message = e.to_string();
                 self.emit(DeployEvent::Stopped {
@@ -571,19 +535,18 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
-    /// The node phase: run every node the plan allows, at most
-    /// `concurrency` at a time, until none is running or ready.
+    /// Execute plan nodes up to `concurrency` at a time until no nodes are
+    /// running or ready.
     async fn run_nodes(&mut self) -> Result<(), DeployError> {
         self.state.seed_ready();
         let config = self.config;
         loop {
             self.admit_ready();
 
-            // No node running, no refresh in flight, nothing admitted or
-            // waiting to be: the node phase is over. A checkpoint still in
-            // flight is best-effort and must not hold the run open;
-            // `shutdown` below aborts it and the final checkpoint in
-            // `close_out` records the totals.
+            // Exit when no nodes or discovery refreshes are running and no
+            // further nodes can be admitted. Any in-flight checkpoint is
+            // best-effort and will be aborted by `shutdown` below before
+            // `close_out` writes the final totals.
             if self.nodes_in_flight == 0
                 && !self.barrier.in_flight
                 && (self.halting || self.state.ready_is_empty())
@@ -597,10 +560,9 @@ impl<'a> Run<'a> {
                 tokio::select! {
                     biased;
                     _ = config.cancel.cancelled() => {
-                        // Stop admitting, abort everything, then keep looping
-                        // to drain: a node that finished just before the
-                        // cancel is still counted, an aborted one becomes
-                        // Cancelled.
+                        // Stop admitting new nodes, abort running tasks, and
+                        // drain the JoinSet so completed and aborted tasks are
+                        // both accounted for.
                         self.cancelling = true;
                         self.halting = true;
                         self.halting_reason = Some(cancel_reason(config));
@@ -621,14 +583,11 @@ impl<'a> Run<'a> {
             }
         }
 
-        // From here on nothing is in flight, so inline awaits park nobody.
-        // They are still bounded: a best-effort write that never answers must
-        // not hold the run open.
         self.tasks.shutdown().await;
         Ok(())
     }
 
-    /// Fill in-flight up to the concurrency cap.
+    /// Admit ready nodes up to the concurrency limit.
     fn admit_ready(&mut self) {
         let concurrency = self.config.concurrency.max(1);
         while !self.halting && self.nodes_in_flight < concurrency {
@@ -637,10 +596,9 @@ impl<'a> Run<'a> {
             };
             let entry = self.state.node_entry(&node_id).clone();
 
-            // Skip nodes terminate immediately: no task, just two events
-            // back-to-back. A skipped resource under the rerun rule is the
-            // exception: its live object may have failed, so it runs a task
-            // that reads it.
+            // Complete ordinary Skip nodes immediately without spawning a task.
+            // Skip nodes with `kix.run/rerun` still spawn a task to inspect the
+            // live object and recreate it if it failed.
             if matches!(entry.kind, TransitionKind::Skip) && entry.rerun.is_none() {
                 self.emit(DeployEvent::NodeStateChanged {
                     node: node_id.clone(),
@@ -680,8 +638,8 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// A task ended without reporting: it was aborted or it panicked. Only a
-    /// panicked node stops the run here.
+    /// Handle a task that was aborted or panicked. Only a panicked node task is
+    /// immediately fatal here.
     async fn on_join_error(&mut self, join_err: tokio::task::JoinError) -> Result<(), DeployError> {
         let aborted = join_err.is_cancelled();
         match self.kinds.remove(&join_err.id()) {
@@ -702,8 +660,8 @@ impl<'a> Run<'a> {
                     self.state.mark_terminal(&node_id, false);
                     return Ok(());
                 }
-                // A panic in a node task is a bug, never a cluster
-                // condition.
+                // A panic in a node task is an internal bug rather than a
+                // cluster condition.
                 let message = format!("a deploy task panicked: {join_err}");
                 self.emit(DeployEvent::Stopped {
                     reason: message.clone(),
@@ -754,8 +712,8 @@ impl<'a> Run<'a> {
                         }
                     }
                     Err(message) => {
-                        // A stale discovery view is a partial view; the run
-                        // does not continue on it. In-flight nodes finish.
+                        // Do not continue with a stale discovery view. Let
+                        // in-flight nodes finish before halting.
                         self.discovery_failed = Some(message.clone());
                         self.halting = true;
                         self.halting_reason =
@@ -786,14 +744,13 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Record a node's verdict and release or cancel its dependents.
+    /// Record a node's verdict and promote or cancel its dependents.
     fn on_node(&mut self, node_id: NodeId, outcome: NodeOutcome) {
         let entry = self.state.node_entry(&node_id).clone();
         match outcome {
             NodeOutcome::Ready { apply_action } => {
-                // A rerun-annotated Skip node that found its live object
-                // healthy is an unchanged resource like any other and still
-                // belongs to this activation.
+                // A rerun-annotated Skip node whose live object succeeded is
+                // unchanged and still belongs to this activation.
                 self.push_skipped(&node_id, &entry);
                 let detail = NodeDetail::Applied(apply_action.clone());
                 self.node_ready(&node_id, &entry, &apply_action, detail);
@@ -842,7 +799,7 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// A Skip node that ran a task is unchanged, and stamped as such.
+    /// Record a `Skip` node that executed a task so it is stamped as unchanged.
     fn push_skipped(&mut self, node_id: &NodeId, entry: &PlanNodeEntry) {
         if matches!(entry.kind, TransitionKind::Skip)
             && let NodeId::Resource(rid) = node_id
@@ -851,9 +808,9 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// A node succeeded. CRD-like nodes hold their dependents until the next
-    /// discovery refresh completes (the barrier); everything else promotes at
-    /// once.
+    /// Record a ready node. CRD-like nodes hold their dependents until the next
+    /// discovery refresh completes; all other nodes promote their dependents
+    /// immediately.
     fn node_ready(
         &mut self,
         node_id: &NodeId,
@@ -895,14 +852,12 @@ impl<'a> Run<'a> {
         });
         self.state.mark_terminal(node_id, false);
 
-        // A dry run persists nothing, so a dependent's own dry run answers as
-        // much after a refused predecessor as after an accepted one. A preview
-        // that stopped at the first refusal would hide every refusal behind it.
+        // Dry runs persist nothing, so promote dependents even when a
+        // predecessor fails so all validation errors surface in a single preview.
         let cancelled = if self.dry_run {
             self.state.promote_dependents(node_id);
             Vec::new()
         } else {
-            // Cancel all transitive dependents.
             self.state.cascade_cancel(node_id)
         };
         let because = match node_id {
@@ -928,8 +883,8 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Start one discovery refresh for the CRDs that became Ready since the
-    /// last one, unless one is in flight.
+    /// Spawn a discovery refresh if any CRDs have become ready since the last
+    /// refresh and no refresh is already running.
     fn start_rediscovery_if_needed(&mut self) {
         if self.barrier.in_flight || self.barrier.awaiting.is_empty() {
             return;
@@ -952,8 +907,8 @@ impl<'a> Run<'a> {
         self.kinds.insert(handle.id(), TaskKind::Rediscovery);
     }
 
-    /// Write a checkpoint when [`CHECKPOINT_BATCH`] verdicts have landed
-    /// since the last, unless one is in flight.
+    /// Spawn a checkpoint write once [`CHECKPOINT_BATCH`] terminal verdicts
+    /// have accumulated since the last checkpoint and none is in flight.
     fn start_checkpoint_if_due(&mut self) {
         let Some(record) = &self.record else {
             return;
@@ -972,15 +927,12 @@ impl<'a> Run<'a> {
         self.kinds.insert(handle.id(), TaskKind::Checkpoint);
     }
 
-    /// Mark the Activation record Failed because the run is ending without
-    /// finalizing, and report a write that did not land. A dry run has no
-    /// record, so there is nothing to mark.
+    /// Mark the Activation record as `Failed` when the deploy stops without
+    /// finalizing, and emit an event if the status write fails.
     ///
-    /// Every early return below `begin` goes through this. A run that stops
-    /// part way has applied some of its closure, and the record is the only
-    /// thing that will tell the next deploy so (kixpkgs#82). Best-effort: the
-    /// run is already over, and a cluster that will not take the patch is one
-    /// the next deploy has to cope with anyway.
+    /// Every early return after `begin` calls this because an interrupted run
+    /// may have already applied part of its closure, and the `Failed` record
+    /// tells the next deploy to fold those changes into its plan.
     async fn abort_record(&self, reason: &str) {
         let Some(record) = &self.record else {
             return;
@@ -997,22 +949,20 @@ impl<'a> Run<'a> {
         });
     }
 
-    /// End the node phase: give every node a verdict, write the final
-    /// checkpoint, and stop the run if it was cancelled, lost discovery, or
-    /// halted on a failure.
+    /// Finish the node phase by assigning a terminal verdict to every remaining
+    /// node, writing the final checkpoint, and returning an error if the run
+    /// was cancelled, lost discovery, or halted on failure.
     async fn close_out(&mut self) -> Result<(), DeployError> {
-        // A cancel that landed as the last node finished may have let the loop
-        // exit on its own; it must still stop the run here, before anything is
-        // pruned or finalized.
+        // Check the cancel token in case cancellation arrived just as the last
+        // node completed.
         if self.config.cancel.is_cancelled() && !self.cancelling {
             self.cancelling = true;
             self.halting = true;
             self.halting_reason = Some(cancel_reason(self.config));
         }
 
-        // Whatever stopped the run, every node that never reached a verdict
-        // gets one now, so renderers never leave a row Pending under a
-        // `Stopped` footer and the counts add up to the plan.
+        // Emit a `Cancelled` verdict for every remaining node so renderers do
+        // not leave rows in `Pending` and summary counts match the plan size.
         if self.halting {
             for node_id in self.state.non_terminal() {
                 let entry = self.state.node_entry(&node_id).clone();
@@ -1077,7 +1027,8 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
-    /// Final checkpoint / close-out if the cadence didn't already cover it.
+    /// Write the final checkpoint if any verdicts accumulated since the last
+    /// periodic checkpoint.
     async fn final_checkpoint(&self) {
         let Some(record) = &self.record else {
             return;
@@ -1104,25 +1055,19 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Stop a run that left part of its closure unapplied. Returns whether it
-    /// stopped.
+    /// Abort the deployment record and return `true` if any nodes were
+    /// cancelled and left unapplied.
     ///
-    /// A node that was never attempted means the closure is only partly
-    /// applied, which is not a state anything may diff against. Under
-    /// `--on-error=continue` a failed node cascades Cancelled to its
-    /// dependents and the loop exits without `halting`, so without this the
-    /// run would finalize and mark the record Degraded, and Degraded IS a
-    /// current state: the next deploy of the same closure would then skip
-    /// every node this one never ran.
+    /// Under `--on-error=continue`, a failed node cancels its transitive
+    /// dependents without setting `halting`. Finalizing such a run would mark
+    /// the record `Degraded`, which is treated as the cluster's current state
+    /// and would cause the next deploy of the same closure to skip nodes that
+    /// were never attempted.
     ///
-    /// It has to happen above the skip stamping and the prune. Pruning deletes
-    /// the orphans of the closure being replaced, and this run is not
-    /// replacing anything: the record ends Failed and the previous activation
-    /// stays Active, so a prune here would delete objects the still current
-    /// closure cannot get back.
-    ///
-    /// The run still returns `Ok` with the counts. Callers read `failed` and
-    /// `cancelled` to decide the outcome; `kix deploy` exits non-zero.
+    /// This check must run before stamping skipped resources or pruning
+    /// orphans. Because the new record is marked `Failed` and the previous
+    /// activation remains `Active`, pruning here would delete resources that
+    /// the active closure still depends on.
     async fn stop_partial_closure(&self) -> bool {
         if self.dry_run || self.result.cancelled == 0 {
             return false;
@@ -1138,18 +1083,13 @@ impl<'a> Run<'a> {
         true
     }
 
-    /// Stamp this activation onto the resources we skipped. They were skipped
-    /// because their content already matches, not because they left the
-    /// activation; without this the annotation only ever records the deploys
-    /// that happened to change a resource, and stable leaves (ServiceAccounts,
-    /// ConfigMaps, import markers) drift arbitrarily far behind.
+    /// Stamp the current activation onto unchanged resources. Without this,
+    /// `kix.run/activations` would only record deployments that modified a
+    /// resource, leaving stable resources with stale activation references.
     ///
-    /// Best-effort by design, unlike the applied path: nothing was written to
-    /// these resources, so a failure here leaves the cluster exactly as it was
-    /// and cannot corrupt the applied state. Failures are counted and reported
-    /// rather than halting a deploy that otherwise succeeded. A dry run has no
-    /// record to stamp from, and the record stamps nothing when the run has no
-    /// activation hash.
+    /// Stamping is best-effort because nothing was written to these resources.
+    /// Failures are counted and reported rather than failing a deploy that
+    /// otherwise succeeded.
     async fn stamp_unchanged(&self) {
         let Some(record) = &self.record else {
             return;
@@ -1197,9 +1137,9 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Prune orphans (after all nodes terminal). Returns whether any
-    /// prunable orphan is still on the cluster after this phase; finalize
-    /// records the builds they came from when it is.
+    /// Prune orphaned resources after all plan nodes reach a terminal verdict.
+    /// Returns `true` if any prunable orphans remain on the cluster so
+    /// finalization can record their source builds.
     async fn prune(&mut self) -> bool {
         let prune = self.prune;
         let effective_orphans: Vec<ResourceId> = self
@@ -1225,13 +1165,7 @@ impl<'a> Run<'a> {
         });
 
         for rid in &ordered {
-            // Warn-only policy: report and move on.
-            if prune == PrunePolicy::WarnOnly {
-                continue;
-            }
-            if never_pruned(&rid.kind) {
-                // Report protected kinds and leave their removal to an
-                // explicit operation. See `never_pruned`.
+            if prune == PrunePolicy::WarnOnly || never_pruned(&rid.kind) {
                 continue;
             }
             let deleted =
@@ -1246,9 +1180,10 @@ impl<'a> Run<'a> {
                 };
             match deleted {
                 Ok(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
-                    // A changed object is still this cluster's orphan, so the
-                    // record keeps naming its build for the next prune. A
-                    // shared one is the other cluster's to remove.
+                    // An object kept because its content drifted still belongs
+                    // to this cluster, so preserve its source build for the
+                    // next prune. An object shared with another Kix cluster is
+                    // managed by that cluster.
                     if matches!(outcome, Pruned::Changed(_)) {
                         orphans_left = true;
                     }
@@ -1281,7 +1216,7 @@ impl<'a> Run<'a> {
         orphans_left
     }
 
-    /// Finalize Activation lifecycle (unless pure no-op or dry-run).
+    /// Finalize the Activation record unless the run was a no-op or a dry run.
     async fn finalize(self, orphans_left: bool) -> Result<DeployResult, DeployError> {
         let r = &self.result;
         let actually_changed = r.created > 0 || r.configured > 0 || r.pruned > 0 || r.failed > 0;
@@ -1299,9 +1234,8 @@ impl<'a> Run<'a> {
                     previous: f.previous,
                 }),
                 Ok(Ok(None)) => {}
-                // The record did not become current, so the run has not
-                // succeeded and its build must not be cached as the one the
-                // cluster runs.
+                // Fail if the record could not be finalized so the caller does
+                // not cache the build as the cluster's active state.
                 Ok(Err(e)) => {
                     return Err(DeployError::FinalizeFailed {
                         message: e.to_string(),
@@ -1323,7 +1257,7 @@ impl<'a> Run<'a> {
     }
 }
 
-/// The reason the cancel token gives, or "cancelled".
+/// Return the cancellation reason from the cancel token, or `"cancelled"`.
 fn cancel_reason(config: &SchedulerConfig) -> String {
     config
         .cancel
@@ -1331,8 +1265,7 @@ fn cancel_reason(config: &SchedulerConfig) -> String {
         .unwrap_or_else(|| "cancelled".to_string())
 }
 
-/// [`run_deploy`] over any plan, against the scripted fake. For tests of
-/// what callers make of a run's result; no cluster is involved.
+/// Run [`run_deploy`] against `ScriptedOps` for testing without a live cluster.
 #[cfg(any(test, feature = "test-util"))]
 pub async fn run_scripted(
     ops: Arc<super::ops::scripted::ScriptedOps>,
@@ -1355,7 +1288,7 @@ pub async fn run_scripted(
     .await
 }
 
-/// Aborts the wrapped task when dropped, on every return path.
+/// Aborts the wrapped task when dropped.
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
@@ -1364,17 +1297,17 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// CRD barrier bookkeeping.
+/// CRD barrier state.
 #[derive(Default)]
 struct CrdBarrier {
-    /// CRD nodes that are Ready and need a refresh to start after them.
+    /// Ready CRD nodes waiting for a discovery refresh to start.
     awaiting: Vec<NodeId>,
-    /// CRD nodes covered by the refresh in flight.
+    /// CRD nodes covered by the currently running discovery refresh.
     covered: Vec<NodeId>,
     in_flight: bool,
 }
 
-/// Checkpoint cadence. Running totals, one write in flight at most.
+/// Checkpoint counters and in-flight state.
 #[derive(Default)]
 struct Checkpoints {
     applied: usize,
@@ -1405,9 +1338,6 @@ impl Checkpoints {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
 struct SchedulerState {
     entries: HashMap<NodeId, PlanNodeEntry>,
     /// Remaining non-Ready predecessors.
@@ -1416,7 +1346,7 @@ struct SchedulerState {
     dependents: HashMap<NodeId, Vec<NodeId>>,
     /// Nodes ready to execute.
     ready: VecDeque<NodeId>,
-    /// Nodes already emitted to ready (guard against double-push).
+    /// Nodes already pushed to `ready` to guard against duplicate admission.
     enqueued: HashSet<NodeId>,
     /// Terminal nodes.
     terminal: HashSet<NodeId>,
@@ -1458,8 +1388,8 @@ impl SchedulerState {
             .filter(|(_, c)| **c == 0)
             .map(|(id, _)| id.clone())
             .collect();
-        // Lexicographic-ish determinism for test stability: sort Resource nodes
-        // by (kind, namespace, name).
+        // Sort resource nodes by `(kind, namespace, name)` for deterministic
+        // execution in tests.
         let mut zero_pred = zero_pred;
         zero_pred.sort_by_key(node_sort_key);
         for id in zero_pred {
@@ -1477,7 +1407,8 @@ impl SchedulerState {
         self.ready.is_empty()
     }
 
-    /// Every node without a verdict, in deterministic order.
+    /// Return all nodes that have not yet reached a terminal verdict, in
+    /// deterministic order.
     fn non_terminal(&self) -> Vec<NodeId> {
         let mut out: Vec<NodeId> = self
             .entries
@@ -1493,9 +1424,8 @@ impl SchedulerState {
         self.entries.get(id).expect("node id must be in plan")
     }
 
-    /// Mark a node terminal. If `success`, promote any dependents whose last
-    /// predecessor just became Ready onto the ready queue. If not a success,
-    /// the caller is responsible for cascade-cancelling dependents.
+    /// Mark a node terminal. If `success` is true, promote any dependents whose
+    /// last predecessor just became ready onto the ready queue.
     fn mark_terminal(&mut self, id: &NodeId, success: bool) {
         self.terminal.insert(id.clone());
         if !success {
@@ -1504,14 +1434,13 @@ impl SchedulerState {
         self.promote_dependents(id);
     }
 
-    /// Mark a node terminal without promoting its dependents yet. Used for
-    /// CRD nodes, whose dependents wait for the discovery refresh
-    /// ([`promote_dependents`](Self::promote_dependents) follows).
+    /// Mark a CRD node terminal without promoting its dependents until the
+    /// subsequent discovery refresh completes.
     fn mark_terminal_deferred(&mut self, id: &NodeId) {
         self.terminal.insert(id.clone());
     }
 
-    /// Promote every dependent of `id` whose last predecessor is now Ready.
+    /// Promote every dependent of `id` whose last predecessor is now ready.
     fn promote_dependents(&mut self, id: &NodeId) {
         let deps = self.dependents.get(id).cloned().unwrap_or_default();
         for dep in deps {
@@ -1527,8 +1456,8 @@ impl SchedulerState {
         }
     }
 
-    /// Cascade-cancel: mark every transitive dependent of `id` terminal (as
-    /// cancelled) and return the list so the caller can emit events.
+    /// Mark every transitive dependent of `id` as terminal and return the
+    /// cancelled node IDs so the caller can emit events.
     fn cascade_cancel(&mut self, id: &NodeId) -> Vec<NodeId> {
         let mut cancelled = Vec::new();
         let mut queue: VecDeque<NodeId> = self
@@ -1588,12 +1517,12 @@ enum NodeOutcome {
         apply_action: ApplyAction,
         reason: String,
     },
-    /// Deleted and created again under the rerun rule.
+    /// Deleted and recreated under the rerun rule.
     Rerun {
         apply_action: ApplyAction,
         reason: String,
     },
-    /// Ready, with `stale` pods of an `OnDelete` DaemonSet still on the
+    /// Ready, with `stale` pods of an `OnDelete` DaemonSet still running the
     /// previous pod template.
     PendingRestart {
         apply_action: ApplyAction,
@@ -1607,13 +1536,8 @@ enum NodeOutcome {
     Cancelled,
 }
 
-/// Hydrate, apply, wait for readiness, and report one node.
-///
-/// A skipped resource carrying `kix.run/rerun` is recreated when its live
-/// object failed. Other skipped resources do not reach this function.
-/// Delete and re-create one resource through `ResourceIo::recreate_in_place`,
-/// unless `recreate_refusal` refuses its kind. Every scheduler path that
-/// deletes a resource to replace it goes through here.
+/// Delete and recreate a resource through `ResourceIo::recreate_in_place`
+/// unless `recreate_refusal` rejects its kind.
 async fn recreate(
     ctx: &NodeCtx,
     manifest: &Value,
@@ -1628,9 +1552,8 @@ async fn recreate(
         .map_err(|e| e.to_string())
 }
 
-/// The error for a resource Kix will not delete and re-create, `None` when
-/// it may. The kinds `never_pruned` protects are refused, because deleting
-/// one also deletes objects outside the build.
+/// Return an error message if `rid` is a protected kind that Kix must not
+/// delete and recreate automatically, or `None` if recreation is allowed.
 fn recreate_refusal(rid: &ResourceId) -> Option<String> {
     if !never_pruned(&rid.kind) {
         return None;
@@ -1650,17 +1573,19 @@ fn recreate_refusal(rid: &ResourceId) -> Option<String> {
     ))
 }
 
+/// Hydrate secrets, apply or recreate the resource, wait for readiness, and
+/// return the node's outcome.
 async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     if entry.kind == TransitionKind::Wait {
         return wait_for_platform(ctx, entry).await;
     }
-    // Reason a rerun node is deleted before apply. None means a plain apply.
+    // Reason a rerun node is deleted before apply. `None` means a standard apply.
     let mut rerun_reason: Option<&'static str> = None;
     let manifest = match (&entry.action, &entry.rerun) {
         (ChangeAction::Apply(m), _) => m.clone(),
         (ChangeAction::Skip(rid), Some(manifest)) => {
-            // Rerun a failed probe even when its manifest is unchanged.
-            // When reruns are disabled, preserve its failed result.
+            // Recreate an unchanged probe if its live object failed and
+            // `rerun_failed` is enabled; otherwise report the failure.
             let live = ctx.resources.get_live(rid).await;
             let terminal = match &live {
                 Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
@@ -1714,7 +1639,6 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     let rid = ResourceId::from_value(&manifest);
     let node = NodeId::Resource(rid.clone());
 
-    // Hydrate SOPS secrets before apply.
     let manifest = if secrets::needs_hydration(&manifest) {
         ctx.progress.set_phase(&node, Phase::Hydrate);
         match ctx.secrets.hydrate(manifest).await {
@@ -1742,9 +1666,9 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         manifest
     };
 
-    // The rerun rule: a changed resource carrying `kix.run/rerun` is never
-    // patched. When something is live it is deleted first (foreground, so
-    // a Job's pod goes with it); when nothing is, a plain apply creates it.
+    // Changed resources carrying `kix.run/rerun` are never patched in place.
+    // Delete the live object in the foreground first so its pods are removed
+    // before recreating it, or apply directly if no live object exists.
     if matches!(entry.kind, TransitionKind::Recreate) && rerun_reason.is_none() {
         match ctx.resources.get_live(&rid).await {
             Ok(Some(_)) => rerun_reason = Some("changed since the last run"),
@@ -1759,7 +1683,6 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         }
     }
 
-    // Apply. Kind resolution (with refresh-on-miss) lives in the ops layer.
     ctx.progress.set_phase(&node, Phase::Apply);
     let applied_action: ApplyAction;
     let mut recreated_reason: Option<String> = None;
@@ -1805,7 +1728,6 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         }
     }
 
-    // Surface apply outcome to the renderer as a mid-flight progress event.
     ctx.emit(DeployEvent::NodeStateChanged {
         node: node.clone(),
         kind: entry.kind,
@@ -1827,8 +1749,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         },
     };
 
-    // A dry-run apply is not persisted, so a readiness poll would fail or
-    // time out. Report it ready once the simulated apply succeeds.
+    // Dry-run applies are not persisted, so skip readiness polling.
     if ctx.dry_run {
         return done(recreated_reason);
     }
@@ -1838,9 +1759,8 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         return done(recreated_reason);
     }
 
-    // Wait for readiness. Every status callback counts as progress for the
-    // watchdog, so a long but healthy rollout is never reported as a stall;
-    // the watchdog reports the wait itself from the status kept here.
+    // Poll for readiness. Each status callback updates the watchdog so an
+    // active rollout does not trigger a stall warning.
     ctx.progress.set_phase(&node, Phase::Readiness);
     let on_status = |msg: &str| {
         ctx.progress.set_status(&node, msg);
@@ -1879,8 +1799,6 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
 
     match outcome {
         ReadinessResult::Ready => done(recreated_reason),
-        // A rerun or a recreate is reported in its place, as `done` orders
-        // the outcomes.
         ReadinessResult::ReadyPendingRestart { stale, message } => match done(recreated_reason) {
             NodeOutcome::Ready { apply_action } => NodeOutcome::PendingRestart {
                 apply_action,
@@ -1919,9 +1837,8 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     }
 }
 
-/// Wait for an object another Kix cluster writes (a [`TransitionKind::Wait`]
-/// node) to be ready, without applying it. A dry run returns at once, as
-/// it does for the readiness of every other node.
+/// Wait for a resource managed by a platform Kix cluster
+/// ([`TransitionKind::Wait`]) to become ready without applying it.
 async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     let unchanged = NodeOutcome::Ready {
         apply_action: ApplyAction::Unchanged,
@@ -1985,14 +1902,12 @@ async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome 
     }
 }
 
-/// Rerun-annotated Skip nodes whose live object failed.
+/// Return rerun-annotated `Skip` nodes whose live object is in a terminal
+/// failed state.
 ///
-/// `kix deploy` and `kix rollback` stop before the engine when the plan has
-/// nothing to apply. An unchanged probe whose last run failed still has to
-/// run, and only the engine's Skip path does that (see `execute_node`),
-/// so the commands ask this first and run the engine when it names
-/// anything. A read that fails counts as "not failed": the engine reports
-/// it on its own path if the run goes ahead for another reason.
+/// `kix deploy` and `kix rollback` short-circuit before invoking the scheduler
+/// when a plan has no changes to apply. They call this function first so an
+/// unchanged probe whose previous run failed still triggers a scheduler run.
 pub async fn failed_rerun_nodes(
     client: &kube::Client,
     discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
@@ -2022,9 +1937,9 @@ pub async fn failed_rerun_nodes(
     failed
 }
 
-/// Reverse-topological ordering of orphaned resources in `old_manifests`.
-/// An orphan with no manifest there has no known dependencies and goes last;
-/// leaving it out would keep it on the cluster with nothing recording it.
+/// Return orphaned resources in reverse-topological order according to
+/// `old_manifests`. Orphans without a matching manifest in `old_manifests`
+/// have no known dependencies and are appended at the end.
 fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
     let orphan_set: HashSet<String> = orphan_rids
         .iter()
@@ -2062,9 +1977,6 @@ fn is_crd_like(entry: &PlanNodeEntry) -> bool {
             .is_some_and(|t| t.kind == "CustomResourceDefinition"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -2308,9 +2220,9 @@ mod tests {
     }
 }
 
-/// Engine tests: `run_deploy` against the scripted fake, no cluster, paused
-/// clock. Every run is wrapped in a one-hour virtual timeout: a parked engine
-/// fails at once instead of hanging the suite.
+/// Engine tests: `run_deploy` against the scripted fake without a cluster,
+/// using a paused clock. Every run is wrapped in a one-hour virtual timeout so
+/// a parked engine fails immediately instead of hanging the suite.
 #[cfg(test)]
 mod engine_tests {
     use super::*;
@@ -2338,8 +2250,7 @@ mod engine_tests {
         }
     }
 
-    /// A manifest whose identity hash is `h_<name>` and whose predecessors
-    /// are named in `deps`.
+    /// Build a manifest with identity hash `h_<name>` and dependencies `deps`.
     fn m(kind: &str, name: &str, deps: &[&str]) -> Value {
         let mut annotations = serde_json::Map::new();
         annotations.insert(keys::IDENTITY_HASH.into(), json!(format!("h_{name}")));
@@ -2354,14 +2265,14 @@ mod engine_tests {
         json!({ "apiVersion": "v1", "kind": kind, "metadata": metadata })
     }
 
-    /// `m` with the rerun annotation: a probe Job under the rerun rule.
+    /// Build a manifest carrying the `kix.run/rerun` annotation.
     fn rerun_m(kind: &str, name: &str, deps: &[&str]) -> Value {
         let mut v = m(kind, name, deps);
         v["metadata"]["annotations"][keys::RERUN] = json!("on-change");
         v
     }
 
-    /// A live Job as the apiserver would return it, failed or succeeded.
+    /// Build a live Job object in a failed or succeeded state.
     fn live_job(failed: bool) -> Value {
         json!({
             "apiVersion": "batch/v1",
@@ -2376,7 +2287,7 @@ mod engine_tests {
         plan_with_skips(manifests, &[])
     }
 
-    /// Like `plan_of`, but the named resources are `Skip` (unchanged) nodes.
+    /// Build a plan from `manifests`, marking the named resources as `Skip`.
     fn plan_with_skips(manifests: &[Value], skip: &[&str]) -> DeployPlan {
         let graph = ResourceGraph::from_manifests(manifests).unwrap();
         let changes: Vec<ChangeAction> = manifests
@@ -2472,7 +2383,7 @@ mod engine_tests {
             })
         }
 
-        /// Terminal verdicts per node, in order of emission.
+        /// Return terminal verdicts per node in emission order.
         fn terminals(&self) -> Vec<(NodeId, Verdict)> {
             self.0
                 .lock()
@@ -2494,8 +2405,7 @@ mod engine_tests {
         }
     }
 
-    /// Run the engine. Panics if it parks: under the paused clock the
-    /// timeout fires the moment nothing is runnable.
+    /// Run the engine with a virtual timeout so any deadlock fails immediately.
     async fn run(
         ops: &Arc<ScriptedOps>,
         plan: DeployPlan,
@@ -2518,7 +2428,7 @@ mod engine_tests {
         .expect("engine parked: nothing runnable for an hour of virtual time")
     }
 
-    /// `run` with orphans to prune.
+    /// Run the engine with orphans to prune.
     async fn run_with_orphans(
         ops: &Arc<ScriptedOps>,
         plan: DeployPlan,
@@ -2843,8 +2753,9 @@ mod engine_tests {
         );
     }
 
-    /// kixpkgs#82. A run that stops because a node failed under Stop leaves
-    /// a record saying so, so the next deploy can reconcile what it applied.
+    /// A run that stops because a node failed under `OnErrorPolicy::Stop`
+    /// marks the activation record as `Failed` so the next deploy can
+    /// reconcile what was applied.
     #[tokio::test(start_paused = true)]
     async fn a_failed_node_under_stop_aborts_the_activation() {
         let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &["a"])];
@@ -3586,7 +3497,7 @@ mod engine_tests {
         assert_eq!(rec.terminal_count(&NodeId::Resource(rid("Widget", "w"))), 1);
     }
 
-    /// One of Kix's own CRDs as a build writes it, serving v1alpha1.
+    /// Build one of Kix's own CRDs serving `v1alpha1`.
     fn kix_crd(name: &str) -> Value {
         let mut v = m("CustomResourceDefinition", name, &[]);
         v["apiVersion"] = json!("apiextensions.k8s.io/v1");
@@ -3594,7 +3505,7 @@ mod engine_tests {
         v
     }
 
-    /// A deploy record depending on `deps`, with the interfaces `interfaces`.
+    /// Build a deploy record depending on `deps` with `interfaces`.
     fn record_m(interfaces: Value, deps: &[&str]) -> Value {
         let mut v = m(lifecycle::RECORD_KIND, "rec", deps);
         v["apiVersion"] = json!(keys::API_VERSION);
@@ -3603,8 +3514,9 @@ mod engine_tests {
         v
     }
 
-    /// Kix's two CRDs, a PackageInstance of the one, and a record of the
-    /// other. `interfaces` makes the build a consumer's.
+    /// Build a manifest set with Kix's two CRDs, a `PackageInstance`, and an
+    /// `Activation` record. Non-empty `interfaces` marks the build as a
+    /// consumer cluster.
     fn kix_build(interfaces: Value) -> Vec<Value> {
         vec![
             kix_crd(keys::ACTIVATIONS_CRD),
@@ -4090,7 +4002,7 @@ mod engine_tests {
         })
     }
 
-    /// Readiness outcomes need a polled kind; a ConfigMap is immediate.
+    /// Return true if node `j` requires readiness polling (`Deployment`).
     fn polled(case: &Case, j: usize) -> bool {
         case.polled[j] || matches!(case.outcomes[j], Outcome::ReadyFail | Outcome::ReadyHang)
     }

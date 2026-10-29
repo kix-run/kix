@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 /// Sentinel namespace value for cluster-scoped resources.
 pub const CLUSTER_SCOPED: &str = "_cluster";
 
-/// Whether `manifest` is a Kubernetes Secret: `apiVersion` `v1` and `kind`
-/// `Secret`. Kix hides a Secret's values by this rule, which is also the one
-/// Kix Enterprise's agent and server use. An object of another API group
-/// with kind `Secret` is a custom resource, and its values show.
+/// Return whether `manifest` is a core Kubernetes `v1/Secret`.
+///
+/// Kix redacts secret values based on this check. Custom resources in other API
+/// groups whose kind happens to be `Secret` are not redacted.
 pub(crate) fn is_secret(manifest: &serde_json::Value) -> bool {
     manifest.get("apiVersion").and_then(|v| v.as_str()) == Some("v1")
         && manifest.get("kind").and_then(|v| v.as_str()) == Some("Secret")
@@ -78,8 +78,8 @@ impl ResourceId {
         })
     }
 
-    /// "Kind/name@namespace", as given: for keys, and for messages that
-    /// escape their text as a whole. Showing an id goes through `Display`.
+    /// Return `"Kind/name@namespace"` (or `"Kind/name"` when cluster-scoped)
+    /// without escaping control characters. Use `Display` for user-facing output.
     pub fn display_id(&self) -> String {
         if self.namespace == CLUSTER_SCOPED {
             format!("{}/{}", self.kind, self.name)
@@ -89,10 +89,8 @@ impl ResourceId {
     }
 }
 
-/// "Kind/name@namespace" for people to read: each part through
-/// [`crate::text::printable`], since a build's kinds, names and namespaces
-/// are its author's text, and plans, logs and graphs show them. This is
-/// where kix shows an object's id.
+/// Format `"Kind/name@namespace"` for user-facing output, passing each segment
+/// through [`crate::text::printable`].
 impl std::fmt::Display for ResourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use crate::text::printable;

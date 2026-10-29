@@ -43,7 +43,7 @@ pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let graph = kix::cluster::graph::ResourceGraph::from_manifests(&manifests).into_diagnostic()?;
 
-    // --format takes priority over global -o
+    // Prefer `--format` over the global `-o` flag.
     match args.format {
         Some(GraphFormat::Dot) => {
             print!("{}", graph.to_dot());

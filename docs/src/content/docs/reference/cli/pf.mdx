@@ -11,7 +11,7 @@ picks the pod and picks a new one when the pod is replaced. `port-forward` is
 an alias. `kubectl` must be on `PATH`.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
-`cli/kix-cli/src/commands/pf.rs` and `cli/kix-cli/src/commands/workload.rs`
+`cli/kix-cli/src/commands/pf.rs`, and `cli/kix-cli/src/commands/workload.rs`
 when in doubt.
 
 ## Synopsis
@@ -25,7 +25,7 @@ kix pf <CLUSTER> <PACKAGE> <PORT>... [--address <ADDRESS>]
 | --- | --- |
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `<PACKAGE>` | Package instance name, or `<namespace>/<name>` when the name is not unique. |
-| `<PORT>...` | One or more port specs, passed to `kubectl port-forward` unchanged. `8080:80` binds local port 8080, `5432` uses the same port on both sides, `:80` lets kubectl choose a free local port. At least one is required. |
+| `<PORT>...` | One or more port specs, passed to `kubectl port-forward` unchanged. `8080:80` binds local port 8080, `5432` uses the same port on both sides, and `:80` lets kubectl choose a free local port. At least one is required. |
 | `--address <ADDRESS>` | Local addresses to listen on (`kubectl port-forward --address`). kubectl's default is `localhost`. |
 | `--context <CONTEXT>` | Kubeconfig context, passed through to `kubectl`. |
 

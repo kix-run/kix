@@ -72,7 +72,7 @@ pub(crate) fn extract_key(parent_field: &str, item: &Value) -> Option<String> {
     }
 }
 
-/// Returns true if this parent field name supports keyed-list matching.
+/// Return whether `parent_field` uses a dedicated natural key for list matching.
 pub(crate) fn is_keyed_field(parent_field: &str) -> bool {
     matches!(
         parent_field,
@@ -116,9 +116,9 @@ pub(crate) fn try_key_lists<'a>(
                 .is_some_and(|s| !s.is_empty())
         });
         if all_have_names {
-            "ports" // use name-based keying
+            "ports"
         } else {
-            "ports_by_number" // force containerPort:protocol
+            "ports_by_number"
         }
     } else {
         parent_field
@@ -128,7 +128,7 @@ pub(crate) fn try_key_lists<'a>(
     for item in a {
         let key = extract_key_inner(effective_field, item)?;
         if a_map.insert(key, item).is_some() {
-            return None; // Duplicate key in A
+            return None;
         }
     }
 
@@ -136,7 +136,7 @@ pub(crate) fn try_key_lists<'a>(
     for item in b {
         let key = extract_key_inner(effective_field, item)?;
         if b_map.insert(key, item).is_some() {
-            return None; // Duplicate key in B
+            return None;
         }
     }
 
@@ -166,7 +166,7 @@ fn key_by_name<'a>(a: &'a [Value], b: &'a [Value]) -> Option<KeyedListPair<'a>> 
     Some((index(a)?, index(b)?))
 }
 
-/// Internal key extraction that handles the ports_by_number pseudo-field.
+/// Extract a match key for `field`, supporting the internal `ports_by_number` mode.
 fn extract_key_inner(field: &str, item: &Value) -> Option<String> {
     if field == "ports_by_number" {
         let obj = item.as_object()?;

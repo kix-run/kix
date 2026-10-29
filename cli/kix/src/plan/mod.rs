@@ -1,12 +1,11 @@
-//! What a deploy of a build would change, as people review it.
+//! Deploy and diff plans for reviewing what a build changes.
 //!
-//! [`Planner`] makes the plan of a deploy from a build and what the cluster
-//! runs ([`baseline`]). [`diff_graphs`] compares two builds package by
-//! package into a [`PackageDiff`]; [`document::Plan`] is the typed document
-//! `kix plan` and `kix diff` emit; [`objects`] holds a deploy to the objects
-//! the diff shows; [`saved`] compares a plan made now with a reviewed one.
-//! [`live`] is the operator's plan, made from the live objects.
-//! Turning any of these into text is the caller's job.
+//! [`Planner`] builds a deploy plan from a build and the cluster's [`baseline`].
+//! [`diff_graphs`] compares two builds package by package into a [`PackageDiff`].
+//! [`document::Plan`] is the typed document that `kix plan` and `kix diff` emit.
+//! [`objects`] verifies that a deploy only writes or deletes objects shown in the diff.
+//! [`saved`] compares a freshly generated plan against a reviewed one.
+//! [`live`] builds the operator's plan from live cluster objects.
 
 pub mod baseline;
 pub mod document;
@@ -42,62 +41,62 @@ use crate::manifest::keys;
 use crate::manifest::lifecycle;
 use crate::manifest::types::{self, ResourceId};
 
-/// What the planner found, as it goes, for the caller to show.
+/// Progress events emitted by the planner for the caller to display.
 #[derive(Debug, Clone, Copy)]
 pub enum PlanEvent<'a> {
-    /// Connecting to the cluster, before anything is read.
+    /// Connecting to the cluster before reading state.
     Connecting,
-    /// `--current-activation` found no cached build: a first deploy.
+    /// `--current-activation` found no cached build, so this is a first deploy.
     NoCachedBuild,
     /// `--current-activation` is loading the cached build.
     LoadingCache,
-    /// The cluster has no Active record for the cluster: a first deploy.
+    /// The cluster has no Active record, so this is a first deploy.
     NoActiveRecord,
-    /// The Active record the plan compares against.
+    /// The Active record that the plan compares against.
     Active {
         name: &'a str,
         identity_hash: &'a str,
     },
     /// The Active record's build is not on this machine (`error` is `None`)
-    /// or will not load, so the plan reads its objects from the cluster.
+    /// or failed to load, so the plan reads its objects from the cluster.
     ReadingLive { error: Option<&'a str> },
-    /// Objects of this cluster that name only older builds, which the plan
-    /// read from the cluster leaves out.
+    /// Number of objects in this cluster that name only older builds and are
+    /// excluded from the live-cluster reconstruction.
     OlderBuildsLeftOut(usize),
     /// Another deploy of the cluster may still be running, so the plan
     /// leaves the leftovers of failed deploys alone.
     DeployInFlight(&'a Record),
-    /// A failed deploy's build is in the plan.
+    /// A failed deploy's build was folded into the plan.
     FailedFolded(&'a Record),
-    /// A rollback's current build was found but will not load, or is not
-    /// the record's, or the record names none; the rollback compares with no
-    /// current build.
+    /// A rollback's current build failed to load or did not match the record,
+    /// so the rollback compares against an empty build.
     ActiveBuildUnusable { activation: &'a str, error: &'a str },
-    /// A rollback's current record has no identity hash, so it names no
-    /// build to look for, and no list can carry it for a later prune.
+    /// A rollback's current record has no identity hash, so its build cannot
+    /// be looked up or recorded for later pruning.
     ActiveWithoutHash {
         activation: &'a str,
         cluster: &'a str,
     },
-    /// A rollback's current build is not on this machine; the rollback
-    /// compares with no current build.
+    /// A rollback's current build is not on this machine, so the rollback
+    /// compares against an empty build.
     ActiveUnresolved { record: &'a Record },
-    /// A failed deploy's build was found but will not load; the plan leaves
-    /// out what that deploy applied.
+    /// A failed deploy's build failed to load, so the plan omits what that
+    /// deploy applied.
     FailedBuildUnusable { activation: &'a str, error: &'a str },
-    /// Failed deploys whose builds are not on this machine, and which the
-    /// plan did not read from the cluster.
+    /// Failed deploys whose builds are not on this machine and were not read
+    /// from the cluster.
     FailedUnresolved {
         records: &'a [Record],
         cluster: &'a str,
     },
-    /// The builds an earlier deploy kept orphans from that are in the plan.
+    /// Builds from which an earlier deploy kept orphans that were folded into
+    /// the plan.
     KeptFolded(&'a [KeptOrphanSource]),
-    /// A build an earlier deploy kept orphans from was found but will not
-    /// load; the plan cannot list or delete those orphans.
+    /// A build from which an earlier deploy kept orphans failed to load, so
+    /// the plan cannot list or delete those orphans.
     KeptBuildUnusable { activation: &'a str, error: &'a str },
-    /// Builds an earlier deploy kept orphans from that are not on this
-    /// machine, and which the plan did not read from the cluster.
+    /// Builds from which an earlier deploy kept orphans that are not on this
+    /// machine and were not read from the cluster.
     KeptUnresolved {
         sources: &'a [KeptOrphanSource],
         cluster: &'a str,
@@ -133,31 +132,32 @@ pub struct PackageDiff {
     pub removed: Vec<PackageInfo>,
     pub changed: Vec<PackageChangeDiff>,
     pub unchanged: usize,
-    /// Resources outside any package (Namespaces, CRDs, cluster-scoped
-    /// bundles) that differ. Keyed `_cluster`, versions empty.
+    /// Resources outside any package (Namespaces, CRDs, and cluster-scoped
+    /// bundles) that differ. Keyed `_cluster` with empty versions.
     pub cluster_level: Option<PackageChangeDiff>,
-    /// The deploy record rotates whenever anything changed; one line, not a
-    /// create plus a delete. `None` when both sides name the same record.
+    /// Deploy record rotation from old to new. `None` when both sides name
+    /// the same record.
     pub activation: Option<RecordChange>,
-    /// Whether `labels` was computed: a three-way comparison with the
-    /// deployed build. Without it no field change carries a label.
+    /// Whether `labels` was computed via a three-way comparison with the
+    /// deployed build. Without it, no field change carries a label.
     pub labelled: bool,
     /// For each modified resource, one label list per entry of its
     /// `resource_diffs`, in order.
     pub labels: HashMap<ResourceId, Vec<Vec<origin::ChangeLabel>>>,
-    /// The objects the lists above show a deploy writing and deleting, as
-    /// [`diff_graphs`] made them. `objects::of` holds a deploy to them.
+    /// Objects that the diff shows a deploy writing and deleting, as
+    /// computed by [`diff_graphs`]. [`objects::of`] verifies the deploy plan
+    /// against this set.
     pub shown: Shown,
 }
 
-/// The objects a [`PackageDiff`] shows a deploy writing and deleting, each
-/// with the package key it is listed under.
+/// Objects that a [`PackageDiff`] shows a deploy writing and deleting, paired
+/// with the package key under which each is listed.
 #[derive(Clone, Debug, Default)]
 pub struct Shown {
-    /// Each new-side object listed as added, modified, or dep-affected, and
-    /// the new Activation record, by its id and the store hash of its file.
+    /// Each new-side object listed as added, modified, or dep-affected, plus
+    /// the new Activation record, keyed by resource ID and store hash.
     pub writes: BTreeMap<(ResourceId, String), (String, document::WriteChange)>,
-    /// Each old-side object listed as removed, kept ones aside.
+    /// Each old-side object listed as removed, excluding kept resources.
     pub deletes: BTreeMap<ResourceId, String>,
 }
 
@@ -202,8 +202,8 @@ impl Shown {
     }
 }
 
-/// Old and new deploy record names; either side may be absent (first
-/// deploy, or an old side that carries no record).
+/// Old and new deploy record names. Either side may be absent on a first
+/// deploy or when the old side carries no record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordChange {
     pub old: Option<String>,
@@ -211,7 +211,7 @@ pub struct RecordChange {
 }
 
 impl PackageDiff {
-    /// Anything at all to report.
+    /// Return true when there is any change to report.
     pub fn has_changes(&self) -> bool {
         !self.added.is_empty()
             || !self.removed.is_empty()
@@ -220,8 +220,8 @@ impl PackageDiff {
             || self.activation.is_some()
     }
 
-    /// Show the orphans another Kix cluster's current build still contains
-    /// as kept rather than removed: the prune keeps them.
+    /// Move orphans that another Kix cluster's current build still contains
+    /// from removed to kept so pruning preserves them.
     pub fn keep_shared(&mut self, shared: &[crate::cluster::inventory::SharedOrphan]) {
         let ids: std::collections::HashSet<&ResourceId> = shared.iter().map(|s| &s.rid).collect();
         for p in &mut self.removed {
@@ -243,14 +243,14 @@ impl PackageDiff {
         self.shown.deletes.retain(|id, _| !ids.contains(id));
     }
 
-    /// Changed packages plus the cluster-level pseudo-package, for renderers
-    /// that walk resource-level detail.
+    /// Return an iterator over changed packages plus the cluster-level
+    /// pseudo-package.
     pub(crate) fn changed_with_cluster_level(&self) -> impl Iterator<Item = &PackageChangeDiff> {
         self.changed.iter().chain(self.cluster_level.iter())
     }
 
-    /// Resource counts summed over `changed_with_cluster_level`. Each
-    /// resource lands in exactly one bucket.
+    /// Sum resource counts across `changed_with_cluster_level`. Each
+    /// resource lands in one bucket.
     pub fn resource_totals(&self) -> ResourceTotals {
         let mut totals = ResourceTotals::default();
         for c in self.changed_with_cluster_level() {
@@ -263,20 +263,20 @@ impl PackageDiff {
     }
 }
 
-/// See `PackageDiff::resource_totals`.
+/// Resource counts returned by [`PackageDiff::resource_totals`].
 #[derive(Default)]
 pub struct ResourceTotals {
-    /// Modified, added, and removed resources that deploy or gc delete.
+    /// Modified, added, and removed resources that deploy or `kix gc` deletes.
     pub real_content: usize,
-    /// Resources that left the build but whose kind `lifecycle::never_pruned`
-    /// protects.
+    /// Resources that left the build but are protected by
+    /// `lifecycle::never_pruned` or shared with another cluster.
     pub kept: usize,
     /// Resources whose only change is a propagated hash.
     pub dep_affected: usize,
 }
 
 impl ResourceTotals {
-    /// Any resource counted at all.
+    /// Return true when at least one resource was counted.
     pub fn any(&self) -> bool {
         self.real_content > 0 || self.kept > 0 || self.dep_affected > 0
     }
@@ -287,11 +287,12 @@ pub struct PackageInfo {
     pub key: String, // ns/name
     pub version: Option<String>,
     pub resource_count: usize,
-    /// For a removed package, the resources that stay on the cluster: kinds
-    /// `lifecycle::never_pruned` protects, and any `PackageDiff::keep_shared`
-    /// adds. Counted in `resource_count`. Empty for an added package.
+    /// For a removed package, the resources that remain on the cluster: kinds
+    /// protected by `lifecycle::never_pruned` plus any added by
+    /// [`PackageDiff::keep_shared`]. Counted in `resource_count`. Empty for
+    /// an added package.
     pub kept: Vec<ResourceId>,
-    /// For a removed package, every resource it had. Empty for an added one.
+    /// For a removed package, every resource it had. Empty for an added package.
     pub resources: Vec<ResourceId>,
 }
 
@@ -342,7 +343,7 @@ pub struct PackageChangeDiff {
 }
 
 impl PackageChangeDiff {
-    /// Any resource added, removed, modified, or dep-affected.
+    /// Return true when any resource was added, removed, modified, or dep-affected.
     fn any(&self) -> bool {
         !self.resource_diffs.is_empty()
             || !self.dep_affected_resources.is_empty()
@@ -350,10 +351,10 @@ impl PackageChangeDiff {
             || !self.removed_resources.is_empty()
     }
 
-    /// `removed_resources` split into `(removed, kept)`. `kept` holds the
-    /// kinds `lifecycle::never_pruned` protects, then `shared_kept`: they
-    /// left the build, but deploy and `kix gc` do not delete them, so
-    /// renderers do not show them as deletions.
+    /// Split `removed_resources` into `(removed, kept)`. `kept` holds the
+    /// kinds protected by `lifecycle::never_pruned` followed by `shared_kept`.
+    /// Because deploy and `kix gc` never delete kept resources, renderers do
+    /// not show them as deletions.
     pub fn removed_and_kept(&self) -> (Vec<&ResourceId>, Vec<&ResourceId>) {
         let (removed, mut kept): (Vec<&ResourceId>, Vec<&ResourceId>) = self
             .removed_resources
@@ -364,10 +365,9 @@ impl PackageChangeDiff {
     }
 }
 
-/// Returns true if a structural-diff path points at a kix.run stamped annotation
-/// whose only purpose is to carry hash propagation (identity, deps, activations,
-/// built-via). Used to distinguish real content changes from dependency-propagated
-/// hash bumps.
+/// Return true when a structural-diff path points at a `kix.run` stamped
+/// annotation that only carries hash propagation (`identity-hash`,
+/// `depends-on`, `activations`, or `built-via`).
 fn is_propagation_path(path: &str) -> bool {
     const PROPAGATION_ANNS: &[&str] = &[
         keys::IDENTITY_HASH,
@@ -375,18 +375,16 @@ fn is_propagation_path(path: &str) -> bool {
         keys::ACTIVATIONS,
         keys::BUILT_VIA,
     ];
-    // The same four under any retired domain: a diff against a cluster whose
-    // objects predate a domain move shows both spellings, and the retired one
-    // is propagation noise just as much as the current one.
+    // Include retired domains because a diff against a cluster whose objects
+    // predate a domain move shows both spellings.
     let legacy: Vec<String> = PROPAGATION_ANNS
         .iter()
         .flat_map(|k| crate::legacy_domain::legacy_spellings(k))
         .collect();
     // Match only top-level metadata.annotations. Pod template annotations
     // (e.g. $.spec.template.metadata.annotations.*) are real content changes.
-    // The match is exact: the path joins keys with `.`, so a prefix would
-    // also take an annotation such as `kix.run/identity-hash.x`, whose
-    // change the plan would then not show.
+    // Match the exact path so an annotation with a shared prefix (such as
+    // `kix.run/identity-hash.x`) still shows as a content change.
     PROPAGATION_ANNS
         .iter()
         .map(|s| (*s).to_string())
@@ -471,10 +469,10 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
         }
     }
 
-    // Resources no package owns: real graphs keep Namespaces, CRDs and
-    // the cluster-scoped bundles outside every PackageNode, and a
-    // synthesized graph does the same for anything without a package
-    // annotation. The deploy record is handled separately below.
+    // Real graphs keep Namespaces, CRDs, and cluster-scoped bundles outside
+    // every PackageNode, and a synthesized graph does the same for resources
+    // without a package annotation. The deploy record is handled separately
+    // below.
     let cluster_level = {
         let old_res = unowned_resources(old);
         let new_res = unowned_resources(new);
@@ -530,10 +528,9 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 /// Key of the cluster-level pseudo-package in renderers.
 pub const CLUSTER_LEVEL_KEY: &str = "_cluster";
 
-/// Resources in `graph.resources` that no package owns, minus the
-/// PackageInstances (each belongs with its package, see
-/// `resource_map_for_package`), the deploy record, and on a consumer the
-/// CRDs its platform writes (`lifecycle::left_to_platform`).
+/// Return the resources in `graph.resources` that no package owns, excluding
+/// PackageInstances (see [`resource_map_for_package`]), the deploy record, and
+/// CRDs that a consumer leaves to its platform (`lifecycle::left_to_platform`).
 fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Value)> {
     let left_to_platform =
         lifecycle::left_to_platform(graph.resources.values().map(|node| &node.manifest));
@@ -553,7 +550,7 @@ fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Val
         .collect()
 }
 
-/// The manifests of `objects`.
+/// Return the manifests from `objects`.
 fn values_of<'a>(
     objects: &BTreeMap<ResourceId, (&'a PathBuf, &'a Value)>,
 ) -> BTreeMap<ResourceId, &'a Value> {
@@ -563,7 +560,7 @@ fn values_of<'a>(
         .collect()
 }
 
-/// Name of the deploy record in the graph, if it carries one.
+/// Return the name of the deploy record in `graph`, if present.
 fn record_name(graph: &StoreGraph) -> Option<String> {
     graph
         .resources
@@ -597,8 +594,8 @@ fn diff_package_resources(
     )
 }
 
-/// Diff two resource sets keyed by identity: content changes, propagation-
-/// only bumps, additions, removals.
+/// Diff two resource maps keyed by identity into content changes,
+/// propagation-only bumps, additions, and removals.
 fn diff_resource_maps(
     key: &str,
     old_version: Option<String>,
@@ -615,8 +612,8 @@ fn diff_resource_maps(
 
     for (id, new_val) in new_res {
         if let Some(old_val) = old_res.get(id) {
-            // Old first: `config` labels side a "old" and side b "new",
-            // and the whole report reads as what a deploy would change.
+            // Pass `old_val` first because `config` labels side a "old" and
+            // side b "new".
             let diffs = structural_diff(old_val, new_val, "$", config);
             if diffs.is_empty() {
                 continue;
@@ -656,8 +653,8 @@ fn diff_resource_maps(
     }
 }
 
-/// A package's resources plus its own PackageInstance (the graph keeps the
-/// PI at the package's store path, outside `resource_paths`).
+/// Return a package's resources plus its own PackageInstance (stored at the
+/// package's store path, outside `resource_paths`).
 fn resource_map_for_package<'a>(
     pkg: &'a PackageNode,
     graph: &'a StoreGraph,
@@ -665,7 +662,7 @@ fn resource_map_for_package<'a>(
     values_of(&objects_of_package(pkg, graph))
 }
 
-/// [`resource_map_for_package`] with the store path of each manifest.
+/// Return [`resource_map_for_package`] paired with the store path of each manifest.
 fn objects_of_package<'a>(
     pkg: &'a PackageNode,
     graph: &'a StoreGraph,
@@ -797,8 +794,8 @@ impl<'a> ManifestIndex<'a> {
         }
     }
 
-    /// The resources of the package `key` (`namespace/name`) on one side,
-    /// its PackageInstance included.
+    /// Return the resources of package `key` (`namespace/name`) on `side`,
+    /// including its PackageInstance.
     pub(crate) fn package_resources(&self, key: &str, side: Side) -> Vec<ResourceId> {
         let graph = match side {
             Side::Old => self.old_graph,
@@ -812,8 +809,8 @@ impl<'a> ManifestIndex<'a> {
             .unwrap_or_default()
     }
 
-    /// The old and new manifest of each of `ids`, each side present when
-    /// that side holds the resource.
+    /// Render the old and new manifests for each resource in `ids` when
+    /// present on that side.
     pub(crate) fn render<'i>(
         &self,
         ids: impl IntoIterator<Item = &'i ResourceId>,
@@ -834,38 +831,34 @@ impl<'a> ManifestIndex<'a> {
     }
 }
 
-/// Stands in for a value the JSON diff leaves out because it is secret: a
+/// Placeholder for a secret value omitted from the JSON diff. Covers a
 /// Secret's `data` and `stringData` values, a Secret's
 /// `kix.run/content-hash` and `kix.run/applied-hash`, and every
-/// `checksum/*` annotation (Helm charts put a hash of a Secret there, and a
-/// hash of a weak secret can be brute-forced).
+/// `checksum/*` annotation (where Helm charts store Secret hashes).
 pub const SECRET_NOT_SHOWN: &str = "(secret, not shown)";
 
-/// Stands in for a secret value on the new side when the old side has a
+/// Placeholder for a secret value on the new side when the old side has a
 /// different value at the same path, so a line diff of the two manifests
 /// still shows the line as changed.
 pub const SECRET_CHANGED_NOT_SHOWN: &str = "(secret, changed, not shown)";
 
-/// A manifest larger than this, serialized, is replaced by a size note at
-/// `--detail manifests` and in a plan file. It is the apiserver's limit on a
-/// request body, so any object a cluster can store is shown whole; only a
-/// build manifest the apiserver would refuse gets the note.
+/// Maximum serialized manifest size (3 MiB) shown at `--detail manifests` and
+/// in a plan file. Matches the apiserver's request body limit so any object a
+/// cluster can store is shown in full.
 pub const MAX_SHOWN_MANIFEST_BYTES: usize = 3 * 1024 * 1024;
 
-/// A value larger than this, serialized, is left out of the JSON diff, so
-/// a changed CRD schema or a large ConfigMap file does not swell a plan
-/// that CI uploads.
+/// Maximum serialized field value size (16 KiB) included in a JSON diff so
+/// large CRD schemas or ConfigMap entries do not bloat uploaded plans.
 pub const MAX_SHOWN_VALUE_BYTES: usize = 16 * 1024;
 
-/// A whole manifest, hidden and capped as [`shown_value`] does, at
+/// Return `manifest` with secrets redacted and values capped at
 /// [`MAX_SHOWN_MANIFEST_BYTES`].
 fn shown_manifest(is_secret: bool, manifest: &Value, old: Option<&Value>) -> Value {
     shown_value(is_secret, "$", manifest, old, MAX_SHOWN_MANIFEST_BYTES)
 }
 
-/// `value`, found at `path`, with every secret value in it hidden (see
-/// `hide_secrets`), or a size note when it is larger than `max_bytes`.
-/// `old` is the old side's value at the same path, given for a new value.
+/// Redact secret values in `value` at `path` (see [`hide_secrets`]), or
+/// replace the value with a size note when it exceeds `max_bytes`.
 pub(crate) fn shown_value(
     is_secret: bool,
     path: &str,
@@ -882,9 +875,9 @@ pub(crate) fn shown_value(
     value
 }
 
-/// `d` with the values `is_secret_path` covers hidden, for the text plan.
-/// Unlike the JSON it keeps large values, which the text diff prints line
-/// by line.
+/// Return `d` with secret values redacted for the text plan. Unlike the JSON
+/// diff, this preserves large values so the text diff can print them line by
+/// line.
 pub fn without_secrets(is_secret: bool, d: &Difference) -> Difference {
     let mut d = d.clone();
     let old = d.a_value.clone();
@@ -897,10 +890,9 @@ pub fn without_secrets(is_secret: bool, d: &Difference) -> Difference {
     d
 }
 
-/// Replace every secret value in `value` with [`SECRET_NOT_SHOWN`]. When
-/// `old` (the old side's value at the same path) holds a different value
-/// there, the replacement is [`SECRET_CHANGED_NOT_SHOWN`]. Array elements
-/// are matched to `old` by position.
+/// Replace every secret value in `value` with [`SECRET_NOT_SHOWN`], or with
+/// [`SECRET_CHANGED_NOT_SHOWN`] when `old` holds a different value at the
+/// same path. Array elements are matched to `old` by position.
 fn hide_secrets(is_secret: bool, path: &str, value: &mut Value, old: Option<&Value>) {
     if is_secret_path(is_secret, path) {
         let changed = old.is_some_and(|o| o != value);
@@ -929,14 +921,12 @@ fn hide_secrets(is_secret: bool, path: &str, value: &mut Value, old: Option<&Val
     }
 }
 
-/// Whether the value at `path` is secret. Annotation keys contain dots and
-/// slashes, and diff paths do not escape them, so a key is matched by its
-/// prefix after `annotations.`.
+/// Return true when the value at `path` is secret. Because annotation keys
+/// contain dots and slashes that diff paths do not escape, keys are matched
+/// by their suffix after `annotations.`.
 ///
-/// On a Secret this covers `kubectl.kubernetes.io/last-applied-configuration`,
-/// which holds the whole Secret as `kubectl apply` last sent it, and the
-/// content and applied hashes under every domain Kix has stamped, since a
-/// live object can still carry a retired spelling.
+/// On a Secret, this also covers `kubectl.kubernetes.io/last-applied-configuration`
+/// and the content and applied hashes under every domain Kix has stamped.
 fn is_secret_path(is_secret: bool, path: &str) -> bool {
     if path.contains(".annotations.checksum/") {
         return true;
@@ -979,7 +969,7 @@ mod diff_graph_tests {
     use crate::manifest::keys;
     use serde_json::json;
 
-    /// The `packages` section of the plan document for `diff`.
+    /// Serialize the `packages` section of the plan document for `diff`.
     fn packages_json(diff: &PackageDiff, detail: document::Detail) -> Value {
         serde_json::to_value(document::Packages::of(diff, detail)).expect("packages serialize")
     }
@@ -1317,7 +1307,7 @@ mod diff_graph_tests {
         assert_eq!(json["added"][0]["kept_resources"], json!([]));
     }
 
-    /// The `changes` of the modified resource named `resource` in `web`.
+    /// Return the `changes` array of the modified `resource` in `app/web`.
     fn json_changes(d: &PackageDiff, resource: &str) -> Value {
         let json = packages_json(d, document::Detail::Fields);
         let web = json["changed"]

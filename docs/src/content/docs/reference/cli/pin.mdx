@@ -13,7 +13,7 @@ does not evaluate the flake or the cluster, so it works while evaluation is
 failing.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
-`cli/kix-cli/src/commands/pin.rs` and `cli/kix-cli/src/commands/pin/locate.rs`
+`cli/kix-cli/src/commands/pin.rs`, and `cli/kix-cli/src/commands/pin/locate.rs`
 when in doubt.
 
 ## Subcommands
@@ -126,7 +126,7 @@ when, and its note.
 
 `-o json` prints a JSON document for all three subcommands: for `set`, the
 pin file path, key, option (null for an image pin), resulting pin, and
-whether it changed; for `check`, each pin's key, option, result and message,
+whether it changed; for `check`, each pin's key, option, result, and message,
 the stale pins, and `ok`; for `list`, an object with `images` and
 `instances`, shaped as in the file. Any other `-o` value prints text.
 

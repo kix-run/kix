@@ -140,7 +140,7 @@ fn format_colored(d: &Difference, config: &DiffConfig, full_diff: bool) -> Strin
     }
 }
 
-/// Compact representation of a JSON value for diff output.
+/// Format a compact representation of a JSON value for diff output.
 fn compact(value: Option<&serde_json::Value>) -> String {
     const MAX_LEN: usize = 120;
 
@@ -252,7 +252,7 @@ mod tests {
         assert!(out.contains("cluster: \"v2\""));
     }
 
-    /// A diff shows a manifest's paths and text with hidden characters
+    /// Check that a diff shows a manifest's paths and text with hidden characters
     /// flagged, so a line it shows cannot be rewritten by them.
     #[test]
     fn a_diff_flags_hidden_characters() {

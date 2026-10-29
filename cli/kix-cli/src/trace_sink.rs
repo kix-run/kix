@@ -40,7 +40,7 @@ pub fn restore_stderr() -> Option<PathBuf> {
     guard.path.take()
 }
 
-/// MakeWriter fn passed to the tracing subscriber.
+/// Return a [`Writer`] for the tracing subscriber.
 pub fn make_writer() -> Writer {
     Writer
 }

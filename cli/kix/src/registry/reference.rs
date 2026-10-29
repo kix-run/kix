@@ -96,7 +96,7 @@ impl Reference {
         Self::parse(&format!("{repository}:{tag}"))
     }
 
-    /// The host to send registry API requests to.
+    /// Return the hostname to send registry API requests to.
     pub(crate) fn api_host(&self) -> &str {
         if self.registry == "docker.io" {
             DOCKER_HUB_API
@@ -105,8 +105,8 @@ impl Reference {
         }
     }
 
-    /// The key credentials are stored under. Docker Hub's is historical and
-    /// every credential helper on disk still uses it.
+    /// Return the key under which credentials for this registry are stored.
+    /// Docker Hub uses a historical URL key across credential helpers.
     pub(crate) fn credential_key(&self) -> &str {
         if self.registry == "docker.io" {
             "https://index.docker.io/v1/"
@@ -115,8 +115,8 @@ impl Reference {
         }
     }
 
-    /// `https://host` unless the host is plainly local, where a registry
-    /// commonly speaks http. `localhost:5000` is the case that matters.
+    /// Return `"http"` for loopback registries (such as `localhost:5000`) and
+    /// `"https"` for all other hosts.
     pub(crate) fn scheme(&self) -> &'static str {
         let host = self.api_host();
         let bare = host.split(':').next().unwrap_or(host);
@@ -127,8 +127,8 @@ impl Reference {
         }
     }
 
-    /// What to ask the manifest endpoint for: the digest when we have one,
-    /// otherwise the tag.
+    /// Return the manifest identifier to request from the registry: the digest
+    /// when present, or the tag otherwise.
     pub(crate) fn manifest_selector(&self) -> Option<&str> {
         self.digest.as_deref().or(self.tag.as_deref())
     }
@@ -147,13 +147,13 @@ impl fmt::Display for Reference {
     }
 }
 
-/// A leading path segment is a registry host when it looks like one: it has a
-/// dot or a port, or it is localhost.
+/// Return whether a leading path segment is a registry host (contains a dot or
+/// colon, or equals `"localhost"`).
 fn is_registry_host(s: &str) -> bool {
     s == "localhost" || s.contains('.') || s.contains(':')
 }
 
-/// `sha256:` followed by exactly 64 lowercase hex characters.
+/// Return whether `s` is `sha256:` followed by 64 hexadecimal characters.
 pub fn is_sha256_digest(s: &str) -> bool {
     match s.strip_prefix("sha256:") {
         Some(hex) => hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()),

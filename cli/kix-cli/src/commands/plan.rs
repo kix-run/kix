@@ -103,7 +103,7 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
     Ok(())
 }
 
-/// The planning flags the command line sets.
+/// Extract [`PlanFlags`] from CLI arguments.
 pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
     PlanFlags {
         prune: args.prune,
@@ -117,8 +117,8 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
     }
 }
 
-/// What a plan of `args` compares the build with: the local cache under
-/// `--current-activation`, else the cluster.
+/// Select the baseline source (`OldSide`) for planning: the local cache under
+/// `--current-activation`, or the live cluster otherwise.
 fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
     if args.current_activation {
         OldSide::LocalCache
@@ -130,10 +130,11 @@ fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
     }
 }
 
-/// Build, then plan the deploy with [`Planner`] and `flags`, which are the
-/// command line's or a saved plan's. `None` when the build has nothing to
-/// deploy. Progress lines go through [`crate::say!`], so `-o markdown`, and
-/// `kix deploy --plan F --dry-run -o json`, keep them off stdout.
+/// Build the target cluster and run [`Planner`] with `flags`.
+///
+/// Returns `Ok(None)` when the build contains no resources. Progress messages
+/// are written via [`crate::say!`] so `-o markdown` and `-o json` keep stdout
+/// clean.
 pub(crate) fn prepare(
     args: &PlanArgs,
     flags: PlanFlags,
@@ -161,12 +162,11 @@ pub(crate) fn prepare(
     Ok(Some(planned))
 }
 
-/// The new build: the bundle `--bundle` names, or a build of the flake
-/// into the local Nix store.
+/// Load the target build from `--bundle` or by building the flake into the
+/// local Nix store.
 ///
-/// A kixpkgs pin from before the domain move renders Kix's own CRDs under
-/// the retired group. Deploying it would put those CRDs back and leave two
-/// groups live, which the CLI cannot tell apart, so it is refused.
+/// Rejects builds pinned to a pre-migration `kixpkgs` revision that still
+/// renders Kix's CRDs under the retired API group.
 fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> {
     let build = match &args.bundle {
         Some(path) => {
@@ -187,9 +187,11 @@ fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> 
     build.installable().map_err(|e| miette!("{e}"))
 }
 
-/// The graphs' manifests, with each object the apiserver answered for shown
-/// as the live object and the dry-run result. A refused write keeps the
-/// build's manifest, which is what the deploy would send.
+/// Index the old and new graphs' manifests, overlaying live objects and
+/// dry-run results returned by the apiserver.
+///
+/// Refused writes keep the build's manifest so diffs show what the deploy
+/// attempted to send.
 fn manifest_index<'a>(
     old: &'a StoreGraph,
     new: &'a StoreGraph,
@@ -210,7 +212,7 @@ fn manifest_index<'a>(
     index
 }
 
-/// What the engine and the apiserver said during a dry run.
+/// Results collected from a server-side dry run of the deploy plan.
 pub(crate) struct DryRunReport {
     pub answers: Vec<DryRunAnswer>,
     /// Nodes the engine failed with no apiserver answer recorded.
@@ -387,10 +389,11 @@ impl DeployObserver for DryRunObserver {
     }
 }
 
-/// Make the plan document, and overlay the apiserver's answers on the
-/// package diff, which the text renderers read ([`Planned::overlay`]).
-/// `manifests` makes it at `--detail manifests`, as a plan file needs;
-/// otherwise at `--detail plain`.
+/// Build the [`Plan`] document and overlay the apiserver's dry-run answers onto
+/// the package diff ([`Planned::overlay`]).
+///
+/// When `manifests` is `true`, includes full manifest diffs (`Detail::Manifests`)
+/// as required when saving a plan file; otherwise uses `Detail::Plain`.
 pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests: bool) -> Plan {
     let connected = p.client.is_some();
     let made_by = if connected {
@@ -608,7 +611,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
     doc
 }
 
-/// The API group and kind a manifest is of.
+/// Return the `(group, kind)` pair for `manifest`.
 fn crd_key(manifest: &Value) -> Option<(String, String)> {
     let kind = manifest.get("kind").and_then(Value::as_str)?;
     let api_version = manifest.get("apiVersion").and_then(Value::as_str)?;
@@ -616,16 +619,19 @@ fn crd_key(manifest: &Value) -> Option<(String, String)> {
     Some((group.to_string(), kind.to_string()))
 }
 
-/// The group and kind a CRD manifest defines.
+/// Return the `(group, kind)` pair defined by a CRD manifest.
 fn defined_by(crd: &Value) -> Option<(String, String)> {
     let group = crd.pointer("/spec/group").and_then(Value::as_str)?;
     let kind = crd.pointer("/spec/names/kind").and_then(Value::as_str)?;
     Some((group.to_string(), kind.to_string()))
 }
 
-/// The kinds whose CRD this deploy creates or changes, by the dry run's
-/// answers. A custom resource of such a kind was checked against the CRD as
-/// it is now, so a refusal of it may not happen on the deploy.
+/// Return the `(group, kind)` pairs whose CRDs are created or modified in
+/// `answers`.
+///
+/// Custom resources of these kinds were dry-run validated against the older CRD
+/// currently on the cluster, so validation refusals on them are reported as
+/// `CrdChangedByThisDeploy` rather than hard admission failures.
 fn changed_crds(answers: &[DryRunAnswer]) -> HashSet<(String, String)> {
     answers
         .iter()
@@ -643,9 +649,9 @@ fn changed_crds(answers: &[DryRunAnswer]) -> HashSet<(String, String)> {
         .collect()
 }
 
-/// The custom resource kinds a build brings: the group and kind of each CRD
-/// it contains, and the API groups of the CRDs its import markers say
-/// something it installs creates (an operator that writes its own CRDs).
+/// Custom resource kinds and API groups introduced by the build, either
+/// directly as `CustomResourceDefinition` manifests or via operator import
+/// markers.
 struct BuildCrds {
     kinds: HashSet<(String, String)>,
     groups: HashSet<String>,
@@ -667,7 +673,8 @@ impl BuildCrds {
         BuildCrds { kinds, groups }
     }
 
-    /// Whether the kind `manifest` is of is one the build brings.
+    /// Return `true` if `manifest` belongs to a CRD kind or API group
+    /// introduced by this build.
     fn brings(&self, manifest: Option<&Value>) -> bool {
         manifest
             .and_then(crd_key)
@@ -675,7 +682,7 @@ impl BuildCrds {
     }
 }
 
-/// Every resource that leaves the build, with what the deploy does to it.
+/// Build the list of [`PruneEntry`] records for orphaned resources.
 fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec<PruneEntry> {
     let policy = p.checked.flags().prune_policy();
     let mut entries: Vec<PruneEntry> = p
@@ -754,8 +761,9 @@ fn print_migrations(doc: &Plan, accepted: bool) {
     }
 }
 
-/// The text plan: the package list, the summary, and every section of
-/// `doc` that found something. `verbose` lists each resource and field.
+/// Print the human-readable plan summary and details.
+///
+/// When `verbose` is `true`, lists each changed resource and field.
 pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     plan::print_package_plan(p.checked.pkg_diff(), verbose);
     plan::print_plan_summary(p.checked.pkg_diff());
@@ -877,8 +885,7 @@ mod tests {
         }
     }
 
-    /// Only a CRD the dry run would change marks its kind; one that holds
-    /// live already does not.
+    /// Verify that [`changed_crds`] includes only CRDs modified by the dry run.
     #[test]
     fn a_crd_the_deploy_changes_marks_its_kind() {
         let new = crd("example.com", "Widget", "v2");
@@ -892,8 +899,7 @@ mod tests {
         assert!(!changed.contains(&("example.com".into(), "Gadget".into())));
     }
 
-    /// A build CRD covers its own group and kind, not the same kind name in
-    /// another group.
+    /// Verify that [`BuildCrds::brings`] matches both API group and kind.
     #[test]
     fn build_crds_match_group_and_kind() {
         let crds = BuildCrds::of(&[crd("example.com", "Widget", "v1")]);

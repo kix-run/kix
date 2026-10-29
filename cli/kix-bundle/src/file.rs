@@ -1,6 +1,5 @@
-//! Bundle files on disk: a bundle as the build `--bundle` plans and deploys,
-//! the bundles `--deployed-bundle` supplies, and writing one for
-//! `kix bundle`.
+//! Reading and writing `.kixbundle` files on disk for `--bundle`,
+//! `--deployed-bundle`, and `kix bundle`.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -16,8 +15,8 @@ use kix::text::printable;
 
 use crate::{Bundle, BundleError, MAX_STORED_BYTES, OpenBundle, from_result_dir};
 
-/// The build in the bundle at `path`, with the `deployed` bundles, which
-/// must be a build of `cluster`. Its result directory is
+/// Load the bundle at `path` (along with any `--deployed-bundle` paths in
+/// `deployed`) as a [`Build`] for `cluster`, setting its result directory to
 /// `bundle:sha256:<sha256>`.
 pub fn read_build(path: &Path, deployed: &[PathBuf], cluster: &str) -> Result<Build, String> {
     let bytes = read_file(path)?;
@@ -29,17 +28,17 @@ pub fn read_build(path: &Path, deployed: &[PathBuf], cluster: &str) -> Result<Bu
     .map_err(|e| format!("cannot use the bundle {}: {e}", path.display()))
 }
 
-/// A bundle written by [`write_build`].
+/// Summary of a bundle written by [`write_build`].
 pub struct Written {
-    /// How many store files it holds.
+    /// Number of store files in the bundle.
     pub files: usize,
-    /// The SHA-256 of its bytes, in hex.
+    /// Lowercase hex SHA-256 digest of the bundle file.
     pub sha256: String,
 }
 
-/// Write the build `graph`, read from its result directory in this
-/// machine's Nix store, to `file` as a bundle. The bundle is read back
-/// first, and `file` is left alone unless it reads as the same build.
+/// Write `graph` from its result directory in the local Nix store to `file` as
+/// a bundle, verifying that the written bundle reads back as an identical
+/// build before persisting it.
 pub fn write_build(
     graph: &StoreGraph,
     kix_rev: &str,
@@ -57,11 +56,8 @@ pub fn write_build(
     contents
         .write(std::io::BufWriter::new(temp.as_file_mut()))
         .map_err(|e| format!("cannot write {}: {e}", file.display()))?;
-    // Read back what was written, so a bundle that would be refused, or
-    // that a deploy would read as another build, is never left at `file`.
-    // A deploy reads it stamped, so it is compared stamped, as `graph` is.
-    // Stamped here, not through `Build`, because stamping records the result
-    // directory, which must first be the build's.
+    // Verify that the written bundle loads and stamps to the exact same
+    // StoreGraph before atomically renaming it into place.
     let (written, mut read_back) =
         load(temp.path()).map_err(|e| format!("the build did not make a valid bundle: {e}"))?;
     read_back.result_dir = graph.result_dir.clone();
@@ -80,8 +76,8 @@ pub fn write_build(
     })
 }
 
-/// The bytes of the bundle file at `path`. Reads no more than a bundle may
-/// hold, so a larger file is refused before it fills memory.
+/// Read the bundle file at `path`, rejecting files larger than
+/// [`MAX_STORED_BYTES`] before reading the rest into memory.
 fn read_file(path: &Path) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     open_file(path)?
@@ -97,27 +93,26 @@ fn read_file(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// A bundle read whole into memory.
 type InMemory = Bundle<Cursor<Vec<u8>>>;
 
-/// A bundle as a build made elsewhere, with the `--deployed-bundle` files,
-/// by the identity hash of their Activation record.
+/// Bundle-backed [`CarriedBuild`] implementation paired with any
+/// `--deployed-bundle` paths keyed by Activation identity hash.
 struct BundleSource {
     bundle: InMemory,
     deployed: HashMap<String, PathBuf>,
 }
 
 impl CarriedBuild for BundleSource {
-    /// The bundle's files that are neither manifests nor its index. Each is
-    /// checked against its store path again as it is read.
+    /// Return all [`Role::Other`](crate::Role::Other) files in the bundle,
+    /// re-verifying each file's store path as it is read.
     fn sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String> {
         self.bundle
             .other_files()
             .map_err(|e| format!("cannot read the bundle's SOPS files: {e}"))
     }
 
-    /// What the machine that made the bundle recorded, with the kix
-    /// revision the bundle names under `source.bundle`.
+    /// Return the provenance recorded in the bundle header, adding the
+    /// bundle's `kix_rev` under `source.bundle`.
     fn provenance(&self) -> Provenance {
         let header = self.bundle.header();
         let mut made = header.receipt.clone().unwrap_or_default();
@@ -126,8 +121,8 @@ impl CarriedBuild for BundleSource {
         made
     }
 
-    /// Reads and verifies the `--deployed-bundle` file on each call, so the
-    /// process keeps no copy of the graph beside the one it returns.
+    /// Read and verify the `--deployed-bundle` file on each call so only one
+    /// deployed graph is held in memory at a time.
     fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
         let Some(path) = self.deployed.get(identity_hash) else {
             return Ok(None);
@@ -142,7 +137,8 @@ fn open_file(path: &Path) -> Result<BufReader<File>, String> {
         .map_err(|e| format!("cannot read the bundle {}: {e}", path.display()))
 }
 
-/// Read and verify the bundle at `path`, and give it with its build.
+/// Read and verify the bundle at `path`, returning the in-memory bundle and
+/// its [`StoreGraph`].
 fn load(path: &Path) -> Result<(InMemory, StoreGraph), String> {
     let bytes = read_file(path)?;
     Bundle::read(Cursor::new(bytes))
@@ -161,10 +157,8 @@ fn deployed_by_hash(paths: &[PathBuf]) -> Result<HashMap<String, PathBuf>, Strin
     Ok(by_hash)
 }
 
-/// A `--deployed-bundle` file, opened, or `None` for a format 1 bundle. A
-/// cluster deployed from one before format 2 still has those bytes as a
-/// deployed build, so it is set aside with a warning rather than stopping
-/// the command.
+/// Open a `--deployed-bundle` file, or log a warning and return `None` if it
+/// is a legacy format 1 bundle.
 fn open_deployed(path: &Path) -> Result<Option<OpenBundle<BufReader<File>>>, String> {
     match OpenBundle::open(open_file(path)?) {
         Ok(open) => Ok(Some(open)),
@@ -179,8 +173,8 @@ fn open_deployed(path: &Path) -> Result<Option<OpenBundle<BufReader<File>>>, Str
     }
 }
 
-/// The graph of the bundle at `path`, which must still hold the build of
-/// the record with `identity_hash`.
+/// Load the [`StoreGraph`] from the bundle at `path` and verify that its
+/// Activation record still matches `identity_hash`.
 fn graph_of(path: &Path, identity_hash: &str) -> Result<StoreGraph, String> {
     let (loaded, graph) = load(path)?;
     // The file may have changed since its header was read.
@@ -248,8 +242,7 @@ mod tests {
         assert!(open_deployed(&path).unwrap().is_none());
     }
 
-    /// A seekable file with one frame, the header `header`, and its seek
-    /// table: what a bundle's header and frames look like before any file.
+    /// Build a single-frame seekable zstd file containing `header`.
     fn header_only(header: &serde_json::Value) -> Vec<u8> {
         let data = serde_json::to_vec(header).unwrap();
         let mut c = zstd::bulk::Compressor::new(3).unwrap();

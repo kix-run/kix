@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// Returns the default cache directory: `~/.cache/kix/`.
+/// Return the default cache directory (`~/.cache/kix/`).
 pub fn default_cache_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "kix")
         .map(|dirs| dirs.cache_dir().to_path_buf())
@@ -23,7 +23,7 @@ pub(crate) fn resolve_symlinks(path: &Path) -> PathBuf {
     })
 }
 
-/// Directory for persisting activation state between deploys.
+/// Return the directory used to persist activation state between deploys.
 fn activations_dir() -> PathBuf {
     default_cache_dir().join("activations")
 }
@@ -161,9 +161,9 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
     None
 }
 
-/// The identity hash of the Activation a result dir holds: the first 32
-/// characters of the store path its `activation` link points at, which is
-/// the hash the Activation record carries. `None` when the link is missing.
+/// Return the identity hash of the Activation in `result_dir` (the first 32
+/// characters of the store path targeted by `result_dir/activation`), or
+/// `None` if the symlink cannot be read.
 pub(crate) fn build_hash_of(result_dir: &Path) -> Option<String> {
     let target = std::fs::read_link(result_dir.join("activation")).ok()?;
     let name = target.file_name()?.to_str()?;

@@ -1,10 +1,8 @@
-//! What the apiserver answered for each object of a dry-run deploy.
+//! Per-resource dry-run outcomes recorded during `kix plan`.
 //!
-//! A dry-run deploy runs the same engine as a real one with every write sent
-//! as `dryRun=All` (`super::ops::DryRun`). The engine only needs a verdict
-//! per node, but `kix plan` reports what each write would do, so the dry run
-//! keeps the apiserver's answers in a `Journal`: the object an apply would
-//! produce, or the typed reason it was refused.
+//! A dry-run deploy executes the deploy engine with `dryRun=All`
+//! (`super::ops::DryRun`) and records each API server response in a [`Journal`],
+//! capturing either the resulting object or a typed [`Refusal`].
 
 use std::sync::Mutex;
 
@@ -26,10 +24,10 @@ pub struct DryRunAnswer {
 pub enum DryRunOutcome {
     /// The apiserver accepted the apply.
     Applied(Box<ApplyPreview>),
-    /// The object would be deleted and created again: a changed field is
-    /// immutable and the plan authorises the delete, or the object is a Job
-    /// under `kix.run/rerun`. `result` is `None` when the dry-run create
-    /// could not run because the object still exists.
+    /// The object would be deleted and recreated because an immutable field
+    /// changed (and the plan authorizes deletion) or because it is a Job with
+    /// `kix.run/rerun`. `result` is `None` when the dry-run create could not
+    /// run while the live object still exists.
     Recreated {
         live: Option<Value>,
         result: Option<Value>,
@@ -160,9 +158,9 @@ impl Refusal {
             .immutable_if(matches!(err, ApplyError::ImmutableConflict { .. }))
     }
 
-    /// The message leaves out the hashes of a [`SecretError::HashMismatch`]:
-    /// the actual one is a hash of the decrypted data, and a plan is meant
-    /// to be shared.
+    /// Classify a secret hydration failure, omitting the actual hash on
+    /// [`SecretError::HashMismatch`] because it hashes decrypted data and plans
+    /// may be shared.
     pub(crate) fn of_hydration(err: &SecretError) -> Refusal {
         let message = match err {
             SecretError::HashMismatch { name, .. } => format!(
@@ -228,23 +226,21 @@ impl Refusal {
     }
 }
 
-/// The double-quoted name right after `prefix`: `admission webhook "x"`.
+/// Extract the double-quoted name immediately after `prefix` (for example,
+/// `admission webhook "x"`).
 fn quoted_after(message: &str, prefix: &str) -> Option<String> {
     quoted_after_with(message, prefix, '"')
 }
 
-/// The name in `quote` characters right after `prefix`. The apiserver
-/// quotes a ValidatingAdmissionPolicy's name with `'`.
+/// Extract the name enclosed in `quote` immediately after `prefix`.
 fn quoted_after_with(message: &str, prefix: &str, quote: char) -> Option<String> {
     let rest = &message[message.find(prefix)? + prefix.len()..];
     let rest = rest.strip_prefix(quote)?;
     Some(rest[..rest.find(quote)?].to_string())
 }
 
-/// The managers and fields of an SSA conflict message. One conflict reads
-/// `Apply failed with 1 conflict: conflict with "kubectl-scale" using
-/// apps/v1: .spec.replicas`; several list each manager's fields as
-/// `- .path` lines under `conflicts with "m" using v:`.
+/// Parse conflicting field managers and their owned field paths from a
+/// server-side apply 409 message.
 pub(crate) fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
     let mut owners: Vec<ConflictOwner> = Vec::new();
     let mut rest = message;
@@ -264,9 +260,8 @@ pub(crate) fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
     owners
 }
 
-/// The field paths in `text`: tokens that start with `.`, split on
-/// whitespace and commas outside brackets, since a list key such as
-/// `ports[containerPort=53,protocol="UDP"]` holds a comma of its own.
+/// Extract `.`-prefixed field paths from `text`, splitting on whitespace and
+/// commas outside brackets so keyed list selectors stay intact.
 fn field_paths(text: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut current = String::new();

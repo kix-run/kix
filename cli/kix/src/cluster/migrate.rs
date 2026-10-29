@@ -2,8 +2,8 @@
 //!
 //! When a deploy removes a stateful resource and adds a different stateful
 //! resource in the same logical slot, the pair represents a data migration
-//! the user needs to acknowledge. This module only detects and reports pairs;
-//! it does not execute the migration.
+//! the user needs to acknowledge. This module detects and reports pairs
+//! without executing the migration.
 //!
 //! # Logical slot identity
 //!
@@ -43,7 +43,7 @@ pub struct MigrationPair {
 }
 
 impl MigrationPair {
-    /// Formatted one-line summary for CLI output.
+    /// Format a one-line summary for CLI output.
     pub fn summary(&self) -> String {
         format!(
             "{slot}: {src_kind}/{src_name} -> {tgt_kind}/{tgt_name} ({reason})",
@@ -69,7 +69,7 @@ fn slot_of(manifest: &Value) -> Option<String> {
     Some(format!("{ns}/{inst}"))
 }
 
-/// True when the resource's package is classified `lifecycle = "stateful"`.
+/// Return whether the resource's package is classified `lifecycle = "stateful"`.
 fn is_stateful(manifest: &Value) -> bool {
     manifest
         .pointer("/metadata/annotations")
@@ -79,8 +79,8 @@ fn is_stateful(manifest: &Value) -> bool {
 }
 
 /// Derive a short "why did this change" reason by comparing source and target
-/// manifests. PVC storage class and size changes receive specific messages;
-/// other differences use a generic message.
+/// manifests. PVC storage class and size changes receive specific messages,
+/// while other differences use a generic message.
 fn derive_reason(source: &Value, target: &Value) -> String {
     let src_kind = source
         .pointer("/kind")
@@ -140,8 +140,8 @@ fn derive_reason(source: &Value, target: &Value) -> String {
 /// `old_manifests` under the same K8s identity. When found, emits a
 /// `MigrationPair`.
 ///
-/// This detector is independent of `detect_changes`; callers combine their
-/// outputs.
+/// This detector runs independently of `detect_changes`, and callers combine
+/// their outputs.
 pub fn detect_migration_pairs(
     new_manifests: &[Value],
     old_manifests: &[Value],
@@ -173,9 +173,8 @@ pub fn detect_migration_pairs(
         let rid = ResourceId::from_value(manifest);
         let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
         if old_by_k8s_id.contains_key(&k8s_id) {
-            // The same identity in the old set is a content change,
-            // just a content change. Not a migration pair: the PVC is
-            // being patched in place (e.g. a label edit) and data stays.
+            // An unchanged Kubernetes identity means the resource is patched in
+            // place rather than replaced.
             continue;
         }
         let Some(slot) = slot_of(manifest) else {
@@ -196,19 +195,17 @@ pub fn detect_migration_pairs(
         let rid = ResourceId::from_value(manifest);
         let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
         if new_by_k8s_id.contains_key(&k8s_id) {
-            continue; // Still present under the same identity.
+            continue;
         }
         let Some(slot) = slot_of(manifest) else {
             continue;
         };
         let Some(candidates) = added_by_slot.get(&slot) else {
             // Removed stateful resource with no replacement in the slot.
-            // An orphan without a replacement is not a migration pair.
             continue;
         };
 
-        // Prefer a same-kind candidate; fall back to any candidate in the slot.
-        // Same-kind replacements are less ambiguous than cross-kind candidates.
+        // Prefer a same-kind candidate, falling back to any candidate in the slot.
         let chosen = candidates
             .iter()
             .find(|(target_rid, m)| {
@@ -351,8 +348,8 @@ mod tests {
 
     #[test]
     fn ignores_same_k8s_identity_patch() {
-        // Identity (kind/ns/name) unchanged, content changed. That is a
-        // regular SSA patch; the data stays in place.
+        // An unchanged identity (`kind/ns/name`) with modified content is an
+        // in-place patch, so data stays in place.
         let old = vec![stamped(
             "PersistentVolumeClaim",
             "immich",

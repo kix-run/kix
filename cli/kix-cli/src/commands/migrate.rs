@@ -1,8 +1,7 @@
 //! `kix migrate domain <cluster>`: move a cluster's Kix records off a
 //! retired API group.
 //!
-//! Part of the compatibility layer described in
-//! `cli/kix/src/legacy_domain/`. It goes when that goes.
+//! Uses the compatibility layer in `cli/kix/src/legacy_domain/`.
 
 use std::io::Write;
 
@@ -28,8 +27,8 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let ops = KubeMigrationOps::new(client);
 
-    // A dry run first, always: it is the only way to show the plan before
-    // asking, and it writes nothing.
+    // Run a dry-run pass first so we can display the migration plan before
+    // prompting for confirmation.
     let plan = ctx
         .runtime
         .block_on(migrate::run(&ops, &crds, true))
@@ -62,29 +61,26 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-/// The two CustomResourceDefinition manifests from the cluster's own build.
+/// Build the cluster and extract Kix's two CustomResourceDefinition manifests.
 ///
-/// Taken from the build rather than written here, so the migration installs
-/// exactly the CRDs the next deploy expects.
+/// Taking the CRDs from the cluster's own build guarantees that the migration
+/// installs the exact definitions the next deploy expects.
 fn kix_crds_from_build(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<Vec<Value>> {
     crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-    // The build is stamped, so the CRDs this installs carry an identity hash
-    // like every other object Kix applies. An unstamped object carrying the
-    // managed-by label is what `kix gc --hard --include-unstamped` deletes,
-    // and deleting `activations.<current>` cascades to every Activation
-    // record on the cluster.
-    // A pin from before the domain move renders Kix's own CRDs under the
-    // retired group, and this command would then install CRDs synthesised
-    // from it, so it is refused. The `crds.len() != wanted.len()` check in
-    // `kix_crds` cannot stand in for this, because stamping upgrades the
-    // names until they match.
+    // Stamp the build so the installed CRDs carry an identity hash like every
+    // other Kix-managed object. Without a stamp, `kix gc --hard
+    // --include-unstamped` would delete `activations.<current>` and cascade
+    // to every Activation record on the cluster.
+    //
+    // `installable()` also rejects builds pinned to a pre-migration revision
+    // that still renders CRDs under the retired API group.
     let build = super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?
         .installable()
         .map_err(|e| miette!("{e}"))?;
     kix_crds(&build)
 }
 
-/// The two CustomResourceDefinition manifests of Kix's own kinds in `build`.
+/// Extract the `Activation` and `PackageInstance` CRD manifests from `build`.
 fn kix_crds(build: &InstallableBuild) -> Result<Vec<Value>> {
     let graph = build.graph();
     let wanted = [
@@ -194,8 +190,9 @@ fn print_report(report: &migrate::Report) {
     println!("  its pod template rolls its pods once (for example valkey and coredns).");
 }
 
-/// Ask unless `--yes`. Exits 1 on a non-interactive terminal without `--yes`,
-/// as `kix gc` does.
+/// Prompt the user for confirmation unless `--yes` was passed.
+///
+/// Exits with code 1 when stdin is not interactive and `--yes` is absent.
 fn confirm(args: &MigrateArgs) -> Result<bool> {
     if args.yes {
         return Ok(true);

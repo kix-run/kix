@@ -25,29 +25,30 @@ use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
 use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo};
 
-/// Shared discovery cache: every kind the cluster serves, refreshed after
-/// CRDs land. Refreshes MERGE (see `discovery::merge_discovery`): the aggregated
-/// discovery document churns after CRD writes and can transiently omit
-/// unrelated groups, so a refresh must never forget a kind already seen, and
-/// one that skipped a group version never replaces a cached kind.
+/// Shared discovery cache of every kind the cluster serves, refreshed after
+/// CRDs land. Refreshes merge into the existing cache (see
+/// `discovery::merge_discovery`). Because the aggregated discovery document
+/// churns after CRD writes and can transiently omit unrelated groups, a refresh
+/// never forgets a kind already seen or replaces a cached kind when a group
+/// version fails to respond.
 type DiscoveryCache = Arc<RwLock<Vec<(ApiResource, Scope)>>>;
 
 /// Wall-clock bound for waiting on the live resource to disappear during an
-/// immutable-conflict recreate. Independent of the readiness timeout:
-/// deletion should be near-instant; anything longer usually means stuck
-/// finalizers, which we surface rather than mask.
+/// immutable-conflict recreate. This is independent of the readiness timeout
+/// because deletion is normally near-instant and a longer wait usually
+/// indicates stuck finalizers.
 const RECREATE_DELETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long apply waits for an object a manifest expects something else to
 /// have created (`kix.run/expects`). The creator is ready by the time this
-/// runs, so the wait covers what it does after becoming ready: a Job's
-/// last step, an operator's first reconcile. Matches the default per-node
+/// runs, so the wait covers work done after becoming ready (such as a Job's
+/// last step or an operator's first reconcile). Matches the default per-node
 /// readiness timeout.
 const EXPECTS_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Kind-aware propagation policy for in-place recreate. Jobs foreground-delete
-/// so the old pods are gone before we re-apply. StatefulSets orphan-delete so
-/// PVCs are retained. Everything else uses Background (kubectl default).
+/// Return the kind-aware propagation policy for in-place recreate. Jobs use
+/// `Foreground` so old pods are gone before re-applying, StatefulSets use
+/// `Orphan` so PVCs are retained, and all other kinds use `Background`.
 fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
     match kind {
         "Job" => kube::api::PropagationPolicy::Foreground,
@@ -60,15 +61,14 @@ fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Writes {
     Persist,
-    /// Every SSA and DELETE with `dryRun=All`. Only [`super::DryRun`] makes
-    /// one, so a dry run's writes cannot persist, whichever of its methods
-    /// they go through.
+    /// Send every SSA and DELETE with `dryRun=All`. Only [`super::DryRun`]
+    /// constructs this mode, so dry-run writes never persist.
     DryRun,
 }
 
-/// The objects of one run on a real cluster. Made by
-/// [`KubeResources::new`], every write persists; inside [`super::DryRun`],
-/// every write is a dry run.
+/// Live cluster resource I/O for a single deploy run. Constructed with
+/// [`KubeResources::new`] for persistent writes, or [`KubeResources::dry_run`]
+/// inside [`super::DryRun`].
 pub(crate) struct KubeResources {
     client: Client,
     writes: Writes,
@@ -80,11 +80,11 @@ pub(crate) struct KubeResources {
     identity_hash: Option<String>,
     /// Take ownership of fields another manager owns.
     force_conflicts: bool,
-    /// Identity hashes of every Activation CR on the cluster, which prune
-    /// `kix.run/activations`. Set by the record when the run begins. `None`
-    /// = do not prune the annotation.
+    /// Identity hashes of every Activation CR on the cluster, used to prune
+    /// `kix.run/activations`. Set by the record when the run begins, or `None`
+    /// to leave the annotation unpruned.
     live_activations: std::sync::RwLock<Option<HashSet<String>>>,
-    /// Made at the first prune delete, when discovery has settled.
+    /// Initialized on the first prune delete, after discovery has settled.
     prune_guard: tokio::sync::OnceCell<PruneGuard>,
 }
 
@@ -106,7 +106,8 @@ impl KubeResources {
         )
     }
 
-    /// Resources whose every write is a dry run, for [`super::DryRun`].
+    /// Create a [`KubeResources`] instance that sends every write with
+    /// `dryRun=All`, for [`super::DryRun`].
     pub(super) fn dry_run(
         client: Client,
         discovery: Vec<(ApiResource, Scope)>,
@@ -148,7 +149,7 @@ impl KubeResources {
         &self.client
     }
 
-    /// Whether writes go with `dryRun=All`.
+    /// Return whether writes use `dryRun=All`.
     fn dry(&self) -> bool {
         self.writes == Writes::DryRun
     }
@@ -171,21 +172,21 @@ impl KubeResources {
         }
     }
 
-    /// The Activation records past the domain gate, opened from the
-    /// discovery cache each time, since the record CRD can arrive mid-run.
+    /// Open `Activation` records past the domain gate using the current
+    /// discovery cache, since the record CRD can arrive mid-run.
     async fn opened(&self) -> Result<OpenedRecords, LegacyDomainError> {
         let d = self.discovery.read().await;
         Records::open(&self.client, &d)
     }
 
-    /// The records for a lifecycle write, `None` when the record CRD is not
-    /// served yet, or the gate's refusal for a cluster whose records sit
-    /// under a retired group.
+    /// Return the `Records` handle for lifecycle writes, `None` when the record
+    /// CRD is not yet served, or an error when the domain gate rejects retired
+    /// records.
     pub(super) async fn records(&self) -> Result<Option<Records>, LegacyDomainError> {
         self.opened().await.map(OpenedRecords::into_records)
     }
 
-    /// Kind lookup from the cache, no refresh.
+    /// Look up `kind` in the discovery cache without refreshing.
     pub(super) async fn cached_kind(&self, kind: &str) -> Option<(ApiResource, Scope)> {
         let d = self.discovery.read().await;
         d.iter()
@@ -193,13 +194,13 @@ impl KubeResources {
             .map(|(ar, s)| (ar.clone(), s.clone()))
     }
 
-    /// Kind lookup with refresh-on-miss, for applies.
+    /// Look up `manifest`'s kind in discovery, refreshing on a cache miss.
     ///
     /// Dependents of a CRD do not run until the CRD is Ready and discovery
     /// has been refreshed, so the kind is normally in the cache. HA
     /// apiservers can serve discovery from different replicas with a few
-    /// hundred ms of skew, so [`Self::refresh_until_found`] asks again
-    /// before the node fails.
+    /// hundred ms of skew, so [`Self::refresh_until_found`] retries before
+    /// failing the node.
     async fn resolve_kind(&self, manifest: &Value) -> Result<(ApiResource, Scope), ApplyError> {
         let kind = manifest.get("kind").and_then(Value::as_str).unwrap_or("");
         let group = manifest
@@ -213,13 +214,13 @@ impl KubeResources {
             })
     }
 
-    /// The cached entry for `kind`, refreshing discovery on a miss up to
+    /// Look up `kind` in the cache, refreshing discovery on a miss up to
     /// `REFRESH_ATTEMPTS` times with backoff (under 4 s of waiting between
-    /// requests). With a `group`, each refresh fetches that group alone and
-    /// falls back to a full walk only when the group fetch fails; without
-    /// one, each refresh is a full walk. A full walk here is a single pass
-    /// ([`discovery::discover_resources_once`]), so an unrelated group version
-    /// that answers 404 does not add [`discovery::DISCOVERY_SETTLE`] to each
+    /// requests). When `group` is provided, each refresh fetches that group
+    /// alone and falls back to a full walk only when the group fetch fails.
+    /// Without `group`, each refresh performs a single-pass full walk
+    /// ([`discovery::discover_resources_once`]) so an unrelated group version
+    /// answering 404 does not add [`discovery::DISCOVERY_SETTLE`] to each
     /// attempt. Refreshes merge into the cache.
     async fn refresh_until_found(
         &self,
@@ -288,10 +289,10 @@ impl KubeResources {
         .await
     }
 
-    /// The first step of a recreate: delete the live object. Returns the
-    /// kind, the API, and whether there was an object to delete. An object
-    /// that is already gone (TTL-reaped, deleted externally, or deleted by a
-    /// concurrent run) is what the recreate wanted anyway.
+    /// Delete the live object as the first step of an in-place recreate.
+    /// Returns the resolved kind, the API handle, and whether an object existed
+    /// to delete. A 404 is treated as success because the object is already
+    /// absent.
     pub(super) async fn delete_for_recreate(
         &self,
         rid: &ResourceId,
@@ -336,12 +337,10 @@ impl ResourceIo for KubeResources {
             dry_run: self.dry(),
             ..Default::default()
         };
-        // An object that is already gone (`Pruned::Gone`) is what the prune
-        // wanted. This is routine now that a failed run's whole closure is
-        // folded into the baseline: much of it was never created, and a
-        // later run pruning what an earlier one already removed must not
-        // read as a failure, which would land the new record Degraded for no
-        // reason.
+        // An object that is already absent (`Pruned::Gone`) is a successful
+        // prune. Baseline closures from failed runs can include resources that
+        // were never created or were already removed, so a 404 must not mark
+        // the new Activation Degraded.
         guard
             .delete(&ar, &scope, rid, &dp)
             .await
@@ -350,11 +349,9 @@ impl ResourceIo for KubeResources {
 
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
         let (ar, scope) = self.resolve_kind(manifest).await?;
-        // What the manifest expects something else to have created
-        // (kix.untrackedRef with a kind and a creator). The creator is a
-        // dependency, so it is ready by now; what is checked is that it
-        // did what the package said it does. Experimental: see
-        // core/markers.nix in the lib.
+        // Wait for any untracked resources expected by the manifest
+        // (`kix.run/expects`, see `core/markers.nix`). The creator dependency
+        // is already Ready, and this verifies that the expected object exists.
         let cancel = CancelToken::new();
         if let Err((expected, detail)) =
             readiness::wait_for_expectations(&self.client, manifest, EXPECTS_TIMEOUT, &cancel).await
@@ -369,8 +366,8 @@ impl ResourceIo for KubeResources {
     }
 
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
-        // Refresh on a miss, as apply does: discovery can lag a CRD apply.
-        // A ResourceId carries no group, so each refresh is a full walk.
+        // Refresh on a cache miss in case discovery lags behind a CRD apply.
+        // Because `ResourceId` carries no API group, each refresh is a full walk.
         let (ar, scope) = self
             .refresh_until_found(&rid.kind, None)
             .await
@@ -386,12 +383,11 @@ impl ResourceIo for KubeResources {
         let rid = ResourceId::from_value(manifest);
         let (ar, scope, api, deleted) = self.delete_for_recreate(&rid).await?;
 
-        // Poll for deletion. Transient API errors are treated as "probably
-        // gone" since the delete itself succeeded; any real problem
-        // re-surfaces on the re-apply. An object still there at the end of
-        // the wait is reported as such rather than re-applied: the apply
-        // would fail with the same immutable-field 422 and say nothing about
-        // why.
+        // Poll until the deleted object disappears. Transient API errors are
+        // treated as gone because the delete call succeeded and any persistent
+        // failure will surface on re-apply. If the object still exists at the
+        // deadline, return `StillExists` instead of re-applying into the same
+        // immutable-field 422.
         if deleted {
             let deadline = tokio::time::Instant::now() + RECREATE_DELETE_TIMEOUT;
             let mut gone = false;
@@ -442,8 +438,8 @@ impl ResourceIo for KubeResources {
         }
         let (ar, scope) = match self.cached_kind(&rid.kind).await {
             Some(found) => found,
-            // The object was just applied, so its kind is known. If the
-            // cache lost it there is nothing to poll; treat as not found.
+            // The object was just applied, so its kind should be in the cache.
+            // If it is missing, report it as a readiness failure.
             None => {
                 return Ok(ReadinessResult::Failed {
                     message: not_discovered(rid).to_string(),
@@ -455,7 +451,6 @@ impl ResourceIo for KubeResources {
     }
 
     async fn rediscover(&self) -> Result<(), FetchError> {
-        // A settled walk: every listed group version answered.
         let new = discovery::DiscoveryPass {
             resources: discovery::discover_resources(&self.client).await?,
             missing: Vec::new(),
@@ -561,8 +556,8 @@ mod discovery_tests {
 
     const RBAC_V1: &str = "/apis/rbac.authorization.k8s.io/v1";
 
-    /// `ops` over `api` with an empty discovery cache, the state of a cache
-    /// that predates the group being served.
+    /// Create a [`KubeResources`] instance over `api` with an empty discovery
+    /// cache, modeling a cache before the group is served.
     fn ops(api: &FakeApi) -> KubeResources {
         KubeResources::new(api.client(), Vec::new(), String::new(), None, false)
     }

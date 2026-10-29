@@ -2,8 +2,8 @@
 //!
 //! 429 responses may be retried for every method. Server errors and connection
 //! failures are retried only for idempotent methods, except a POST whose
-//! connection never opened. Backoff is bounded by an attempt count and time
-//! budget; `Retry-After` takes precedence.
+//! connection never opened. Backoff is bounded by an attempt count and a time
+//! budget, and `Retry-After` takes precedence.
 //!
 //! The layer does not limit requests in flight. A permit held inside an
 //! unpolled request future can block work needed to resume that future. Callers
@@ -84,10 +84,10 @@ pub(crate) const CONNECT_TIMEOUT_ENV: &str = "KIX_CONNECT_TIMEOUT";
 pub(crate) const PREFLIGHT_ENV: &str = "KIX_PREFLIGHT";
 
 impl ResiliencePolicy {
-    /// The defaults with environment overrides applied. Unparseable values
-    /// are ignored with a warning rather than failing the command. The
-    /// binaries call this once; nothing in this crate reads the transport
-    /// policy from the environment.
+    /// Return the default policy with environment overrides applied.
+    /// Unparseable values are ignored with a warning rather than failing the
+    /// command. The binaries call this once, and nothing in this crate reads
+    /// the transport policy from the environment.
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(n) = env_number(RETRY_ATTEMPTS_ENV) {
@@ -159,7 +159,7 @@ pub(crate) struct Stats {
     pub exhausted: AtomicU64,
 }
 
-/// The tower layer. Wraps the inner service in a `Buffer` (so the retry
+/// Tower layer that wraps the inner service in a `Buffer` (so the retry
 /// future can own a handle to it) and then in [`Resilience`].
 #[derive(Clone)]
 pub(crate) struct ResilienceLayer {
@@ -193,7 +193,8 @@ where
     }
 }
 
-/// The service. Generic so tests can wrap a fake without the `Buffer`.
+/// Retry and timeout service, generic so tests can wrap a fake service without
+/// `Buffer`.
 #[derive(Clone)]
 pub(crate) struct Resilience<S> {
     inner: S,
@@ -238,8 +239,8 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        // Standard tower idiom: the readiness we just polled belongs to
-        // `self.inner`, so move that one into the future and keep a clone.
+        // Move `self.inner`, which holds the polled readiness, into the future
+        // and keep a clone.
         let clone = self.inner.clone();
         let inner = std::mem::replace(&mut self.inner, clone);
         let policy = self.policy.clone();
@@ -248,9 +249,8 @@ where
     }
 }
 
-/// The parts of a request we need to rebuild it for another attempt.
-/// `http::request::Parts` is not `Clone` (extensions), so the fields that
-/// matter are copied out once.
+/// Request parts needed to rebuild a request for another attempt. Because
+/// `http::request::Parts` is not `Clone`, the relevant fields are copied once.
 struct RequestShape {
     method: Method,
     uri: Uri,
@@ -286,7 +286,8 @@ impl RequestShape {
     }
 }
 
-/// Is this a watch request? Kube encodes it as `watch=true` in the query.
+/// Return whether `uri` is a watch request (`watch=true` or `watch=1` in the
+/// query).
 pub(crate) fn is_watch_uri(uri: &Uri) -> bool {
     uri.query().is_some_and(|q| {
         q.split('&')
@@ -294,9 +295,9 @@ pub(crate) fn is_watch_uri(uri: &Uri) -> bool {
     })
 }
 
-/// Can this method be repeated without changing the outcome?
+/// Return whether `method` can be repeated without changing the outcome.
 ///
-/// Everything kix sends is idempotent except POST. Server-side apply is a
+/// Everything Kix sends is idempotent except POST. Server-side apply is a
 /// PATCH, and a repeated apply of the same manifest is a no-op.
 pub(crate) fn is_idempotent(method: &Method) -> bool {
     matches!(
@@ -305,7 +306,7 @@ pub(crate) fn is_idempotent(method: &Method) -> bool {
     )
 }
 
-/// What one attempt produced, seen through the retry policy's eyes.
+/// Outcome of a single request attempt for retry decisions.
 pub enum Observed<'a> {
     /// The server answered.
     Status(StatusCode, &'a HeaderMap),
@@ -313,7 +314,7 @@ pub enum Observed<'a> {
     Error(&'a BoxError),
 }
 
-/// What to do after an attempt.
+/// Action to take after a request attempt.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// Return this outcome to the caller.
@@ -322,8 +323,8 @@ pub enum Verdict {
     Retry(Duration),
 }
 
-/// The pure decision. `attempt` counts from 1; `elapsed` is since the first
-/// attempt started.
+/// Decide whether to retry or finish after `attempt` (starting at 1), given
+/// `elapsed` since the first attempt started.
 pub fn decide(
     policy: &ResiliencePolicy,
     shape_idempotent: bool,
@@ -358,8 +359,8 @@ pub fn decide(
     Verdict::Retry(delay)
 }
 
-/// Exponential backoff with equal jitter: half the step is fixed, the other
-/// half random, so consecutive attempts spread out without collapsing to
+/// Compute exponential backoff with equal jitter. Half of each step is fixed
+/// and half is random, spreading consecutive attempts without collapsing to
 /// zero.
 pub fn backoff(policy: &ResiliencePolicy, attempt: usize) -> Duration {
     let exp = attempt.saturating_sub(1).min(16) as u32;
@@ -377,7 +378,7 @@ pub fn backoff(policy: &ResiliencePolicy, attempt: usize) -> Duration {
 }
 
 /// Parse a `Retry-After` header given in whole seconds. HTTP-date forms are
-/// ignored; the apiserver never sends them.
+/// ignored because the API server never sends them.
 pub(crate) fn retry_after(headers: &HeaderMap) -> Option<Duration> {
     headers
         .get(RETRY_AFTER)?
@@ -389,14 +390,14 @@ pub(crate) fn retry_after(headers: &HeaderMap) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
-/// Did the request fail before the connection opened? Such a request never
-/// reached the server, so even a POST is safe to send again.
+/// Return whether the request failed before the connection opened. Such a
+/// request never reached the server, so even a POST is safe to send again.
 pub(crate) fn is_connect_error(err: &(dyn std::error::Error + 'static)) -> bool {
     error_chain_find::<hyper_util::client::legacy::Error>(err).is_some_and(|e| e.is_connect())
 }
 
-/// Did the connect phase time out (as opposed to being refused or reset)?
-/// kube's connector reports this as an `io::Error` of kind `TimedOut`
+/// Return whether the connect phase timed out rather than being refused or
+/// reset. Kube's connector reports this as an `io::Error` of kind `TimedOut`
 /// beneath the hyper connect error.
 pub(crate) fn is_connect_timeout(err: &(dyn std::error::Error + 'static)) -> bool {
     is_connect_error(err)
@@ -434,8 +435,6 @@ where
             Ok(resp) => Observed::Status(resp.status(), resp.headers()),
             Err(err) => Observed::Error(err),
         };
-        // First contact never retries. Handled here so `decide` stays the
-        // pure policy for every other request rather than growing a case.
         let verdict = if shape.first_contact {
             Verdict::Done
         } else {
@@ -476,8 +475,8 @@ where
                     Ok(resp) => resp.status().to_string(),
                     Err(err) => err.to_string(),
                 };
-                // A retry is routine; only a request that outlasts its
-                // retries is worth a warning, and the `Done` arm prints it.
+                // Log retries at debug. The `Done` arm warns if all retries are
+                // exhausted.
                 tracing::debug!(
                     method = %shape.method,
                     path = shape.uri.path(),
@@ -506,8 +505,8 @@ where
     let req = shape.build(body);
     let ready = inner.ready().await.map_err(Into::into)?;
     let call = ready.call(req);
-    // A watch is long-lived by design and first contact carries the caller's
-    // deadline instead. Neither wants one of ours.
+    // Watch requests are long-lived, and first-contact requests use the
+    // caller's deadline.
     let exempt = shape.is_watch || shape.first_contact;
     match policy.request_timeout.filter(|_| !exempt) {
         Some(deadline) => match tokio::time::timeout(deadline, call).await {
@@ -518,15 +517,12 @@ where
     }
 }
 
-/// Create a kube client, optionally targeting a specific context.
+/// Create a kube client with `policy` applied, optionally targeting a specific
+/// context.
 ///
-/// The client carries `policy`: retries with backoff and per-request
-/// deadlines. Every command builds its client here, with the policy the
-/// environment sets ([`ResiliencePolicy::from_env`]).
-///
-/// With `policy.preflight`, the client has exchanged one request with the
-/// apiserver before returning, so every caller past this point is talking
-/// to an endpoint that answers. See `probe_apiserver` for why that matters.
+/// Every command builds its client here using [`ResiliencePolicy::from_env`].
+/// When `policy.preflight` is enabled, this probes the API server before
+/// returning so callers only receive a client whose endpoint responds.
 pub async fn make_client(
     context: Option<&str>,
     policy: ResiliencePolicy,
@@ -562,51 +558,35 @@ pub async fn make_client(
     Ok(client)
 }
 
-/// How much slack the probe's deadline gets over the transport's
-/// `connect_timeout`.
+/// Extra time given to the preflight probe beyond `connect_timeout`.
 ///
-/// The two bound different things and must not race. A connect that never
-/// completes is the transport's to report, because it knows the cause
-/// ("tcp connect error", "deadline has elapsed") where the probe knows only
-/// that time passed; the probe adds the endpoint on the way out. What is
-/// left over for the probe's own deadline is the case the transport cannot
-/// see at all: a connect that succeeded, followed by silence.
+/// The transport's `connect_timeout` bounds TCP and TLS connection setup and
+/// reports the specific connection error. The probe's own deadline is slightly
+/// longer so it only fires when a connection succeeds and the endpoint then
+/// stops responding.
 const PROBE_GRACE: Duration = Duration::from_secs(5);
 
-/// Confirm the apiserver answers at all, within `deadline`.
+/// Verify that the API server responds within `deadline`.
 ///
-/// `Client::try_from` never touches the network, so without this the first
-/// real request carries the cost of an unreachable endpoint and the "failed
-/// to connect to cluster" message at every call site is dead code: no error
-/// is ever produced for it to print, because nothing has tried to connect
-/// (kixpkgs#36).
+/// `Client::try_from` does not touch the network, so probing up front catches
+/// unreachable endpoints before the first API call:
 ///
-/// Two failure shapes, and only one of them is a connect problem:
+/// - If the connection fails or times out, the transport's `connect_timeout`
+///   bounds the attempt and the probe attaches the endpoint URL to the error.
+/// - If the connection succeeds (for example, through a TLS-terminating load
+///   balancer) and the upstream server never replies, the probe's `deadline`
+///   bounds the wait.
 ///
-/// - The connect never completes or is refused. The transport's own
-///   `connect_timeout` bounds it, and the probe's job is to add the endpoint
-///   to the error, where kube alone yields an opaque
-///   `ServiceError: client error (Connect)`.
-/// - The connect completes and the endpoint then says nothing. No connect
-///   timeout can ever fire on this one, because the connect succeeded. With
-///   HTTPS the TLS handshake usually turns this into the first shape, but a
-///   load balancer that terminates TLS in front of a wedged apiserver does
-///   not. Only the probe's own deadline bounds it.
-///
-/// Only transport failures count as unreachable. *Any* HTTP response, 401
-/// and 403 and 404 included, proves the endpoint is alive, so the probe
-/// passes and the real call gets to report the real error. That rule is what
-/// keeps the probe from becoming a new failure mode of its own on a cluster
-/// where the account cannot read `/version`.
+/// Only transport failures count as unreachable. Any HTTP response, including
+/// 401, 403, or 404, proves the endpoint is reachable and lets the subsequent
+/// API call report the status error.
 async fn probe_apiserver(
     client: &Client,
     endpoint: &str,
     deadline: Duration,
 ) -> Result<(), FetchError> {
-    // `Client::apiserver_version()` would do, but it gives us no way to mark
-    // the request, so this is that call with the marker added. The response
-    // is `/version`'s, and the connection it opens is pooled for the real
-    // work that follows.
+    // Send GET /version with the `FirstContact` marker so it does not retry,
+    // while pooling the connection for subsequent requests.
     let mut request = match http::Request::get("/version").body(Vec::new()) {
         Ok(request) => request,
         Err(e) => return Err(FetchError::ClientError(Box::new(e))),
@@ -620,7 +600,6 @@ async fn probe_apiserver(
             Ok(())
         }
         Ok(Err(e)) if server_responded(&e) => {
-            // Alive, just not willing or able to serve /version to us.
             tracing::debug!(endpoint, error = %e, "apiserver reachable, /version unreadable");
             Ok(())
         }
@@ -635,8 +614,8 @@ async fn probe_apiserver(
     }
 }
 
-/// Did an HTTP response come back? Separates "the endpoint is alive but said
-/// no" from "we never reached it".
+/// Return whether `e` came from an HTTP response rather than a transport
+/// failure.
 fn server_responded(e: &kube::Error) -> bool {
     matches!(
         e,
@@ -759,7 +738,7 @@ mod tests {
         )
     }
 
-    /// `Result::unwrap_err` needs `T: Debug`, and a boxed body is not.
+    /// Extract the error from `r` without requiring `Response<Box<DynBody>>: Debug`.
     fn expect_err(r: Result<Response<Box<DynBody>>, BoxError>) -> BoxError {
         match r {
             Ok(resp) => panic!("expected an error, got status {}", resp.status()),
@@ -890,8 +869,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
-        // Asked for 1s, capped to 60ms: longer than the 2ms backoff, shorter
-        // than the header.
+        // The 1s Retry-After is capped to 60ms.
         let waited = started.elapsed();
         assert!(waited >= Duration::from_millis(60), "waited {waited:?}");
         assert!(waited < Duration::from_millis(900), "waited {waited:?}");
@@ -993,12 +971,10 @@ mod tests {
         assert_eq!(resp.status(), 200);
     }
 
-    /// Regression for the deploy deadlock: a request whose future its owner
-    /// stops polling must not hold anything another request needs. The
-    /// scheduler parks its apply futures in a `FuturesUnordered` while it
-    /// awaits rediscovery inline; with a shared limiter, sixteen parked
-    /// applies starved the rediscovery of permits and the deploy hung with
-    /// every thread idle.
+    /// Ensure a request whose future is no longer polled does not block other
+    /// requests. The scheduler parks apply futures in `FuturesUnordered` while
+    /// awaiting rediscovery inline, so parked requests must not hold shared
+    /// permits.
     #[tokio::test]
     async fn unpolled_requests_never_block_another() {
         // As many parked requests as the scheduler can have in flight.
@@ -1091,11 +1067,10 @@ mod tests {
 
     #[test]
     fn connect_timeout_needs_both_the_hyper_connect_error_and_a_timed_out_io_error() {
-        // hyper_util's legacy `Error` has no public constructor, so the
-        // positive case is covered live (a black-holed server address fails
-        // in one connect timeout). The negative cases are what a unit test
-        // can pin: a bare timed-out io error is not a connect timeout, and
-        // neither is a reset.
+        // `hyper_util::client::legacy::Error` has no public constructor, so the
+        // positive case is covered by live tests. Here we verify that a bare
+        // `TimedOut` or `ConnectionReset` `io::Error` is not treated as a
+        // connect timeout.
         let timed_out: BoxError =
             Box::new(std::io::Error::new(std::io::ErrorKind::TimedOut, "connect"));
         assert!(!is_connect_timeout(timed_out.as_ref()));
@@ -1170,7 +1145,7 @@ mod tests {
 
     #[test]
     fn env_overrides() {
-        // Serialised through the env: run the cases in one test.
+        // Run all environment-variable cases in one test to avoid races.
         unsafe {
             std::env::set_var(RETRY_ATTEMPTS_ENV, "1");
             std::env::set_var(REQUEST_TIMEOUT_ENV, "0");
@@ -1196,22 +1171,18 @@ mod tests {
         }
     }
 
-    // These drive a real localhost socket rather than mocking kube, because
-    // the mode that matters is a TCP-level one: accept the connection and
-    // then say nothing. A mock at the kube layer cannot express it.
-
-    /// A localhost stand-in for an apiserver.
+    /// Start a localhost TCP listener that stands in for an API server.
     ///
-    /// `reply: None` accepts the connection and then goes silent, which is
-    /// the failure mode no connect timeout can catch: the handshake
-    /// succeeds, so only a deadline above the connect ever fires.
+    /// When `reply` is `None`, the listener accepts connections and never
+    /// writes back, testing the case where the TCP handshake succeeds and the
+    /// server then hangs.
     async fn fake_apiserver(reply: Option<&'static [u8]>) -> String {
         use tokio::io::AsyncWriteExt;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            // Sockets stay in `held` so the peer sees silence, not a close.
+            // Keep accepted sockets open so the peer sees silence rather than EOF.
             let mut held = Vec::new();
             while let Ok((mut sock, _)) = listener.accept().await {
                 if let Some(bytes) = reply {
@@ -1224,7 +1195,7 @@ mod tests {
         format!("http://{addr}")
     }
 
-    /// A client for `endpoint`, built the way `make_client` builds it.
+    /// Build a client for `endpoint` using the default resilience policy.
     async fn client_for(endpoint: &str) -> Client {
         let config = Config::new(endpoint.parse().unwrap());
         build_client(config, ResiliencePolicy::default())
@@ -1250,15 +1221,12 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "probe must fail on its own deadline, not the transport's"
         );
-        // The message has to name the endpoint: that is the whole point of
-        // failing here rather than deep inside discovery.
         assert!(err.to_string().contains(&endpoint), "{err}");
     }
 
     #[tokio::test]
     async fn probe_passes_when_the_endpoint_answers_at_all() {
-        // 403 on /version still proves the apiserver is alive and routable;
-        // the real call gets to report the real error.
+        // A 403 on /version still proves the API server is reachable.
         let endpoint = fake_apiserver(Some(
             b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: 61\r\n\r\n\
               {\"kind\":\"Status\",\"status\":\"Failure\",\"code\":403,\"message\":\"no\"}",
@@ -1273,7 +1241,7 @@ mod tests {
 
     #[tokio::test]
     async fn probe_reports_a_refused_connection() {
-        // Bind then drop: nothing is listening on the port any more.
+        // Bind and immediately drop the listener to get a closed port.
         let endpoint = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             format!("http://{}", listener.local_addr().unwrap())
@@ -1293,9 +1261,7 @@ mod tests {
 
     #[tokio::test]
     async fn probe_reports_a_refused_connection_without_retrying() {
-        // The same refused port under the full policy is retried for ~18s.
-        // The `FirstContact` marker is what stops that, and it is the whole
-        // reason a probe on the real client is affordable.
+        // The `FirstContact` marker skips the retry policy on a refused port.
         let endpoint = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             format!("http://{}", listener.local_addr().unwrap())

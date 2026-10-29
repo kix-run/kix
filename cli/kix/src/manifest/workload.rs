@@ -1,14 +1,11 @@
-//! Where a manifest keeps its pod template.
-//!
-//! Every reader of containers, images or placement rules has to know that a
-//! Deployment's pod spec is at `spec.template.spec`, a CronJob's one level
-//! deeper, and a bare Pod's at `spec`. Three commands used to carry that
-//! table each; this is the one copy, so a kind added here is seen by all.
+//! Locate the pod spec inside a workload or Pod manifest.
 
 use serde_json::Value;
 
-/// The pod spec a manifest would create pods from, or `None` for a kind
-/// that has no pod template.
+/// Return the pod spec inside `manifest` (`spec` for `Pod`,
+/// `spec.jobTemplate.spec.template.spec` for `CronJob`, and
+/// `spec.template.spec` for standard workload controllers), or `None` if the
+/// kind has no pod template.
 pub fn pod_spec(manifest: &Value) -> Option<&Value> {
     match manifest.get("kind").and_then(Value::as_str)? {
         "Pod" => manifest.get("spec"),

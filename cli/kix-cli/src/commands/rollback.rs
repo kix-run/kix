@@ -47,9 +47,11 @@ pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
     ctx.runtime.block_on(run_async(args, &cluster, ctx))
 }
 
-/// Read-only: connect, enumerate Superseded activations, print history, exit.
-/// Works the same whether the cluster is operator-managed or direct-apply
-/// because it only inspects Activation CRs. Supports `--output json|yaml`.
+/// Connect to the cluster, list superseded activations, and print the rollback
+/// history.
+///
+/// Works identically for operator-managed and direct-apply clusters because it
+/// only inspects `Activation` CRs.
 async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
     let client = client::make_client(ctx.global.context.as_deref())
         .await
@@ -61,14 +63,11 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
 
     let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
-    // The current Active activation is an optional position marker
-    // in the history listing, but we must still print even if none exists.
     let current = records.active(cluster).await.map_err(|e| miette!("{e}"))?;
 
-    // Only records that really were the cluster's state. A deploy that
-    // stopped part way is Superseded once a later plan folded its leftovers
-    // in, but it was never running, so rolling back to it would apply a state
-    // the cluster has never been in.
+    // Include only activations that actually ran on the cluster. A deploy that
+    // stopped partway through is marked Superseded once a later deploy folds
+    // its leftovers in, so rolling back to it would apply a partial state.
     let superseded = records
         .rollback_targets(cluster)
         .await
@@ -202,15 +201,12 @@ fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Rec
 }
 
 async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
-    // 1. Connect to cluster
     crate::say!("Connecting to cluster...");
 
     let client = client::make_client(ctx.global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    // SOPS sources are read from the paths the target's Secrets name, on
-    // this machine.
     let target = Target::connect(client.clone(), SopsSources::Local)
         .await
         .map_err(|e| miette!("{e}"))?;
@@ -218,7 +214,6 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let records =
         Records::open_installed(&client, target.discovery()).map_err(|e| miette!("{e}"))?;
 
-    // 2. Find current Active activation
     let current = records
         .active(cluster)
         .await
@@ -232,11 +227,6 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     print_current(&current);
 
-    // 3. Find available Superseded activations
-    // Only records that really were the cluster's state. A deploy that
-    // stopped part way is Superseded once a later plan folded its leftovers
-    // in, but it was never running, so rolling back to it would apply a state
-    // the cluster has never been in.
     let superseded = records
         .rollback_targets(cluster)
         .await
@@ -248,9 +238,8 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         ));
     }
 
-    // In interactive mode, let the user pick; with --yes, use most recent
     let selected = if args.yes || !output::is_interactive() {
-        &superseded[0] // most recent (list is sorted by deployed_at desc)
+        &superseded[0]
     } else {
         println!();
         println!("Available activations to rollback to:");
@@ -345,7 +334,6 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         );
     }
 
-    // 8. Confirmation
     if !args.yes {
         if !output::is_interactive() {
             eprintln!(
@@ -369,7 +357,6 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     super::deploy::refuse_before_writing(&checked, Some(&records), target.discovery()).await?;
 
-    // 9. Apply via DAG-streaming scheduler.
     let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
@@ -389,18 +376,12 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         })
     };
 
-    // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
-    // the start of the run, so a process that just dies leaves it Deploying.
+    // Forward SIGINT and SIGTERM to the engine so the Activation record is not
+    // left in Deploying if the process is interrupted.
     config.cancel.cancel_on_interrupt();
 
-    // A rollback's target record already exists on the cluster as a
-    // Superseded one, so the run re-asserts it and marks it Deploying for the
-    // duration, the same as a deploy.
-    //
-    // A rollback re-applies a build from an earlier deploy, and that deploy
-    // wrote its own receipt. Writing a fresh one here would record the
-    // machine running the rollback as the provenance of a build it did not
-    // make.
+    // Pass `None` for the receipt so the rollback preserves the receipt
+    // originally written when the target activation was deployed.
     let (result, kept) = checked.run(target, None, config, observer).await;
 
     if let Some(recorded) = kept {
@@ -447,11 +428,9 @@ async fn run_operator_async(
     cluster: &str,
     ctx: &CommandContext,
 ) -> Result<()> {
-    // 1. Connect and find current + superseded activations
     let (client, records) =
         super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
 
-    // 2. Find current Active activation
     let current = records
         .active(cluster)
         .await
@@ -465,11 +444,6 @@ async fn run_operator_async(
 
     print_current(&current);
 
-    // 3. Find superseded activations
-    // Only records that really were the cluster's state. A deploy that
-    // stopped part way is Superseded once a later plan folded its leftovers
-    // in, but it was never running, so rolling back to it would apply a state
-    // the cluster has never been in.
     let superseded = records
         .rollback_targets(cluster)
         .await
@@ -481,7 +455,6 @@ async fn run_operator_async(
         ));
     }
 
-    // Interactive selection or auto-select most recent
     let selected = if args.yes || !output::is_interactive() {
         &superseded[0]
     } else {
@@ -543,7 +516,6 @@ async fn run_operator_async(
         return Ok(());
     }
 
-    // 5. Confirmation
     if !args.yes {
         if !output::is_interactive() {
             eprintln!(
@@ -565,8 +537,6 @@ async fn run_operator_async(
         }
     }
 
-    // 6. Patch the current Activation CR to point to the target's source path
-    //    The operator will detect the source change and reconcile.
     crate::say!(
         "Updating Activation CR '{}' to point to rollback target...",
         output::bold(&current.name),
@@ -612,7 +582,7 @@ async fn run_operator_async(
     Ok(())
 }
 
-/// The current activation, with the start of its identity hash.
+/// Print the current active activation name and short identity hash.
 fn print_current(current: &Record) {
     let hash_preview = current
         .identity_hash
@@ -626,8 +596,8 @@ fn print_current(current: &Record) {
     );
 }
 
-/// A rollback to one record, planned the way `kix deploy` plans: the target
-/// build against the current one, with what failed and kept deploys left.
+/// Planned rollback from the current baseline to a target activation's store
+/// path.
 struct RollbackPlan {
     target_result_dir: std::path::PathBuf,
     checked: CheckedPlan,
@@ -657,9 +627,10 @@ impl RollbackPlan {
     }
 }
 
-/// A rollback's planning flags: only whether it prunes. A rollback
-/// re-applies a known-good prior activation; conflicts fail loudly rather
-/// than silently overwriting whatever the cluster has.
+/// Build [`PlanFlags`] for a rollback.
+///
+/// Rollbacks never force field-ownership conflicts or accept stateful
+/// migrations automatically.
 fn flags(prune: bool) -> PlanFlags {
     PlanFlags {
         prune,
@@ -670,10 +641,7 @@ fn flags(prune: bool) -> PlanFlags {
     }
 }
 
-/// Plan a rollback of `cluster`, which runs `current`, to `selected`, with
-/// the pieces of [`Planner`]: the current record's baseline, the changes,
-/// and the checked plan. Refuses a target whose plan writes or deletes an
-/// object the diff leaves out, as `kix deploy` does.
+/// Plan a rollback of `cluster` from `current` to `selected`.
 async fn plan_rollback(
     client: &kube::Client,
     records: &Records,
@@ -682,13 +650,9 @@ async fn plan_rollback(
     selected: &Record,
     prune: bool,
 ) -> Result<RollbackPlan> {
-    // The target's build: the path its record was built via, or a build in
-    // the local store with its identity hash, refused unless it is the
-    // build the record names. Not refused for a retired domain
-    // (`Build::installable`): a rollback target can be a build from before
-    // the domain move, and stamping upgrades its keys, its record's API
-    // group and Kix's own CRDs, so what gets applied names the current
-    // domain throughout.
+    // Load the target activation's build from its recorded path or local store
+    // hash. Pre-migration builds are allowed here because stamping upgrades
+    // their metadata and CRD group names to the current API domain.
     let target_hash = selected.identity_hash.as_deref().ok_or_else(|| {
         miette!(
             "superseded activation '{}' has no identity hash",
@@ -707,8 +671,6 @@ async fn plan_rollback(
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;
-    // The records and the orphans another Kix cluster deploys are looked up
-    // under `cluster`, the name the rollback resolved its records by.
     let checked = Planner::new(flags(prune), &report)
         .plan(&target_graph, cluster, &baseline, Some(client))
         .await
@@ -719,10 +681,8 @@ async fn plan_rollback(
     })
 }
 
-/// Refuses a rollback target whose build names another Kix cluster than
-/// `cluster`, the one the rollback found its records by. The run finalizes
-/// under the plan's cluster, so a build of another one would supersede that
-/// cluster's records and prune as if it were it.
+/// Reject a rollback target whose build belongs to a different Kix cluster
+/// than `cluster`.
 fn same_cluster(record: &str, build_cluster: &str, cluster: &str) -> Result<()> {
     if build_cluster == cluster {
         return Ok(());
@@ -732,10 +692,8 @@ fn same_cluster(record: &str, build_cluster: &str, cluster: &str) -> Result<()> 
     ))
 }
 
-/// Shared formatter for a list of superseded activations used by both the
-/// interactive rollback selector and `kix rollback --list`. Shows store path
-/// availability, source directory, and the `previousActivation` link so the
-/// operator sees exactly what each history entry points at.
+/// Print a numbered list of superseded activations with local store
+/// availability, source path, and previous activation link.
 fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
     for (i, act) in superseded.iter().enumerate() {
         let hash_preview = act
@@ -775,7 +733,7 @@ fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
     }
 }
 
-/// The last line of a rollback, worded as `kix deploy`'s summary line is.
+/// Print the final rollback summary line.
 fn print_summary(r: &DeployResult, succeeded: bool) {
     let failed_str = r.failed.to_string();
     let ending = if succeeded {
@@ -802,8 +760,7 @@ fn print_summary(r: &DeployResult, succeeded: bool) {
 mod tests {
     use super::*;
 
-    /// A target built for the cluster the records were found by is
-    /// accepted; one built for another Kix cluster is refused, naming both.
+    /// Verify that [`same_cluster`] accepts matching cluster names and rejects mismatches.
     #[test]
     fn a_target_built_for_another_cluster_is_refused() {
         assert!(same_cluster("act-1", "prod", "prod").is_ok());

@@ -23,14 +23,14 @@ kix status <CLUSTER> [--operator] [-o text|json|yaml]
 | --- | --- |
 | `<CLUSTER>` | Cluster name. The flat view evaluates it from the flake first; `--operator` uses it to find the Active record. |
 | `--operator` | Package-grouped view built from the Active Activation record. |
-| `-o`, `--output` | `text` (default), `json` or `yaml`. `markdown` prints text. |
+| `-o`, `--output` | `text` (default), `json`, or `yaml`. `markdown` prints text. |
 | `--flake`, `--no-cache` | Select and evaluate the cluster for the flat view. Ignored with `--operator`. |
 | `--context` | Select the kubeconfig context in either view. |
 
 ## Flat view
 
-A table with `NAME`, `NAMESPACE`, `KIND`, `READY`, `STATUS` and `AGE`, sorted
-by namespace, kind and name. It includes the resources of `<CLUSTER>`: those
+A table with `NAME`, `NAMESPACE`, `KIND`, `READY`, `STATUS`, and `AGE`, sorted
+by namespace, kind, and name. It includes the resources of `<CLUSTER>`: those
 whose `kix.run/activations` annotation names one of its Activation records,
 including resources it shares with another Kix cluster. Resources of other Kix
 clusters on the same Kubernetes cluster are left out, and a line on stderr
@@ -42,7 +42,7 @@ says how many per cluster.
 | --- | --- |
 | Deployment, StatefulSet | Ready replicas over desired replicas |
 | DaemonSet | Ready pods over desired scheduled pods |
-| Job | `Complete`, `Running` or `Pending` |
+| Job | `Complete`, `Running`, or `Pending` |
 | PersistentVolumeClaim | `status.phase` |
 | Other | `Ready` or `Available` when that condition is `True`, otherwise `Active` |
 
@@ -50,7 +50,7 @@ says how many per cluster.
 
 ## `--operator` view
 
-Prints the Active record's name, phase, identity hash and age, then one line
+Prints the Active record's name, phase, identity hash, and age, then one line
 per package with its resource count and `healthy` or `N degraded`. Packages
 with a resource that is not ready are expanded. A resource the build declares
 but the cluster lacks shows as `NotFound`.

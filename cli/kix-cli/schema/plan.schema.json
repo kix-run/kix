@@ -573,7 +573,7 @@
         },
         {
           "const": "live_read",
-          "description": "`kix diff` against the live cluster or a snapshot: a read-only\ncomparison with the kix-owned view.",
+          "description": "`kix diff` against the live cluster or a snapshot: a read-only\ncomparison with the Kix-owned view.",
           "type": "string"
         },
         {
@@ -826,7 +826,7 @@
               "type": "null"
             }
           ],
-          "description": "Resources outside any package (Namespaces, CRDs, cluster-scoped\nbundles) that differ. Keyed `_cluster`."
+          "description": "Resources outside any package (Namespaces, CRDs, and cluster-scoped\nbundles) that differ. Keyed `_cluster`."
         },
         "removed": {
           "items": {
@@ -1113,7 +1113,7 @@
   "properties": {
     "admission": {
       "$ref": "#/$defs/Checked3",
-      "description": "Writes the apiserver, an admission webhook or the deploy itself would\nrefuse, other than ownership conflicts."
+      "description": "Writes the apiserver, an admission webhook, or the deploy itself would\nrefuse, other than ownership conflicts."
     },
     "build": {
       "$ref": "#/$defs/Build",

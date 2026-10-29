@@ -1,35 +1,14 @@
-//! The deploy receipt: what was deployed, written down where the deploy
-//! happened.
+//! Build and format deploy provenance receipts.
 //!
-//! Kix already computed all of this. `kix compliance attest` assembled the
-//! flake reference, the git revision, a hash of `flake.lock`, every input's
-//! revision and narHash, and the kix and Nix versions, printed the lot to
-//! stdout and threw it away. Meanwhile an Activation record on the cluster
-//! held a cluster name, a list of instances, and a `built-via` annotation
-//! naming a `/nix/store` path on whichever machine ran the deploy.
+//! A deploy receipt records the flake reference, Git revision and dirty state,
+//! `flake.lock` digest, locked input revisions and NAR hashes, container image
+//! references, and builder versions for a deployed activation.
 //!
-//! So the cluster could not answer "what is running here, and where did it
-//! come from" without the machine that deployed it, and that is the same
-//! failure Argo CD users hit when their repository is unreachable and a
-//! rollback fails with "repository not accessible". Storing pointers is fine
-//! until the thing pointed at is gone.
-//!
-//! The fix is small because the parts already exist. The receipt goes into
-//! the Activation's `status` subresource, which the CRD already declares and
-//! the CLI already writes. Status rather than spec on purpose: a status
-//! subresource is untouched by an apply of the main resource, so re-applying
-//! an Activation during a rollback cannot erase the record of what happened.
-//! It is also the correct half by Kubernetes convention, where spec is intent
-//! and status is observation, and a receipt is an observation.
-//!
-//! Manifests are excluded. Helm stores rendered
-//! manifests in cluster Secrets and pays for it twice, once at the 1 MiB
-//! object limit and once because those records become a readable archive of
-//! every credential the release ever held. Kix's built manifests carry secret
-//! values inline too, so the same store would be the same archive. The
-//! receipt records provenance, and rollback stays tied to the source.
-//!
-//! Design: `v2_discussions/archive/138_values_that_vary_per_deploy.md` section 5.2.
+//! Receipts are written to the `Activation` resource's `status` subresource so
+//! that re-applying the `Activation` spec during a rollback does not overwrite
+//! the historical provenance record. Rendered manifests are omitted from the
+//! receipt to avoid hitting the Kubernetes object size limit or storing inline
+//! Secret values on the `Activation` resource.
 
 use std::collections::BTreeSet;
 
@@ -43,7 +22,7 @@ use super::shared;
 use crate::commands::ReceiptMaker;
 use crate::output;
 
-/// The receipt this module writes, for `kix deploy` and `kix bundle`.
+/// Builds deploy provenance receipts for `kix deploy` and `kix bundle`.
 pub struct ComplianceReceipts;
 
 impl ReceiptMaker for ComplianceReceipts {
@@ -56,9 +35,9 @@ impl ReceiptMaker for ComplianceReceipts {
     }
 }
 
-/// The receipt for a build about to be deployed: for a build made here,
-/// from the flake at `flake_ref` ([`build_receipt`]), and otherwise from
-/// what the machine that made it recorded ([`from_provenance`]).
+/// Build the deploy receipt for `build`, either from the local flake at
+/// `flake_ref` ([`build_receipt`]) or from provenance carried inside a bundle
+/// ([`from_provenance`]).
 fn of_build(build: &Build, flake_ref: &str) -> Value {
     match build.carried_provenance() {
         None => build_receipt(build.graph(), flake_ref),
@@ -112,12 +91,11 @@ pub(super) fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
     })
 }
 
-/// The receipt for a deploy of a build made on another machine.
+/// Assemble a deploy receipt from bundle provenance `made` and the bundle digest `sha256`.
 ///
-/// The source, inputs and builder are what that machine recorded; this
-/// machine has no source tree to read them from. They are claims by whoever
-/// made the build. `source.bundle.sha256` is not: it is `sha256`, of the
-/// bytes this machine read, so it names exactly what was deployed.
+/// The `source`, `inputs`, and `builder` fields come from the machine that
+/// created the bundle, while `source.bundle.sha256` is always set to the digest
+/// of the bundle bytes read by the deploying machine.
 fn from_provenance(graph: &StoreGraph, made: Provenance, sha256: &str) -> Value {
     let mut source = made.source;
     let mut bundle = serde_json::Map::from_iter([("sha256".to_string(), json!(sha256))]);
@@ -144,12 +122,10 @@ fn from_provenance(graph: &StoreGraph, made: Provenance, sha256: &str) -> Value 
     })
 }
 
-/// The warning to print before confirming a deploy whose receipt records a
-/// dirty source, then the recorded revision. A dirty tree is allowed, but
-/// its recorded commit does not fully describe the deployed source. A build
-/// made elsewhere has `source.bundle` ([`from_provenance`]): its receipt
-/// says what the machine that made it recorded, so the revision is shown
-/// with its control characters escaped.
+/// Build warning lines for a receipt whose source tree had uncommitted changes.
+///
+/// Escapes control characters in the recorded revision because bundle receipts
+/// originate on another machine.
 fn dirty_source_warning(receipt: &Value) -> Vec<String> {
     if receipt["source"]["dirty"] != Value::Bool(true) {
         return Vec::new();
@@ -175,17 +151,13 @@ fn dirty_source_warning(receipt: &Value) -> Vec<String> {
     lines
 }
 
-/// Every container image the build renders, sorted and deduplicated.
-///
-/// Tags can move after they are read. Pin-file references carry digests, so
-/// the receipt names exactly what the cluster was told to pull.
+/// Collect all container image references rendered by `graph`, sorted and
+/// deduplicated.
 fn images(graph: &StoreGraph) -> Value {
     let mut found: BTreeSet<String> = BTreeSet::new();
     for resource in graph.resources.values() {
-        // A ConfigMap's `data` and a Secret's `stringData` are opaque
-        // payloads. A config file that happens to have an `image:` line is
-        // not a container this cluster runs, and putting it in the receipt
-        // would be a claim about the cluster that is not true.
+        // Skip ConfigMap and Secret manifests so `image` keys inside opaque
+        // configuration data are not mistaken for container images.
         let kind = resource
             .manifest
             .get("kind")
@@ -199,11 +171,11 @@ fn images(graph: &StoreGraph) -> Value {
     json!(found.into_iter().collect::<Vec<_>>())
 }
 
-/// Walk a manifest for `image` fields. Walking rather than reading the known
-/// pod-spec paths, because a CustomResource carries containers wherever its
-/// operator decided and an operator will happily run them. The cost of
-/// walking is that `image` is not a reserved word, so the value has to look
-/// like an image reference before it is believed.
+/// Recursively scan a manifest JSON value for `image` fields that parse as
+/// container image references.
+///
+/// Walks the entire JSON tree rather than only standard PodSpec paths so images
+/// declared inside custom resources are also captured.
 fn collect_images(value: &Value, out: &mut BTreeSet<String>) {
     match value {
         Value::Object(map) => {
@@ -226,9 +198,7 @@ fn collect_images(value: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
-/// A cheap shape test, not a parser. An image reference has no whitespace and
-/// is not a paragraph; that rules out the prose and config blobs that share
-/// the field name without rejecting anything a kubelet would accept.
+/// Return `true` if `s` has the shape of a valid container image reference.
 fn looks_like_an_image(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 512
@@ -256,10 +226,8 @@ fn flake_inputs(lock: &Value) -> Value {
         if let Some(n) = locked.get("narHash").and_then(|v| v.as_str()) {
             entry.insert("narHash".into(), json!(n));
         }
-        // A `path:` input has neither, because Nix does not lock a local
-        // directory. Record what it is instead of an entry that is only a
-        // name: "this input was a path on the deploying machine" is a real
-        // answer, and a more honest one than an empty digest.
+        // Local `path:` inputs have neither `rev` nor `narHash`; record their
+        // type and path with `locked: false` instead of an empty entry.
         if !entry.contains_key("rev") && !entry.contains_key("narHash") {
             if let Some(t) = locked.get("type").and_then(|v| v.as_str()) {
                 entry.insert("type".into(), json!(t));
@@ -276,19 +244,11 @@ fn flake_inputs(lock: &Value) -> Value {
     json!(inputs)
 }
 
-/// Turn a receipt into a SLSA v1 provenance statement.
+/// Convert a deploy receipt into an in-toto SLSA v1 provenance statement.
 ///
-/// This is the inversion that makes the receipt worth writing. Attestation
-/// used to require the machine that built the cluster, because the facts only
-/// existed there. Reading them from the record instead means a deploy can be
-/// attested from anywhere that can reach the cluster, by someone who never
-/// built it, which is what an auditor actually needs.
-///
-/// SLSA's own split is followed: `externalParameters` is what was asked for
-/// and `resolvedDependencies` is what it resolved to. Argo CD shows what goes
-/// wrong when only the request is recorded, where a multi-source Application's
-/// status holds the target revision and not the resolved one, so users cannot
-/// tell what was deployed.
+/// Maps requested build inputs (`cluster`, `flakeRef`, `flakeLock`) to
+/// `externalParameters` and resolved Git commits, NAR hashes, and image digests
+/// to `resolvedDependencies`.
 pub fn attestation_from_receipt(
     receipt: &Value,
     builder_id: Option<&str>,
@@ -567,8 +527,8 @@ mod tests {
         assert!(found.is_empty(), "{found:?}");
     }
 
-    /// A build carried in a bundle whose maker recorded `made`, with the
-    /// bundle's bytes and the kix revision it names.
+    /// Build a fixture bundle carrying `made` as its receipt, returning the
+    /// loaded [`Build`], raw bundle bytes, and `kix_rev`.
     fn carried_build(made: Value) -> (Build, Vec<u8>, String) {
         use kix_bundle::Bundle;
 
@@ -586,8 +546,8 @@ mod tests {
         (build, std::fs::read(file.path()).unwrap(), contents.kix_rev)
     }
 
-    /// A deploy from a bundle records the bytes it deployed, and repeats
-    /// what the bundle's maker recorded about the source.
+    /// Verify that a bundle receipt records the bundle's SHA-256 digest while
+    /// preserving the builder's source provenance.
     #[test]
     fn a_bundle_receipt_names_the_bundle_and_keeps_its_makers_record() {
         let (build, bytes, kix_rev) = carried_build(json!({
@@ -612,9 +572,8 @@ mod tests {
         assert!(ComplianceReceipts.warnings(&r).is_empty());
     }
 
-    /// A bundle's receipt is written by whoever made the bundle: its text
-    /// reaches the terminal without control characters, and the warning
-    /// is about the bundle's source, not the operator's tree.
+    /// Verify that dirty-source warnings for a bundle attribute the dirty tree
+    /// to the bundle and strip control characters from the revision.
     #[test]
     fn a_dirty_bundle_source_is_named_as_the_bundles_and_escaped() {
         let (build, _, _) = carried_build(json!({"source": {
@@ -636,7 +595,7 @@ mod tests {
         );
     }
 
-    /// The warning for a build made here names the working tree.
+    /// Verify that dirty-source warnings for a local build name the working tree.
     #[test]
     fn a_dirty_working_tree_is_named_as_such() {
         let receipt = json!({"source": {"dirty": true, "revision": "abc-dirty"}});
@@ -652,8 +611,8 @@ mod tests {
         assert!(ComplianceReceipts.warnings(&clean).is_empty());
     }
 
-    /// The digest in the receipt is the one this machine computed. A
-    /// source that claims another is not believed.
+    /// Verify that `source.bundle.sha256` always uses the locally computed
+    /// digest rather than a value claimed inside the bundle's provenance.
     #[test]
     fn a_source_cannot_supply_the_receipts_digest() {
         let made = Provenance {

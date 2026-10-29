@@ -33,17 +33,17 @@ use miette::IntoDiagnostic;
 
 use crate::cli::GlobalArgs;
 
-/// Makes the receipt a deploy records on its Activation. `kix bundle` also
-/// fills the bundle's `Provenance` from the receipt's `source`, `inputs` and
-/// `builder`. Both treat the receipt as opaque otherwise, so what goes into
-/// it is chosen once, in `main`.
+/// Build the receipt that a deploy records on its Activation, and extract
+/// pre-deploy warnings from it.
+///
+/// `kix bundle` also populates the bundle's `Provenance` from the receipt's
+/// `source`, `inputs`, and `builder` fields.
 pub trait ReceiptMaker {
-    /// The receipt for a deploy of `build`. A local build reads its source
+    /// Build the receipt for a deploy of `build`, reading local source metadata
     /// from the flake at `flake_ref`.
     fn of_build(&self, build: &Build, flake_ref: &str) -> serde_json::Value;
 
-    /// Styled lines to print before the deploy is confirmed. Empty when
-    /// there is nothing to say.
+    /// Return styled warning lines to print before confirming the deploy.
     fn warnings(&self, receipt: &serde_json::Value) -> Vec<String>;
 }
 
@@ -66,34 +66,32 @@ impl CommandContext {
         })
     }
 
-    /// The name that identifies the cluster `arg` names, for every lookup a
-    /// command makes on the Kubernetes cluster or in the local activation
-    /// cache.
+    /// Resolve the cluster name used to look up records on the Kubernetes
+    /// cluster or in the local activation cache.
     ///
-    /// `arg` is the flake attribute the user typed. Activation records and
-    /// the cache are keyed by the cluster definition's own `name` instead
-    /// (see [`kix::eval::eval_cluster_name`]). Reading that name evaluates
-    /// most of the cluster, needs the flake's inputs, and fails when the
-    /// flake does not evaluate, so it is the last resort:
+    /// `arg` is the flake attribute from the command line, whereas activation
+    /// records and the cache are keyed by the cluster definition's own `name`
+    /// (see [`kix::eval::eval_cluster_name`]). Evaluating that name requires
+    /// fetching flake inputs and evaluating most of the cluster, so Kix avoids
+    /// it when possible:
     ///
-    /// 1. With no flake (no `flake.nix` in a local `--flake` directory),
-    ///    `arg` is the name.
-    /// 2. When records in the current context carry `arg` as their cluster
-    ///    label, `arg` is the name.
-    /// 3. Otherwise the name is evaluated. A flake that does not define
-    ///    `arg`, or has no `kixClusters`, leaves `arg` as the name.
+    /// 1. When `--flake` points to a local directory without `flake.nix`,
+    ///    return `arg`.
+    /// 2. When records in the current Kubernetes context already carry `arg` as
+    ///    their cluster label, return `arg`.
+    /// 3. Otherwise, evaluate the cluster name from the flake. If the flake
+    ///    does not define `arg` or `kixClusters`, return `arg`.
     ///
-    /// When the evaluation fails, [`Lookup::Mutating`] is an error naming the
-    /// attribute and the failure, and [`Lookup::ReadOnly`] warns and uses
-    /// `arg`. A command that builds the cluster reads the name from the
-    /// build, `StoreGraph::cluster_name`, instead.
+    /// If evaluation fails, [`Lookup::Mutating`] returns an error and
+    /// [`Lookup::ReadOnly`] prints a warning and falls back to `arg`. Commands
+    /// that build the cluster read `StoreGraph::cluster_name` from the build
+    /// instead.
     pub fn cluster_identity(&self, arg: &str, lookup: Lookup) -> miette::Result<String> {
         let flake_path = match resolve_flake_path(&self.global.flake) {
             Ok(p) => p,
             Err(_) => return Ok(arg.to_string()),
         };
-        // A local directory without a flake has nothing to evaluate, and
-        // `nix eval` there would only print an error.
+        // A local directory without `flake.nix` has nothing to evaluate.
         if !self.global.flake.contains(':') && !flake_path.join("flake.nix").exists() {
             return Ok(arg.to_string());
         }
@@ -113,7 +111,7 @@ impl CommandContext {
         })
     }
 
-    /// Evaluate a cluster, returning a helpful error with available cluster names if not found.
+    /// Evaluate a cluster, or return an error listing available clusters when `name` is not found.
     pub fn eval_cluster_or_suggest(
         &mut self,
         name: &str,
@@ -134,18 +132,21 @@ impl CommandContext {
     }
 }
 
-/// Whether a command that looks up a cluster's records changes the cluster.
+/// Whether a cluster-record lookup is read-only or mutates cluster state.
+///
 /// See [`CommandContext::cluster_identity`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lookup {
-    /// Reads state only (health, status, attest): a wrong name finds nothing.
+    /// The command only reads state (`health`, `status`, `attest`), so a
+    /// fallback name is safe.
     ReadOnly,
-    /// Deletes or reverts (rollback, gc): a wrong name must not be guessed.
+    /// The command deletes or reverts cluster state (`rollback`, `gc`), so
+    /// Kix must not guess the cluster name when evaluation fails.
     Mutating,
 }
 
-/// Steps 2 and 3 of [`CommandContext::cluster_identity`]: `arg` when records
-/// carry it, else the evaluated name.
+/// Apply steps 2 and 3 of [`CommandContext::cluster_identity`], returning `arg`
+/// when existing records match it or evaluating the cluster name otherwise.
 fn resolve_identity(
     arg: &str,
     has_records: bool,
@@ -172,10 +173,8 @@ fn resolve_identity(
     }
 }
 
-/// A build of `cluster` from the flake `global.flake`, made now into this
-/// machine's Nix store. `status` gets progress lines. A failed `nix build`
-/// reads `{build_failed}: {error}`; a failure to load what it built reads
-/// as the error alone. Each command keeps the wording it had.
+/// Build `cluster` from `global.flake` into the local Nix store, reporting
+/// progress lines to `status` and prefixing `nix build` errors with `build_failed`.
 pub(crate) fn build_flake(
     global: &GlobalArgs,
     cluster: &str,
@@ -189,15 +188,12 @@ pub(crate) fn build_flake(
     })
 }
 
-/// What a command whose `nix build` failed says, before the error.
+/// Error prefix for commands whose `nix build` step fails.
 pub(crate) const BUILD_FAILED: &str = "failed to build cluster";
-/// The same, in the commands that have always said "activation".
+/// Error prefix for activation-oriented commands whose `nix build` step fails.
 pub(crate) const ACTIVATION_BUILD_FAILED: &str = "failed to build cluster activation";
 
-/// Resolve a flake reference to a path for evaluation.
-///
-/// For local paths (relative or absolute), resolves to an absolute path.
-/// For remote references (e.g. "github:org/repo"), passes through as-is.
+/// Resolve a local flake path to an absolute path, or pass a remote flake URI through unchanged.
 pub(crate) fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     if flake.contains(':') {
         Ok(PathBuf::from(flake))
@@ -212,7 +208,6 @@ pub(crate) fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     }
 }
 
-/// Create a KixEvaluator with the CLI subprocess backend.
 fn create_evaluator(
     flake: &str,
     no_cache: bool,
@@ -246,7 +241,7 @@ mod tests {
         }
     }
 
-    /// Records that carry the argument settle the name without evaluating.
+    /// Verify that existing records matching the argument skip flake evaluation.
     #[test]
     fn records_under_the_argument_skip_the_evaluation() {
         let name = resolve_identity("harbor", true, Lookup::Mutating, || {
@@ -255,8 +250,8 @@ mod tests {
         assert_eq!(name.unwrap(), "harbor");
     }
 
-    /// Without records the evaluated name is used, and a flake that does not
-    /// define the attribute leaves the argument.
+    /// Verify that without matching records, Kix evaluates the cluster name or
+    /// falls back to the argument when the flake does not define the attribute.
     #[test]
     fn without_records_the_name_is_evaluated() {
         let name = resolve_identity("harbor", false, Lookup::Mutating, || {
@@ -267,8 +262,8 @@ mod tests {
         assert_eq!(name.unwrap(), "harbor");
     }
 
-    /// A failed evaluation is an error naming the attribute and the failure
-    /// for a command that changes the cluster, and the argument otherwise.
+    /// Verify that a failed evaluation errors on a mutating lookup and falls
+    /// back to the argument on a read-only lookup.
     #[test]
     fn a_failed_evaluation_refuses_a_mutating_lookup() {
         let err = resolve_identity("harbor", false, Lookup::Mutating, || Err(eval_error()))
@@ -280,7 +275,8 @@ mod tests {
         assert_eq!(name.unwrap(), "harbor");
     }
 
-    /// Without a flake there is nothing to resolve, and no `nix` runs.
+    /// Verify that a local directory without `flake.nix` returns the argument
+    /// without invoking `nix`.
     #[test]
     fn without_a_flake_the_argument_is_the_name() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,43 +1,31 @@
-//! Garbage-collect stale kix-managed resources from the cluster.
+//! Garbage-collect stale Kix-managed resources from the cluster.
 //!
-//! Three modes:
-//!   - **Soft (default):** Diff old vs new activation store graphs locally.
-//!     Resources only in the old graph are garbage, and so are resources only
-//!     in a build the Active record lists under `status.orphansKeptFrom`
-//!     (orphans a warn-only deploy kept). Deletes in reverse dependency order
-//!     (dependents first). Fast: no cluster-wide resource scan. This is the
-//!     same diff that deploy computes; soft GC is "deploy's prune phase, run
-//!     separately."
-//!   - **Hard (`--hard`):** Builds the cluster now and lists every live
-//!     resource carrying the kix label that belongs to this Kix cluster, by
-//!     the Activation record hashes in its `kix.run/activations`
-//!     (`inventory::SweepScope::Cluster`). A resource whose identity hash is not
-//!     in that build is garbage; one stamped before the domain move is judged
-//!     by Kubernetes identity instead. Unstamped label carriers are reported
-//!     and deleted only with `--include-unstamped`. When another Kix cluster
-//!     has records here, objects naming no record at all are reported and
-//!     judged only with `--include-unattributed`, and an object another
-//!     cluster's current build contains is kept. Copies a controller made of
-//!     Kix objects (`inventory::ManagedSweep::copies`) are reported and judged
-//!     only with `--include-copies`.
-//!   - **Operator (`--operator`):** Deletes retired Activation records. They
-//!     are Superseded, so the operator's finalizer deletes no resources.
+//! Supports three modes:
+//! - **Soft (default):** Diff the previous and new activation store graphs
+//!   locally, plus any closures listed in the Active record's
+//!   `status.orphansKeptFrom` from warn-only deploys. Deletes orphaned
+//!   resources in reverse dependency order without scanning every resource kind
+//!   on the cluster.
+//! - **Hard (`--hard`):** Build the cluster and scan all live Kix-managed
+//!   resources attributed to this cluster via `kix.run/activations`
+//!   (`inventory::SweepScope::Cluster`). Resources whose `kix.run/identity-hash`
+//!   is absent from the new build are garbage (or, for resources stamped before
+//!   the domain move, resources whose Kubernetes identity is absent). Unstamped
+//!   label carriers, unattributed resources on multi-cluster targets, and
+//!   controller-created copies are reported and only deleted when
+//!   `--include-unstamped`, `--include-unattributed`, or `--include-copies` is
+//!   passed.
+//! - **Operator (`--operator`):** Delete retired Superseded Activation records
+//!   and wait for the operator's finalizer.
 //!
-//! Soft and hard mode never delete a kind that `lifecycle::never_pruned`
-//! protects (Namespace, CustomResourceDefinition); they list it as kept.
+//! Soft and hard modes never delete resource kinds protected by
+//! `lifecycle::never_pruned` (`Namespace`, `CustomResourceDefinition`), listing
+//! them as kept instead.
 //!
-//! In every mode, Superseded Activation records are retired under one
-//! retention policy: always keep the `--keep` newest rollback targets
-//! (default 10), never more than `--keep-max` records in all (default 50),
-//! and beyond the floor retire anything older than `--keep-for` (default
-//! 30d). A record of a deploy that never finished is no rollback target: it
-//! is kept by age alone, and goes first when the cap is reached. The records
-//! are the rollback history, so recent ones stay, but each record still on
-//! the cluster keeps one entry alive in `kix.run/activations` on every
-//! managed resource, and that annotation has a 256 KiB cap. `activation::retire_plan` decides which go; deletes are
-//! conditional on the record being unchanged since it was listed; the next
-//! deploy drops the retired hashes from the resources. Soft mode needs the
-//! cluster for this, so it is no longer an offline command.
+//! All modes retire Superseded Activation records under a shared retention
+//! policy (`--keep`, `--keep-max`, and `--keep-for`) via `activation::retire_plan`.
+//! Retiring old records bounds the size of the `kix.run/activations` annotation
+//! on managed resources, which the next deploy compacts.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -77,27 +65,21 @@ pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Soft GC: diff old vs new activation store graphs
-// ---------------------------------------------------------------------------
-
 fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
-    // The cache and the records are read before the build, so the name comes
-    // from the flake rather than from `new_graph`.
+    // Resolve the cluster name from the flake before building so we can query
+    // the local cache and cluster records first.
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
 
-    // 1. Activation records under the retention policy. Needs the cluster;
-    //    done before the build so an unreachable cluster fails fast and the
-    //    connection is reused for the deletes.
+    // Plan Activation record retirement before building so an unreachable
+    // cluster fails fast.
     let policy = retention_policy(args)?;
     let global = ctx.global.clone();
     let retirement = ctx
         .runtime
         .block_on(plan_record_retirement(&global, &cluster, &policy))?;
 
-    // 2. The old build: the Active record's. The local cache is keyed by
-    //    cluster name only, and a build another context deployed under the
-    //    same name would make this context's objects look like garbage.
+    // Validate the cached build path against the Active record so a cache entry
+    // written by another context with the same cluster name is not used.
     let (old_path, warning) = baseline::active_build_dir(
         &cluster,
         store::load_activation_path(&cluster),
@@ -128,7 +110,6 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         })?
         .into_graph();
 
-    // 3. Build new activation
     crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
     let status = |msg: &str| {
         if !output::quiet() {
@@ -148,9 +129,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if !output::quiet() {
         eprint!("\r\x1b[2K");
     }
-    // The records and the old build were read under the name resolved before
-    // the build. Under any other name they belong to another cluster, and
-    // the comparison would list this cluster's objects as garbage.
+    // Refuse to proceed if the built cluster name differs from the pre-build
+    // cluster identity used to load the records and previous build.
     if new_graph.cluster_name != cluster {
         return Err(miette!(
             "flake attribute '{}' builds cluster '{}', but the Activation records read before the build are those of cluster '{}'. Nothing was deleted.",
@@ -160,7 +140,6 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         ));
     }
 
-    // 4. Diff: resources in the old build that the new build no longer has.
     let new_hashes: HashSet<String> = new_graph.resources.keys().map(|p| store_hash(p)).collect();
     let new_ids: HashSet<String> = new_graph
         .resources
@@ -173,8 +152,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &new_ids,
     );
 
-    // Orphans a warn-only deploy kept. The cached build is usually the one
-    // that deploy made, so the diff above cannot see them.
+    // Include orphans recorded in `status.orphansKeptFrom` by earlier warn-only
+    // deploys, which are absent from `old_graph` when `old_graph` is the latest build.
     let kept_baseline = match &retirement.active {
         Some(active) => baseline::load_kept(active, None, &cluster, &plan::progress::print, None),
         None => baseline::KeptBaseline::default(),
@@ -211,9 +190,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 5. Reverse-topological ordering for deletion (dependents first so a
-    //    provider still exists when its consumer is torn down), less what
-    //    another Kix cluster still deploys.
+    // Order deletions in reverse topological order (dependents before
+    // dependencies) and exclude resources still deployed by another Kix cluster.
     let kept_rids: Vec<ResourceId> = kept_garbage.iter().map(ResourceId::from_value).collect();
     let garbage_values: Vec<Value> = garbage_manifests
         .values()
@@ -238,9 +216,6 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         ))
         .map_err(|e| miette!("{e}"))?;
 
-    // 6. Display package-grouped garbage plan.
-    //    Always render per-resource detail because the user
-    //    must see what exactly will be deleted before confirming.
     if !garbage_manifests.is_empty() {
         let mut pkg_diff = kix::plan::diff_garbage(&old_graph, &new_graph);
         pkg_diff.keep_shared(&shared);
@@ -275,8 +250,6 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 7. Confirm once for both, delete resources first, then records, then
-    //    one summary.
     if !confirm(
         args,
         &deletion_prompt(ordered_rids.len(), retirement.plan.retire.len()),
@@ -305,9 +278,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     )
 }
 
-/// Manifests from kept closures (`status.orphansKeptFrom`) that the new build
-/// no longer has, by the rule [`soft_garbage`] uses, and that `garbage` does
-/// not already name by Kubernetes identity.
+/// Return manifests from `closures` (`status.orphansKeptFrom`) that are absent
+/// from the new build and not already present in `garbage`.
 fn kept_garbage(
     closures: &[Vec<Value>],
     garbage: &HashMap<String, Value>,
@@ -333,11 +305,8 @@ fn kept_garbage(
     out
 }
 
-/// Remove `status.orphansKeptFrom` from the Active record once this gc has
-/// deleted what it describes, and drop the GC roots this machine keeps for
-/// those builds under `cluster`. See [`may_clear_kept`] for when. Best-effort: a list left behind
-/// makes the next deploy's plan name objects that are already gone, and
-/// deleting those is a no-op.
+/// Clear `status.orphansKeptFrom` on the Active record and remove local GC
+/// roots for `cluster` when [`may_clear_kept`] permits.
 async fn clear_kept(
     cluster: &str,
     retirement: &RecordRetirement,
@@ -365,13 +334,11 @@ async fn clear_kept(
     }
 }
 
-/// Whether a gc that deleted its garbage without failures may clear the
-/// Active record's `orphansKeptFrom`.
+/// Return `true` when `clear_kept` may clear `orphansKeptFrom` on `active`.
 ///
-/// Only when the build gc compared against is the Active one: against a
-/// different build, an object the Active build lacks but this build declares
-/// was not deleted and is still an orphan. And only when `examined_all`: soft
-/// gc resolved every listed build, or hard gc was allowed to list every kind.
+/// Clearing is safe only when `active` matches `build_hash` and `examined_all`
+/// is true (soft GC resolved every listed build, or hard GC listed every
+/// resource kind and unattributed resource).
 fn may_clear_kept(active: &Record, examined_all: bool, build_hash: Option<&str>) -> bool {
     !active.orphans_kept_from.is_empty()
         && examined_all
@@ -379,18 +346,11 @@ fn may_clear_kept(active: &Record, examined_all: bool, build_hash: Option<&str>)
         && active.identity_hash.as_deref() == build_hash
 }
 
-// ---------------------------------------------------------------------------
-// Hard GC: full cluster scan
-// ---------------------------------------------------------------------------
-
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
-    // 1. Build new activation
     crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
     let graph =
         super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?.into_graph();
 
-    // 2. Collect expected identity hashes, and the Kubernetes identities
-    //    behind them, for objects whose hash cannot be compared.
     let expected_hashes: HashSet<String> = graph
         .resources
         .values()
@@ -417,7 +377,6 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     )
     .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
 
-    // 3. Fetch ALL live kix-managed resources
     let global = ctx.global.clone();
     let cluster_name = graph.cluster_name.clone();
     ctx.runtime.block_on(run_hard_async(
@@ -446,14 +405,12 @@ async fn run_hard_async(
     let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    // The gate error must not be read as "no Activation CRD". On a cluster
-    // still under the retired group, this gc would compare live objects
-    // stamped with retired identity hashes against a current build, find no
-    // match for most of them, and plan to delete them.
+    // Open `Records` to enforce the domain migration gate. On an unmigrated
+    // cluster, comparing pre-move live identity hashes against a current build
+    // would flag almost every resource as garbage.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    // Only this Kix cluster's objects. Another Kix cluster's objects are
-    // absent from this build too, and judging them against it would delete
-    // them.
+    // Scope the sweep to this Kix cluster so another Kix cluster's resources on
+    // the same Kubernetes cluster are not flagged as garbage.
     let sweep = inventory::sweep_managed(
         &client,
         &discovery,
@@ -488,13 +445,9 @@ async fn run_hard_async(
     let unattributed_judged = sweep.unattributed.is_empty() || args.include_unattributed;
     let live = judged_objects(sweep, args.include_unattributed, args.include_copies);
 
-    // Refuse on a cluster that has been migrated but not deployed since.
-    //
-    // The expected set above comes from a build made now, so every hash in
-    // it is a post-move hash, while every object here still carries the
-    // pre-move one. Every single resource would read as HashNotExpected and
-    // be deleted. The domain gate cannot catch this: discovery shows only
-    // the current group, because the migration is what moved it.
+    // Resources stamped before the domain migration have store hashes under the
+    // retired domain that cannot match a current build, so `judge_hard`
+    // compares them by Kubernetes identity instead.
     let stale = live
         .iter()
         .filter(|obj| kix::legacy_domain::stamped_before_move(|key| has_key(obj, key)))
@@ -510,23 +463,16 @@ async fn run_hard_async(
         );
     }
 
-    // Find resources with identity-hash not in expected set.
-    // Activation CRs are handled separately below.
     let (mut garbage, shared) = judge_hard(&live, expected_hashes, expected_ids, &tenancy);
 
-    // Superseded Activation records under the retention policy. A listing
-    // failure is an error, not an empty list: gc must never plan on a
-    // partial view. Listed here for display; deleted with preconditions by
-    // `delete_records`, not by kind lookup.
+    // Plan Superseded Activation record retirement. Any listing failure is
+    // returned as an error rather than treated as an empty list.
     let policy = retention_policy(args)?;
     let retirement = plan_records_with(records.into_records(), cluster_name, &policy).await?;
     garbage.extend(record_garbage(&retirement.plan));
 
-    // Unstamped resources carry the kix label but no identity hash: kix never
-    // applied them (a controller child that inherited the label, a render
-    // someone kubectl-applied). Report them, but delete only on request.
-    // Protected kinds stay in `garbage` and are listed as kept below, since
-    // --include-unstamped does not delete them either.
+    // Separate unstamped resources unless `--include-unstamped` is set.
+    // Protected kinds remain in `garbage` so they are listed as kept below.
     let (unstamped, garbage): (Vec<GarbageEntry>, Vec<GarbageEntry>) =
         garbage.into_iter().partition(|g| {
             g.reason == GarbageReason::NoIdentityHash
@@ -542,11 +488,8 @@ async fn run_hard_async(
         plan::print_shared(&shared);
     }
 
-    // Hard gc judges every live object against the build, so once it has
-    // deleted without failures no kept orphan is left, whether or not this
-    // machine can resolve the builds the Active record names. Kinds the
-    // sweep was forbidden to list, and unattributed objects left out without
-    // --include-unattributed, were not judged.
+    // Hard GC has examined all cluster objects when no resource kinds were
+    // forbidden and no unattributed objects were skipped.
     let examined_all = forbidden_none && unattributed_judged;
 
     if garbage.is_empty() {
@@ -597,10 +540,10 @@ async fn run_hard_async(
     )
 }
 
-/// Judge each live object of this cluster against the build. Returns the
-/// garbage, and apart from it the objects the build dropped that another Kix
-/// cluster's current build still contains. Activation records are skipped:
-/// retention decides those.
+/// Classify `live` objects against `expected_hashes` and `expected_ids`,
+/// returning garbage entries and orphans shared with other Kix clusters.
+///
+/// Activation records are skipped here and handled by the retention policy.
 fn judge_hard(
     live: &[kube::api::DynamicObject],
     expected_hashes: &HashSet<String>,
@@ -613,7 +556,7 @@ fn judge_hard(
         if kix::manifest::lifecycle::lifecycle_of_live(obj)
             == kix::manifest::lifecycle::Lifecycle::Record
         {
-            continue; // the retention policy decides records
+            continue;
         }
 
         let annotations_from_data = obj
@@ -638,17 +581,9 @@ fn judge_hard(
 
         let reason = match &identity_hash {
             Some(hash) if expected_hashes.contains(hash) => continue,
-            // An object still stamped by a pre-move Kix cannot be judged by
-            // hash at all. Its hash was computed from a store path under the
-            // old domain, and the move changed every path, so it can never
-            // appear in a current expected set. Judging it by hash would
-            // condemn every resource the deploy after a migration has not
-            // reached yet, which is most of a cluster.
-            //
-            // Judge it by Kubernetes identity instead, the rule soft gc and
-            // deploy's prune already use. Present in the build means still
-            // ours, waiting to be re-stamped. Absent means garbage, whatever
-            // it is stamped with.
+            // Objects stamped before the domain migration carry hashes computed
+            // from store paths under the retired domain, so compare them by
+            // Kubernetes identity instead.
             Some(_)
                 if kix::legacy_domain::stamped_before_move(|key| has_key(obj, key))
                     && expected_ids.contains(&live_identity(obj)) =>
@@ -659,7 +594,6 @@ fn judge_hard(
             None => GarbageReason::NoIdentityHash,
         };
 
-        // A protected kind is kept anyway and listed with the others.
         let others = tenancy.still_deployed_by_others(obj);
         if !others.is_empty() && !lifecycle::never_pruned(&live_kind(obj)) {
             shared.push(inventory::SharedOrphan {
@@ -708,7 +642,7 @@ fn live_kind(obj: &kube::api::DynamicObject) -> String {
         .to_string()
 }
 
-/// Does the object carry this annotation, in its raw data or typed metadata?
+/// Return `true` if `obj` carries annotation `key` in its raw data or typed metadata.
 fn has_key(obj: &kube::api::DynamicObject, key: &str) -> bool {
     obj.data
         .pointer("/metadata/annotations")
@@ -721,10 +655,8 @@ fn has_key(obj: &kube::api::DynamicObject, key: &str) -> bool {
             .is_some_and(|a| a.contains_key(key))
 }
 
-/// The swept objects hard gc judges against the build: the managed and
-/// unstamped ones, plus the unattributed objects and the copies when their
-/// flags ask for them. Copies are not Kix's, so leaving them out does not
-/// make the examination incomplete for `clear_kept`.
+/// Collect the swept objects that hard GC evaluates against the build,
+/// including `unattributed` and `copies` when their respective flags are set.
 fn judged_objects(
     sweep: inventory::ManagedSweep,
     include_unattributed: bool,
@@ -749,19 +681,14 @@ fn judged_objects(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Hard GC: garbage entry + display
-// ---------------------------------------------------------------------------
-
-/// Why a live resource is flagged as garbage.
+/// Reason a live resource was classified as garbage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GarbageReason {
-    /// Resource carries a `kix.run/identity-hash` that isn't in the expected set.
+    /// Resource carries a `kix.run/identity-hash` that is absent from the expected set.
     HashNotExpected,
-    /// Resource has no `kix.run/identity-hash` annotation. It looks kix-managed
-    /// (matched the managed-by label) but was never properly stamped.
+    /// Resource carries the Kix label but no `kix.run/identity-hash` annotation.
     NoIdentityHash,
-    /// A Superseded `Activation` record the retention policy retires
+    /// Superseded `Activation` record retired by the retention policy
     /// (`--keep`, `--keep-max`, `--keep-for`).
     RetiredActivation,
 }
@@ -785,8 +712,8 @@ struct GarbageEntry {
     reason: GarbageReason,
 }
 
-/// List resources that carry the kix label but were never stamped, and say
-/// why gc leaves them alone.
+/// Print resources that carry the Kix label but no identity hash, and explain
+/// why GC leaves them alone by default.
 fn print_unstamped(unstamped: &[GarbageEntry]) {
     println!();
     println!(
@@ -813,8 +740,8 @@ fn print_unstamped(unstamped: &[GarbageEntry]) {
     );
 }
 
-/// List the objects that name no Activation record while another Kix cluster
-/// has records here, and say whether this run judges them.
+/// Print objects that name no Activation record on a multi-cluster target, and
+/// state whether `--include-unattributed` includes them.
 fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
@@ -839,8 +766,8 @@ fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
     println!("  {}", output::dim(note));
 }
 
-/// List the copies a controller made of Kix objects, and say whether this
-/// run judges them.
+/// Print controller-created copies of Kix objects, and state whether
+/// `--include-copies` includes them.
 fn print_copies(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
@@ -865,7 +792,7 @@ fn print_copies(objects: &[kube::api::DynamicObject], included: bool) {
     println!("  {}", output::dim(note));
 }
 
-/// Print grouped, per-resource garbage plan with reasons and owning activation.
+/// Print the grouped per-resource garbage plan with reasons and owning activations.
 fn print_garbage_plan(garbage: &[GarbageEntry]) {
     use std::collections::BTreeMap;
 
@@ -876,7 +803,6 @@ fn print_garbage_plan(garbage: &[GarbageEntry]) {
         garbage.len(),
     );
 
-    // Group by (namespace, kind) for readable output.
     let mut by_ns: BTreeMap<&str, BTreeMap<&str, Vec<&GarbageEntry>>> = BTreeMap::new();
     for entry in garbage {
         by_ns
@@ -933,14 +859,9 @@ fn print_garbage_plan(garbage: &[GarbageEntry]) {
     println!();
 }
 
-// ---------------------------------------------------------------------------
-// Operator-delegated GC: delete Superseded Activation CRs
-// ---------------------------------------------------------------------------
-
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
     let (_, records) = super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
 
-    // Superseded activations under the retention policy
     let policy = retention_policy(args)?;
     let retirement = plan_records_with(Some(records.clone()), cluster, &policy).await?;
 
@@ -966,8 +887,6 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
         return Ok(());
     }
 
-    // Delete each retired Activation CR (only if unchanged since listed)
-    // and watch for finalizer cleanup
     let mut deleted = 0usize;
     let mut failed = 0usize;
 
@@ -977,7 +896,6 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
 
         match records.retire(&retired.record).await {
             Ok(_) => {
-                // Wait for finalizer to complete deletion
                 super::operator::wait_for_deletion(&records, name).await?;
                 deleted += 1;
             }
@@ -1007,17 +925,12 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Shared: activation record retention (--keep, --keep-max, --keep-for)
-// ---------------------------------------------------------------------------
-
 use kix::cluster::activation::{
     Record, Records, RetentionPolicy, RetireReason, Retirement, retire_plan,
 };
 use kix::manifest::keys;
 
-/// The policy from the flags. `--keep-max` below `--keep` is raised to it
-/// (the floor wins) and said so.
+/// Build a [`RetentionPolicy`] from `args`, clamping `--keep-max` to at least `--keep`.
 fn retention_policy(args: &GcArgs) -> Result<RetentionPolicy> {
     let keep_for = parse_retention_duration(&args.keep_for)?;
     if args.keep_max < args.keep && !args.yes {
@@ -1045,8 +958,8 @@ fn retention_policy(args: &GcArgs) -> Result<RetentionPolicy> {
     })
 }
 
-/// `30d`, `12h`, `45m`, `30s`; a bare number is days; `0` or `off` turns the
-/// age rule off.
+/// Parse a retention duration (`30d`, `12h`, `45m`, `30s`, a bare day count, or
+/// `0`/`off`/`never` to disable age-based retirement).
 fn parse_retention_duration(s: &str) -> Result<Option<chrono::Duration>> {
     let s = s.trim();
     if s == "0" || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("never") {
@@ -1073,13 +986,13 @@ fn parse_retention_duration(s: &str) -> Result<Option<chrono::Duration>> {
     Ok(Some(d))
 }
 
-/// The records to retire, with the handle that listed them so the deletes
-/// reuse it. `records` is `None` when the cluster has no Activation CRD, which
-/// also means it has no records.
+/// Planned Activation record retirement paired with the [`Records`] handle used
+/// to list and delete them.
 struct RecordRetirement {
     records: Option<Records>,
     plan: Retirement,
-    /// The cluster's Active or Degraded record, for its `orphansKeptFrom`.
+    /// Current Active or Degraded record for the cluster, used to inspect
+    /// `orphansKeptFrom`.
     active: Option<Record>,
 }
 
@@ -1093,8 +1006,7 @@ impl RecordRetirement {
     }
 }
 
-/// Connect, then list and plan. A listing failure is an error, never an
-/// empty plan.
+/// Connect to the cluster and plan Activation record retirement for `cluster`.
 async fn plan_record_retirement(
     global: &crate::cli::GlobalArgs,
     cluster: &str,
@@ -1110,7 +1022,7 @@ async fn plan_record_retirement(
     plan_records_with(records.into_records(), cluster, policy).await
 }
 
-/// List and plan through the opened records.
+/// List Superseded records and compute the retirement plan for `cluster`.
 async fn plan_records_with(
     records: Option<Records>,
     cluster: &str,
@@ -1136,8 +1048,7 @@ async fn plan_records_with(
     })
 }
 
-/// Hard-mode garbage entries for the records a plan retires. Never the kept
-/// ones.
+/// Convert retired Activation records in `plan` into hard-mode [`GarbageEntry`] items.
 fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
     plan.retire
         .iter()
@@ -1156,7 +1067,7 @@ fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
         .collect()
 }
 
-/// One line describing the policy in words.
+/// Format `policy` as a human-readable summary clause.
 fn describe_policy(policy: &RetentionPolicy) -> String {
     let age = match policy.keep_for {
         Some(d) => format!(", and anything newer than {}", humanize(d)),
@@ -1169,8 +1080,8 @@ fn describe_policy(policy: &RetentionPolicy) -> String {
     )
 }
 
-/// The time retention judged a record by, in words: when it was deployed,
-/// else when its deploy failed, else when it was created.
+/// Format the timestamp used by retention to evaluate `record` (`deployed_at`,
+/// `failed_at`, or `created_at`).
 fn judged_by(record: &Record) -> String {
     if let Some(at) = record.deployed_at.as_deref().filter(|at| !at.is_empty()) {
         at.to_string()
@@ -1183,7 +1094,7 @@ fn judged_by(record: &Record) -> String {
     }
 }
 
-/// Why a record is retired, in words.
+/// Format `reason` for display in the retirement plan.
 fn describe_reason(reason: &RetireReason) -> String {
     match reason {
         RetireReason::BeyondMax(n) => format!("beyond the {n} newest"),
@@ -1192,7 +1103,7 @@ fn describe_reason(reason: &RetireReason) -> String {
     }
 }
 
-/// `30d`, `12h`, `45m`, `30s`: the largest unit that divides evenly.
+/// Format `d` using the largest unit (`d`, `h`, `m`, or `s`) that divides it evenly.
 fn humanize(d: chrono::Duration) -> String {
     let secs = d.num_seconds();
     if secs > 0 && secs % 86_400 == 0 {
@@ -1206,7 +1117,7 @@ fn humanize(d: chrono::Duration) -> String {
     }
 }
 
-/// Print which records will go, why, and which stay.
+/// Print the Activation records scheduled for retirement and the count kept.
 fn print_record_plan(retirement: &RecordRetirement, policy: &RetentionPolicy) {
     let plan = &retirement.plan;
     if plan.retire.is_empty() {
@@ -1240,9 +1151,8 @@ fn print_record_plan(retirement: &RecordRetirement, policy: &RetentionPolicy) {
     );
 }
 
-/// Delete the retired records, each only if unchanged since it was listed.
-/// Returns `(retired, failed)`; the caller prints the summary and sets the
-/// exit code.
+/// Delete retired Activation records conditionally on their resource version,
+/// returning `(retired, failed)`.
 async fn delete_records(retirement: &RecordRetirement) -> Result<(usize, usize)> {
     let Some(records) = &retirement.records else {
         return Ok((0, 0));
@@ -1273,8 +1183,7 @@ async fn delete_records(retirement: &RecordRetirement) -> Result<(usize, usize)>
     Ok((retired, failed))
 }
 
-/// The one closing line, then the exit code. `records` is
-/// `(retired, kept)` when the run considered records.
+/// Print the final GC summary line and exit non-zero if `failed > 0`.
 fn finish(deleted: usize, failed: usize, records: Option<(usize, usize)>) -> Result<()> {
     crate::say!();
     let failed_str = failed.to_string();
@@ -1299,8 +1208,8 @@ fn finish(deleted: usize, failed: usize, records: Option<(usize, usize)>) -> Res
     Ok(())
 }
 
-/// The confirmation question for a deletion of `resources` resources and
-/// `records` activation records.
+/// Build the confirmation prompt for deleting `resources` resources and
+/// `records` Activation records.
 fn deletion_prompt(resources: usize, records: usize) -> String {
     match (resources, records) {
         (0, r) => format!("Delete {r} activation record(s)? [y/N] "),
@@ -1309,9 +1218,8 @@ fn deletion_prompt(resources: usize, records: usize) -> String {
     }
 }
 
-/// Ask unless `--yes`. Exits 1 on a non-interactive terminal without
-/// `--yes`. Returns `false` when the user declines; the caller returns
-/// `Ok(())` so the run ends with exit code 0, as `kix deploy` does.
+/// Prompt the user for confirmation unless `--yes` is set, exiting 1 on a
+/// non-interactive terminal without `--yes`.
 fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
     if args.yes {
         return Ok(true);
@@ -1335,27 +1243,18 @@ fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
     Ok(true)
 }
 
-// ---------------------------------------------------------------------------
-// Shared: delete a list of resources from the cluster
-// ---------------------------------------------------------------------------
-
-/// What [`delete_resources`] did.
+/// Counts returned by [`delete_resources`].
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Deletions {
     deleted: usize,
     failed: usize,
-    /// Objects the prune guard left because they changed after it read
-    /// them. They are still this cluster's garbage, so the kept-orphan
-    /// record must not be cleared.
+    /// Resources skipped by [`PruneGuard`] because they changed after being
+    /// read; their presence prevents `clear_kept` from clearing `orphansKeptFrom`.
     changed: usize,
 }
 
-/// Delete `cluster`'s garbage in the given order, each through
-/// [`PruneGuard`], which keeps an object another Kix cluster's current build
-/// still contains or that changed since it was read. The caller prints the
-/// summary and sets the exit code. Kinds that `lifecycle::never_pruned`
-/// protects are skipped with a message and count as nothing; callers list
-/// them with `print_never_pruned` beforehand.
+/// Delete `resources` for `cluster` in order via [`PruneGuard`], skipping kinds
+/// protected by `lifecycle::never_pruned`.
 async fn delete_resources(
     client: &kube::Client,
     cluster: &str,
@@ -1397,8 +1296,6 @@ async fn delete_resources(
                 println!("  {} deleted {}", output::red("-"), rid);
                 done.deleted += 1;
             }
-            // A kept orphan someone already removed by hand. Nothing is left
-            // to delete, so it is not a failure.
             Ok(Pruned::Gone) => {
                 println!("  {} {} already gone", output::dim("="), rid);
             }
@@ -1419,8 +1316,7 @@ async fn delete_resources(
     Ok(done)
 }
 
-/// `kind/namespace/name` for a live object, in the shape [`k8s_identity`]
-/// produces for a manifest.
+/// Return `kind/namespace/name` for a live object, matching [`k8s_identity`].
 fn live_identity(obj: &kube::api::DynamicObject) -> String {
     let kind = obj
         .data
@@ -1437,24 +1333,19 @@ fn live_identity(obj: &kube::api::DynamicObject) -> String {
     format!("{kind}/{namespace}/{name}")
 }
 
-/// `kind/namespace/name`, the identity deploy's change detection matches on.
+/// Return `kind/namespace/name` for `manifest`.
 fn k8s_identity(manifest: &Value) -> String {
     let rid = ResourceId::from_value(manifest);
     format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
 }
 
-/// Old manifests the new build no longer has, keyed by store hash.
+/// Return manifests from `old` whose Kubernetes identity (`kind`, `namespace`,
+/// and `name`) is absent from the new build, keyed by store hash.
 ///
-/// "No longer has" means the Kubernetes identity (kind, namespace, name) is
-/// absent from the new build, the same rule deploy's prune uses. A changed
-/// store hash alone is not garbage: the resource still exists under the same
-/// name with new content, and soft gc deletes by name, so listing it would
-/// delete the live object the new build wants. Before this rule soft gc did
-/// exactly that whenever the cached "last deployed" build differed from the
-/// live one (found while testing `--keep` against stage2).
-///
-/// The deploy record is never garbage here either: its store hash changes on
-/// every build (kixpkgs#59). Records are retired by `--keep` in every mode.
+/// A changed store hash alone is not garbage when the resource still exists
+/// under the same Kubernetes identity, because soft GC deletes by name.
+/// Activation records are also excluded here and retired via the retention
+/// policy instead.
 fn soft_garbage<'a>(
     old: impl IntoIterator<Item = (&'a PathBuf, &'a Value)>,
     new_hashes: &HashSet<String>,
@@ -1529,8 +1420,8 @@ mod kept_garbage_tests {
         })
     }
 
-    /// Soft gc after a warn-only deploy: the cached build equals the new one,
-    /// so only the kept closure names the dropped ConfigMap.
+    /// Verify that `kept_garbage` returns manifests present only in a kept
+    /// closure once each.
     #[test]
     fn objects_only_a_kept_closure_has_are_garbage_once() {
         let kept = vec![
@@ -1553,8 +1444,8 @@ mod kept_garbage_tests {
         assert_eq!(got, vec!["ConfigMap/d/old"]);
     }
 
-    /// gc clears the list only against the Active build, only when it
-    /// examined everything, and only when there is a list.
+    /// Verify that `may_clear_kept` permits clearing only when the build hash
+    /// matches the Active record and all resources were examined.
     #[test]
     fn kept_list_is_cleared_only_after_a_complete_gc_of_the_active_build() {
         use kix::cluster::activation::KeptOrphanSource;
@@ -1597,8 +1488,8 @@ mod record_garbage_tests {
         }
     }
 
-    /// Hard mode lists exactly the retired records, never a kept one, as
-    /// cluster-scoped Activation entries with the retirement reason.
+    /// Verify that `record_garbage` emits cluster-scoped `Activation` entries
+    /// only for retired records and never for kept records.
     #[test]
     fn hard_mode_garbage_is_exactly_the_retired_records() {
         let policy = RetentionPolicy {
@@ -1661,8 +1552,8 @@ mod record_garbage_tests {
         assert_eq!(reason(RetireReason::UnknownAge), "age unknown");
     }
 
-    /// A record of a deploy that never finished is shown by when it failed,
-    /// the time retention judged it by.
+    /// Verify that `judged_by` formats the timestamp used by retention for both
+    /// deployed and failed records.
     #[test]
     fn a_retired_record_is_shown_by_the_time_it_was_judged_by() {
         assert_eq!(
@@ -1711,8 +1602,8 @@ mod delete_tests {
         }
     }
 
-    /// `delete_resources` drops protected kinds before any request, so a
-    /// list of only a CRD and a Namespace deletes nothing.
+    /// Verify that `delete_resources` skips protected kinds without issuing API
+    /// requests.
     #[tokio::test]
     async fn delete_resources_skips_protected_kinds() {
         let api = FakeApi::new([json!({
@@ -1752,9 +1643,9 @@ mod delete_tests {
         })
     }
 
-    /// gc of `a` deletes its own garbage, keeps what `b`'s current build
-    /// contains, and leaves an object that changed after the read without
-    /// counting it as failed.
+    /// Verify that `delete_resources` deletes unshared garbage, keeps resources
+    /// still deployed by another Kix cluster, and records resources modified
+    /// concurrently as `changed`.
     #[tokio::test]
     async fn delete_resources_goes_through_the_prune_guard() {
         let api = FakeApi::new([
@@ -1831,9 +1722,9 @@ mod hard_scope_tests {
         v
     }
 
-    /// `kix gc a --hard` over a Kubernetes cluster that also runs Kix cluster
-    /// `b`: `b`'s objects never reach the plan, an object both deploy is kept,
-    /// and objects naming no record are left for the flag.
+    /// Verify that hard GC on a shared Kubernetes cluster ignores another Kix
+    /// cluster's objects, keeps shared objects, and only judges unattributed
+    /// objects when `--include-unattributed` is set.
     #[test]
     fn hard_gc_judges_only_this_clusters_objects() {
         let tenancy = Tenancy::fixture(&[record("a", "a2"), record("b", "b1")], "a");
@@ -1856,16 +1747,14 @@ mod hard_scope_tests {
         assert_eq!(shared[0].rid.name, "shared");
         assert_eq!(shared[0].clusters, vec!["b".to_string()]);
 
-        // --include-unattributed judges the leftover too.
         let mut with_flag = sweep.managed.clone();
         with_flag.extend(sweep.unattributed);
         let (garbage, _) = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy);
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
     }
 
-    /// A copy a controller made of a Kix object (stamped, owned, no Kix
-    /// apply entry) is left out of the judged objects unless
-    /// `--include-copies` is passed.
+    /// Verify that controller-created copies of Kix objects are excluded unless
+    /// `--include-copies` is set.
     #[test]
     fn hard_gc_judges_copies_only_with_the_flag() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
@@ -1902,8 +1791,8 @@ mod hard_scope_tests {
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
-    /// With one Kix cluster the plan is what it was before scoping: a
-    /// leftover naming a retired record is garbage without any flag.
+    /// Verify that on a single-cluster target, objects referencing only retired
+    /// Activation records are judged as garbage without extra flags.
     #[test]
     fn hard_gc_on_a_single_cluster_is_unchanged() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");

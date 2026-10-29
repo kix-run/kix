@@ -41,7 +41,6 @@ fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
         .cloned()
         .unwrap_or_default();
 
-    // Collect unique rules
     let mut rules: Vec<serde_json::Value> = Vec::new();
     let mut rule_indices: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
@@ -71,7 +70,6 @@ fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
         }
     }
 
-    // Convert findings to SARIF results
     let results: Vec<serde_json::Value> = findings
         .iter()
         .map(|f| {
@@ -106,7 +104,6 @@ fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
                 "message": { "text": message }
             });
 
-            // Add location if we have context
             if !location_text.is_empty() {
                 result["locations"] = serde_json::json!([{
                     "logicalLocations": [{
@@ -136,15 +133,16 @@ fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
     })
 }
 
-/// A SARIF run describing an evaluation that never produced a scorecard.
+/// Build a synthetic scorecard report for an evaluation that failed before
+/// producing a scorecard.
 ///
 /// An error-severity scorecard finding becomes a failed assertion in
-/// `scorecardToWarnings`. Evaluation therefore stops before producing a
-/// report. Emit the evaluation failure as a finding so a failing job does not
-/// upload an empty SARIF run.
+/// `scorecardToWarnings`, which stops evaluation before a report is produced.
+/// Emit the evaluation failure as a finding so a failing job does not upload an
+/// empty SARIF run.
 ///
 /// Nix stops at the first failed assertion, so each run can report at most one
-/// scorecard error. The message format, `[scorecard:<rule>] <loc>: <text>`,
+/// scorecard error. The message format `[scorecard:<rule>] <loc>: <text>`
 /// identifies the responsible rule.
 fn eval_failure_sarif(message: &str) -> serde_json::Value {
     let parsed = message
@@ -171,10 +169,9 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let spinner = output::spinner(format!("Checking cluster '{}'...", args.cluster));
 
-    // Step 1: Nix evaluation. buildCluster runs the constructor validators,
-    // the scorecard (error findings) and the cross-resource resolution
-    // checks (kix/lib/eval/validate.nix) as assertions, so a failure in any
-    // of them surfaces here as an eval error.
+    // `buildCluster` runs constructor validators, error-severity scorecard
+    // rules, and cross-resource resolution checks (`kix/lib/eval/validate.nix`)
+    // as assertions, so a failure in any of them surfaces here as an eval error.
     let eval_result = ctx.evaluator.eval_cluster(&args.cluster);
 
     if let Some(sp) = &spinner {
@@ -203,7 +200,6 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     };
 
-    // Step 2: Include scorecard findings
     if let Some(output) = &cluster_output {
         if let Some(report) = &output.scorecard_report {
             if let Some(findings) = report.get("findings").and_then(|f| f.as_array()) {
@@ -236,10 +232,8 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // Determine exit code
     let has_failure = results.iter().any(|r| r.result == "fail");
 
-    // SARIF output: print SARIF JSON and exit instead of normal output
     if args.sarif {
         let sarif = if let Some(output) = &cluster_output {
             if let Some(report) = &output.scorecard_report {
@@ -250,9 +244,8 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
                 to_sarif(&serde_json::json!({"findings": []}))
             }
         } else {
-            // Evaluation failed, so there is no report to convert. Report the
-            // failure itself, attributed to the scorecard rule when the
-            // message names one.
+            // Evaluation failed before producing a report. Emit the failure
+            // itself, attributed to the scorecard rule when the message names one.
             let detail = results
                 .iter()
                 .find(|r| r.tool == "eval" && r.result == "fail")
@@ -286,9 +279,8 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
 mod sarif_tests {
     use super::*;
 
-    /// `--sarif` used to emit no results when evaluation failed on an
-    /// error-severity rule. The CI job failed, but its code-scanning report
-    /// contained no explanation.
+    /// Verify that an evaluation failure from an error-severity rule produces a
+    /// SARIF finding attributed to that rule.
     #[test]
     fn a_failed_eval_becomes_a_finding_attributed_to_its_rule() {
         let msg = "[scorecard:reliability.volumeHasSource] apps/web/Deployment-web: \
@@ -318,7 +310,8 @@ mod sarif_tests {
         assert_eq!(results[0]["level"], "error");
     }
 
-    /// A successful evaluation with the scorecard disabled emits an empty run.
+    /// Verify that a successful evaluation with the scorecard disabled emits an
+    /// empty SARIF run.
     #[test]
     fn no_scorecard_data_is_an_empty_run() {
         let sarif = to_sarif(&serde_json::json!({"findings": []}));

@@ -1,43 +1,40 @@
-//! Everything that exists only because Kix once stamped a domain it has
-//! since retired.
+//! Compatibility layer for Kix's retired API domain.
 //!
-//! Kix used `kix.dev` for the prefix of every annotation and label it
-//! stamps, and for the API group of its two CRDs. We do not own that name.
-//! `kix.run`, which we do own, replaced it. Clusters deployed before that
-//! still carry the old keys and, until they are migrated, the old CRDs.
+//! Kix previously used `kix.dev` as the prefix for its annotations and labels
+//! and as the API group for its two CRDs. It now uses `kix.run`. Clusters
+//! deployed before the switch still carry the legacy keys and, until they are
+//! migrated, the legacy CRDs.
 //!
-//! # The shape of the compatibility layer
+//! # Compatibility hooks
 //!
-//! This module is the whole of it. The rest of the codebase reaches it
-//! through four one-line hooks:
+//! The rest of the codebase reaches this module through four hooks:
 //!
-//! 1. `fallback`, from `keys::get` and `keys::get_meta`. A live object
-//!    stamped by an older Kix still parses.
-//! 2. [`upgrade_manifest`], from stamping a loaded build and from the live
-//!    reconstruction in `kix deploy`. A build loaded from an old activation,
-//!    or a set of live objects projected back to manifests, is brought to
-//!    the current domain before the planner ever sees it.
-//! 3. `bookkeeping_null_outs`, from the two merge patches in
-//!    `cluster::apply`. Server-side apply drops the build-time keys on its
-//!    own because the `kix` field manager owns them; these two are written
-//!    by patch and would otherwise stay on the object forever.
-//! 4. [`check_discovery`] and `check_build`, the gate. Every command that
-//!    reads Kix records opens them through
-//!    [`crate::cluster::activation::Records::open`], which refuses a cluster
-//!    that has not been migrated and names the command to run. `Build`
-//!    checks each build it loads, and the commands that install a build's
-//!    CRDs refuse a stale one
+//! 1. `fallback`, called from `keys::get` and `keys::get_meta`, so live
+//!    objects stamped by an older Kix still parse.
+//! 2. [`upgrade_manifest`], called when stamping a loaded build and when
+//!    reconstructing live state in `kix deploy`. Builds loaded from an old
+//!    activation and live objects projected back to manifests are upgraded to
+//!    the current domain before the planner sees them.
+//! 3. `bookkeeping_null_outs`, called from the two merge patches in
+//!    `cluster::apply`. Server-side apply drops build-time keys automatically
+//!    because the `kix` field manager owns them, whereas patch-written keys
+//!    must be explicitly nulled out.
+//! 4. [`check_discovery`] and `check_build`. Every command that reads Kix
+//!    records opens them through [`crate::cluster::activation::Records::open`],
+//!    which rejects an unmigrated cluster and prints the migration command.
+//!    `Build` checks each loaded build, and commands that install CRDs reject
+//!    builds that still use the retired group
 //!    ([`crate::build_source::Build::installable`]).
 //!
-//! Plus the migration itself, [`migrate::run`], behind `kix migrate domain`.
+//! [`migrate::run`] implements the migration behind `kix migrate domain`.
 //!
-//! # Deleting it
+//! # Removing this layer
 //!
-//! Set [`DOMAINS`] to `&[]` and the layer is inert. Removing it for real is
-//! a checklist in `v2_discussions/archive/137_kix_run_domain_migration.md`: delete
-//! this directory and `kix-cli`'s `migrate` command, remove the four hooks,
-//! drop `legacyDomains` from `kix/lib/core/annotations.nix`, and shrink the
-//! allowlist in `keys`'s `no_other_file_spells_a_kix_domain` test.
+//! Setting [`DOMAINS`] to `&[]` makes the entire layer a no-op. To remove it
+//! completely, delete this directory and `kix-cli`'s `migrate` command, remove
+//! the four hooks, drop `legacyDomains` from `kix/lib/core/annotations.nix`,
+//! and shrink the allowlist in `keys`'s `no_other_file_spells_a_kix_domain`
+//! test.
 
 use kube::discovery::{ApiResource, Scope};
 use serde_json::{Map, Value};
@@ -57,26 +54,24 @@ pub use kube_ops::KubeMigrationOps;
 /// half is `legacyDomains` in `kix/lib/core/annotations.nix`.
 pub const DOMAINS: &[&str] = &["kix.dev"];
 
-/// Does `key` sit under `domain`, as in `kix.dev/package`?
+/// Return whether `key` sits under `domain` (for example, `kix.dev/package`).
 fn under(key: &str, domain: &str) -> bool {
     key.len() > domain.len() && key.starts_with(domain) && key.as_bytes()[domain.len()] == b'/'
 }
 
-/// Is this a Kix key under a retired domain?
+/// Return whether `key` is a Kix key under a retired domain.
 pub(crate) fn is_legacy_key(key: &str) -> bool {
     is_key_under_any(key, DOMAINS)
 }
 
-/// Is this a Kix key under any of `domains`? Parameterised so the tests can
-/// drive both an empty retired list and a populated one.
+/// Return whether `key` sits under any domain in `domains`. Parameterized so
+/// tests can exercise both an empty and a populated retired-domain list.
 fn is_key_under_any(key: &str, domains: &[&str]) -> bool {
     domains.iter().any(|d| under(key, d))
 }
 
-/// The same key under each retired domain, newest first.
-///
-/// `key` is a current-domain constant. Returns nothing for a key that is
-/// not Kix's own.
+/// Return the equivalent spellings of `key` under each retired domain, newest
+/// first, or an empty vector when `key` is not in Kix's current domain.
 pub(crate) fn legacy_spellings(key: &str) -> Vec<String> {
     let Some(name) = key.strip_prefix(keys::PREFIX) else {
         return Vec::new();
@@ -84,20 +79,15 @@ pub(crate) fn legacy_spellings(key: &str) -> Vec<String> {
     DOMAINS.iter().map(|d| format!("{d}/{name}")).collect()
 }
 
-/// Is this live object still carrying the identity stamp a pre-move Kix
-/// wrote? `has` answers whether one exact annotation key is present.
+/// Return whether a live object still carries only a pre-migration identity
+/// stamp, where `has` reports whether a specific annotation key is present.
 ///
-/// True when the retired spelling is there and the current one is not. That
-/// is the window between `kix migrate domain` and the first deploy after it:
-/// the records have moved, so the gate in [`check_discovery`] passes, but
-/// every object on the cluster still carries the annotations the old build
-/// wrote. Nothing reconciles that until a deploy re-applies them.
-///
-/// It matters because an identity hash covers the manifest that produced it,
-/// and the move changed every manifest. So in this window a live hash never
-/// equals the hash of the same resource in a fresh build. Anything that
-/// treats "hash not in the expected set" as "this resource is garbage" would
-/// condemn the entire cluster.
+/// Returns true during the window between `kix migrate domain` and the next
+/// deploy: the cluster records have moved so [`check_discovery`] passes, but
+/// live objects still carry the retired annotations until a deploy re-applies
+/// them. Because an identity hash covers the full manifest and the domain
+/// change altered every manifest, live hashes from before the migration do not
+/// match fresh build hashes and must not be treated as orphaned resources.
 pub fn stamped_before_move<F>(has: F) -> bool
 where
     F: Fn(&str) -> bool,
@@ -105,24 +95,19 @@ where
     !has(keys::IDENTITY_HASH) && legacy_spellings(keys::IDENTITY_HASH).iter().any(|k| has(k))
 }
 
-/// Every retired Kix key on an object Kix has just applied.
+/// Return every retired Kix annotation key on an object that Kix has just
+/// applied.
 ///
-/// Server-side apply drops these on its own, but only where the `kix` field
-/// manager owns them. An object whose `managedFields` are empty, which is
-/// what client-side `kubectl apply` leaves behind, has no owner for them: the
-/// apply adds the current spelling and the retired one stays beside it. Four
-/// coredns objects on stage1 were in exactly that state after the move.
+/// Server-side apply drops retired keys only when the `kix` field manager owns
+/// them. Objects previously written with client-side `kubectl apply` have no
+/// `managedFields` owner for those keys, so server-side apply adds the current
+/// key while leaving the retired key alongside it.
 ///
-/// Only ever called after a successful apply, which is what makes clearing
-/// them right rather than merely tidy. The apply wrote the object's complete
-/// current key set from the build, so a retired key is by definition not
-/// part of what the object should now carry. Left alone it is worse than
-/// untidy: [`fallback`] reads a retired key whenever the current one is
-/// absent, so a stale value from an older build generation would be returned
-/// as though it were true.
-///
-/// The skipped path must never call this. There the resource was not
-/// re-applied and its retired keys are the only ones it has.
+/// Call this only after a successful apply. The apply wrote the object's full
+/// current key set, so any remaining retired key is stale residue that would
+/// otherwise cause [`fallback`] to return outdated values when a current key
+/// is absent. Never call this on the skipped path, where the object was not
+/// re-applied and its retired keys are still authoritative.
 pub(crate) fn retired_keys(
     annotations: &std::collections::BTreeMap<String, String>,
 ) -> Vec<String> {
@@ -133,10 +118,8 @@ pub(crate) fn retired_keys(
         .collect()
 }
 
-/// Look `key` up under each retired domain in turn.
-///
-/// The hook in `keys::get` and `keys::get_meta`. `lookup` reads one key out
-/// of whatever map the caller holds.
+/// Look up `key` under each retired domain in turn, using `lookup` to read a
+/// single key from the caller's map.
 pub(crate) fn fallback<'a, F>(key: &str, lookup: F) -> Option<&'a str>
 where
     F: Fn(&str) -> Option<&'a str>,
@@ -144,20 +127,19 @@ where
     legacy_spellings(key).into_iter().find_map(|k| lookup(&k))
 }
 
-/// Bring every Kix annotation and label on a manifest to the current domain.
+/// Upgrade every Kix annotation, label, and record group on `manifest` to the
+/// current domain.
 ///
-/// The hook in the store-graph loader and in `kix deploy`'s live
-/// reconstruction. A manifest that has been through this carries no retired
-/// key, so the planner, the differ and the stamper all see one domain.
-///
-/// A key already present under the current domain wins: it is what the
-/// running Kix wrote, and the retired one is what it replaced.
+/// Called by the store-graph loader and by `kix deploy`'s live reconstruction
+/// so the planner, the differ, and the stamper all see a single domain. If a
+/// key is already present under the current domain, its value takes
+/// precedence over the retired key.
 pub fn upgrade_manifest(manifest: &mut Value) {
     upgrade_manifest_from(manifest, DOMAINS);
 }
 
-/// [`upgrade_manifest`] against a given retired list. With an empty list it
-/// is a no-op, which is what makes removing the layer safe.
+/// Upgrade `manifest` from the given retired `domains` list (a no-op when
+/// `domains` is empty).
 fn upgrade_manifest_from(manifest: &mut Value, domains: &[&str]) {
     for field in ["annotations", "labels"] {
         let pointer = format!("/metadata/{field}");
@@ -263,25 +245,23 @@ fn upgrade_map(map: &mut Map<String, Value>, domains: &[&str]) {
     }
 }
 
-/// The retired spellings of the keys this patch is about to write.
+/// Return the retired spellings of the keys that a merge patch is about to
+/// write.
 ///
-/// The hook in `cluster::apply`. Server-side apply drops the build-time keys
-/// on its own, because the `kix` field manager owns them and the new
-/// manifest does not have them. `activations` and `applied-hash` are written
-/// by merge patch and are owned by nobody, so they have to be removed by
-/// name or they outlive the move.
+/// Called from `cluster::apply`. Server-side apply drops build-time keys
+/// automatically because the `kix` field manager owns them, whereas
+/// `activations` and `applied-hash` are written by merge patch and must be
+/// removed explicitly.
 ///
-/// `writing` is what the patch actually sets. Only those keys are cleared.
-/// Clearing a retired key the patch is not replacing would leave the object
-/// with no value under either domain: on the skipped path, where nothing was
-/// applied and `applied-hash` is not rewritten, that would blind
-/// drift detection on the resource for good, because an unchanged resource is
-/// never applied again.
+/// Only the keys in `writing` are cleared. Clearing a retired key that the
+/// patch does not replace (such as `applied-hash` on the skipped path) would
+/// leave an unchanged resource without a hash under either domain and disable
+/// drift detection for it.
 pub(crate) fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {
     writing.iter().flat_map(|k| legacy_spellings(k)).collect()
 }
 
-/// The cluster is not ready for this Kix.
+/// Error returned when a cluster or build uses a retired Kix API group.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LegacyDomainError {
     #[error(
@@ -307,12 +287,11 @@ pub enum LegacyDomainError {
     StalePin { group: String, current: String },
 }
 
-/// Does discovery show Kix records under a retired group?
+/// Check whether API discovery shows Kix records under a retired group.
 ///
-/// The gate. [`crate::cluster::activation::Records::open`] runs it, so every
-/// command that reads or writes a record is covered. A command that only
-/// reads objects calls it itself where an unmigrated cluster would mislead
-/// it, as `kix diff` and `kix plan` do.
+/// [`crate::cluster::activation::Records::open`] runs this check before
+/// reading or writing records, and read-only commands such as `kix diff` and
+/// `kix plan` call it directly.
 pub fn check_discovery(discovery: &[(ApiResource, Scope)]) -> Result<(), LegacyDomainError> {
     let groups: Vec<&str> = discovery
         .iter()
@@ -322,7 +301,7 @@ pub fn check_discovery(discovery: &[(ApiResource, Scope)]) -> Result<(), LegacyD
     check_cluster(&groups)
 }
 
-/// [`check_discovery`] on the API groups that serve a record kind.
+/// Check the API groups serving Kix record kinds for any retired domain.
 fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainError> {
     let legacy = DOMAINS
         .iter()
@@ -341,16 +320,13 @@ fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainError> 
     })
 }
 
-/// Does this build render Kix's own records under a retired group?
+/// Check whether a raw build renders Kix's own records or CRDs under a retired
+/// API group.
 ///
-/// Catches a kixpkgs pin from before the move. Without it, deploying such a
-/// build would re-create the retired CRDs on a migrated cluster and leave
-/// two groups live, which the CLI cannot tell apart.
-///
-/// It must see the build as loaded: stamping upgrades a build to the current
-/// domain, after which a stale pin looks exactly like a current one. So
-/// [`crate::build_source::Build`] runs it as it loads a build, before
-/// stamping, and keeps the verdict.
+/// Rejects builds evaluated against a `kixpkgs` revision from before the
+/// domain migration so deploying them cannot re-create the retired CRDs on a
+/// migrated cluster. [`crate::build_source::Build`] runs this check before
+/// stamping because stamping upgrades manifests to the current domain.
 pub(crate) fn check_build<'a>(
     manifests: impl IntoIterator<Item = &'a Value>,
 ) -> Result<(), LegacyDomainError> {
@@ -638,13 +614,8 @@ mod tests {
         assert_eq!(crd, before);
     }
 
-    /// The claim in `upgrade_own_crd` is that only Kix's own two kinds move.
-    /// Kix does not own the retired domain, so a CRD sitting in that group
-    /// may well be someone else's. Renaming it into `kix.run` would apply a
-    /// third party's resource under a name they never chose.
-    ///
-    /// The earlier version of this test used a group that was not retired at
-    /// all, so it passed without exercising the guard.
+    /// Verify that a third-party CRD in a retired Kix group is not renamed
+    /// into `kix.run`.
     #[test]
     fn a_third_party_crd_in_a_retired_group_is_left_alone() {
         let retired = "old.example";

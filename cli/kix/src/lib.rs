@@ -8,15 +8,15 @@
 //! - [`manifest`]: Kubernetes types, diffs, annotation stamping, and validation
 //! - [`cluster`]: apply, fetch, DAG, readiness, activation lifecycle, and reconcile
 //!
-//! [`plan`] sits on top of them: what a deploy of a build would change, the
-//! plan document `kix plan` and `kix diff` print, and the check that holds a
-//! deploy to the objects its plan shows.
+//! [`plan`] sits on top of them. It computes what deploying a build would
+//! change, renders the plan document printed by `kix plan` and `kix diff`, and
+//! verifies that a deploy applies only the objects shown in its plan.
 //!
-//! Four smaller modules sit beside them: [`build_source`], the checked build
-//! a command plans and deploys and where it came from, [`pins`], the committed record of
-//! what each image reference resolved to, [`registry`], the one place Kix asks
-//! a container registry a question, and [`text`], for printing text kix did
-//! not write.
+//! Four smaller modules sit beside them: [`build_source`] loads and validates
+//! builds from the local Nix store or a carried bundle, [`pins`] manages the
+//! committed record of resolved image digests, [`registry`] resolves image
+//! references against container registries, and [`text`] sanitizes untrusted
+//! text for terminal output.
 
 pub mod build_source;
 pub mod cluster;

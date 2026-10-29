@@ -20,8 +20,7 @@ pub mod preview;
 pub mod prune_guard;
 pub mod readiness;
 pub mod scheduler;
-/// The scripted fake of the engine's seams, for tests of the engine's
-/// callers.
+/// Scripted test fakes for the deploy engine's external interfaces.
 #[cfg(any(test, feature = "test-util"))]
 pub use ops::scripted;
 pub(crate) mod secrets;

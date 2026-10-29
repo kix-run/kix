@@ -1,15 +1,15 @@
-//! Which Kix cluster each Activation record, and so each object, belongs to.
+//! Attribution of Activation records and live objects to Kix clusters.
 //!
 //! Every object a deploy touches names the deploying record's identity hash
-//! in `kix.run/activations`. Read with the records' `kix.run/cluster`
+//! in `kix.run/activations`. Read alongside the records' `kix.run/cluster`
 //! labels, those hashes attribute a live object to the Kix clusters whose
 //! builds contain it ([`super::inventory::attribute`]), and tell a prune which
 //! objects another Kix cluster still deploys ([`super::prune_guard`]).
 //!
-//! It reads the records through [`Records`](super::activation::Records), so the domain gate has run: on
-//! a cluster whose records sit under a retired group every record would be
-//! missing, every object would look unattributed, and a view of one Kix
-//! cluster would hold all of them.
+//! Records are read through [`Records`](super::activation::Records) after the
+//! domain gate runs. Without that gate, a cluster whose records sit under a
+//! retired group would appear to have no records, every object would look
+//! unattributed, and a view of one Kix cluster would include all of them.
 
 use std::collections::{HashMap, HashSet};
 
@@ -29,18 +29,18 @@ use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 pub struct Tenancy {
     /// The Kix cluster this tenancy is read for.
     pub(crate) cluster: String,
-    /// Identity hashes of this cluster's records, every phase.
+    /// Identity hashes of this cluster's records, across every phase.
     pub(crate) own: HashSet<String>,
-    /// Identity hash to owning cluster, for every other record. A record
-    /// without a `kix.run/cluster` label is listed under `?`.
+    /// Map from identity hash to owning cluster for every other record. A
+    /// record without a `kix.run/cluster` label is listed under `?`.
     pub(crate) others: HashMap<String, String>,
-    /// The hashes in `others` whose record is not Superseded: builds another
-    /// cluster runs, is deploying, or left part-applied.
+    /// Hashes in `others` whose record is not Superseded (builds another
+    /// cluster runs, is deploying, or left partially applied).
     pub(crate) others_current: HashSet<String>,
 }
 
 impl Tenancy {
-    /// The tenancy of a cluster with no records.
+    /// Return an empty tenancy for `cluster`.
     pub(crate) fn empty(cluster: &str) -> Self {
         Tenancy {
             cluster: cluster.to_string(),
@@ -50,15 +50,16 @@ impl Tenancy {
         }
     }
 
-    /// A tenancy of `records` as given, for tests of other crates. Outside
-    /// tests a tenancy is only read through [`read`], past the domain gate.
+    /// Build a [`Tenancy`] from `records` for tests. Outside tests, a tenancy
+    /// is read through [`read`] past the domain gate.
     #[cfg(any(test, feature = "test-util"))]
     pub fn fixture(records: &[DynamicObject], cluster: &str) -> Self {
         Self::from_records(records, cluster)
     }
 
-    /// Partition the records by their `kix.run/cluster` label. An empty
-    /// `cluster` owns no record: every record is another cluster's.
+    /// Partition `records` by their `kix.run/cluster` label. An empty
+    /// `cluster` owns no records, so every record is treated as belonging to
+    /// another cluster.
     pub(crate) fn from_records(records: &[DynamicObject], cluster: &str) -> Self {
         let mut tenancy = Tenancy::empty(cluster);
         for record in records {
@@ -89,8 +90,8 @@ impl Tenancy {
         tenancy
     }
 
-    /// Refuse a tenancy whose cluster has no records while other clusters
-    /// do: the name is most likely a typo, and a view of it would be empty.
+    /// Reject a tenancy whose cluster has no records when other clusters do,
+    /// because the cluster name is likely a typo and its view would be empty.
     pub fn require_records(&self) -> Result<(), String> {
         if !self.own.is_empty() || self.others.is_empty() {
             return Ok(());
@@ -105,13 +106,13 @@ impl Tenancy {
         ))
     }
 
-    /// Whether `hash` is the identity hash of a record this tenancy read.
+    /// Return whether `hash` is the identity hash of a record in this tenancy.
     pub(crate) fn knows(&self, hash: &str) -> bool {
         self.own.contains(hash) || self.others.contains_key(hash)
     }
 
-    /// The Kix clusters an object belongs to, by the record hashes it names.
-    /// A record names itself through its own identity hash.
+    /// Return the sorted Kix clusters an object belongs to based on the record
+    /// hashes it names. A record names itself through its own identity hash.
     pub fn owners_of(&self, obj: &DynamicObject) -> Vec<String> {
         let mut owners: Vec<String> = named_hashes(obj)
             .filter_map(|h| {
@@ -127,8 +128,8 @@ impl Tenancy {
         owners
     }
 
-    /// Other Kix clusters whose current build contains this object. A prune
-    /// must leave such an object in place.
+    /// Return other Kix clusters whose current build contains `obj`. Prune
+    /// leaves such objects in place.
     pub fn still_deployed_by_others(&self, obj: &DynamicObject) -> Vec<String> {
         let mut clusters: Vec<String> = named_hashes(obj)
             .filter(|h| self.others_current.contains(*h))
@@ -140,10 +141,10 @@ impl Tenancy {
     }
 }
 
-/// The record identity hashes an object names: every entry of
-/// `kix.run/activations`, plus its own `kix.run/identity-hash`, which for an
-/// Activation record is the key [`Tenancy`] is indexed by. A record in its
-/// first wave is not yet stamped with its own hash in `kix.run/activations`.
+/// Return an iterator over the record identity hashes `obj` names: every entry
+/// of `kix.run/activations` plus its own `kix.run/identity-hash`. A record in
+/// its first wave is not yet stamped with its own hash in `kix.run/activations`,
+/// so including `kix.run/identity-hash` ensures it attributes to itself.
 pub(crate) fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
     let annotations = obj.metadata.annotations.as_ref();
     let activations = annotations
@@ -156,18 +157,17 @@ pub(crate) fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
     activations.chain(own)
 }
 
-/// Read the [`Tenancy`] for `cluster` from one list of every Activation
-/// record, read through what [`super::activation::Records::open`]
-/// returned. A cluster that does not serve the Activation kind has no
-/// records, and the tenancy is empty.
+/// Read the [`Tenancy`] for `cluster` by listing all Activation records from
+/// `records`. If the cluster does not serve the Activation kind, returns an
+/// empty tenancy.
 ///
-/// Read it after the objects it will attribute, as
-/// [`super::inventory::sweep_managed`] and [`super::prune_guard::PruneGuard`] do.
-/// A deploy creates its record before any object names the record's hash, so
-/// every hash on an object read earlier belongs to a record this list
-/// returns, or to one deleted since. Read before the objects, a Kix cluster
-/// whose first deploy lands in between leaves objects that name no known
-/// record, and those count as this cluster's own.
+/// Callers must read [`Tenancy`] after listing the objects it will attribute
+/// (as [`super::inventory::sweep_managed`] and [`super::prune_guard::PruneGuard`]
+/// do). Because a deploy creates its record before any object names the
+/// record's hash, every hash on an earlier-read object belongs either to a
+/// record in this list or to one deleted since. Reading [`Tenancy`] before the
+/// objects would miss a concurrent first deploy of another Kix cluster and
+/// misattribute its objects as unrecorded.
 pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, RecordsError> {
     let Some(records) = records.records() else {
         return Ok(Tenancy::empty(cluster));

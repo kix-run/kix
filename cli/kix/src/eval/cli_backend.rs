@@ -1,11 +1,12 @@
 //! Subprocess-based Nix backend using `nix` CLI commands:
-//! - `list_clusters`, `list_packages` and `list_cluster_packages` →
-//!   `nix eval --json` of the flake's `kixClusters` and `kixPackages`
-//! - `eval_cluster` → `nix build .#cluster-<name>-activation` + StoreGraph manifest extraction
+//! - `list_clusters`, `list_packages`, and `list_cluster_packages` run
+//!   `nix eval --json` against the flake's `kixClusters` and `kixPackages`
+//!   attributes.
+//! - `eval_cluster` runs `nix build .#cluster-<name>-activation` and extracts
+//!   manifests through `StoreGraph`.
 //!
-//! Nix's built-in eval cache makes repeated invocations fast. Combined with
-//! the SQLite cache in KixEvaluator, this provides good performance for all
-//! commands.
+//! Nix's built-in evaluation cache keeps repeated invocations fast, and
+//! [`super::evaluator::KixEvaluator`] layers a SQLite cache on top.
 
 use std::path::Path;
 use std::process::Command;
@@ -75,7 +76,6 @@ impl NixBackend for CliNixBackend {
         // print the same order every time.
         raw_manifests.sort_by_cached_key(manifest_sort_key);
 
-        // Read scorecard report if present
         let scorecard_path = result_dir.join("kix-scorecard.json");
         let scorecard_report = if scorecard_path.exists() {
             match std::fs::read_to_string(&scorecard_path) {
@@ -98,7 +98,6 @@ impl NixBackend for CliNixBackend {
             None
         };
 
-        // Read extra images if present (operator-spawned images declared by packages)
         let extra_images_path = result_dir.join("kix-extra-images.json");
         let extra_images = if extra_images_path.exists() {
             match std::fs::read_to_string(&extra_images_path) {
@@ -144,13 +143,10 @@ impl NixBackend for CliNixBackend {
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError> {
         tracing::debug!("listing clusters via nix eval");
 
-        // Query `legacyPackages.<system>.kixClusters` and take its attr
-        // names. mkFlake.nix exports that attrset specifically for this
-        // CLI path. Previously we shelled out to `nix flake show
-        // --json` and walked the packages tree, but Determinate Nix
-        // sometimes omits cluster attrs from that output when
-        // `--override-input` introduces a path input. `nix eval` is a
-        // direct attribute query and stays stable.
+        // Query `legacyPackages.<system>.kixClusters` directly via `nix eval`.
+        // `mkFlake.nix` exports this attribute set for the CLI because
+        // `nix flake show --json` can omit cluster attributes when
+        // `--override-input` introduces a path input.
         let attr = format!(".#legacyPackages.{}.kixClusters", current_nix_system());
 
         let mut cmd = Command::new("nix");
@@ -257,19 +253,17 @@ impl NixBackend for CliNixBackend {
     }
 }
 
-/// The `name` of the cluster that flake attribute `attr` defines, or `None`
-/// when the flake's `kixClusters` has no such attribute or the flake has no
-/// `kixClusters` at all.
+/// Evaluate the `name` of the cluster defined by flake attribute `attr`, or
+/// return `None` when `kixClusters` lacks `attr` or the flake has no
+/// `kixClusters` output.
 ///
-/// The name is what the cluster definition passes to `buildCluster`. The
-/// build writes it into the Activation record's `kix.run/cluster` label, so
-/// it, not `attr`, is what finds the cluster's records. The two differ when
-/// a flake maps `clusters.harbor = ./test-harbor.nix` and that file sets
-/// `name = "test-harbor"`. Nothing is built, but reading `name` evaluates
-/// the cluster definition's `buildCluster` call, which is close to a whole
-/// cluster evaluation and needs the flake's inputs.
+/// The returned name is the value passed to `buildCluster` and written into
+/// the Activation record's `kix.run/cluster` label. It differs from `attr`
+/// when a flake maps an attribute like `clusters.harbor = ./test-harbor.nix`
+/// to a cluster definition that sets `name = "test-harbor"`. Reading `name`
+/// evaluates the `buildCluster` call without building derivations.
 ///
-/// `flake` is a flake reference: a local directory or a URL such as
+/// `flake` may be a local directory path or a flake URL such as
 /// `github:org/repo`.
 pub fn eval_cluster_name(
     flake: &str,
@@ -280,8 +274,8 @@ pub fn eval_cluster_name(
         return Ok(None);
     };
     let output = match nix::output(&mut cmd) {
-        // The flake has no `legacyPackages.<sys>.kixClusters` output: a
-        // flake that is not a kix flake defines no clusters.
+        // A flake without `legacyPackages.<sys>.kixClusters` is not a Kix
+        // flake and defines no clusters.
         Err(e) if e.missing_attribute() => return Ok(None),
         output => output?,
     };
@@ -290,9 +284,8 @@ pub fn eval_cluster_name(
     })
 }
 
-/// The `nix eval` that reads the `name` of `kixClusters.<attr>` from `flake`,
-/// or `None` when `attr` is not a plain attribute name. The flake reference
-/// goes on the command line, so it works for a URL as well as a directory.
+/// Build the `nix eval` command that reads `kixClusters.<attr>.name` from
+/// `flake`, or return `None` when `attr` is not a valid attribute name.
 pub fn cluster_name_command(
     flake: &str,
     attr: &str,
@@ -343,7 +336,7 @@ fn current_nix_system() -> &'static str {
     }
 }
 
-/// Stable ordering for manifests: apiVersion, kind, namespace, name.
+/// Return a deterministic sort key `(apiVersion, kind, namespace, name)` for `manifest`.
 pub fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, String, String) {
     let field = |pointer: &str| {
         manifest
