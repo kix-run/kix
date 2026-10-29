@@ -1,6 +1,6 @@
 # persistent-volume-claim: one PersistentVolumeClaim as its own cluster
 # instance, so a claim appears in the dependency graph and gets the
-# stateful lifecycle protection of kix diff. Packages that need a volume take
+# stateful lifecycle protection of `kix diff`. Packages that need a volume take
 # it through their `storage` dependency.
 #
 #   instances.apps.storage = {
@@ -43,8 +43,7 @@ in
     scope = "namespace";
     defaultAliases = [ "storage" ];
     # The canonical PVC author: raw claims are an eval-time error everywhere
-    # else (v2_discussions/128). The grant is listed by the scorecard's
-    # unsafeGrants audit.
+    # else. The grant is listed by the scorecard's unsafeGrants audit.
     unsafe = [ "raw-pvc" ];
   };
 

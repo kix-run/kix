@@ -1,0 +1,289 @@
+# Provisioned datasources and rendered grafana.ini for the grafana package.
+{
+  lib,
+  kix,
+  who,
+  httpPort,
+  paths,
+  config,
+  self,
+  adminUser,
+  adminPassword,
+  oidcOn,
+  oidcProviderInfo,
+  oidcCredentials,
+  prometheusServer,
+  alertmanager,
+  loki,
+  tempo,
+}:
+let
+  wiredDatasources =
+    lib.optional (prometheusServer != null) {
+      inherit (config.prometheusDatasource) name uid;
+      type = "prometheus";
+      url =
+        prometheusServer.out.serviceUrl
+          or (throw "${who}: deps.prometheusServer resolved to an instance without out.serviceUrl, the base URL of the Prometheus HTTP API. Wire a prometheus instance, or set out.serviceUrl in the kix.mkImport that answers prometheusServer.");
+      access = "proxy";
+      isDefault = true;
+      jsonData.httpMethod = "POST";
+    }
+    ++ lib.optional (alertmanager != null) {
+      inherit (config.alertmanagerDatasource) name uid;
+      type = "alertmanager";
+      url =
+        alertmanager.out.serviceUrl
+          or (throw "${who}: deps.alertmanager resolved to an instance without out.serviceUrl, the base URL of Alertmanager's API. Wire an alertmanager instance, or set out.serviceUrl in the kix.mkImport that answers alertmanager.");
+      access = "proxy";
+      jsonData = {
+        handleGrafanaManagedAlerts = false;
+        implementation = "prometheus";
+      };
+    }
+    ++ lib.optional (loki != null) {
+      inherit (config.lokiDatasource) name uid;
+      type = "loki";
+      url =
+        loki.out.serviceUrl
+          or (throw "${who}: deps.loki resolved to an instance without out.serviceUrl, the base URL of Loki's HTTP API. Wire a loki instance, or set out.serviceUrl in the kix.mkImport that answers loki.");
+      access = "proxy";
+    }
+    ++ lib.optional (tempo != null) {
+      inherit (config.tempoDatasource) name uid;
+      type = "tempo";
+      url =
+        tempo.out.queryUrl
+          or (throw "${who}: deps.tempo resolved to an instance without out.queryUrl, the base URL of Tempo's query API. Wire a tempo instance, or set out.queryUrl in the kix.mkImport that answers tempo.");
+      access = "proxy";
+      jsonData =
+        lib.optionalAttrs (prometheusServer != null) {
+          serviceMap.datasourceUid = config.prometheusDatasource.uid;
+        }
+        // lib.optionalAttrs (loki != null) {
+          tracesToLogsV2 = {
+            datasourceUid = config.lokiDatasource.uid;
+            filterByTraceID = true;
+            tags = [
+              {
+                key = "k8s.namespace.name";
+                value = "namespace";
+              }
+              {
+                key = "k8s.pod.name";
+                value = "pod";
+              }
+            ];
+          };
+        };
+    };
+
+  clashes =
+    field:
+    let
+      wired = map (d: d.${field}) wiredDatasources;
+    in
+    builtins.filter (v: builtins.elem v wired) (
+      builtins.filter (v: v != null) (map (d: d.${field} or null) config.datasources)
+    );
+  clashing = clashes "name" ++ clashes "uid";
+
+  # Grafana expands $VAR, ${VAR}, $__env{VAR}, and $__file{path} in
+  # provisioning files, so credentials must be written as references rather
+  # than literals in the datasources ConfigMap.
+  inlineSecrets = lib.concatMap (
+    d:
+    let
+      where = "datasources \"${d.name}\"";
+      literal = v: builtins.isString v && !(lib.hasInfix "$" v);
+    in
+    lib.mapAttrsToList (k: _: "${where} secureJsonData.${k}") (
+      lib.filterAttrs (_: literal) (d.secureJsonData or { })
+    )
+    ++ map (k: "${where} ${k}") (
+      builtins.filter (k: literal (d.${k} or null)) [
+        "password"
+        "basicAuthPassword"
+      ]
+    )
+  ) config.datasources;
+
+  datasources =
+    if inlineSecrets != [ ] then
+      throw "${who}: ${lib.concatStringsSep ", " inlineSecrets} holds a value written inline, and the datasources ConfigMap would carry it. Write a reference that Grafana expands: $NAME with NAME in `env` from a secretKeyRef, or $__file{<path>} for a mounted file, and put it under secureJsonData."
+    else if clashing != [ ] then
+      throw "${who}: datasources reuses ${
+        lib.concatMapStringsSep ", " (v: "\"${v}\"") clashing
+      }, the name or uid of a datasource wired from a dependency. Rename the entry, or change prometheusDatasource, alertmanagerDatasource, lokiDatasource, or tempoDatasource."
+    else
+      wiredDatasources ++ map (lib.filterAttrs (_: v: v != null)) config.datasources;
+
+  # Booleans render as `true`/`false`: Grafana reads an empty value as the
+  # setting's default, so `toString false` would be lost.
+  rootUrl = if self.exposure.via == null then null else self.exposure.url;
+  defaultIni = {
+    analytics = {
+      reporting_enabled = false;
+      check_for_updates = false;
+      check_for_plugin_updates = false;
+    };
+    plugins = {
+      public_key_retrieval_disabled = true;
+      preinstall_disabled = true;
+    };
+    news.news_feed_enabled = false;
+    dataproxy = {
+      keep_alive_seconds = 600;
+      timeout = 600;
+    };
+    log.mode = "console";
+  }
+  // lib.optionalAttrs (rootUrl != null) { server.root_url = rootUrl; }
+  // lib.optionalAttrs oidcOn {
+    "auth.generic_oauth" =
+      let
+        e = oidcProviderInfo.endpoints;
+      in
+      {
+        enabled = true;
+        auth_url = e.authorizationUrl;
+        token_url = e.tokenUrl;
+        api_url = e.userinfoUrl;
+        scopes = lib.concatStringsSep " " config.oidc.scopes;
+        use_pkce = true;
+        auto_login = config.oidc.autoLogin;
+      };
+  };
+
+  # Grafana reads GF_<SECTION>_<KEY> over grafana.ini, so `env` is locked for
+  # OIDC keys too while `oidc.enabled` is set.
+  oidcKeys = [
+    "enabled"
+    "client_id"
+    "client_secret"
+    "auth_url"
+    "token_url"
+    "api_url"
+    "scopes"
+    "use_pkce"
+    "auto_login"
+  ];
+
+  ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
+    kix.mergeGuarded {
+      inherit who;
+      what = "settings";
+      locked = [
+        [ "paths" ]
+        [
+          "server"
+          "http_port"
+        ]
+        [
+          "security"
+          "admin_user"
+        ]
+        [
+          "security"
+          "admin_password"
+        ]
+      ]
+      ++ lib.optionals oidcOn (
+        map (k: [
+          "auth.generic_oauth"
+          k
+        ]) oidcKeys
+      );
+    } defaultIni config.settings
+  );
+
+  oidcRootUrlCheck =
+    if oidcOn && (ini.server.root_url or null) == null then
+      throw "${who}: oidc.enabled is true, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth. Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open."
+    else
+      null;
+
+  renderIniValue = v: if builtins.isBool v then lib.boolToString v else toString v;
+
+  # Reject characters that would inject a new INI section or key past the
+  # guarded merge above.
+  hasLineBreak = v: lib.hasInfix "\n" v || lib.hasInfix "\r" v;
+  iniProblems = lib.concatLists (
+    lib.mapAttrsToList (
+      section: keys:
+      lib.optional (
+        hasLineBreak section || lib.hasInfix "]" section
+      ) "section name ${builtins.toJSON section}"
+      ++ lib.concatLists (
+        lib.mapAttrsToList (
+          k: v:
+          lib.optional (hasLineBreak k || lib.hasInfix "=" k) "key ${builtins.toJSON "${section}.${k}"}"
+          ++ lib.optional (hasLineBreak (renderIniValue v)) "the value of ${section}.${k}"
+        ) keys
+      )
+    ) ini
+  );
+
+  iniText =
+    if oidcRootUrlCheck != null then
+      oidcRootUrlCheck
+    else if iniProblems != [ ] then
+      throw "${who}: settings: ${lib.concatStringsSep ", " iniProblems} would break a grafana.ini line, so the file would carry sections or keys that settings does not show. Keep values on one line, and leave line breaks and `]` out of section names and line breaks and `=` out of keys."
+    else
+      lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (
+          section: keys:
+          "[${section}]\n"
+          + lib.concatStrings (lib.mapAttrsToList (k: v: "${k} = ${renderIniValue v}\n") keys)
+        ) ini
+      );
+
+  env = kix.mkEnvVars (
+    kix.mergeEnv {
+      inherit who;
+      owned = [
+        {
+          vars = paths;
+          from = "the package, which mounts the data, plugins, and provisioning directories there";
+          fix = "Remove it from env.";
+        }
+        {
+          vars = {
+            GF_SECURITY_ADMIN_USER = adminUser;
+            GF_SECURITY_ADMIN_PASSWORD = adminPassword;
+          };
+          names = [
+            "GF_SECURITY_ADMIN_USER__FILE"
+            "GF_SECURITY_ADMIN_PASSWORD__FILE"
+          ];
+          from = "the grafanaAdmin dependency";
+          fix = "Wire a different secret through deps.grafanaAdmin instead.";
+        }
+        {
+          vars.GF_SERVER_HTTP_PORT = toString httpPort;
+          from = "the package, so the Service and probes match the container";
+          fix = "Remove it from env.";
+        }
+      ]
+      ++ lib.optional oidcOn {
+        vars = {
+          GF_AUTH_GENERIC_OAUTH_CLIENT_ID = oidcCredentials.out.keyRef "clientId";
+          GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET = oidcCredentials.out.keyRef "clientSecret";
+        };
+        names =
+          map (k: "GF_AUTH_GENERIC_OAUTH_${lib.toUpper k}") (
+            lib.subtractLists [ "client_id" "client_secret" ] oidcKeys
+          )
+          ++ [
+            "GF_AUTH_GENERIC_OAUTH_CLIENT_ID__FILE"
+            "GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE"
+          ];
+        from = "the oidc option and the oidcClient dependency";
+        fix = "Set the oidc option, or wire another secret through deps.oidcClient.";
+      };
+    } config.env
+  );
+in
+{
+  inherit datasources iniText env;
+}

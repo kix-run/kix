@@ -75,7 +75,7 @@ in
       };
       description = ''
         Connector replicas (>=2 for connection redundancy). Defaults from
-        the cluster's availability level (v2_discussions/145).
+        the cluster's availability level.
       '';
     };
     resources = kix.options.resources {

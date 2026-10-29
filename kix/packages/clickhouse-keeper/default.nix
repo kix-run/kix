@@ -1,9 +1,8 @@
-# ClickHouse Keeper, a quorum run by the Altinity operator
-# (v2_discussions/148, phase 5).
+# ClickHouse Keeper, a quorum run by the Altinity operator.
 #
 # One ClickHouseKeeperInstallation CR, built through the operator package's
 # builder. The operator turns it into one StatefulSet per replica, the
-# Services between them and a PodDisruptionBudget. Three replicas is the
+# Services between them, and a PodDisruptionBudget. Three replicas is the
 # default and the smallest quorum that survives losing one; the scorecard
 # cannot see operator-created pods, so high availability has to be the
 # default here and not something a rule reminds you of.
@@ -15,8 +14,7 @@
 #
 # Traffic between the replicas (raft) runs between pods that no build
 # knows about, so no address can carry that edge. The package states it as
-# a policy over the operator's pod labels, the way stackgres-cluster does
-# for patroni.
+# a policy over the operator's pod labels.
 #
 # DI deps:
 #   clickhouseOperator (required)  the CRD and out.mkKeeperInstallation

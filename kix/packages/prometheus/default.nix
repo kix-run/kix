@@ -82,7 +82,7 @@ in
     defaultAliases = [ "prometheusServer" ];
     k8s.minVersion = "1.25";
     # Historical metrics are expendable; a fresh start is acceptable on
-    # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
+    # storage backend swaps.
     lifecycle = "ephemeral";
   };
 

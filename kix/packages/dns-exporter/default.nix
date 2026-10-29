@@ -53,7 +53,7 @@ in
       };
       description = ''
         Number of dns-exporter `Deployment` replicas. Defaults from the
-        cluster's availability level (v2_discussions/145).
+        cluster's availability level.
       '';
     };
     # Upstream publishes no chart or resource guidance. An idle exporter

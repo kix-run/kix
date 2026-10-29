@@ -15,7 +15,7 @@
 #
 # VMSingle / VMAuth and the logs/traces kinds are still not shipped. The
 # operator only gates on the indexed set; add the rest when a consumer
-# appears (v2_discussions/133).
+# appears.
 
 {
   self,
@@ -30,7 +30,7 @@ let
   promGroup = "monitoring.coreos.com";
   inherit (import ./kinds.nix) vmCrdDefs indexedKinds promCompatDefs;
 
-  # ── Compile-time guard for the runtime invariant (kinds.nix) ─────────
+  # Compile-time guard for the runtime invariant in kinds.nix.
   shippedKinds = lib.mapAttrsToList (_: def: def.kind) vmCrdDefs;
   missingIndexed = builtins.filter (k: !(builtins.elem k shippedKinds)) indexedKinds;
   guard =
@@ -64,18 +64,16 @@ let
   mkVMOperatorCRD =
     attrs: scope.mkCRD (attrs |> scope.crd.withLabels labels |> scope.crd.withAnnotations annotations);
 
-  # Per-kind extras merged onto the table-derived base.
-  #
-  # factBehavior: kinds whose operator-created operand pods dial endpoints
-  # embedded in the CR spec declare terminate + the operand podSelector so
+  # Build factBehavior for kinds whose operator-created operand pods dial
+  # endpoints embedded in the CR spec: terminate + the operand podSelector so
   # netpol opens egress for the operands, not for whoever references the CR:
   #   VMAgent         remoteWrite[].url
   #   VMAlert         datasource.url, remoteWrite.url, remoteRead.url,
   #                   notifier[].url
   #   VMAlertmanager  receiver endpoints carried in the routing config
   # VMCluster carries no external endpoints (vminsert/vmselect/vmstorage
-  # only dial each other, operator-wired; the doc 96 blindspot): explicit
-  # conduct so a fact flowing through the CR never warns as undeclared.
+  # only dial each other, operator-wired): explicit conduct so a fact
+  # flowing through the CR never warns as undeclared.
   operandFactBehavior = component: {
     endpoint = "terminate";
     podSelector = cr: {
@@ -218,7 +216,7 @@ let
   # status.updateStatus == "operational". Its conditions are
   # consumer-prefixed, never Ready/Available, so the generic condition check
   # would wait forever. The rule rides the typed chain into every CR as the
-  # `kix.run/readiness` annotation, which the kix CLI evaluates at deploy
+  # `kix.run/readiness` annotation, which the Kix CLI evaluates at deploy
   # time, so the CLI keeps no kind list.
   #
   # The operator reconciles operand kinds (VMCluster, VMAgent, ...) itself
@@ -255,20 +253,20 @@ let
     "VMAnomalyConfig"
   ];
 
-  # ── Vendored upstream spec schemas ──────────────────────────────────
+  # Read the vendored upstream spec schema for consumer-facing kinds.
   # `fromKind` mints a stub whose spec is x-kubernetes-preserve-unknown-
   # fields, which registers the kind and validates nothing. A mistyped
   # field in a CR then reaches the operator instead of being refused at
   # apply time, and `kix deploy --dry-run` cannot see it either.
   #
-  # So every kind with a consumer surface (`consumer = true` in kinds.nix:
+  # Every kind with a consumer surface (`consumer = true` in kinds.nix:
   # the out.mk* builders and the sibling packages) carries the real
   # upstream schema, vendored under ./crds by scripts/vendor-crds.py from
   # the URL in crds/sources.txt. The indexer-floor kinds keep the stub:
-  # nothing in kix writes one, and their only job is to exist.
+  # nothing in Kix writes one, and their only job is to exist.
   #
   # The file is the whole upstream CRD document; only its spec subtree is
-  # read here. A missing file is an error rather than a silent fall back
+  # read here. A missing file is an error rather than a silent fallback
   # to the stub, because the point is that consumer kinds are checked.
   vendoredSpec =
     def:
@@ -316,10 +314,10 @@ let
 
   vmCrds = lib.mapAttrs (_: mkVMKindCRD) vmCrdDefs;
 
-  # ── prometheus-operator compat CRDs (converter input) ────────────────
-  # ServiceMonitor, PodMonitor, PrometheusRule, Probe. The same slim
-  # schemas as prometheus-operator/crds.nix, so the converter has
-  # something to watch when that package isn't installed.
+  # Build a prometheus-operator compat CRD (ServiceMonitor, PodMonitor,
+  # PrometheusRule, Probe) with the same slim schema as
+  # prometheus-operator/crds.nix so the converter has something to watch
+  # when that package is not installed.
   #
   # On a cluster that already runs prometheus-operator, these four names
   # are taken: the real CRDs are there at the upstream schemas, owned by
@@ -338,11 +336,11 @@ let
       |> scope.crd.withPrinterColumns ageColumn
     );
 
-  # No labels, annotations, short names or printer columns: this marker
-  # names a CRD somebody else installed and does not get to restyle it.
-  # The plural is spelled out in the table above rather than derived,
-  # because `<plural>.<group>` has to match the name already on the
-  # cluster exactly.
+  # Reference an existing prometheus-operator CRD without labels,
+  # annotations, short names, or printer columns: this marker names a CRD
+  # somebody else installed and does not restyle it. The plural is spelled
+  # out in kinds.nix rather than derived, because `<plural>.<group>` must
+  # match the name already on the cluster.
   mkPromCompatRef =
     def:
     scope.mkCRDRef {

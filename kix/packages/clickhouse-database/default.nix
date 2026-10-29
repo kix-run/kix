@@ -1,7 +1,6 @@
 # ClickHouse database: one database and one user on a ClickHouse server,
-# with the user's credentials in the consumer's own namespace
-# (v2_discussions/148, phase 2). The package an application depends on; it
-# never depends on the server directly.
+# with the user's credentials in the consumer's own namespace. The package
+# an application depends on; it never depends on the server directly.
 #
 # Works against either implementation of the `clickhouse` contract
 # (../clickhouse/contract.nix), because everything it runs is replicated DDL
@@ -20,7 +19,7 @@
 #
 # How it works:
 #   1. `credentials`, a Secret in this (the consumer's) namespace with
-#      username, password, database, host and ports.
+#      username, password, database, host, and ports.
 #   2. `bootstrapPassword`, the same password in the server's namespace
 #      (`scope.forService clickhouse`), so the Job there can take it by
 #      secretKeyRef.
@@ -28,7 +27,7 @@
 #      consumer's `schema` files, when there are any.
 #   4. `bootstrapJob`, in the server's namespace, logged in as the server's
 #      administrator from `clickhouse.out.authSecret`. It creates the
-#      database and the user, sets the password, grants the privileges and
+#      database and the user, sets the password, grants the privileges, and
 #      then runs the schema files in name order. Every statement is
 #      idempotent. The Job's name carries a hash of its inputs, so a change
 #      is a new Job and the old one is reaped by its TTL. It deliberately

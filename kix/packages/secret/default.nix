@@ -1,4 +1,4 @@
-# Standalone secret instance: kix-managed (SOPS or inline).
+# Standalone secret instance: Kix-managed (SOPS or inline).
 #
 # Creates a K8s Secret with the enriched out API (keyRef, mkEnv,
 # envFrom, volume). Use as a first-class instance in the cluster

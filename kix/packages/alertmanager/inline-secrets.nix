@@ -56,7 +56,7 @@ let
     sigv4.secret_key = "sigv4 has no file form: leave `access_key` and `secret_key` unset and Alertmanager takes the AWS default credentials (a web identity token, or the credentials file that `profile` names)";
   };
 
-  # Lists of "<path>: <remedy>" for every inline secret under `v`.
+  # Return "<path>: <remedy>" entries for every inline secret under `v`.
   walk =
     path: parent: v:
     if builtins.isAttrs v then

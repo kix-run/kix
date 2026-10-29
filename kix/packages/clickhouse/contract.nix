@@ -1,5 +1,5 @@
 # The `clickhouse` contract: what every package answering the alias
-# promises on root.out (v2_discussions/148 §1).
+# promises on root.out.
 #
 # Two implementations honour it today, `clickhouse` (one node) and
 # `clickhouse-cluster` (the Altinity operator). Each passes its out through
@@ -88,7 +88,8 @@ in
   alias = "clickhouse";
   inherit fields problems;
 
-  # For an implementation: `root.out = contract.check "clickhouse (x)" { ... }`.
+  # Verify that an implementation's `root.out` satisfies the contract:
+  # `root.out = contract.check "clickhouse (x)" { ... }`.
   check =
     who: out:
     let
@@ -99,7 +100,8 @@ in
     else
       throw "${who}: root.out does not honour the clickhouse contract: ${lib.concatStringsSep "; " found} (${here})";
 
-  # For a consumer: `deps.clickhouse.assertions = dep: contract.assertions "x" dep.out;`.
+  # Build `deps.clickhouse.assertions` for a consumer:
+  # `deps.clickhouse.assertions = dep: contract.assertions "x" dep.out;`.
   assertions =
     who: out:
     lib.optional (problems out != [ ]) {

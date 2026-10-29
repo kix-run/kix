@@ -7,9 +7,9 @@
 # RBAC is curated from the upstream chart's role.yaml (victoria-metrics-
 # operator 0.67.x, operator v0.74.1). The wide core/apps/rbac grants are
 # required: the operator creates operand workloads, their Services,
-# ServiceAccounts and per-operand RBAC. K8s escalation prevention means
+# ServiceAccounts, and per-operand RBAC. K8s escalation prevention means
 # the operator must itself hold everything it grants (nodes, /metrics
-# nonResourceURLs, endpointslices are what vmagent's scrape RBAC needs).
+# nonResourceURLs, and endpointslices are what vmagent's scrape RBAC needs).
 
 {
   self,
@@ -117,8 +117,6 @@ let
     }
   ];
 
-  # ── Cluster RBAC ─────────────────────────────────────────────────────
-
   operatorClusterRoles = mkClusterRoleSet scope {
     subjects = mkSubject self.operatorServiceAccount;
     labels = labels;
@@ -219,8 +217,7 @@ let
     };
   };
 
-  # ── Namespace-scoped RBAC (leader election) ──────────────────────────
-
+  # Namespace-scoped RBAC for leader election.
   operatorLeaderElection = mkRoleSet scope {
     subjects = mkSubject self.operatorServiceAccount;
     labels = labels;
@@ -239,8 +236,6 @@ let
   };
 in
 {
-  # ── ServiceAccount ───────────────────────────────────────────────────
-
   operatorServiceAccount = scope.mkResource (
     {
       apiVersion = "v1";
@@ -253,8 +248,6 @@ in
       annotations = config.serviceAccountAnnotations;
     }
   );
-
-  # ── Service ──────────────────────────────────────────────────────────
 
   operatorService = scope.mkResource {
     apiVersion = "v1";
@@ -276,8 +269,6 @@ in
       metricsPort = "8080";
     };
   };
-
-  # ── Deployment ───────────────────────────────────────────────────────
 
   # Self-scrape via this package's own builder; the operator only
   # auto-scrapes its operands, never its own Deployment.
@@ -313,10 +304,10 @@ in
       ++ config.extraArgs;
 
       # The prometheus-operator converter is the compat contract for the
-      # `prometheus` alias claim (v2_discussions/133 §5): every converter
-      # is pinned explicitly, from the `convert` options. Those decide
-      # which compat CRDs crds.nix renders, so the operator can never be
-      # told to watch a CRD that is not here.
+      # `prometheus` alias claim: every converter is pinned explicitly from
+      # the `convert` options. Those decide which compat CRDs crds.nix
+      # renders, so the operator can never be told to watch a CRD that is
+      # not here.
       env = [
         {
           name = "POD_NAME";

@@ -112,7 +112,7 @@ in
     defaultAliases = [ "alertmanager" ];
     k8s.minVersion = "1.25";
     # Silences and notification state are recoverable, so expendable on
-    # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
+    # storage backend swaps.
     lifecycle = "ephemeral";
   };
 
@@ -163,7 +163,7 @@ in
         refuses `image`, `version`, and `imagePullPolicy`, which image sets,
         `replicas` and `topologySpreadConstraints`, which follow the
         instance's availability, `resources`, `serviceAccountName`,
-        `serviceName`, `storage`, `configSecret` and
+        `serviceName`, `storage`, `configSecret`, and
         `alertmanagerConfiguration`, which `settings` decides, and, when the
         instance has the dependency, `priorityClassName`.
       '';

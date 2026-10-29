@@ -90,7 +90,7 @@
 # does not sync meanwhile. Restarting the operator
 # (`kubectl -n <namespace> rollout restart deployment/<instance>`) or
 # updating a Secret the auth references makes the operator reconcile the
-# auth again. See housekeeping/2026-10-01-bookkeeping-patch-races-operator-status-writes.md.
+# auth again.
 # A connection built from `out.crds.InfisicalConnection` has the same limit.
 #
 # Self-hosted Infisical behind a private CA: mount the CA through
@@ -659,7 +659,7 @@ in
         # operator writes the connection's status with an update that fails
         # when the object changed after its read, ignores metadata-only
         # changes, and retries a success after five minutes. A connection the
-        # operator reconciles before the annotation patch kix deploy sends
+        # operator reconciles before the annotation patch `kix deploy` sends
         # after each apply can lose IsReady for longer than the deploy waits.
         # That stays possible when a later deploy changes `address` for a
         # running operator.

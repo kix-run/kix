@@ -109,7 +109,7 @@ in
     k8s.minVersion = "1.25";
     # This package owns the operator.prometheus.io annotation domain (it
     # stamps its CRDs with it); declared for the
-    # architecture.annotationDomainOwnership lint (v2_discussions/128).
+    # architecture.annotationDomainOwnership lint.
     annotationDomains = [ "operator.prometheus.io" ];
   };
 

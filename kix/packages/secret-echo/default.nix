@@ -37,7 +37,6 @@ in
       ...
     }:
     {
-      # --- ConfigMap (nginx config that echoes env vars) ---
       configmap = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
@@ -69,7 +68,6 @@ in
         };
       };
 
-      # --- Deployment ---
       deployment =
         {
           inherit name;
@@ -194,7 +192,6 @@ in
         }
         |> scope.mkDeployment;
 
-      # --- Service ---
       service =
         self.deployment
         |> kix.service.fromWorkload {
@@ -210,7 +207,6 @@ in
         }
         |> scope.mkResource;
 
-      # --- Entry point ---
       root = self.service;
     };
 }

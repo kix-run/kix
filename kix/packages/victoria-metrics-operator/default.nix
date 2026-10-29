@@ -1,5 +1,5 @@
 # victoria-metrics-operator: VictoriaMetrics operator, the drop-in
-# monitoring provider behind the `prometheus` alias (v2_discussions/133).
+# monitoring provider behind the `prometheus` alias.
 #
 # Manages operator.victoriametrics.com CRDs (VMCluster, VMAgent, VMAlert,
 # VMAlertmanager, VMServiceScrape, VMPodScrape, VMRule, VMProbe) and
@@ -54,7 +54,7 @@ in
     k8s.minVersion = "1.25";
     # This package owns the operator.victoriametrics.com annotation domain
     # (it stamps its CRDs with it); declared for the
-    # architecture.annotationDomainOwnership lint (v2_discussions/128).
+    # architecture.annotationDomainOwnership lint.
     annotationDomains = [ "operator.victoriametrics.com" ];
   };
 
@@ -75,7 +75,7 @@ in
       };
       description = ''
         Number of operator replicas. Defaults from the cluster's
-        availability level (v2_discussions/145).
+        availability level.
       '';
     };
     resources = kix.options.resources {
@@ -145,7 +145,7 @@ in
     # operator itself, usually installed by Helm. Kix emits an import
     # marker per CRD and waits for it to be Established instead of
     # declaring it. Deploying "declare" onto such a cluster stops on a
-    # field-ownership conflict, because kix's `.spec.versions` collides
+    # field-ownership conflict, because Kix's `.spec.versions` collides
     # with the real one and helm and kubectl own it. Forcing that conflict
     # would replace the upstream schemas with stubs for every
     # ServiceMonitor on the cluster, so there is no safe default here to
@@ -229,8 +229,8 @@ in
         ...
       }:
       let
-        # What the operator will name and size an operand: its pods are
-        # scraped under job "<prefix>-<CR name>" and there are
+        # Wrap `mkCR` with `scrapeJob` and `replicas` outputs. Operand pods
+        # are scraped under job "<prefix>-<CR name>" and there are
         # spec.replicaCount of them. Stated on the CR's `out` so a consumer
         # (the sibling packages' probes) reads it off the resource instead
         # of retyping the convention. Structural: reading a count is not
@@ -284,7 +284,7 @@ in
             # Kinds marked indexer-floor-only in kinds.nix (VMScrapeConfig,
             # VMUser, ...) get no builders until a consumer appears.
             # The operator injects its config-reloader sidecar into vmagent /
-            # vmalert / vmalertmanager pods, not in any kix-generated
+            # vmalert / vmalertmanager pods, not in any Kix-generated
             # manifest. Default image per upstream internal/config/config.go.
             extraImages = [
               "victoriametrics/operator:config-reloader-${config.image.tag}"
