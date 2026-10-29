@@ -1,21 +1,18 @@
-# clusters/test-ingress-netpol.nix — the ingress controller to backend edge.
+# clusters/test-ingress-netpol.nix: Ingress controller to backend dependency.
 #
-# The smallest cluster that shows the edge: a controller in one namespace,
-# an exposed backend in another, default-deny network policy on. Under
-# cilium the backend's pods accept nothing they have no ingress rule for,
-# and the controller is a pod like any other, so without a rule naming it
-# every request through the Ingress ends as a 504 the compiler cannot see.
-# filebrowser is the backend because it is one Deployment, one Service and
-# one `kix.expose`, and nothing else.
+# Minimal cluster for cross-namespace ingress network policy: a controller in
+# one namespace, an exposed backend in another, and default-deny network policy
+# enabled. Under Cilium, backend pods reject traffic without an explicit ingress
+# rule, and the controller is a normal pod, so without a rule naming it every
+# request through the Ingress returns 504. filebrowser is the backend because
+# it is one Deployment, one Service, and one `kix.expose`.
 #
 # Build:  nix build .#cluster-ingress-netpol --extra-experimental-features pipe-operators
 #
-# It is meant to be deployed against a cluster whose environment already
-# runs Cilium. It takes no flavor on purpose: a flavor
-# declares platform instances in `kube-system`, every declared namespace
-# gets a default-deny policy, and denying kube-system by default on a
-# cluster kix did not build takes out that cluster's own DNS. Everything
-# here lives in namespaces this fixture creates.
+# Target clusters must already run Cilium. This fixture omits a flavor because
+# flavors declare platform instances in `kube-system`, and enabling default-deny
+# network policies on a `kube-system` namespace that Kix did not build blocks
+# cluster DNS. All resources here live in fixture-owned namespaces.
 
 { kix, packages }:
 
@@ -42,7 +39,7 @@ kix.buildCluster {
 
         # Cilium is installed by the target, and the `platform-cilium`
         # import below stands for it. The `cilium` instance uses it (no
-        # chart, no HelmChartConfig), claims the enforcer role and emits the
+        # chart, no HelmChartConfig), claims the enforcer role, and emits the
         # CRD references the generated policies wait on.
         cluster.roles = {
           cni = {
@@ -63,7 +60,7 @@ kix.buildCluster {
             roles = [ "cni" ];
             out.helmChartConfig = null;
           };
-          # `kind`, `apiVersion` and `out.name` make the deploy wait for the
+          # `kind`, `apiVersion`, and `out.name` make the deploy wait for the
           # StorageClass, and let the claims that name it resolve in the
           # cluster build.
           platform-storage = {

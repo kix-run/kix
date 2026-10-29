@@ -1,8 +1,8 @@
-/* Kix theme for the Starlight docs: paper, ink and orange, Inter Tight and
+/* Kix theme for the Starlight docs: paper, ink, and orange, Inter Tight and
  * JetBrains Mono, night panels for every terminal and code block.
  *
  * Design source: kix-oss-handoff design/kix-oss.pen.json, frames mJBvI
- * (light page), o1hudj (dark page) and z240z (theme sheet).
+ * (light page), o1hudj (dark page), and z240z (theme sheet).
  *
  * The design tokens are exposed as --kix-*; the --sl-* blocks map them onto
  * Starlight's variable contract:
@@ -183,8 +183,7 @@ body {
   color: var(--kix-ink-2);
 }
 
-/* Page frame
- * ------------------------------------------------------------------------- */
+/* Page frame */
 
 .header {
   border-bottom-color: var(--kix-line);
@@ -218,8 +217,7 @@ body {
 }
 
 
-/* Markdown
- * ------------------------------------------------------------------------- */
+/* Markdown */
 
 .sl-markdown-content {
   --sl-line-height: 1.65;
@@ -406,7 +404,7 @@ body {
 /* Asides
  * The title renders as a mono caps label. The icon is chosen by type, and
  * for notes by title through aria-label, which Starlight sets to the title.
- * ------------------------------------------------------------------------- */
+ */
 
 .starlight-aside {
   --kix-aside-edge: var(--kix-ink-2);
@@ -480,8 +478,7 @@ body {
   --kix-aside-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4M12 17h.01'/%3E%3C/svg%3E");
 }
 
-/* Starlight components
- * ------------------------------------------------------------------------- */
+/* Starlight components */
 
 .card-grid {
   gap: 1rem;
@@ -584,9 +581,9 @@ starlight-file-tree .highlight {
 }
 
 /* Expressive Code
- * Colours, fonts and radii are set in astro.config.mjs; these rules cover
+ * Colours, fonts, and radii are set in astro.config.mjs; these rules cover
  * what its style overrides cannot.
- * ------------------------------------------------------------------------- */
+ */
 
 .expressive-code {
   margin-top: 1.25rem;
@@ -615,8 +612,7 @@ starlight-file-tree .highlight {
   display: none;
 }
 
-/* Reading-surface layout
- * ------------------------------------------------------------------------- */
+/* Reading-surface layout */
 
 .sl-markdown-content > :not(:where(.not-content, .not-content *)) + :is(figure.command-block, .expressive-code, .kix-table, .starlight-aside, .card-grid, starlight-file-tree, .kix-recap, .kix-loop) {
   margin-top: 1.25rem;

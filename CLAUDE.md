@@ -4,7 +4,7 @@ Nix-based Kubernetes manifest generator. Packages in `packages/` produce K8s res
 
 ## Key rule
 
-When modifying kix APIs, package conventions, or the diff tooling, keep the `kix-migration` skill (`.claude/skills/kix-migration/SKILL.md`) up to date. This is the primary reference for LLMs working on migrations — stale guidance causes wasted effort.
+When modifying Kix APIs, package conventions, or the diff tooling, keep the `kix-migration` skill (`.claude/skills/kix-migration/SKILL.md`) up to date. This is the primary reference for LLMs working on migrations; stale guidance causes wasted effort.
 
 When modifying how packages vendor their CRDs, or `scripts/vendor-crds.py`, keep the `crd-vendoring` skill (`.claude/skills/crd-vendoring/SKILL.md`) up to date. It is the maintainer of that script and the reference for adding CRD-bearing packages.
 
@@ -12,15 +12,15 @@ When changing package conventions, the lib APIs packages use (`kix/lib/vocab/`, 
 
 When changing package conventions, the lib APIs packages use, the test or verification steps for a package, or the authoring process, keep the `package-authoring` skill (`.claude/skills/package-authoring/SKILL.md`) up to date. Authors follow it before and while writing a package, and its pattern table cites package line numbers, so update those when you move the code they point at.
 
-When modifying CLI public APIs, commands, data flows, or crate structure, keep `cli/README.md` up to date. This is the primary reference for LLMs working on CLI features — stale docs cause wasted exploration.
+When modifying CLI public APIs, commands, data flows, or crate structure, keep `cli/README.md` up to date. This is the primary reference for LLMs working on CLI features; stale docs cause wasted exploration.
 
 When implementing new features or completing existing ones, check `ROADMAP.md` and mark completed items as `[x]`, expand descriptions with implementation details, or add new items discovered during development.
 
-If you want to understand internals of kix/lib, read kix/lib/architecture.md. If you edit anything in kix/lib, you may or may not need to update the architecture.md
+If you want to understand internals of `kix/lib`, read `kix/lib/architecture.md`. If you edit anything in `kix/lib`, you may or may not need to update `architecture.md`.
 
-The user-facing reference docs are `docs-legacy/BEST-PRACTICES.md` (durable, principles-first) and `docs-legacy/HANDBOOK.md` (dense, low-level mechanics). When you change user-visible API surface or durable guidance, update them. The breadth-first inventory in `docs-legacy/FEATURE-CATALOG.md` is the third sibling — keep it in sync when adding new APIs. Do not create additional top-level docs; extend these.
+The user-facing reference docs are `docs-legacy/BEST-PRACTICES.md` (durable, principles-first) and `docs-legacy/HANDBOOK.md` (dense, low-level mechanics). When you change user-visible API surface or durable guidance, update them. The breadth-first inventory in `docs-legacy/FEATURE-CATALOG.md` is the third sibling: keep it in sync when adding new APIs. Do not create additional top-level docs; extend these.
 
-## Housekeeping — log what you notice
+## Housekeeping: log what you notice
 
 Add every problem you notice and do not fix to the
 [`housekeeping/`](housekeeping/) directory, one problem to a file, and commit
@@ -33,7 +33,7 @@ and rules: [`CLAUDE.housekeeping.md`](CLAUDE.housekeeping.md).
 
 ## Git hygiene
 
-Never `git stash pop`/`apply` unless you created the stash in this session and verified it is the top entry (`git stash list` — check the message matches yours). This repo's stash stack carries old `autostash` leftovers; a blind pop resurrects them into the working tree. To test a hypothesis against a clean tree, use `git worktree add` (or `git show HEAD:<file>`) instead of stashing. Chain stash push→pop with `&&`, never `;`.
+Never `git stash pop`/`apply` unless you created the stash in this session and verified it is the top entry (`git stash list`: check the message matches yours). This repo's stash stack carries old `autostash` leftovers; a blind pop resurrects them into the working tree. To test a hypothesis against a clean tree, use `git worktree add` (or `git show HEAD:<file>`) instead of stashing. Chain stash push→pop with `&&`, never `;`.
 
 **No `Co-Authored-By` trailers.** The `commit-msg` hook in `lefthook.yml`
 rejects them and the hook wins. This repo does not record co-authorship in
@@ -47,7 +47,7 @@ Use the `structured-thinking` skill (instead of plan mode) when the user wants t
 
 Two rules the skill enforces and you should honor outside it too:
 
-- **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc — start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `v2_discussions/interesting_thoughts/`, never the active folder.
+- **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc: start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `v2_discussions/interesting_thoughts/`, never the active folder.
 - **Archive on ship.** When a feature that traces back to a v2_discussions doc lands, re-invoke the skill in the same session: split shipped content from still-open questions (lift to `ROADMAP.md § Open design questions` or `interesting_thoughts/`), move the doc to `archive/`, update the README.
 
 ## Code comments
@@ -92,7 +92,7 @@ consensus on dev-tool hero anatomy.
 
 ## Breaking changes
 
-The kix API is in active development. Breaking changes are fine — none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
+The Kix API is in active development. Breaking changes are fine: none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
 
 ## DSL design principles
 
@@ -102,7 +102,7 @@ The kix API is in active development. Breaking changes are fine — none of the 
 
 ## Build
 
-Use the ludo-kind cluster as the canonical smoke-test — it wires together
+Use the ludo-kind cluster as the canonical smoke-test; it wires together
 the full package set (stackgres, cilium, cert-manager, ingress, etc.) and
 catches most regressions:
 
@@ -159,9 +159,9 @@ hides it from git and from nothing else.
 
 ## Subagent guidelines
 
-- **Define what "done" looks like** — give a concrete check command and expected outcome.
-- **Constrain the workflow** — specify the edit/verify loop. No git commands, no unnecessary builds, no broad exploration.
-- **Fail fast** — if they break things badly, return immediately instead of trying to recover.
+- **Define what "done" looks like:** give a concrete check command and expected outcome.
+- **Constrain the workflow:** specify the edit/verify loop. No git commands, no unnecessary builds, no broad exploration.
+- **Fail fast:** if they break things badly, return immediately instead of trying to recover.
 - **Include known context in the prompt** rather than having agents rediscover it. If it is in files, tell them which files to read.
-- **Keep verification with the parent** — agents edit, parent builds/integrates.
-- **Reference skill files directly** but never say "understand X" — that triggers expensive exploration.
+- **Keep verification with the parent:** agents edit, parent builds/integrates.
+- **Reference skill files directly** but never say "understand X"; that triggers expensive exploration.

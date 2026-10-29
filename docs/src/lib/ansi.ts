@@ -1,6 +1,6 @@
 // Minimal ANSI SGR parser. Turns a string with embedded `\x1b[<params>m`
 // escapes into a sequence of styled spans. Non-SGR escapes (cursor moves,
-// clear-line, etc.) and stray control bytes are silently dropped — the
+// clear-line, etc.) and stray control bytes are silently dropped; the
 // upstream output-transforms pipeline is expected to have already removed
 // them, but this parser is defensive.
 //
@@ -108,7 +108,7 @@ function applyParams(style: Style, params: number[]): Style {
         i += 1;
         break;
       default:
-        // Unknown / unsupported parameter — skip it.
+        // Unknown / unsupported parameter: skip it.
         i += 1;
         break;
     }

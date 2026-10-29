@@ -1,4 +1,4 @@
-# Captures manifest — declares the commands the docs pipeline runs to
+# Captures manifest: declares the commands the docs pipeline runs to
 # generate sidecar JSON for `<Command>`. One manifest, two execution
 # modes:
 #
@@ -9,20 +9,20 @@
 #
 # Per-group fields:
 #
-#   group     — identifier; sidecar paths go to docs/src/command-output/<group>/<name>.json
-#   page      — docs URL the sidecars belong to (carried in the JSON for tooling)
-#   cwd       — working directory shown in the `<Command>` chrome
-#   resetCluster — live only. Delete and recreate the kind cluster before
+#   group:        identifier; sidecar paths go to docs/src/command-output/<group>/<name>.json
+#   page:         docs URL the sidecars belong to (carried in the JSON for tooling)
+#   cwd:          working directory shown in the `<Command>` chrome
+#   resetCluster: live only. Delete and recreate the kind cluster before
 #               this group runs. Use it when a group needs a whole-cluster
-#               view that only its own kix cluster contributes to.
-#   overlay   — optional directory `cp -r`'d onto the workspace (e.g. adds
+#               view that only its own Kix cluster contributes to.
+#   overlay:      optional directory `cp -r`'d onto the workspace (e.g. adds
 #               a tutorial's finished cluster file). Layout mirrors
 #               kix-examples/. See docs/overlays/README.md.
-#   setup     — list of `mutate` steps applied once after the workspace
+#   setup:        list of `mutate` steps applied once after the workspace
 #               is prepared (e.g. patch flake.nix to register an overlay
 #               cluster). Runs for BOTH offline and live pipelines.
-#   offline   — list of steps the offline driver executes.
-#   live      — list of steps the live driver executes.
+#   offline:      list of steps the offline driver executes.
+#   live:         list of steps the live driver executes.
 #
 # Step shapes:
 #
@@ -162,7 +162,7 @@
         ];
       }
       {
-        # Tutorial 02's "Make One Edit" section — change the message in
+        # Tutorial 02's "Make One Edit" section: change the message in
         # the checked-in cluster file, then re-deploy.
         mutate = {
           file = "tutorials/02-hello-world/cluster.nix";
@@ -266,7 +266,7 @@
         allowFailure = true;
       }
       {
-        # Tutorial 05's "make a visible edit" — change the message in
+        # Tutorial 05's "make a visible edit": change the message in
         # the cluster file the reader just built.
         mutate = {
           file = "tutorial-04/cluster.nix";
@@ -355,7 +355,7 @@
         ];
       }
       {
-        # Tutorial 06's "Try Breaking The Name Match" section —
+        # Tutorial 06's "Try Breaking The Name Match" section:
         # rename `backend` to `api` so the gateway package's
         # `backend` dep no longer resolves. `kix check` should fail
         # with an unresolved-dep error; we capture that failure as
@@ -2538,8 +2538,8 @@
     cwd = "kix-examples/";
     # First live group after how-to/adoption-stateful-migration, which leaves
     # how-to-stateful-migration deployed. Kix's cluster-wide listings include
-    # every Kix cluster in the kind cluster, so status, health and diff would
-    # report it (housekeeping/2026-09-27-managed-sweep-ignores-cluster-label.md).
+    # every Kix cluster in the kind cluster, so status, health, and diff would
+    # report it.
     resetCluster = true;
     live = [
       {
@@ -3060,7 +3060,7 @@
         shell = "find handoff -type f | sort";
       }
       {
-        # The point of the exit export is that nothing kix-specific
+        # The point of the exit export is that nothing Kix-specific
         # survives it, so the grep is expected to find nothing and exit 1.
         capture = "no-annotations";
         shell = "grep -r 'kix.run/' ./handoff/";
@@ -3141,8 +3141,8 @@
     ];
   }
 
-  # Ordering note: the two groups below run last on purpose. Each one
-  # deliberately leaves the shared kind cluster in a state a later group
+  # Ordering note: the two groups below run last. Each one
+  # leaves the shared kind cluster in a state a later group
   # would trip over. The gc group deletes the resources of a renamed
   # instance, and the health-check group deploys a probe that fails,
   # which leaves a Degraded activation behind. A plain `kix deploy`
@@ -3193,8 +3193,8 @@
           "-y"
         ];
       }
-      # No `--hard` capture on purpose. Hard mode sweeps every
-      # kix-managed resource in the Kubernetes cluster and judges it
+      # No `--hard` capture: hard mode sweeps every
+      # Kix-managed resource in the Kubernetes cluster and judges it
       # against this one cluster's build, so it would delete the
       # tutorial deployments the other live groups put here.
     ];

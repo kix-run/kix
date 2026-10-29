@@ -114,14 +114,14 @@ Deploy the first Kix example:
 
 The `-y` flag skips the confirmation prompt. On the first deploy, Kix builds the
 cluster, sees there is no previous activation, and applies the resources
-wave-by-wave — the order you see comes from the deploy graph.
+wave-by-wave. The order you see comes from the deploy graph.
 
 List the packages installed in this Kix cluster:
 
 <Command {...listPackages} />
 
 You should see an installed `hello-world` instance. The `import` rows are
-platform pieces (DNS, storage) Kix pulls in automatically — later tutorials
+platform pieces (DNS, storage) Kix pulls in automatically; later tutorials
 explain them. You can also ask Kubernetes
 directly:
 

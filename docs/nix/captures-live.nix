@@ -15,7 +15,7 @@
 #      writes them, `--check` exits non-zero on any diff.
 #
 # Trust boundary: the script writes its own KUBECONFIG and pins the
-# context to `kind-kix-docs`. All kix, kubectl, and Helm invocations get
+# context to `kind-kix-docs`. All Kix, kubectl, and Helm invocations get
 # `--context kind-kix-docs` so they refuse to talk to any other
 # cluster the maintainer might have set as current.
 
@@ -100,7 +100,7 @@ let
     "kubectl"
   ];
 
-  # `kix diff`, `status`, `snapshot save` and `gc` read only the Kix
+  # `kix diff`, `status`, `snapshot save`, and `gc` read only the Kix
   # cluster named on the command line, and print a line counting the
   # objects of each other Kix cluster they skipped. The tutorial groups
   # deploy three other clusters into the shared kind cluster, so a group
@@ -194,7 +194,7 @@ let
           ;;
         -h|--help)
           cat <<USAGE
-    regen-captures — capture every `live` step in docs/nix/captures.nix
+    regen-captures: capture every `live` step in docs/nix/captures.nix
     against a dedicated kind cluster, diff against the checked-in
     sidecars, optionally apply.
 
@@ -275,7 +275,7 @@ let
         continue
       fi
       # Honour `skipDriftCheck = true` (see captures.nix). Same
-      # rationale as the offline driver — sidecar still gets
+      # rationale as the offline driver: sidecar still gets
       # rewritten by --apply, just isn't gated by --check.
       if [ "$(jq -r '.skipDriftCheck // false' "$sidecar")" = "true" ]; then
         if [ "$apply" -eq 1 ]; then

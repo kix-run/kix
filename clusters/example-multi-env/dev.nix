@@ -1,4 +1,4 @@
-# clusters/example-multi-env/dev.nix — Dev environment cluster.
+# clusters/example-multi-env/dev.nix: Dev environment cluster.
 #
 # Imports the shared base and overrides for development:
 # - Smaller resource limits
@@ -17,7 +17,7 @@ kix.buildCluster {
     kix.flavors.gke
     ./base.nix
 
-    # --- Dev-specific overrides ---
+    # Dev-specific overrides.
     (
       { lib, ... }:
       {
@@ -33,7 +33,7 @@ kix.buildCluster {
         };
 
         instances.cache.valkey.config = {
-          # No HA needed in dev. Without Sentinel valkey runs one pod.
+          # No HA needed in dev. Without Sentinel, Valkey runs one pod.
           sentinel.enabled = lib.mkDefault false;
         };
       }

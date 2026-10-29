@@ -12,21 +12,21 @@ them coexist requires modifications to one of them. Upstream issue:
 Three narrow changes vs. upstream `0.7.1`. Search for `VENDOR MOD` in
 the source.
 
-1. **`index.ts` — dropped sidebar-already-configured guard.** The
+1. **`index.ts`: dropped sidebar-already-configured guard.** The
    upstream plugin throws if `starlightConfig.sidebar` is already set.
    We removed the throw so the plugin composes with anything that
    touches the sidebar later in `config:setup`. As long as topics is
    *first* in the `plugins:` array, this code path can't fire.
 
-2. **`index.ts` — changed `addRouteMiddleware` order from `pre` to
+2. **`index.ts`: changed `addRouteMiddleware` order from `pre` to
    `post`.** Starlight runs middlewares in three buckets: `pre →
    default → post`. `starlight-versions` registers its middleware at
    `default` (no order set) and unwraps the per-version sidebar shell
    to expose just the current version's items. Topics needs to read
-   that unwrapped shape, so it must run *after* versions —
-   i.e., `post`.
+   that unwrapped shape, so it must run *after* versions
+   (i.e., `post`).
 
-3. **`middleware.ts` — topic switcher inherits the current page's
+3. **`middleware.ts`: topic switcher inherits the current page's
    version prefix.** Upstream renders topic buttons with the
    statically-configured `topic.link` (e.g. `/tutorials/`). When the
    reader is on `/docs/v0.1/foo`, clicking a topic should take them

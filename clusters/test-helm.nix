@@ -1,4 +1,4 @@
-# clusters/test-helm.nix — Tests the helm bridge with a local test chart.
+# clusters/test-helm.nix: Tests the Helm bridge with a local test chart.
 #
 # Verifies that importChart produces valid resources that pass
 # through buildCluster, dependency tracking, and validation.

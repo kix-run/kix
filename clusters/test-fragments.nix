@@ -1,11 +1,7 @@
-# clusters/test-fragments.nix — a cluster composed with `kix.mergeFragments`.
+# clusters/test-fragments.nix: Cluster composed with `kix.mergeFragments`.
 #
-# The point of this cluster is the *public* call. `mergeFragments` was
-# implemented in kix/lib/vocab/fragments.nix and documented in the handbook
-# for months while `kix/lib/default.nix` never re-exported it, so every
-# consuming flake that followed the documentation got
-# "attribute 'mergeFragments' missing". Nothing built here used it, so
-# nothing caught it. Now something does.
+# Exercises the public `kix.mergeFragments` entry point re-exported by
+# `kix/lib/default.nix`.
 #
 # Build:  nix build .#cluster-fragments --extra-experimental-features pipe-operators
 

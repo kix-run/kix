@@ -5,7 +5,7 @@
 #
 #   - displayTransforms: applied during capture. The result is what we store
 #     as the JSON's `stdout` / `stderr` and what the `<Command>` component
-#     renders in the docs. Keep this minimal — only normalisation that is
+#     renders in the docs. Keep this minimal: only normalisation that is
 #     never useful for a reader to see (terminal control bytes, PTY framing,
 #     CRLF endings, intra-line `\r` overwrites). The reader should otherwise
 #     see what they would see in their own terminal.
@@ -47,7 +47,7 @@ let
       s/\b[0-9]+(\.[0-9]+)?(ms|µs|us|s|m[0-9]+s|h)\b/<DURATION>/g
     '';
 
-    # Activation IDs: `02-hello-world-kddvid7wbdpp` style — `<cluster>-<11-char-hash>`.
+    # Activation IDs: `02-hello-world-kddvid7wbdpp` style (`<cluster>-<11-char-hash>`).
     # Use the Nix base32 alphabet so ordinary 11-letter suffixes such as
     # `application` are not mistaken for content-addressed IDs.
     # Run before strip-pod-suffix so the longer hash is consumed first.
@@ -82,7 +82,7 @@ let
     # Nix `narHash=sha256-…` blobs leaked into error messages when an
     # eval fails. URL-encoded (`%2B`, `%2F`, `%3D`) or raw, 43–44 chars
     # of base64 followed by an `=` pad. Same churn category as
-    # identity hashes — content-addressed over inputs that move when
+    # identity hashes: content-addressed over inputs that move when
     # sidecars get rewritten.
     redact-nar-hash = ''
       s|narHash=sha256-[A-Za-z0-9+/%]+%3D|narHash=sha256-<nar-hash>|g
@@ -97,7 +97,7 @@ let
     #   2. At start-of-line, strip a leading literal `^D` (caret + capital
     #      D). `script -q` on macOS still emits this once at the top of the
     #      session.
-    #   3. Drop the trailing `\r` PTYs add as part of CRLF line endings —
+    #   3. Drop the trailing `\r` PTYs add as part of CRLF line endings;
     #      otherwise step 5 would treat it as an overwrite pivot and eat
     #      the whole line.
     #   4. Strip CSI escapes that don't end in `m` (cursor moves, clear-
@@ -116,7 +116,7 @@ let
     '';
 
     # Strip SGR (colour / weight) escapes entirely. Used only for drift
-    # comparison — colour is purely presentational and shouldn't trigger
+    # comparison: colour is purely presentational and shouldn't trigger
     # false drift if e.g. the CLI changes a span from green to bright-green.
     strip-sgr = ''
       s/\x1b\[[0-9;]*m//g
@@ -148,9 +148,9 @@ let
     # only emits them when it actually has to build: a warm store prints
     # nothing. So whether a capture contains them records the state of
     # the machine that generated it, not the behaviour of the command.
-    # Drift-only — a reader on a cold store really would see them.
+    # Drift-only: a reader on a cold store really would see them.
     #
-    # `Building cluster '...'` is kix's own line and stays; the pattern
+    # `Building cluster '...'` is Kix's own line and stays; the pattern
     # requires the quote immediately after `Building`.
     strip-nix-build-progress = ''
       /^[[:space:]]*building '\/nix\/store\/.*\.\.\.$/d
@@ -180,7 +180,7 @@ let
 
   # Applied additionally for drift-only comparison; baked into the
   # `stdoutDrift` / `stderrDrift` fields. The regen tool compares those
-  # fields between runs. Ordering matters — see comments next to each entry.
+  # fields between runs. Ordering matters; see comments next to each entry.
   driftOnlyTransforms = [
     # SGR first so subsequent regexes see plain text.
     "strip-sgr"
@@ -205,7 +205,7 @@ let
     "strip-trailing-whitespace"
     "collapse-spaces"
     "collapse-blank-lines"
-    # Tree-indent strip is the very last layer — it has to run after
+    # Tree-indent strip is the very last layer: it has to run after
     # everything else so the redactions still see their patterns at
     # the original positions.
     "strip-tree-indent"

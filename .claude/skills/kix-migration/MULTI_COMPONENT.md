@@ -6,7 +6,7 @@ Reference implementation: `packages/harbor/`.
 
 ## Key patterns
 
-1. **Shared let bindings** — define common values (security contexts, probe bases, internal URLs) once in the `let` block:
+1. **Shared let bindings:** define common values (security contexts, probe bases, internal URLs) once in the `let` block:
    ```nix
    let
      harborPodDefaults = { securityContext = { runAsUser = 10000; ... }; ... };
@@ -14,7 +14,7 @@ Reference implementation: `packages/harbor/`.
      coreProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/v2.0/ping"; };
    ```
 
-2. **Per-component selectors and Service labels** — derive both from `scope.selectorLabels`, and give every Service its own `app.kubernetes.io/component` value. `architecture.distinctSameKindLabels` (error) refuses two Services in one instance that carry the same labels, because nothing selecting by labels could tell them apart. Use container port *numbers* as `targetPort` in any Service you write by hand: the netpol layer copies them into consumers' egress rules and cilium drops egress on a named port (`fromWorkload` resolves names for you):
+2. **Per-component selectors and Service labels:** derive both from `scope.selectorLabels`, and give every Service its own `app.kubernetes.io/component` value. `architecture.distinctSameKindLabels` (error) refuses two Services in one instance that carry the same labels, because nothing selecting by labels could tell them apart. Use container port *numbers* as `targetPort` in any Service you write by hand: the netpol layer copies them into consumers' egress rules and cilium drops egress on a named port (`fromWorkload` resolves names for you):
    ```nix
    componentSelector = c: scope.selectorLabels // { "app.kubernetes.io/component" = c; };
    componentLabels = c: { "app.kubernetes.io/component" = c; };
@@ -26,12 +26,12 @@ Reference implementation: `packages/harbor/`.
      |> scope.mkResource;
    ```
 
-3. **Internal URLs carry facts** — components dial each other through `self.<service>.out.fqdn`, never a bare `"${name}-core"` string. The fqdn carries the endpoint fact, which is what gives the consuming pod its netpol egress and orders it after the Service:
+3. **Internal URLs carry facts:** components dial each other through `self.<service>.out.fqdn`, never a bare `"${name}-core"` string. The fqdn carries the endpoint fact, which is what gives the consuming pod its netpol egress and orders it after the Service:
    ```nix
    coreUrl = "http://${self.coreService.out.fqdn}:${self.coreService.out.port}";
    ```
 
-4. **Breaking a mutual-dial cycle** — when two components dial each other (Harbor's core and jobservice), one direction has to lose its workload edge or the store paths recurse. Build that one Service with a literal selector, shared with its Deployment so the two cannot drift, and put the Deployment in `root.requires` to restore the ordering edge. The `selectorCoherence` warning this raises is deliberate (BEST-PRACTICES §12.6). Choose the side by boot order, not by convenience: the Service that goes literal is the one whose pod must start *later*. Jobservice fetches its configuration from core's API on boot and panics until core answers, so the jobservice Service is the literal one and its Deployment carries an explicit `requires` on core (verified on a kind cluster: the other way round, jobservice crash-loops and the deploy fails). A component whose own config names its own Service (core's `CORE_URL`) has to be literal as well:
+4. **Breaking a mutual-dial cycle:** when two components dial each other (Harbor's core and jobservice), one direction has to lose its workload edge or the store paths recurse. Build that one Service with a literal selector, shared with its Deployment so the two cannot drift, and put the Deployment in `root.requires` to restore the ordering edge. The `selectorCoherence` warning this raises is deliberate (BEST-PRACTICES §12.6). Choose the side by boot order, not by convenience: the Service that goes literal is the one whose pod must start *later*. Jobservice fetches its configuration from core's API on boot and panics until core answers, so the jobservice Service is the literal one and its Deployment carries an explicit `requires` on core (verified on a kind cluster: the other way round, jobservice crash-loops and the deploy fails). A component whose own config names its own Service (core's `CORE_URL`) has to be literal as well:
    ```nix
    coreSelector = componentSelector "core";           # core dials itself (CORE_URL)
    jobserviceSelector = componentSelector "jobservice";
@@ -53,7 +53,7 @@ Reference implementation: `packages/harbor/`.
 
 6. **Storage is a DI dep, logs live in the database**: the registry's blobs come from a `storage` dep (`kix.mount.pvc storage { ... }`); scratch paths are `emptyDir`. State that must be visible to every replica goes to a dependency, not a pod volume: jobservice's DB job logger keeps job logs in PostgreSQL, so any jobservice pod serves any job's log and jobservice scales with availability. A package that builds its own PVC needs `meta.unsafe = [ "raw-pvc" ]` and the `unsafeGrants` audit lists it forever.
 
-7. **Multi-container pods** — inject shared volumes once with `kix.withMountsOn "<container>"`, and let the second container mount them by the mount objects' names:
+7. **Multi-container pods:** inject shared volumes once with `kix.withMountsOn "<container>"`, and let the second container mount them by the mount objects' names:
    ```nix
    configMount = kix.mount.configMap self.registryConfigMap { name = "registry-config"; ... };   # in the Deployment's let
    # registryctl container:
@@ -63,7 +63,7 @@ Reference implementation: `packages/harbor/`.
    ```
    An init container is outside `withMountsOn`'s reach (it injects into `containers` only), so it also mounts by name.
 
-8. **One `kix.monitor` per metrics Service** — a ServiceMonitor selects one Service's labels; several metrics Services mean several entries, each with its own `name`, `monitorPart` and `rulesPart`. Alert rules ride on one of them:
+8. **One `kix.monitor` per metrics Service:** a ServiceMonitor selects one Service's labels; several metrics Services mean several entries, each with its own `name`, `monitorPart`, and `rulesPart`. Alert rules ride on one of them:
    ```nix
    (kix.monitor { service = "coreService"; port = "http-metrics"; name = "${name}-core";
                   monitorPart = "coreMonitor"; rulesPart = "coreAlerts"; inherit alerts; })

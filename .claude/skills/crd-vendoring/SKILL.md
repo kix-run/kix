@@ -1,6 +1,6 @@
 ---
 name: crd-vendoring
-description: Maintain the CRDs and operator roles that kix packages vendor from upstream. Use this skill when adding a package that ships CustomResourceDefinitions, bumping an operator's version, when the CRD vendoring check fails in CI, or when scripts/vendor-crds.py itself breaks. Owns the judgement the script cannot make and keeps the script small.
+description: Maintain the CRDs and operator roles that Kix packages vendor from upstream. Use this skill when adding a package that ships CustomResourceDefinitions, bumping an operator's version, when the CRD vendoring check fails in CI, or when scripts/vendor-crds.py itself breaks. Owns the judgement the script cannot make and keeps the script small.
 ---
 
 # CRD vendoring
@@ -66,7 +66,7 @@ under `rbac/`, the named roles), sort, write. CI runs `--check` on every pull re
 
 ## 2. A version bump
 
-1. Move the tag in `crds/sources.txt` (and `rbac/sources.txt`), `release`
+1. Move the tag in `crds/sources.txt` (and `rbac/sources.txt`), `release`,
    and the image digests in `default.nix` in the same change. Operator
    packages refuse an `image.tag` of another major.minor than `release`,
    and for kubevirt and cdi the kix-lib test
@@ -103,7 +103,7 @@ Fix `sources.txt` before touching the script. The failures that arrive with
 upstream releases are layout moves (a chart moved its `crds/`, a project
 switched to release assets), and those are data.
 
-Change the script only for a failure in fetch, parse or render. A package
+Change the script only for a failure in fetch, parse, or render. A package
 whose upstream is genuinely not a public URL (an OCI-only chart, CRDs
 generated at build time) gets `crds/update.py` exposing
 `crds() -> list[dict]`, built on `scripts/vendor_crds/`, with a comment

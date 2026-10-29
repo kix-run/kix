@@ -1,4 +1,4 @@
-# clusters/test-kind-v2.nix — Updated kind cluster for demo (v2).
+# clusters/test-kind-v2.nix: Updated kind cluster for demo (v2).
 #
 # Changes from v1: different message, 2 replicas.
 # Used by demo/vhs/run-demos.sh to simulate a cluster config change.

@@ -21,14 +21,14 @@ let
   # Evaluate a single package's options.
   #
   # The package function gets `scope` and `kix` thunks that throw if
-  # touched — options declarations should only need `lib`. If a package
+  # touched: options declarations should only need `lib`. If a package
   # reaches for `scope`/`kix` at the options level, the thrown error
   # identifies which package is misbehaving.
   evalPackageOptions =
     { packagePath, packageName }:
     let
       package = import packagePath;
-      # Only pass arguments the package function actually declares —
+      # Only pass arguments the package function actually declares:
       # several packages (e.g. cert-manager, cilium) take `{ scope, lib }`
       # without `kix`, and Nix's strict arity check rejects unexpected args.
       fnArgs = builtins.functionArgs package;
@@ -56,7 +56,7 @@ let
         modules = [ { options = pkg.options or { }; } ];
       };
     in
-    # Strip `_module` — `evalModules` injects it and it pollutes the doc.
+    # Strip `_module`, which `evalModules` injects and which pollutes the doc.
     removeAttrs evaluated.options [ "_module" ];
 
   # Build the MDX reference for a single package.

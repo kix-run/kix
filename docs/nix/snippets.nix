@@ -16,7 +16,7 @@
 { pkgs, lib }:
 
 let
-  # Regex matchers — `builtins.match` returns null on no match,
+  # Regex matchers: `builtins.match` returns null on no match,
   # or a list of capture groups.
   startRe = "[[:space:]]*#[[:space:]]*region:([a-zA-Z][a-zA-Z0-9-]*)[[:space:]]*";
   endRe = "[[:space:]]*#[[:space:]]*endregion:([a-zA-Z][a-zA-Z0-9-]*)[[:space:]]*";
@@ -170,14 +170,14 @@ let
   # describing the files to emit, plus a manifest entry.
   #
   # Emit TWO files per region:
-  # - `<region>.<extension>` — raw code, importable as `?raw` for use with
+  # - `<region>.<extension>`: raw code, importable as `?raw` for use with
   #   Starlight's `<Code>` component.
-  # - `<region>.json` — metadata + code: `{ code, source, startLine,
+  # - `<region>.json`: metadata + code: `{ code, source, startLine,
   #   endLine, url }`. Importable directly as JSON in MDX; wrap with
   #   the `<Snippet>` component to render code + a "View source" link.
   #
   # `sourceUrlBase` is optional; if null, `url` is omitted.
-  # `file` may be a Nix path OR a flake-store interpolation string —
+  # `file` may be a Nix path OR a flake-store interpolation string:
   # `builtins.readFile` accepts both, so we don't coerce.
   processSource =
     {
@@ -230,7 +230,7 @@ let
           ]
         ) regions
       );
-      # The manifest is metadata — keep it free of store-path
+      # The manifest is metadata: keep it free of store-path
       # references so `builtins.toFile` works even when the
       # underlying source flake input hasn't yet been materialised
       # in the local Nix store (this comes up in CI where overrides
