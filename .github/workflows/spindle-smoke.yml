@@ -13,7 +13,7 @@ name: Spindle smoke test
 # On GitHub the `runs-on` label IS the machine shape:
 # `spindle-<vcpu>c-<ram>g[-<disk>d]`, vCPU one of 2/4/8/16/32 and RAM
 # between 0.5 and 8 GiB per vCPU. `spindle-auto` is rejected here (it
-# works on Forgejo) — GitHub has no per-job claim API, so the job that
+# works on Forgejo): GitHub has no per-job claim API, so the job that
 # lands on a VM is not necessarily the one Spindle sized for, and only a
 # label that names the size makes that swap harmless.
 #
@@ -51,7 +51,7 @@ jobs:
           echo "npm       $(npm --version)"
           echo "nix       $(nix --version)"
           echo "git       $(git --version)"
-          test -d .git || { echo "no .git — checkout degraded to a tarball"; exit 1; }
+          test -d .git || { echo "no .git: checkout degraded to a tarball"; exit 1; }
 
       # The substituter the image ships. If this resolves, Nix builds here
       # pull from cache.nixos.org and the Lithus read-through cache rather

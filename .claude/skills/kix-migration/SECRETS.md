@@ -1,8 +1,8 @@
 # Secret Primitives
 
-**Always use `scope.mkSecret` or `scope.mkSecretRef` for secrets** — never raw `scope.mkResource { kind = "Secret"; }`. The secret primitives provide an enriched `out` API with build-time key validation and dependency tracking.
+**Always use `scope.mkSecret` or `scope.mkSecretRef` for secrets**: never raw `scope.mkResource { kind = "Secret"; }`. The secret primitives provide an enriched `out` API with build-time key validation and dependency tracking.
 
-## `scope.mkSecret` — kix-managed secret
+## `scope.mkSecret`: Kix-managed secret
 
 Creates a K8s Secret resource with enriched `out`. Accepts inline `stringData` or SOPS `source` + `hash`. A declared key needs a value in `stringData` or the SOPS `source`; the build refuses one with neither.
 
@@ -23,9 +23,9 @@ creds = scope.mkSecret {
 
 `mkSecret` stamps where each key's value comes from (`kix.run/secret-sources`, `username=plain,password=sops`): `inline` (in the expression), `sops`, `controller` (a controller writes it), or `plain`. `plainKeys = [ "username" ]` marks an inline value that is not a credential; a basic-auth username is plain by type. The `security.secretSource` rule compares the stamp with `cluster.secrets.accept` (HANDBOOK §21.11), so a Secret that mixes a host and a password needs `plainKeys` for the host, or the host moves to `out`.
 
-## `scope.mkSecretRef` — externally-managed secret
+## `scope.mkSecretRef`: externally-managed secret
 
-References a secret that exists outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.run/mode=import` that the deploy CLI polls before running the wave that depends on it — if the Secret is missing or the declared keys aren't populated, the wave fails fast.
+References a secret that exists outside Kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.run/mode=import` that the deploy CLI polls before running the wave that depends on it: if the Secret is missing or the declared keys aren't populated, the wave fails fast.
 
 ```nix
 appSecret = scope.mkSecretRef {
@@ -36,7 +36,7 @@ appSecret = scope.mkSecretRef {
 
 List every key a pod reads by name. `keys = [ ]` is allowed only when no pod does: pods use the Secret whole (`envFrom`, a volume without `items`), and the deploy checks only that it exists. A named read of a key of such a ref fails cross-resource check 22.
 
-**Gotcha 1 — the marker must be in the returned attrset, not just `let`.** Package build functions only emit resources that `collectTypedAttrs` finds in the returned attrset. A `mkSecretRef` stashed in a `let` binding will *not* produce a manifest. Always `inherit` the ref in the return attrset:
+**Gotcha 1: the marker must be in the returned attrset, not just `let`.** Package build functions only emit resources that `collectTypedAttrs` finds in the returned attrset. A `mkSecretRef` stashed in a `let` binding will *not* produce a manifest. Always `inherit` the ref in the return attrset:
 
 ```nix
 let
@@ -50,7 +50,7 @@ in {
 }
 ```
 
-**Gotcha 2 — wave ordering for operator-provisioned secrets.** If the Secret is created by an operator *after* some CR is applied (e.g. StackGres auto-creates `Secret/<cluster-name>` when it reconciles an `SGCluster`), the marker needs an explicit `requires` edge to that CR. Otherwise the marker lands in wave 0, the readiness poll starts before the operator has had a chance to materialize the Secret, and the deploy times out.
+**Gotcha 2: wave ordering for operator-provisioned secrets.** If the Secret is created by an operator *after* some CR is applied (e.g. StackGres auto-creates `Secret/<cluster-name>` when it reconciles an `SGCluster`), the marker needs an explicit `requires` edge to that CR. Otherwise the marker lands in wave 0, the readiness poll starts before the operator has had a chance to materialize the Secret, and the deploy times out.
 
 ```nix
 # stackgres-cluster: the operator creates Secret/<cluster> when it
@@ -121,7 +121,7 @@ env = kix.mkEnvVars {
 
 An operator that syncs a Secret from an external store has a builder that does this for you: `external-secrets` (`out.mkExternalSecret`, HANDBOOK §21.9) and `infisical-operator` (`out.mkInfisicalStaticSecret`, §21.8) return `out.secretRef { keys; }`, a `mkSecretRef` ordered after the custom resource. Prefer them to a hand-made `mkSecretRef` with `requires`.
 
-That is also how a `kix.healthCheck` probe gets a credential: its `env` callback returns an attrset that goes through `mkEnvVars`, so `CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password";` gives the probe Job the value, the dependency edge and the key check. Never render a password into the probe's ConfigMap or its `out`.
+That is also how a `kix.healthCheck` probe gets a credential: its `env` callback returns an attrset that goes through `mkEnvVars`, so `CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password";` gives the probe Job the value, the dependency edge, and the key check. Never render a password into the probe's ConfigMap or its `out`.
 
 ## The site chooses the source
 

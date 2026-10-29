@@ -1,4 +1,4 @@
-# clusters/test-secrets.nix — Integration test for SOPS secret hydration.
+# clusters/test-secrets.nix: Integration test for SOPS secret hydration.
 #
 # Deploys:
 #   1. A standalone SOPS-encrypted secret (credentials)

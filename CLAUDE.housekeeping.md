@@ -1,4 +1,4 @@
-# Housekeeping — logging problems we are not fixing
+# Housekeeping: logging problems we are not fixing
 
 The [`housekeeping/`](housekeeping/) directory at the repo root collects
 the problems we notice and leave: rough edges, stale docs, slow
@@ -33,9 +33,9 @@ Write one new file, named for the date and a short slug:
 
     housekeeping/YYYY-MM-DD-short-slug.md
 
-The slug names the thing and then its problem —
+The slug names the thing and then its problem:
 `from-workload-cannot-build-headless-service`, not `service-bug`. Three
-to six words, lowercase letters, digits and hyphens. Someone scanning
+to six words, lowercase letters, digits, and hyphens. Someone scanning
 `ls` should be able to tell your entry from the hundred around it.
 
 The file holds a heading and a few lines under it:
@@ -61,7 +61,7 @@ resolve and no entry is ever lost to one.
   month of entries at once, with `/housekeeping-review`.
 - **Check for an entry that already covers it.** Search first:
   `grep -ril <keyword> housekeeping/`. When one exists, add a line to
-  that file — `- Hit again YYYY-MM-DD while <what you were doing>.`
+  that file: `- Hit again YYYY-MM-DD while <what you were doing>.`
   How often a problem recurs is the signal we most want.
 - **Record it and carry on.** Fix the problem itself only when the fix
   already sits inside the work you have.

@@ -31,7 +31,7 @@ name: Deploy site to Cloudflare Pages
 # Deploys go to Cloudflare Pages, not GitHub Pages: kixpkgs is a
 # private repo in a Free-plan org, and GitHub Pages only serves
 # public repos on that plan. Cloudflare Pages direct upload has no
-# such restriction. Needs two repo secrets — CLOUDFLARE_API_TOKEN
+# such restriction. Needs two repo secrets: CLOUDFLARE_API_TOKEN
 # (scoped to "Cloudflare Pages: Edit") and CLOUDFLARE_ACCOUNT_ID.
 
 on:
@@ -59,8 +59,8 @@ concurrency:
 jobs:
   deploy:
     # Spindle (runners.example.com) brokers this onto an ephemeral GCE VM
-    # running our NixOS CI image. On GitHub the label IS the machine shape
-    # — `spindle-auto` is rejected, because GitHub has no per-job claim API
+    # running our NixOS CI image. On GitHub the label IS the machine shape:
+    # `spindle-auto` is rejected, because GitHub has no per-job claim API
     # and a runner takes whatever queued job matches its labels. 8 vCPU for
     # the three npm builds and the Astro build; 100 GB because the Nix store
     # and three node_modules trees share the disk. See spindle-smoke.yml for
@@ -104,8 +104,8 @@ jobs:
           path: kix-examples
           fetch-depth: 0
 
-      # The Nix store is NOT cached through actions/cache here, and
-      # deliberately. cache-nix-action restores another machine's
+      # The Nix store is NOT cached through actions/cache here.
+      # cache-nix-action restores another machine's
       # /nix/var/nix/db over this one's; on NixOS that database does not
       # know about the running system's own closure, so its purge/GC pass
       # is free to collect paths the live system is using. The image's

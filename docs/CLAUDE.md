@@ -27,7 +27,7 @@ boundaries are the biggest places to slow down and teach deliberately.
 - Render every shell command the reader is meant to run with the `Command`
   component (`docs/src/components/Command.astro`). Do not pair it with a
   separate shell fence or a `CommandCwd`. Do not use a raw ```` ```sh ```` /
-  ```` ```bash ```` fence for runnable commands — fences are reserved for
+  ```` ```bash ```` fence for runnable commands: fences are reserved for
   illustrative snippets, file paths, and inline file content (Nix, YAML,
   expected text the reader does not type).
 - `Command` usage:
@@ -40,8 +40,8 @@ boundaries are the biggest places to slow down and teach deliberately.
     import its committed JSON sidecar from `docs/src/command-output/`, and
     spread it: `<Command {...check} />`. Sidecars use the same
     `commands: Step[]` schema the component accepts.
-  - Hide output behind a disclosure: add `expandable` —
-    `<Command expandable {...deployFirst} />`. The command lines stay
+  - Hide output behind a disclosure: add `expandable`
+    (`<Command expandable {...deployFirst} />`). The command lines stay
     visible; the output is in a `<details>` block. Use for long or noisy
     outputs (full deploy banners, large `kix build` dumps).
   - Working directory: set `cwd` when the reader must be in a specific
@@ -89,9 +89,9 @@ boundaries are the biggest places to slow down and teach deliberately.
 - `CommandCwd.astro` is retained only so the frozen `v0.1/` snapshot keeps
   building. Do not import it in new pages.
 - Fenced code blocks (```` ```nix ````, ```` ```text ````, ```` ```yaml ````)
-  remain the right tool for *file contents* — the snippet the reader edits or
-  pastes into a file. `Command` is for *executions* — what the reader runs in
-  a shell. Both can sit side-by-side on the same page.
+  remain the right tool for *file contents* (the snippet the reader edits or
+  pastes into a file). `Command` is for *executions* (what the reader runs in
+  a shell). Both can sit side-by-side on the same page.
 - **Astro template gotcha.** Inside `{...}` expressions in an `.astro`
   template, arrow functions returning JSX **must be expression-bodied**:
   `items.map((x) => <span>{x}</span>)`. Block bodies like
@@ -177,7 +177,7 @@ Use these labels consistently:
 
 Cross-link paths are **always absolute, prefixed with `/docs/`** (the site's
 base path), never relative (`../`). The `starlight-links-validator` plugin
-enforces this — relative links aren't validated, and absolute links without
+enforces this: relative links aren't validated, and absolute links without
 the `/docs/` prefix fail validation because the validator matches against
 final URL paths.
 
@@ -368,7 +368,7 @@ scenario that can exercise a group of related guides.
   not raise it to hide one that stopped terminating.
 - Set `resetCluster = true` on the first live group whose output must not
   depend on what earlier groups deployed. `kix diff`, `status`, `snapshot
-  save` and `gc` read only the Kix cluster you named, but print a line
+  save`, and `gc` read only the Kix cluster you named, but print a line
   counting the objects of each other Kix cluster they skipped, so the
   tutorial deployments would otherwise appear in the capture.
 - Put a group that deliberately breaks the cluster last. A deploy whose probe

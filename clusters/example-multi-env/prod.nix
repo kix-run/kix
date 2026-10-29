@@ -1,4 +1,4 @@
-# clusters/example-multi-env/prod.nix — Production environment cluster.
+# clusters/example-multi-env/prod.nix: Production environment cluster.
 #
 # Imports the shared base and overrides for production:
 # - Pinned image versions
@@ -18,7 +18,7 @@ kix.buildCluster {
     kix.flavors.gke
     ./base.nix
 
-    # --- Prod-specific overrides ---
+    # Prod-specific overrides.
     (
       { lib, ... }:
       {

@@ -1,20 +1,9 @@
-# clusters/test-multi-env.nix — one instance set, several environments,
+# clusters/test-multi-env.nix: One instance set across multiple environments
 # via `kix.mkEnv`.
 #
-# `mkEnv` had no build coverage anywhere in the tree, which is how it came
-# to add `_envScope` to every generated instance while the instance
-# submodule refused that field. Assigning a `mkEnv` result to `instances`
-# therefore always failed:
-#
-#   error: The option `instances.development-app.web._envScope' does not exist.
-#
-# So this cluster exists mainly to keep `mkEnv` buildable.
-#
-# Note the sibling `example-multi-env/`, which does the same job the other
-# way: one cluster definition per environment, sharing a base module. That
-# pattern gives each environment its own activation and its own deploy;
-# `mkEnv` puts every environment in one cluster, so they deploy together.
-# Neither is the successor to the other.
+# Whereas `example-multi-env/` defines one cluster per environment sharing a
+# base module (giving each environment its own activation and deploy), `mkEnv`
+# places all environments in one cluster so they deploy together.
 #
 # Build:  nix build .#cluster-multi-env --extra-experimental-features pipe-operators
 
@@ -40,7 +29,7 @@ kix.buildCluster {
       # That prefix is the whole isolation mechanism. A plain dependency
       # auto-instantiated for `development-app` lands in `development-app`,
       # because `eval/auto.nix` resolves it into the requesting namespace.
-      # Role-named deps are the deliberate exception: they are keyed by the
+      # Role-named deps are the exception: they are keyed by the
       # role, so both environments share one provider.
       instances =
         kix.mkEnv "development" { } { app = application; }

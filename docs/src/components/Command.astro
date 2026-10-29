@@ -1,5 +1,5 @@
 ---
-// Command — terminal-style block for one or more shell commands and their
+// Command: terminal-style block for one or more shell commands and their
 // captured output. Canonical way to show commands in the docs.
 //
 // API:
@@ -7,8 +7,8 @@
 //     A bare string entry renders as a command line with no output.
 //     A Step object can carry stdout / stderr / exitCode captured against a
 //     real run, plus a per-step `cwd` override.
-//   cwd?: string       — working directory shown in the terminal chrome.
-//   title?: string     — overrides the chrome label (defaults to `cwd`; with
+//   cwd?: string:       working directory shown in the terminal chrome.
+//   title?: string:     overrides the chrome label (defaults to `cwd`; with
 //                        neither, the block has no chrome row).
 //   expandable?: boolean
 //     When set, output is collapsed inside a <details> disclosure. The
@@ -43,7 +43,7 @@ interface Props {
   expandable?: boolean;
   /**
    * Generator tag carried by spread sidecar JSON: `"offline"` or `"live"`.
-   * When present, the author signalled "this block shows generated output" —
+   * When present, the author signalled "this block shows generated output":
    * if every step is empty we treat that as a build error rather than a
    * silent blank box. Sidecar JSON sets this field; hand-written
    * `<Command commands={[...]} />` invocations omit it.
@@ -53,7 +53,7 @@ interface Props {
   outputExcerpt?: boolean;
   /**
    * Sidecar id (e.g. `tutorials/02-hello-world/list-clusters`). Used only
-   * for diagnostics — included in any thrown error so the maintainer can
+   * for diagnostics: included in any thrown error so the maintainer can
    * trace the failing sidecar back to its manifest entry.
    */
   id?: string;
@@ -152,7 +152,7 @@ function renderOutput(stdout: string, stderr: string, exitCode: number): Span[] 
 //
 // Astro's template compiler only accepts expression-bodied arrow functions
 // in `{...}` expressions, and trips up on nested ternaries returning JSX.
-// So per-step content is normalised in the script into a flat shape — a
+// So per-step content is normalised in the script into a flat shape: a
 // list of `LineItem`s, each one wrap-span (`command-line` or `output`) +
 // a sequence of `InnerSpan`s. The template walks the shape with at most
 // one ternary level (PreUnit vs DetailsUnit).

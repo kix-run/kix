@@ -1,6 +1,6 @@
 ---
 name: housekeeping-review
-description: Read the housekeeping/ directory, group the entries by the cause they share, and propose architectural and developer-experience fixes. Use when asked to review, triage or clear housekeeping.
+description: Read the housekeeping/ directory, group the entries by the cause they share, and propose architectural and developer-experience fixes. Use when asked to review, triage, or clear housekeeping.
 user_invocable: true
 ---
 
@@ -14,7 +14,7 @@ and say which change would remove a whole group of entries at once.
 
 Take an argument as a window: `2026-08`, `3 months`, `since the last
 review`. Every filename starts with the date the entry was written, so a
-window is a glob — `housekeeping/2026-08-*`. Without an argument, cover
+window is a glob (`housekeeping/2026-08-*`). Without an argument, cover
 everything in the directory.
 
 ## Process
@@ -33,7 +33,7 @@ everything in the directory.
 
 3. **Group entries by cause rather than by area.** Two entries in the
    same directory often have nothing in common, while a rule that fires
-   on every package, a builder that stamps the wrong labels and a doc
+   on every package, a builder that stamps the wrong labels, and a doc
    that describes the old behaviour can all be the same missing piece
    of the lib. A group of one is fine and stays a one-off.
 
@@ -76,7 +76,7 @@ everything in the directory.
 ## Review template
 
 ```markdown
-# Housekeeping review — YYYY-MM-DD
+# Housekeeping review: YYYY-MM-DD
 
 Covers N entries written between YYYY-MM and YYYY-MM.
 

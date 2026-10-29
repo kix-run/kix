@@ -1,15 +1,15 @@
-# clusters/test-victoria-metrics.nix — VictoriaMetrics stack smoke test.
+# clusters/test-victoria-metrics.nix: VictoriaMetrics stack smoke test.
 #
-# Exercises (v2_discussions/133 phases 1–2):
+# Exercises:
 # 1. victoria-metrics-operator builds: CRDs (VM-native + prometheus-operator
-#    compat), RBAC, deployment.
-# 2. The operator claims the `prometheus` DI alias — an inline consumer's
+#    compat), RBAC, and deployment.
+# 2. The operator claims the `prometheus` DI alias: an inline consumer's
 #    prometheus.out.mkServiceMonitor / mkPrometheusRule calls render as
 #    monitoring.coreos.com CRs, proving the drop-in surface for kix.monitor
 #    and app packages.
 # 3. victoria-metrics-cluster renders a VMCluster CR with the HA defaults
 #    (RF=2, 3x vmstorage, dedup flags, PDBs, anti-affinity) and claims the
-#    `prometheusServer` alias — the grafana instance auto-wires its
+#    `prometheusServer` alias: the grafana instance auto-wires its
 #    Prometheus datasource from out.serviceUrl with zero config.
 # 4. victoria-metrics-agent remote-writes to the cluster's remoteWriteUrl (the
 #    dependency edge rides the URL); victoria-metrics-alert wires
@@ -36,7 +36,7 @@ let
         ...
       }:
       {
-        # Selectorless Service (no pods behind it — this fixture only tests
+        # Selectorless Service (no pods behind it; this fixture only tests
         # the ServiceMonitor→VMServiceScrape conversion contract). The
         # monitor sources its selector from the Service's labels, the shape
         # monitorSelectorMatchesService enforces.
@@ -53,7 +53,7 @@ let
           ];
         };
 
-        # PROBE: second Service, identical labels, same port name — the
+        # PROBE: second Service, identical labels, same port name; the
         # over-match rule must fail this build.
         probeService = scope.mkResource {
           apiVersion = "v1";

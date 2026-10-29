@@ -15,7 +15,7 @@
 # Used by CI's `pages.yml` (`--check`) to gate stale sidecars and by
 # maintainers locally (`--apply`) to regenerate them. Mirrors
 # `captures-live.nix`'s shape; the only fundamental difference is no
-# kind cluster — `kix` is invoked against the workspace directly, with
+# kind cluster: `kix` is invoked against the workspace directly, with
 # `kixpkgs` repointed via `--override-input` so the eval stays clear of
 # the workspace flake.lock's pinned-but-stale kixpkgs rev.
 
@@ -134,7 +134,7 @@ let
           ;;
         -h|--help)
           cat <<USAGE
-    regen-captures-offline — capture every `offline` step in
+    regen-captures-offline: capture every `offline` step in
     docs/nix/captures.nix, diff against the checked-in sidecars,
     optionally apply.
 
@@ -198,7 +198,7 @@ let
       # Captures marked `skipDriftCheck = true` in captures.nix have
       # environment-specific content (e.g. Nix-version-dependent
       # error traces) that can't be cleanly redacted. --apply still
-      # rewrites them — we just don't gate CI on their content.
+      # rewrites them; we just don't gate CI on their content.
       if [ "$(jq -r '.skipDriftCheck // false' "$sidecar")" = "true" ]; then
         if [ "$apply" -eq 1 ]; then
           printf 'REFRESH  %s (drift check skipped)\n' "$rel" >> "$diff_report"
@@ -224,7 +224,7 @@ let
 
     if [ "$check" -eq 1 ]; then
       cat "$diff_report"
-      echo "FAIL: $changed offline sidecar(s) would change — run \`nix run ./docs#regen-captures-offline -- --apply\` to refresh" >&2
+      echo "FAIL: $changed offline sidecar(s) would change; run \`nix run ./docs#regen-captures-offline -- --apply\` to refresh" >&2
       rm -f "$diff_report"
       exit 3
     fi

@@ -1,14 +1,14 @@
-# Kix documentation site — Astro Starlight, built as a Nix derivation.
+# Kix documentation site: Astro Starlight, built as a Nix derivation.
 #
 # Build:  nix build ./docs#site
 # Dev:    nix run  ./docs#dev
 #
-# This is a true sibling subflake — the top-level kixpkgs flake does NOT
+# This is a true sibling subflake; the top-level kixpkgs flake does NOT
 # depend on it.
 #
 # Requires `nix-command` and `flakes` to be enabled in the host's Nix
 # config (standard on nix-darwin / NixOS / most setups). `pipe-operators`
-# is requested via `nixConfig` below — accept the prompt or set
+# is requested via `nixConfig` below; accept the prompt or set
 # `accept-flake-config = true` in your nix.conf.
 
 {
@@ -147,7 +147,7 @@
           #   `src/content/docs/reference/package-catalog/`, overwriting
           #   any placeholder pages Phase 2A wrote for these names.
           #   Generated content wins.
-          # `--no-preserve=mode` + chmod so the copies are writable —
+          # `--no-preserve=mode` + chmod so the copies are writable:
           # files from the Nix store arrive read-only.
           #
           # Captures sidecars (src/command-output/) are NOT copied here:
@@ -193,7 +193,7 @@
         };
       });
 
-      # `nix run ./docs#dev` — one-shot dev workflow:
+      # `nix run ./docs#dev`: one-shot dev workflow:
       #   1. Build the snippets + reference Nix derivations.
       #   2. Sync their outputs into the writable source tree.
       #   3. `npm install` if node_modules is missing.
@@ -220,8 +220,8 @@
             kixpkgsSrc = kixpkgs;
           }).app;
 
-        # Offline captures regen. Same shape as regen-captures but
-        # without a kind cluster — invokes `kix` against the workspace
+        # Offline captures regen. Same shape as regen-captures, but
+        # without a kind cluster: invokes `kix` against the workspace
         # directly. See `nix/captures-offline.nix` for the trust
         # boundary and `nix/captures.nix` for the manifest.
         regen-captures-offline =

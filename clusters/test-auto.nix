@@ -1,4 +1,4 @@
-# clusters/test-auto.nix — Test auto-instantiation and optional instances.
+# clusters/test-auto.nix: Test auto-instantiation and optional instances.
 #
 # Exercises:
 # 1. Auto-instantiation of valkey (required dep of test-app)
@@ -11,12 +11,9 @@
 { kix, packages }:
 
 let
-  # NB: each package puts its resource under a named part with `root`
-  # aliased to it. Assigning the resource straight to `root` renders NOTHING
-  # but the PackageInstance marker — collectResources excludes the `root`
-  # key (kixpkgs#25). These fixtures previously did exactly that, so the
-  # ConfigMaps they exist to assert on were silently absent while the
-  # clusters still built green.
+  # Each package puts its resource under a named part with `root` aliased to it.
+  # collectResources excludes the `root` key, so assigning a resource directly
+  # to `root` renders only the PackageInstance marker.
 
   # Minimal test package that requires valkey as a hard dependency.
   testAppPackage = {
@@ -55,7 +52,7 @@ let
       };
   };
 
-  # A package that requires coredns — used to test optional activation.
+  # A package that requires coredns, used to test optional activation.
   needsCorednsPackage = {
     meta.version = "0.0.0";
     build =
@@ -87,7 +84,7 @@ kix.buildCluster {
 
       namespaces.app = { };
 
-      # test-app requires valkey — should trigger auto-instantiation.
+      # test-app requires valkey, which triggers auto-instantiation.
       instances.app = {
         test-app = {
           package = testAppPackage;
@@ -100,7 +97,7 @@ kix.buildCluster {
         };
       };
 
-      # Optional instance that nobody needs — should NOT produce resources.
+      # Optional instance that nobody needs; must not produce resources.
       instances.unused-ns = {
         unused = {
           package = unusedOptionalPackage;
@@ -108,7 +105,7 @@ kix.buildCluster {
         };
       };
 
-      # Optional coredns in infra ns — will be activated by needs-coredns.
+      # Optional coredns in infra ns, activated by needs-coredns.
       instances.infra = {
         coredns = {
           package = packages.coredns;
@@ -117,7 +114,7 @@ kix.buildCluster {
         };
       };
 
-      # needs-coredns requires coredns — should activate the optional instance.
+      # needs-coredns requires coredns, activating the optional instance.
       instances.other = {
         needs-coredns = {
           package = needsCorednsPackage;

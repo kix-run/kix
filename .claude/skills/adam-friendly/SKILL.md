@@ -5,9 +5,9 @@ description: Rewrite technical documents to be clearer and more concrete for Ada
 
 # Adam-Friendly Document Rewriting
 
-You are rewriting a technical document to make it clearer for Adam. The original is likely written by Luca, who writes well but for an audience that thinks in abstractions first. Adam needs the concrete first — he'll extract the abstraction on his own. Neither style is better; they're just different cognitive entry points.
+You are rewriting a technical document to make it clearer for Adam. The original is likely written by Luca, who writes well but for an audience that thinks in abstractions first. Adam needs the concrete first: he'll extract the abstraction on his own. Neither style is better; they're just different cognitive entry points.
 
-Your job is to restructure and annotate for clarity. Never lose actual information — just change how it's presented.
+Your job is to restructure and annotate for clarity. Never lose actual information; just change how it's presented.
 
 ## The six transforms
 
@@ -40,7 +40,7 @@ Luca sometimes writes things like "this replaces the workload" without spelling 
 - **How** it works (the mechanism)
 - **What** the result is
 
-Add inline code comments to spell this out where it helps. A comment like `# This attrset gets merged over super — only keys we set here are replaced` does a lot of work.
+Add inline code comments to spell this out where it helps. A comment like `# This attrset gets merged over super; only keys we set here are replaced` does a lot of work.
 
 ### 4. Walk through examples step by step
 
@@ -48,20 +48,20 @@ Where Luca might use a two-column table or ASCII diagram to show relationships, 
 
 Instead of:
 ```
-A ───ref──→ B    (automatic)
-A ───requires──→ C    (manual)
+A --ref--> B    (automatic)
+A --requires--> C    (manual)
 ```
 
 Write something like:
-> When your YAML mentions resource B by name, that's a `ref` — the dependency is tracked automatically. But resource C selects your pods by label — your YAML never mentions C's name, so there's nowhere for a `ref` to go. You use `requires` to say "include C anyway."
+> When your YAML mentions resource B by name, that's a `ref`: the dependency is tracked automatically. But resource C selects your pods by label: your YAML never mentions C's name, so there's nowhere for a `ref` to go. You use `requires` to say "include C anyway."
 
 The walkthrough should feel like someone explaining it over a whiteboard, not like a textbook diagram.
 
 ### 5. Cut redundant representations
 
-Luca sometimes shows the same concept as code, then a tree diagram, then a table. Multiple representations aren't clarifying for Adam — they're more surface area to reconcile.
+Luca sometimes shows the same concept as code, then a tree diagram, then a table. Multiple representations aren't clarifying for Adam; they're more surface area to reconcile.
 
-Pick the most concrete representation (usually the code with good comments) and fold the insights from the others into prose or inline comments. If a diagram genuinely adds something the code can't show, keep it — but that's the exception.
+Pick the most concrete representation (usually the code with good comments) and fold the insights from the others into prose or inline comments. If a diagram genuinely adds something the code can't show, keep it, but that's the exception.
 
 ### 6. Remove details that don't serve the point
 
@@ -75,7 +75,7 @@ Replace stripped sections with `/* ... */` or a brief comment so the reader know
 ## Tone
 
 - Write like a senior colleague explaining something at a whiteboard, not like a textbook
-- Use "you" and "your" — address the reader directly
+- Use "you" and "your" to address the reader directly
 - Short sentences. If a sentence has a semicolon and a dependent clause, it's probably two sentences
 - Bold the first use of a new term, then define it immediately
 

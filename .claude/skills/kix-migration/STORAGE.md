@@ -79,7 +79,7 @@ cluster that wants the driver as everyone's default sets the instance's
 `aliases = [ "storageClasses" "zfsLocalPv" ]`, keeping the package's own
 alias so its one-instance check still applies. A user-keyed map the
 package renders into a part folder (VolumeSnapshotClasses) refuses the
-keys `root` and `meta`, which kix does not render as parts. A driver's
+keys `root` and `meta`, which Kix does not render as parts. A driver's
 VolumeSnapshotClasses are built with
 `scope.mkCR snapshotController.out.crds.VolumeSnapshotClass { ... }` from
 an optional `snapshotController ? null` dependency, and the package

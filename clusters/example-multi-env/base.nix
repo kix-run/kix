@@ -4,7 +4,6 @@
 # cluster definitions (dev.nix, prod.nix) import this and override what differs.
 #
 # Pattern: packages are defined once, config varies per environment.
-# See v2_discussions/64_mvp_implementation_approach.md §Multi-Environment Pattern.
 
 {
   lib,
@@ -22,7 +21,7 @@
     "app.kubernetes.io/part-of" = "my-project";
   };
 
-  # --- Service definitions (shared across dev and prod) ---
+  # Service definitions shared across dev and prod.
 
   instances.app = {
     # The main application: the same package, with config that varies per env.

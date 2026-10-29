@@ -2,7 +2,7 @@
 
 Per-tutorial overlays that the docs captures pipeline lays on top of a
 writable copy of `kix-examples/` before running commands. An overlay
-is just a directory whose layout mirrors `kix-examples/` — files in
+is just a directory whose layout mirrors `kix-examples/`: files in
 it land at the same relative path in the workspace.
 
 Use an overlay for:

@@ -2,8 +2,8 @@
 #
 # Both the offline driver (`captures-offline.nix`, runs in a Nix sandbox)
 # and the live driver (`captures-live.nix`, runs as a host shell script
-# against kind) compose the helpers in here. The library is intentionally
-# free of pipeline-level state — it returns shell snippets parameterised
+# against kind) compose the helpers in here. The library is
+# free of pipeline-level state: it returns shell snippets parameterised
 # by group/step plus a small set of runtime expectations the caller
 # documents below.
 
@@ -16,7 +16,7 @@
   # invocation as `--override-input kixpkgs path:<store>` so the
   # workspace's eval resolves against a known, already-realised
   # source instead of re-fetching via github. The workspace's
-  # flake.lock for nixpkgs is left untouched — both drivers run
+  # flake.lock for nixpkgs is left untouched: both drivers run
   # host-side with network access, so the standard fetcher just
   # works for everything else.
   kixpkgsSrc,
@@ -49,7 +49,7 @@ let
     if (step.sortLines or true) then "${baseDriftPipeline} | LC_ALL=C sort -u" else baseDriftPipeline;
 
   # Display-only join: produces the human-readable `❱` prompt string
-  # for the rendered docs. Not shell-safe — manifest args never
+  # for the rendered docs. Not shell-safe: manifest args never
   # contain single quotes, so the naive wrap-in-quotes-if-space is
   # fine for this purpose. Don't reuse for actual shell invocation.
   mkDisplayCommand =
@@ -96,7 +96,7 @@ let
     '';
 
   # Workspace setup shell. Caller is expected to have:
-  #   $workspace — empty writable directory the workspace will live in.
+  #   $workspace: empty writable directory the workspace will live in.
   # After this snippet, $workspace contains kix-examples + (optional)
   # overlay + applied setup mutations. The workspace's `flake.nix` and
   # `flake.lock` are untouched; kix-side `--override-input kixpkgs
@@ -183,11 +183,11 @@ let
   # from anything but an interactive shell.
   #
   # Capture step → shell. Parameterised by:
-  #   invocation — shell string that invokes the binary with whatever
+  #   invocation: shell string that invokes the binary with whatever
   #     auto-flags the driver wants (PTY wrap, --context, --flake, etc.)
-  #   wrappers   — [{ name; invocation; }] used only by `shell` steps, so
+  #   wrappers: [{ name; invocation; }] used only by `shell` steps, so
   #     the command line runs the driver-flagged binaries off PATH.
-  #   generator  — "offline" or "live"; baked into the sidecar JSON.
+  #   generator: "offline" or "live"; baked into the sidecar JSON.
   # Caller is expected to have on PATH or pinned: jq, sed, python3.
   # Caller is expected to have set: $workspace, $stagingDir.
   captureShell =
