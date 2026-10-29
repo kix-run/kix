@@ -3,28 +3,45 @@ name: Bundle checks
 # The bundle checks too slow for every `cargo test` (cli/README.md,
 # "Bundle acceptance checks"):
 #
-# - each libFuzzer target in cli/fuzz for two minutes, seeded from the
-#   honest bundles in cli/kix-bundle/tests/fixtures and the plan file in
-#   cli/kix/tests/fixtures, under the README's
-#   4 GiB RSS cap;
+# - each libFuzzer target in cli/fuzz (20s per target on PRs and pushes, two
+#   minutes on the weekly schedule and manual runs), seeded from the honest
+#   bundles in cli/kix-bundle/tests/fixtures and the plan file in
+#   cli/kix/tests/fixtures, under the README's 4 GiB RSS cap;
 # - `every_test_cluster_bundles`, which builds and bundles every test
 #   cluster.
 #
 # A short run catches a reader change that breaks on the seeds' first
-# mutations. The weekly run is where a slower finding turns up. A crash
-# leaves its input under cli/fuzz/artifacts/, uploaded with the run.
+# mutations without holding a Spot VM long enough to be preempted. The weekly
+# run is where a slower finding turns up. A crash leaves its input under
+# cli/fuzz/artifacts/, uploaded with the run.
 #
 # Same Nix setup as cli-tests.yml, on a Spindle VM whose image ships Nix.
 
 on:
   pull_request:
     paths:
-      - 'cli/**'
+      - 'cli/kix-bundle/**'
+      - 'cli/kix-container/**'
+      - 'cli/kix/src/plan/file.rs'
+      - 'cli/kix/src/eval/**'
+      - 'cli/kix-cli/src/commands/bundle.rs'
+      - 'cli/kix-cli/tests/commands_test.rs'
+      - 'cli/fuzz/**'
+      - 'cli/Cargo.toml'
+      - 'cli/Cargo.lock'
       - '.github/workflows/bundle-checks.yml'
   push:
     branches: [main]
     paths:
-      - 'cli/**'
+      - 'cli/kix-bundle/**'
+      - 'cli/kix-container/**'
+      - 'cli/kix/src/plan/file.rs'
+      - 'cli/kix/src/eval/**'
+      - 'cli/kix-cli/src/commands/bundle.rs'
+      - 'cli/kix-cli/tests/commands_test.rs'
+      - 'cli/fuzz/**'
+      - 'cli/Cargo.toml'
+      - 'cli/Cargo.lock'
       - '.github/workflows/bundle-checks.yml'
   schedule:
     - cron: '0 3 * * 1'
@@ -46,15 +63,18 @@ jobs:
         extra-experimental-features = nix-command flakes pipe-operators
         accept-flake-config = true
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+      FUZZ_SECONDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '120' || '20' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      # cargo-fuzz, zstd and python3 come from this flake's nixpkgs. The
+      # cargo-fuzz, zstd, and python3 come from this flake's nixpkgs. The
       # targets build on stable rustc without a sanitizer, hence
-      # RUSTC_BOOTSTRAP.
+      # RUSTC_BOOTSTRAP. `--codegen-units 16` overrides cargo-fuzz's default
+      # of 1 so the 8-core runner compiles crates in parallel instead of
+      # spending 7+ minutes in single-threaded codegen.
       - name: Fuzz
         run: |
           nix develop --command nix shell --inputs-from . \
@@ -63,15 +83,15 @@ jobs:
             cd cli/fuzz
             ./seed.py ../kix-bundle/tests/fixtures/*.kixbundle ../kix/tests/fixtures/*.kixplan seeds
             export RUSTC_BOOTSTRAP=1
-            cargo fuzz build -s none -O
+            cargo fuzz build -s none -O --codegen-units 16
             for target in $(cargo fuzz list); do
               case $target in
                 *_frames) seeds=seeds/frames ;;
                 *) seeds=seeds/raw ;;
               esac
               mkdir -p "corpus/$target"
-              cargo fuzz run -s none -O "$target" "corpus/$target" "$seeds" -- \
-                -max_total_time=120 -max_len=2500000 -rss_limit_mb=4096
+              cargo fuzz run -s none -O --codegen-units 16 "$target" "corpus/$target" "$seeds" -- \
+                -max_total_time="$FUZZ_SECONDS" -max_len=2500000 -rss_limit_mb=4096
             done'
 
       - name: Every test cluster bundles
