@@ -1,0 +1,419 @@
+//! Classify soft, hard, and Activation record garbage for `kix gc`.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
+use miette::{Result, miette};
+use serde_json::Value;
+
+use crate::cli::GcArgs;
+use crate::client;
+use crate::output;
+use kix::cluster::activation::{Record, Records, RetentionPolicy, Retirement, retire_plan};
+use kix::cluster::discovery;
+use kix::cluster::inventory;
+use kix::eval::store_graph::store_hash;
+use kix::manifest::keys;
+use kix::manifest::lifecycle;
+use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
+
+/// Reason a live resource was classified as garbage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GarbageReason {
+    /// Resource carries a `kix.run/identity-hash` that is absent from the expected set.
+    HashNotExpected,
+    /// Resource carries the Kix label but no `kix.run/identity-hash` annotation.
+    NoIdentityHash,
+    /// Superseded `Activation` record retired by the retention policy
+    /// (`--keep`, `--keep-max`, `--keep-for`).
+    RetiredActivation,
+}
+
+impl GarbageReason {
+    pub(super) fn label(&self) -> &'static str {
+        match self {
+            GarbageReason::HashNotExpected => "identity-hash not in expected set",
+            GarbageReason::NoIdentityHash => "missing identity-hash",
+            GarbageReason::RetiredActivation => "activation record retired by retention",
+        }
+    }
+}
+
+pub(super) struct GarbageEntry {
+    pub(super) id: ResourceId,
+    pub(super) identity_hash: Option<String>,
+    pub(super) package: Option<String>,
+    pub(super) package_namespace: Option<String>,
+    pub(super) activations: Option<String>,
+    pub(super) reason: GarbageReason,
+}
+
+/// Planned Activation record retirement paired with the [`Records`] handle used
+/// to list and delete them.
+pub(super) struct RecordRetirement {
+    pub(super) records: Option<Records>,
+    pub(super) plan: Retirement,
+    /// Current Active or Degraded record for the cluster, used to inspect
+    /// `orphansKeptFrom`.
+    pub(super) active: Option<Record>,
+}
+
+impl RecordRetirement {
+    pub(super) fn kept_note(&self) -> String {
+        if self.records.is_none() {
+            "no Activation records on this cluster".to_string()
+        } else {
+            format!("{} activation records kept", self.plan.kept.len())
+        }
+    }
+}
+
+/// Return manifests from `closures` (`status.orphansKeptFrom`) that are absent
+/// from the new build and not already present in `garbage`.
+pub(super) fn kept_garbage(
+    closures: &[Vec<Value>],
+    garbage: &HashMap<String, Value>,
+    new_hashes: &HashSet<String>,
+    new_ids: &HashSet<String>,
+) -> Vec<Value> {
+    let mut seen: HashSet<String> = garbage.values().map(k8s_identity).collect();
+    let mut out = Vec::new();
+    for manifest in closures.iter().flatten() {
+        let Some(hash) = keys::get(manifest, keys::IDENTITY_HASH) else {
+            continue;
+        };
+        if !lifecycle::lifecycle_of(manifest).prunable()
+            || new_hashes.contains(hash)
+            || new_ids.contains(&k8s_identity(manifest))
+        {
+            continue;
+        }
+        if seen.insert(k8s_identity(manifest)) {
+            out.push(manifest.clone());
+        }
+    }
+    out
+}
+
+/// Return `true` when `clear_kept` may clear `orphansKeptFrom` on `active`.
+///
+/// Clearing is safe only when `active` matches `build_hash` and `examined_all`
+/// is true (soft GC resolved every listed build, or hard GC listed every
+/// resource kind and unattributed resource).
+pub(super) fn may_clear_kept(
+    active: &Record,
+    examined_all: bool,
+    build_hash: Option<&str>,
+) -> bool {
+    !active.orphans_kept_from.is_empty()
+        && examined_all
+        && build_hash.is_some()
+        && active.identity_hash.as_deref() == build_hash
+}
+
+/// Classify `live` objects against `expected_hashes` and `expected_ids`,
+/// returning garbage entries and orphans shared with other Kix clusters.
+///
+/// Activation records are skipped here and handled by the retention policy.
+pub(super) fn judge_hard(
+    live: &[kube::api::DynamicObject],
+    expected_hashes: &HashSet<String>,
+    expected_ids: &HashSet<String>,
+    tenancy: &kix::cluster::tenancy::Tenancy,
+) -> (Vec<GarbageEntry>, Vec<inventory::SharedOrphan>) {
+    let mut garbage: Vec<GarbageEntry> = Vec::new();
+    let mut shared: Vec<inventory::SharedOrphan> = Vec::new();
+    for obj in live {
+        if kix::manifest::lifecycle::lifecycle_of_live(obj)
+            == kix::manifest::lifecycle::Lifecycle::Record
+        {
+            continue;
+        }
+
+        let annotations_from_data = obj
+            .data
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.as_object());
+
+        let ann_get = |key: &str| -> Option<String> {
+            if let Some(map) = annotations_from_data
+                && let Some(v) = map.get(key).and_then(|v| v.as_str())
+            {
+                return Some(v.to_string());
+            }
+            obj.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| keys::get_meta(a, key))
+                .map(str::to_string)
+        };
+
+        let identity_hash = ann_get(keys::IDENTITY_HASH);
+
+        let reason = match &identity_hash {
+            Some(hash) if expected_hashes.contains(hash) => continue,
+            // Objects stamped before the domain migration carry hashes computed
+            // from store paths under the retired domain, so compare them by
+            // Kubernetes identity instead.
+            Some(_)
+                if kix::legacy_domain::stamped_before_move(|key| has_key(obj, key))
+                    && expected_ids.contains(&live_identity(obj)) =>
+            {
+                continue;
+            }
+            Some(_) => GarbageReason::HashNotExpected,
+            None => GarbageReason::NoIdentityHash,
+        };
+
+        let others = tenancy.still_deployed_by_others(obj);
+        if !others.is_empty() && !lifecycle::never_pruned(&live_kind(obj)) {
+            shared.push(inventory::SharedOrphan {
+                rid: ResourceId::from_value(&to_manifest_value(obj)),
+                clusters: others,
+            });
+            continue;
+        }
+
+        let kind = live_kind(obj);
+        let name = obj
+            .metadata
+            .name
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_string();
+        let namespace = obj
+            .metadata
+            .namespace
+            .as_deref()
+            .unwrap_or(CLUSTER_SCOPED)
+            .to_string();
+
+        garbage.push(GarbageEntry {
+            id: ResourceId {
+                kind,
+                name,
+                namespace,
+            },
+            identity_hash,
+            package: ann_get(keys::PACKAGE),
+            package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
+            activations: ann_get(keys::ACTIVATIONS),
+            reason,
+        });
+    }
+    (garbage, shared)
+}
+
+fn live_kind(obj: &kube::api::DynamicObject) -> String {
+    obj.data
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
+/// Return `true` if `obj` carries annotation `key` in its raw data or typed metadata.
+pub(super) fn has_key(obj: &kube::api::DynamicObject, key: &str) -> bool {
+    obj.data
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.as_object())
+        .is_some_and(|m| m.contains_key(key))
+        || obj
+            .metadata
+            .annotations
+            .as_ref()
+            .is_some_and(|a| a.contains_key(key))
+}
+
+/// Collect the swept objects that hard GC evaluates against the build,
+/// including `unattributed` and `copies` when their respective flags are set.
+pub(super) fn judged_objects(
+    sweep: inventory::ManagedSweep,
+    include_unattributed: bool,
+    include_copies: bool,
+) -> Vec<kube::api::DynamicObject> {
+    let unattributed = if include_unattributed {
+        sweep.unattributed
+    } else {
+        Vec::new()
+    };
+    let copies = if include_copies {
+        sweep.copies
+    } else {
+        Vec::new()
+    };
+    sweep
+        .managed
+        .into_iter()
+        .chain(sweep.unstamped)
+        .chain(unattributed)
+        .chain(copies)
+        .collect()
+}
+
+/// Build a [`RetentionPolicy`] from `args`, clamping `--keep-max` to at least `--keep`.
+pub(super) fn retention_policy(args: &GcArgs) -> Result<RetentionPolicy> {
+    let keep_for = parse_retention_duration(&args.keep_for)?;
+    if args.keep_max < args.keep && !args.yes {
+        eprintln!(
+            "{}",
+            output::yellow(&format!(
+                "--keep-max {} is below --keep {}; keeping {}.",
+                args.keep_max, args.keep, args.keep
+            ))
+        );
+    }
+    if args.keep == 0 && !args.yes {
+        eprintln!(
+            "{}",
+            output::yellow(
+                "--keep 0: every rollback target older than --keep-for will be retired."
+            )
+        );
+    }
+    Ok(RetentionPolicy {
+        keep_min: args.keep,
+        keep_max: args.keep_max.max(args.keep),
+        keep_for,
+        now: chrono::Utc::now(),
+    })
+}
+
+/// Parse a retention duration (`30d`, `12h`, `45m`, `30s`, a bare day count, or
+/// `0`/`off`/`never` to disable age-based retirement).
+pub(super) fn parse_retention_duration(s: &str) -> Result<Option<chrono::Duration>> {
+    let s = s.trim();
+    if s == "0" || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("never") {
+        return Ok(None);
+    }
+    let (digits, unit) = match s.find(|c: char| !c.is_ascii_digit()) {
+        Some(i) => s.split_at(i),
+        None => (s, "d"),
+    };
+    let n: i64 = digits
+        .parse()
+        .map_err(|_| miette!("--keep-for: expected a number with d, h, m or s (got '{s}')"))?;
+    let d = match unit.trim() {
+        "d" | "day" | "days" => chrono::Duration::days(n),
+        "h" | "hour" | "hours" => chrono::Duration::hours(n),
+        "m" | "min" | "minute" | "minutes" => chrono::Duration::minutes(n),
+        "s" | "sec" | "second" | "seconds" => chrono::Duration::seconds(n),
+        other => {
+            return Err(miette!(
+                "--keep-for: unknown unit '{other}' (use d, h, m or s, or 0 to disable)"
+            ));
+        }
+    };
+    Ok(Some(d))
+}
+
+/// Connect to the cluster and plan Activation record retirement for `cluster`.
+pub(super) async fn plan_record_retirement(
+    global: &crate::cli::GlobalArgs,
+    cluster: &str,
+    policy: &RetentionPolicy,
+) -> Result<RecordRetirement> {
+    let client = client::make_client(global.context.as_deref())
+        .await
+        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+    let discovery = discovery::discover_resources(&client)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    plan_records_with(records.into_records(), cluster, policy).await
+}
+
+/// List Superseded records and compute the retirement plan for `cluster`.
+pub(super) async fn plan_records_with(
+    records: Option<Records>,
+    cluster: &str,
+    policy: &RetentionPolicy,
+) -> Result<RecordRetirement> {
+    let Some(records) = records else {
+        return Ok(RecordRetirement {
+            records: None,
+            plan: Default::default(),
+            active: None,
+        });
+    };
+    let superseded = records
+        .superseded(cluster)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    let plan = retire_plan(superseded, policy);
+    let active = records.active(cluster).await.map_err(|e| miette!("{e}"))?;
+    Ok(RecordRetirement {
+        records: Some(records),
+        plan,
+        active,
+    })
+}
+
+/// Convert retired Activation records in `plan` into hard-mode [`GarbageEntry`] items.
+pub(super) fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
+    plan.retire
+        .iter()
+        .map(|retired| GarbageEntry {
+            id: ResourceId {
+                kind: kix::manifest::lifecycle::RECORD_KIND.to_string(),
+                namespace: CLUSTER_SCOPED.to_string(),
+                name: retired.record.name.clone(),
+            },
+            identity_hash: retired.record.identity_hash.clone(),
+            package: None,
+            package_namespace: None,
+            activations: None,
+            reason: GarbageReason::RetiredActivation,
+        })
+        .collect()
+}
+
+/// Return `kind/namespace/name` for a live object, matching [`k8s_identity`].
+fn live_identity(obj: &kube::api::DynamicObject) -> String {
+    let kind = obj
+        .data
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+        .unwrap_or("Unknown");
+    let namespace = obj
+        .metadata
+        .namespace
+        .as_deref()
+        .unwrap_or(kix::manifest::types::CLUSTER_SCOPED);
+    let name = obj.metadata.name.as_deref().unwrap_or("unknown");
+    format!("{kind}/{namespace}/{name}")
+}
+
+/// Return `kind/namespace/name` for `manifest`.
+pub(super) fn k8s_identity(manifest: &Value) -> String {
+    let rid = ResourceId::from_value(manifest);
+    format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+}
+
+/// Return manifests from `old` whose Kubernetes identity (`kind`, `namespace`,
+/// and `name`) is absent from the new build, keyed by store hash.
+///
+/// A changed store hash alone is not garbage when the resource still exists
+/// under the same Kubernetes identity, because soft GC deletes by name.
+/// Activation records are also excluded here and retired via the retention
+/// policy instead.
+pub(super) fn soft_garbage<'a>(
+    old: impl IntoIterator<Item = (&'a PathBuf, &'a Value)>,
+    new_hashes: &HashSet<String>,
+    new_ids: &HashSet<String>,
+) -> HashMap<String, Value> {
+    let mut garbage = HashMap::new();
+    for (path, manifest) in old {
+        if lifecycle::is_record(manifest) {
+            continue;
+        }
+        let hash = store_hash(path);
+        if new_hashes.contains(&hash) || new_ids.contains(&k8s_identity(manifest)) {
+            continue;
+        }
+        garbage.insert(hash, manifest.clone());
+    }
+    garbage
+}

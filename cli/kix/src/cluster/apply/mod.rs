@@ -1,0 +1,399 @@
+//! Apply resources with server-side apply and local DAG change detection.
+//!
+//! Uses server-side apply (`Patch::Apply`) with `kix` as the field manager.
+//! Change detection diffs two sets of stamped manifests locally by comparing
+//! identity-hashes, without querying the live cluster.
+
+mod ssa;
+#[cfg(test)]
+mod tests;
+
+use std::collections::{HashMap, HashSet};
+
+use crate::manifest::keys;
+use crate::manifest::lifecycle::{lifecycle_of, lifecycle_of_live};
+#[cfg(test)]
+use crate::manifest::types::CLUSTER_SCOPED;
+use crate::manifest::types::ResourceId;
+use kube::api::DynamicObject;
+use serde_json::Value;
+
+pub use ssa::{ApplyAction, ApplyError, ApplyPreview, namespaceless};
+pub(crate) use ssa::{ApplyResult, apply_resource, record_activation_on_skipped};
+#[cfg(test)]
+use ssa::{
+    Seg, conflict_paths, is_immutable_field_message, is_stored_version_message,
+    merge_activation_set, parse_path, without_ceded_conflicts,
+};
+
+/// Return `true` if `manifest` is a `Job` with `kix.run/rerun: on-change`.
+///
+/// Only `Job` resources support the rerun rule because rerunning deletes the
+/// live object before re-creating it; deleting a rollout-based workload such as
+/// a `Deployment` would cause an outage rather than a retry.
+pub(crate) fn wants_rerun(manifest: &Value) -> bool {
+    manifest.get("kind").and_then(Value::as_str) == Some("Job")
+        && manifest
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(keys::RERUN))
+            .and_then(Value::as_str)
+            == Some(keys::RERUN_ON_CHANGE)
+}
+
+/// Change action determined by diffing the old and new activations.
+#[derive(Debug, Clone)]
+pub enum ChangeAction {
+    /// Resource is new or changed and needs to be applied.
+    Apply(Value),
+    /// Resource has the same identity-hash and can be skipped.
+    Skip(ResourceId),
+    /// Resource exists in the old activation but not the new one and is a
+    /// candidate for pruning.
+    Orphan(ResourceId),
+}
+
+/// Return the `kix.run/identity-hash` annotation from a manifest, if present.
+fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
+    manifest
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(keys::IDENTITY_HASH))
+        .and_then(Value::as_str)
+}
+
+/// Detect changes by diffing two sets of stamped manifests locally.
+///
+/// Matches resources by Kubernetes identity (`kind/namespace/name`) and
+/// compares `kix.run/identity-hash` annotations to determine whether content
+/// changed. Returns [`ChangeAction::Apply`] or [`ChangeAction::Skip`] for each
+/// manifest in `new_manifests`, followed by [`ChangeAction::Orphan`] for
+/// prunable stamped resources present in `old_manifests` but absent from
+/// `new_manifests`.
+pub(crate) fn detect_changes(
+    new_manifests: &[Value],
+    old_manifests: &[Value],
+) -> Vec<ChangeAction> {
+    // Keep the previous deploy's Activation record in this index so an
+    // unchanged build (same record name and hash) produces Skip and can
+    // short-circuit; records are excluded from the orphan set below.
+    let old_by_k8s_id: HashMap<String, &str> = old_manifests
+        .iter()
+        .filter_map(|m| {
+            let rid = ResourceId::from_value(m);
+            let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+            let hash = m
+                .pointer("/metadata/annotations")
+                .and_then(|a| a.get(keys::IDENTITY_HASH))
+                .and_then(Value::as_str)?;
+            Some((k8s_id, hash))
+        })
+        .collect();
+
+    let mut matched_old_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut actions: Vec<ChangeAction> = Vec::new();
+
+    for manifest in new_manifests {
+        let rid = ResourceId::from_value(manifest);
+        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+
+        let new_hash = manifest
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
+            .and_then(Value::as_str);
+
+        match (old_by_k8s_id.get(&k8s_id), new_hash) {
+            (Some(&old_hash), Some(new_h)) if old_hash == new_h => {
+                matched_old_ids.insert(k8s_id);
+                actions.push(ChangeAction::Skip(rid));
+            }
+            (Some(_), _) => {
+                matched_old_ids.insert(k8s_id);
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+            (None, _) => {
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+        }
+    }
+
+    // Only stamped, prunable resources can become orphans. Unstamped manifests
+    // may belong to controller children or external tools, and Activation
+    // records are superseded during finalization rather than pruned here.
+    for old_manifest in old_manifests {
+        if manifest_identity_hash(old_manifest).is_none() || !lifecycle_of(old_manifest).prunable()
+        {
+            continue;
+        }
+        let rid = ResourceId::from_value(old_manifest);
+        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+        if !matched_old_ids.contains(&k8s_id) {
+            actions.push(ChangeAction::Orphan(rid));
+        }
+    }
+
+    actions
+}
+
+/// Fold the closures of partially applied `Failed` deploys into a change plan.
+///
+/// When a prior deploy stopped mid-wave, it may have created or modified some
+/// resources before aborting without updating the `Active` record. Diffing
+/// only against the `Active` closure would miss those partial changes.
+///
+/// For each resource in `failed_closures`:
+/// * A [`ChangeAction::Skip`] whose resource appears in a failed closure with a
+///   different identity hash is promoted to [`ChangeAction::Apply`] so the
+///   desired manifest is re-asserted if the failed deploy overwrote it.
+/// * A stamped, prunable resource that appears only in `failed_closures` and
+///   not in `new_manifests` is added as [`ChangeAction::Orphan`].
+pub(crate) fn fold_failed_closures(
+    actions: Vec<ChangeAction>,
+    new_manifests: &[Value],
+    failed_closures: &[Vec<Value>],
+) -> Vec<ChangeAction> {
+    if failed_closures.is_empty() {
+        return actions;
+    }
+
+    let id_of = |m: &Value| {
+        let rid = ResourceId::from_value(m);
+        format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+    };
+
+    let mut uncertain: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut failed_manifest: HashMap<String, &Value> = HashMap::new();
+    for closure in failed_closures {
+        for manifest in closure {
+            let Some(hash) = manifest_identity_hash(manifest) else {
+                continue;
+            };
+            let id = id_of(manifest);
+            uncertain
+                .entry(id.clone())
+                .or_default()
+                .insert(hash.to_string());
+            failed_manifest.entry(id).or_insert(manifest);
+        }
+    }
+
+    let new_by_id: HashMap<String, &Value> = new_manifests.iter().map(|m| (id_of(m), m)).collect();
+
+    let mut out: Vec<ChangeAction> = Vec::with_capacity(actions.len());
+    let mut seen_orphans: HashSet<String> = HashSet::new();
+
+    for action in actions {
+        match action {
+            ChangeAction::Skip(rid) => {
+                let id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+                let new_hash = new_by_id.get(&id).and_then(|m| manifest_identity_hash(m));
+                let all_agree = match (uncertain.get(&id), new_hash) {
+                    (None, _) => true,
+                    (Some(hashes), Some(h)) => hashes.iter().all(|candidate| candidate == h),
+                    (Some(_), None) => true,
+                };
+                if all_agree {
+                    out.push(ChangeAction::Skip(rid));
+                } else {
+                    match new_by_id.get(&id) {
+                        Some(manifest) => out.push(ChangeAction::Apply((*manifest).clone())),
+                        None => out.push(ChangeAction::Skip(rid)),
+                    }
+                }
+            }
+            ChangeAction::Orphan(rid) => {
+                seen_orphans.insert(format!("{}/{}/{}", rid.kind, rid.namespace, rid.name));
+                out.push(ChangeAction::Orphan(rid));
+            }
+            other => out.push(other),
+        }
+    }
+
+    // Sort leftover orphans for deterministic plan output.
+    let mut leftovers: Vec<&String> = uncertain
+        .keys()
+        .filter(|id| !new_by_id.contains_key(*id) && !seen_orphans.contains(*id))
+        .collect();
+    leftovers.sort();
+    for id in leftovers {
+        let manifest = failed_manifest[id];
+        if !lifecycle_of(manifest).prunable() {
+            continue;
+        }
+        out.push(ChangeAction::Orphan(ResourceId::from_value(manifest)));
+    }
+
+    out
+}
+
+/// Add orphans from builds listed in `status.orphansKeptFrom` to `actions`.
+///
+/// Because each closure in `kept_closures` was previously superseded by a
+/// completed deploy, shared resources are already represented in the `Active`
+/// closure and do not need to be promoted from `Skip` to `Apply`. Only stamped,
+/// prunable resources absent from `new_manifests` are added as
+/// [`ChangeAction::Orphan`].
+pub(crate) fn fold_kept_closures(
+    mut actions: Vec<ChangeAction>,
+    new_manifests: &[Value],
+    kept_closures: &[Vec<Value>],
+) -> Vec<ChangeAction> {
+    let id_of = |rid: &ResourceId| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+    let new_ids: HashSet<String> = new_manifests
+        .iter()
+        .map(|m| id_of(&ResourceId::from_value(m)))
+        .collect();
+    let mut seen: HashSet<String> = actions
+        .iter()
+        .filter_map(|a| match a {
+            ChangeAction::Orphan(rid) => Some(id_of(rid)),
+            _ => None,
+        })
+        .collect();
+    let mut added: Vec<ResourceId> = Vec::new();
+    for manifest in kept_closures.iter().flatten() {
+        if manifest_identity_hash(manifest).is_none() || !lifecycle_of(manifest).prunable() {
+            continue;
+        }
+        let rid = ResourceId::from_value(manifest);
+        let id = id_of(&rid);
+        if !new_ids.contains(&id) && seen.insert(id) {
+            added.push(rid);
+        }
+    }
+    added.sort();
+    actions.extend(added.into_iter().map(ChangeAction::Orphan));
+    actions
+}
+
+/// Return `true` if `closure` contains any stamped, prunable resource (excluding
+/// `never_pruned` kinds) that is absent from `new_manifests`.
+///
+/// Used when a deploy keeps orphans so `status.orphansKeptFrom` records only
+/// builds that still have unpruned resources on the cluster.
+pub(crate) fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
+    let id_of = |m: &Value| {
+        let rid = ResourceId::from_value(m);
+        format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+    };
+    let new_ids: HashSet<String> = new_manifests.iter().map(id_of).collect();
+    closure.iter().any(|m| {
+        manifest_identity_hash(m).is_some()
+            && lifecycle_of(m).prunable()
+            && !crate::manifest::lifecycle::never_pruned(&ResourceId::from_value(m).kind)
+            && !new_ids.contains(&id_of(m))
+    })
+}
+
+/// Return the baseline manifest set combining `active` with any manifests that
+/// appear only in `failed`.
+///
+/// Provides manifests for orphans originating from failed deploys so they can
+/// be topologically sorted for pruning and rendered in plan output.
+pub(crate) fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value> {
+    let id_of = |m: &Value| {
+        let rid = ResourceId::from_value(m);
+        format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+    };
+    let mut seen: HashSet<String> = active.iter().map(id_of).collect();
+    let mut out = active.to_vec();
+    for closure in failed {
+        for manifest in closure {
+            let id = id_of(manifest);
+            if seen.insert(id) {
+                out.push(manifest.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Detect changes by comparing desired manifests against live cluster objects.
+///
+/// Used by the operator, where live cluster state is the baseline:
+/// * Desired resources absent from `live_resources` or with a differing
+///   `kix.run/identity-hash` produce [`ChangeAction::Apply`].
+/// * Desired resources whose `kix.run/identity-hash` matches the live object
+///   produce [`ChangeAction::Skip`].
+/// * Stamped, prunable live resources absent from `desired_manifests` produce
+///   [`ChangeAction::Orphan`].
+pub(crate) fn detect_changes_live(
+    desired_manifests: &[Value],
+    live_resources: &[DynamicObject],
+) -> Vec<ChangeAction> {
+    // Keep live Activation records in the index so an unchanged record produces
+    // Skip; records are excluded from the orphan set via `live_prunable` below.
+    let mut live_by_k8s_id: HashMap<String, Option<&str>> = HashMap::new();
+    let mut live_rids: HashMap<String, ResourceId> = HashMap::new();
+    let mut live_prunable: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for obj in live_resources {
+        let kind = obj
+            .data
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+            .unwrap_or("");
+        let name = obj.metadata.name.as_deref().unwrap_or("");
+        let ns = obj
+            .metadata
+            .namespace
+            .as_deref()
+            .unwrap_or(crate::manifest::types::CLUSTER_SCOPED);
+        let k8s_id = format!("{kind}/{ns}/{name}");
+
+        let hash = obj
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH));
+
+        live_by_k8s_id.insert(k8s_id.clone(), hash);
+        if lifecycle_of_live(obj).prunable() {
+            live_prunable.insert(k8s_id.clone());
+        }
+        live_rids.insert(
+            k8s_id,
+            ResourceId {
+                kind: kind.to_string(),
+                name: name.to_string(),
+                namespace: ns.to_string(),
+            },
+        );
+    }
+
+    let mut matched_live_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut actions: Vec<ChangeAction> = Vec::new();
+
+    for manifest in desired_manifests {
+        let rid = ResourceId::from_value(manifest);
+        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+
+        let desired_hash = manifest
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
+            .and_then(Value::as_str);
+
+        match (live_by_k8s_id.get(&k8s_id), desired_hash) {
+            (Some(Some(live_hash)), Some(desired_h)) if *live_hash == desired_h => {
+                matched_live_ids.insert(k8s_id);
+                actions.push(ChangeAction::Skip(rid));
+            }
+            (Some(_), _) => {
+                matched_live_ids.insert(k8s_id);
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+            (None, _) => {
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+        }
+    }
+
+    // Only stamped, prunable live resources absent from desired manifests are orphans.
+    for (k8s_id, rid) in &live_rids {
+        let stamped = live_by_k8s_id.get(k8s_id).copied().flatten().is_some();
+        if stamped && live_prunable.contains(k8s_id) && !matched_live_ids.contains(k8s_id) {
+            actions.push(ChangeAction::Orphan(rid.clone()));
+        }
+    }
+
+    actions
+}
