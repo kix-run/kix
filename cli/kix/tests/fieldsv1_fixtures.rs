@@ -1,9 +1,9 @@
-//! fieldsV1 projection + applied-hash tests against recorded fixtures.
+//! fieldsV1 projection and applied-hash tests against recorded fixtures.
 //!
 //! The fixtures in `tests/fixtures/` are real apiserver objects, recorded from
 //! a kind cluster where they were server-side applied with field manager
-//! `kix` (mimicking kix's SSA), merge-patched with kix's bookkeeping
-//! annotations, and — for `deployment-coowned.json` — co-written by foreign
+//! `kix` (mimicking Kix's SSA), merge-patched with Kix's bookkeeping
+//! annotations, and (for `deployment-coowned.json`) co-written by foreign
 //! managers: `kubectl-patch` took `containers[name=api].image` and `kubectl`
 //! took `spec.replicas` through the `/scale` subresource. Recorded with
 //! `kubectl get --show-managed-fields -o json`.
@@ -31,8 +31,6 @@ fn coowned() -> DynamicObject {
     load(include_str!("fixtures/deployment-coowned.json"))
 }
 
-// -- fieldset extraction ----------------------------------------------------
-
 #[test]
 fn kix_fieldset_found_on_all_fixtures() {
     for obj in [deployment(), secret(), coowned()] {
@@ -44,15 +42,13 @@ fn kix_fieldset_found_on_all_fixtures() {
 #[test]
 fn fieldset_reads_typed_metadata_not_raw_data() {
     let mut obj = deployment();
-    // Simulate a LIST response where raw data carries no metadata at all —
+    // Simulate a LIST response where raw data carries no metadata at all:
     // the typed metadata must be the only source consulted.
     if let Some(map) = obj.data.as_object_mut() {
         map.remove("metadata");
     }
     assert!(fieldsv1::kix_fieldset(&obj).is_some());
 }
-
-// -- projection shape ---------------------------------------------------------
 
 #[test]
 fn deployment_projection_shape() {
@@ -61,7 +57,7 @@ fn deployment_projection_shape() {
     let full = fieldsv1::merge_typed_metadata(&obj);
     let proj = fieldsv1::project(&full, &fields);
 
-    // kix-owned spec content is present.
+    // Kix-owned spec content is present.
     let containers = proj
         .pointer("/spec/template/spec/containers")
         .and_then(Value::as_array)
@@ -95,7 +91,7 @@ fn deployment_projection_shape() {
         proj.pointer("/spec/progressDeadlineSeconds").is_none(),
         "server-defaulted fields stay out"
     );
-    // The bookkeeping annotations live under kix's Update entry, not the
+    // The bookkeeping annotations live under Kix's Update entry, not the
     // Apply fieldset, so they never enter the projection.
     assert!(keys::get(&proj, keys::APPLIED_HASH).is_none());
 }
@@ -116,8 +112,6 @@ fn secret_projection_includes_data() {
         Some("Opaque")
     );
 }
-
-// -- hash stability -----------------------------------------------------------
 
 #[test]
 fn hash_is_stable_across_recompute_and_roundtrip() {
@@ -145,8 +139,6 @@ fn hash_ignores_own_stamp_annotation() {
         .insert(keys::APPLIED_HASH.to_string(), before.clone());
     assert_eq!(before, fieldsv1::applied_content_hash(&obj).unwrap());
 }
-
-// -- tamper detection ---------------------------------------------------------
 
 #[test]
 fn tamper_on_kix_owned_field_changes_hash() {
@@ -183,8 +175,8 @@ fn deleting_kix_owned_field_changes_hash() {
 #[test]
 fn tamper_on_foreign_owned_field_keeps_hash() {
     // On the co-owned fixture, `image` and `replicas` were taken by foreign
-    // managers — they left kix's fieldset, so mutating them must NOT move the
-    // kix hash (the take-over itself was the drift, already reflected in the
+    // managers. They left Kix's fieldset, so mutating them must NOT move the
+    // Kix hash (the take-over itself was the drift, already reflected in the
     // fieldset shrink at take-over time).
     let mut obj = coowned();
     let before = fieldsv1::applied_content_hash(&obj).unwrap();
@@ -201,9 +193,9 @@ fn tamper_on_foreign_owned_field_keeps_hash() {
 
 #[test]
 fn fieldset_shrink_after_takeover_changes_hash() {
-    // The take-over story end to end: same live content, but kix's fieldset
+    // The take-over story end to end: same live content, but Kix's fieldset
     // with vs without `f:image` hashes differently. Simulate the pre-takeover
-    // state by re-adding f:image to kix's entry in the co-owned fixture.
+    // state by re-adding f:image to Kix's entry in the co-owned fixture.
     let obj = coowned();
     let after_takeover = fieldsv1::applied_content_hash(&obj).unwrap();
 
@@ -223,8 +215,6 @@ fn fieldset_shrink_after_takeover_changes_hash() {
 
     assert_ne!(before_takeover, after_takeover);
 }
-
-// -- k: key matching ----------------------------------------------------------
 
 #[test]
 fn keyed_list_matching_is_by_key_not_position() {
@@ -281,8 +271,6 @@ fn keyed_list_matching_is_by_key_not_position() {
     assert_eq!(baseline_containers[1], projected[0]);
 }
 
-// -- drift verdicts on fixtures -------------------------------------------------
-
 #[test]
 fn check_object_in_sync_when_stamp_matches() {
     let mut obj = deployment();
@@ -310,7 +298,7 @@ fn check_object_unstamped_without_annotation() {
     assert_eq!(drift::check_object(&obj).verdict, DriftVerdict::Unstamped);
 }
 
-/// An object a Kix from before the domain move stamped still reads as
+/// Verify that an object stamped by Kix under a retired domain still reads as
 /// stamped, so drift reports it and gc does not call it unmanaged.
 #[test]
 fn check_object_reads_a_stamp_under_a_retired_domain() {
@@ -336,7 +324,7 @@ fn check_object_no_fieldset_when_managed_fields_stripped() {
 
 #[test]
 fn check_object_drifted_with_attribution() {
-    // Stamp the co-owned fixture as if kix had applied it BEFORE the foreign
+    // Stamp the co-owned fixture as if Kix had applied it BEFORE the foreign
     // take-overs (fieldset still holding image), then check the recorded
     // post-takeover object.
     let mut pre_takeover = coowned();
@@ -375,7 +363,7 @@ fn check_object_drifted_with_attribution() {
     // kubectl owns spec.replicas, so the write is recorded, not inferred.
     assert_eq!(unrecorded_scale, None);
 
-    // kubectl-patch took the image — attributed with a field path.
+    // kubectl-patch took the image: attributed with a field path.
     let patcher = foreign
         .iter()
         .find(|o| o.manager == "kubectl-patch")
@@ -389,7 +377,7 @@ fn check_object_drifted_with_attribution() {
     );
     assert!(patcher.time.is_some());
 
-    // kubectl scale went through the /scale subresource — must stay visible.
+    // kubectl scale went through the /scale subresource and must stay visible.
     let scaler = foreign
         .iter()
         .find(|o| o.subresource.as_deref() == Some("scale"))
@@ -399,7 +387,7 @@ fn check_object_drifted_with_attribution() {
     // The apiserver records a /scale entry without a time.
     assert_eq!(scaler.time, None);
 
-    // Status writers and kix itself are never attributed.
+    // Status writers and Kix itself are never attributed.
     assert!(
         foreign
             .iter()
@@ -408,9 +396,7 @@ fn check_object_drifted_with_attribution() {
     assert!(foreign.iter().all(|o| o.manager != "kix"));
 }
 
-// -- /scale writes Kubernetes records no owner for -------------------------
-//
-// These objects are derived from the recorded `deployment.json` (kix owns
+// These objects are derived from the recorded `deployment.json` (Kix owns
 // `spec.replicas` = 2) by the changes the apiserver's ScaleHandler makes
 // (k8s.io/apimachinery v0.36.1, util/managedfields/scalehandler.go). Scaling
 // to 0 removes `replicas` from the Scale object, so no writer gains it and
@@ -419,8 +405,8 @@ fn check_object_drifted_with_attribution() {
 // object with no managedFields (internal/skipnonapplied.go). Both leave
 // `spec.replicas` with no owner and add no entry.
 
-/// `deployment.json` stamped as Kix applied it, then scaled through /scale
-/// to `live` replicas without a recorded owner.
+/// Return `deployment.json` stamped as Kix applied it, then scaled through
+/// `/scale` to `live` replicas without a recorded owner.
 fn scaled_without_owner(live: i64) -> DynamicObject {
     let mut obj = deployment();
     let stamp = fieldsv1::applied_content_hash(&obj).unwrap();

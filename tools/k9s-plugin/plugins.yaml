@@ -1,6 +1,5 @@
 plugins:
-  # ─── Package Context ───────────────────────────────────────────────
-  # Show which kix package owns the selected resource, its identity hash,
+  # Show which Kix package owns the selected resource, its identity hash,
   # and dependency annotations.
   kix-package:
     shortCut: Shift-P
@@ -26,8 +25,7 @@ plugins:
         printf '\nPress any key to close...\n'
         read -n1 -s -r
 
-  # ─── Package Siblings ──────────────────────────────────────────────
-  # List all resources belonging to the same kix package.
+  # List all resources belonging to the same Kix package.
   kix-siblings:
     shortCut: Shift-I
     description: "[kix] Package siblings"
@@ -68,7 +66,6 @@ plugins:
         printf '\nPress any key to close...\n'
         read -n1 -s -r
 
-  # ─── DAG Neighbors ─────────────────────────────────────────────────
   # Show direct dependencies and dependents of the selected resource.
   kix-dag:
     shortCut: Shift-D
@@ -89,7 +86,7 @@ plugins:
         fi
         printf '\n  %s/%s  (hash: %s)\n' "$RESOURCE_NAME" "$NAME" "${HASH:0:12}..."
 
-        # Build lookup of all kix resources: hash → Kind/ns/name, and their deps
+        # Build lookup of all Kix resources: hash -> Kind/ns/name, and their deps
         LOOKUP=$(kubectl get deploy,sts,ds,svc,cm,secret,sa,role,rolebinding,clusterrole,clusterrolebinding,networkpolicy,pvc,ingress,job,cronjob \
           -A -l "app.kubernetes.io/managed-by=kix" -o json 2>/dev/null | \
           jq -c '.items[] | {
@@ -125,8 +122,7 @@ plugins:
         printf '\nPress any key to close...\n'
         read -n1 -s -r
 
-  # ─── Blast Radius ──────────────────────────────────────────────────
-  # Show all transitive dependents — everything that would break if this
+  # Show all transitive dependents: everything that would break if this
   # resource disappeared.
   kix-blast:
     shortCut: Shift-B

@@ -1,11 +1,11 @@
-//! End-to-end integration test for the kix operator.
+//! End-to-end integration test for the Kix operator.
 //!
-//! Requires: `kind`, `kubectl`, `nix` on PATH.
+//! Requires: `kind`, `kubectl`, and `nix` on PATH.
 //! Creates a temporary kind cluster, starts the operator as a subprocess,
 //! creates Activation CRs, and verifies reconciliation and GC.
 //!
 //! Run with: cargo test --test operator_integration_test -- --ignored
-//! (ignored by default because it requires kind + nix + is slow)
+//! (ignored by default because it requires kind and nix, and is slow)
 
 use kix::manifest::keys;
 use std::path::{Path, PathBuf};
@@ -127,7 +127,7 @@ fn kubeconfig_path() -> String {
     })
 }
 
-/// Apply the kix CRDs to the cluster.
+/// Apply the Kix CRDs to the cluster.
 fn apply_crds(context: &str) {
     let activation_crd = r#"
 apiVersion: apiextensions.k8s.io/v1
@@ -263,9 +263,7 @@ fn operator_reconcile_and_gc() {
         return;
     }
 
-    // =========================================================================
-    // Setup: build activation, create kind cluster, apply CRDs
-    // =========================================================================
+    // Setup: build activation, create kind cluster, and apply CRDs
     eprintln!("\n=== Setup: Building activation ===");
     let result_dir = build_activation();
     eprintln!("Activation built at: {}", result_dir.display());
@@ -294,9 +292,7 @@ fn operator_reconcile_and_gc() {
     eprintln!("\n=== Setup: Applying CRDs ===");
     apply_crds(KUBE_CTX);
 
-    // =========================================================================
-    // Phase 1: Start operator, create Activation, verify resources
-    // =========================================================================
+    // Phase 1: Start operator, create Activation, and verify resources
     eprintln!("\n=== Phase 1: Start operator and create Activation ===");
 
     let operator = start_operator(KUBE_CTX);
@@ -309,7 +305,7 @@ fn operator_reconcile_and_gc() {
     create_activation(KUBE_CTX, "test-activation", &result_dir, KIX_CLUSTER);
     eprintln!("Activation CR created");
 
-    // Wait for operator to reconcile — look for managed resources in the echo namespace
+    // Wait for operator to reconcile: look for managed resources in the echo namespace
     let resources_created = wait_until(
         "resources to be created by operator",
         Duration::from_secs(120),
@@ -355,9 +351,7 @@ fn operator_reconcile_and_gc() {
         "Activation CR should exist"
     );
 
-    // =========================================================================
-    // Phase 2: Delete Activation, verify GC
-    // =========================================================================
+    // Phase 2: Delete Activation and verify GC
     eprintln!("\n=== Phase 2: Delete Activation, verify GC ===");
 
     let delete_result = kubectl(
@@ -420,7 +414,7 @@ fn operator_reconcile_and_gc() {
         eprintln!("GC completed — all managed resources cleaned up");
     } else {
         eprintln!("GC may still be in progress or some resources remain");
-        // Don't hard-fail — GC timing can be flaky in CI
+        // Don't hard-fail: GC timing can be flaky in CI
     }
 
     // Verify the Activation CR itself is deleted

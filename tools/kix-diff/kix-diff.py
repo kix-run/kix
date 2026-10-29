@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Compare two kix activations and show what changed.
+"""Compare two Kix activations and show what changed.
 
 Sections:
-  1. Package changes (nom-style) — added, removed, version changes
-  2. Edge changes — dependency graph diff (new/removed/moved edges)
+  1. Package changes (nom-style): added, removed, and version changes
+  2. Edge changes: dependency graph diff (new, removed, and moved edges)
   3. Manifest diffs grouped by package
 
 Usage: kix-diff.py <old-result> <new-result>
@@ -19,9 +19,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"
 
 from lib.kix_model import KixModel, read_store_json  # noqa: E402
 from parity.structural_diff import structural_diff, format_diffs  # noqa: E402
-
-
-# ── ANSI helpers ──────────────────────────────────────────────────────
 
 _COLOR = sys.stdout.isatty()
 
@@ -58,14 +55,11 @@ def _magenta(t):
     return _c("35", t)
 
 
-# ── Package diff ──────────────────────────────────────────────────────
-
-
 def diff_packages(old_model, new_model):
     """Compare package sets. Returns (added, removed, changed, unchanged) lists.
 
     Each entry is a dict with keys: key, name, ns, old_version, new_version,
-    old_hash, new_hash, resource_count_delta.
+    old_hash, new_hash, and resource_count_delta.
     """
     old_pkgs = old_model.packages_by_key()
     new_pkgs = new_model.packages_by_key()
@@ -170,9 +164,6 @@ def print_package_summary(added, removed, changed, unchanged):
     if unchanged:
         print(_dim(f"\n  {len(unchanged)} packages unchanged"))
     print()
-
-
-# ── Edge diff ─────────────────────────────────────────────────────────
 
 
 def _edge_set(model):
@@ -280,11 +271,8 @@ def print_edge_changes(added, removed, moved, new_detail):
     print()
 
 
-# ── Manifest diffs grouped by package ─────────────────────────────────
-
-
 def _resource_key(res):
-    """Stable key for a resource: Kind/name."""
+    """Return a stable key for a resource: Kind/name."""
     return f"{res.get('kind', '?')}/{res.get('metadata', {}).get('name', '?')}"
 
 
@@ -373,9 +361,6 @@ def print_manifest_diffs(manifest_diffs, full_diff=False):
         print()
 
 
-# ── Stateful resource warnings ────────────────────────────────────────
-
-
 def warn_stateful_changes(_old_model, new_model, changed_keys):
     """Warn about changes to stateful packages (PVCs, databases, etc.)."""
     warnings = []
@@ -401,9 +386,6 @@ def warn_stateful_changes(_old_model, new_model, changed_keys):
         for w in warnings:
             print(f"  {_yellow('⚠')} {w} — stateful resource changed, review carefully")
         print()
-
-
-# ── Main ──────────────────────────────────────────────────────────────
 
 
 def main():

@@ -1,4 +1,4 @@
-# Audit for v2_discussions/83 Phase C.
+# Audit scope-time vs instance-level network policy edge extraction.
 #
 # Compares, per instance, per cluster:
 #   A = inst._networkEdges           (processInstance, post-fixpoint, sees allPartResources ++ depResources)
@@ -6,8 +6,8 @@
 #
 # An edge in A but not in B = an edge that today's cluster-level
 # generateIngressPolicies catches but scope-time extraction would miss.
-# Phase C deletes generateIngressPolicies, so every such edge would be a
-# silent netpol regression.
+# Deleting generateIngressPolicies makes every such edge a silent
+# netpol regression.
 #
 # Empty `missingFromScope` across every instance in every fixture cluster
 # is the green light to delete generateIngressPolicies.
@@ -42,7 +42,7 @@ let
 
   # Walk an instance's raw parts attrset collecting all workload resources.
   # `raw` is view.nix's pass-through of the package's `parts`, which may
-  # nest arbitrarily — so recurse on attrs until we hit a resource.
+  # nest arbitrarily, so recurse on attrs until we hit a resource.
   collectWorkloads =
     root:
     let
@@ -59,9 +59,9 @@ let
     in
     go root;
 
-  # Canonical edge key — must be computable from both sides identically.
+  # Build a canonical edge key that is computable from both sides identically.
   # Shape matches the records built in netpol.nix's extractServiceEdges*
-  # (sourceSelector, sourceNamespace, service, targetSelector, targetNamespace, ports).
+  # (sourceSelector, sourceNamespace, service, targetSelector, targetNamespace, and ports).
   edgeKey =
     e:
     let

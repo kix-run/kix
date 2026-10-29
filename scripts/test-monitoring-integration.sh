@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-monitoring-integration.sh — Deploy native monitoring stack to kind and smoke test.
+# test-monitoring-integration.sh: deploy native monitoring stack to kind and smoke test.
 #
 # Creates a kind cluster, applies the native monitoring manifests, waits for
 # all pods to be ready, then verifies:
@@ -75,13 +75,9 @@ wait_for() {
     return 1
 }
 
-# ── Build manifests ──────────────────────────────────────────────────────
-
 echo -e "${BLUE}Building native monitoring manifests...${NC}"
 nix build ".#cluster-monitoring-native" --extra-experimental-features pipe-operators -o "$NATIVE_OUT" 2>/dev/null
 echo
-
-# ── Create kind cluster ──────────────────────────────────────────────────
 
 echo -e "${BLUE}Creating kind cluster '$CLUSTER_NAME'...${NC}"
 kind delete cluster --name "$CLUSTER_NAME" 2>/dev/null || true
@@ -91,16 +87,14 @@ echo
 # Set kubectl context
 kubectl cluster-info --context "kind-$CLUSTER_NAME" &>/dev/null
 
-# ── Apply manifests ──────────────────────────────────────────────────────
-
 echo -e "${BLUE}Applying manifests...${NC}"
 
-# Apply cluster-scoped resources first (CRDs, namespaces, ClusterRoles)
-# Skip kix-internal resources (Activation, PackageInstance CRDs) that aren't real K8s resources
+# Apply cluster-scoped resources first (CRDs, namespaces, and ClusterRoles)
+# Skip Kix-internal resources (Activation and PackageInstance CRDs) that aren't real K8s resources
 echo "  Applying cluster-scoped resources..."
 for f in "$NATIVE_OUT/_cluster/"*.yaml; do
     base=$(basename "$f")
-    # Skip kix-internal resources
+    # Skip Kix-internal resources
     case "$base" in
         *activation*|*packageinstance*) continue ;;
     esac
@@ -112,7 +106,7 @@ echo
 wait_for "CRDs to be established" \
     "kubectl get crd prometheuses.monitoring.coreos.com -o jsonpath='{.status.conditions[?(@.type==\"Established\")].status}' | grep -q True"
 
-# Apply namespace-scoped resources (skip kix-internal PackageInstance resources)
+# Apply namespace-scoped resources (skip Kix-internal PackageInstance resources)
 echo "  Applying monitoring-system resources..."
 for f in "$NATIVE_OUT/monitoring-system/"*.yaml; do
     base=$(basename "$f")
@@ -122,8 +116,6 @@ for f in "$NATIVE_OUT/monitoring-system/"*.yaml; do
     kubectl apply -f "$f" --server-side 2>&1 | grep -v '^$' || true
 done
 echo
-
-# ── Wait for pods ────────────────────────────────────────────────────────
 
 echo -e "${BLUE}Waiting for pods to be ready...${NC}"
 
@@ -147,12 +139,8 @@ wait_for "all pods ready" \
     300
 echo
 
-# ── Checks ───────────────────────────────────────────────────────────────
-
 echo -e "${BLUE}Running checks...${NC}"
 echo
-
-# ── 1. Pod status ────────────────────────────────────────────────────────
 
 echo -e "${BLUE}1. Pod status${NC}"
 kubectl -n "$NS" get pods -o wide --no-headers 2>/dev/null | while read -r line; do
@@ -184,8 +172,6 @@ else
 fi
 echo
 
-# ── 2. CRD registration ─────────────────────────────────────────────────
-
 echo -e "${BLUE}2. CRDs registered${NC}"
 for crd in prometheuses.monitoring.coreos.com alertmanagers.monitoring.coreos.com servicemonitors.monitoring.coreos.com podmonitors.monitoring.coreos.com prometheusrules.monitoring.coreos.com; do
     if kubectl get crd "$crd" &>/dev/null; then
@@ -195,8 +181,6 @@ for crd in prometheuses.monitoring.coreos.com alertmanagers.monitoring.coreos.co
     fi
 done
 echo
-
-# ── 3. Prometheus CR reconciled ──────────────────────────────────────────
 
 echo -e "${BLUE}3. Prometheus CR status${NC}"
 prom_available=$(kubectl -n "$NS" get prometheus prometheus-server -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "Unknown")
@@ -213,8 +197,6 @@ else
     check_warn "Prometheus available replicas: $prom_replicas"
 fi
 echo
-
-# ── 4. Prometheus targets ────────────────────────────────────────────────
 
 echo -e "${BLUE}4. Prometheus targets${NC}"
 
@@ -252,8 +234,6 @@ else
 fi
 echo
 
-# ── 5. Alertmanager status ───────────────────────────────────────────────
-
 echo -e "${BLUE}5. Alertmanager status${NC}"
 
 am_pod=$(kubectl -n "$NS" get pods -l "app.kubernetes.io/name=alertmanager,app.kubernetes.io/instance=alertmanager" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
@@ -277,8 +257,6 @@ else
 fi
 echo
 
-# ── 6. ServiceMonitors and PrometheusRules ───────────────────────────────
-
 echo -e "${BLUE}6. ServiceMonitors & PrometheusRules in cluster${NC}"
 
 smon_count=$(kubectl -n "$NS" get servicemonitors --no-headers 2>/dev/null | wc -l)
@@ -298,8 +276,6 @@ else
 fi
 echo
 
-# ── 7. Grafana ───────────────────────────────────────────────────────────
-
 echo -e "${BLUE}7. Grafana${NC}"
 grafana_pod=$(kubectl -n "$NS" get pods -l "app.kubernetes.io/name=grafana" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 if [ -n "$grafana_pod" ]; then
@@ -313,8 +289,6 @@ else
     check_fail "No Grafana pod found"
 fi
 echo
-
-# ── Summary ──────────────────────────────────────────────────────────────
 
 echo -e "${BLUE}Summary${NC}"
 echo -e "  ${GREEN}Passed: $pass${NC}"

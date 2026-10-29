@@ -60,7 +60,7 @@ def _load_dir(root: Path) -> dict[tuple, dict]:
                     f"warning: skipping malformed doc in {path}: {str(e)[:80]}",
                     err=True,
                 )
-                # Re-init generator past the failure point — yaml-py
+                # Re-init generator past the failure point: yaml-py
                 # can't recover so we abort the rest of this file.
                 break
             docs.append(doc)
@@ -162,8 +162,8 @@ def main(
 ) -> None:
     """Diff two directories of K8s manifests at the resource level.
 
-    LEFT_DIR is conventionally the kix build output (./result). One or more
-    RIGHT_DIRS are merged into a single right-side index — pass both
+    LEFT_DIR is conventionally the Kix build output (./result). One or more
+    RIGHT_DIRS are merged into a single right-side index: pass both
     `nw1/migration/k8s/` and `nw1/migration/helm-rendered/` to compare
     against the full Ansible deployment. Resources are matched on
     (apiVersion, kind, namespace or "_cluster", name).

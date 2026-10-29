@@ -33,7 +33,9 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 PKG = REPO / "kix" / "packages" / "clickhouse-operator"
 SCHEMAS = PKG / "schemas"
 CRD_DIR = "deploy/helm/clickhouse-operator/crds"
-RAW = "https://raw.githubusercontent.com/Altinity/clickhouse-operator/release-{version}/"
+RAW = (
+    "https://raw.githubusercontent.com/Altinity/clickhouse-operator/release-{version}/"
+)
 
 
 def pinned_version() -> str:

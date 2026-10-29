@@ -1,7 +1,7 @@
-# kix framework flake — exports lib.mkFlake and lib.forPkgs.
+# Kix framework flake: exports lib.mkFlake and lib.forPkgs.
 #
 # No nixpkgs dependency: consumers provide their own via inputs.
-# This flake is pure framework — no packages or clusters.
+# This flake is pure framework, with no packages or clusters.
 
 {
   description = "kix — Nix-based Kubernetes framework";
@@ -14,7 +14,7 @@
         # See kix/lib/mkFlake.nix for full documentation.
         mkFlake = import ./lib/mkFlake.nix;
 
-        # Direct API for external flake consumers who manage their own flake.nix.
+        # Build the Kix library and package set for an explicit `pkgs` and `lib`.
         forPkgs =
           { pkgs, lib }:
           let

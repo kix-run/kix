@@ -6,11 +6,11 @@
 """
 Dump live Kubernetes cluster resources into a normalized YAML directory.
 
-Output uses the same file naming convention as kix ({namespace}--{name}-{kind}.yaml)
+Output uses the same file naming convention as Kix ({namespace}--{name}-{kind}.yaml)
 so it can be directly compared with `kix-diff.py` or even plain `diff -r`.
 
-Secret resources are included but their data/stringData fields are stripped
-during normalization — only metadata and type are preserved for comparison.
+Secret resources are included, but their data/stringData fields are stripped
+during normalization: only metadata and type are preserved for comparison.
 """
 
 import json
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parity.normalize import normalize_cluster
 
 
-# Resource types to always skip — these are ephemeral, derived, or runtime-only
+# Resource types to always skip: these are ephemeral, derived, or runtime-only
 # and not useful for comparing declared vs actual state.
 SKIP_RESOURCES = {
     # Ephemeral / runtime state
@@ -95,9 +95,6 @@ SKIP_RESOURCES = {
 }
 
 
-# --- kubectl helpers ---
-
-
 def kubectl(args: list[str], context: str | None = None) -> str:
     """Run a kubectl command and return stdout."""
     cmd = ["kubectl"]
@@ -154,11 +151,8 @@ def get_api_resources(context: str | None = None) -> list[tuple[str, bool]]:
     return results
 
 
-# --- Filename helpers ---
-
-
 def parse_kix_filename(filename: str) -> tuple[str, str, str] | None:
-    """Parse a kix filename into (namespace, name, kind).
+    """Parse a Kix filename into (namespace, name, kind).
 
     Format: {namespace}--{name}-{kind}.yaml
     The kind is the last hyphen-separated segment before .yaml.
@@ -175,23 +169,20 @@ def parse_kix_filename(filename: str) -> tuple[str, str, str] | None:
 
 
 def make_filepath(ns: str, name: str, kind: str) -> Path:
-    """Build a kix-convention file path: {namespace}/{name}-{kind}.yaml"""
+    """Build a Kix-convention file path: {namespace}/{name}-{kind}.yaml"""
     kind_lower = kind.lower()
     ns_dir = ns if ns else "_cluster"
     return Path(ns_dir) / f"{name}-{kind_lower}.yaml"
-
-
-# --- Dump modes ---
 
 
 def dump_match_kix(
     kix_dir: Path,
     context: str | None,
 ) -> tuple[list[dict], list[str]]:
-    """Fetch exactly the resources that exist in a kix output directory.
+    """Fetch exactly the resources that exist in a Kix output directory.
 
     Uses `kubectl get <kind> <name> -n <ns>` per resource. The kind from the
-    kix filename (e.g. "deployment") works directly as a kubectl resource type.
+    Kix filename (e.g. "deployment") works directly as a kubectl resource type.
     """
     # Group targets by (kind, namespace) for batching
     targets: dict[tuple[str, str], list[str]] = {}  # (kind, ns) -> [name, ...]
@@ -291,9 +282,6 @@ def dump_all(
     return resources, skipped
 
 
-# --- Main ---
-
-
 @click.command()
 @click.argument("output_dir", type=click.Path())
 @click.option("--context", default=None, help="Kubernetes context to use")
@@ -324,7 +312,7 @@ def main(
     """Dump live cluster resources into a normalized YAML directory.
 
     OUTPUT_DIR is the directory to write normalized YAML files to.
-    Secrets are included but their data is stripped — only metadata and type are kept.
+    Secrets are included, but their data is stripped: only metadata and type are kept.
     """
     out = Path(output_dir)
 

@@ -1,7 +1,7 @@
 # Pre-commit hooks for kixpkgs
 # Install: lefthook install
 #
-# Rust hooks adapted from lithus monorepo pattern (no mise — uses cargo directly)
+# Rust hooks adapted from lithus monorepo pattern (no mise: uses cargo directly)
 
 # A hook that cannot find lefthook fails the commit or push. Without this,
 # the script `lefthook install` writes prints "Can't find lefthook in PATH"
@@ -67,7 +67,7 @@ pre-commit:
     - merge
     - rebase
   commands:
-    # rustfmt does no compilation, so it does not need devenv — running it
+    # rustfmt does no compilation, so it does not need devenv: running it
     # on the host keeps this well under a second.
     format-rust:
       glob: "cli/**/*.rs"
@@ -79,9 +79,9 @@ pre-commit:
     # This is affordable only because of two things, and it goes back to
     # being unusable if either regresses:
     #   1. Every package in `packages` must actually build. Nix does not
-    #      cache failed builds, so one broken package (this was `wrangler`
-    #      on aarch64-darwin) makes EVERY shell entry re-attempt it — 60-105s
-    #      each, twice per commit, and the hook then fails without ever
+    #      cache failed builds, so one broken package (for example, `wrangler`
+    #      on aarch64-darwin) makes EVERY shell entry re-attempt it (60-105s
+    #      each, twice per commit), and the hook then fails without ever
     #      running clippy.
     #   2. devenv.nix sets CARGO_TARGET_DIR to its own directory. Sharing
     #      cli/target/ with a host rustup toolchain makes the two compiler
@@ -89,8 +89,8 @@ pre-commit:
     #      cold build.
     # With both holding: ~6s shell entry + ~3s warm clippy.
     #
-    # Nothing else covers this — the only CI workflow (pages.yml) builds the
-    # site and never lints — so it must not simply be dropped.
+    # Nothing else covers this: the only CI workflow (pages.yml) builds the
+    # site and never lints, so it must not simply be dropped.
     clippy-rust:
       glob: "cli/**/*.rs"
       run: devenv shell -- bash -c 'cd cli && cargo clippy --workspace --all-targets -- -D warnings'
@@ -109,8 +109,8 @@ pre-commit:
       # deadnix below and the lint workflow do.
       run: nix shell --inputs-from . nixpkgs#nixfmt -c nixfmt --check {staged_files}
 
-    # Unused bindings. Attrset pattern names are exempt: kix reads them
-    # with builtins.functionArgs to resolve a package's dependencies.
+    # Check for unused bindings. Attrset pattern names are exempt: Kix reads
+    # them with builtins.functionArgs to resolve a package's dependencies.
     # `--inputs-from .` takes deadnix from this flake's locked nixpkgs, not
     # the machine's registry. deadnix before 1.3 cannot parse the `|>` pipe
     # operator: it prints a parse error and passes the file unchecked.

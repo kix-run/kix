@@ -1,4 +1,4 @@
-//! Consolidated CLI smoke tests — one test per command to verify basic functionality.
+//! Consolidated CLI smoke tests: one test per command to verify basic functionality.
 //! These invoke the real binary with `assert_cmd`, so they require `nix`.
 
 use assert_cmd::Command;
@@ -65,8 +65,9 @@ fn inspect_text() {
         .stdout(predicate::str::contains("Cluster: example"));
 }
 
-/// `deploy --dry-run` is `kix plan`. With `--current-activation` it compares
-/// two builds offline, says so, and exits 2 because the plan has changes.
+/// Verify that `deploy --dry-run` (equivalent to `kix plan`) with
+/// `--current-activation` compares two builds offline and exits 2 when the
+/// plan has changes.
 #[test]
 fn deploy_dry_run() {
     kix()
@@ -83,8 +84,8 @@ fn deploy_dry_run() {
         .stdout(predicate::str::contains("Two builds compared"));
 }
 
-/// `kix bundle` reads back what it writes, so a build the bundle reader
-/// would refuse fails here.
+/// Verify that `kix bundle` reads back what it writes, so a build the bundle
+/// reader would refuse fails immediately.
 #[test]
 fn bundle_reads_back() {
     let dir = tempfile::tempdir().unwrap();
@@ -101,11 +102,11 @@ fn bundle_reads_back() {
         .success();
 }
 
-/// Every cluster `kix list clusters` names makes a bundle that reads back
-/// as the build it was written from: `kix bundle` refuses one whose graph
-/// differs from the result directory's. Builds every test cluster, about
-/// ten minutes, so it runs only when asked: `cargo test -p kix-cli --test
-/// commands_test -- --ignored every_test_cluster_bundles`.
+/// Verify that every cluster `kix list clusters` names produces a bundle that
+/// reads back as the build it was written from (`kix bundle` refuses a bundle
+/// whose graph differs from the result directory's). Builds every test
+/// cluster (about ten minutes), so it runs only when asked: `cargo test -p
+/// kix-cli --test commands_test -- --ignored every_test_cluster_bundles`.
 #[test]
 #[ignore]
 fn every_test_cluster_bundles() {
@@ -131,8 +132,8 @@ fn every_test_cluster_bundles() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
-/// An instance that names one resource under two parts still makes a
-/// bundle `kix bundle` reads back.
+/// Verify that an instance naming one resource under two parts still produces
+/// a bundle `kix bundle` reads back.
 #[test]
 fn bundle_reads_back_an_aliased_resource() {
     let dir = tempfile::tempdir().unwrap();
@@ -144,9 +145,9 @@ fn bundle_reads_back_an_aliased_resource() {
         .success();
 }
 
-/// A platform that hosts a consumer, and the consumer, which renders no
-/// Namespace for the namespaces the platform creates, each make a bundle
-/// `kix bundle` reads back.
+/// Verify that both a platform hosting a consumer and the consumer itself
+/// (which renders no Namespace for namespaces the platform creates) produce
+/// bundles `kix bundle` reads back.
 #[test]
 fn bundle_reads_back_a_platform_and_its_consumer() {
     let dir = tempfile::tempdir().unwrap();
