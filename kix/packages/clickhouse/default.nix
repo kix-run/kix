@@ -1,4 +1,4 @@
-# ClickHouse, single node (v2_discussions/148).
+# ClickHouse, single node.
 #
 # One of two implementations behind the `clickhouse` alias. This one is a
 # StatefulSet Kix renders in full and it stays at one replica for good; a
@@ -10,7 +10,7 @@
 # replicated ClickHouse differ in the DDL they accept (`MergeTree` against
 # `ReplicatedMergeTree`, plain DDL against `ON CLUSTER`), so this package
 # runs embedded Keeper and defines a one-shard, one-replica cluster with the
-# `{cluster}`, `{shard}` and `{replica}` macros. Consumers always write
+# `{cluster}`, `{shard}`, and `{replica}` macros. Consumers always write
 # replicated DDL (`ON CLUSTER '{cluster}'`, `ReplicatedMergeTree`) and it
 # works here exactly as it does on a real cluster.
 #
@@ -98,21 +98,20 @@ let
 
   contract = import ./contract.nix { inherit lib; };
 
-  # JSON is YAML, and ClickHouse reads *.yaml fragments natively. XML
-  # attributes are spelled "@name" in its YAML dialect.
+  # Render each fragment as `<name>.yaml`. JSON is YAML, and ClickHouse
+  # reads *.yaml fragments natively; XML attributes are spelled "@name" in
+  # its YAML dialect.
   renderFragments = lib.mapAttrs' (
     fragment: value: lib.nameValuePair "${fragment}.yaml" (builtins.toJSON value)
   );
 
-  # The cluster's fragments over the package's own. A null anywhere in the
-  # cluster's side deletes that key, or the whole fragment, which is the
-  # only way to take something out of a built-in.
+  # Merge overrides over builtin, deleting keys or fragments set to null.
   mergeFragments =
     builtin: overrides:
     lib.filterAttrsRecursive (_: v: v != null) (lib.recursiveUpdate builtin overrides);
 
-  # A null `prometheus` fragment, or a null `prometheus.prometheus` key in
-  # it, removes the metrics endpoint, so nothing is left to scrape or alert on.
+  # Return true unless a null `prometheus` fragment or a null
+  # `prometheus.prometheus` key removes the metrics endpoint.
   metricsEndpointOn =
     serverConfig:
     let
@@ -177,7 +176,7 @@ in
       type = lib.types.attrsOf lib.types.anything;
       default = { };
       description = ''
-        Users, profiles and quotas fragments. Each attribute becomes
+        Users, profiles, and quotas fragments. Each attribute becomes
         users.d/<name>.yaml, merged over the package's own (default-user).
         Null removes, as in serverConfig: to authenticate the default user
         another way, null out `default-user.users.default.password` too, or

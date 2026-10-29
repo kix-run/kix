@@ -1,5 +1,5 @@
 # victoria-metrics-agent: HA scrape agent (VMAgent CR) feeding a
-# victoria-metrics-cluster (v2_discussions/133 §3.3).
+# victoria-metrics-cluster.
 #
 # Two identical replicas scrape everything and both remote-write to
 # vminsert; the cluster's dedup (calibrated to the same scrapeInterval,
@@ -60,13 +60,12 @@ in
     k8s.minVersion = "1.25";
   };
 
-  # Dedup CORRECTNESS rides on scrapeInterval equality with the cluster
-  # (doc 133 §5): -dedup.minScrapeInterval on vmselect/vmstorage is
-  # calibrated to the cluster's value, so a differing agent override
-  # double-counts samples. Surfaced through the structured diagnostics
-  # channel so it lands in kix's warning output, not a bare eval trace.
-  # It is a warning rather than an error so that a trial can scrape at
-  # another interval.
+  # Dedup correctness rides on scrapeInterval equality with the cluster:
+  # -dedup.minScrapeInterval on vmselect/vmstorage is calibrated to the
+  # cluster's value, so a differing agent override double-counts samples.
+  # Surfaced through the structured diagnostics channel so it lands in
+  # Kix's warning output, not a bare eval trace. It is a warning rather
+  # than an error so that a trial can scrape at another interval.
   warnings =
     { config, deps, ... }:
     lib.optional
@@ -95,8 +94,7 @@ in
       };
       description = ''
         Identical-replica HA pair; the cluster's dedup collapses the
-        double ingest. Defaults from the cluster's availability level
-        (v2_discussions/145).
+        double ingest. Defaults from the cluster's availability level.
       '';
     };
     scrapeInterval = lib.mkOption {
@@ -183,20 +181,18 @@ in
           replicaCount = config.replicaCount;
           image = crImage config.image;
           remoteWrite = [ { url = vmCluster.out.remoteWriteUrl; } ];
-          # The cluster's dedup is calibrated to ITS scrapeInterval; an
-          # agent override that differs double-counts samples (doc 133 §5).
-          # Drift is flagged through the package-level `warnings` channel
-          # below, not inline.
+          # The cluster's dedup is calibrated to its scrapeInterval; an
+          # agent override that differs double-counts samples. Drift is
+          # flagged through the package-level `warnings` channel above.
           scrapeInterval =
             if config.scrapeInterval == null then vmCluster.out.scrapeInterval else config.scrapeInterval;
           selectAllByDefault = config.selectAllByDefault;
           podDisruptionBudget = {
             maxUnavailable = 1;
           };
-          # Operand pods are rendered by the operator, so kix's derived
-          # spread never sees them: the CR carries the rule, but the
-          # failure-domain keys come from the cluster (v2_discussions/143
-          # §2), never a literal.
+          # Operand pods are rendered by the operator, so Kix's derived
+          # spread never sees them: the CR carries the rule, and the
+          # failure-domain keys come from the cluster, never a literal.
           affinity = {
             podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
               weight = 100;
@@ -237,7 +233,7 @@ in
           resource = self.vmAgent;
           requires = lib.optional (self.prometheusRules != null) self.prometheusRules;
           out = {
-            # Operand pods are operator-created; image not in any kix manifest.
+            # Operand pods are operator-created; image not in any Kix manifest.
             extraImages = [ (kix.image.ref config.image) ];
           };
         };
@@ -322,7 +318,7 @@ in
 
     # The agent's samples arrive at the cluster and nothing on the
     # scrape-and-write path reports errors (see kix.healthCheck). The
-    # script is a file so it can be read, linted and run on its own.
+    # script is a file so it can be read, linted, and run on its own.
     # region:healthCheckBuildEntry
     (kix.healthCheck {
       env =

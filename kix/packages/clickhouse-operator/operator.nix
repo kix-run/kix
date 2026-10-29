@@ -2,7 +2,7 @@
 #
 # The pod runs two containers from two images of the same release. The
 # operator reconciles ClickHouseInstallations and ClickHouseKeeperInstallations
-# into StatefulSets, Services, ConfigMaps and PodDisruptionBudgets. The
+# into StatefulSets, Services, ConfigMaps, and PodDisruptionBudgets. The
 # metrics exporter answers one scrape with the ClickHouse metrics of every
 # installation, which it collects by querying each server. Both read the same
 # configuration tree under /etc/clickhouse-operator, so both get the same
@@ -37,16 +37,13 @@ let
 
   configRoot = "/etc/clickhouse-operator";
 
-  # The cluster's side over the package's own. A null anywhere in the
-  # cluster's side deletes that key, which is the only way to take something
-  # out of a built-in.
+  # Merge overrides over builtin, deleting keys set to null.
   mergeOver =
     builtin: overrides:
     lib.filterAttrsRecursive (_: v: v != null) (lib.recursiveUpdate builtin overrides);
 
-  # ── config.yaml ──────────────────────────────────────────────────────
-  # Only what has to be said. Every key absent here is the operator's
-  # compiled-in default (pkg/apis/clickhouse.altinity.com/v1/
+  # Only what has to be said in config.yaml. Every key absent here is the
+  # operator's compiled-in default (pkg/apis/clickhouse.altinity.com/v1/
   # type_configuration_chop.go, the `default*` constants and `normalize*`
   # functions), and upstream's config.yaml restates most of those. What is
   # left falls into three groups: where things are mounted, the credentials,
@@ -223,11 +220,10 @@ let
     };
   };
 
-  # ── Config fragments for the operand pods ────────────────────────────
-  # Eight directories, which the operator reads at startup and renders into
-  # the ConfigMaps of every installation. Four are empty upstream. They are
-  # mounted all the same, so `files` can put something in any of them
-  # without the Deployment changing shape.
+  # Eight directories for operand pod config fragments, which the operator
+  # reads at startup and renders into the ConfigMaps of every installation.
+  # Four are empty upstream; all eight are mounted so `files` can populate
+  # any of them without changing the Deployment shape.
   fragmentDirs = {
     chi = [
       "conf.d"
@@ -243,8 +239,8 @@ let
     ];
   };
 
-  # Upstream's files, verbatim, so `diff -r` against the operator's config/
-  # directory shows exactly what a version bump moved.
+  # Read upstream's files verbatim so `diff -r` against the operator's
+  # config/ directory shows what a version bump changed.
   upstreamFiles =
     family: dir:
     let
@@ -304,9 +300,9 @@ let
     })
   ];
 
+  # Copy volumeMounts from container `from` to container `to`.
   # kix.withMountsOn targets one container, and a second pass with the same
-  # mounts is refused for declaring each volume twice. The exporter gets the
-  # operator's volumeMounts as they were rendered.
+  # mounts is refused for declaring each volume twice.
   shareMounts =
     from: to: workload:
     let
@@ -319,7 +315,6 @@ let
       ) podSpec.containers;
     };
 
-  # ── RBAC ─────────────────────────────────────────────────────────────
   inherit (scope.rbac)
     group
     core
@@ -424,7 +419,7 @@ let
         )
 
         # At startup the operator stamps its version on its own pod, the
-        # ReplicaSet above it and this Deployment. Upstream names the
+        # ReplicaSet above it, and this Deployment. Upstream names the
         # Deployment and leaves the ReplicaSet open, since its name is not
         # known ahead of time.
         (apps.replicasets |> manage)
@@ -441,7 +436,6 @@ let
     );
   };
 
-  # ── Deployment ───────────────────────────────────────────────────────
   # What the binaries read from the environment (config_manager.go lists a
   # few more, which are only logged). The namespace is where the operator
   # looks for its ClickHouseOperatorConfigurations, the name is how it finds
@@ -469,9 +463,9 @@ let
     timeoutSeconds = 3;
     failureThreshold = 3;
   };
-  # Neither binary has a health endpoint. Each opens its metrics listener
-  # once its configuration is loaded and its clients are built, so an open
-  # port is the signal there is.
+  # Build a TCP socket probe for `port`. Neither binary has a health
+  # endpoint; each opens its metrics listener once its configuration is
+  # loaded and its clients are built.
   portOpen = port: probeTiming // { tcpSocket.port = port; };
 in
 if unknownFragmentDirs != [ ] then

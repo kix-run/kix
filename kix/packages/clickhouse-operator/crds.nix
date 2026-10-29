@@ -42,25 +42,22 @@ let
   # generic condition check would wait forever. Rides the typed chain into
   # every CR as Kix's readiness annotation, which `kix deploy` evaluates.
   #
-  # UNVERIFIED on a live cluster (doc 148, phase 4): that the operator moves
-  # the status back to InProgress on a spec change before the previous
-  # generation's Completed can be read as the new one's verdict.
+  # UNVERIFIED on a live cluster: whether the operator moves status.status
+  # back to InProgress on a spec change before the previous generation's
+  # Completed can be read as the new one's verdict.
   operandReadiness = {
     path = "/status/status";
     equals = "Completed";
   };
 
-  # The operand pods are the ones that dial what the CR spec carries. A CHI
-  # names its Keeper (`spec.configuration.zookeeper`) and the ClickHouse
-  # servers connect to it; the operator only renders that address into their
-  # config. So both operand kinds terminate the fact at the pods the
-  # operator labels with the CR's name, and netpol opens egress for those
-  # pods. A Keeper spec carries no outside address today; it declares the
-  # same shape so a fact that does flow into one lands on the right pods.
-  #
-  # The two kinds that configure the operator run no pods and dial nothing.
-  # Explicit conduct, so a fact flowing through one never warns as
-  # undeclared.
+  # Route endpoint facts to operand pods for operand kinds, or conduct them
+  # for operator configuration kinds. A CHI names its Keeper
+  # (`spec.configuration.zookeeper`) and the ClickHouse servers connect to
+  # it; the operator only renders that address into their config. Both
+  # operand kinds terminate the fact at the pods the operator labels with
+  # the CR's name so netpol opens egress for those pods. The two kinds that
+  # configure the operator run no pods and dial nothing, so they conduct
+  # facts without warning as undeclared.
   factBehaviorFor =
     def:
     if def.operand then
@@ -157,9 +154,7 @@ let
     else
       { };
 
-  # The file is the whole upstream CRD document. A missing file is an error
-  # and not a fall back to the stub, because the point is that these kinds
-  # are checked.
+  # Read the vendored upstream CRD document, or throw if the file is missing.
   vendored =
     def:
     let
@@ -173,10 +168,8 @@ let
     else
       builtins.fromJSON (builtins.readFile path);
 
-  # kinds.nix is what the RBAC is derived from, the vendored document is
-  # what the operator was built against. If they name the kind differently
-  # the operator is granted a resource that is not the one it watches, and
-  # that surfaces as a watch that never syncs. Refuse at eval time.
+  # Verify that kinds.nix (which drives RBAC) matches the vendored CRD
+  # document (which the operator watches), and return its single version.
   checkedVersion =
     def: upstream:
     let

@@ -21,9 +21,9 @@
 # instead of at operator startup; the watch invariant has no
 # compile-time oracle beyond keeping this table == the chart bundle.
 {
-  # ── monitoring.coreos.com, the converter's input ─────────────────────
-  # The prometheus-operator kinds the operator's built-in converter can
-  # turn into VM equivalents. One entry per converter the operator has.
+  # The prometheus-operator kinds (monitoring.coreos.com) the operator's
+  # built-in converter can turn into VM equivalents. One entry per converter
+  # the operator has.
   #
   # `version` is the API version upstream prometheus-operator serves for
   # the kind, so a declared CRD and a reference to the real one agree.
@@ -33,7 +33,7 @@
   #
   #   builder = true   the CRD is part of this package's API surface, so
   #                    it is always present. A cluster can still turn the
-  #                    converter off (VM beside Prometheus, where kix
+  #                    converter off (VM beside Prometheus, where Kix
   #                    writes the objects but VM should ignore them).
   #   builder = false  the CRD exists only to feed the converter, so it
   #                    is present exactly when that converter is on.
@@ -104,8 +104,8 @@
     };
   };
 
-  # kind → { plural, version } for every CRD we ship in the VM group.
-  # `consumer = true` marks kinds with a kix-side consumer surface
+  # kind -> { plural, version } for every CRD we ship in the VM group.
+  # `consumer = true` marks kinds with a Kix-side consumer surface
   # (out.mk* builder / sibling package); the rest exist only to satisfy
   # the operator's startup indexers.
   vmCrdDefs = {
@@ -157,7 +157,7 @@
       version = "v1beta1";
       consumer = true;
     };
-    # ── Indexer floor only: no kix consumer surface yet ──────────────
+    # Indexer floor only: no Kix consumer surface yet.
     vmScrapeConfigs = {
       kind = "VMScrapeConfig";
       plural = "vmscrapeconfigs";
@@ -188,7 +188,7 @@
       plural = "vmanomalyconfigs";
       version = "v1";
     };
-    # ── Watch floor only: remaining chart-bundle kinds ────────────────
+    # Watch floor only: remaining chart-bundle kinds.
     vmSingles = {
       kind = "VMSingle";
       plural = "vmsingles";

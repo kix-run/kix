@@ -44,8 +44,7 @@
 # Known limits:
 # - The APIService sets insecureSkipTLSVerify, as upstream does, because
 #   the server signs its own certificate in an emptyDir at startup; the API
-#   server does not verify it
-#   (housekeeping/2026-10-03-metrics-server-apiservice-skips-tls-verify.md).
+#   server does not verify it.
 # - Network policy admits egress to the kubelets on 10250 at every node
 #   address. `--kubelet-use-node-status-port` takes each kubelet's port from
 #   its Node status, so a kubelet on another port is unreachable under

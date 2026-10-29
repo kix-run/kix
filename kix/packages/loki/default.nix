@@ -15,8 +15,7 @@
 # Beside a workload whose own `storage` dependency is optional (Grafana),
 # give Loki's claim another instance name and `aliases`, and wire
 # `deps.storage = ref.<ns>.<claim>` as kix.modules.monitoring does.
-# Otherwise both pods mount the one ReadWriteOnce claim
-# (housekeeping/2026-10-02-shared-dependency-state-collides-between-consumers.md).
+# Otherwise both pods mount the one ReadWriteOnce claim.
 #
 # DI deps:
 #   storage (required)     a persistent-volume-claim instance, mounted at
@@ -144,7 +143,7 @@ let
   lockedPaths = [
     # Consumers send no X-Scope-OrgID header.
     [ "auth_enabled" ]
-    # The Services, the probes and `out` use httpPort.
+    # The Services, the probes, and `out` use httpPort.
     [
       "server"
       "http_listen_port"

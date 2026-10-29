@@ -164,7 +164,7 @@ in
       type = lib.types.nullOr lib.types.path;
       default = null;
       description = ''
-        Path to a SOPS-encrypted file containing a `password` key. The kix
+        Path to a SOPS-encrypted file containing a `password` key. The Kix
         deploy CLI hydrates the credentials Secret and the bootstrap Secret
         from this same source at apply time.
       '';

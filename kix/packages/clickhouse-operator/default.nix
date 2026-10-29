@@ -1,8 +1,7 @@
-# clickhouse-operator: the Altinity operator for ClickHouse
-# (v2_discussions/148, phase 4).
+# clickhouse-operator: the Altinity operator for ClickHouse.
 #
 # Replicated ClickHouse is not a StatefulSet Kix renders. It is a
-# ClickHouseInstallation (CHI) the operator turns into StatefulSets, Services
+# ClickHouseInstallation (CHI) the operator turns into StatefulSets, Services,
 # and config at runtime, with a ClickHouseKeeperInstallation (CHK) beside it
 # for coordination. This package owns the four CRDs (crds.nix, from the table
 # in kinds.nix) and the controller (operator.nix). The sibling packages build
@@ -33,8 +32,8 @@
 #   out.mkKeeperInstallation scope { name; spec; }
 #       CR builders. The CR waits for its CRD and for the operator
 #       Deployment, carries the readiness convention
-#       (status.status == "Completed") and the operand pod selector netpol
-#       needs.
+#       (status.status == "Completed"), and carries the operand pod selector
+#       netpol needs.
 #   out.operandSelector.<kind> <crName>
 #       The labels the operator stamps on that installation's pods, from
 #       kinds.nix, for the policies the CR packages write over them.
@@ -127,8 +126,8 @@ in
       description = ''
         Config fragments the operator injects into every operand pod, as
         `<chi|chk>.<directory>.<file name> = contents`. The directories are
-        the operator's: `conf.d`, `config.d`, `templates.d` and `users.d`
-        for chi; `conf.d`, `keeper_config.d`, `templates.d` and `users.d` for
+        the operator's: `conf.d`, `config.d`, `templates.d`, and `users.d`
+        for chi; `conf.d`, `keeper_config.d`, `templates.d`, and `users.d` for
         chk. Merged over the upstream files under ./files, and null removes
         one of those. A fragment for a single installation belongs in that
         CR's `spec.configuration.files`.

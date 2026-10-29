@@ -1,4 +1,4 @@
-# envoy-gateway kix package: Gateway API resources.
+# envoy-gateway Kix package: Gateway API resources.
 #
 # Creates GatewayClass and Gateway resources for the Gateway API, plus an
 # optional EnvoyProxy that tells Envoy Gateway how to provision the data
@@ -75,7 +75,7 @@ in
         `tls.certificateRefs` is a placeholder and is not rendered.
 
         kix.expose reads the rendered listeners: `protocol`, `hostname`,
-        `port` and `allowedRoutes.namespaces.from` decide whether an
+        `port`, and `allowedRoutes.namespaces.from` decide whether an
         HTTPRoute can attach and which URL scheme and port it gets.
       '';
     };
@@ -155,7 +155,6 @@ in
 
       gatewayApiGroup = "gateway.networking.k8s.io";
     in
-    # --- EnvoyProxy (optional, namespaced) ---
     # Envoy Gateway reads this through the GatewayClass's parametersRef and
     # provisions the proxy Deployment/Service from it. The reference is by
     # name and namespace, so it must exist before the class is accepted;
@@ -176,8 +175,7 @@ in
       };
     }
     // {
-      # --- Gateway API CRD refs ---
-      # The CRDs arrive with the controller, outside kix. The refs give each
+      # The CRDs arrive with the controller, outside Kix. The refs give each
       # CR its CRD-before-CR edge and carry the Gateway API's readiness
       # conditions: a GatewayClass is usable once Accepted=True, a Gateway
       # once Programmed=True. Neither kind sets Ready or Available.
@@ -205,7 +203,6 @@ in
         };
       };
 
-      # --- GatewayClass (cluster-scoped) ---
       gatewayClass = self.gatewayClassCrd.out.mkCR scope {
         name = gatewayClassName;
         labels = selectorLabels;
@@ -222,7 +219,6 @@ in
         };
       };
 
-      # --- Gateway ---
       gateway = self.gatewayCrd.out.mkCR scope {
         name = gatewayName;
         labels = selectorLabels;
@@ -235,7 +231,6 @@ in
         };
       };
 
-      # --- Entry point ---
       root = {
         resource = self.gateway;
         # The gateway contract (kix/lib/vocab/gateway.nix), read by

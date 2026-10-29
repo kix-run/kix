@@ -1,12 +1,11 @@
 # victoria-metrics-cluster: VictoriaMetrics cluster (VMCluster CR) in HA
-# mode, the metrics store behind the `prometheusServer` alias
-# (v2_discussions/133 §3.2).
+# mode, the metrics store behind the `prometheusServer` alias.
 #
 # Creates a VMCluster CR that the VM operator reconciles into vmstorage /
 # vmselect / vminsert workloads. HA is the default posture, and must be,
 # because the scorecard cannot see operator-created pods: replication
 # factor 2 over 3 vmstorage nodes, 2 vmselect + 2 vminsert, per-component
-# PDBs and preferred hostname anti-affinity.
+# PDBs, and preferred hostname anti-affinity.
 #
 # Dedup is correctness, not tuning: with replicationFactor > 1 every
 # sample exists twice, and an HA vmagent pair ingests everything twice
@@ -79,9 +78,7 @@ in
       "vmCluster"
     ];
     k8s.minVersion = "1.25";
-    # Trial posture: historical metrics are expendable on storage swaps
-    # (prometheus package precedent). Revisit if VM becomes the long-term
-    # store (v2_discussions/133 §3.2).
+    # Historical metrics are expendable on storage backend swaps.
     lifecycle = "ephemeral";
   };
 
@@ -113,7 +110,7 @@ in
         Copies of every sample across vmstorage nodes. The operator
         propagates it to vminsert and vmselect (-replicationFactor), so
         queries stay complete with one vmstorage down. Defaults from the
-        cluster's availability level (v2_discussions/145).
+        cluster's availability level.
       '';
     };
     scrapeInterval = lib.mkOption {
@@ -144,8 +141,7 @@ in
         };
         description = ''
           Minimum 3 for replicationFactor 2 with one-node failure
-          headroom. Defaults from the cluster's availability level
-          (v2_discussions/145).
+          headroom. Defaults from the cluster's availability level.
         '';
       };
       storage = lib.mkOption {
@@ -193,7 +189,7 @@ in
         };
         description = ''
           Number of vmselect replicas. Defaults from the cluster's
-          availability level (v2_discussions/145).
+          availability level.
         '';
       };
       # No CPU limit: a CFS quota throttles merges and query bursts.
@@ -226,7 +222,7 @@ in
         };
         description = ''
           Number of vminsert replicas. Defaults from the cluster's
-          availability level (v2_discussions/145).
+          availability level.
         '';
       };
       # No CPU limit: a CFS quota throttles merges and query bursts.
@@ -285,16 +281,17 @@ in
         ...
       }:
       let
-        # Operand pod labels the operator stamps on VMCluster children:
+        # Return operand pod labels the operator stamps on VMCluster children:
         # component name + CR name (CR name = instance name).
         componentSelector = component: {
           "app.kubernetes.io/name" = component;
           "app.kubernetes.io/instance" = name;
         };
 
-        # Operand pods are rendered by the operator, so kix's derived spread
-        # never sees them: the CR carries the rule, but the failure-domain
-        # keys come from the cluster (v2_discussions/143 §2), never a literal.
+        # Build preferred anti-affinity for `component`. Operand pods are
+        # rendered by the operator, so Kix's derived spread never sees them:
+        # the CR carries the rule, and the failure-domain keys come from the
+        # cluster, never a literal.
         antiAffinity = component: {
           podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
             weight = 100;
@@ -406,7 +403,7 @@ in
         # with componentSelector. A ServiceRef describes each one, so
         # consumers get out.fqdn with dependency context, the deploy engine
         # waits for the Service to exist, and netpol opens the same edges it
-        # would for a rendered Service (v2_discussions/135).
+        # would for a rendered Service.
         selectService = scope.mkServiceRef {
           name = "vmselect-${name}";
           selector = componentSelector "vmselect";
@@ -448,7 +445,7 @@ in
             insertBaseUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus";
             inherit (config) scrapeInterval;
             # Operand images are reconciled by the operator, not in any
-            # kix-generated pod spec.
+            # Kix-generated pod spec.
             extraImages = [
               "victoriametrics/vmstorage:${config.clusterVersion}"
               "victoriametrics/vmselect:${config.clusterVersion}"

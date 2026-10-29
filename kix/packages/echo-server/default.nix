@@ -56,7 +56,7 @@ in
       };
       description = ''
         Number of `Deployment` replicas for the echo-server pods. Defaults
-        from the cluster's availability level (v2_discussions/145).
+        from the cluster's availability level.
       '';
     };
     service = {
@@ -88,7 +88,6 @@ in
   build =
     { self, config, ... }:
     {
-      # --- ConfigMap (nginx config + response page) ---
       configmap = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
@@ -110,7 +109,6 @@ in
         };
       };
 
-      # --- Deployment ---
       deployment =
         {
           inherit name;
@@ -190,7 +188,6 @@ in
         }
         |> scope.mkDeployment;
 
-      # --- Service ---
       service =
         self.deployment
         |> kix.service.fromWorkload {
@@ -207,7 +204,6 @@ in
         }
         |> scope.mkResource;
 
-      # --- Entry point ---
       root = self.service;
     };
 }

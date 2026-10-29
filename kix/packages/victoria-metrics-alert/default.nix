@@ -1,6 +1,5 @@
 # victoria-metrics-alert: alerting rule evaluation (VMAlert CR ×2) plus
-# the Alertmanager it notifies (VMAlertmanager CR ×2)
-# (v2_discussions/133 §3.4).
+# the Alertmanager it notifies (VMAlertmanager CR ×2).
 #
 # vmalert evaluates VMRules (and, via the operator's converter,
 # PrometheusRules) against the cluster's read path and remote-writes
@@ -14,9 +13,9 @@
 # selects the VMAlertmanager CR by label, and the operator expands that
 # to every alertmanager replica's pod FQDN, which is what Alertmanager
 # HA requires (fan-out to all replicas, not a load-balanced Service).
-# NOTE the vmalert → alertmanager notifier traffic is therefore between
-# operator-created pods with no endpoint fact in any kix manifest: the
-# doc 96 netpol blindspot, same class as the intra-VMCluster traffic.
+# The vmalert -> alertmanager notifier traffic runs between
+# operator-created pods with no endpoint fact in any Kix manifest,
+# like the intra-VMCluster traffic.
 #
 # DI deps:
 #   vmOperator (required)   VMAlert/VMAlertmanager CRDs + builders
@@ -113,7 +112,7 @@ in
       };
       description = ''
         Number of vmalert replicas. Defaults from the cluster's
-        availability level (v2_discussions/145).
+        availability level.
       '';
     };
     evaluationInterval = lib.mkOption {
@@ -166,7 +165,7 @@ in
         };
         description = ''
           Number of VMAlertmanager replicas. Defaults from the cluster's
-          availability level (v2_discussions/145).
+          availability level.
         '';
       };
       retention = lib.mkOption {
@@ -228,7 +227,7 @@ in
     };
     # After vmalert is ready, run ./health-check.py as a Job in this
     # namespace: every vmalert and alertmanager replica is up, rules
-    # loaded, no alert-send, datasource or remote-write errors.
+    # loaded, and no alert-send, datasource, or remote-write errors.
     healthCheck = kix.options.healthCheck;
   };
 
@@ -276,9 +275,10 @@ in
               )
             );
         configInCr = am.configRawYaml != null;
-        # Operand pods are rendered by the operator, so kix's derived spread
-        # never sees them: the CR carries the rule, but the failure-domain
-        # keys come from the cluster (v2_discussions/143 §2), never a literal.
+        # Build preferred anti-affinity for `component`. Operand pods are
+        # rendered by the operator, so Kix's derived spread never sees them:
+        # the CR carries the rule, and the failure-domain keys come from the
+        # cluster, never a literal.
         antiAffinity = component: {
           podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
             weight = 100;

@@ -1,5 +1,4 @@
-# ClickHouse, replicated, run by the Altinity operator
-# (v2_discussions/148, phase 5).
+# ClickHouse, replicated, run by the Altinity operator.
 #
 # The second implementation behind the `clickhouse` alias. It exposes the
 # same `out` as the bare `clickhouse` package, so `clickhouse-database` and
@@ -24,11 +23,10 @@
 # Three flows have no address to ride on, because both ends are pods no
 # build knows about: replica to replica, and the operator (with its metrics
 # exporter) to every replica on 8123. The package states them as policies
-# over the operator's pod labels, the stackgres-cluster precedent. They are
-# what phase 5's default-deny test on kind exercises.
+# over the operator's pod labels.
 #
-# Upgrades: stay on an LTS line (the March and August releases), and take a
-# new release only after it has had a few weeks of fixes. The operator
+# Upgrades: stay on an LTS line (the March and August releases), and upgrade
+# to a new version only after it has had a few weeks of fixes. The operator
 # restarts one replica at a time on an image change. Run no DDL until every
 # replica reports the new version, and use no new feature until then
 # either. Keep clickhouse-keeper on the same LTS line as the servers.
@@ -90,8 +88,8 @@ let
   # The PodMonitor's name, which the alert selector's `job` label carries.
   podMonitorName = name;
 
-  # A null `prometheus` fragment, or a null `prometheus.prometheus` key in
-  # it, removes the metrics endpoint, so nothing is left to scrape or alert on.
+  # Return true unless a null `prometheus` fragment or a null
+  # `prometheus.prometheus` key removes the metrics endpoint.
   metricsEndpointOn =
     serverConfig:
     let
@@ -221,10 +219,10 @@ in
         # What the operator stamps on every pod of this installation.
         podSelector = clickhouseOperator.out.operandSelector.clickHouseInstallations name;
 
-        # The operator's Service for one replica, named
+        # Trim a name segment for the operator's per-replica Service name,
         # chi-{chi}-{cluster}-{shard}-{replica} with zero-based indexes
         # (patterns.go in operator 0.27.3). It cuts the installation name to
-        # 60 characters and the cluster name to 15, then trims "-", "_" and
+        # 60 characters and the cluster name to 15, then trims "-", "_", and
         # "." from both ends of each. A serviceTemplate could rename it, so
         # extraSpec may not define one.
         operatorNamePart =
@@ -249,7 +247,7 @@ in
         # The lessons of the bare package that the operator's own fragments
         # do not cover: the shipped console log level is trace, most system
         # log tables have no TTL (the operator already gives query_log,
-        # part_log and trace_log one), and the metrics endpoint is off.
+        # part_log, and trace_log one), and the metrics endpoint is off.
         builtinServerConfig = {
           logging.logger.level = "information";
           # The same endpoint as the bare package, so both share one metric

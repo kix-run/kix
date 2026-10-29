@@ -151,7 +151,7 @@ let
     else
       lib.toInt (builtins.head m);
 
-  # The port of the first key set in `attrs`, or null.
+  # Return the port of the first key set in `attrs`, or null.
   firstPort =
     whereOf: attrs: keys:
     let

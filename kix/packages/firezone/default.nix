@@ -118,8 +118,7 @@ in
       };
       description = ''
         Number of Firezone replicas. Pinned to one at every availability
-        level (v2_discussions/145) because the WireGuard interface has a
-        single owner.
+        level because the WireGuard interface has a single owner.
       '';
     };
 
@@ -338,7 +337,6 @@ in
           if reloader == null || untracked == [ ] then args else reloader.out.withReloadOn untracked args;
       in
       {
-        # --- ConfigMap: non-secret env vars ---
         configMap = scope.mkResource {
           apiVersion = "v1";
           kind = "ConfigMap";
@@ -373,7 +371,6 @@ in
           };
         };
 
-        # --- Mounts: the WireGuard key and the optional SAML pair, as files ---
         wireguardMount = kix.mount.secret wgKey {
           name = "wireguard-key";
           mountPath = secretsDir;
@@ -385,7 +382,6 @@ in
           defaultMode = 256; # 0400
         };
 
-        # --- Deployment ---
         deployment =
           {
             name = name;
@@ -497,7 +493,6 @@ in
           |> withReload
           |> scope.mkDeployment;
 
-        # --- Service ---
         service =
           self.deployment
           |> kix.service.fromWorkload {
@@ -511,7 +506,6 @@ in
           }
           |> scope.mkResource;
 
-        # --- Entry point ---
         root = self.service;
       }
     )

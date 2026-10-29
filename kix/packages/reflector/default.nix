@@ -1,7 +1,7 @@
 # Reflector: emberstack/kubernetes-reflector.
 #
 # Copies Secrets/ConfigMaps across namespaces based on annotations on the
-# source. kix uses it as the cross-namespace propagation strategy for
+# source. Kix uses it as the cross-namespace propagation strategy for
 # operator-managed secrets (e.g. StackGres' superuser credentials).
 #
 # Consumers call `reflector.out.reflectSecret scope { secretName; ... }`
@@ -149,7 +149,7 @@ in
     defaultAliases = [ "reflector" ];
     # This package owns the reflector annotation domain: resources carrying
     # annotations under it without a DI dep on this instance trip the
-    # architecture.annotationDomainOwnership lint (v2_discussions/128).
+    # architecture.annotationDomainOwnership lint.
     annotationDomains = [ "reflector.v1.k8s.emberstack.com" ];
   };
 

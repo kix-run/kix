@@ -54,7 +54,7 @@ in
       };
       description = ''
         Number of Caddy `Deployment` replicas. Defaults from the cluster's
-        availability level (v2_discussions/145).
+        availability level.
       '';
     };
     resources = kix.options.resources {
@@ -112,7 +112,7 @@ in
           minReplicas = lib.mkOption {
             type = lib.types.int;
             # The floor follows replicaCount's mapping of the availability
-            # level (v2_discussions/145), so the autoscaler never undoes it.
+            # level, so the autoscaler never undoes it.
             default = kix.availability.pick availability {
               none = 1;
               pod = 2;
@@ -137,7 +137,6 @@ in
       description = "The HorizontalPodAutoscaler on the Deployment.";
     };
 
-    # --- Config secret name ---
     configSecretName = lib.mkOption {
       type = lib.types.str;
       default = "${name}-config";
@@ -151,14 +150,12 @@ in
       clusterConfig,
     }:
     {
-      # --- ServiceAccount ---
       serviceAccount = scope.mkResource {
         apiVersion = "v1";
         kind = "ServiceAccount";
         name = name;
       };
 
-      # --- Config secret reference ---
       # User-provided external Secret, wrapped in a SecretRef so volume
       # mounts carry DI context and the deploy engine gates on its existence.
       configSecret = scope.mkSecretRef {
@@ -170,7 +167,6 @@ in
         ];
       };
 
-      # --- Deployment ---
       deployment =
         {
           inherit name;
@@ -308,7 +304,6 @@ in
         }
         |> scope.mkDeployment;
 
-      # --- Service ---
       service =
         self.deployment
         |> kix.service.fromWorkload {
@@ -332,7 +327,6 @@ in
         }
         |> scope.mkResource;
 
-      # --- Custom Domains Service (optional) ---
       customDomainsService =
         if config.customDomainsService.enabled then
           self.deployment
@@ -359,7 +353,6 @@ in
         else
           null;
 
-      # --- HorizontalPodAutoscaler ---
       hpa = scope.mkResource {
         apiVersion = "autoscaling/v2";
         kind = "HorizontalPodAutoscaler";
@@ -387,7 +380,6 @@ in
         };
       };
 
-      # --- Entry point ---
       # No PodDisruptionBudget here: the availability plugin derives one for
       # every workload above a single replica, and an explicit
       # minAvailable = 1 blocked eviction outright on a single-replica

@@ -89,13 +89,12 @@ in
   meta = {
     # The chart version, which only the chart delivery deploys. In the other
     # deliveries the environment picks the Cilium version and
-    # meta.compatibleWith still compares against this one
-    # (housekeeping/2026-10-01-platform-providers-carry-placeholder-versions.md).
+    # meta.compatibleWith still compares against this one.
     version = release;
     description = "Cilium: CNI and CiliumNetworkPolicy enforcer. Installs the chart, configures an environment's bundled Cilium, or uses one the environment installed";
     owner = "platform";
     # A CNI programs the node's own networking and loads BPF into the
-    # kernel, so the agent, envoy and operator pods run on the host
+    # kernel, so the agent, envoy, and operator pods run on the host
     # network with a privileged mount. Declared here rather than
     # downgraded per namespace in every cluster that installs cilium:
     # the grant is scoped to this package and listed by
