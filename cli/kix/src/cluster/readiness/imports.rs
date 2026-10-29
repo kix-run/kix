@@ -1,0 +1,536 @@
+//! Readiness checks for import markers and resource expectations.
+
+use std::time::{Duration, Instant};
+
+use kube::{
+    api::{Api, DynamicObject},
+    client::Client,
+    discovery::{ApiResource, Scope},
+};
+use serde_json::Value;
+
+use super::super::cancel::CancelToken;
+use super::super::errors::{FailureClass, classify};
+use super::declared::{
+    check_crd_ready, check_readiness, is_immediate_kind, readiness_message, served_crd_versions,
+    unserved_crd_versions,
+};
+use super::{POLL_INTERVAL, ReadinessError, ReadinessResult, probe_crd_discovery};
+use crate::manifest::keys;
+
+/// A resource described by an import marker. The CLI polls the cluster for
+/// this resource and blocks dependents until it is present and ready, using the
+/// same per-kind readiness checks as managed resources (for example, waiting
+/// for `readyReplicas == spec.replicas` on `Deployment` resources). CRDs also
+/// require `Established=True`, and `Secret` resources with `expected_keys`
+/// verify that every declared key is present in `data`.
+///
+/// The marker lives in its own namespace and the described resource is
+/// expected in the same namespace for namespaced kinds. Cross-namespace
+/// imports are not supported; use a dedicated adapter instance in the owning
+/// namespace and pass the resource handle through dependency injection instead.
+#[derive(Debug, Clone)]
+pub struct ImportTarget {
+    /// Kubernetes kind of the expected resource (such as `"CustomResourceDefinition"`).
+    pub kind: String,
+    /// Kubernetes `apiVersion` (such as `"apiextensions.k8s.io/v1"` or `"v1"`).
+    pub api_version: String,
+    /// Name of the expected resource.
+    pub name: String,
+    /// Namespace of the expected resource. `None` for cluster-scoped kinds
+    /// (currently `CustomResourceDefinition`). For namespaced kinds, this
+    /// comes from the marker's own `metadata.namespace`.
+    pub namespace: Option<String>,
+    /// For `Secret` imports, the set of keys expected in `data`, parsed from
+    /// the comma-separated `kix.run/import-secret-keys` annotation. When empty,
+    /// only Secret existence is checked.
+    pub expected_keys: Vec<String>,
+    /// For a CRD reference marker, the API versions declared in
+    /// `kix.run/crd-served-versions`. Each version must appear in the live
+    /// CRD's `spec.versions` with `served: true`. Empty for non-CRD imports.
+    pub served_versions: Vec<String>,
+    /// The platform Kix cluster that installs this CRD when running on a
+    /// consumer cluster ([`crate::manifest::lifecycle::left_to_platform`]).
+    /// Used in failure messages to direct the user to deploy or upgrade Kix on
+    /// the platform cluster.
+    pub platform: Option<String>,
+}
+
+impl ImportTarget {
+    /// Build the target that a consumer deploy waits for instead of applying
+    /// `crd`, one of Kix's own CRDs managed by `platform`. The live CRD must
+    /// serve every version that `crd` declares.
+    pub fn left_to_platform(crd: &Value, platform: &str) -> Self {
+        ImportTarget {
+            kind: "CustomResourceDefinition".into(),
+            api_version: "apiextensions.k8s.io/v1".into(),
+            name: crd
+                .pointer("/metadata/name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            namespace: None,
+            expected_keys: Vec::new(),
+            served_versions: served_crd_versions(crd),
+            platform: Some(platform.to_string()),
+        }
+    }
+}
+
+/// An import marker with missing or invalid annotations. Planning a deploy
+/// rejects the build rather than deploying a marker whose checks would be
+/// skipped.
+#[derive(Debug, thiserror::Error)]
+#[error("{marker}: {reason}")]
+pub struct MalformedMarker {
+    /// The marker identifier formatted as `PackageInstance <namespace>/<name>`.
+    pub marker: String,
+    pub reason: String,
+}
+
+/// Extract an [`ImportTarget`] from a manifest if it is a `PackageInstance`
+/// import marker (`kix.run/mode: import`). Returns `Ok(None)` for non-markers
+/// or for markers that lack a target kind or name.
+///
+/// A CRD reference marker carries `kix.run/crd-kind` and must also list at
+/// least one version in `kix.run/crd-served-versions`, or this function returns
+/// [`MalformedMarker`].
+///
+/// The target's namespace comes from the marker's own `metadata.namespace` for
+/// namespaced kinds, or `None` for `CustomResourceDefinition`.
+pub fn import_target_from_manifest(
+    manifest: &Value,
+) -> Result<Option<ImportTarget>, MalformedMarker> {
+    if !crate::manifest::lifecycle::is_marker(manifest) {
+        return Ok(None);
+    }
+    let Some(annotations) = manifest.pointer("/metadata/annotations") else {
+        return Ok(None);
+    };
+    let annotation = |key: &str| annotations.get(key).and_then(Value::as_str);
+
+    let (Some(import_kind), Some(import_api_version), Some(import_name)) = (
+        annotation(keys::IMPORT_KIND),
+        annotation(keys::IMPORT_API_VERSION),
+        annotation(keys::IMPORT_NAME),
+    ) else {
+        return Ok(None);
+    };
+
+    let namespace = if import_kind == "CustomResourceDefinition" {
+        None
+    } else {
+        manifest
+            .pointer("/metadata/namespace")
+            .and_then(Value::as_str)
+            .map(String::from)
+    };
+
+    // Parse comma-separated Secret keys. An empty list checks only that the
+    // Secret exists.
+    let expected_keys = annotations
+        .get(keys::IMPORT_SECRET_KEYS)
+        .and_then(Value::as_str)
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let served_versions = match annotation(keys::CRD_KIND) {
+        None => Vec::new(),
+        Some(crd_kind) => {
+            let served: Vec<String> = annotation(keys::CRD_SERVED_VERSIONS)
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(String::from)
+                .collect();
+            if served.is_empty() {
+                return Err(MalformedMarker {
+                    marker: format!(
+                        "PackageInstance {}/{}",
+                        manifest
+                            .pointer("/metadata/namespace")
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
+                        manifest
+                            .pointer("/metadata/name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                    ),
+                    reason: format!(
+                        "CRD ref marker for {crd_kind} ({import_name}) lists no versions in {}. Builds from a kix library before 2026-10-02 lack it. Rebuild and deploy; a rollback or the operator cannot apply this build.",
+                        keys::CRD_SERVED_VERSIONS
+                    ),
+                });
+            }
+            served
+        }
+    };
+
+    Ok(Some(ImportTarget {
+        kind: import_kind.to_string(),
+        api_version: import_api_version.to_string(),
+        name: import_name.to_string(),
+        namespace,
+        expected_keys,
+        served_versions,
+        platform: None,
+    }))
+}
+
+/// Poll the cluster for the described [`ImportTarget`] until it exists and
+/// passes the same readiness checks as managed resources, or until the timeout
+/// elapses.
+///
+/// Unlike [`super::wait_for_ready`], this does not require the target kind to be in
+/// the discovery cache at the start of the deploy. For
+/// `CustomResourceDefinition` targets, it constructs the `ApiResource`
+/// directly from `apiextensions.k8s.io/v1` so it can wait for CRDs installed
+/// asynchronously by operators during the deploy.
+pub(crate) async fn wait_for_import_target(
+    client: &Client,
+    target: &ImportTarget,
+    timeout: Duration,
+    cancel: &CancelToken,
+    on_status: impl Fn(&str),
+) -> Result<ReadinessResult, ReadinessError> {
+    // Construct the ApiResource for CRDs directly so polling does not depend on
+    // initial discovery when the CRD is not registered yet.
+    let (ar, scope) = if target.kind == "CustomResourceDefinition" {
+        (
+            ApiResource {
+                group: "apiextensions.k8s.io".into(),
+                version: "v1".into(),
+                api_version: "apiextensions.k8s.io/v1".into(),
+                kind: "CustomResourceDefinition".into(),
+                plural: "customresourcedefinitions".into(),
+            },
+            Scope::Cluster,
+        )
+    } else {
+        // Query discovery for the target kind's scope because a namespaced
+        // marker may import a cluster-scoped resource such as a StorageClass
+        // or ClusterIssuer. If the kind is not yet served by discovery, fall
+        // back to the marker's annotations and assume namespaced scope.
+        let (group, version) = split_api_version(&target.api_version);
+        let gvk = kube::core::GroupVersionKind::gvk(group, version, &target.kind);
+        match kube::discovery::oneshot::pinned_kind(client, &gvk).await {
+            Ok((ar, caps)) => (ar, caps.scope),
+            Err(_) => (
+                ApiResource {
+                    group: group.to_string(),
+                    version: version.to_string(),
+                    api_version: target.api_version.clone(),
+                    kind: target.kind.clone(),
+                    plural: pluralize_kind(&target.kind),
+                },
+                Scope::Namespaced,
+            ),
+        }
+    };
+
+    let api: Api<DynamicObject> = match scope {
+        Scope::Namespaced => {
+            // Reject namespaced targets without a namespace rather than
+            // defaulting to "default".
+            let ns = target.namespace.as_deref().ok_or_else(|| {
+                ReadinessError::MalformedImportTarget(format!(
+                    "namespaced import target {}/{} has no namespace (marker malformed)",
+                    target.kind, target.name
+                ))
+            })?;
+            Api::namespaced_with(client.clone(), ns, &ar)
+        }
+        Scope::Cluster => Api::all_with(client.clone(), &ar),
+    };
+
+    let start = Instant::now();
+    loop {
+        if cancel.is_cancelled() {
+            return Ok(ReadinessResult::Cancelled);
+        }
+        let status_msg: String = match api.get_opt(&target.name).await {
+            Ok(Some(obj)) => {
+                if target.kind == "CustomResourceDefinition" {
+                    if check_crd_ready(&obj.data) {
+                        // Fail immediately if the live CRD does not serve a
+                        // required API version.
+                        let unserved = unserved_crd_versions(&obj.data, &target.served_versions);
+                        if !unserved.is_empty() {
+                            let fix = match &target.platform {
+                                Some(platform) => format!(
+                                    "This cluster is a consumer, and its platform cluster '{platform}' installs Kix's own resource types. Upgrade Kix on '{platform}' first, then deploy again."
+                                ),
+                                None => "Correct version or servedVersions on the scope.mkCRDRef or mkImport crds entry that declares it.".to_string(),
+                            };
+                            return Ok(ReadinessResult::ImportMismatch {
+                                missing_keys: Vec::new(),
+                                message: format!(
+                                    "CustomResourceDefinition {} does not serve {} (serves {}). {fix}",
+                                    target.name,
+                                    unserved.join(", "),
+                                    served_crd_versions(&obj.data).join(", ")
+                                ),
+                            });
+                        }
+                        let _ = probe_crd_discovery(client, &obj.data).await;
+                        return Ok(ReadinessResult::Ready);
+                    }
+                    "CRD present, waiting for Established=True".into()
+                } else if target.kind == "Secret" && !target.expected_keys.is_empty() {
+                    // Once the Secret exists, any missing declared key in `data`
+                    // is treated as an immediate mismatch rather than a transient
+                    // state because external secret controllers populate keys
+                    // atomically when creating the Secret.
+                    let missing = check_secret_keys(&obj.data, &target.expected_keys);
+                    if missing.is_empty() {
+                        return Ok(ReadinessResult::Ready);
+                    } else {
+                        let ns = target.namespace.as_deref().unwrap_or("?");
+                        let message = format!(
+                            "Secret {}/{} is missing expected key(s): [{}]",
+                            ns,
+                            target.name,
+                            missing.join(", ")
+                        );
+                        return Ok(ReadinessResult::ImportMismatch {
+                            missing_keys: missing,
+                            message,
+                        });
+                    }
+                } else if target.kind == "Service" {
+                    // Wait for at least one ready endpoint because a controller
+                    // may create the Service before its backing pods are ready.
+                    // Headless Services and manual Endpoints populate the
+                    // Endpoints object the same way; ExternalName Services have
+                    // no endpoints and are not supported as Service imports.
+                    let ns = target.namespace.as_deref().unwrap_or("default");
+                    match check_service_has_ready_endpoints(client, ns, &target.name).await {
+                        Ok(true) => return Ok(ReadinessResult::Ready),
+                        Ok(false) => "Service exists, waiting for ready endpoints".into(),
+                        Err(e) => {
+                            tracing::debug!(
+                                service = %target.name,
+                                error = %e,
+                                "transient error checking endpoints, retrying"
+                            );
+                            format!("Service exists, endpoints check error: {e}")
+                        }
+                    }
+                } else if is_immediate_kind(&target.kind) || check_readiness(&obj, &target.kind) {
+                    return Ok(ReadinessResult::Ready);
+                } else {
+                    readiness_message(&obj, &target.kind)
+                }
+            }
+            Ok(None) => "not found yet".into(),
+            Err(e) if classify(&e) == FailureClass::NotFound => "not found yet".into(),
+            Err(e) => {
+                // Keep polling through transient API or network failures until
+                // the timeout elapses.
+                tracing::debug!(
+                    target.kind = %target.kind,
+                    target.name = %target.name,
+                    error = %e,
+                    "transient error polling import target, retrying"
+                );
+                format!("transient error: {e}")
+            }
+        };
+
+        on_status(&status_msg);
+
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
+            let message = match &target.platform {
+                Some(platform) => format!(
+                    "{} {} is not on the cluster, or is not established. This cluster is a consumer, and its platform cluster '{platform}' installs Kix's own resource types. Deploy Kix on '{platform}' first, then deploy again.",
+                    target.kind, target.name
+                ),
+                None => format!(
+                    "import target {}/{} (apiVersion {}) not found on cluster",
+                    target.kind, target.name, target.api_version
+                ),
+            };
+            return Ok(ReadinessResult::TimedOut { elapsed, message });
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Check whether a Service has at least one ready endpoint by querying the
+/// `v1/Endpoints` resource. Returns `Ok(true)` if at least one address appears
+/// in a ready subset, `Ok(false)` if none are ready yet, or `Err` on API errors.
+///
+/// Queries `v1/Endpoints` rather than `EndpointSlice` because the Endpoints
+/// object shares the Service's name and can be fetched in a single `GET`
+/// without listing by label selector.
+async fn check_service_has_ready_endpoints(
+    client: &Client,
+    namespace: &str,
+    service_name: &str,
+) -> Result<bool, kube::Error> {
+    let ar = ApiResource {
+        group: "".into(),
+        version: "v1".into(),
+        api_version: "v1".into(),
+        kind: "Endpoints".into(),
+        plural: "endpoints".into(),
+    };
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    match api.get_opt(service_name).await? {
+        Some(ep) => {
+            let has_ready = ep
+                .data
+                .pointer("/subsets")
+                .and_then(Value::as_array)
+                .map(|subsets| {
+                    subsets.iter().any(|s| {
+                        s.pointer("/addresses")
+                            .and_then(Value::as_array)
+                            .is_some_and(|addrs| !addrs.is_empty())
+                    })
+                })
+                .unwrap_or(false);
+            Ok(has_ready)
+        }
+        None => Ok(false),
+    }
+}
+
+/// Return the subset of `expected` keys not present in the live Secret's `data`
+/// field. Checks key presence only; values may be empty strings.
+pub(super) fn check_secret_keys(secret: &Value, expected: &[String]) -> Vec<String> {
+    let Some(data) = secret.pointer("/data").and_then(Value::as_object) else {
+        return expected.to_vec();
+    };
+    expected
+        .iter()
+        .filter(|k| !data.contains_key(k.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Split an `apiVersion` string into `(group, version)`, such as `"v1"` into
+/// `("", "v1")` and `"apps/v1"` into `("apps", "v1")`.
+pub(super) fn split_api_version(api_version: &str) -> (&str, &str) {
+    match api_version.split_once('/') {
+        Some((g, v)) => (g, v),
+        None => ("", api_version),
+    }
+}
+
+/// Derive a best-effort plural resource name for a kind when discovery is
+/// unavailable.
+fn pluralize_kind(kind: &str) -> String {
+    let lower = kind.to_ascii_lowercase();
+    if lower.ends_with('y') && !lower.ends_with("ay") && !lower.ends_with("ey") {
+        format!("{}ies", &lower[..lower.len() - 1])
+    } else if lower.ends_with('s') {
+        format!("{lower}es")
+    } else {
+        format!("{lower}s")
+    }
+}
+
+/// An external resource that a manifest expects another controller to create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Expectation {
+    pub api_version: String,
+    pub kind: String,
+    pub name: String,
+}
+
+impl Expectation {
+    pub fn display(&self) -> String {
+        format!("{}/{}", self.kind, self.name)
+    }
+}
+
+/// Parse the `kix.run/expects` annotation of a manifest, ignoring malformed
+/// entries.
+pub(crate) fn expectations(manifest: &Value) -> Vec<Expectation> {
+    manifest
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(keys::EXPECTS))
+        .and_then(Value::as_str)
+        .map(|s| {
+            s.split(',')
+                .filter_map(|entry| {
+                    let mut parts = entry.trim().splitn(3, '|');
+                    let api_version = parts.next()?.to_string();
+                    let kind = parts.next()?.to_string();
+                    let name = parts.next()?.to_string();
+                    if api_version.is_empty() || kind.is_empty() || name.is_empty() {
+                        return None;
+                    }
+                    Some(Expectation {
+                        api_version,
+                        kind,
+                        name,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Wait until every object the manifest expects exists, in the manifest's
+/// namespace (or at cluster scope for a cluster-scoped kind). Returns the
+/// first expectation still unmet at the timeout, with the reason.
+pub(crate) async fn wait_for_expectations(
+    client: &Client,
+    manifest: &Value,
+    timeout: Duration,
+    cancel: &CancelToken,
+) -> Result<(), (Expectation, String)> {
+    let expected = expectations(manifest);
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let namespace = manifest
+        .pointer("/metadata/namespace")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let start = Instant::now();
+    for e in expected {
+        let (group, version) = split_api_version(&e.api_version);
+        let gvk = kube::core::GroupVersionKind::gvk(group, version, &e.kind);
+        let (ar, caps) = kube::discovery::oneshot::pinned_kind(client, &gvk)
+            .await
+            .map_err(|err| (e.clone(), format!("the kind is not served: {err}")))?;
+        let api: Api<DynamicObject> = match caps.scope {
+            Scope::Cluster => Api::all_with(client.clone(), &ar),
+            Scope::Namespaced => {
+                let ns = namespace.as_deref().ok_or_else(|| {
+                    (
+                        e.clone(),
+                        "the referring manifest has no namespace".to_string(),
+                    )
+                })?;
+                Api::namespaced_with(client.clone(), ns, &ar)
+            }
+        };
+        loop {
+            if cancel.is_cancelled() {
+                return Err((e, "cancelled".to_string()));
+            }
+            match api.get_opt(&e.name).await {
+                Ok(Some(_)) => break,
+                Ok(None) => {}
+                Err(err) => return Err((e, format!("lookup failed: {err}"))),
+            }
+            if start.elapsed() >= timeout {
+                return Err((e, format!("not found after {}s", timeout.as_secs())));
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    Ok(())
+}

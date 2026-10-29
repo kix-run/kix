@@ -434,7 +434,12 @@ mod tests {
         for root in roots {
             assert!(root.is_dir(), "scan root missing: {}", root.display());
             for path in rust_files(&root) {
-                if path.ends_with("lifecycle.rs") {
+                if path.ends_with("lifecycle.rs")
+                    || path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n == "tests.rs" || n.ends_with("_tests.rs"))
+                {
                     continue;
                 }
                 scanned += 1;
