@@ -875,10 +875,11 @@ in
                 # Count `spec.instances` pods, lowered to
                 # `spec.autoscaling.minInstances` when horizontal autoscaling is
                 # active (`mode` is `"all"`, the default, or `"horizontal"`) and to
-                # 1 when replicas initialize from a newly created backup. Only the
-                # pod count is reported because container resources live on the
+                # 1 when replicas initialize from a newly created backup. Each
+                # pod has one claim of `spec.pods.persistentVolume.size`. Pod
+                # resources are not counted because they live on the
                 # referenced `SGInstanceProfile`.
-                runsAtLeast =
+                usesAtLeast =
                   cr:
                   let
                     spec = cr.spec or { };
@@ -894,21 +895,20 @@ in
                       lib.optional scales (autoscaling.minInstances or 0) ++ lib.optional fromNewBackup 1
                     );
                   in
-                  [
-                    {
-                      inherit pods;
-                      resources = { };
-                    }
-                  ];
+                  kix.usage.times pods {
+                    pods = 1;
+                    persistentvolumeclaims = 1;
+                    "requests.storage" = spec.pods.persistentVolume.size or null;
+                  };
               }
               // lib.optionalAttrs (kind == "SGDistributedLogs") {
-                # Count the single-instance `SGCluster` created for distributed logs.
-                runsAtLeast = _: [
-                  {
-                    pods = 1;
-                    resources = { };
-                  }
-                ];
+                # Count the single-instance `SGCluster` created for distributed
+                # logs, with its one claim of `spec.persistentVolume.size`.
+                usesAtLeast = cr: {
+                  pods = 1;
+                  persistentvolumeclaims = 1;
+                  "requests.storage" = cr.spec.persistentVolume.size or null;
+                };
               }
               // lib.optionalAttrs (kind == "SGObjectStorage") {
                 # No pod dials the endpoint for the SGObjectStorage; the

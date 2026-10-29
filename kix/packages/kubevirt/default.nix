@@ -612,8 +612,9 @@ in
           # (`spec.runStrategy` is `Always` or `RerunOnFailure`, or
           # `spec.running` is `true`). Only the pod count is reported because
           # hugepages or a referenced instance type can change the launcher
-          # pod's resource requests.
-          runsAtLeast =
+          # pod's resource requests. Claims from `spec.dataVolumeTemplates`
+          # are left out: CDI makes them, and when depends on its settings.
+          usesAtLeast =
             cr:
             let
               spec = cr.spec or { };
@@ -626,12 +627,9 @@ in
                 else
                   spec.running or false;
             in
-            [
-              {
-                pods = if runs then 1 else 0;
-                resources = { };
-              }
-            ];
+            {
+              pods = if runs then 1 else 0;
+            };
         };
       };
 

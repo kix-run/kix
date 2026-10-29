@@ -8,6 +8,7 @@ let
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
   oidcProvider = import ./oidc-provider.nix { inherit lib; };
+  quotaUse = import ./quota-use.nix { inherit lib; };
 in
 compose
 // {
@@ -73,6 +74,10 @@ compose
         maxSeverity = sc.maxSeverity or "error";
         inherit namespaceName owner;
       };
+  # Build the usage a CRD's `usesAtLeast` returns: one pod's usage from its
+  # containers, a usage times a count, and the sum of several usages
+  # (`vocab/quota-use.nix`).
+  usage = quotaUse.helpers;
   # Convert Prometheus durations and compute staleness thresholds for scheduled
   # jobs (`vocab/durations.nix`).
   inherit (durations) durations schedules;

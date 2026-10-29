@@ -25,6 +25,7 @@
   config,
   scope,
   lib,
+  kix,
   ...
 }:
 let
@@ -70,22 +71,23 @@ let
     else
       { endpoint = "conduct"; };
 
-  # Return the minimum pod groups for an installation CR. Each cluster
-  # runs `layout.shardsCount` * `layout.replicasCount` pods (each at
-  # least 1 and at least the length of `layout.shards` or
-  # `layout.replicas`), defaulting to a single 1x1 cluster when
-  # `spec.configuration.clusters` is empty. When `spec.stop` or
-  # `spec.suspend` is truthy, the operator runs no pods.
+  # Return the least an installation CR uses. Each cluster runs
+  # `layout.shardsCount` * `layout.replicasCount` hosts (each at least 1 and
+  # at least the length of `layout.shards` or `layout.replicas`), defaulting
+  # to a single 1x1 cluster when `spec.configuration.clusters` is empty.
+  # When `spec.stop` or `spec.suspend` is truthy, the operator runs nothing.
   #
-  # Pod resources come from the `def.container` container in the
-  # cluster's `templates.podTemplate` (falling back to
-  # `spec.defaults.templates.podTemplate`). If any shard, replica, or
-  # host overrides `templates`, or if `spec.templates.hostTemplates` is
-  # non-empty, only the pod count is reported because hosts may use
-  # different pod templates. Sidecar containers and external
-  # `ClickHouseInstallationTemplate` resources are not included.
-  runsAtLeastFor =
-    def: cr:
+  # Every host is one pod with its own Service. The pod has every container
+  # in the cluster's `templates.podTemplate` (falling back to
+  # `spec.defaults.templates.podTemplate`), and one claim for each
+  # `dataVolumeClaimTemplate` and `logVolumeClaimTemplate` the cluster or
+  # `spec.defaults` names, sized by that volume claim template. If any
+  # shard, replica, or host overrides `templates`, or if
+  # `spec.templates.hostTemplates` is non-empty, only the pods and Services
+  # are counted, because hosts may use different templates. External
+  # `ClickHouseInstallationTemplate` resources are not read.
+  usesAtLeastFor =
+    cr:
     let
       spec = cr.spec or { };
       off =
@@ -99,15 +101,9 @@ let
           "disable"
           "disabled"
         ];
-      podTemplate =
-        templateName:
-        lib.findFirst (t: (t.name or null) == templateName) null (spec.templates.podTemplates or [ ]);
-      containerOf =
-        template:
-        lib.findFirst (c: (c.name or null) == def.container) { } (
-          if template == null then [ ] else template.spec.containers or [ ]
-        );
-      podsOf =
+      named =
+        list: name: lib.findFirst (t: (t.name or null) == name) null (if name == null then [ ] else list);
+      useOf =
         cluster:
         let
           layout = cluster.layout or { };
@@ -120,19 +116,46 @@ let
             ++ builtins.concatMap (r: r.shards or [ ]) replicas;
           ownTemplates =
             builtins.any (e: e ? templates) nested || (spec.templates.hostTemplates or [ ]) != [ ];
-          templateName = cluster.templates.podTemplate or spec.defaults.templates.podTemplate or null;
-        in
-        {
-          pods =
+          templateOf = field: cluster.templates.${field} or spec.defaults.templates.${field} or null;
+          podTemplate = named (spec.templates.podTemplates or [ ]) (templateOf "podTemplate");
+          claims = builtins.filter (t: t != null) (
+            map (named (spec.templates.volumeClaimTemplates or [ ])) (
+              lib.unique (
+                builtins.filter (n: n != null) [
+                  (templateOf "dataVolumeClaimTemplate")
+                  (templateOf "logVolumeClaimTemplate")
+                ]
+              )
+            )
+          );
+          hosts =
             lib.max 1 (lib.max (layout.shardsCount or 0) (builtins.length shards))
             * lib.max 1 (lib.max (layout.replicasCount or 0) (builtins.length replicas));
-          resources = if ownTemplates then { } else (containerOf (podTemplate templateName)).resources or { };
-        };
+          perHost =
+            if ownTemplates then
+              {
+                pods = 1;
+                services = 1;
+              }
+            else
+              kix.usage.add (
+                [
+                  (kix.usage.ofPod (if podTemplate == null then [ ] else podTemplate.spec.containers or [ ]))
+                  { services = 1; }
+                ]
+                ++ map (t: {
+                  persistentvolumeclaims = 1;
+                  "requests.storage" = t.spec.resources.requests.storage or null;
+                }) claims
+              );
+        in
+        kix.usage.times hosts perHost;
       clusters = spec.configuration.clusters or [ ];
     in
-    lib.optionals (off (spec.stop or null) && off (spec.suspend or null)) (
-      map podsOf (if clusters == [ ] then [ { } ] else clusters)
-    );
+    if off (spec.stop or null) && off (spec.suspend or null) then
+      kix.usage.add (map useOf (if clusters == [ ] then [ { } ] else clusters))
+    else
+      { };
 
   # The file is the whole upstream CRD document. A missing file is an error
   # and not a fall back to the stub, because the point is that these kinds
@@ -199,7 +222,7 @@ let
         }
         // lib.optionalAttrs def.operand {
           readiness = operandReadiness;
-          runsAtLeast = runsAtLeastFor def;
+          usesAtLeast = usesAtLeastFor;
         }
       )
     );

@@ -387,16 +387,17 @@ in
         poolers = gate (
           scope.mkCRD {
             spec = vendored "poolers.${group}.json";
-            # Count one PgBouncer pod per `spec.instances` (default 1),
-            # sized by the `pgbouncer` container of `spec.template`.
-            runsAtLeast = cr: [
-              {
-                pods = cr.spec.instances or 1;
-                resources =
-                  (lib.findFirst (c: (c.name or null) == "pgbouncer") { } (cr.spec.template.spec.containers or [ ]))
-                  .resources or { };
-              }
-            ];
+            # Count `spec.instances` PgBouncer pods (default 1), each with
+            # every container in `spec.template`, and the one Service the
+            # operator makes for the Pooler.
+            usesAtLeast =
+              cr:
+              kix.usage.add [
+                (kix.usage.times (cr.spec.instances or 1) (
+                  kix.usage.ofPod (cr.spec.template.spec.containers or [ ])
+                ))
+                { services = 1; }
+              ];
           }
         );
         failoverQuorums = scope.mkCRD { spec = vendored "failoverquorums.${group}.json"; };
@@ -409,14 +410,52 @@ in
               endpoint = "terminate";
               podSelector = cr: operandSelectors.cluster cr.metadata.name;
             };
-            # Count one instance pod per `spec.instances`, sized by
-            # `spec.resources`. Short-lived init and join Jobs are excluded.
-            runsAtLeast = cr: [
-              {
-                pods = cr.spec.instances or 1;
-                resources = cr.spec.resources or { };
-              }
-            ];
+            # Count `spec.instances` instance pods, sized by `spec.resources`.
+            # Each instance has one claim for its data, one for
+            # `spec.walStorage` when set, and one per tablespace. A claim
+            # counts only when its size is known. The rw, ro, and r Services
+            # count unless `spec.managed.services` disables them, plus each
+            # additional managed Service. Short-lived init and join Jobs are
+            # excluded.
+            usesAtLeast =
+              cr:
+              let
+                spec = cr.spec or { };
+                instances = spec.instances or 1;
+                sizeOf = storage: storage.size or storage.pvcTemplate.resources.requests.storage or null;
+                sizes = builtins.filter (size: size != null && size != "") (
+                  map sizeOf (
+                    [ (spec.storage or { }) ]
+                    ++ lib.optional (spec ? walStorage) spec.walStorage
+                    ++ map (t: t.storage or { }) (spec.tablespaces or [ ])
+                  )
+                );
+                services = spec.managed.services or { };
+                disabled = services.disabledDefaultServices or [ ];
+              in
+              kix.usage.add (
+                [
+                  (kix.usage.times instances (kix.usage.ofPod [ { resources = spec.resources or { }; } ]))
+                  {
+                    services =
+                      builtins.length (
+                        builtins.filter (t: !(builtins.elem t disabled)) [
+                          "rw"
+                          "ro"
+                          "r"
+                        ]
+                      )
+                      + builtins.length (services.additional or [ ]);
+                  }
+                ]
+                ++ map (
+                  size:
+                  kix.usage.times instances {
+                    persistentvolumeclaims = 1;
+                    "requests.storage" = size;
+                  }
+                ) sizes
+              );
           }
         );
         databases = gate (
