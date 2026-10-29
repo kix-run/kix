@@ -1,6 +1,6 @@
 ---
-title: "`service.fromWorkload`"
-description: "Build a Service from a workload's selector and declared container ports."
+title: "`service.fromWorkload` and `port`"
+description: "Build a Service from a workload's selector and declared container ports, and construct named TCP container ports."
 ---
 
 `kix.service.fromWorkload` returns an unsealed Service definition whose
@@ -61,6 +61,28 @@ service =
 The workload reference in `out.selector` also carries its resource identity.
 Sealing the Service records that dependency, so deployment waits for the
 workload before treating the Service as ready.
+
+## `kix.port`
+
+`kix.port name containerPort` returns a named TCP container port definition:
+
+```nix
+ports = [ (kix.port "http" 8080) ];
+```
+
+This expands to:
+
+```nix
+{
+  name = "http";
+  containerPort = 8080;
+  protocol = "TCP";
+}
+```
+
+When a workload declares its container ports with `kix.port`,
+`kix.service.fromWorkload` copies both `name` and `port` into the generated
+Service `spec.ports`.
 
 :::tip[Use it in a task]
 See [Create a local package](/docs/how-to/author-packages-and-clusters/create-a-local-package/)

@@ -1,140 +1,224 @@
 ---
-title: "`expose`"
-description: "Add an Ingress or Gateway API HTTPRoute for one Service or a set of path backends."
+title: "`expose`, `ingress`, and `httpRoute`"
+description: "Expose a Service or path backends through an Ingress or Gateway API HTTPRoute, or build route definitions directly."
 ---
 
-`kix.expose` returns a package build function. Add it to the package's `build`
-list after the function that creates the backend Services:
+Kix provides two layers for HTTP exposure:
+
+- `kix.expose` is a build-entry function that inspects the resolved router
+  dependency (`gateway` or `ingressNginx`) and creates either a Gateway API
+  `HTTPRoute` or a Kubernetes `Ingress` (plus network policy edges when a
+  network policy enforcer is active).
+- `kix.ingress.fromService`, `kix.httpRoute.fromService`, and
+  `kix.httpRoute.fromPaths` are lower-level helpers that return unsealed
+  `Ingress` or `HTTPRoute` definitions for `scope.mkResource` or `scope.mkCR`.
+
+## `kix.expose`
+
+`kix.expose` returns a build-entry function for a package's `build` list:
 
 ```nix
 build = [
-  ({ self, scope, ... }: {
-    service = scope.mkResource { /* ... */ };
-    root = self.service;
+  ({ scope, config, self, kix, ... }: {
+    deployment = /* ... */;
+    service = self.deployment |> kix.service.fromWorkload { port = 8080; } |> scope.mkResource;
   })
   (kix.expose { service = "service"; })
 ];
 ```
 
-The helper has optional `gateway`, `ingressNginx`, and `clusterIssuer` build
-arguments. It emits an HTTPRoute when a Gateway provider is resolved, or an
-Ingress when an ingress-nginx provider is resolved. Resolving both exposure
-providers is an evaluation error; wire exactly one with the instance's
-`deps` when both are available. The HTTPRoute depends on a CRD reference
-marker for `httproutes.gateway.networking.k8s.io`, so `kix deploy` waits for
-the Gateway API CRDs before applying it.
+Pair `kix.expose` with `kix.options.ingress` in the package's `options` so
+instances can configure `ingress.host` and `ingress.annotations`.
 
-No route is emitted when neither provider is available or when no host can be
-resolved. The host comes from `config.ingress.host`, then falls back to
-`<instance>.<cluster.domain>`. With `deriveHost = false` there is no
-fallback: the instance gets a route only when it sets `ingress.host`.
-
-The helper adds two parts to the package: the Ingress or HTTPRoute, named
-`route` by default, and `exposure`, a record that describes it. A
-Deployment in the same package can read `self.exposure.url`.
-
-## Backend modes
-
-Set exactly one of `service` and `paths`.
-
-`service` names one part in the package's returned attrset:
-
-```nix
-kix.expose {
-  service = "service";
-  port = 8080;
-}
-```
-
-`paths` routes several paths, possibly to different Service parts:
-
-```nix
-kix.expose {
-  paths = [
-    { path = "/api"; service = "apiService"; }
-    { path = "/"; service = "frontendService"; port = 80; }
-  ];
-}
-```
-
-Each path accepts `path`, `service`, optional `port`, and optional `pathType`.
-The default path type is `Prefix`. In Gateway mode it is translated to
-`PathPrefix`; `Exact` is supported in both modes. A missing port is read from
-the Service's `out.port`, and evaluation fails when neither is available.
-
-## Arguments
+### Arguments
 
 | Argument | Default | Meaning |
-|---|---|---|
-| `service` | `null` | Name of the single backend Service part. Mutually exclusive with `paths`. |
-| `paths` | `null` | Path records for one Ingress or HTTPRoute. Mutually exclusive with `service`. |
-| `partName` | `"route"` | Part name for the generated Ingress or HTTPRoute. Derived network-policy part names also start with this value. In Gateway mode a second part, `<partName>Crd`, holds the `scope.mkCRDRef` for HTTPRoute that the route is built from (`routeCrd` by default). |
-| `exposurePart` | `"exposure"` | Part name for the exposure record. A package that calls `kix.expose` twice sets `partName` and `exposurePart` on the second call; two build entries that define the same part are an evaluation error. |
-| `defaultAnnotations` | `{ }` | Base Ingress annotations. `config.ingress.annotations` takes precedence on duplicate keys. Ignored in Gateway mode. |
-| `port` | `null` | Single-backend Service port. `null` reads `out.port`. |
-| `timeouts` | `null` | Gateway API rule timeouts. Copied to every rule and ignored in Ingress mode. |
-| `deriveHost` | `true` | When `false`, the host comes only from `config.ingress.host`. Without it there is no route and `exposure.via` is `null`. Use it for a package that should not be public unless the instance names a host. |
+| --- | --- | --- |
+| `service` | `null` | Name of the Service part on `self` (for example, `"service"`). Mutually exclusive with `paths`. |
+| `paths` | `null` | List of `{ path; service; port ? null; pathType ? "Prefix"; }` records naming Service parts on `self`. Mutually exclusive with `service`. |
+| `partName` | `"route"` | Part name created on `self` for the rendered `Ingress` or `HTTPRoute` (or `null` when unexposed). |
+| `exposurePart` | `"exposure"` | Part name created on `self` for the route metadata record (`{ via; host; scheme; url; urlOrNull; }`). |
+| `defaultAnnotations` | `{ }` | Default annotations merged under `config.ingress.annotations` in Ingress mode. |
+| `port` | `null` | Explicit backend Service port when `service` is used. Defaults to `self.<service>.out.port`. |
+| `timeouts` | `null` | Gateway API rule timeouts (such as `{ request = "0s"; }`) in Gateway mode. Ignored in Ingress mode. |
+| `deriveHost` | `true` | When `true`, falls back to `<instanceName>.<cluster.domain>` when `config.ingress.host` is unset. When `false`, requires an explicit `config.ingress.host`. |
 
-## TLS
+If a package calls `kix.expose` more than once, set distinct `partName` and
+`exposurePart` names on the second call so its parts do not collide with the
+first.
 
-Ingress mode enables TLS when a `clusterIssuer` dependency is resolved. The
-issuer helper annotates the Ingress, and Kix adds a TLS entry for the host
-with the Secret `<instance>-tls`. Gateway mode leaves TLS to the Gateway
-listener.
+### Dependencies and parts produced
 
-## Public URL
+The build function returned by `kix.expose` takes optional `gateway ? null`,
+`ingressNginx ? null`, and `clusterIssuer ? null` dependencies:
 
-The `exposure` part is a record of the route this call renders:
+- When neither `gateway` nor `ingressNginx` is resolved (or no host is set),
+  `self.<partName>` is `null` and `self.<exposurePart>.via` is `null`.
+- When `gateway` is resolved, `kix.expose` validates that the Gateway publishes
+  a matching HTTP or HTTPS listener for the route's host and namespace, creates
+  `self.<partName>Crd` (`scope.mkCRDRef` for `HTTPRoute`), and builds
+  `self.<partName>` with `scope.mkCR`.
+- When `ingressNginx` is resolved, `kix.expose` builds a `networking.k8s.io/v1`
+  `Ingress` with `scope.mkResource`, applying `clusterIssuer.out.withCert` when
+  `clusterIssuer` is present.
+- When both `gateway` and `ingressNginx` are resolved at once, evaluation fails
+  and asks the cluster definition to wire one of them via `deps`.
+- When a `network-policy-enforcer` is present and the router publishes
+  `out.podSelector`, `kix.expose` also emits `<partName>-netpol-<servicePart>`
+  allowing ingress traffic from the router's pods to the backend Service ports.
+
+### Reading the public URL (`self.exposure`)
+
+`self.<exposurePart>` (`self.exposure` by default) is a record with:
 
 | Field | Value |
-|---|---|
-| `via` | `"gateway"`, `"ingress"`, or `null` when no route is rendered |
-| `host` | The route's host, or `null` |
-| `scheme` | `"https"` or `"http"`, or `null` when Kix cannot tell |
-| `url` | `<scheme>://<host>`, with `:<port>` when the port is not the scheme's default. Reading it when `scheme` is null is an evaluation error that names the instance and the cause: no route, no host, or a Gateway without listeners |
-| `urlOrNull` | `url`, or `null` when `scheme` is null, for a package that works without a public URL |
+| --- | --- |
+| `via` | `"gateway"`, `"ingress"`, or `null` |
+| `host` | Resolved hostname string without Nix string context, or `null` |
+| `scheme` | `"http"`, `"https"`, or `null` |
+| `urlOrNull` | `"<scheme>://<host>[:<port>]"` when exposed, or `null` when unexposed |
+| `url` | Same as `urlOrNull`, but fails evaluation with an actionable message if the instance is not exposed |
 
-In Ingress mode the scheme is `https` when a `clusterIssuer` is wired and
-`http` otherwise.
+## `kix.ingress.fromService`
 
-In Gateway mode Kix finds the listener the HTTPRoute attaches to, as
-Gateway API does. A listener qualifies when its `protocol` is `HTTP` or
-`HTTPS`, its `hostname` is unset, equal to the host, or a wildcard such as
-`*.example.com` that covers it, and its `allowedRoutes.namespaces.from` is
-`All`, or `Same` (the default) with the application in the Gateway's
-namespace. Among qualifying listeners Kix prefers HTTPS, then the scheme's
-default port, then list order. When no listener qualifies, evaluation
-fails and the message lists each listener with the reason it was skipped.
+`kix.ingress.fromService` takes route settings and a Service resource, and
+returns an unsealed `networking.k8s.io/v1` `Ingress` definition for
+`scope.mkResource`:
 
-Kix does not evaluate a `Selector` namespace policy. Such a listener is
-chosen only when no other qualifies, and Kix warns that it assumed the
-application's namespace matches.
+```nix
+ingress =
+  self.service
+  |> kix.ingress.fromService {
+    name = scope.instanceName;
+    host = "app.example.com";
+    className = ingressNginx.out.ingressClassName;
+  }
+  |> scope.mkResource;
+```
 
-A Gateway that does not publish its listeners, such as one declared with
-`kix.mkImport`, gives `scheme = null`, so reading `url` fails.
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | `Ingress` name. |
+| `host` | required | Hostname for the single rule. |
+| `path` | `"/"` | HTTP path match value. |
+| `pathType` | `"Prefix"` | Kubernetes Ingress path match type (`"Prefix"` or `"Exact"`). |
+| `port` | the Service's `out.port` | Numeric backend Service port. Required when the Service exports no `out.port`. |
+| `className` | `null` | Written to `spec.ingressClassName` when non-null. |
+| `tls` | `[ ]` | Written to `spec.tls` when non-empty. |
 
-A package that needs its public URL reads `url`, so an instance without a
-route fails evaluation instead of starting with a wrong address. A package
-that works without one, such as Metabase, which then records the URL of
-the first administrator's request, reads `urlOrNull` and handles null.
+Any additional attributes on the first argument (such as `annotations` or
+`labels`) are passed through to the returned resource definition.
 
-TLS that terminates outside Kix, for example at cloudflared or at a load
-balancer in front of ingress-nginx, is not visible to Kix, so the record
-says `http`. Packages that read the URL take an override for that case
-(vaultwarden's `domain`, for one).
+## `kix.httpRoute.fromService`
 
-## Generated network policy
+`kix.httpRoute.fromService` takes route settings and a Service resource, and
+returns an unsealed Gateway API `HTTPRoute` definition with one rule. Build it
+with `scope.mkCR` from a CRD reference for HTTPRoute, which adds the instance
+namespace, labels, validation, and dependency metadata. The HTTPRoute CRD
+comes with the Gateway API implementation, so the package declares it with
+`scope.mkCRDRef`; without that dependency the cluster build refuses the route
+(cross-resource check 21).
 
-With ingress-nginx and a network-policy provider, Kix derives an ingress rule
-from the controller pods to each backend. The ingress controller package must
-export `out.podSelector` and `out.podNamespace`; Kix warns when it cannot
-derive the rule. In Gateway mode the rule comes from the gateway's
-`out.podSelector` and `out.podNamespace`: traefik publishes its pods, and
-envoy-gateway publishes null because Envoy Gateway's controller places the
-proxy pods, so its backends get no rule.
+```nix
+routeCrd = scope.mkCRDRef {
+  group = "gateway.networking.k8s.io";
+  kind = "HTTPRoute";
+  plural = "httproutes";
+  version = "v1";
+};
 
-:::tip[Use it in a task]
-See [Expose a Service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/),
-[Expose a Service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/),
-and [Add TLS through a cluster issuer](/docs/how-to/platform-capabilities/add-tls-through-a-cluster-issuer/).
-:::
+route =
+  self.service
+  |> kix.httpRoute.fromService {
+    name = scope.instanceName;
+    host = "app.example.com";
+    parentRef = gateway.out.gatewayRef;
+  }
+  |> scope.mkCR self.routeCrd;
+```
+
+### Arguments
+
+The first argument is a record; the second is the backend Service resource.
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | HTTPRoute name. |
+| `host` | required | The single entry written to `spec.hostnames`. |
+| `parentRef` | required | Gateway reference with `name` and optional `namespace`. |
+| `path` | `"/"` | HTTP path value of the rule's match. |
+| `pathType` | `"PathPrefix"` | Gateway API path match type, written as given. |
+| `port` | the Service's `out.port` | Numeric backend Service port. Required when the Service exports no `out.port`. |
+| `timeouts` | `null` | Gateway API rule timeouts, such as `{ request = "0s"; }` for a long-lived streaming backend. Omitted when `null`. |
+
+Any other key is copied to the top level of the returned definition, so
+`labels` or `annotations` reach `scope.mkCR`.
+
+`kix.expose { service = ...; }` uses this helper when the package receives a
+Gateway provider, and adds the CRD reference as the part `<partName>Crd`
+(`routeCrd` by default). Use the helper directly when a package needs an
+HTTPRoute outside the standard exposure interface. For several paths to
+different Services, see [`kix.httpRoute.fromPaths`](#kixhttproutefrompaths).
+
+## `kix.httpRoute.fromPaths`
+
+`kix.httpRoute.fromPaths` returns an unsealed Gateway API `HTTPRoute`
+definition. Build it with `scope.mkCR` from a CRD reference for HTTPRoute,
+which adds the instance namespace, labels, validation, and dependency
+metadata. The HTTPRoute CRD comes with the Gateway API implementation, so the
+package declares it with `scope.mkCRDRef`; without that dependency the
+cluster build refuses the route (cross-resource check 21).
+
+```nix
+routeCrd = scope.mkCRDRef {
+  group = "gateway.networking.k8s.io";
+  kind = "HTTPRoute";
+  plural = "httproutes";
+  version = "v1";
+};
+
+route = scope.mkCR self.routeCrd (kix.httpRoute.fromPaths {
+  name = scope.instanceName;
+  host = "app.example.com";
+  parentRef = gateway.out.gatewayRef;
+  paths = [
+    {
+      path = "/api";
+      svc = self.apiService;
+      port = 8080;
+    }
+    {
+      path = "/";
+      pathType = "Exact";
+      svc = self.frontendService;
+    }
+  ];
+});
+```
+
+### Arguments
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | HTTPRoute name. |
+| `host` | required | The single entry written to `spec.hostnames`. |
+| `parentRef` | required | Gateway reference with `name` and optional `namespace`. |
+| `paths` | required | List of backend path records described below. |
+| `timeouts` | `null` | Gateway API rule timeouts, copied to every generated rule. |
+
+Each `paths` entry accepts:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `path` | required | HTTP path value. |
+| `svc` | required | Kix Service resource used for the backend name and dependency. |
+| `port` | `svc.out.port` | Numeric backend Service port. Required when the Service exports no `out.port`. |
+| `pathType` | `"Prefix"` | `Prefix` or `PathPrefix` becomes Gateway API `PathPrefix`; `Exact` remains `Exact`. Other values are evaluation errors. |
+
+The helper writes one HTTPRoute rule per path. Gateway API determines rule
+precedence, so list order does not control which matching rule wins.
+
+`kix.expose { paths = ...; }` uses this helper when the package receives a
+Gateway provider, and adds the CRD reference as the part `<partName>Crd`
+(`routeCrd` by default). Use the helper directly when a package needs an
+HTTPRoute outside the standard exposure interface.

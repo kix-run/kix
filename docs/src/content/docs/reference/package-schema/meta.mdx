@@ -1,4 +1,410 @@
 ---
 title: "`meta`"
-description: TODO
+description: "Package metadata fields: version, roles, aliases, availability ceilings, compatibility constraints, conflicts, pod security, unsafe grants, annotation domains, lifecycle, scope, owner, and deprecation."
 ---
+
+Every Kix package can declare a top-level `meta` attribute set. Unlike `options`
+or `build`, `meta` is static package metadata: Kix inspects it before resolving
+the dependency graph or evaluating instance options, so `meta` must not depend
+on `config`, `deps`, or the `availability` argument.
+
+```nix
+{
+  meta = {
+    version = "1.19.6";
+    owner = "platform";
+    defaultAliases = [ "certManager" ];
+    conflictsWith = [ "cluster:certManager" ];
+    annotationDomains = [ "cert-manager.io" ];
+  };
+
+  build = { scope, config, ... }: {
+    # ...
+  };
+}
+```
+
+## Summary of fields
+
+| Field | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| [`version`](#version) | `string` | unset | Upstream release the package deploys, checked against [`compatibleWith`](#compatiblewith) constraints. |
+| [`roles`](#roles) | `list of string` | `[ ]` | Cluster infrastructure roles the package provides (`cni`, `dns`, `loadBalancer`, `metricsApi`, `network-policy-enforcer`, `registryMirror`, `snapshotController`, `storageClasses`). |
+| [`defaultAliases`](#defaultaliases) | `list of string` | `[ ]` | Default dependency-injection names the package answers when an instance does not set `aliases`. |
+| [`availability`](#availability) | `{ max = "none" \| "pod" \| "node"; }` | unset | Highest availability level the package can provide across all of its workloads. |
+| [`compatibleWith`](#compatiblewith) | `attrs of { minVersion?; maxVersion?; reason?; }` | `{ }` | Version constraints on dependencies bound by `<dep>` name. |
+| [`k8s`](#compatiblewith) | `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version constraints on the cluster's `k8sVersion`. |
+| [`conflictsWith`](#conflictswith) | `list of string` | `[ ]` | Names (`"<name>"` or `"cluster:<name>"`) whose instances cannot coexist with this package. |
+| [`podSecurity`](#podsecurity) | `"privileged" \| "baseline" \| "restricted"` | unset | Pod Security Standards level the package requires from its namespace. |
+| [`unsafe`](#unsafe) | `list of string` | `[ ]` | Audited exceptions to Kix structural and security rules (`raw-pvc`, `host-network`, `privileged`, `run-as-root`, `cluster-admin`). |
+| [`annotationDomains`](#annotationdomains) | `list of string` | `[ ]` | Annotation domains the package's operator or controller owns and consumes. |
+| [`lifecycle`](#lifecycle) | `"stateful"` | unset | Marks the package as stateful so `kix plan` and `kix deploy` flag destructive replacements. |
+| [`scope`](#scope) | `"cluster" \| "namespace"` | `"cluster"` | Controls whether automatic dependency resolution can match an instance across namespaces. |
+| [`owner`](#owner) | `string` | `null` | Team or maintainer identifier used by scorecard governance rules and `byOwner` severity overrides. |
+| [`deprecated`](#deprecated) | `{ message; replacement?; }` | `null` | Emits an evaluation warning when any instance uses the package. |
+
+## `version`
+
+`meta.version` is the upstream release a package deploys, such as `"1.19.6"` or
+`"v1.19.6"`. Both spellings are valid. A package that only writes another
+package's resources omits it.
+
+### Version grammar
+
+A version is an optional `v`, numbers separated by dots, an optional `-suffix`,
+and an optional `+build`: `1.31`, `v2.12.2`, `1.31.2+rke2r1`,
+`1.31.2-gke.1209000`.
+
+A `-suffix` is a prerelease only when its first identifier is `alpha`, `beta`,
+`rc`, `pre`, `dev`, or `preview`, optionally followed by digits (`rc1`), as
+Kubernetes tags its releases. Any other suffix (`-gke.1209000`, `-eks-7f9249a`,
+`-cf`) is a vendor build tag and is ignored, like `+build`. This differs from
+semver 2.0, which would treat every suffix as a prerelease. Helm's `-0` in
+`>= 1.18.0-0` is therefore a build tag too.
+
+### Version ordering
+
+Versions compare number by number, padding the shorter one with zeros, so
+`1.31` equals `1.31.0`. With equal numbers, a prerelease sorts before the
+release, and prereleases compare by semver 2.0 rules after `rc10` is split into
+`rc` and `10`, so `rc2` sorts before `rc10`.
+
+`kix/package-eval.nix` checks that every package's `meta.version` parses.
+
+## `roles`
+
+`meta.roles` is a list of cluster infrastructure roles that the package
+provides:
+
+```nix
+meta.roles = [
+  "cni"
+  "network-policy-enforcer"
+];
+```
+
+The role registry is closed. An unknown role name is an evaluation error. For
+ordinary dependency names, use [`meta.defaultAliases`](#defaultaliases).
+
+| Role | Required `out` fields | Purpose |
+| --- | --- | --- |
+| `cni` | none | Pod network owner. Checked against `roles.cni.binding` so an exclusive environment CNI rejects a second managed CNI at evaluation time. |
+| `dns` | `fqdn` | Cluster DNS provider. Workloads take a readiness edge on its root and read `out.fqdn`. |
+| `loadBalancer` | none | `Service` `type = "LoadBalancer"` implementation. Presence (via a managed provider or an environment binding) gates LoadBalancer Services. |
+| `metricsApi` | none | Resource metrics API (`metrics.k8s.io`). Presence gates resource-metric HorizontalPodAutoscalers and the descheduler's `KubernetesMetrics` source. |
+| `network-policy-enforcer` | `netpol` | NetworkPolicy enforcement engine, consumed by the `netpol` plugin and `scope.networkPolicyEnforcer`. |
+| `registryMirror` | none | Node-local OCI registry mirror (such as Spegel). Checked against `roles.registryMirror.binding`. |
+| `snapshotController` | `crds` | CSI snapshot controller and `snapshot.storage.k8s.io` CRDs. |
+| `storageClasses` | `storageClassName` | StorageClass provider. Consumers read `out.storageClassName` when a claim does not name a class explicitly. |
+
+Declaring a role has three effects:
+
+1. **Dependency alias**: every role in `meta.roles` remains active as a
+   dependency-injection alias for the instance, even when the instance sets its
+   own `aliases`.
+2. **Single provider and environment binding**: Kix checks `meta.roles` against
+   the cluster's [`roles.<name>.binding`](/docs/reference/cluster-module/cluster-roles/)
+   (`managed`, `shadowable`, `exclusive`, or `unprovided`) and enforces at most
+   one managed provider per role in the cluster.
+3. **Output contract**: when a consumer resolves the role provider, Kix checks
+   that the provider's `out` attribute set includes the role's required top-level
+   attributes.
+
+## `defaultAliases`
+
+`meta.defaultAliases` lists the dependency names a package answers when an
+instance does not set `aliases`:
+
+```nix
+meta.defaultAliases = [ "postgres" "db" ];
+```
+
+When an instance sets a non-empty [`aliases`](/docs/reference/instance-schema/aliases/)
+list, that list replaces `meta.defaultAliases` for that instance. Role names
+from [`meta.roles`](#roles) remain active either way.
+
+ See [Use aliases and default aliases](/docs/how-to/debug-dependency-wiring/use-aliases-and-default-aliases/)
+for how aliases participate in dependency resolution.
+
+## `availability`
+
+`meta.availability.max` states the highest availability level the entire
+package can provide.
+
+```nix
+# One writer: the program keeps its state in a local SQLite file.
+meta.availability.max = "none";
+```
+
+The value is one of these levels:
+
+| Ceiling | Meaning | Replicas |
+| --- | --- | --- |
+| `none` | One pod at a time: a single writer, no coordination between pods. | 0 or 1 |
+| `pod` | Survives a pod crash or a rolling update, not a node loss. | any |
+| `node` | Survives a node loss, not a zone loss. | any |
+
+Any other value is an evaluation error. A `zone` ceiling limits nothing, so
+packages omit it.
+
+When an instance requests a higher level, Kix passes the ceiling to the
+package and warns that the instance does not meet the requested level.
+Because the package never sees a level above its ceiling,
+`kix.availability.atLeast` refuses a threshold above the ceiling, which would
+always be false. The evaluation error names the instance.
+
+`max` is the only key of `meta.availability`. Any other key, or a value that
+is not an attribute set, is an evaluation error.
+
+Use a package ceiling for a limit of the program itself that holds for every
+workload and that no configuration lifts. Do not use it merely because one
+replica option has not been mapped from the availability argument.
+
+### Per-workload ceiling
+
+Workload builders (`mkDeployment`, `mkStatefulSet`, `mkJob`, `mkCronJob`)
+also accept `availability.max`:
+
+```nix
+worker = scope.mkDeployment {
+  name = "${scope.instanceName}-worker";
+  availability.max = "none";
+  spec.replicas = 1;
+  # ...
+};
+```
+
+This ceiling applies only to that workload's derived placement, disruption
+budget, and replica checks. It does not change the package's `availability`
+argument or the level used by sibling workloads. Kix warns when it caps the
+instance's level, naming the workload and what it cannot survive.
+
+`max` is the only key. `mkDaemonSet` refuses `availability`, because a
+DaemonSet runs one pod per node and the ceiling has no effect on it.
+
+Put the ceiling on the builder call when the limit belongs to one workload,
+depends on the package's configuration (the builder call can compute it from
+`config`), or comes from what the package wires rather than from the program.
+
+### Effective ceiling
+
+A workload's effective ceiling is the lower of its builder `availability.max`
+and the package's `meta.availability.max`.
+
+A Deployment or StatefulSet with more than one replica under an effective
+ceiling of `none` is an evaluation error. The message names the workload and
+says whether the ceiling comes from its builder call or from the package. Kix
+checks the final manifests, so the error also covers chart workloads under a
+package ceiling and replica counts that an instance or a `partsOverlays` entry
+sets.
+
+A `partsOverlays` entry that rebuilds a workload without `availability.max`
+drops its builder ceiling, which lets a cluster operator run more pods once
+the workload can coordinate them. An overlay that keeps the builder ceiling
+and raises the replica count fails. A package ceiling has no such escape.
+
+:::note[Reference]
+See [`kix.availability`](/docs/reference/kix-helpers/availability/) for mapping
+the package argument onto replica and quorum defaults.
+:::
+
+## `compatibleWith`
+
+`meta.compatibleWith.<dep>` declares a version range for the dependency
+bound to `<dep>`, with optional `minVersion`, `maxVersion`, and `reason`.
+`meta.k8s.minVersion` and `maxVersion` declare a range for the cluster's
+`k8sVersion`. Versions follow the [`version` grammar](#version).
+
+A constraint compares at its own precision. `maxVersion = "1.30"` accepts
+`1.30.4` and rejects `1.31.0`; `minVersion = "1.30"` accepts `1.30.0-rc.1`,
+because the prerelease is below the constraint's precision.
+
+| Outcome | Result |
+| --- | --- |
+| The version is inside the range | Passes |
+| The version is outside the range | Failed assertion naming the dependency, both versions, and the `reason` |
+| The constraint is not a version (`minVersion = "abc"`) | Failed assertion |
+| The dependency reports no version, a word such as `"external"`, or a version less precise than the constraint (`"1.31"` against `minVersion = "1.31.2"`) | Warning; Kix skips the check |
+
+An unset `k8sVersion` is not checked and does not warn.
+
+A managed dependency reports its package's `meta.version`; an import
+reports `out.version` if it sets one.
+
+## `conflictsWith`
+
+```nix
+meta.conflictsWith = [ "alt-pkg" "cluster:certManager" ];
+```
+
+`meta.conflictsWith` is a list of names. Each name is matched against the
+instance names and aliases of the cluster's other instances. When another
+instance matches, evaluation fails with an assertion that names the
+conflicting instances.
+
+| Entry | Matches |
+| --- | --- |
+| `"<name>"` | Other instances in the same namespace |
+| `"cluster:<name>"` | Other instances in any namespace |
+
+The instance never conflicts with itself, so a package that may run only
+once per cluster lists its own default alias with the `cluster:` prefix.
+cert-manager does this with `conflictsWith = [ "cluster:certManager" ];`,
+because a second install would fight over the same cluster-scoped objects.
+
+The assertion names the instance that declares the entry. A conflicting
+instance that auto-instantiation created is marked with the consumers it was
+created for. Auto-instantiation reads a `cluster:` entry naming one of the
+package's own names too: when consumers in more than one namespace require
+the package from `availablePackages`, evaluation fails and asks for one
+declared instance.
+
+The attribute is optional. Its default is `[ ]`.
+
+## `podSecurity`
+
+Set `meta.podSecurity` when a package's pods need a particular Kubernetes Pod
+Security Standards level:
+
+```nix
+meta = {
+  version = "1.0.0";
+  podSecurity = "privileged";
+};
+```
+
+The value is one of `privileged`, `baseline`, or `restricted`, ordered from
+most to least permissive. Kix evaluates the declarations of every instance in
+a namespace and writes the most permissive requested level to the Namespace:
+
+```yaml
+pod-security.kubernetes.io/enforce: privileged
+```
+
+When no instance declares a level and the cluster does not configure one, Kix
+writes no Pod Security Admission label.
+
+The cluster can set `namespaces.<name>.podSecurity` directly. Kix rejects a
+value that is stricter than any package in the namespace requests because
+Kubernetes would refuse that package's pods. When package declarations exist,
+their most permissive level is the one rendered; a more permissive namespace
+setting does not raise it further.
+
+`meta.podSecurity` controls the namespace admission label. It does not exempt
+a package from scorecard rules or from cluster capability checks. Use
+[`meta.unsafe`](#unsafe) only for one of its specific, audited exceptions.
+
+## `unsafe`
+
+`meta.unsafe` is a list of named exceptions to structural and security rules:
+
+```nix
+meta = {
+  version = "1.0.0";
+  unsafe = [ "run-as-root" ];
+};
+```
+
+The vocabulary is closed. An unknown name is an evaluation error, including
+when the package does not render a resource that would use the exception.
+
+| Grant | Effect |
+| --- | --- |
+| `raw-pvc` | Allows the package to build a `PersistentVolumeClaim` directly. Without it, packages must receive storage through a dependency. |
+| `host-network` | Exempts the package from `security.noHostNetwork`, which checks `hostNetwork`, `hostPID`, and `hostIPC`. |
+| `privileged` | Exempts the package from `security.noPrivileged`. |
+| `run-as-root` | Exempts the package from `security.nonRoot`. |
+| `cluster-admin` | Exempts the package from `security.noClusterAdmin`, which refuses a ClusterRoleBinding to `cluster-admin` and a ClusterRole that grants every verb on every resource in every API group. Velero holds it: a backup tool reads every kind and recreates any kind on restore. |
+
+Every declared grant produces an info-level
+`architecture.unsafeGrants` scorecard finding. This keeps the exception
+visible even though the waived rule does not report a finding.
+
+Grants do not change the target cluster's capabilities or Kubernetes
+admission policy. For example, `privileged` suppresses the scorecard rule, but
+a workload still fails evaluation when
+`cluster.capabilities.privilegedContainers = false`, and the API server may
+still reject it under Pod Security Admission.
+
+Keep the list on the package, not on an individual cluster instance, and add a
+source comment explaining why the workload cannot satisfy the normal rule.
+The grant then travels with every use of the package and remains visible in
+the scorecard.
+
+## `annotationDomains`
+
+Operator packages that watch custom annotation prefixes on other resources
+declare those domains in `meta.annotationDomains`:
+
+```nix
+meta.annotationDomains = [ "reloader.stakater.com" ];
+```
+
+Each entry must be a domain name containing at least one dot (`.`) and no slash
+(`/`). At cluster evaluation time, Kix builds a cluster-wide index of declared
+annotation domains:
+
+- Two instances cannot declare the same annotation domain in one cluster; a
+  duplicate declaration fails evaluation immediately.
+- The `architecture.annotationDomainOwnership` scorecard rule checks resource
+  annotations against this index and flags annotations whose domain belongs to
+  an operator that is not deployed in the cluster.
+
+## `lifecycle`
+
+Setting `meta.lifecycle = "stateful"` marks the package as stateful:
+
+```nix
+meta.lifecycle = "stateful";
+```
+
+Kix propagates this marker to the rendered `PackageInstance` record as the
+`kix.run/lifecycle: stateful` annotation. During `kix plan` and `kix deploy`,
+Kix inspects this marker to detect stateful package replacements or migrations
+that require operator confirmation before deleting or replacing state.
+
+## `scope`
+
+`meta.scope` controls whether automatic dependency resolution can match an
+instance of the package across namespaces. The value is `"cluster"` (the
+default) or `"namespace"`:
+
+```nix
+meta.scope = "namespace";
+```
+
+When `meta.scope = "namespace"`:
+
+- Automatic dependency resolution only matches an instance in the requesting
+  consumer's own namespace. Instances in other namespaces are skipped.
+- Auto-instantiation from `availablePackages` places a separate instance in
+  each requesting namespace rather than sharing one instance across the
+  cluster.
+
+## `owner`
+
+`meta.owner` is an optional string naming the team or maintainer responsible
+for the package:
+
+```nix
+meta.owner = "platform";
+```
+
+Kix records `meta.owner` on the evaluated instance metadata. The
+`governance.hasOwner` scorecard rule checks that every deployed package sets an
+owner, and `scorecard.overrides.byOwner.<owner>` can adjust rule severities for
+all packages owned by that team.
+
+## `deprecated`
+
+`meta.deprecated` marks a package as deprecated and emits a warning whenever a
+cluster instantiates it:
+
+```nix
+meta.deprecated = {
+  message = "upstream project is unmaintained";
+  replacement = "valkey";
+};
+```
+
+`message` is required when `deprecated` is set; `replacement` is optional.
