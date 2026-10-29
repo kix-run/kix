@@ -1,14 +1,14 @@
 # Cluster Diff Tools
 
-Compare kix-generated manifests against a live Kubernetes cluster.
+Compare Kix-generated manifests against a live Kubernetes cluster.
 
 ## Quick Start
 
 ```bash
-# 1. Build kix manifests
+# 1. Build Kix manifests
 nix build .#cluster-nw1 --extra-experimental-features pipe-operators
 
-# 2. Dump the live cluster (matching only what kix declares)
+# 2. Dump the live cluster (matching only what Kix declares)
 ./scripts/kix-dump.py --match-kix ./result --context nw1-prod cluster-dump/
 
 # 3. Compare
@@ -28,8 +28,7 @@ from the public URLs in that directory's `sources.txt` (one per line, with
 optional CRD names to take from a bundle). `--check` fails on drift and runs
 in CI on every pull request that touches a package. A package whose upstream
 is not a public URL ships `crds/update.py` instead, exposing
-`crds() -> list[dict]` against `scripts/vendor_crds/`. Design and rules:
-`v2_discussions/146_crd_vendoring_and_upgrades.md`; the maintainer is the
+`crds() -> list[dict]` against `scripts/vendor_crds/`. The maintainer is the
 `crd-vendoring` skill.
 
 ```bash
@@ -48,27 +47,27 @@ cluster-dump/
   kube-system/
   monitoring-system/
   ...
-  README.md          # dump metadata, command used, skipped resources
+  README.md          # dump metadata, command used, and skipped resources
 ```
 
 **Modes:**
 
 | Flag | What it fetches |
 |------|----------------|
-| `--match-kix <dir>` | Exactly the resources that exist in a kix output directory |
+| `--match-kix <dir>` | Exactly the resources that exist in a Kix output directory |
 | `--managed` | All resources with `app.kubernetes.io/managed-by=kix` label |
 | `--namespaces ns1,ns2` | All resources in the given namespaces |
 | `--all` | Everything across all namespaces + cluster-scoped |
 
 `--match-kix` is the tightest comparison. `--all` is useful for discovery.
 
-**Normalization:** Server-side fields (uid, resourceVersion, managedFields, status, etc.) are stripped. Secret data is stripped — only metadata and type are kept.
+**Normalization:** Server-side fields (uid, resourceVersion, managedFields, status, etc.) are stripped. Secret data is stripped: only metadata and type are kept.
 
 **Skipped resource types:** Ephemeral/runtime resources (pods, replicasets, events, jobs, endpoints, etc.) are excluded from broad dumps. See the generated `README.md` in the dump directory for the full list.
 
 ## kix-diff.py
 
-Compares a kix output directory against a cluster dump and produces a structured markdown report on stdout. Progress goes to stderr.
+Compares a Kix output directory against a cluster dump and produces a structured markdown report on stdout. Progress goes to stderr.
 
 ```bash
 # View in terminal
@@ -86,12 +85,12 @@ Compares a kix output directory against a cluster dump and produces a structured
 
 **Report sections:**
 
-- **Summary** — counts of identical, modified, kix-only, cluster-only resources
-- **Probable renames / moves** — resources that likely exist under a different name, with structural diffs. Uses mutual best-match + structural similarity filtering to avoid false positives.
-- **kix-only** — resources kix declares but the cluster doesn't have
-- **Cluster-only** — resources in the cluster that kix doesn't declare
-- **Modified** — resources that exist in both but differ, with JSON-path diffs
-- **Identical** — resources that match exactly (collapsed)
+- **Summary**: counts of identical, modified, Kix-only, and cluster-only resources
+- **Probable renames / moves**: resources that likely exist under a different name, with structural diffs. Uses mutual best-match and structural similarity filtering to avoid false positives.
+- **kix-only**: resources Kix declares that the cluster does not have
+- **Cluster-only**: resources in the cluster that Kix does not declare
+- **Modified**: resources that exist in both but differ, with JSON-path diffs
+- **Identical**: resources that match exactly (collapsed)
 
 **Diff format:** Differences are shown by JSON path, not as unified diffs:
 

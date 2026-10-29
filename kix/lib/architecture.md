@@ -5,11 +5,11 @@ Internals map for editing the compiler. The tree is organized by ring: the deepe
 ## Layout by ring
 
 ```
-core/     Ring 0 — the artifact. Sealing, string-context machinery, PackageInstance/Activation CRs.
-eval/     Ring 1 — the pipeline. Module eval, DI, fixpoints, edge analysis, hooks, validation.
-scope/    Ring 1 — the authoring surface. Builders, validators, labels.
-vocab/    Open vocabulary — pure helper libraries, importable without the core.
-plugins/  Ring 2 — cross-cutting layers attached via hooks (netpol, availability).
+core/     Ring 0: the artifact. Sealing, string-context machinery, and PackageInstance/Activation CRs.
+eval/     Ring 1: the pipeline. Module eval, DI, fixpoints, edge analysis, hooks, and validation.
+scope/    Ring 1: the authoring surface. Builders, validators, and labels.
+vocab/    Open vocabulary: pure helper libraries, importable without the core.
+plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability).
 ```
 
 Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema + hook options + plugin imports), `mkFlake.nix`, `meta.nix`, `env.nix`, `scorecard.nix`, `unsafe.nix`, `rules/`, `flavors/`, `modules/`, `helm.nix` + `helm-dag.nix`.
@@ -25,7 +25,6 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
   5. phase-1 pre-pass                          # introspect, resolve dep targets, config injections
                                                # (`ref.<ns>.<inst>` is a static pointer built over
                                                # every name step 2 could produce)
-  ── three fixpoints ──
   6. instanceConfigs fixpoint                  # config-only; breaks function-injection cycles
   7. clusterInstances fixpoint: evaluateInstance (eval/instance.nix)
        mkScope (scope/) → build entries folded with `mergeCollide` (parts fixpoint + overlays)
@@ -99,9 +98,9 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 
 Plugins attach through three module options. A hook is a function `ctx → result` or `{ priority ? 1000; fn; }`. Execution order is `(priority ascending, then name)`. Results are shape-checked per channel in `eval/hooks.nix`.
 
-- `hooks.workloadInterceptors.<name> :: ctx → { requires?, resources?, warnings?, podSpec? }` — runs inside `sealWorkload` before `builtins.toFile` seals the workload. `requires` splice pre-seal; `resources` ride the `_injectedResources` sideband and are drained after the parts fixpoint; `podSpec` is merged into `spec.template.spec` per top-level field (author fields win; earlier hook wins between hooks).
-- `hooks.instanceProcessors.<name> :: ctx → { resources?, warnings? }` — runs post-parts-fixpoint per instance.
-- `hooks.clusterProcessors.<name> :: ctx → { resources?, checks?, warnings? }` — runs at cluster aggregation. `resources` become Activation `extraDeps` and the manifest-list tail in hook execution order. Each entry in `checks` is a lazy value forced before the cluster result is returned.
+- `hooks.workloadInterceptors.<name> :: ctx → { requires?, resources?, warnings?, podSpec? }`: runs inside `sealWorkload` before `builtins.toFile` seals the workload. `requires` splice pre-seal; `resources` ride the `_injectedResources` sideband and are drained after the parts fixpoint; `podSpec` is merged into `spec.template.spec` per top-level field (author fields win; earlier hook wins between hooks).
+- `hooks.instanceProcessors.<name> :: ctx → { resources?, warnings? }`: runs post-parts-fixpoint per instance.
+- `hooks.clusterProcessors.<name> :: ctx → { resources?, checks?, warnings? }`: runs at cluster aggregation. `resources` become Activation `extraDeps` and the manifest-list tail in hook execution order. Each entry in `checks` is a lazy value forced before the cluster result is returned.
 
 **Hooks emit through `ctx.emit`, never a scope.** The facade (`scope/builders.nix`) provides sealing capability only (`mkResource`, `mkClusterResource`, `inNamespace nsName → { mkResource }`).
 
@@ -126,7 +125,7 @@ Fixpoint safety: a hook may read `workloadInput` and outer-fixpoint data (DI dep
 
 ## When editing lib/
 
-- `core/` changes touch the CLI contract (Activation closure, `depends-on` format, `PackageInstance` fields) — coordinate with `cli/`.
+- `core/` changes touch the CLI contract (Activation closure, `depends-on` format, and `PackageInstance` fields); coordinate with `cli/`.
 - `core/annotations.nix` and `cli/kix/src/manifest/keys.rs` move together; retiring a domain requires an entry in `cli/kix/src/legacy_domain/`.
 - Authoring-surface changes (scope builders, vocab, DI semantics) → update `guide/` and the `kix-migration` skill.
 - New cross-cutting concerns belong in plugins registering hooks rather than inline calls in `eval/` or `scope/`.

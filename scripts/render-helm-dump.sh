@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Render the nw1 dump's helm releases (one per `helm/<n>-<ns>-<chart>.yaml`
-# + `.values.yaml` pair) into native K8s manifests, so the dump-vs-kix
+# + `.values.yaml` pair) into native K8s manifests, so the dump-vs-Kix
 # diff can include the helm-rendered side as well as `k8s/`.
 #
 # Output: one yaml file per release at $OUT/<n>-<ns>-<chart>.rendered.yaml.
@@ -57,7 +57,7 @@ for meta in "$HELM_DIR"/*.yaml; do
     --namespace "$release_ns"
     --include-crds
     # Pin kubeVersion so charts with stricter version bounds (e.g.
-    # external-dns 8.7.11) render — match what the cluster actually runs.
+    # external-dns 8.7.11) render: match what the cluster actually runs.
     --kube-version "1.32.0"
   )
   if [[ "$chart_version" != "null" ]]; then

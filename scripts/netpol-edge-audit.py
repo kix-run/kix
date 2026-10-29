@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pretty-printer for netpol-edge-audit.nix output.
+"""Format and print netpol-edge-audit.nix output.
 
 Reads the JSON emitted by
 
@@ -8,8 +8,9 @@ Reads the JSON emitted by
       -f scripts/netpol-edge-audit.nix
 
 and prints a per-cluster / per-instance summary. Exit code is non-zero
-if any instance has `missingFromScope` edges — i.e. if Phase C would
-silently drop an ingress rule that today's cluster-level pass catches.
+if any instance has `missingFromScope` edges (i.e. if scope-time
+extraction would silently drop an ingress rule that today's
+cluster-level pass catches).
 """
 
 from __future__ import annotations

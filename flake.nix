@@ -1,4 +1,4 @@
-# kixpkgs root flake — aggregates all clusters.
+# kixpkgs root flake: aggregates all clusters.
 #
 # Prefer using the per-directory flakes (ludo/, clusters/) directly.
 # This root flake exists for backwards compatibility and CI.
@@ -73,7 +73,7 @@
         };
       };
 
-      # kix CLI package (built with crane)
+      # Kix CLI package (built with crane)
       mkKixPackage = (import ./cli/flake-integration.nix).mkKixPackage;
       systems = [
         "x86_64-linux"
@@ -95,11 +95,9 @@
         }
       );
 
-      # The kix/lib evaluation test matrix (kix/lib/tests) as a flake check,
-      # so `nix flake check` runs it. Until 2026-09 it ran only when someone
-      # typed the nix eval by hand, and 13 of its 54 cases were failing on
-      # main unnoticed. Forcing `ok` evaluates every case; a failure throws
-      # with the failing names.
+      # Run the kix/lib evaluation test matrix (kix/lib/tests) as a flake check
+      # so `nix flake check` covers it. Forcing `ok` evaluates every case; a
+      # failure throws with the failing names.
       libTests = lib.genAttrs systems (system: {
         kix-lib-tests =
           let
@@ -112,10 +110,10 @@
             touch $out
           '';
       });
-      # Every directory under kix/packages/ evaluated in a synthetic cluster
-      # of its own (kix/package-eval.nix), once at availability "none" and
-      # once at "zone", so a package that no cluster names still runs
-      # through the validators and the scorecard.
+      # Evaluate every directory under kix/packages/ in a synthetic cluster of
+      # its own (kix/package-eval.nix), once at availability "none" and once at
+      # "zone", so a package that no cluster names still runs through the
+      # validators and the scorecard.
       packageEval = lib.genAttrs systems (system: {
         every-package-evaluates =
           let
@@ -143,14 +141,12 @@
           '';
       });
 
-      # A shell that can build and TEST the CLI.
+      # Provide a shell that can build and test the CLI.
       #
-      # The crane package (`packages.kix`) sets `doCheck = false`, because
+      # The crane package (`packages.kix`) sets `doCheck = false` because
       # the integration tests need a writable Nix store for the eval cache
-      # and the build sandbox has none. So `nix flake check` cannot run
-      # them and CI needs somewhere outside a build to run them from. This
-      # is that place, and it is also the one entry point that does not
-      # need devenv installed.
+      # and the build sandbox has none. `nix flake check` cannot run them,
+      # so CI runs them from this shell without requiring devenv.
       devShells = lib.genAttrs systems (
         system:
         let
@@ -188,15 +184,14 @@
         }
       );
 
-      # One consumer, built once on the bare `clickhouse` package and once
-      # on `clickhouse-cluster` (v2_discussions/148). Everything rendered
-      # into the consumer's namespace, and the facade's bootstrap Job next
-      # to the server, must come out the same but for the ClickHouse
-      # hostname. The contract itself is defined and checked at eval in
-      # kix/packages/clickhouse/contract.nix; this is the rendering
-      # regression test. Kix's own dependency bookkeeping is set aside
-      # first, since it names what is upstream and upstream is the thing
-      # that changed.
+      # Build one consumer once on the bare `clickhouse` package and once on
+      # `clickhouse-cluster`. Everything rendered into the consumer's
+      # namespace, plus the facade's bootstrap Job next to the server, must
+      # match except for the ClickHouse hostname. The contract itself is
+      # defined and checked at evaluation time in
+      # kix/packages/clickhouse/contract.nix; this is the rendering regression
+      # test. Kix's own dependency bookkeeping is stripped first because it
+      # records upstream hashes that legitimately differ between providers.
       clickhouseSwap = lib.genAttrs systems (system: {
         clickhouse-swap =
           let
@@ -225,14 +220,13 @@
           '';
       });
 
-      # One Metabase, built once on stackgres-database and once on
+      # Build one Metabase instance once on stackgres-database and once on
       # cnpg-database (clusters/test-postgres-swap). Metabase's manifests and
-      # the facade's credentials Secret in the consumer's namespace must come
-      # out the same but for the PostgreSQL hostname. Also set aside: Kix's
-      # dependency bookkeeping, which names what is upstream; the
-      # `checksum/database` annotation, the identity hash of the credentials
-      # Secret, which holds the hostname; and the facade's package-name
-      # label.
+      # the facade's credentials Secret in the consumer's namespace must match
+      # except for the PostgreSQL hostname. Stripped before comparison: Kix's
+      # dependency bookkeeping (which names the upstream provider), the
+      # `checksum/database` annotation (the identity hash of the credentials
+      # Secret containing the hostname), and the facade's package-name label.
       postgresSwap = lib.genAttrs systems (system: {
         postgres-swap =
           let
@@ -268,14 +262,14 @@
           '';
       });
 
-      # One File Browser, built once behind envoy-gateway and once behind
-      # traefik (clusters/test-gateway-swap). Its manifests must come out the
-      # same but for the HTTPRoute's parentRef, which names each
-      # implementation's Gateway (envoy-system/envoy, traefik-system/traefik).
-      # Also set aside: Kix's dependency bookkeeping, which names what is
-      # upstream. Network policy is off in both builds, because only traefik
-      # publishes its data-plane pods, and with policy on File Browser gets a
-      # policy admitting them that the envoy-gateway build lacks.
+      # Build one File Browser instance once behind envoy-gateway and once
+      # behind traefik (clusters/test-gateway-swap). Its manifests must match
+      # except for the HTTPRoute's parentRef, which names each implementation's
+      # Gateway (envoy-system/envoy, traefik-system/traefik), and Kix's
+      # dependency bookkeeping. Network policy is off in both builds because
+      # only traefik publishes its data-plane pods, so enabling policy would
+      # emit an ingress rule in the traefik build that the envoy-gateway build
+      # lacks.
       gatewaySwap = lib.genAttrs systems (system: {
         gateway-swap =
           let
@@ -309,7 +303,7 @@
     // {
       inherit devShells;
 
-      # Merge kix CLI into per-system packages alongside cluster outputs.
+      # Merge the Kix CLI into per-system packages alongside cluster outputs.
       packages = lib.mapAttrs (
         system: clusterPkgs: clusterPkgs // (cliPackages.${system} or { })
       ) clusterOutputs.packages;
@@ -326,7 +320,7 @@
 
       # Preserve the forPkgs API for external consumers.
       #
-      # `self` is the consumer's flake. Without it, kix cannot tell a pin
+      # `self` is the consumer's flake. Without it, Kix cannot tell a pin
       # file in that flake from one in another input, so image sources name
       # no pin file and Kix Enterprise opens no update pull requests.
       lib.forPkgs =
@@ -346,8 +340,8 @@
           inherit (kix) mkManifests;
         };
 
-      # mkFlake helper for external consumers — wraps cluster definitions
-      # into a complete per-system flake output.
+      # Wrap cluster definitions into a complete per-system flake output for
+      # external consumers:
       #
       #   outputs = inputs: inputs.kixpkgs.lib.mkFlake {
       #     inherit inputs;

@@ -1,4 +1,4 @@
-# kix checks: the kubeconform schema check and the alert rule check.
+# Kix checks: the kubeconform schema check and the alert rule check.
 #
 # Imported by kix/lib/mkFlake.nix as:
 #   kixChecks = import ./checks.nix { inherit pkgs lib; };
@@ -10,9 +10,9 @@
 
 rec {
 
-  # Offline K8s JSON schemas for kubeconform — the Nix sandbox has no
-  # network access, so we can't let kubeconform download schemas at
-  # build time. Sparse checkout to avoid fetching the entire (~2GB) repo.
+  # Fetch offline K8s JSON schemas for kubeconform. The Nix sandbox has no
+  # network access, so kubeconform cannot download schemas at build time.
+  # Sparse checkout avoids fetching the entire (~2GB) repo.
   kubernetesSchemas = pkgs.fetchgit {
     url = "https://github.com/yannh/kubernetes-json-schema.git";
     rev = "5040e4b99f6b2b6fd3801c7798cce29a077acf56";

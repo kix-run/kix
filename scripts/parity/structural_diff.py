@@ -4,10 +4,10 @@ Structural diff engine for comparing Kubernetes resources as data structures.
 Instead of serializing to JSON and doing string diffs, this walks both data
 trees in parallel and reports differences by JSON path. This means:
 - Dict key ordering doesn't matter (dicts are inherently unordered)
-- Differences are reported as semantic operations (missing, extra, changed)
+- Differences are reported as semantic operations (missing, extra, and changed)
 - Output shows exact JSON paths to each difference
 
-The structural approach lets kix produce semantically equivalent output without
+The structural approach lets Kix produce semantically equivalent output without
 needing to match the cluster's exact formatting, field ordering, or whitespace.
 """
 
@@ -61,7 +61,7 @@ class Difference:
 
 
 def _compact(value: Any, max_len: int = 120, full: bool = False) -> str:
-    """Compact representation of a value for diff output.
+    """Format a compact representation of a value for diff output.
 
     If *full* is True, strings and collections are never truncated.
     """
@@ -231,7 +231,7 @@ def structural_diff(
     """Compare two values structurally, returning all differences.
 
     Args:
-        a: The first value (e.g. kix side).
+        a: The first value (e.g. Kix side).
         b: The second value (e.g. cluster side).
         path: Current JSON path (for recursion). Root is "$".
         ignore_paths: Set of JSON path patterns to skip. Supports:
@@ -302,7 +302,7 @@ def structural_diff(
                 )
         return diffs
 
-    # Lists — try key-based matching first, fall back to content-based matching
+    # Lists: try key-based matching first, then fall back to content-based matching
     if isinstance(a, list):
         parent_key = _path_leaf(path)
         key_fn = _get_list_key_fn(parent_key, a, b)
@@ -397,9 +397,7 @@ def structural_diff(
     return diffs
 
 
-# --- K8s quantity comparison ---
-
-# Matches K8s resource quantities like "500m", "1.5Gi", "100", "2e3"
+# Matches K8s resource quantities like "500m", "1.5Gi", "100", and "2e3"
 _QUANTITY_RE = re.compile(
     r"^([+-]?(?:\d+\.?\d*|\d*\.?\d+)(?:e[+-]?\d+)?)\s*"
     r"(n|u|m|k|Ki|Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)?$"
@@ -437,7 +435,10 @@ def _parse_quantity(s: str) -> float | None:
 
 
 def _intorstring_equal(a, b) -> bool:
-    """K8s IntOrString fields tolerate '8443' == 8443. Named ports stay distinct."""
+    """Return whether two values are equal under K8s IntOrString semantics.
+
+    K8s IntOrString fields tolerate '8443' == 8443. Named ports stay distinct.
+    """
     if isinstance(a, bool) or isinstance(b, bool):
         return False
     if isinstance(a, str) and isinstance(b, (int, float)):
@@ -555,7 +556,7 @@ def format_diffs(
     """Format a list of differences for terminal output.
 
     If *color* is True, ANSI escape codes are used to highlight lines:
-    - Red for missing-in-B (only in kix)
+    - Red for missing-in-B (only in Kix)
     - Green for extra-in-B (only in cluster)
     - Yellow for value/type mismatches
 

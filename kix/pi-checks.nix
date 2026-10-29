@@ -1,11 +1,8 @@
-# PI wiring invariant checks — eval-time assertions for the PackageInstance
-# overlay design (see v2_discussions/24_package_instance_wiring.md).
-#
-# Validates 5 invariants:
-# 1. No resource depends on a PI (subsumes invariant 2: cross-package edges are resource→resource)
-# 3. PI references resources via annotation string context
-# 4. PI's store closure covers all non-orphaned package resources
-# 5. Activation only references PIs
+# Validate the PackageInstance overlay invariants at evaluation time:
+# 1. No resource depends on a PI (subsumes invariant 2: cross-package edges are resource-to-resource).
+# 3. Each PI references its resources via annotation string context.
+# 4. Each PI's store closure covers all non-orphaned package resources.
+# 5. Activation references only PIs.
 
 { lib }:
 
@@ -14,16 +11,14 @@ let
 in
 rec {
 
-  # --- Helpers ---
-
   # Strip string context from a store path.
   plainPath = resource: builtins.unsafeDiscardStringContext resource.outPath;
 
-  # All store paths referenced in a resource's manifest (via string context).
+  # Return all store paths referenced in a resource's manifest via string context.
   manifestCtxPaths =
     resource: builtins.attrNames (builtins.getContext (builtins.toJSON resource.rawManifest));
 
-  # All store paths from requires + extraDeps (structural deps).
+  # Return all store paths from requires and extraDeps (structural dependencies).
   reqDepPaths =
     resource:
     map (d: builtins.unsafeDiscardStringContext d.outPath) (
@@ -32,10 +27,10 @@ rec {
       )
     );
 
-  # All direct dependency store paths of a resource.
+  # Return all direct dependency store paths of a resource.
   allDepPaths = resource: manifestCtxPaths resource ++ reqDepPaths resource;
 
-  # Flatten clusterInstances { nsName.instName = inst } → [ inst ... ]
+  # Flatten clusterInstances ({ nsName.instName = inst }) into a list of instances.
   flattenInstances =
     clusterInstances:
     builtins.concatMap (
@@ -45,11 +40,11 @@ rec {
       )
     ) (builtins.attrNames clusterInstances);
 
-  # Non-PI resources of an instance: the part set `collectResources` in
-  # eval/cluster.nix renders, without the PI and hook resources.
+  # Return the non-PI resources of an instance: the part set `collectResources`
+  # in eval/cluster.nix renders, without the PI and hook resources.
   collectInstanceResources = helpers.instancePartResources;
 
-  # All non-PI resource store paths for an instance, deduplicated.
+  # Return all deduplicated non-PI resource store paths for an instance.
   instanceResourcePaths =
     inst:
     let
@@ -66,7 +61,7 @@ rec {
       )
     );
 
-  # Build a registry mapping plain store paths → resources from a list of resources.
+  # Build a registry mapping plain store paths to resources from a list of resources.
   buildResourceRegistry =
     resources:
     builtins.listToAttrs (
@@ -76,13 +71,12 @@ rec {
       }) resources
     );
 
-  # --- Invariant 1: No resource depends on a PI ---
+  # Verify that no resource depends on a PackageInstance (invariant 1).
   #
   # `piPathMap` must hold managed instances only. An import renders nothing
   # but its marker PackageInstance, so a resource ordered after an import
-  # (for example a workload after an imported DNS provider) depends on that
+  # (for example, a workload after an imported DNS provider) depends on that
   # marker the same way it depends on a mkSecretRef marker.
-
   checkNoResourceDependsOnPI =
     clusterName: instances: piPathMap:
     let
@@ -119,8 +113,7 @@ rec {
       in
       throw "cluster '${clusterName}' has invalid package dependencies: resources must depend on the resources they use, not PackageInstance records: ${lib.concatStringsSep "; " msgs}";
 
-  # --- Invariant 3: PI references resources via annotation string context ---
-
+  # Verify that each PackageInstance references its resources via annotation string context (invariant 3).
   checkPIReferencesResources =
     clusterName: instances:
     let
@@ -154,15 +147,14 @@ rec {
       in
       throw "cluster '${clusterName}' has invalid package dependencies: package resource references are missing: ${lib.concatStringsSep "; " msgs}";
 
-  # --- Invariant 4: PI closure covers all non-orphaned package resources ---
-
+  # Verify that each PackageInstance closure covers all non-orphaned package resources (invariant 4).
   checkPIClosureComplete =
     clusterName: instances: clusterRegistry:
     let
       nonImports = builtins.filter (i: !(i._isImport or false)) instances;
 
-      # BFS from a root resource through manifest context + requires edges,
-      # restricted to paths known in the registry.
+      # Return all paths in the registry reachable from `root` through manifest
+      # context and `requires` edges.
       transitiveReachable =
         root:
         let
@@ -228,8 +220,7 @@ rec {
       in
       throw "cluster '${clusterName}' has invalid package dependencies: package dependencies do not include all resources: ${lib.concatStringsSep "; " msgs}";
 
-  # --- Invariant 5: Activation only references PIs ---
-
+  # Verify that Activation references only PackageInstances (invariant 5).
   checkActivationOnlyReferencesPIs =
     clusterName: activation: piPathMap: clusterRegistry:
     let
@@ -250,8 +241,7 @@ rec {
       in
       throw "cluster '${clusterName}' has invalid package dependencies: Activation must reference PackageInstance records: ${lib.concatStringsSep "; " msgs}";
 
-  # --- Top-level validator ---
-
+  # Validate all PackageInstance wiring invariants for a cluster.
   validatePIWiring =
     clusterName: cluster:
     let

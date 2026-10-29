@@ -1,5 +1,5 @@
 """
-Normalization logic for comparing kix output against live cluster state.
+Normalization logic for comparing Kix output against live cluster state.
 
 Strips server-side fields, cosmetic differences, and noise so the comparison
 focuses on what actually matters to Kubernetes behavior.
@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 
-# --- Server-side fields that K8s adds and kix never produces ---
+# Server-side fields that K8s adds and Kix never produces
 
 STRIP_METADATA_KEYS = {
     "uid",
@@ -33,7 +33,7 @@ STRIP_ANNOTATIONS = {
     "deprecated.daemonset.template.generation",
 }
 
-# Annotation prefixes — any annotation starting with these is stripped from cluster side
+# Annotation prefixes: any annotation starting with these is stripped from the cluster side
 STRIP_ANNOTATION_PREFIXES = [
     "control-plane.alpha.kubernetes.io/",
     "autoscaling.alpha.kubernetes.io/",
@@ -43,10 +43,10 @@ STRIP_ANNOTATION_PREFIXES = [
     "checksum/",
 ]
 
-# Labels stripped from both sides — either build metadata or organizational
+# Labels stripped from both sides: either build metadata or organizational
 # labels that don't affect K8s behavior.
 STRIP_LABELS = {
-    # app.kubernetes.io organizational labels — differ between kix and existing cluster
+    # app.kubernetes.io organizational labels: differ between Kix and existing cluster
     "app.kubernetes.io/managed-by",
     "app.kubernetes.io/instance",
     "app.kubernetes.io/part-of",
@@ -55,10 +55,10 @@ STRIP_LABELS = {
     "app.kubernetes.io/name",
     # K8s auto-adds this to namespaces
     "kubernetes.io/metadata.name",
-    # Cluster-level labels kix adds
+    # Cluster-level labels Kix adds
     "cluster",
     "team",
-    # An older kix generation stamped this one. It is not built from the
+    # An older Kix generation stamped this one. It is not built from the
     # domain below: `build.kix.dev` was a separate prefix, retired before
     # the kix.run move, and a live cluster can still carry it.
     "build.kix.dev/hash",
@@ -78,13 +78,12 @@ STRIP_LABEL_PREFIXES = [
 ]
 
 # The domain Kix stamps its own keys under, and the ones it has retired.
-# The retired entries go when the compatibility layer goes; the checklist is
-# in v2_discussions/137_kix_run_domain_migration.md.
+# The retired entries go when the compatibility layer goes.
 KIX_DOMAIN = "kix.run"
 KIX_LEGACY_DOMAINS = ["kix.dev"]
 
-# Annotation prefixes kix adds for build metadata. `build.kix.dev/` is
-# listed separately: it is not a domain kix stamps keys under, it is an
+# Annotation prefixes Kix adds for build metadata. `build.kix.dev/` is
+# listed separately: it is not a domain Kix stamps keys under, it is an
 # older prefix retired before the kix.run move, so it does not follow from
 # KIX_DOMAIN or KIX_LEGACY_DOMAINS.
 STRIP_KIX_ANNOTATION_PREFIXES = [f"{d}/" for d in [KIX_DOMAIN, *KIX_LEGACY_DOMAINS]] + [
@@ -109,11 +108,11 @@ def normalize_cluster(doc: dict) -> dict:
 
 
 def normalize_kix(doc: dict) -> dict:
-    """Normalize a kix-built resource for behavioral comparison."""
+    """Normalize a Kix-built resource for behavioral comparison."""
     if not isinstance(doc, dict):
         return doc
 
-    # status is never declarative — kix occasionally ships empty stubs
+    # status is never declarative: Kix occasionally ships empty stubs
     # (e.g. CRDs with status.acceptedNames). Strip on both sides so the
     # cluster-stripped side has nothing to diff against.
     doc = dict(doc)
@@ -126,9 +125,6 @@ def normalize_kix(doc: dict) -> dict:
     doc = _normalize_paths(doc)
     doc = _sort_arrays(doc)
     return doc
-
-
-# --- Internals ---
 
 
 def _strip_server_fields(doc: dict) -> dict:
@@ -155,7 +151,7 @@ def _strip_secret_data(doc: dict) -> dict:
     doc = dict(doc)
     doc.pop("data", None)
     doc.pop("stringData", None)
-    # type defaults to Opaque; some helm charts omit it, kix sets it
+    # type defaults to Opaque; some helm charts omit it, and Kix sets it
     # explicitly. Strip when default so the formulations compare equal.
     if doc.get("type") == "Opaque":
         doc.pop("type", None)
@@ -594,7 +590,7 @@ def _strip_vct_defaults(vct: Any) -> Any:
 def _normalize_rbac_rules(doc: dict) -> dict:
     """Normalize RBAC rules for semantic comparison.
 
-    The kix `grant` function merges rules that share apiGroups+verbs into
+    The Kix `grant` function merges rules that share apiGroups+verbs into
     one rule with combined resources. Helm keeps them separate. Both are
     semantically equivalent. This normalizes to a canonical merged form.
     """
@@ -602,8 +598,8 @@ def _normalize_rbac_rules(doc: dict) -> dict:
     if not isinstance(rules, list) or not rules:
         return doc
 
-    # Expand all rules into atomic (apiGroups, resources, verbs, resourceNames) and re-merge
-    # Group key: (sorted apiGroups, sorted verbs, sorted resourceNames)
+    # Expand all rules into atomic (apiGroups, resources, verbs, and resourceNames) and re-merge
+    # Group key: (sorted apiGroups, sorted verbs, and sorted resourceNames)
     merged: dict[tuple, set] = {}
     for rule in rules:
         if not isinstance(rule, dict):
@@ -670,9 +666,9 @@ def _strip_labels_and_annotations(doc: dict, cluster: bool) -> dict:
             if key in STRIP_ANNOTATIONS:
                 del annotations[key]
                 continue
-            # Server-side / helm convention annotation prefixes — strip
-            # from both sides so kix-vs-dump diffs don't surface helm-isms
-            # that kix intentionally doesn't reproduce (meta.helm.sh/*,
+            # Server-side / helm convention annotation prefixes: strip
+            # from both sides so Kix-vs-dump diffs don't surface helm-isms
+            # that Kix intentionally doesn't reproduce (meta.helm.sh/*,
             # checksum/config, etc.).
             stripped = False
             for prefix in STRIP_ANNOTATION_PREFIXES:
@@ -682,7 +678,7 @@ def _strip_labels_and_annotations(doc: dict, cluster: bool) -> dict:
                     break
             if stripped:
                 continue
-            # kix build metadata — only stripped on the kix side
+            # Kix build metadata: only stripped on the Kix side
             if not cluster:
                 for prefix in STRIP_KIX_ANNOTATION_PREFIXES:
                     if key.startswith(prefix):
@@ -791,7 +787,7 @@ _SORT_DICT_ARRAYS: dict[str, Any] = {
     "volumes": lambda vol: vol.get("name", ""),
     "containers": lambda c: c.get("name", ""),
     "initContainers": lambda c: c.get("name", ""),
-    # RBAC rules by apiGroups, Ingress rules by host — both work via the tuple fallback
+    # RBAC rules by apiGroups, Ingress rules by host: both work via the tuple fallback
     "rules": lambda r: (str(sorted(r.get("apiGroups", []))), r.get("host", "")),
     "hostAliases": lambda h: h.get("ip", ""),
     "webhooks": lambda w: w.get("name", ""),

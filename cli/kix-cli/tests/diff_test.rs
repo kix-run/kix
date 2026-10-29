@@ -21,8 +21,7 @@ fn kix() -> Command {
     cmd
 }
 
-/// An empty manifest directory is a cluster with nothing on it: every
-/// package is added.
+/// Verify that diffing against an empty manifest directory adds every package.
 #[test]
 fn diff_from_empty_manifest_dir_adds_everything() {
     let tmp = tempfile::tempdir().unwrap();
@@ -36,10 +35,9 @@ fn diff_from_empty_manifest_dir_adds_everything() {
         .stdout(predicate::str::contains("added"));
 }
 
-/// `kix export --for audit` writes the build as a manifest directory in
-/// the layout `kix snapshot save` uses. Diffing the build against its own
-/// export exercises the whole flat-side path — loading, synthesis, the
-/// package-grouped diff — with no cluster, and must come back clean.
+/// Verify that diffing a build against its own `kix export --for audit`
+/// manifest directory exercises the flat-side path (loading, synthesis, and
+/// the package-grouped diff) without a cluster and reports no differences.
 #[test]
 fn diff_from_own_audit_export_is_identical() {
     let tmp = tempfile::tempdir().unwrap();
@@ -99,8 +97,8 @@ fn fixture_bundle(name: &str) -> std::path::PathBuf {
     repo_root().join(format!("cli/kix-bundle/tests/fixtures/{name}.kixbundle"))
 }
 
-/// `kix diff --bundle --from-bundle` compares two bundled builds with no
-/// flake and no cluster, and writes the plan document of two builds.
+/// Verify that `kix diff --bundle --from-bundle` compares two bundled builds
+/// without a flake or cluster and writes the plan document of two builds.
 #[test]
 fn diff_of_a_bundle_against_itself_is_identical() {
     let bundle = fixture_bundle("kix-enterprise-test");
@@ -132,7 +130,7 @@ fn diff_of_a_bundle_against_itself_is_identical() {
     assert_eq!(doc["packages"]["added"], serde_json::json!([]));
 }
 
-/// `--bundle` alone compares against no build: every package is added.
+/// Verify that `--bundle` alone compares against an empty baseline and adds every package.
 #[test]
 fn diff_of_a_bundle_alone_adds_everything() {
     let out = kix()
@@ -153,7 +151,7 @@ fn diff_of_a_bundle_alone_adds_everything() {
     assert_eq!(doc["deployed"], serde_json::Value::Null);
 }
 
-/// The old bundle must be a build of the named cluster, as the new one must.
+/// Verify that `--from-bundle` rejects a bundle built for a different cluster.
 #[test]
 fn diff_refuses_a_from_bundle_of_another_cluster() {
     kix()
@@ -167,7 +165,7 @@ fn diff_refuses_a_from_bundle_of_another_cluster() {
         .stderr(predicate::str::contains("not 'kix-enterprise-test'"));
 }
 
-/// An old bundle whose content does not match its store paths is refused.
+/// Verify that `--from-bundle` rejects a bundle whose content does not match its store paths.
 #[test]
 fn diff_refuses_a_from_bundle_that_does_not_verify() {
     let bundle = fixture_bundle("kix-enterprise-test");
@@ -188,8 +186,8 @@ fn diff_refuses_a_from_bundle_that_does_not_verify() {
         .stderr(predicate::str::contains("cannot use the bundle"));
 }
 
-/// `kix diff --save` writes a plan file whose plan is the document `-o json
-/// --detail fields` prints, and whose graph is `kix graph`'s.
+/// Verify that `kix diff --save` writes a plan file whose plan matches `-o json
+/// --detail fields` and whose graph matches `kix graph`.
 #[test]
 fn diff_save_writes_the_document_and_the_graph() {
     let bundle = fixture_bundle("kix-enterprise-test");

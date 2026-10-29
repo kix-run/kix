@@ -2,11 +2,11 @@
 //!
 //! Requires: `kind` and `kubectl` on PATH, and `nix`.
 //! Creates a temporary kind cluster, deploys the `kind` cluster definition
-//! (echo-server in its own namespace — no conflicts with kind's built-ins),
-//! verifies deploy, local DAG diff, soft GC, and hard GC.
+//! (echo-server in its own namespace, with no conflicts with kind's built-ins),
+//! and verifies deploy, local DAG diff, soft GC, and hard GC.
 //!
 //! Run with: cargo test --test kind_integration_test -- --ignored
-//! (ignored by default because it requires kind + is slow)
+//! (ignored by default because it requires kind and is slow)
 
 use kix::manifest::keys;
 use std::path::Path;
@@ -67,7 +67,7 @@ fn kubectl_stdout(context: &str, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-/// Clear the activation cache for a kix cluster name so the next deploy
+/// Clear the activation cache for a Kix cluster name so the next deploy
 /// sees no previous state. The cache persists across kind cluster recreations.
 fn clear_activation_cache(kix_cluster: &str) {
     if let Ok(home) = std::env::var("HOME") {
@@ -79,15 +79,15 @@ fn clear_activation_cache(kix_cluster: &str) {
 
 const KIND_CLUSTER: &str = "kix-integration";
 
-/// `package bucket resource` for every object a plan document's packages
-/// section lists as added, removed, or modified.
-/// The plan in the plan file at `path`, as JSON.
+/// Read and verify the plan in the plan file at `path`, returning it as JSON.
 fn saved_plan(path: &Path) -> serde_json::Value {
     let file = std::fs::File::open(path).expect("the plan file");
     let (file, _) = kix::plan::file::PlanFile::verify(file).expect("a valid plan file");
     serde_json::to_value(&file.header().plan).unwrap()
 }
 
+/// Return `"<package> <bucket> <resource>"` for every object a plan document's
+/// `packages` section lists as added, removed, or modified.
 fn package_objects(doc: &serde_json::Value) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     let packages = &doc["packages"];
@@ -113,7 +113,7 @@ fn package_objects(doc: &serde_json::Value) -> std::collections::BTreeSet<String
     out
 }
 const KUBE_CTX: &str = "kind-kix-integration";
-/// The kix cluster name (from clusters/test-kind.nix, registered as "kind" in flake.nix)
+/// The Kix cluster name (from clusters/test-kind.nix, registered as "kind" in flake.nix)
 const KIX_CLUSTER: &str = "kind";
 
 #[test]
@@ -141,11 +141,9 @@ fn deploy_and_gc() {
     }
     let _guard = CleanupGuard;
 
-    // =========================================================================
     // Phase 0: Plan before the first deploy. Nothing exists yet, so the
     // objects in the namespace the deploy creates cannot be dry-run; the
     // plan says so and writes nothing.
-    // =========================================================================
     eprintln!("\n=== Phase 0: Plan a first deploy ===");
 
     let plan0_file =
@@ -178,9 +176,7 @@ fn deploy_and_gc() {
         "a plan writes no record: {records}"
     );
 
-    // =========================================================================
-    // Phase 1: First deploy — everything created
-    // =========================================================================
+    // Phase 1: First deploy: everything created
     eprintln!("\n=== Phase 1: First deploy ===");
 
     let first = kix(KIND_CLUSTER)
@@ -215,9 +211,7 @@ fn deploy_and_gc() {
     eprintln!("Managed resources:\n{managed}");
     assert!(!managed.trim().is_empty(), "should have managed resources");
 
-    // =========================================================================
-    // Phase 2: Second deploy — local DAG diff, everything unchanged
-    // =========================================================================
+    // Phase 2: Second deploy: local DAG diff, everything unchanged
     eprintln!("\n=== Phase 2: Second deploy (DAG diff) ===");
 
     let second = kix(KIND_CLUSTER)
@@ -238,10 +232,8 @@ fn deploy_and_gc() {
         "should plan against the cluster's Active record"
     );
 
-    // =========================================================================
     // Phase 2b: Plan and diff of a changed build list the same objects, and
     // the plan applies nothing.
-    // =========================================================================
     eprintln!("\n=== Phase 2b: kix plan and kix diff agree ===");
 
     let dir = std::env::temp_dir().join(format!("kix-saved-plan-{}", std::process::id()));
@@ -289,13 +281,11 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&unchanged.stdout)
     );
 
-    // =========================================================================
     // Phase 2c: A saved plan gates the deploy. A plan goes stale when a
-    // hand edit makes a new conflict; the deploy of a plan made with
+    // direct edit makes a new conflict; the deploy of a plan made with
     // --force-conflicts takes the plan's flags, so it succeeds without the
     // flag on the command line; and the plan is stale once the cluster runs
     // that build.
-    // =========================================================================
     eprintln!("\n=== Phase 2c: kix deploy --plan ===");
 
     let check = |saved: &Path, extra: &[&str]| {
@@ -348,7 +338,7 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&contradicted.stderr)
     );
 
-    // A hand edit of a field the deploy sets: kubectl now owns replicas.
+    // Direct edit of a field the deploy sets: kubectl now owns replicas.
     let deployment = kubectl_stdout(KUBE_CTX, &["get", "deploy", "-n", "echo", "-o", "name"]);
     let deployment = deployment.lines().next().expect("a Deployment").to_string();
     let scaled = kubectl(
@@ -449,9 +439,7 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&back.stderr)
     );
 
-    // =========================================================================
-    // Phase 3: Soft GC — no garbage (same activation)
-    // =========================================================================
+    // Phase 3: Soft GC: no garbage (same activation)
     eprintln!("\n=== Phase 3: Soft GC (no garbage expected) ===");
 
     let gc_soft = kix(KIND_CLUSTER)
@@ -468,9 +456,7 @@ fn deploy_and_gc() {
         "soft gc should find no garbage when nothing changed, got:\n{gc_soft_out}"
     );
 
-    // =========================================================================
-    // Phase 4: Hard GC — no garbage (all resources match expected set)
-    // =========================================================================
+    // Phase 4: Hard GC: no garbage (all resources match expected set)
     eprintln!("\n=== Phase 4: Hard GC (no garbage expected) ===");
 
     let gc_hard = kix(KIND_CLUSTER)
@@ -487,12 +473,10 @@ fn deploy_and_gc() {
         "hard gc should find no garbage when cluster matches expected state, got:\n{gc_hard_out}"
     );
 
-    // =========================================================================
-    // Phase 5: Hard GC — detect manually created orphan
-    // =========================================================================
+    // Phase 5: Hard GC: detect an orphaned resource created outside Kix
     eprintln!("\n=== Phase 5: Hard GC (detect orphan) ===");
 
-    // Create a ConfigMap with kix labels that's NOT in the activation
+    // Create a ConfigMap with Kix labels that's NOT in the activation
     let create_result = kubectl(
         KUBE_CTX,
         &[
@@ -509,7 +493,7 @@ fn deploy_and_gc() {
         "should create test configmap"
     );
 
-    // Label it as kix-managed so hard GC picks it up
+    // Label it as Kix-managed so hard GC picks it up
     let label_result = kubectl(
         KUBE_CTX,
         &[
@@ -579,10 +563,6 @@ fn deploy_and_gc() {
 
     eprintln!("\n=== All phases passed ===");
 }
-
-// =============================================================================
-// Two Kix clusters in one Kubernetes cluster
-// =============================================================================
 
 /// A flake with Kix clusters `sweep-a` and `sweep-b`, echo servers in
 /// namespaces of their own, both deploying the `shared-role` package into
@@ -729,7 +709,7 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(ok, "git {args:?} failed");
 }
 
-/// Every object of Kix cluster `sweep-b` that must survive `sweep-a`'s
+/// Verify that every object of Kix cluster `sweep-b` survives `sweep-a`'s
 /// commands.
 fn assert_b_intact(kube_ctx: &str) {
     for (kind, ns, name) in [
@@ -752,8 +732,8 @@ fn assert_b_intact(kube_ctx: &str) {
     }
 }
 
-/// Two Kix clusters deploy into one kind cluster, sharing a ClusterRole and
-/// a ConfigMap. Every command run for `sweep-a` leaves
+/// Verify that two Kix clusters can deploy into one kind cluster while sharing
+/// a ClusterRole and a ConfigMap. Every command run for `sweep-a` leaves
 /// `sweep-b`'s objects alone, and a prune by `sweep-a` keeps what `sweep-b`
 /// still deploys.
 ///

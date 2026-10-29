@@ -24,10 +24,10 @@ You never see it. It survives concatenation, interpolation, and `toJSON`.
    unsafeDiscardStringContext → strips them off
 ```
 
-kix weaponises this: **every value a resource exposes through `out.*` is tagged
+Kix weaponises this: **every value a resource exposes through `out.*` is tagged
 with that resource's own store path.** So the moment you *use* another resource's
-name/address/selector, you are invisibly carrying a pointer to it. Hold onto
-that — it is the entire game.
+name, address, or selector, you are invisibly carrying a pointer to it. Hold onto
+that: it is the entire game.
 
 Since the typed-facts rework the channel carries TWO kinds of path:
 
@@ -39,12 +39,12 @@ Since the typed-facts rework the channel carries TWO kinds of path:
 ```
 
 A fact token is a tiny self-describing file (`readFile` it, no registry).
-Address-shaped fields (`out.fqdn`, `out.url`, user outputs) carry both;
-structural fields (`out.name`) carry identity only — *naming* a resource and
+Address-shaped fields (`out.fqdn`, `out.url`, and user outputs) carry both;
+structural fields (`out.name`) carry identity only, because *naming* a resource and
 *dialing* it are different claims. Non-workload seals conduct absorbed facts
 onward (a ConfigMap carrying postgres's fqdn hands the claim to whoever mounts
 it); workloads terminate them (their pods dial). Facts are stripped before
-sealing — they exist only at eval time, never in the store DAG.
+sealing: they exist only at eval time, never in the store DAG.
 
 ---
 
@@ -73,21 +73,21 @@ that must be a dependency has to be decided before the seal.* (Sections 4–5.)
 
 ## 2. How a dependency is *discovered* (never declared)
 
-Here's the handshake. Nobody writes "app depends on postgres." kix observes it,
+Here's the handshake. Nobody writes "app depends on postgres." Kix observes it,
 because the app *used* postgres's address.
 
 ```
-  STEP 1 ── postgres package seals its Service
+  STEP 1: postgres package seals its Service
      Service ──toFile──▶ /nix/store/P_svc-k8s-Service-db-postgres
                                    │
      out.fqdn = "postgres.db.svc.cluster.local"   ⟨ctx: P_svc⟩   ◀ tagged at birth
 
-  STEP 2 ── app package uses that address (ordinary Nix, looks innocent)
+  STEP 2: app package uses that address (ordinary Nix, looks innocent)
      env = [ { name = "DB_HOST"; value = pg.out.fqdn; } ]
                                           │
                        "postgres.db.svc..."  still ⟨ctx: P_svc⟩
 
-  STEP 3 ── app Deployment is sealed
+  STEP 3: app Deployment is sealed
      manifestJson = toJSON(deploy)                 ⟨ctx: P_svc⟩   ◀ rode along
      getContext(manifestJson)  ─▶  finds P_svc
      stamp:  metadata.annotations["kix.run/depends-on"] = "hash(P_svc)"
@@ -97,19 +97,19 @@ because the app *used* postgres's address.
 
 The deploy-time CLI later walks this store-path DAG (rooted at the Activation CR)
 to order rollouts. The graph was *derived from usage*, which is why mismatched
-selectors and forgotten `dependsOn` simply can't happen — you either used the
+selectors and forgotten `dependsOn` simply can't happen: you either used the
 thing (edge exists) or you didn't (no edge).
 
 **Two doors into the seal.** Sometimes you need an ordering edge to something
-whose address you never embed — "apply the CRD before the CR." That goes in
+whose address you never embed ("apply the CRD before the CR"). That goes in
 `requires`. But since its path isn't in your manifest text, the STEP-3 scan
 wouldn't catch it. So `mkResource` *manually* folds those deps' context onto the
 JSON right before `toFile`:
 
 ```
-   (a) implicit edge  — you used dep.out.* → its path is already in context.   [free]
-   (b) requires edge  — you didn't, but you need ordering → mkResource does
-                        appendContext(json, dep-paths) before sealing.         [explicit]
+   (a) implicit edge:  you used dep.out.* → its path is already in context.   [free]
+   (b) requires edge:  you didn't, but you need ordering → mkResource does
+                       appendContext(json, dep-paths) before sealing.         [explicit]
 
    Both land as entries in kix.run/depends-on. At deploy time an edge is an edge.
 ```
@@ -140,17 +140,17 @@ JSON right before `toFile`:
 ```
 
 `extra` has a guard: it may *not* set `spec`, `data`, `metadata.name/namespace`,
-etc. — those go through dedicated args so kix can attach tracking. `extra` is
-only for sibling fields kix doesn't manage.
+etc. Those go through dedicated args so Kix can attach tracking. `extra` is
+only for sibling fields Kix doesn't manage.
 
 ---
 
 ## 4. Why workload dependencies get *spliced* (pre-seal assembly)
 
-A plain resource is sealed once and done. A **workload** (Deployment/StatefulSet/
-Job/DaemonSet) is special: cross-cutting layers (DNS ordering, network policies)
+A plain resource is sealed once and done. A **workload** (Deployment, StatefulSet,
+Job, or DaemonSet) is special: cross-cutting layers (DNS ordering, network policies)
 need to add dependencies to it. But per §1 you can't add a dep after the seal. So
-every workload goes through one assembly line — `sealWorkload` — that layers
+every workload goes through one assembly line (`sealWorkload`) that layers
 everything on, *then* seals exactly once.
 
 ```
@@ -159,13 +159,13 @@ everything on, *then* seals exactly once.
         ▼
    ┌──────────────────── sealWorkload (the only pre-seal splice point) ─────────────────┐
    │                                                                                     │
-   │  1. edges   = who does this workload talk to?      (scan its context — §6)          │
+   │  1. edges   = who does this workload talk to?      (scan its context, §6)           │
    │  2. dnsDeps = if edges ≠ [] → depend on the DNS provider's root   [CORE, always]    │
    │  3. interceptors (plugins, e.g. netpol) run → each returns extra `requires`         │
    │                                                                                     │
    │        requires  =  author's own  ++  interceptors'  ++  dnsDeps                     │
    │                     └──────────── spliced in THIS fixed order ───────────┘           │
-   │                        (order is hashed into the output — it's a contract)          │
+   │                        (order is hashed into the output: it's a contract)           │
    └───────────────────────────────────────┬─────────────────────────────────────────────┘
                                             ▼
                                        🔒 SEAL once
@@ -185,7 +185,7 @@ Two distinct return channels, and the distinction matters:
 
 ## 5. Service edges: who-dials-whom, read back from facts
 
-An "edge" is no longer inferred from identity presence — it is *stated* by the
+An "edge" is no longer inferred from identity presence; it is *stated* by the
 endpoint fact riding the address the workload embedded:
 
 ```
@@ -216,14 +216,14 @@ shared. Core uses it even with netpol *off* (DNS ordering is unconditional).
 ## 6. Network policies: edges → firewall rules
 
 Mental model: **default-deny everything, then punch exactly one hole per observed
-edge — from both ends.** A CNI like Cilium needs *both* sides: the caller allowed
-to egress AND the callee allowed to ingress. kix knows both ends of every edge,
+edge, from both ends.** A CNI like Cilium needs *both* sides: the caller allowed
+to egress AND the callee allowed to ingress. Kix knows both ends of every edge,
 so it writes both.
 
 ```
    Baseline per namespace:   DENY ALL  (ingress + egress)
 
-   For the edge   app ──▶ postgres   kix writes a policy on EACH side:
+   For the edge   app ──▶ postgres   Kix writes a policy on EACH side:
 
      on the caller (app)                    on the callee (postgres)
      ┌──────────────────────┐               ┌──────────────────────────┐
@@ -258,7 +258,7 @@ exist:
 
    cluster          ALL instances + namespaces exist    the default-deny walls
    (processor)                                          themselves; platform intents
-                                                        (holes for non-kix pods like
+                                                        (holes for non-Kix pods like
                                                         CoreDNS, local-path)
 ```
 
@@ -272,7 +272,7 @@ its own policies (a firewall can't depend on itself booting).
 
 ---
 
-## 7. Plugins attach through phases — netpol owns nothing in the core
+## 7. Plugins attach through phases: netpol owns nothing in the core
 
 netpol is a plugin. It never appears in `eval/` or `scope/`; it registers one
 hook in each of the three phases above and reads a shared `ctx`. Any future
@@ -289,8 +289,8 @@ cross-cutting layer plugs in the same way.
 ```
 
 The enforcer (Cilium) is found by asking for whoever claims the
-`network-policy-enforcer` role (§9) — no explicit wiring. If none is declared
-while policies are on, kix refuses at eval time, because a policy CR with no
+`network-policy-enforcer` role (§9), with no explicit wiring. If none is declared
+while policies are on, Kix refuses at eval time, because a policy CR with no
 store-path edge to the CNI would race the operator at apply time.
 
 ---
@@ -298,8 +298,8 @@ store-path edge to the CNI would race the operator at apply time.
 ## 8. The three fixpoints (why not one)
 
 Packages can mutually reference each other's config. Nix needs `lib.fix` to
-resolve mutual references — but *one* big fixpoint would be too eager: building
-instance A forces B forces A, and real graphs deadlock. kix splits into three
+resolve mutual references, but *one* big fixpoint would be too eager: building
+instance A forces B forces A, and real graphs deadlock. Kix splits into three
 rings, each only reaching *down* to the settled layer beneath it.
 
 ```
@@ -315,9 +315,9 @@ rings, each only reaching *down* to the settled layer beneath it.
         │  (configs are now plain data)
         ▼
    ② instance fixpoint      build each instance's resources. An instance may
-        │                   reference another's out.* — safe, because configs
+        │                   reference another's out.* (safe, because configs
         │                   are already settled, so forcing a dep can't fall
-        │                   back into ①.
+        │                   back into ①).
         │  (within a single instance:)
         ▼
    ③ parts fixpoint         one instance's parts referencing each other
@@ -346,7 +346,7 @@ instance that satisfies it. Ambiguity is a link error, never a silent pick.
            managed beats imported             (a real deploy beats a mere reference)
            exactly one in my namespace?    → bind it
            else exactly one anywhere?      → bind it
-           more than one?                  → LINK ERROR (ambiguous — declare it)
+           more than one?                  → LINK ERROR (ambiguous: declare it)
            none & arg optional?            → leave unbound
            none & required?                → LINK ERROR (undefined symbol)
 
@@ -363,7 +363,7 @@ its `root` resource is the thing every talking workload waits on.
 
 ---
 
-## Putting it together — the example, end to end
+## Putting it together: the example, end to end
 
 ```
    postgres pkg seals Service            →  P_svc, out.fqdn ⟨ctx: P_svc⟩          (§1)

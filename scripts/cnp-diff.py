@@ -4,11 +4,11 @@
 # dependencies = ["pyyaml", "click"]
 # ///
 """Compare CiliumNetworkPolicy / CiliumClusterwideNetworkPolicy between
-kix output and a cluster dump *semantically*, ignoring per-policy naming.
+Kix output and a cluster dump *semantically*, ignoring per-policy naming.
 
 The main diff (compare-cluster-dump.py) is configured to suppress CNPs
-because kix generates one policy per workload while the dump groups them
-differently — names rarely line up. This tool answers the question that
+because Kix generates one policy per workload while the dump groups them
+differently: names rarely line up. This tool answers the question that
 suppression makes risky to leave unanswered: **does the union of allow
 rules on each side actually grant the same network access?**
 
@@ -24,7 +24,7 @@ Strategy:
 
 Output (text) shows:
 - A summary line: total allow tuples per side + per-direction match/diff
-- Per-bucket mismatches: what kix allows that dump doesn't, and vice-versa.
+- Per-bucket mismatches: what Kix allows that dump doesn't, and vice-versa.
 
 For a CCNP, the target namespace is "_cluster".
 """
@@ -41,9 +41,6 @@ _YAMLLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 _CNP_KINDS = {"CiliumNetworkPolicy", "CiliumClusterwideNetworkPolicy"}
 
-
-# ── ANSI helpers ──────────────────────────────────────────────────────
-
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _RED = "\033[31m"
@@ -55,9 +52,6 @@ _RESET = "\033[0m"
 
 def _c(code: str, text: str, color: bool) -> str:
     return f"{code}{text}{_RESET}" if color else text
-
-
-# ── Loading ───────────────────────────────────────────────────────────
 
 
 def _iter_yaml_docs(path: Path):
@@ -73,7 +67,7 @@ def _iter_yaml_docs(path: Path):
 
 
 def _canon(value) -> str:
-    """Stable JSON for a Python value (sort keys, sort lists of dicts)."""
+    """Return stable JSON for a Python value (sort keys, sort lists of dicts)."""
     return json.dumps(value, sort_keys=True, default=str)
 
 
@@ -83,9 +77,9 @@ def _extract_allows(doc: dict) -> list[tuple]:
     Each tuple has the shape:
         (target_ns, target_selector_canon, direction, peer_canon)
 
-    `direction` is one of: "ingress", "egress", "ingressDeny", "egressDeny".
-    `target_selector_canon` mixes endpointSelector / nodeSelector — whichever
-    the policy uses — so two policies that target the same workload bucket
+    `direction` is one of: "ingress", "egress", "ingressDeny", or "egressDeny".
+    `target_selector_canon` mixes endpointSelector / nodeSelector (whichever
+    the policy uses) so two policies that target the same workload bucket
     together regardless of which selector they use.
     """
     kind = doc.get("kind")
@@ -117,13 +111,10 @@ def load_allows(directories: list[Path]) -> list[tuple]:
     return out
 
 
-# ── Diff ──────────────────────────────────────────────────────────────
-
-
 def bucket(allows: list[tuple]) -> dict[tuple, set[tuple[str, str]]]:
     """Group allow tuples by (ns, target_selector).
 
-    Value is a set of (direction, peer_canon) pairs — duplicates collapse,
+    Value is a set of (direction, peer_canon) pairs: duplicates collapse,
     so two policies granting the same access count once.
     """
     out: dict[tuple, set[tuple[str, str]]] = defaultdict(set)
@@ -141,7 +132,7 @@ def _summary_counts(allows: list[tuple]) -> dict[str, int]:
 
 
 def _short_selector(sel_canon: str) -> str:
-    """Compact one-line rendering of a selector for log output."""
+    """Format a compact one-line rendering of a selector for log output."""
     sel = json.loads(sel_canon)
     match = sel.get("matchLabels") or sel
     if not match:
@@ -150,7 +141,7 @@ def _short_selector(sel_canon: str) -> str:
 
 
 def _short_peer(direction: str, peer_canon: str) -> str:
-    """Compact one-line rendering of an ingress/egress rule."""
+    """Format a compact one-line rendering of an ingress/egress rule."""
     rule = json.loads(peer_canon)
     parts = []
     if direction.startswith("ingress"):
@@ -180,9 +171,6 @@ def _short_peer(direction: str, peer_canon: str) -> str:
     if ports:
         parts.append(f"ports={','.join(sorted(set(ports)))}")
     return "; ".join(parts) or "<empty>"
-
-
-# ── CLI ───────────────────────────────────────────────────────────────
 
 
 @click.command()
@@ -280,7 +268,7 @@ def main(
     print(f"  only-in-cluster: {C(_RED, str(len(only_cluster)))}")
     print()
 
-    # Detail: mismatched buckets — most actionable
+    # Detail: mismatched buckets (most actionable)
     if mismatch_buckets:
         print(C(_BOLD, "Mismatched buckets"))
         print()

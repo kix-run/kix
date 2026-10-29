@@ -4,10 +4,10 @@
 # dependencies = ["pyyaml", "click"]
 # ///
 """
-Compare kix-generated manifests against a cluster dump directory.
+Compare Kix-generated manifests against a cluster dump directory.
 
 Produces a structured markdown report with:
-- Summary counts (identical, modified, missing, extra)
+- Summary counts (identical, modified, missing, and extra)
 - Fuzzy name matching for unmatched resources
 - Structural diffs (JSON-path-based) for modified resources
 
@@ -46,7 +46,7 @@ _YAMLLoader.add_constructor(
     "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
 )
 
-# Fields that Kubernetes auto-assigns at runtime — never present in kix output.
+# Fields that Kubernetes auto-assigns at runtime, never present in Kix output.
 # These are skipped entirely during comparison (any value is ignored).
 # For fields with known default *values*, use _strip_k8s_defaults in normalize.py instead.
 CLUSTER_DEFAULT_PATHS = {
@@ -67,9 +67,6 @@ _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
 _CYAN = "\033[36m"
 _RESET = "\033[0m"
-
-
-# --- Resource loading ---
 
 
 # Kinds that are always created by operators/controllers at runtime, never declarative.
@@ -99,7 +96,7 @@ def _is_runtime_resource(doc: dict) -> bool:
     - Helm release secrets (sh.helm.release.v1.*)
     - Velero backup artifacts (velero.io/backup-name annotation)
     - Resources in kube-public / kube-node-lease namespaces
-    - RKE2 distribution resources (metrics-server, snapshot-controller, cilium helm configs)
+    - RKE2 distribution resources (metrics-server, snapshot-controller, and cilium helm configs)
     - StatefulSet-generated PVCs (named {template}-{sts}-{ordinal})
     - K8s extension-apiserver-authentication ConfigMap
     """
@@ -131,7 +128,7 @@ def _is_runtime_resource(doc: dict) -> bool:
     if kind == "configmap" and name == "extension-apiserver-authentication":
         return True
 
-    # Bare ServiceAccounts in kube-system (no labels, no annotations) are
+    # Bare ServiceAccounts in kube-system (no labels or annotations) are
     # auto-created by kube-controller-manager for built-in controllers.
     if (
         kind == "serviceaccount"
@@ -145,9 +142,7 @@ def _is_runtime_resource(doc: dict) -> bool:
     if kind == "secret" and name.startswith("sh.helm.release.v1."):
         return True
 
-    # ---------------------------------------------------------------
     # Operator-generated secrets
-    # ---------------------------------------------------------------
     if kind == "secret":
         # Legacy ServiceAccount token secrets (auto-created by K8s < 1.24,
         # or by the token-controller for SAs that request them).
@@ -156,7 +151,7 @@ def _is_runtime_resource(doc: dict) -> bool:
         if secret_type == "kubernetes.io/service-account-token":
             return True
 
-        # cert-manager managed secrets (webhook CA, ACME account keys).
+        # cert-manager managed secrets (webhook CA and ACME account keys).
         # Evidence: label app.kubernetes.io/managed-by: cert-manager.
         if labels.get("app.kubernetes.io/managed-by") == "cert-manager":
             return True
@@ -169,7 +164,7 @@ def _is_runtime_resource(doc: dict) -> bool:
             return True
 
         # StackGres init-script secrets. The operator generates these from
-        # SGScript CRs — they contain the rendered SQL init scripts.
+        # SGScript CRs: they contain the rendered SQL init scripts.
         # Evidence: naming pattern {cluster}-init-script, always paired with
         # an sgscript CR of the same name in the cluster dump.
         if name.endswith("-init-script"):
@@ -188,15 +183,12 @@ def _is_runtime_resource(doc: dict) -> bool:
     if ns in _RUNTIME_NAMESPACES:
         return True
 
-    # ---------------------------------------------------------------
-    # RKE2 distribution resources
-    # ---------------------------------------------------------------
     # RKE2 bundles metrics-server, snapshot-controller, cilium, and
     # runtime classes as internal Helm charts. These resources are
-    # managed by RKE2, not by kix.
+    # managed by RKE2, not by Kix.
     #
     # Evidence: annotations like meta.helm.sh/release-name: rke2-*,
-    # names matching helm-rke2-*, chart-content-rke2-*, chart-values-rke2-*.
+    # names matching helm-rke2-*, chart-content-rke2-*, and chart-values-rke2-*.
     # Verified via cluster dump inspection.
     release_name = annotations.get("meta.helm.sh/release-name", "")
     if release_name.startswith("rke2-"):
@@ -225,17 +217,17 @@ def _is_runtime_resource(doc: dict) -> bool:
     if annotations.get("objectset.rio.cattle.io/owner-name", "").startswith("rke2-"):
         return True
     # Cilium CRDs and cluster-scoped resources are deployed by RKE2's
-    # bundled cilium, not by kix. Under RKE2 the kix `cilium` package
+    # bundled cilium, not by Kix. Under RKE2 the Kix `cilium` package
     # generates only a HelmChartConfig (a configuration overlay), not the
     # operator itself.
-    # Evidence: cilium CRDs have no helm annotations — they're created
+    # Evidence: cilium CRDs have no helm annotations; they are created
     # by the cilium agent DaemonSet at startup.
     if kind == "customresourcedefinition" and name.endswith(".cilium.io"):
         return True
-    # Hubble resources (UI, relay, metrics) are part of RKE2's cilium.
+    # Hubble resources (UI, relay, and metrics) are part of RKE2's cilium.
     if ns == "kube-system" and name.startswith("hubble"):
         return True
-    # RKE2 cattle.io CRDs (HelmChart, HelmChartConfig, EtcdSnapshotFile, Addon).
+    # RKE2 cattle.io CRDs (HelmChart, HelmChartConfig, EtcdSnapshotFile, and Addon).
     _RKE2_CRD_DOMAINS = {"k3s.cattle.io", "helm.cattle.io"}
     if kind == "customresourcedefinition":
         crd_domain = ".".join(name.split(".")[-2:]) if "." in name else ""
@@ -248,9 +240,6 @@ def _is_runtime_resource(doc: dict) -> bool:
         if crd_domain in _SNAPSHOT_CRD_DOMAINS:
             return True
 
-    # ---------------------------------------------------------------
-    # StackGres operator-generated resources
-    # ---------------------------------------------------------------
     # The StackGres operator creates Services (primary/replicas endpoints),
     # SGScripts (init scripts), and old-format SGPostgresConfigs from SGCluster
     # definitions. These are not declaratively managed.
@@ -264,9 +253,6 @@ def _is_runtime_resource(doc: dict) -> bool:
         if any(k.startswith("stackgres.io/") for k in labels):
             return True
 
-    # ---------------------------------------------------------------
-    # StatefulSet-generated PVCs
-    # ---------------------------------------------------------------
     # K8s creates PVCs from StatefulSet volumeClaimTemplates automatically.
     # Their names follow the pattern: {vctName}-{stsName}-{ordinal}
     # (e.g. data-loki-write-0, data-valkey-2).
@@ -274,7 +260,7 @@ def _is_runtime_resource(doc: dict) -> bool:
     # We require TWO conditions to avoid false positives:
     # 1. Name ends with -{digit} (the StatefulSet ordinal suffix)
     # 2. Has a label from a known workload label scheme, proving it was
-    #    created by a StatefulSet controller rather than manually.
+    #    created by a StatefulSet controller rather than defined directly.
     #
     # Evidence: cluster dump PVCs carry StatefulSet selector labels:
     #   - valkey PVCs: app.kubernetes.io/instance, app.kubernetes.io/name
@@ -292,10 +278,7 @@ def _is_runtime_resource(doc: dict) -> bool:
         if labels.keys() & _STS_PVC_LABELS:
             return True
 
-    # ---------------------------------------------------------------
-    # StackGres operator-generated CRs
-    # ---------------------------------------------------------------
-    # The operator creates SGScript, SGPoolingConfig, SGInstanceProfile,
+    # The StackGres operator creates SGScript, SGPoolingConfig, SGInstanceProfile,
     # and SGObjectStorage resources from SGCluster definitions.
     # Old-format SGPostgresConfig (without pg version in name) are leftovers.
     _SG_OPERATOR_KINDS = {
@@ -306,9 +289,6 @@ def _is_runtime_resource(doc: dict) -> bool:
     if kind in _SG_OPERATOR_KINDS:
         return True
 
-    # ---------------------------------------------------------------
-    # System namespaces and RBAC
-    # ---------------------------------------------------------------
     # Namespaces auto-created by K8s or the distribution.
     if kind == "namespace" and name in (
         "kube-public",
@@ -327,15 +307,10 @@ def _is_runtime_resource(doc: dict) -> bool:
     ):
         return True
 
-    # ---------------------------------------------------------------
-    # Infisical operator CRs
-    # ---------------------------------------------------------------
     if kind == "infisicalsecret":
         return True
 
-    # ---------------------------------------------------------------
     # OpenEBS internal logging (loki/promtail inside openebs-system)
-    # ---------------------------------------------------------------
     if ns == "openebs-system" and ("loki" in name or "promtail" in name):
         return True
 
@@ -355,10 +330,10 @@ def _is_controller_owned(doc: dict) -> bool:
     metadata = doc.get("metadata", {})
     labels = metadata.get("labels", {}) or {}
 
-    # managed-by label: operators like virt-operator, cilium-operator set this
+    # managed-by label: operators like virt-operator and cilium-operator set this
     # to indicate they control the resource's lifecycle.
     # Evidence: kubevirt/* resources all have managed-by: virt-operator with
-    # NO ownerReferences — verified via cluster dump inspection.
+    # NO ownerReferences, verified via cluster dump inspection.
     managed_by = labels.get("app.kubernetes.io/managed-by", "")
     _OPERATOR_MANAGERS = {
         "virt-operator",  # KubeVirt: creates virt-api, virt-controller, etc.
@@ -430,7 +405,7 @@ def load_resources(
     document's metadata, so naming conventions don't matter):
 
     - Nested: ``{namespace}/{anything}.yaml``       (kix-dump output)
-    - Kix flat: ``{namespace}--{name}-{kind}.yaml`` (kix nix build output)
+    - Kix flat: ``{namespace}--{name}-{kind}.yaml`` (Kix nix build output)
     - Dump flat: ``NNNN-{Kind}-{namespace}-{name}.yaml`` (migration dumps)
     - Multi-doc: any ``*.yaml`` containing multiple ``---`` separated docs
       (e.g. helm-rendered ``*.rendered.yaml`` bundles)
@@ -489,7 +464,7 @@ def load_resources(
                     continue
                 if not _matches_service_doc(item):
                     continue
-                # Compute group key from the *raw* doc — the normalizer
+                # Compute group key from the *raw* doc: the normalizer
                 # strips helm annotations and app.kubernetes.io labels,
                 # which would collapse everything to ns: groups.
                 gk = group_key(item)
@@ -556,9 +531,6 @@ def format_resource(key: str) -> str:
     return f"{ns}/{name} ({kind})"
 
 
-# --- Fuzzy matching ---
-
-
 def find_best_match(
     key: str,
     candidates_by_kind: dict[str, list[str]],
@@ -597,7 +569,7 @@ def find_rename_pairs(
     ignore_paths: set[str] | None,
     max_structural_diffs: int = 5,
 ) -> list[tuple[str, str, float, list]]:
-    """Find probable renames between kix-only and cluster-only resources.
+    """Find probable renames between Kix-only and cluster-only resources.
 
     Uses three filters to avoid false positives:
     1. Name similarity (SequenceMatcher ratio >= 0.6)
@@ -617,10 +589,10 @@ def find_rename_pairs(
         kind, _, _ = parse_resource_id(key)
         cluster_by_kind.setdefault(kind, []).append(key)
 
-    # Kinds where rename detection produces too many false positives —
+    # Kinds where rename detection produces too many false positives:
     # CNPs in particular use highly templated names that score 70%+
     # similar across unrelated rules (egress vs ingress, create vs patch).
-    # For those we'd rather see the raw kix-only / cluster-only lists.
+    # For those we'd rather see the raw Kix-only / cluster-only lists.
     _RENAME_SKIP_KINDS = {
         "ciliumnetworkpolicy",
         "ciliumclusterwidenetworkpolicy",
@@ -659,7 +631,7 @@ def find_rename_pairs(
         if _antonym_mismatch(kix_key, cluster_key):
             continue
 
-        # B's best match in kix (mutual check)
+        # B's best match in Kix (mutual check)
         reverse = find_best_match(cluster_key, kix_by_kind)
         if not reverse or reverse[0] != kix_key:
             continue
@@ -682,9 +654,6 @@ def find_rename_pairs(
         pairs.append((kix_key, cluster_key, ratio, diffs))
 
     return pairs
-
-
-# --- Report generation ---
 
 
 def generate_report(
@@ -1130,7 +1099,7 @@ def _strip_webhook_match_policy(doc: dict) -> dict:
     return doc
 
 
-# StackGres fields that the operator enriches at runtime — never in declarative manifests.
+# StackGres fields that the operator enriches at runtime, never in declarative manifests.
 _SG_CLUSTER_RUNTIME_FIELDS = {
     "managedSql",
     "nonProductionOptions",
@@ -1198,9 +1167,6 @@ def _strip_sg_runtime(doc: dict) -> dict:
             spec.pop(field, None)
 
     return doc
-
-
-# --- Main ---
 
 
 @click.command()
@@ -1352,10 +1318,10 @@ def main(
     json_output: bool,
     output_file: str | None,
 ):
-    """Compare kix manifests against one or more cluster dump directories.
+    """Compare Kix manifests against one or more cluster dump directories.
 
-    KIX_DIR is the kix output directory (e.g. ./result from nix build).
-    CLUSTER_DIRS is one or more dump directories — resources from all of
+    KIX_DIR is the Kix output directory (e.g. ./result from nix build).
+    CLUSTER_DIRS is one or more dump directories: resources from all of
     them are merged into a single cluster-side resource set (later
     directories override earlier ones on key collision). This is useful
     when a deployment is split across formats (e.g. nw1's k8s/ +
@@ -1489,7 +1455,7 @@ def main(
             err=True,
         )
 
-    # Whole-resource ignores from scripts/nw1-diff-ignores.txt — lines of
+    # Whole-resource ignores from scripts/nw1-diff-ignores.txt: lines of
     # the form `resource:<ns>/<Kind>/<name>` (use _cluster for cluster-scoped).
     # Drop matching resources from both sides so they don't appear as
     # missing/extra in the diff.
@@ -1546,9 +1512,9 @@ def main(
 
     # Cross-index matching: helm-rendered manifests often omit
     # metadata.namespace (helm sets it implicitly at install time), so a
-    # cluster-side resource ends up keyed under "_cluster/" while kix has
+    # cluster-side resource ends up keyed under "_cluster/" while Kix has
     # it under its actual namespace. Reconcile by matching on (kind,
-    # name) — if exactly one resource on each side has that pair and
+    # name): if exactly one resource on each side has that pair and
     # neither was matched by the strict key, treat them as the same
     # resource. This is the canonical (kind, ns, name) the API server
     # would return; the dump just lacked the namespace.
@@ -1580,7 +1546,7 @@ def main(
                 doc = cluster_resources.pop(old)
                 # Helm-rendered manifests often omit metadata.namespace
                 # because helm injects it at install time. After we've
-                # confidently re-keyed onto the kix-side namespace, sync
+                # confidently re-keyed onto the Kix-side namespace, sync
                 # the doc's metadata.namespace too so the structural
                 # diff doesn't flag a phantom namespace difference.
                 kix_meta = kix_resources[new].get("metadata") or {}
