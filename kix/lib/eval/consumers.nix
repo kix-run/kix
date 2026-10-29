@@ -480,6 +480,9 @@ in
         in
         if isKixOwn m then
           null
+        # Name the namespace a Namespace object creates, since it is in none.
+        else if ns == null && namespace != null && whose namespace != null then
+          "${name} may not create Namespace ${namespace}, which ${whose namespace}."
         else if namespace != null && whose namespace != null then
           "${who m} is in namespace ${namespace}, which ${whose namespace}."
         else if

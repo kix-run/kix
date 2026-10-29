@@ -485,6 +485,45 @@ in
     )
     || throw "an object in a namespace no pattern matches was built";
 
+  # Name the namespace a refused Namespace would create, and a refused object
+  # by the namespace it is in.
+  lib-consumers-namespace-refusal-names-what-it-creates =
+    let
+      consumers = import ../../eval/consumers.nix {
+        inherit lib;
+        k8s = null;
+        mkImport = null;
+        instancePinsLib = null;
+      };
+      check = consumers.consumer {
+        name = "acme-prod";
+        cfg.interfaces.prod = builtins.fromJSON (builtins.readFile fixture) // {
+          file = fixture;
+        };
+        self = null;
+      };
+      messages = map (a: a.message) (
+        check.assertionsFor [
+          {
+            kind = "Namespace";
+            metadata.name = "other-team";
+          }
+          {
+            kind = "ConfigMap";
+            metadata = {
+              name = "extra";
+              namespace = "other-team";
+            };
+          }
+        ]
+      );
+    in
+    messages == [
+      "kix: acme-prod may not create Namespace other-team, which matches none of your namespaces (acme-*, acme-app)."
+      "kix: ConfigMap other-team/extra is in namespace other-team, which matches none of your namespaces (acme-*, acme-app)."
+    ]
+    || throw "unexpected refusals: ${builtins.toJSON messages}";
+
   lib-consumers-platform-namespace-refused =
     evalFails (
       consumerWith
