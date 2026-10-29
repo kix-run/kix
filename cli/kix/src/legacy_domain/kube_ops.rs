@@ -55,35 +55,32 @@ impl KubeMigrationOps {
         Self { client }
     }
 
-    /// The CustomResourceDefinition API.
+    /// Return the `CustomResourceDefinition` API client.
     fn crds(&self) -> Api<k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition>
     {
         Api::all(self.client.clone())
     }
 
-    /// A dynamic API for one record kind in one group.
+    /// Build a dynamic API client for `record` in `group`.
     ///
-    /// Constructed directly rather than from discovery: during the migration both
-    /// groups can be registered, and discovery lookup is first-kind-wins, so
-    /// it cannot say which `Activation` a caller meant.
+    /// Constructs the `ApiResource` directly rather than from discovery
+    /// because both the retired and current groups can be registered during
+    /// migration, and discovery lookup is first-kind-wins.
     ///
-    /// The handle spans all namespaces, which is what listing wants and is
-    /// valid for a namespaced kind. Writing through it is only correct for a
-    /// cluster-scoped kind, so every write below calls [`Self::writable`]
-    /// first rather than trusting the caller.
+    /// The returned client spans all namespaces, which works for listing any
+    /// kind but is valid for writes only on cluster-scoped kinds. Write
+    /// operations call [`Self::writable`] first.
     fn records(&self, group: &str, record: RecordKind) -> Api<DynamicObject> {
         let gvk = GroupVersionKind::gvk(group, RECORD_VERSION, record.kind);
         let ar = ApiResource::from_gvk_with_plural(&gvk, record.plural);
         Api::all_with(self.client.clone(), &ar)
     }
 
-    /// The same handle, for a write.
+    /// Return a dynamic API client for writing a cluster-scoped `record` in
+    /// `group`.
     ///
-    /// `Api::all_with` addresses the cluster-scoped endpoint. For a
-    /// namespaced kind that is right for a LIST and wrong for a POST, which
-    /// would 404 against a URL with no namespace. Today only the
-    /// cluster-scoped Activation is written, and this turns a future caller's
-    /// mistake into a clear error instead of a confusing 404.
+    /// `Api::all_with` targets the cluster-scoped endpoint, which would return
+    /// 404 on a POST for a namespaced kind.
     fn writable(&self, group: &str, record: RecordKind) -> Result<Api<DynamicObject>, String> {
         if !record.cluster_scoped {
             return Err(format!(

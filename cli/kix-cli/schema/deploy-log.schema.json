@@ -1,21 +1,21 @@
 {
   "$defs": {
     "ApplyAction": {
-      "description": "The action taken during apply. The deploy log names it in snake_case.",
+      "description": "Action taken during apply, serialized in `snake_case` in the deploy log.",
       "oneOf": [
         {
           "const": "created",
-          "description": "Resource was created (didn't exist before).",
+          "description": "Resource was created.",
           "type": "string"
         },
         {
           "const": "configured",
-          "description": "Resource was updated (identity-hash changed).",
+          "description": "Resource was updated because its identity-hash changed.",
           "type": "string"
         },
         {
           "const": "unchanged",
-          "description": "Resource was skipped (identity-hash matched).",
+          "description": "Resource was skipped because its identity-hash matched.",
           "type": "string"
         },
         {
@@ -329,7 +329,7 @@
         },
         {
           "const": "discovery",
-          "description": "Not a node: the API discovery refresh behind a CRD barrier.",
+          "description": "API discovery refresh behind a CRD barrier.",
           "type": "string"
         }
       ]
@@ -516,7 +516,7 @@
         },
         {
           "const": "skip",
-          "description": "Identity-hash unchanged; no work needed. Rendered dim, folded\naggressively.",
+          "description": "Identity-hash unchanged, so no work is needed. Rendered dim and folded\naggressively.",
           "type": "string"
         },
         {
@@ -546,7 +546,7 @@
         },
         {
           "const": "wait",
-          "description": "Wait for an object the build needs and another Kix cluster writes:\nKix's own CRDs on a consumer cluster, which its platform installs.\nNothing is applied or stamped.",
+          "description": "Wait for an object the build needs and another Kix cluster writes,\nsuch as Kix's own CRDs on a consumer cluster.\nNothing is applied or stamped.",
           "type": "string"
         }
       ]
@@ -631,7 +631,7 @@
       "type": "object"
     },
     {
-      "description": "The orphans: `resources` may be deleted, in prune order, and `count`\nis how many. `delete` says whether this run deletes them or only\nreports them. `kept` are orphans no prune policy deletes.",
+      "description": "Start of orphan pruning. `resources` lists orphans in prune order,\n`count` is `resources.len()`, `delete` indicates whether this run\ndeletes or only reports them, and `kept` lists orphans retained by\nprune policy.",
       "properties": {
         "count": {
           "format": "uint",
@@ -712,7 +712,7 @@
       "type": "object"
     },
     {
-      "description": "The run stopped: cancelled, or halted at a failure.",
+      "description": "The run stopped due to cancellation or a failure.",
       "properties": {
         "reason": {
           "type": "string"
@@ -886,7 +886,7 @@
       "type": "integer"
     },
     "schema_version": {
-      "description": "The date, `YYYY-MM-DD`, of the log shape's last change that was not\nbackward compatible. On every line, so each line can be read alone.",
+      "description": "Schema version (`YYYY-MM-DD`), included on every line so lines can be\nparsed independently.",
       "type": "string"
     }
   },

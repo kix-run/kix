@@ -1,18 +1,15 @@
-//! Asking a container registry what a reference resolves to.
+//! Query a container registry to resolve an image reference to its manifest digest.
 //!
-//! This client answers one question:
-//! *does this reference exist, and what is its manifest digest*. Kix does not
-//! pull layers, does not inspect image configuration and does not cache. The
-//! answer is written into a pin file and committed, so the network is touched
-//! at promotion time and never at deploy time.
+//! This client checks whether a reference exists and returns its manifest
+//! digest without pulling layers, inspecting image configuration, or caching.
+//! Because resolved digests are committed to a pin file, network requests
+//! happen only during pin promotion and never during deployment.
 //!
-//! The digest returned is the digest of the manifest bytes the registry
-//! served for the reference. For a multi-architecture image that is the index
-//! digest, which is what a container runtime resolves and what `crane digest`
-//! prints. Kix computes it from the body rather than trusting the
-//! `Docker-Content-Digest` header, because the body is the definition and the
-//! header is a claim; when both are present and disagree, that is an error
-//! worth surfacing rather than a preference to settle.
+//! The returned digest is the SHA-256 of the manifest bytes served by the
+//! registry (the image index digest for multi-architecture images, matching
+//! container runtimes and `crane digest`). Kix hashes the response body itself
+//! and verifies that `Docker-Content-Digest` agrees when that header is
+//! present.
 
 use std::time::Duration;
 

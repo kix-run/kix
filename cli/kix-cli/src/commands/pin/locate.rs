@@ -1,37 +1,30 @@
-//! Finding the pin file when nobody named one.
+//! Locate the pin file for `kix pin` commands without evaluating the flake.
 //!
-//! `--pins-file` used to be required in practice, because its default was
-//! `pins.json` in the working directory and a pin file normally sits next to
-//! the cluster definition rather than next to the shell. Every documented
-//! example therefore repeated the same path on every line, which is the shape
-//! of a flag that should have been a default.
+//! Evaluating a flake to read a pin-file path would copy the repository into
+//! `/nix/store/<hash>-source/...` and fail whenever the pin file itself is
+//! broken or missing. Instead, the CLI searches in order:
+//! 1. `--pins-file <path>`, if passed.
+//! 2. `pins.json` in the working directory.
+//! 3. `pins.json` in the flake directory.
+//! 4. A bounded scan of the Git repository for a single pin file.
 //!
-//! The flake cannot supply it without a cost. A path literal inside a flake
-//! evaluates to a store path (`/nix/store/<hash>-source/clusters/pins.json`),
-//! not to a file you can write, so reading a declaration out of the flake
-//! means evaluating the flake and then reconstructing the source path from
-//! `self`. That trades away the property `kix pin` exists to have: it works
-//! when evaluation does not. So the CLI finds the file instead of being told.
-//!
-//! The order is: what you passed, then the working directory, then the flake
-//! directory, then a bounded scan of the repository. Ambiguity is refused
-//! rather than guessed, because writing a digest into the wrong file is a
-//! quiet failure and being asked which one is a loud one.
+//! If the repository scan finds more than one candidate, the command returns an
+//! error asking for `--pins-file` rather than guessing.
 
 use std::path::{Path, PathBuf};
 
 use miette::{Result, miette};
 
-/// How the pin file was found, so the command can say so.
+/// How the pin file was located.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum How {
-    /// `--pins-file` said so.
+    /// Selected explicitly via `--pins-file`.
     Flag,
-    /// It was in the working directory.
+    /// Found at `./pins.json` in the working directory.
     Cwd,
-    /// It was next to the flake.
+    /// Found at `pins.json` next to the flake.
     Flake,
-    /// It was the only one in the repository.
+    /// Found as the sole pin file in the Git repository.
     Scan,
 }
 
@@ -42,9 +35,8 @@ pub struct Location {
 }
 
 impl Location {
-    /// A short phrase for the line the command prints when it chose the file
-    /// itself. Nothing is printed for `--pins-file`, because the reader wrote
-    /// it and does not need telling.
+    /// Return a note describing how the file was chosen when `--pins-file` was
+    /// not passed.
     pub fn note(&self) -> Option<String> {
         match self.how {
             How::Flag => None,
@@ -58,11 +50,8 @@ impl Location {
     }
 }
 
-/// Find the pin file to read, or say plainly that there is not one.
-///
-/// `Ok(None)` means nothing was found, which `--init` is allowed to act on.
-/// `Err` means something was found and it was not one thing, which nothing is
-/// allowed to act on.
+/// Find the pin file to read, returning `Ok(None)` when none exists and `Err`
+/// when multiple candidates exist in the repository.
 fn find(explicit: Option<&Path>, flake: &str) -> Result<Option<Location>> {
     if let Some(p) = explicit {
         return Ok(Some(Location {
@@ -89,9 +78,8 @@ fn find(explicit: Option<&Path>, flake: &str) -> Result<Option<Location>> {
         }
     }
 
-    // Only inside a repository. Scanning an arbitrary working directory
-    // means scanning whatever happens to be under it, which on a home
-    // directory is slow and on a temp directory is somebody else's files.
+    // Scan only inside a Git repository to avoid walking arbitrary directories
+    // such as `$HOME` or `/tmp`.
     let root = repo_root();
     let mut found = match &root {
         Some(root) => scan(root),
@@ -102,9 +90,8 @@ fn find(explicit: Option<&Path>, flake: &str) -> Result<Option<Location>> {
     decide(found)
 }
 
-/// What the scan's result means. Split out because the distinction it draws
-/// is the one that is easy to get wrong: nothing found is an absence that
-/// `--init` may answer, and several found is an error that it may not.
+/// Convert repository scan candidates into a single [`Location`], `Ok(None)`
+/// when none were found, or an ambiguity error when several were found.
 fn decide(mut found: Vec<PathBuf>) -> Result<Option<Location>> {
     match found.len() {
         1 => Ok(Some(Location {
@@ -143,14 +130,13 @@ pub fn locate(explicit: Option<&Path>, flake: &str) -> Result<Location> {
     })
 }
 
-/// Find the pin file to read, or the path to create when there is none.
+/// Find the pin file to read, or return the default path to create for `--init`.
 ///
-/// `kix pin set --init` is the one command that is allowed to invent a path,
-/// and it invents a predictable one: next to the flake, because that is where
-/// the cluster definition that reads it lives.
+/// When no pin file exists yet, defaults to `pins.json` in the flake directory
+/// (or the working directory for remote flakes).
 pub fn locate_or_init(explicit: Option<&Path>, flake: &str) -> Result<Location> {
-    // `find` returning Err means there is more than one pin file. Creating
-    // another one is the worst possible answer to that, so it propagates.
+    // Propagate ambiguity errors from `find` so `--init` never creates a third
+    // pin file when the repository already has two.
     Ok(find(explicit, flake)?.unwrap_or_else(|| Location {
         path: match flake_dir(flake) {
             Some(dir) => dir.join("pins.json"),
@@ -160,8 +146,8 @@ pub fn locate_or_init(explicit: Option<&Path>, flake: &str) -> Result<Location> 
     }))
 }
 
-/// The local directory a flake reference names, if it names one at all.
-/// `github:owner/repo` and friends have no directory to look in.
+/// Return the local directory referenced by `flake`, or `None` for remote flake
+/// URLs such as `github:owner/repo`.
 fn flake_dir(flake: &str) -> Option<PathBuf> {
     let without_fragment = flake.split('#').next().unwrap_or(flake);
     let bare = without_fragment
@@ -174,8 +160,7 @@ fn flake_dir(flake: &str) -> Option<PathBuf> {
     path.is_dir().then_some(path)
 }
 
-/// A path as the reader would type it, when it is below the working
-/// directory. An absolute path is correct but harder to retype.
+/// Format `path` relative to the current working directory when possible.
 fn display_from_cwd(path: &Path) -> String {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match path.strip_prefix(&cwd) {
@@ -184,10 +169,7 @@ fn display_from_cwd(path: &Path) -> String {
     }
 }
 
-/// The git root above the working directory, if there is one.
-///
-/// Shared with the workflow check, which needs a repository root to express a
-/// path the way a `paths:` filter sees it.
+/// Find the enclosing Git repository root above the current working directory.
 pub fn repo_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let mut dir = cwd.as_path();
@@ -199,15 +181,12 @@ pub fn repo_root() -> Option<PathBuf> {
     }
 }
 
-/// Every pin file under `root`, to a bounded depth.
+/// Return all pin files under `root` up to [`MAX_DEPTH`].
 ///
-/// A pin file is one called `pins.json`, or one whose name ends in
-/// `pins.json` and that declares `managedBy`. The second condition keeps an
-/// unrelated JSON file that happens to end in `pins.json` from being read as
-/// a pin file and reported as a second candidate.
-///
-/// Symlinks are not followed. A `nix build` leaves a `result` symlink into the
-/// store, and walking into it is both slow and wrong.
+/// Matches files named `pins.json`, plus files ending in `pins.json` whose
+/// header contains [`kix::pins::MANAGED_MARKER`] so unrelated JSON files ending
+/// in `pins.json` are not treated as pin files. Does not follow symlinks (such
+/// as Nix `result` links).
 fn scan(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     walk(root, 0, &mut out);

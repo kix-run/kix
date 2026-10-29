@@ -9,17 +9,16 @@ use kube::api::DynamicObject;
 
 /// Strip server-side fields from a DynamicObject for diffing.
 ///
-/// Removes: uid, resourceVersion, creationTimestamp, generation,
-/// selfLink, managedFields, status, last-applied-configuration annotation.
+/// Removes `uid`, `resourceVersion`, `creationTimestamp`, `generation`,
+/// `selfLink`, `managedFields`, `status`, and the `last-applied-configuration`
+/// annotation.
 pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
-    // Top-level metadata fields
     obj.metadata.uid = None;
     obj.metadata.resource_version = None;
     obj.metadata.creation_timestamp = None;
     obj.metadata.generation = None;
     obj.metadata.managed_fields = None;
 
-    // Remove selfLink if present in the raw data
     if let Some(data) = obj.data.as_object_mut() {
         if let Some(meta) = data.get_mut("metadata").and_then(|m| m.as_object_mut()) {
             meta.remove("selfLink");
@@ -29,42 +28,34 @@ pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
             meta.remove("generation");
             meta.remove("managedFields");
 
-            // Strip last-applied-configuration annotation
             if let Some(annotations) = meta.get_mut("annotations").and_then(|a| a.as_object_mut()) {
                 annotations.remove("kubectl.kubernetes.io/last-applied-configuration");
-                // Remove annotations object entirely if empty
                 if annotations.is_empty() {
                     meta.remove("annotations");
                 }
             }
         }
 
-        // Remove status entirely
         data.remove("status");
     }
 }
 
-/// The kix-owned view of a live object: the live value projected onto the
-/// fieldset kix's server-side apply owns, with the type
-/// meta and identity that fieldsV1 never lists (`apiVersion`, `kind`,
-/// `metadata.name`, `metadata.namespace`) restored.
+/// Project `obj` onto the fieldset owned by Kix's server-side apply, restoring
+/// `apiVersion`, `kind`, `metadata.name`, and `metadata.namespace`, and
+/// redacting `Secret` values.
 ///
-/// This is what `kix diff` and `kix snapshot save` compare against a build:
-/// the server's defaults (deployment strategy, probe thresholds, scheduler
-/// name, ...) are owned by nobody or by a controller, so they never enter the
-/// view, and kix's own bookkeeping annotations (`kix.run/activations`,
-/// `kix.run/applied-hash`) are written through a separate `Update` entry, so
-/// they are excluded too. Comparing this to the rendered manifest asks the
-/// question a change review actually needs answered: "does what kix would
-/// apply differ from what kix last applied?"
+/// `kix diff` and `kix snapshot save` compare this view against a build. Server
+/// defaults (such as deployment strategy, probe thresholds, and scheduler name)
+/// are unowned or owned by a controller, so they are excluded. Kix's
+/// bookkeeping annotations (`kix.run/activations` and `kix.run/applied-hash`)
+/// are written through a separate `Update` entry and are also excluded.
 ///
-/// Objects without a kix `Apply` entry (adopted externally, or predating SSA)
-/// fall back to the whole object with server metadata stripped.
+/// Objects without a Kix `Apply` entry fall back to the full object with server
+/// metadata stripped.
 ///
-/// A Secret's view holds no live value: every `data` key reads
-/// [`HIDDEN_SECRET_VALUE`] (see `redact_secret`). Values kix applied
-/// through `stringData` are absent, since the server stores them only in
-/// `data` and kix's fieldset lists `stringData`.
+/// Every `data` key on a `Secret` is replaced with [`HIDDEN_SECRET_VALUE`] (see
+/// [`redact_secret`]). Values Kix applied through `stringData` are absent
+/// because the server stores them only in `data`.
 /// [`kix_owned_manifests_against`] compares both against a build.
 pub(crate) fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
     let mut view = unredacted_view(obj);
@@ -72,8 +63,8 @@ pub(crate) fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
     view
 }
 
-/// [`kix_owned_view`] before [`redact_secret`]. A Secret's live values are
-/// still in it, so it must not leave this module.
+/// Build [`kix_owned_view`] before running [`redact_secret`]. Because `Secret`
+/// values remain unredacted, this value must not leave the module.
 fn unredacted_view(obj: &DynamicObject) -> serde_json::Value {
     let Some(mut view) = super::fieldsv1::kix_owned_projection(obj) else {
         let mut fallback = obj.clone();
@@ -101,28 +92,25 @@ fn unredacted_view(obj: &DynamicObject) -> serde_json::Value {
     view
 }
 
-/// Stands in for a live Secret value that differs from the build's, so a
-/// diff shows the key as changed without printing what the cluster holds.
+/// Placeholder for a live `Secret` value that differs from the build, so a diff
+/// shows the key as changed without printing the live value.
 pub const HIDDEN_SECRET_VALUE: &str = "(live value differs from the build, not shown)";
 
-/// Keep every live value out of a Secret's view.
+/// Replace live `Secret` values in `view` with build values when equal, or
+/// [`HIDDEN_SECRET_VALUE`] when different.
 ///
-/// Each key under the view's `data` becomes the value `built` gives it when
-/// the decoded live value equals the build's: under `data` when the build
-/// declares the key there, under `stringData` when the build declares it
-/// there. Every other key reads [`HIDDEN_SECRET_VALUE`], as does every key
-/// when `built` is `None`.
+/// Each key under `view`'s `data` is replaced with `built`'s value when the
+/// decoded live bytes match `built` (under `data` or `stringData` according to
+/// where `built` declares the key). Every other key, and every key when `built`
+/// is `None`, becomes [`HIDDEN_SECRET_VALUE`].
 ///
-/// The API server merges `stringData` into `data` and never stores it, so the
-/// projection of a Secret kix applied with `stringData` lists neither field.
-/// For each `stringData` key `built` declares and kix's fieldset lists, the
-/// decoded live `data` value is compared the same way and the key is added
-/// under `stringData`; a key whose live value is missing or is not
-/// base64-encoded UTF-8 is left out. A SOPS Secret's build manifest has no
-/// `stringData` (kix decrypts its values at deploy time), so none of its keys
-/// are restored and a value changed out of band does not show.
-///
-/// The view therefore never holds a value that is not already in the build.
+/// Because the API server merges `stringData` into `data` and never stores
+/// `stringData`, the projection of a `Secret` that Kix applied with
+/// `stringData` contains neither field. For each `stringData` key declared in
+/// `built` and listed in Kix's fieldset, the decoded live `data` value is
+/// compared and restored under `stringData` (or omitted if missing or not valid
+/// UTF-8). A SOPS `Secret` manifest has no `stringData` in the build, so its
+/// keys are not restored.
 fn redact_secret(
     view: &mut serde_json::Value,
     obj: &DynamicObject,
@@ -148,7 +136,7 @@ fn redact_secret(
     let Some(map) = view.as_object_mut() else {
         return;
     };
-    // The server never returns `stringData`; hide anything found there.
+    // The server never returns `stringData`, so redact anything present there.
     if let Some(Value::Object(found)) = map.remove("stringData") {
         string_data.extend(found.into_iter().map(|(k, _)| (k, hidden())));
     }
@@ -211,14 +199,8 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(text).ok()
 }
 
-/// The kix-owned view of every object in a sweep, brought to the current
-/// domain: what a build is compared against, whether the comparison runs
-/// now (`kix diff`), later from a directory (`kix snapshot save`), or as
-/// the previous state a deploy plans from when its store path is gone.
-///
-/// The domain upgrade matters on a cluster a previous Kix stamped under a
-/// retired domain: without it every Kix annotation reads as a paired add
-/// and remove, and an in-sync cluster reads as entirely modified.
+/// Project each object in `objects` with [`kix_owned_view`] and upgrade retired
+/// Kix annotation domains to the current domain.
 pub fn kix_owned_manifests(
     objects: impl IntoIterator<Item = DynamicObject>,
 ) -> Vec<serde_json::Value> {
@@ -232,28 +214,21 @@ pub fn kix_owned_manifests(
         .collect()
 }
 
-/// [`kix_owned_manifests`] for comparison against a build, with each object
-/// that is unchanged since kix applied a manifest still in the build replaced
-/// by that manifest. `built` maps identity hash to the build's stamped
-/// manifest.
+/// Build [`kix_owned_manifests`] for comparison against `built` (keyed by
+/// identity hash), replacing any object that has not changed since apply with
+/// its build manifest.
 ///
-/// An object is unchanged when its `kix.run/identity-hash` names a manifest
-/// in `built`, [`super::drift::check_object`] finds it in sync, and every
-/// field that manifest sets holds the same value in the kix-owned view (see
-/// `build_holds_in`). The view may carry fields the build does not set,
-/// such as the `publisher` StackGres's mutating webhook adds to each
-/// extension; those are what the replacement hides. In sync alone is not
-/// enough: it means the live fields match the apply response, which already
-/// lacks a field the CRD schema pruned and already holds a value a webhook
-/// overwrote. The replacement keeps the live `kix.run/*` annotations, because
-/// both hashes leave them out and a package move would otherwise not show.
+/// An object is considered unchanged when its `kix.run/identity-hash` matches a
+/// manifest in `built`, [`super::drift::check_object`] reports
+/// [`super::drift::DriftVerdict::InSync`], and every field set by the build
+/// manifest holds an equivalent value in the Kix-owned view (see
+/// [`build_holds_in`]). Replacing the view with the build manifest hides extra
+/// fields added inside atomic lists by mutating webhooks while still surfacing
+/// fields pruned by CRD schemas or overwritten by webhooks. Live `kix.run/*`
+/// annotations are preserved so package moves remain visible.
 ///
-/// Every other object is compared through its view, with `redact_secret`
-/// run against the build manifest of the same name, so no live Secret value
-/// leaves this function. A Secret kix applied with `stringData` always takes
-/// that path (the server stores no `stringData`). A changed value shows there
-/// only when the build holds the plaintext: a literal `data` or `stringData`
-/// value, not a SOPS Secret's.
+/// All other objects use their Kix-owned view after running [`redact_secret`]
+/// against the matching build manifest.
 pub fn kix_owned_manifests_against(
     objects: impl IntoIterator<Item = DynamicObject>,
     built: &HashMap<String, &serde_json::Value>,
@@ -277,9 +252,8 @@ pub fn kix_owned_manifests_against(
         .collect()
 }
 
-/// The build manifest `obj` was applied from, with the live `kix.run/*`
-/// annotations of `view`, when nothing has changed it since. See
-/// [`kix_owned_manifests_against`].
+/// Return the build manifest `obj` was applied from (with live `kix.run/*`
+/// annotations preserved) if the object has not changed since apply.
 fn unchanged_since_apply(
     obj: &DynamicObject,
     view: &serde_json::Value,
@@ -318,12 +292,9 @@ fn unchanged_since_apply(
     Some(out)
 }
 
-/// Whether every field `build` sets is present in `live` with an equal
-/// value, using the same equivalences as the diff engine (a server default
-/// or empty list for an absent field, quantity spellings). `live` may hold
-/// fields `build` does not. Lists match by the diff engine's keys, or by
-/// position, and must have the same length. `path` is the diff path of
-/// `build`, which the equivalence rules match on.
+/// Return whether every field set in `build` is present in `live` with an
+/// equivalent value under the diff engine's rules. `live` may contain extra
+/// fields not present in `build`.
 fn build_holds_in(build: &serde_json::Value, live: &serde_json::Value, path: &str) -> bool {
     use crate::manifest::diff::equivalence::{
         equivalent_to_unset, is_quantity_field, same_quantity,
@@ -391,11 +362,9 @@ mod tests {
         }
     }
 
-    /// A live Deployment as the apiserver hands it back: kix's Apply entry
-    /// owns what kix sent, kix's bookkeeping patch is a separate Update
-    /// entry, the controller owns its revision annotation and status, and
-    /// the server defaulted strategy, probe thresholds and the like with no
-    /// owner at all. Only the first survives.
+    /// Verify that only Kix's `Apply` fieldset survives in the view, excluding
+    /// Kix's `Update` bookkeeping patch, controller-owned fields, and unowned
+    /// server defaults.
     #[test]
     fn kix_owned_view_keeps_only_the_applied_fieldset() {
         let f_identity = format!("f:{}", keys::IDENTITY_HASH);
@@ -524,8 +493,8 @@ mod tests {
         );
     }
 
-    /// A live Secret kix applied with `stringData`: the server stored only
-    /// `data`, under the given base64 password and `other`, which is not kix's.
+    /// Build a live `Secret` that Kix applied with `stringData`, where the
+    /// server stored only `data` plus an unowned `other` key.
     fn string_data_secret(password_b64: &str, annotations: Value) -> DynamicObject {
         let annotation_fields: serde_json::Map<String, Value> = annotations
             .as_object()
@@ -595,8 +564,8 @@ mod tests {
         assert!(view.get("data").is_none());
     }
 
-    /// A live SGCluster after an apply: the operator's webhook added
-    /// `publisher` to each extension, inside a list kix owns whole.
+    /// Build a live `SGCluster` where a mutating webhook added `publisher` to
+    /// each extension inside an atomic list owned by Kix.
     fn webhook_defaulted_cluster(extensions: Value, applied_hash: Option<&str>) -> DynamicObject {
         applied_cluster(
             json!({"postgres": {"extensions": extensions}}),
@@ -605,9 +574,8 @@ mod tests {
         )
     }
 
-    /// A live SGCluster whose kix Apply entry owns the given annotations and
-    /// `spec.postgres.extensions`. The applied-content hash is computed from
-    /// the object unless `applied_hash` overrides it.
+    /// Build a live `SGCluster` whose Kix `Apply` entry owns `owned_annotations`
+    /// and `spec.postgres.extensions`.
     fn applied_cluster(
         spec: Value,
         owned_annotations: &[(&str, &str)],
@@ -712,9 +680,9 @@ mod tests {
         );
     }
 
-    /// The identity and applied-content hashes leave out `kix.run/*`
-    /// annotations, so a package move or a hand-edited stamp keeps both. The
-    /// comparison carries the live stamps and shows the change.
+    /// Because identity and applied-content hashes exclude `kix.run/*`
+    /// annotations, the comparison preserves live `kix.run/*` annotations so
+    /// package moves or annotation edits remain visible.
     #[test]
     fn a_changed_stamp_annotation_shows_in_the_comparison() {
         let spec = json!({"postgres": {"extensions": [{"name": "cube"}]}});
@@ -772,12 +740,12 @@ mod tests {
             std::slice::from_ref(&built)
         );
 
-        // Changed since the apply: the live view, webhook default and all.
+        // Drifted since apply: returns the live view, including webhook defaults.
         let drifted = webhook_defaulted_cluster(live_extensions.clone(), Some("other"));
         let out = kix_owned_manifests_against([drifted], &by_hash);
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
 
-        // Applied from a manifest the build no longer has: the live view.
+        // Build manifest no longer present: returns the live view.
         let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
         let out = kix_owned_manifests_against([in_sync], &HashMap::new());
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
@@ -814,9 +782,9 @@ mod tests {
         assert_eq!(broken["stringData"], json!({"user": "admin"}));
     }
 
-    /// A SOPS Secret: the build has no `stringData`, and kix applied the
-    /// decrypted values through it. The live object reads as the build, and
-    /// no decrypted value appears in the comparison or the view.
+    /// A SOPS `Secret` has no `stringData` in the build, and Kix applies
+    /// decrypted values through `stringData`. Verify that the live object
+    /// compares equal to the build without exposing decrypted values.
     #[test]
     fn a_sops_secret_compares_unchanged_without_its_values() {
         let annotations = json!({
@@ -843,8 +811,8 @@ mod tests {
         }
     }
 
-    /// A live Secret holding `data` user "admin", password "rotated" and
-    /// `other` "x", whose managedFields are `managed_fields`.
+    /// Build a live `Secret` with `data` keys `user`, `password`, and `other`
+    /// and the given `managed_fields`.
     fn data_secret(
         managed_fields: Vec<k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry>,
     ) -> DynamicObject {
@@ -879,9 +847,9 @@ mod tests {
         }
     }
 
-    /// A Secret kix applied through `data` that has drifted since: no live
-    /// value is in its view, and against the build a key equal to the
-    /// build's reads as the build's while a changed one is hidden.
+    /// Verify that a drifted `Secret` applied through `data` exposes no live
+    /// values, keeping matching build values and replacing changed ones with
+    /// [`HIDDEN_SECRET_VALUE`].
     #[test]
     fn a_secret_applied_with_data_holds_no_live_value() {
         let live = || {
@@ -914,10 +882,8 @@ mod tests {
         assert_no_live_value(&compared);
     }
 
-    /// A Secret with no kix Apply entry falls back to the whole object, and
-    /// still holds no live value: without a build every key is hidden, and a
-    /// key the build declares under `stringData` with the same value reads
-    /// as the build's.
+    /// Verify that a `Secret` without a Kix `Apply` entry still redacts all
+    /// live values.
     #[test]
     fn a_secret_without_an_apply_entry_holds_no_live_value() {
         let live = || {
@@ -951,8 +917,8 @@ mod tests {
         assert_no_live_value(&compared);
     }
 
-    /// No kix Apply entry (adopted externally, or pre-SSA): the whole object,
-    /// minus server metadata, so the diff still has something to show.
+    /// When an object has no Kix `Apply` entry, [`kix_owned_view`] falls back
+    /// to the full object with server metadata stripped.
     #[test]
     fn kix_owned_view_falls_back_without_an_apply_entry() {
         let obj = DynamicObject {
@@ -1041,25 +1007,22 @@ mod tests {
         assert!(data.contains_key("spec"));
     }
 
-    /// A LIST item as the apiserver actually returns it: no per-item
-    /// `apiVersion`/`kind`, and `metadata` alongside `spec`.
+    /// Build a deserialized LIST item with `kind` and `apiVersion` injected as
+    /// [`super::inventory`] does.
     fn list_item() -> DynamicObject {
         let mut obj: DynamicObject = serde_json::from_value(json!({
             "metadata": { "name": "lithus-secret-operator", "namespace": "lithus-system" },
             "spec": { "replicas": 1 },
         }))
         .unwrap();
-        // What fetch_parallel does, because LIST omits these per item.
         let map = obj.data.as_object_mut().unwrap();
         map.insert("kind".into(), json!("Deployment"));
         map.insert("apiVersion".into(), json!("apps/v1"));
         obj
     }
 
-    /// Pins the shape the whole bug turned on: kube-rs parses `metadata`
-    /// into the typed field and leaves it OUT of `.data`. The synthetic
-    /// fixtures above put `metadata` inside `.data`, which the apiserver
-    /// never does, so anything reading `.data["metadata"]` reads nothing.
+    /// Verify that deserializing a `DynamicObject` places `metadata` on the
+    /// typed field rather than inside `.data`.
     #[test]
     fn deserialized_object_keeps_metadata_out_of_data() {
         let obj = list_item();
@@ -1070,9 +1033,8 @@ mod tests {
         );
     }
 
-    /// Regression: serialising `.data` alone drops metadata, so every live
-    /// object of a kind degrades to the same `Kind/unknown` id, matches
-    /// nothing, and `kix diff` reports an unchanged cluster as fully new.
+    /// Verify that [`to_manifest_value`] merges typed metadata so
+    /// [`ResourceId::from_value`] extracts the resource's name and namespace.
     #[test]
     fn to_manifest_value_yields_a_matchable_resource_id() {
         let mut obj = list_item();
@@ -1087,8 +1049,8 @@ mod tests {
         assert_eq!(id.namespace, "lithus-system");
     }
 
-    /// normalize_for_diff clears the TYPED metadata fields; that only has
-    /// any effect if the typed metadata is what gets serialised.
+    /// Verify that [`to_manifest_value`] omits server fields cleared by
+    /// [`normalize_for_diff`].
     #[test]
     fn to_manifest_value_drops_normalized_server_fields() {
         let mut obj = list_item();

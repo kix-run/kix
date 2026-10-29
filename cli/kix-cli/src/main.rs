@@ -32,18 +32,15 @@ fn validate_cluster_name(name: &str) -> miette::Result<()> {
     Ok(())
 }
 
-/// The tracing filter for the verbosity flags, when `KIX_LOG` is unset.
+/// Return the default tracing filter for the given verbosity when `KIX_LOG` is unset.
 ///
-/// Without `-v`, `kube_client::client` is held to errors. It logs a warning
-/// with the body of every error response that is not JSON, such as the
-/// plain-text `404 page not found` a group version answers while discovery
-/// settles, and then returns the error, which kix reports or retries itself.
-/// The same setting hides its other warnings: the `timeout in poll` and
-/// `eof in poll` lines a watch stream logs before it ends, and the warning
-/// on a response that fails to deserialize, which prints the whole response
-/// body. `-vvv` (`debug` everywhere) or `KIX_LOG` shows them again.
-/// `kube_client::client::tls` keeps its warning that certificate checks are
-/// off.
+/// At default verbosity (`verbose == 0`), `kube_client::client` is restricted
+/// to `error` to suppress noisy warnings that Kix already handles or retries:
+/// non-JSON error responses (such as plain-text 404 responses during API
+/// discovery), watch stream `timeout in poll` / `eof in poll` warnings, and
+/// deserialization failure dumps. Pass `-vvv` or set `KIX_LOG` to see them.
+/// `kube_client::client::tls` remains at `warn` so disabled certificate checks
+/// are always surfaced.
 fn default_filter(verbose: u8, quiet: bool) -> &'static str {
     if quiet {
         return "error";
@@ -74,7 +71,7 @@ fn init_tracing(verbose: u8, quiet: bool) {
         .init();
 }
 
-/// How the command `cli` names prints: see [`output::Mode`].
+/// Compute the [`output::Mode`] for `cli`.
 fn output_mode(cli: &Cli) -> output::Mode {
     let default = match &cli.command {
         Command::Build(_) => OutputFormat::Yaml,
@@ -87,8 +84,8 @@ fn output_mode(cli: &Cli) -> output::Mode {
         _ => OutputFormat::Text,
     };
     let format = cli.global.output.unwrap_or(default);
-    // Whether stdout carries a document: a plan, from `kix plan` and
-    // `kix deploy --dry-run` under `-o`, or the deploy log.
+    // Route progress output to stderr when stdout carries a structured plan
+    // document or JSON deploy log.
     let document = match &cli.command {
         Command::Plan(_) => format != OutputFormat::Text,
         Command::Deploy(args) if args.dry_run => format != OutputFormat::Text,
@@ -102,11 +99,12 @@ fn output_mode(cli: &Cli) -> output::Mode {
     }
 }
 
-/// Reads `KIX_OVERRIDE_INPUT` when `--override-input` is not given.
+/// Populate `global.override_input` from `KIX_OVERRIDE_INPUT` when
+/// `--override-input` is not passed on the command line.
 ///
-/// clap does not read it: splitting the variable on spaces with a value
-/// delimiter would split the flag's own values too, and a `path:` URL may
-/// hold a space.
+/// Handled outside clap because configuring a space delimiter on the argument
+/// would also split `--override-input` flag values containing spaces (such as
+/// `path:` URLs).
 fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
     if !global.override_input.is_empty() {
         return Ok(());
@@ -148,15 +146,14 @@ fn main() -> miette::Result<()> {
         return commands::completions::run(args, &cli.global);
     }
 
-    // `kix pin` reads and writes a file. It takes no flake and evaluates no
-    // cluster on purpose: the state in which a pin most needs fixing is the
-    // state in which evaluation is unhappy about it.
+    // `kix pin` operates directly on the pin file without evaluating the
+    // flake, so it works even when evaluation fails.
     if let Command::Pin(command) = &cli.command {
         return commands::pin::run(command, &cli.global);
     }
 
     // Drift uses only the cluster: no flake or Nix backend is needed, and
-    // it must work from a bare kubeconfig outside any kix repo.
+    // it must work from a bare kubeconfig outside any Kix repository.
     if let Command::Drift(args) = &cli.command {
         return commands::drift::run(args, &cli.global);
     }
@@ -205,7 +202,7 @@ mod tracing_filter_tests {
     use super::default_filter;
     use std::sync::{Arc, Mutex};
 
-    /// The lines the default filter lets through for `emit`.
+    /// Capture the log output emitted by `emit` under the default tracing filter.
     fn logged(emit: impl FnOnce()) -> String {
         let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
         let sink = buf.clone();

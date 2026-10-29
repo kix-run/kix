@@ -40,8 +40,9 @@
 //! and gives the SHA-256 of the whole file: for a server that stores
 //! uploads, or a deploy that names the file it used.
 //!
-//! The same plan gives the same bytes from the same kix and libzstd: the
-//! header's order is fixed by its types, and the files are sorted.
+//! The same plan produces identical bytes from the same Kix and libzstd builds
+//! because the header's field order is fixed by its types and the files are
+//! sorted.
 //!
 //! # Caps
 //!
@@ -76,12 +77,13 @@ use crate::text::printable;
 
 /// The `format` field of every plan file's header.
 pub const FORMAT: &str = "kixplan";
-/// The version this kix writes and reads. A reader refuses any other.
+/// The format version that this Kix writes and reads. Readers reject any other
+/// version.
 pub const VERSION: u32 = 1;
 /// The file extension of a plan file.
 pub const EXTENSION: &str = "kixplan";
 
-/// The largest plan file kix reads.
+/// The largest plan file Kix reads.
 pub const MAX_STORED_BYTES: u64 = 64 * 1024 * 1024;
 /// The largest header, decompressed. A plan at `--detail fields` of a
 /// cluster of 26 objects is about 30 KB.
@@ -296,7 +298,7 @@ pub fn write(mut plan: Plan, graph: GraphListing, out: impl Write) -> io::Result
     kix_container::write(&header, &files, out)
 }
 
-/// The field changes of each modified object, by id.
+/// Return the field changes of each modified object, keyed by resource ID.
 fn field_changes(packages: &Packages) -> BTreeMap<&str, &[FieldChange]> {
     packages
         .changed
@@ -307,10 +309,9 @@ fn field_changes(packages: &Packages) -> BTreeMap<&str, &[FieldChange]> {
         .collect()
 }
 
-/// What a deploy does to the Pods of the object `id`: they are replaced
-/// when it is a rolling kind, modified, and a field of its pod template
-/// changes. `new` is its new manifest as shown; a manifest replaced by a
-/// size note reads as not `OnDelete`.
+/// Return the [`Rollout`] effect on Pods of `id` when `id` is a modified
+/// rolling workload whose pod template changes. `new` is the shown new
+/// manifest; a manifest replaced by a size note is treated as not `OnDelete`.
 fn rollout(id: &str, changes: Option<&[FieldChange]>, new: Option<&Value>) -> Option<Rollout> {
     let kind = id.split('/').next().unwrap_or_default();
     let template_changes = ROLLING_KINDS.contains(&kind)
@@ -330,9 +331,9 @@ fn rollout(id: &str, changes: Option<&[FieldChange]>, new: Option<&Value>) -> Op
     })
 }
 
-/// The dependency graph of `build`, as `kix graph --format json --bundle`
-/// prints it: the manifests sorted by apiVersion, kind, namespace, and
-/// name.
+/// Build the dependency graph of `build` as `kix graph --format json --bundle`
+/// prints it, with manifests sorted by `apiVersion`, `kind`, `namespace`, and
+/// `name`.
 pub fn graph_of(build: &StoreGraph) -> Result<GraphListing, GraphError> {
     let mut manifests: Vec<Value> = build
         .resources
@@ -382,8 +383,8 @@ impl<R: Read + Seek> PlanFile<R> {
         Ok((PlanFile { container, header }, sha256))
     }
 
-    /// The manifest in the file named `sha256`, checked against its name.
-    /// `None` when the plan file holds no such file.
+    /// Read and verify the manifest stored under `sha256`, or return `Ok(None)`
+    /// when the plan file holds no such file.
     pub fn file(&mut self, sha256: &str) -> Result<Option<Value>, PlanFileError> {
         let Ok(i) = self
             .header
@@ -399,8 +400,8 @@ impl<R: Read + Seek> PlanFile<R> {
         Ok(Some(manifest))
     }
 
-    /// The old manifest of the object `id`, as shown: `None` when the plan
-    /// shows no old side for it.
+    /// Read the shown old manifest of object `id`, or return `Ok(None)` when
+    /// the plan shows no old side for it.
     pub fn old_manifest(&mut self, id: &str) -> Result<Option<Value>, PlanFileError> {
         match self.header.shown.get(id).and_then(|s| s.old.clone()) {
             Some(sha256) => self.file(&sha256),
@@ -408,8 +409,8 @@ impl<R: Read + Seek> PlanFile<R> {
         }
     }
 
-    /// The new manifest of the object `id`, as shown: `None` when the plan
-    /// shows no new side for it.
+    /// Read the shown new manifest of object `id`, or return `Ok(None)` when
+    /// the plan shows no new side for it.
     pub fn new_manifest(&mut self, id: &str) -> Result<Option<Value>, PlanFileError> {
         match self.header.shown.get(id).and_then(|s| s.new.clone()) {
             Some(sha256) => self.file(&sha256),
@@ -571,8 +572,8 @@ mod tests {
     const DEPLOYMENT: &str = "Deployment/web@app";
     const SECRET: &str = "Secret/web@app";
 
-    /// The old side: the `web` package with a Secret. The new side changes
-    /// the Secret's password and the Deployment's pod template.
+    /// Return test old and new manifest lists where the Secret's password and
+    /// the Deployment's pod template change.
     fn sides() -> (Vec<Value>, Vec<Value>) {
         let secret = |hash: &str, password: &str| {
             web_resource(
@@ -600,8 +601,8 @@ mod tests {
         (old, new)
     }
 
-    /// The plan of `old` to `new` at `--detail manifests`, or at `--detail
-    /// fields`, and the new build's graph.
+    /// Build a plan from `old` to `new` at `--detail manifests` or `--detail
+    /// fields`, along with the new build's graph.
     fn plan_at(old: &[Value], new: &[Value], manifests: bool) -> (Plan, GraphListing) {
         let (old_graph, new_graph) = graphs_of(old, new);
         let index = ManifestIndex::new(&old_graph, &new_graph);
@@ -637,14 +638,14 @@ mod tests {
         PlanFile::verify(Cursor::new(bytes)).map(|(f, _)| f.into_header())
     }
 
-    /// A plan file of this header JSON and these files.
+    /// Write a plan file from raw `header` JSON and `files`.
     fn file_of(header: &Value, files: &[&[u8]]) -> Vec<u8> {
         let mut out = Vec::new();
         kix_container::write(&serde_json::to_vec(header).unwrap(), files, &mut out).unwrap();
         out
     }
 
-    /// The real plan file's header as JSON, and its files in order.
+    /// Return the header JSON and ordered file payloads of the test plan file.
     fn parts() -> (Value, Vec<Vec<u8>>) {
         let (old, new) = sides();
         let bytes = written(&old, &new);
@@ -680,10 +681,9 @@ mod tests {
         }
     }
 
-    /// `kix/tests/fixtures/plan.kixplan` is the plan file of [`sides`], as
-    /// this kix writes it: the same plan gives the same bytes from one build
-    /// to the next. The fuzz targets start from it. Regenerate it with
-    /// `KIX_WRITE_FIXTURES=1 cargo test -p kix-lib plan::file`.
+    /// `kix/tests/fixtures/plan.kixplan` is the plan file of [`sides`] as this
+    /// Kix writes it, ensuring deterministic output across builds. Regenerate
+    /// it with `KIX_WRITE_FIXTURES=1 cargo test -p kix-lib plan::file`.
     #[test]
     fn the_fixture_is_what_this_kix_writes() {
         let path =

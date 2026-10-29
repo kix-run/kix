@@ -1,6 +1,6 @@
 ---
 title: "Operator mode"
-description: "How `deploy`, `rollback`, `gc` and `status` behave with `--operator`, when the Kix operator applies Activation records inside the cluster."
+description: "How `deploy`, `rollback`, `gc`, and `status` behave with `--operator`, when the Kix operator applies Activation records inside the cluster."
 ---
 
 In operator mode the CLI still builds and plans on your machine, but the
@@ -17,7 +17,7 @@ current build also contains, both when it prunes and when a deleted record's
 finalizer removes that record's resources.
 
 This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
-`cli/kix-operator/src/main.rs` and the command files when in doubt.
+`cli/kix-operator/src/main.rs`, and the command files when in doubt.
 
 ## Commands
 
@@ -30,8 +30,8 @@ This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 
 Flags that control the local engine have no effect in operator mode:
 `--timeout`, `--on-error`, `--prune`, `--prune-mode`, `--reconcile`,
-`--force-conflicts`, `--tui` and `--log-format`. `--yes`,
-`--current-activation` and `--accept-migrations` still apply to the local
+`--force-conflicts`, `--tui`, and `--log-format`. `--yes`,
+`--current-activation`, and `--accept-migrations` still apply to the local
 plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
 does not contact the operator.
 

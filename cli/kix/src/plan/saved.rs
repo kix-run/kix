@@ -1,9 +1,8 @@
 //! Saved plans: whether a plan made now still matches a reviewed one.
 //!
 //! `kix deploy --plan plan.kixplan` rebuilds, plans again, and refuses when
-//! [`compare`] finds a mismatch. The rules and their keys are in
-//! `v2_discussions/158_saved_plans.md`. A saved plan only restricts a
-//! deploy: the deploy never applies anything read from it.
+//! [`compare`] finds a mismatch. A saved plan only restricts a deploy; the
+//! deploy never applies anything read from it.
 
 use std::collections::BTreeSet;
 
@@ -11,7 +10,7 @@ use serde::Serialize;
 
 use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate};
 
-/// One comparison rule, numbered as in doc 158.
+/// One comparison rule between a reviewed plan and a fresh plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Rule {
@@ -27,7 +26,7 @@ pub enum Rule {
 }
 
 impl Rule {
-    /// The rule as a deploy names it.
+    /// Return the display label for this rule.
     pub fn label(self) -> &'static str {
         match self {
             Rule::Cluster => "cluster",
@@ -68,7 +67,8 @@ pub struct Comparison {
     pub kix_differs: Option<(String, String)>,
 }
 
-/// Why a saved plan cannot be used at all, before any build.
+/// Return a reason why `reviewed` cannot be used to gate a deploy, or `None`
+/// when it is valid.
 pub fn unusable(reviewed: &Plan) -> Option<String> {
     if reviewed.schema_version != super::document::SCHEMA_VERSION {
         return Some(format!(
@@ -136,9 +136,8 @@ pub fn unusable(reviewed: &Plan) -> Option<String> {
     None
 }
 
-/// The planning flags a deploy from `reviewed` uses, or why the command
-/// line contradicts them. `given` are the flags on the command line; a flag
-/// the command line sets must agree with the plan.
+/// Return the planning flags for a deploy gated by `reviewed`, or an error
+/// when `given` contradicts the plan.
 pub fn flags_for(reviewed: &Plan, given: &PlanFlags) -> Result<PlanFlags, String> {
     let Some(planned) = reviewed.flags else {
         // A `kix diff` plan: no reviewer saw what these flags would do.
@@ -384,8 +383,8 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
 /// How many differing objects a mismatch names.
 const NAMED_OBJECTS: usize = 20;
 
-/// The objects the fresh plan writes or deletes that the reviewed one does
-/// not, and the other way round, one line each.
+/// Format the objects that `fresh` writes or deletes that `reviewed` does
+/// not, and vice versa, one line each.
 fn objects_differ(reviewed: &Plan, fresh: &Plan) -> Vec<String> {
     let (Some(r), Some(f)) = (&reviewed.objects, &fresh.objects) else {
         return vec!["one of the plans lists no objects, so they cannot be compared".into()];
@@ -432,7 +431,7 @@ fn objects_differ(reviewed: &Plan, fresh: &Plan) -> Vec<String> {
     items
 }
 
-/// An object's id as the plan shows it, its build-supplied text escaped.
+/// Format an object's display ID with build-supplied text escaped.
 fn object_id(kind: &str, namespace: &str, name: &str) -> String {
     let id = crate::manifest::types::ResourceId {
         kind: kind.to_string(),

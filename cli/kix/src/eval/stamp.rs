@@ -34,7 +34,7 @@ struct StampEntry {
 pub fn stamp_annotations(graph: &mut StoreGraph) {
     // A build loaded from an activation that predates a domain move carries
     // the retired keys in its store paths. Bring them to the current domain
-    // before anything reads them, so the planner, the differ and the stamps
+    // before anything reads them, so the planner, the differ, and the stamps
     // below all see one domain. Inert when no domain has been retired.
     for res in graph.resources.values_mut() {
         crate::legacy_domain::upgrade_manifest(&mut res.manifest);

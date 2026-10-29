@@ -99,8 +99,8 @@ pub fn write(header: &[u8], files: &[&[u8]], mut out: impl Write) -> io::Result<
     out.flush()
 }
 
-/// The seek table of frames of these `(compressed, decompressed)` sizes, as
-/// a skippable frame, with no checksums.
+/// Encode the seek table for `frames` (`(compressed_size, decompressed_size)`)
+/// as a zstd skippable frame without checksums.
 pub fn seek_table(frames: &[(u32, u32)]) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + 8 * frames.len() + FOOTER_BYTES);
     out.extend(SEEK_TABLE_MAGIC.to_le_bytes());
@@ -115,27 +115,27 @@ pub fn seek_table(frames: &[(u32, u32)]) -> Vec<u8> {
     out
 }
 
-/// One frame of a container, as its seek table gives it.
+/// One frame of a container, as described by its seek table.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame {
-    /// Its first byte's offset in the file.
+    /// Byte offset of the frame in the file.
     pub offset: u64,
-    /// Its length in the file.
+    /// Compressed length in bytes.
     pub stored: usize,
-    /// Its length decompressed.
+    /// Decompressed length in bytes.
     pub size: usize,
 }
 
-/// The seek table: every frame, frame 0 first, and the table's own bytes.
+/// Parsed seek table containing frame descriptors (from frame 0 onward) and
+/// the raw seek-table frame bytes.
 #[derive(Debug)]
 pub struct SeekTable {
     pub frames: Vec<Frame>,
     pub bytes: Vec<u8>,
 }
 
-/// Whether `input` ends with a zstd seek table. Checks the length against
-/// `limits.stored` before it reads anything, so a format can look for an
-/// older format of its own when this is false.
+/// Return whether `input` ends with a zstd seek table, checking the file size
+/// against `limits.stored` before reading.
 pub fn has_seek_table(
     input: &mut (impl Read + Seek),
     limits: &Limits,
@@ -143,7 +143,8 @@ pub fn has_seek_table(
     Ok(footer(input, limits)?.is_some())
 }
 
-/// The footer of `input`'s seek table, or `None` when it has none.
+/// Read the 9-byte seek table footer at the end of `input`, or return `None`
+/// if the file does not end with [`SEEKABLE_MAGIC`].
 fn footer(
     input: &mut (impl Read + Seek),
     limits: &Limits,
@@ -329,9 +330,9 @@ impl<R: Read + Seek> Container<R> {
         Ok(())
     }
 
-    /// The bytes of file `i`, by its position in the sizes given to
-    /// [`Container::place`]. Decompresses its frame unless that frame was
-    /// the last one read.
+    /// Read and return the bytes of file `i` (indexed by the slice given to
+    /// [`Container::place`]), reusing the cached frame if it was the last one
+    /// decompressed.
     pub fn file(&mut self, i: usize) -> Result<Vec<u8>, ContainerError> {
         let Place {
             frame,
@@ -453,7 +454,7 @@ fn too_large(message: impl Into<String>) -> ContainerError {
     ContainerError::TooLarge(message.into())
 }
 
-/// `bytes` as lowercase hex.
+/// Format `bytes` as lowercase hex.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

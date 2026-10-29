@@ -1,13 +1,14 @@
 //! Runtime content drift checks.
 //!
-//! For every kix-managed live object: project it onto kix's current SSA
-//! fieldset, hash, and compare against the `kix.run/applied-hash` stamp
-//! written from the SSA response echo at apply time. Match ⇒ every field kix
-//! applied is byte-identical to what the server committed. Mismatch ⇒
-//! attribute via `managedFields`: the apiserver records field-precisely who
-//! took what, when.
+//! For each Kix-managed live object, project it onto Kix's current server-side
+//! apply fieldset, hash the projection, and compare it against the
+//! `kix.run/applied-hash` annotation written from the SSA response at apply
+//! time. When they match, every field Kix applied is identical to what the
+//! server committed. When they differ, `managedFields` attributes which manager
+//! modified each field and when.
 //!
-//! Cluster-only: no nix build, no store, any kubeconfig context.
+//! This check queries only the cluster and does not require a Nix build or
+//! store.
 
 use kube::{
     api::DynamicObject,
@@ -27,27 +28,27 @@ use crate::manifest::types::ResourceId;
 /// Per-resource drift verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriftVerdict {
-    /// Every field kix applied is byte-identical to the state committed at
+    /// Every field Kix applied is byte-identical to the state committed at
     /// apply time.
     InSync,
-    /// The kix-owned projection no longer hashes to the stamp. Content
-    /// changed under kix's ownership or ownership was taken by another
-    /// manager. `foreign` lists the other managers' recorded fields;
+    /// The Kix-owned projection no longer hashes to the stamp because content
+    /// changed under Kix's ownership or another manager took ownership.
+    /// `foreign` lists the other managers' recorded fields, and
     /// `unrecorded_scale` is set when the change is a replicas write that
     /// Kubernetes recorded no owner for.
     Drifted {
         foreign: Vec<ForeignOwner>,
         unrecorded_scale: Option<UnrecordedScale>,
     },
-    /// No `kix.run/applied-hash` annotation: the resource predates stamping
-    /// or the stamp patch was lost. This is restamped on the next deploy.
+    /// The resource has no `kix.run/applied-hash` annotation and will be
+    /// stamped on the next deploy.
     Unstamped,
-    /// `managedFields` missing or stripped (backup/restore tools, etcd
-    /// surgery); the check cannot run for this object.
+    /// `managedFields` is missing or has no Kix entry, so the drift check
+    /// cannot run for this object.
     NoFieldset,
 }
 
-/// A non-kix field manager owning parts of the object, flattened from its
+/// A non-Kix field manager owning parts of the object, flattened from its
 /// `managedFields` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignOwner {
@@ -57,8 +58,8 @@ pub struct ForeignOwner {
     /// excluded before this is ever constructed.
     pub subresource: Option<String>,
     /// RFC 3339 timestamp of the entry's last write, as reported by the
-    /// server. `None` for a `/scale` entry: the apiserver copies the scale
-    /// writer's fields onto the parent object without a time.
+    /// server. `None` for a `/scale` entry because the API server copies the
+    /// scale writer's fields onto the parent object without a timestamp.
     pub time: Option<String>,
     /// Field paths the manager owns, e.g.
     /// `spec.template.spec.containers[name=web].image`.
@@ -94,9 +95,9 @@ const SCALE_KINDS: &[(&str, &str)] = &[
     ("", "ReplicationController"),
 ];
 
-/// The highest deployed replicas value [`unrecorded_scale`] tries. The stamp
-/// is a hash, so recovering the deployed value means hashing each candidate;
-/// the bound keeps that to about a thousand hashes per drifted workload.
+/// Highest deployed replicas value [`unrecorded_scale`] tries. Because the
+/// stamp is a hash, recovering the deployed value requires hashing each
+/// candidate up to this bound.
 const SCALE_SEARCH_LIMIT: i64 = 1024;
 
 /// Drift report for a single resource.
@@ -109,12 +110,12 @@ pub struct DriftReport {
     pub clusters: Vec<String>,
 }
 
-/// Check kix-managed resources on the cluster: every one when `cluster` is
-/// `None`, otherwise the ones [`inventory::SweepScope::Cluster`] gives for it.
-/// Also returns the sweep's [`Tenancy`], which names each report's clusters.
+/// Check Kix-managed resources on the cluster. Checks all managed resources
+/// when `cluster` is `None`, or only those in [`inventory::SweepScope::Cluster`]
+/// when `Some`. Also returns the sweep's [`Tenancy`].
 ///
-/// Fetches through [`inventory::sweep_managed`] and hashes raw objects.
-/// `owned_view::normalize_for_diff` cannot be used because it removes managedFields.
+/// Fetches raw objects through [`inventory::sweep_managed`] so `managedFields`
+/// remains intact.
 pub async fn check_cluster(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -138,8 +139,8 @@ pub async fn check_cluster(
     Ok((reports, sweep.tenancy))
 }
 
-/// Run the drift check on one live object. `clusters` is left empty;
-/// [`check_cluster`] fills it.
+/// Run the drift check on one live object. `clusters` is left empty and
+/// populated by [`check_cluster`].
 pub fn check_object(obj: &DynamicObject) -> DriftReport {
     let rid = resource_id(obj);
 
@@ -158,8 +159,8 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
         };
     };
 
-    // Same recipe as the stamp side: project onto kix's current fieldset,
-    // strip kix.run self-references, hash canonical JSON.
+    // Project onto Kix's current fieldset, strip `kix.run/*` annotations, and
+    // hash canonical JSON.
     // TODO: exclude PI spec.driftIgnore pointers here, resolved through
     // kix.run/package annotations and a PackageInstance GET, so compiled
     // delegation (HPA on replicas, cert-manager on Secret data) is an
@@ -241,15 +242,16 @@ fn serves_scale(obj: &DynamicObject) -> bool {
     SCALE_KINDS.contains(&(group, kind))
 }
 
-/// Attribute co-ownership: flatten every OTHER manager's fieldsV1 into field
-/// paths with manager name, operation, subresource, and timestamp.
+/// Extract non-Kix field managers from `managedFields` with their operation,
+/// subresource, timestamp, and flattened field paths.
 ///
-/// Excludes entries with subresource == "status" because status writes are
-/// controller noise, never drift. Other subresources stay in the list, so a
-/// `/scale` write that Kubernetes records appears here as its writer
-/// (subresource `scale`, owning `spec.replicas`, no time). Kubernetes records
-/// one only when the write sets a non-zero value and some manager owned
-/// `spec.replicas` before it; [`UnrecordedScale`] covers the other writes.
+/// Excludes entries with `subresource == "status"` because status writes are
+/// controller updates rather than configuration drift. Other subresources stay
+/// in the list, so a `/scale` write that Kubernetes records appears here under
+/// subresource `scale` owning `spec.replicas` with no timestamp. Kubernetes
+/// records a `/scale` entry only when the write sets a non-zero value and a
+/// manager already owned `spec.replicas`. [`UnrecordedScale`] covers the other
+/// cases.
 pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
@@ -272,10 +274,11 @@ pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
         .collect()
 }
 
-/// Flatten a fieldsV1 tree into human-readable field paths:
-/// `f:` segments join with `.`, keyed elements render as `[name=web]`,
-/// set values as `[v=<json>]`, positions as `[2]`. Only leaves are emitted;
-/// a node owning just `.` (element existence) is a leaf too.
+/// Flatten a fieldsV1 tree into human-readable field paths.
+///
+/// `f:` segments join with `.`, keyed elements render as `[name=web]`, set
+/// values as `[v=<json>]`, and positions as `[2]`. Only leaves are emitted, and
+/// a node owning only `.` (element existence) is also treated as a leaf.
 pub fn flatten_paths(fields: &Value) -> Vec<String> {
     let mut out = Vec::new();
     walk_paths(fields, String::new(), &mut out);

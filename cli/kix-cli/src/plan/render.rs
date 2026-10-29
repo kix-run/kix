@@ -1,11 +1,11 @@
-//! Text and Markdown for the sections of a [`Plan`] beyond its packages,
-//! and the text of a saved plan's comparison.
+//! Text and Markdown rendering for the non-package sections of a [`Plan`],
+//! as well as saved-plan verification output.
 //!
-//! The package list is rendered by `render_package_plan` and
-//! `render_package_diff_markdown`; these add what the write path found
-//! (conflicts, refusals, prune fates, objects not checked, the objects
-//! written and deleted) and what the three-way comparison found (drift),
-//! each saying when it did not look.
+//! While [`super::render_package_plan`] and
+//! [`super::render_package_diff_markdown`] render the package diff, this
+//! module renders write-path findings (ownership conflicts, admission
+//! refusals, prune outcomes, unchecked resources, and object write/delete
+//! counts) and three-way drift findings.
 
 use std::fmt::Write;
 
@@ -18,8 +18,8 @@ use kix::plan::document::{
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
 
-/// The tag after a field change in the text plan. Intent is the expected
-/// case and carries no tag.
+/// Return the drift annotation tag for a field change in text output, or an
+/// empty string for committed changes.
 pub fn label_tag(labels: &[ChangeLabel]) -> String {
     if labels.contains(&ChangeLabel::RevertsDrift) {
         output::yellow("(reverts drift)").into_owned()
@@ -30,7 +30,7 @@ pub fn label_tag(labels: &[ChangeLabel]) -> String {
     }
 }
 
-/// Everything the text plan prints below the package list.
+/// Render the text plan sections that follow the package diff.
 pub fn render_text(plan: &Plan) -> String {
     let mut out = String::new();
     write_stops(&mut out, plan);
@@ -41,8 +41,8 @@ pub fn render_text(plan: &Plan) -> String {
     out
 }
 
-/// How many objects the deploy writes and deletes, the digest a saved plan
-/// holds a deploy to, and the writes the package list leaves out.
+/// Write the object write/delete summary, plan digest, and count of unchanged
+/// objects re-applied from earlier builds.
 fn write_objects(out: &mut String, plan: &Plan) {
     let (Some(objects), Some(digest)) = (&plan.objects, &plan.objects_digest) else {
         return;
@@ -210,8 +210,8 @@ fn write_drift(out: &mut String, plan: &Plan) {
     }
 }
 
-/// A value short enough for one drift line: its first line, cut at 60
-/// characters, with the full size when anything was cut.
+/// Format a JSON value on a single line (truncated to 60 characters with byte
+/// length) for drift output.
 fn compact(v: Option<&serde_json::Value>) -> String {
     const WIDTH: usize = 60;
     let Some(v) = v else {
@@ -351,7 +351,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
     }
 }
 
-/// Everything the Markdown plan prints below the package list.
+/// Render the Markdown plan sections that follow the package diff.
 pub fn render_markdown(plan: &Plan) -> String {
     let mut out = String::new();
     let conflicts = plan.conflicts.items();
@@ -452,7 +452,7 @@ pub fn render_markdown(plan: &Plan) -> String {
     out
 }
 
-/// The comparison as the deploy prints it. `path` names the saved plan.
+/// Render the result of comparing a live plan against the saved plan at `path`.
 pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str) -> String {
     let mut out = String::new();
     let path = match &c.plan_sha256 {

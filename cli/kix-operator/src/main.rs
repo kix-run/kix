@@ -44,13 +44,13 @@ use controller::{Context, error_policy, reconcile_activation};
 use kix::cluster::activation::Records;
 use kix::manifest::keys;
 
-/// Stream-level generation filter for `DynamicObject`.
+/// Filter a `DynamicObject` watch stream to emit only when
+/// `metadata.generation` changes.
 ///
 /// kube-rs's `predicate_filter(predicates::generation)` requires
-/// `K::DynamicType: Default`, which `ApiResource` doesn't implement.
-/// This is a manual equivalent: it tracks the last seen generation per
-/// object name and drops events where the generation hasn't changed
-/// (i.e., status-only updates).
+/// `K::DynamicType: Default`, which `ApiResource` does not implement. This
+/// tracks the last seen generation per object name and drops status-only
+/// updates where the generation has not changed.
 fn generation_filter(
     stream: impl futures::Stream<Item = Result<DynamicObject, watcher::Error>>,
 ) -> impl futures::Stream<Item = Result<DynamicObject, watcher::Error>> {
@@ -72,14 +72,13 @@ fn generation_filter(
     })
 }
 
-/// The cluster's Activation records, opened past the domain gate.
+/// Open the cluster's Activation records after verifying the domain gate.
 ///
-/// Discovery that fails is a refusal too. It used to be logged and passed
-/// over, which started the operator unchecked on exactly the kind of cluster
-/// the gate is for. Kubernetes restarts the pod, and the next start checks
-/// again. Only Kix's own groups, current and retired, are discovered: the
-/// gate needs nothing else, and an unrelated API that is down must not keep
-/// the operator from starting.
+/// Fails if API group discovery fails or if retired Kix API groups are still
+/// present on the cluster, so Kubernetes restarts the pod rather than running
+/// the operator against an unmigrated cluster. Discovers only Kix's own API
+/// groups (current and retired) so an unavailable third-party API service does
+/// not block startup.
 async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
     let groups: Vec<&str> = std::iter::once(keys::GROUP)
         .chain(kix::legacy_domain::DOMAINS.iter().copied())
@@ -104,7 +103,6 @@ async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing with env filter (e.g. RUST_LOG=info,kix_operator=debug)
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(
@@ -115,9 +113,6 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting kix-operator");
 
-    // Create Kubernetes client (works both in-cluster and via kubeconfig),
-    // through the same transport policy the CLI uses: retries, deadlines,
-    // and a cap on requests in flight.
     let client = kix::cluster::client::build_client(
         kube::Config::infer().await?,
         kix::cluster::client::ResiliencePolicy::from_env(),
@@ -125,19 +120,11 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     tracing::info!("Connected to Kubernetes API server");
 
-    // The domain gate, before anything else touches a record.
-    //
-    // The operator watches the current API group only, so it cannot tell on
-    // its own that a cluster is simply on the retired one: it would find no
-    // CRD, which reads as "your CRDs are missing" and sends the reader to
-    // fix the wrong thing.
-    //
-    // Refusing while both groups are live matters more than the wording. In
-    // that state a migration is either running or was interrupted, and Kix's
-    // records exist twice. An operator that reconciled here would read the
-    // copies the migration has created but not yet given a status to, and an
-    // Activation with no phase reads as Queued: it would supersede the real
-    // Active activation and deploy whatever build that record names.
+    // Verify the domain gate before watching records. If both the retired and
+    // current API groups are present (for example, during an in-flight or
+    // interrupted `kix migrate domain`), newly copied Activation records may
+    // not yet have their `.status.phase` populated; reconciling in that state
+    // would treat them as Queued and supersede the active deployment.
     let records = open_records(&client).await?;
     tracing::info!("Activation CRD is registered");
     let ar = records.watch_resource().clone();

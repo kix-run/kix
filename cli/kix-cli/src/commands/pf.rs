@@ -1,9 +1,8 @@
 //! Port-forward to a package's primary workload.
 //!
 //! Shells out to `kubectl port-forward -n <ns> <kind>/<name> <ports...>`.
-//! Uses the workload resource directly (not the matching pod) so kubectl
-//! handles pod selection and re-selection on pod churn.
-//! See `v2_discussions/84_m0_m1_implementation_plan.md` §4.
+//! Targets the workload resource directly rather than a specific pod so
+//! `kubectl` handles pod selection and re-selection on pod churn.
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;

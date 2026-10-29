@@ -1,19 +1,17 @@
 //! SLSA v1 provenance as an in-toto Statement whose predicate is a SLSA
 //! `https://slsa.dev/provenance/v1` predicate.
 //!
-//! The activation identity hash IS the subject digest. Nix content-addressing
-//! means no additional hashing is needed: two identical clusters produce the
-//! same subject, and any byte-level change flips the hash.
+//! The activation identity hash is the subject digest. Because Nix store paths
+//! are content-addressed, two identical clusters produce the same subject and
+//! any byte-level change produces a different hash.
 //!
-//! Two sources, one assembly. By default the statement is built from a fresh
-//! evaluation, which answers "what would be deployed". With `--from-cluster`
-//! it is built from the deploy receipt on the cluster's active Activation,
-//! which answers "what was deployed", from a machine that never built it.
-//! Both go through [`super::receipt::attestation_from_receipt`], so the two
-//! cannot drift apart.
+//! By default, the statement is built from a fresh evaluation of the cluster.
+//! With `--from-cluster`, it is built from the deploy receipt stored on the
+//! cluster's active `Activation` resource. Both paths construct the statement
+//! through [`super::receipt::attestation_from_receipt`].
 //!
-//! This command emits an unsigned Statement so signing can be added
-//! independently.
+//! This command emits an unsigned Statement so signing can be layered on
+//! separately.
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
@@ -65,8 +63,8 @@ pub fn build_attestation(
 ) -> Value {
     let record = receipt::build_receipt(graph, flake_ref);
     if record["source"]["dirty"] == Value::Bool(true) {
-        // Warned rather than refused. Attesting from a dirty tree is
-        // sometimes the honest thing to do; doing it silently never is.
+        // Warn rather than fail when the working tree has uncommitted changes,
+        // and mark the attestation as dirty.
         eprintln!(
             "warning: the working tree has uncommitted changes, so the recorded commit does not fully describe this build. The attestation marks the working tree as dirty."
         );

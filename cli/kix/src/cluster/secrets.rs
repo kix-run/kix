@@ -84,19 +84,18 @@ pub(crate) fn needs_hydration(manifest: &Value) -> bool {
 ///
 /// Returns the list of hydrated secrets, or the first error encountered.
 ///
-/// From the files a build carries, a source must be one of them, the file must
-/// be encrypted to age recipients only (so decrypting never reaches a cloud
-/// KMS or Vault with this machine's credentials), and the Secret must
-/// declare a content hash. With placeholders, nothing is decrypted: each
-/// declared key (`kix.run/secret-keys`) gets a value valid for the Secret's
-/// type.
+/// When `sources` is [`SopsSources::Carried`], every referenced source must be
+/// present in the carried files, encrypted to `age` recipients only (so
+/// decryption never calls a cloud KMS or Vault with local credentials), and
+/// paired with a `kix.run/content-hash` annotation on the `Secret`. When
+/// `placeholders` is enabled, each key from the SOPS file receives a
+/// placeholder value valid for the `Secret` type without running `sops`.
 pub(crate) fn hydrate_secrets_from(
     manifests: &mut [Value],
     sources: &SopsSources,
 ) -> Result<Vec<HydrationResult>, SecretError> {
     let mut results = Vec::new();
-    // Many Secrets may name one source, which is checked, and decrypted,
-    // once.
+    // Validate and decrypt each shared SOPS source at most once.
     let mut read = HashMap::new();
 
     for manifest in manifests.iter_mut() {
@@ -114,8 +113,7 @@ pub(crate) fn hydrate_secrets_from(
     Ok(results)
 }
 
-/// What one SOPS source the build carries gave: its keys, stored in clear, its
-/// format, and, once decrypted, its values.
+/// Cached keys, format, and decrypted values for a carried SOPS source.
 struct ReadSource {
     keys: Vec<String>,
     input_type: &'static str,
@@ -184,12 +182,12 @@ fn hydrate_carried(
     Ok(HydrationResult { rid, keys_injected })
 }
 
-/// A value for each of `keys`, valid for the Secret's type, so a dry run
-/// passes the API server's own checks without the real values.
+/// Generate a placeholder value for each key in `keys` that is valid for
+/// `manifest`'s `Secret` type.
 ///
-/// The keys come from the SOPS file, where they are stored in clear, and
-/// not from the Secret's own annotation: they are the keys a deploy will
-/// write, so the plan shows exactly those.
+/// `keys` are read from the cleartext keys of the SOPS file rather than
+/// `kix.run/secret-keys` so a dry run validates the exact keys a deploy will
+/// write.
 fn placeholders(manifest: &Value, keys: &[String]) -> BTreeMap<String, String> {
     let secret_type = manifest
         .get("type")
@@ -207,14 +205,12 @@ fn placeholders(manifest: &Value, keys: &[String]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Refuse a SOPS file whose metadata names any key source but age, and
-/// return the file's keys (stored in clear; only values are encrypted) and
-/// its format, `json` or `yaml`. sops must be told that format: by default
-/// it goes by the file's extension, and whoever made the build chose the
-/// name.
+/// Validate that `path` is a SOPS file encrypted to `age` recipients only, and
+/// return its cleartext top-level keys and format (`"json"` or `"yaml"`).
 ///
-/// An allowlist: SOPS adds key sources over time (and `key_groups` can hold
-/// any of them), so a field this code does not know is refused.
+/// Uses an allowlist of known SOPS metadata fields so unknown key sources are
+/// rejected. Returns the detected format so `sops --input-type` does not rely
+/// on the file extension.
 fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError> {
     /// Metadata that names no key.
     const NOT_KEYS: &[&str] = &[
@@ -241,9 +237,9 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         Ok(_) => "json",
         Err(_) => "yaml",
     };
-    // Checked before the file is parsed into values. A parsed value keeps
-    // the last of a repeated key, where sops would refuse it (YAML) or
-    // merge it into the first (JSON).
+    // Reject duplicate keys and oversized expansions before parsing into
+    // `Value`, because `Value` keeps the last duplicate key while `sops`
+    // rejects duplicates in YAML or merges them in JSON.
     let left = Cell::new(MAX_SOPS_TEXT_BYTES);
     let problem = Cell::new(None);
     let seed = UniqueKeys {
@@ -271,7 +267,7 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         _ => serde_yml::from_str(&text).map_err(|e| e.to_string()),
     }
     .map_err(|_| refuse("only YAML or JSON SOPS files can come with a build"))?;
-    // yaml.v3 matches `sops` exactly; Go's encoding/json does not.
+    // Go's `encoding/json` matches `"sops"` case-insensitively.
     if let Some(key) = doc
         .as_object()
         .filter(|_| input_type == "json")
@@ -312,11 +308,8 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
     Ok((keys, input_type))
 }
 
-/// Whether Go's encoding/json, which sops reads JSON metadata with, takes
-/// `key` for the `sops` field. It matches field names under Unicode simple
-/// case folding, where `ſ` (U+017F) folds with `s`. The fields inside the
-/// metadata need no such check: the allowlist in [`age_only_keys`] matches
-/// them exactly and refuses any other non-empty field.
+/// Return whether Go's `encoding/json` matches `key` to the `"sops"` field
+/// under Unicode simple case folding (where `ſ`, U+017F, folds to `s`).
 fn folds_to_sops(key: &str) -> bool {
     let mut chars = key.chars();
     "sops".chars().all(|want| {
@@ -326,17 +319,13 @@ fn folds_to_sops(key: &str) -> bool {
     }) && chars.next().is_none()
 }
 
-/// The most a SOPS file the build carries may hold, counting one byte for each
-/// value plus the bytes of each key and string, and a YAML alias as all its
-/// anchor holds: parsing copies an anchor's values each time an alias names
-/// it, so a small file can stand for a large document. A file without
-/// aliases takes about its own size. sops writes a few hundred bytes for
-/// each secret.
+/// Maximum size of a carried SOPS document in bytes, counting one byte per
+/// value plus key and string lengths, with YAML aliases counted each time they
+/// are expanded.
 const MAX_SOPS_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
-/// A JSON or YAML value that deserializes only when no object in it repeats
-/// a key and the document stays within [`MAX_SOPS_TEXT_BYTES`], counted
-/// down in `left`. Keeps nothing. When it refuses, `problem` says why.
+/// Deserializer seed that rejects duplicate map keys and documents exceeding
+/// [`MAX_SOPS_TEXT_BYTES`] without allocating a value tree.
 #[derive(Clone, Copy)]
 struct UniqueKeys<'a> {
     left: &'a Cell<usize>,
@@ -447,16 +436,10 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    // Resolve the SOPS file path
     let sops_path = resolve_sops_path(&sops_source)?;
-
-    // Decrypt
     let plaintext = decrypt_sops(&sops_path, None)?;
-
-    // Parse the decrypted YAML/JSON into key-value pairs
     let data = parse_secret_data(&sops_path, &plaintext)?;
 
-    // Verify content hash if declared
     if let Some(ref expected) = expected_hash {
         let actual = compute_content_hash(&data);
         if &actual != expected {
@@ -470,7 +453,6 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
 
     let keys_injected = data.len();
 
-    // Inject into stringData
     let string_data: serde_json::Map<String, Value> = data
         .into_iter()
         .map(|(k, v)| (k, Value::String(v)))
@@ -495,7 +477,6 @@ fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
         return Ok(path);
     }
 
-    // Try relative to CWD
     if let Ok(cwd) = std::env::current_dir() {
         let relative = cwd.join(&path);
         if relative.exists() {
@@ -532,8 +513,8 @@ fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretE
     })
 }
 
-/// The `sops` command that decrypts `path` to JSON, reading it as
-/// `input_type` when given and by its extension otherwise.
+/// Build the `sops` command that decrypts `path` to JSON, passing
+/// `--input-type` when `input_type` is `Some`.
 fn decrypt_command(path: &Path, input_type: Option<&str>) -> Command {
     let mut command = Command::new("sops");
     command.arg("--decrypt");
@@ -960,9 +941,9 @@ mod tests {
         );
     }
 
-    /// A YAML alias of a long string copies the string each time it is
-    /// used, so the bytes of keys and strings are counted, aliases
-    /// expanded, before the file is parsed into values.
+    /// Expanding a YAML alias of a long string copies the string on each use,
+    /// so key and string bytes are counted with aliases expanded before
+    /// building a `Value`.
     #[test]
     fn a_yaml_sops_file_whose_aliases_stand_for_too_many_bytes_is_refused() {
         let anchor = format!("a: &a {}\n", "x".repeat(1 << 20));

@@ -1,7 +1,7 @@
 //! Types shared by the deploy scheduler and its observers.
 //!
 //! This module defines the per-node state machine and event shape for
-//! DAG-streaming deploys. Each transition in the plan is one node; its state
+//! DAG-streaming deploys. Each transition in the plan is one node. Its state
 //! advances through [`Verdict`] variants, and observers consume
 //! [`DeployEvent`]s.
 //!
@@ -29,7 +29,7 @@ use super::readiness::ImportTarget;
 pub enum TransitionKind {
     /// Server-side apply a manifest.
     Apply,
-    /// Identity-hash unchanged; no work needed. Rendered dim, folded
+    /// Identity-hash unchanged, so no work is needed. Rendered dim and folded
     /// aggressively.
     Skip,
     /// Delete the live object, then apply. Tagged `recreate` because that
@@ -48,16 +48,14 @@ pub enum TransitionKind {
     Delete,
     /// Wait for operator approval.
     Pause,
-    /// Wait for an object the build needs and another Kix cluster writes:
-    /// Kix's own CRDs on a consumer cluster, which its platform installs.
+    /// Wait for an object the build needs and another Kix cluster writes,
+    /// such as Kix's own CRDs on a consumer cluster.
     /// Nothing is applied or stamped.
     Wait,
 }
 
 impl TransitionKind {
-    /// Short tag used as the prefix in renderers.
-    ///
-    /// `Apply` has no prefix (it's the default); the others render their tag.
+    /// Return the short prefix tag used in renderers, or `None` for `Apply`.
     pub fn tag(self) -> Option<&'static str> {
         match self {
             TransitionKind::Apply => None,
@@ -81,7 +79,7 @@ impl TransitionKind {
 /// Dependents are not cancelled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// Predecessors not all Ready; not yet eligible to run.
+    /// Predecessors are not all Ready, so the node is not yet eligible to run.
     Pending,
     /// Apply issued and readiness being watched.
     Running,
@@ -93,8 +91,8 @@ pub enum Verdict {
     Cancelled { because: CancelReason },
     /// A Pause gate waiting on operator approval.
     AwaitingInput { prompt: String },
-    /// Was Ready, readiness probe now says otherwise. Dependents keep their
-    /// stale-Ready signal; this row just flips its glyph.
+    /// Was Ready, and the readiness probe now says otherwise. Dependents keep
+    /// their stale-Ready signal while this row flips its glyph.
     DriftDetected { since: Duration, message: String },
 }
 
@@ -107,6 +105,7 @@ pub enum CancelReason {
 }
 
 impl Verdict {
+    /// Return whether the verdict is terminal (`Ready`, `Failed`, `Cancelled`, or `DriftDetected`).
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -129,8 +128,7 @@ pub enum NodeId {
     Synthetic(String),
 }
 
-/// The resource as [`ResourceId`] shows it, or a synthetic node's id in
-/// `⟦…⟧`.
+/// Format as [`ResourceId`] for resource nodes, or in `⟦…⟧` for synthetic nodes.
 impl std::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -149,7 +147,7 @@ impl From<ResourceId> for NodeId {
 /// Structured per-node detail piggy-backed on state changes.
 ///
 /// The renderer reads this to build the "2/3 ready, rollout 0/1" per-kind
-/// strings. The deploy log mirrors them in [`super::deploy_log::Detail`];
+/// strings. The deploy log mirrors them in [`super::deploy_log::Detail`], and
 /// other renderers format them for display.
 #[derive(Debug, Clone)]
 pub enum NodeDetail {
@@ -193,12 +191,12 @@ pub enum NodeDetail {
 /// planner twice.
 #[derive(Debug, Clone)]
 pub struct NodeMeta {
-    /// Owning kix package instance name (from `kix.run/package` annotation).
+    /// Owning Kix package instance name (from `kix.run/package` annotation).
     pub package: Option<String>,
-    /// Namespace for namespaced resources; `None` for cluster-scoped or
+    /// Namespace for namespaced resources, or `None` for cluster-scoped and
     /// synthetic nodes.
     pub namespace: Option<String>,
-    /// Populated iff the node is an import marker (`kix.run/mode: import`).
+    /// Populated when the node is an import marker (`kix.run/mode: import`).
     pub import_target: Option<ImportTarget>,
 }
 
@@ -210,11 +208,11 @@ pub struct NodeMeta {
 /// variants are deploy-wide lifecycle (finalization, prune, discovery).
 #[derive(Debug, Clone)]
 pub enum DeployEvent {
-    /// Plan handed to the executor; carries the full DAG so renderers can
+    /// Plan handed to the executor, carrying the full DAG so renderers can
     /// paint the tree skeleton before execution begins.
     PlanComputed {
         nodes: Vec<PlanNode>,
-        /// Directed edges: `(dependent, predecessor)`; the dependent waits
+        /// Directed edges `(dependent, predecessor)` where the dependent waits
         /// on the predecessor.
         edges: Vec<(NodeId, NodeId)>,
     },
@@ -225,23 +223,23 @@ pub enum DeployEvent {
         verdict: Verdict,
         detail: Option<NodeDetail>,
     },
-    /// CRDs applied; re-ran API discovery. Rendered as a subtle banner so the
-    /// user knows later rows may reference newly-known kinds.
+    /// CRDs applied and API discovery re-ran. Rendered as a subtle banner so
+    /// the user knows later rows may reference newly discovered kinds.
     CrdRediscovery,
     /// About to consider the orphans. `resources` names the ones prune may
     /// delete, in prune order, and `count` is its length. `delete` says
     /// whether this run deletes them (`--prune`) or only reports them (the
     /// default, warn-only). `kept` names the orphans whose kind
-    /// `lifecycle::never_pruned` protects: no prune policy deletes them.
+    /// `lifecycle::never_pruned` protects so no prune policy deletes them.
     PruneStart {
         count: usize,
         resources: Vec<ResourceId>,
         kept: Vec<ResourceId>,
         delete: bool,
     },
-    /// The prune left an orphan in place when it came to delete it: another
-    /// Kix cluster's current build contains it, or it changed since it was
-    /// read. `reason` is the line to show (`Pruned::kept_reason`).
+    /// Prune left an orphan in place because another Kix cluster's current
+    /// build contains it or it changed since it was read. `reason` is the line
+    /// to show (`Pruned::kept_reason`).
     PruneKept {
         resource: ResourceId,
         reason: String,
@@ -256,9 +254,9 @@ pub enum DeployEvent {
     /// under `halt-on-first-failure`.
     Stopped { reason: String },
     /// Nothing has happened for `idle`. Names every node in flight, what it
-    /// is doing and for how long, so a stuck run is never silent. Emitted by
-    /// the progress watchdog (`cluster::watchdog`), repeated while the stall
-    /// lasts. `aborting` is true on the last one: the watchdog is cancelling
+    /// is doing, and for how long, so a stuck run is never silent. Emitted by
+    /// the progress watchdog (`cluster::watchdog`) and repeated while the stall
+    /// lasts. `aborting` is true on the final event when the watchdog cancels
     /// the run.
     Stalled {
         idle: Duration,
@@ -269,7 +267,7 @@ pub enum DeployEvent {
     /// progress watchdog emits this on a time schedule (`cluster::watchdog`),
     /// so a plain log says what a long wait is for while it lasts and not
     /// only when it ends. `status` is the last readiness message the node
-    /// reported, and `budget` the readiness timeout the wait runs against.
+    /// reported, and `budget` is the readiness timeout the wait runs against.
     Waiting {
         node: NodeId,
         phase: Phase,
@@ -279,8 +277,7 @@ pub enum DeployEvent {
     },
     /// A best-effort write failed. These are writes that cannot corrupt
     /// applied state and that the next deploy redoes (checkpoint, stamping
-    /// unchanged resources, finalizing the Activation). They used to be
-    /// `tracing::warn` lines the user never saw.
+    /// unchanged resources, and finalizing the Activation).
     BestEffortFailed { what: String, message: String },
 }
 
@@ -294,11 +291,12 @@ pub enum Phase {
     Apply,
     /// Polling the object for readiness.
     Readiness,
-    /// Not a node: the API discovery refresh behind a CRD barrier.
+    /// API discovery refresh behind a CRD barrier.
     Discovery,
 }
 
 impl Phase {
+    /// Return the snake_case name of the phase.
     pub fn as_str(self) -> &'static str {
         match self {
             Phase::Hydrate => "hydrate",
@@ -329,16 +327,16 @@ pub struct PlanNode {
 
 /// Progress observer for a DAG-streaming deploy.
 ///
-/// Observers are called synchronously on the scheduler thread; heavy work
-/// (redraw, JSON serialization, K8s Event emission) should be queued and
+/// Observers are called synchronously on the scheduler thread. Heavy work
+/// (redraw, JSON serialization, and K8s Event emission) should be queued and
 /// executed on a different task. See `cli/kix-cli/src/commands/deploy_tui.rs`
 /// for the mpsc pattern.
 pub trait DeployObserver: Send + Sync {
     fn on_event(&self, event: &DeployEvent);
 }
 
-/// Discards every event. Used when the caller only wants the final
-/// `DeployResult` and nothing else.
+/// Observer that discards every event when the caller only needs the final
+/// `DeployResult`.
 pub struct NullObserver;
 
 impl DeployObserver for NullObserver {
@@ -347,8 +345,8 @@ impl DeployObserver for NullObserver {
 
 /// Summary of a completed deploy run.
 ///
-/// Counts are computed from terminal Verdicts, not from apply-time outcomes:
-/// a node that applied cleanly but then failed readiness lands in `failed`,
+/// Counts are computed from terminal Verdicts rather than apply-time outcomes.
+/// A node that applied cleanly but then failed readiness lands in `failed`,
 /// not `configured`.
 #[derive(Debug, Clone, Default)]
 pub struct DeployResult {

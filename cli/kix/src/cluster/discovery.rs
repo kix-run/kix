@@ -1,5 +1,4 @@
-//! API discovery: the resource types the apiserver serves, and the API a
-//! request about one object goes to.
+//! API discovery for served resource types and dynamic object clients.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -12,11 +11,9 @@ use kube::{
     discovery::{ApiResource, Scope},
 };
 
-/// How long [`discover_resources`] keeps asking about group versions that
-/// `/apis` lists but that answer 404. On fresh kind clusters, a walk made
-/// just after new CRDs were Established has got a plain-text
-/// `404 page not found` for a listed group version, and a rerun of the
-/// same deploy got past that point.
+/// Maximum time [`discover_resources`] waits for group versions listed in
+/// `/apis` that initially return 404 (for example, immediately after a CRD
+/// becomes Established).
 pub(crate) const DISCOVERY_SETTLE: Duration = Duration::from_secs(30);
 const DISCOVERY_BACKOFF_START: Duration = Duration::from_millis(250);
 const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
@@ -26,19 +23,16 @@ const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
 /// The core group comes first, then the groups in the order `/apis` lists
 /// them, so a kind lookup that takes the first match is deterministic.
 ///
-/// A listed group version that answers 404 makes the whole walk run again,
-/// with backoff, until every listed group version answers or
-/// `DISCOVERY_SETTLE` has passed ([`FetchError::DiscoveryUnsettled`]).
-/// The walk is repeated from `/apis` because a group that is going away
-/// stops being listed, and one that is arriving starts being served. Any
-/// other failure is returned at once: the transport has already retried it.
+/// If a listed group version returns 404, the walk repeats from `/apis` with
+/// backoff until every listed group version responds or `DISCOVERY_SETTLE`
+/// elapses ([`FetchError::DiscoveryUnsettled`]). Any other error is returned
+/// immediately after transport retries.
 pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
     settled_discovery(client, None).await
 }
 
-/// [`discover_resources`] of the named API groups alone. A group the
-/// cluster does not list is left out, and nothing else is asked for, so a
-/// group version of some other API that is down cannot fail it.
+/// Discover listable resources in the named API groups only. Groups not listed
+/// by the cluster are omitted, and unrelated API groups are not queried.
 pub async fn discover_groups(
     client: &Client,
     groups: &[&str],
@@ -46,8 +40,8 @@ pub async fn discover_groups(
     settled_discovery(client, Some(groups)).await
 }
 
-/// Walk `groups` (every group, the core one first, when `None`) until no
-/// listed group version answers 404, as [`discover_resources`] describes.
+/// Walk `groups` (or all groups, starting with core, when `None`) until no
+/// listed group version returns 404.
 async fn settled_discovery(
     client: &Client,
     groups: Option<&[&str]>,
@@ -76,9 +70,8 @@ async fn settled_discovery(
     }
 }
 
-/// One discovery walk, for a caller that retries on its own: a listed group
-/// version that answers 404 is left out, named in `missing` and logged at
-/// debug, with no wait. Any other failure is returned.
+/// Run a single discovery pass without retrying 404 responses. Group versions
+/// that return 404 are omitted from `resources` and recorded in `missing`.
 pub(crate) async fn discover_resources_once(client: &Client) -> Result<DiscoveryPass, FetchError> {
     let pass = discovery_pass(client, None).await?;
     if !pass.missing.is_empty() {
@@ -87,16 +80,16 @@ pub(crate) async fn discover_resources_once(client: &Client) -> Result<Discovery
     Ok(pass)
 }
 
-/// One discovery walk. `missing` holds the path of every listed group
-/// version that answered 404; their resources are absent from `resources`,
-/// and a kind served there may appear at another version of its group.
+/// Result of a single discovery pass. `missing` lists group-version paths that
+/// returned 404 and were omitted from `resources`.
 #[derive(Debug, Default)]
 pub(crate) struct DiscoveryPass {
     pub resources: Vec<(ApiResource, Scope)>,
     pub missing: Vec<String>,
 }
 
-/// One walk of `only` (every group, the core one first, when `None`).
+/// Run one discovery pass over `only` (or all groups, starting with core, when
+/// `None`).
 async fn discovery_pass(
     client: &Client,
     only: Option<&[&str]>,
@@ -180,12 +173,9 @@ async fn walk_group(
     Ok(())
 }
 
-/// Discovery of one group, the targeted fetch behind refresh-on-miss: a
-/// bulk walk under deploy load can transiently omit a group, and this is a
-/// smaller request. `group` is "" for the core group. A version that
-/// answers 404 is left out rather than failing the group, and named in
-/// `missing`, so the caller gets whatever the group serves now and can ask
-/// again.
+/// Discover a single API group (`""` for the core group). Group versions that
+/// return 404 are omitted from `resources` and recorded in `missing` so the
+/// caller receives any versions that already respond.
 pub(crate) async fn discover_group(
     client: &Client,
     group: &str,
@@ -211,20 +201,17 @@ pub(crate) async fn discover_group(
     Ok(pass)
 }
 
-/// Merge a fresh discovery walk into an existing cache, unioned by
-/// (group, kind). Kubernetes' aggregated discovery document is rebuilt
-/// after CRD writes and can transiently omit unrelated groups, so a refresh
-/// must never *forget* kinds the cluster already proved it serves. Stale
-/// entries for genuinely deleted CRDs are harmless by comparison (their
-/// applies would fail anyway).
+/// Merge a fresh discovery pass into an existing cache by `(group, kind)`.
 ///
-/// When every listed group version answered, the fresh entry wins, so a
-/// kind whose preferred version changed moves to it. When the walk skipped
-/// a group version (`fresh.missing`), a kind it found may be one the
-/// skipped version also serves at a higher priority: the walk picks the
-/// next version that answered. The cached entry then wins, and the walk
-/// only adds (group, kind) keys the cache lacks, so a momentary 404 does not
-/// move a kind to an older version's URL.
+/// Kubernetes rebuilds its aggregated discovery document after CRD writes and
+/// can transiently omit unrelated groups, so a refresh preserves kinds the
+/// cluster previously served.
+///
+/// When every listed group version responded (`fresh.missing` is empty), fresh
+/// entries replace cached ones so kinds track preferred-version changes. When
+/// the pass skipped a 404 group version, cached entries take precedence and
+/// the pass only adds missing `(group, kind)` keys so a transient 404 does not
+/// downgrade a kind to an older version.
 pub(crate) fn merge_discovery(
     existing: &[(ApiResource, Scope)],
     fresh: DiscoveryPass,
@@ -240,11 +227,9 @@ pub(crate) fn merge_discovery(
     merged
 }
 
-/// The API a request about `rid` goes to. For a namespaced kind keyed
-/// [`CLUSTER_SCOPED`] (its manifest names no namespace) that is `default`:
-/// `apply::apply_resource` refuses to create such an
-/// object, but Kix CLIs before that check applied it there, and a prune of
-/// an old build reads and deletes it there.
+/// Build a dynamic [`Api`] handle for `rid`. Namespaced kinds keyed with
+/// [`CLUSTER_SCOPED`] target the `default` namespace so pruning can read and
+/// delete legacy objects that omitted a namespace.
 pub(crate) fn api_for(
     client: &Client,
     ar: &ApiResource,
@@ -339,7 +324,7 @@ mod tests {
     const TWO_V1: &str = "/apis/example.kix.test/v1";
     const TWO_V1BETA1: &str = "/apis/example.kix.test/v1beta1";
 
-    /// `(kind, version)` of each resource of the two-version group.
+    /// Return `(kind, version)` pairs for resources in `TWO_VERSION_GROUP`, sorted.
     fn versions_of(resources: &[(ApiResource, Scope)]) -> Vec<(String, String)> {
         let mut v: Vec<(String, String)> = resources
             .iter()
@@ -378,8 +363,9 @@ mod tests {
         );
     }
 
-    /// When the preferred version 404s, the walk keeps what the other
-    /// version serves, `Gizmo` included at v1beta1, and says what it skipped.
+    /// When the preferred version returns 404, the pass keeps resources served
+    /// by other versions (including `Gizmo` at `v1beta1`) and records the
+    /// skipped path.
     #[tokio::test]
     async fn group_discovery_keeps_the_versions_that_answer() {
         use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};

@@ -1,28 +1,24 @@
-//! What kind of thing a manifest is, decided once.
+//! Classify manifests by their deployment lifecycle role.
 //!
-//! A kix build contains three kinds of object that look alike on the wire
-//! and are nothing alike in how kix treats them:
+//! A Kix build contains three categories of objects with distinct lifecycle rules:
 //!
-//! - **Desired** state: the workloads and their supporting resources. Change
-//!   detection diffs them, the scheduler applies them, prune deletes the
-//!   ones that vanished from the build.
-//! - **Markers**: PackageInstance objects with `kix.run/mode: import`. They
-//!   describe a resource kix does not render (a StorageClass installed by
-//!   hand, a Secret created out of band). Readiness polls for the described
-//!   object instead of the marker.
-//! - **Records**: the Activation, one per deploy. It records which build is
-//!   live. Its lifecycle is supersede-managed by finalize and by `kix gc`,
-//!   never by prune. It changes name on every deploy (the identity-hash
-//!   suffix), so change detection matches it like any other resource (an
-//!   unchanged build is still a Skip) but never lists it as an orphan:
-//!   before this module `--prune` deleted last deploy's record before
-//!   finalize could mark it Superseded (kixpkgs#59).
+//! - **Desired** state: workloads and supporting resources. Change detection
+//!   diffs them, the scheduler applies them, and pruning deletes any that leave
+//!   the build.
+//! - **Markers**: `PackageInstance` objects with `kix.run/mode: import`. They
+//!   describe an external resource that Kix does not render (such as a
+//!   pre-installed `StorageClass` or an out-of-band `Secret`). Readiness polls
+//!   the referenced object instead of the marker.
+//! - **Records**: the `Activation` resource, one per deploy, recording which
+//!   build is live. Its lifecycle is managed by `finalize` and `kix gc`
+//!   (superseding older records) rather than by pruning. Because its name
+//!   includes the build's identity hash, change detection matches it like any
+//!   other resource (an unchanged build is a `Skip`) but never marks an older
+//!   `Activation` as a prunable orphan.
 //!
-//! Before this module the distinction lived in eleven `kind == "Activation"`
-//! comparisons across three crates, each a private copy of the same rule,
-//! and the store-graph path in deploy had forgotten it. This is the one
-//! table. Nothing outside it may compare a kind string to `"Activation"`
-//! (a test in this module enforces that).
+//! All classification goes through this module; no other module may compare a
+//! kind string directly to `"Activation"` or `"PackageInstance"` (enforced by a
+//! test in this module).
 
 use std::collections::HashSet;
 
@@ -74,16 +70,15 @@ pub enum Lifecycle {
 }
 
 impl Lifecycle {
-    /// Can this thing be an orphan, that is, deleted because it left the
-    /// build? Only desired state and markers. Records never.
+    /// Return whether an object of this lifecycle role can be pruned when it
+    /// leaves the build. Only desired resources and markers are prunable;
+    /// `Activation` records are superseded instead.
     pub fn prunable(self) -> bool {
         !matches!(self, Lifecycle::Record)
     }
 }
 
-/// Classify from a kind and an annotation lookup. The one place the rule
-/// is written; the public functions below adapt manifests and live objects
-/// to it.
+/// Classify a resource from its kind and `kix.run/mode` annotation.
 fn classify(kind: &str, mode: Option<&str>) -> Lifecycle {
     if kind == RECORD_KIND {
         Lifecycle::Record
@@ -94,8 +89,7 @@ fn classify(kind: &str, mode: Option<&str>) -> Lifecycle {
     }
 }
 
-/// Is this kind the record kind? For call sites that hold only a
-/// `ResourceId`, not the manifest.
+/// Return whether `kind` is the `Activation` record kind.
 pub fn is_record_kind(kind: &str) -> bool {
     kind == RECORD_KIND
 }
@@ -111,7 +105,7 @@ pub fn lifecycle_of(manifest: &Value) -> Lifecycle {
 }
 
 /// Classify a live object. LIST responses put the kind either in `.data`
-/// (kix injects it there) or in `.types`; annotations live on the typed
+/// (Kix injects it there) or in `.types`; annotations live on the typed
 /// metadata.
 pub fn lifecycle_of_live(obj: &DynamicObject) -> Lifecycle {
     let kind = obj
@@ -128,12 +122,12 @@ pub fn lifecycle_of_live(obj: &DynamicObject) -> Lifecycle {
     classify(kind, mode)
 }
 
-/// Is this manifest the deploy record?
+/// Return whether `manifest` is the deploy record (`Activation`).
 pub fn is_record(manifest: &Value) -> bool {
     lifecycle_of(manifest) == Lifecycle::Record
 }
 
-/// Is this manifest an import marker?
+/// Return whether `manifest` is an import marker.
 pub(crate) fn is_marker(manifest: &Value) -> bool {
     lifecycle_of(manifest) == Lifecycle::Marker
 }
@@ -142,15 +136,13 @@ pub(crate) fn is_marker(manifest: &Value) -> bool {
 /// package keep them.
 pub(crate) const HOOK_DELETE_POLICY: [&str; 1] = ["helm.sh/hook-delete-policy"];
 
-/// Does this manifest declare that it removes itself once it succeeds?
+/// Return whether `manifest` declares that it deletes itself after completion.
 ///
-/// Two independent declarations, either of which makes absence expected:
+/// Checks two independent declarations:
 ///   * `helm.sh/hook-delete-policy` containing `hook-succeeded` on a manifest
-///     rendered from a chart: Helm's convention, kept so imported hooks read
-///     the same way. Kix has no hook vocabulary of its own; a Job that
-///     must run again is the rerun rule's business (`kix.run/rerun`).
-///   * a Job's `spec.ttlSecondsAfterFinished`: Kubernetes' TTL controller
-///     deletes it some time after completion.
+///     rendered from a Helm chart.
+///   * A `Job` with `spec.ttlSecondsAfterFinished`, which Kubernetes' TTL
+///     controller deletes after completion.
 pub fn declares_own_deletion(manifest: &serde_json::Value) -> bool {
     let annotations = manifest.pointer("/metadata/annotations");
     let deletes_on_success = HOOK_DELETE_POLICY.iter().any(|key| {
@@ -168,34 +160,32 @@ pub fn declares_own_deletion(manifest: &serde_json::Value) -> bool {
     deletes_on_success || ttl_reaped
 }
 
-/// The deploy record in a manifest set, if present. A build carries at most
-/// one; the first is returned.
+/// Return the deploy record in `manifests`, if present.
 pub fn record_of(manifests: &[Value]) -> Option<&Value> {
     manifests.iter().find(|m| is_record(m))
 }
 
-/// Kinds that only make sense inside a live kix deployment. An "exit"
-/// export drops them; they would be garbage in a neutral handoff.
+/// Return whether `kind` is a Kix-internal bookkeeping kind (`Activation` or
+/// `PackageInstance`) that `kix export --for=exit` omits.
 pub fn is_kix_internal_kind(kind: &str) -> bool {
     kind == RECORD_KIND || kind == PACKAGE_INSTANCE_KIND
 }
 
-/// Kinds that Kix reports when they leave the build but never deletes,
-/// because deleting one also deletes resources outside the deployment.
+/// Return whether `kind` is reported as an orphan when it leaves the build but
+/// never deleted automatically (`Namespace` and `CustomResourceDefinition`).
 ///
-/// A Namespace takes every object inside it, whether Kix manages it or not.
-/// A CustomResourceDefinition takes every custom resource of that kind in
-/// the cluster, including resources Kix does not manage. Deploy's prune,
-/// every `kix gc` mode and the operator's teardown all consult this
-/// predicate; removing such an object is left to an explicit `kubectl delete`.
+/// Deleting a `Namespace` deletes every object inside it, and deleting a
+/// `CustomResourceDefinition` deletes every custom resource of that kind across
+/// the cluster, including resources Kix does not manage. Deploy pruning, all
+/// `kix gc` modes, and operator teardown consult this predicate and leave
+/// deletion to an explicit `kubectl delete`.
 pub fn never_pruned(kind: &str) -> bool {
     matches!(kind, "Namespace" | "CustomResourceDefinition")
 }
 
-/// The platform Kix cluster whose consumer `record` is, from the interface
-/// that platform gave it in `spec.interfaces`. A consumer shares its
-/// Kubernetes cluster with that platform and loads one interface. `None`
-/// for any other cluster's record.
+/// Return the platform Kix cluster name for a consumer `Activation` record
+/// (from `spec.interfaces`), or `None` if the record does not belong to a
+/// consumer cluster.
 pub fn platform_of(record: &Value) -> Option<&str> {
     record
         .pointer("/spec/interfaces")
@@ -204,7 +194,7 @@ pub fn platform_of(record: &Value) -> Option<&str> {
         .map(String::as_str)
 }
 
-/// Whether `manifest` is one of Kix's own CustomResourceDefinitions.
+/// Return whether `manifest` is one of Kix's own CustomResourceDefinitions.
 pub fn is_kix_crd(manifest: &Value) -> bool {
     manifest.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition")
         && matches!(
@@ -213,15 +203,13 @@ pub fn is_kix_crd(manifest: &Value) -> bool {
         )
 }
 
-/// The objects of a build that its platform writes: Kix's own CRDs when the
-/// build's record is a consumer's, and nothing otherwise.
+/// Return the resource IDs in `manifests` that belong to the platform rather
+/// than the consumer cluster (Kix's own CRDs when the build's record is a
+/// consumer record, or an empty set otherwise).
 ///
-/// Every Kix build contains Kix's CRDs, and every Kix cluster applies with
-/// the same field manager. On a Kubernetes cluster that a platform shares
-/// with its consumers, the platform installs these CRDs. A consumer that
-/// applied its own copy would replace the platform's schema without a
-/// conflict, and a consumer on another Kix version would change it. So a
-/// consumer's deploy waits for them and never writes them.
+/// On a shared Kubernetes cluster, the platform installs Kix's CRDs. A consumer
+/// deploy waits for those CRDs and never writes them, so it cannot overwrite
+/// the platform's CRD schema.
 pub fn left_to_platform<'a>(manifests: impl IntoIterator<Item = &'a Value>) -> HashSet<ResourceId> {
     let manifests: Vec<&Value> = manifests.into_iter().collect();
     if !manifests
@@ -428,13 +416,10 @@ mod tests {
         assert!(!is_kix_internal_kind("Deployment"));
     }
 
-    /// Invariant 7 from kixpkgs#59: the kind strings of the record and the
-    /// marker are written in exactly one place. Any other non-test line in
-    /// the three crates that spells `"Activation"` or `"PackageInstance"` is
-    /// a private copy of the rule (a comparison, a match arm, a constructed
-    /// object), which is how the phantom orphan happened. Use `RECORD_KIND`
-    /// and `PACKAGE_INSTANCE_KIND` instead. Test modules (everything after
-    /// the first `#[cfg(test)]` in a file) may use the literals as fixtures.
+    /// Verify that the record and marker kind strings (`"Activation"` and
+    /// `"PackageInstance"`) are spelled only in this module; all other non-test
+    /// code across the workspace must use `RECORD_KIND` and
+    /// `PACKAGE_INSTANCE_KIND`.
     #[test]
     fn no_other_file_spells_the_record_or_marker_kind() {
         let lib_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

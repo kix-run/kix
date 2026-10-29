@@ -47,7 +47,7 @@ superseded activations, are not reported.
 | at risk | Present, but depends on a missing or at-risk resource |
 
 Each package line reads `healthy`, `external`, `completed`, `DEGRADED` (a
-missing resource) or `AT RISK`. Packages with problems are expanded below the
+missing resource), or `AT RISK`. Packages with problems are expanded below the
 summary.
 
 Kix reads the sealed manifest for a dependency's hash from the local Nix
@@ -66,7 +66,7 @@ by hash, and a self-deleting Job that is gone reads as missing.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Every package is healthy, external or completed |
+| `0` | Every package is healthy, external, or completed |
 | `1` | A resource is missing or at risk; no Active record exists for the cluster; or a cluster error |
 
 :::tip[Use it in a task]

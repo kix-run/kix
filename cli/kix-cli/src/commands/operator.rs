@@ -20,8 +20,8 @@ use kix::cluster::discovery;
 
 use crate::output;
 
-/// Connect to the cluster and open its Activation records, which runs the
-/// domain gate, then check that this client can read them.
+/// Connect to the cluster, run the domain gate, and verify that Activation
+/// records are readable.
 pub async fn connect_and_verify(context: Option<&str>) -> Result<(Client, Records)> {
     crate::say!("Connecting to cluster...");
 
@@ -35,8 +35,7 @@ pub async fn connect_and_verify(context: Option<&str>) -> Result<(Client, Record
     Ok((client, records))
 }
 
-/// The cluster's Activation records, past the domain gate and readable by
-/// this client.
+/// Discover and open the cluster's Activation records, verifying read access.
 async fn open_records(client: &Client) -> Result<Records> {
     let discovery = discovery::discover_resources(client)
         .await
@@ -80,7 +79,7 @@ pub async fn apply_activation(
     Ok(())
 }
 
-/// How the operator finished an Activation it reconciled.
+/// Terminal outcome of an operator-reconciled Activation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reconciled {
     Active,
@@ -89,8 +88,7 @@ pub enum Reconciled {
     Degraded,
 }
 
-/// What the watch has printed of a record's progress, so each poll prints
-/// only what is new.
+/// Tracks which progress lines have already been printed across poll ticks.
 #[derive(Default)]
 struct Progress {
     seen_deploying: bool,
@@ -98,9 +96,7 @@ struct Progress {
 }
 
 impl Progress {
-    /// The lines this read of the record adds: "Operator is reconciling"
-    /// the first time it is Deploying, then each wave that has finished
-    /// since the last read.
+    /// Return any new progress lines since the previous poll of `act`.
     fn lines(&mut self, act: &Record) -> Vec<String> {
         let mut lines = Vec::new();
         if !self.seen_deploying && act.phase == PHASE_DEPLOYING {
@@ -266,9 +262,7 @@ mod tests {
         watch_activation_progress(&records, "rec").await
     }
 
-    /// Operator mode opens the records through discovery and the domain
-    /// gate: a discovery that fails, or a cluster that has not migrated,
-    /// stops it.
+    /// Verify that operator mode requires API discovery and rejects unmigrated clusters.
     #[tokio::test]
     async fn operator_mode_opens_records_only_through_discovery() {
         let api = FakeApi::new([]);
@@ -284,8 +278,7 @@ mod tests {
         assert!(err.to_string().contains("kix migrate domain"), "{err}");
     }
 
-    /// A Degraded record is reported apart from an Active one, so
-    /// `kix deploy --operator` can exit non-zero for it.
+    /// Verify that a `Degraded` record is distinguished from `Active` so the CLI can exit non-zero.
     #[tokio::test]
     async fn a_degraded_record_is_not_reported_as_active() {
         assert_eq!(watch("Active").await.unwrap(), Reconciled::Active);
@@ -293,9 +286,7 @@ mod tests {
         assert!(watch("Failed").await.is_err());
     }
 
-    /// The first read of a Deploying record says the operator is
-    /// reconciling, once; each finished wave is printed once, in order, and
-    /// a pending one is not.
+    /// Verify that [`Progress::lines`] emits the reconciling banner and each completed wave once.
     #[test]
     fn the_watch_prints_each_step_once() {
         use kix::cluster::activation::{WaveRecord, WaveStatus};
@@ -329,8 +320,7 @@ mod tests {
         assert!(progress.lines(&act).is_empty());
     }
 
-    /// A record that is gone while the watch waits on it is an error that
-    /// names it.
+    /// Verify that a record deleted while watching returns an error naming the record.
     #[tokio::test]
     async fn a_record_that_vanishes_is_named() {
         let api = FakeApi::new([]);
@@ -342,8 +332,7 @@ mod tests {
         assert_eq!(err, "Activation 'rec' no longer exists");
     }
 
-    /// A Failed record's error names the reason the deploy stopped, from
-    /// `status.failure.reason`, which is where Kix writes it.
+    /// Verify that a `Failed` record surfaces `status.failure.reason` in the returned error.
     #[tokio::test]
     async fn a_failed_record_reports_why() {
         let mut failed = record("rec", "Failed");

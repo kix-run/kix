@@ -19,11 +19,11 @@ use kube::{
 use serde_json::Value;
 use thiserror::Error;
 
-/// Does this manifest opt into the rerun rule? Jobs only: the rule deletes
-/// the live object, and for anything with a rollout (a Deployment stuck on
-/// its progress deadline is "failed" too) that would be an outage, not a
-/// retry. The Nix side refuses the annotation on other kinds as well
-/// (cross-resource check 16).
+/// Return `true` if `manifest` is a `Job` with `kix.run/rerun: on-change`.
+///
+/// Only `Job` resources support the rerun rule because rerunning deletes the
+/// live object before re-creating it; deleting a rollout-based workload such as
+/// a `Deployment` would cause an outage rather than a retry.
 pub(crate) fn wants_rerun(manifest: &Value) -> bool {
     manifest.get("kind").and_then(Value::as_str) == Some("Job")
         && manifest
@@ -113,17 +113,22 @@ pub enum ApplyError {
     NoNamespace { resource: String },
 }
 
-/// Is `rid` of a namespaced kind but keyed [`CLUSTER_SCOPED`], because its
-/// manifest names no namespace? The apiserver would store such an object in
-/// the requester's namespace, where no later comparison with the build finds
-/// it, so `apply_resource` refuses it.
+/// Return `true` if `rid` has a namespaced kind (`scope == Scope::Namespaced`)
+/// but is keyed as [`CLUSTER_SCOPED`] because its manifest omits
+/// `metadata.namespace`.
+///
+/// [`apply_resource`] rejects such manifests so the API server does not store
+/// them in the client's default namespace where later diffs against the build
+/// would not find them.
 pub(crate) fn is_namespaceless(scope: &Scope, rid: &ResourceId) -> bool {
     matches!(scope, Scope::Namespaced) && rid.namespace == CLUSTER_SCOPED
 }
 
-/// The resources among `rids` that `apply_resource` would refuse as
-/// [`ApplyError::NoNamespace`], judged by `discovery`. A kind discovery does
-/// not know yet (a CRD the same deploy creates) is not reported.
+/// Return the resources in `rids` that [`apply_resource`] would reject with
+/// [`ApplyError::NoNamespace`] according to `discovery`.
+///
+/// Kinds not yet present in `discovery` (such as CRDs created by the same
+/// deploy) are skipped.
 pub fn namespaceless<'a>(
     discovery: &[(ApiResource, Scope)],
     rids: impl IntoIterator<Item = &'a ResourceId>,
@@ -142,63 +147,54 @@ pub fn namespaceless<'a>(
 /// Result of applying a single resource.
 #[derive(Debug, Clone)]
 pub(crate) struct ApplyResult {
-    /// What action was taken.
+    /// Action taken during apply.
     pub action: ApplyAction,
-    /// What the apiserver answered to a dry-run apply. `None` for a real
-    /// apply, and for a dry run that never reached the apiserver.
+    /// Server-side dry-run preview, or `None` for a live apply or a dry run
+    /// that did not reach the API server.
     pub preview: Option<Box<ApplyPreview>>,
 }
 
-/// The two objects a dry-run apply compares: the live object before the
-/// apply and the object the apiserver says the apply would produce. Both are
-/// whole objects as the apiserver serves them, `managedFields` and Secret
-/// values included, so a caller that shows them must hide what is secret.
+/// Live and dry-run result objects compared by a dry-run apply.
+///
+/// Both fields hold full objects as returned by the API server (including
+/// `managedFields` and `Secret` values), so callers displaying them must redact
+/// secret data.
 #[derive(Debug, Clone)]
 pub struct ApplyPreview {
-    /// `None` when the object does not exist, so the apply would create it.
+    /// Live object before the apply, or `None` if the apply would create it.
     pub live: Option<Value>,
     pub result: Value,
 }
 
-/// The action taken during apply. The deploy log names it in snake_case.
+/// Action taken during apply, serialized in `snake_case` in the deploy log.
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyAction {
-    /// Resource was created (didn't exist before).
+    /// Resource was created.
     Created,
-    /// Resource was updated (identity-hash changed).
+    /// Resource was updated because its identity-hash changed.
     Configured,
-    /// Resource was skipped (identity-hash matched).
+    /// Resource was skipped because its identity-hash matched.
     Unchanged,
     /// Resource was skipped for another reason.
     Skipped,
 }
 
-/// A change action determined by local DAG diff (old vs new activation).
+/// Change action determined by diffing the old and new activations.
 #[derive(Debug, Clone)]
 pub enum ChangeAction {
-    /// Resource needs to be applied (new or changed).
+    /// Resource is new or changed and needs to be applied.
     Apply(Value),
-    /// Resource is unchanged (same identity-hash), skip it.
+    /// Resource has the same identity-hash and can be skipped.
     Skip(ResourceId),
-    /// Resource exists in the old activation but not the new one; candidate for pruning.
+    /// Resource exists in the old activation but not the new one and is a
+    /// candidate for pruning.
     Orphan(ResourceId),
 }
 
-/// Detect changes by diffing two sets of stamped manifests locally.
-///
-/// Matches resources by Kubernetes identity (kind + namespace + name),
-/// then compares identity-hashes to determine if content changed.
-///
-/// `new_manifests`: manifests from the new activation (what we want to deploy)
-/// `old_manifests`: manifests from the old/current activation (what's deployed)
-///
-/// Returns actions for the new manifests (Apply or Skip) plus Orphan actions
-/// for resources in old but not in new.
-/// The `kix.run/identity-hash` a rendered or live-reconstructed manifest
-/// carries, if kix ever applied it.
+/// Return the `kix.run/identity-hash` annotation from a manifest, if present.
 fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
     manifest
         .pointer("/metadata/annotations")
@@ -206,14 +202,21 @@ fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+/// Detect changes by diffing two sets of stamped manifests locally.
+///
+/// Matches resources by Kubernetes identity (`kind/namespace/name`) and
+/// compares `kix.run/identity-hash` annotations to determine whether content
+/// changed. Returns [`ChangeAction::Apply`] or [`ChangeAction::Skip`] for each
+/// manifest in `new_manifests`, followed by [`ChangeAction::Orphan`] for
+/// prunable stamped resources present in `old_manifests` but absent from
+/// `new_manifests`.
 pub(crate) fn detect_changes(
     new_manifests: &[Value],
     old_manifests: &[Value],
 ) -> Vec<ChangeAction> {
-    // Index old manifests by K8s identity (kind/ns/name) → identity-hash.
-    // The previous deploy's record stays in this index so an unchanged
-    // build (same record name, same hash) still comes out as Skip and the
-    // deploy can short-circuit; it is only kept out of the orphan set below.
+    // Keep the previous deploy's Activation record in this index so an
+    // unchanged build (same record name and hash) produces Skip and can
+    // short-circuit; records are excluded from the orphan set below.
     let old_by_k8s_id: HashMap<String, &str> = old_manifests
         .iter()
         .filter_map(|m| {
@@ -227,7 +230,6 @@ pub(crate) fn detect_changes(
         })
         .collect();
 
-    // Track which old K8s identities are matched by new manifests
     let mut matched_old_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut actions: Vec<ChangeAction> = Vec::new();
 
@@ -242,27 +244,22 @@ pub(crate) fn detect_changes(
 
         match (old_by_k8s_id.get(&k8s_id), new_hash) {
             (Some(&old_hash), Some(new_h)) if old_hash == new_h => {
-                // Same identity-hash → identical content+deps, skip
                 matched_old_ids.insert(k8s_id);
                 actions.push(ChangeAction::Skip(rid));
             }
             (Some(_), _) => {
-                // Different identity-hash or missing → content changed, apply
                 matched_old_ids.insert(k8s_id);
                 actions.push(ChangeAction::Apply(manifest.clone()));
             }
             (None, _) => {
-                // Not in old graph → new resource, apply
                 actions.push(ChangeAction::Apply(manifest.clone()));
             }
         }
     }
 
-    // Only stamped resources can become orphans. An unstamped manifest may be
-    // a controller child or an object applied outside Kix and must not be deleted.
-    //
-    // Finalization supersedes the previous deploy record. Exclude it from
-    // orphan detection because each changed activation has a different name.
+    // Only stamped, prunable resources can become orphans. Unstamped manifests
+    // may belong to controller children or external tools, and Activation
+    // records are superseded during finalization rather than pruned here.
     for old_manifest in old_manifests {
         if manifest_identity_hash(old_manifest).is_none() || !lifecycle_of(old_manifest).prunable()
         {
@@ -278,27 +275,18 @@ pub(crate) fn detect_changes(
     actions
 }
 
-/// Fold the closures of deploys that stopped part way into a plan.
+/// Fold the closures of partially applied `Failed` deploys into a change plan.
 ///
-/// A run that dies mid-wave applied some of its closure and recorded nothing,
-/// so [`detect_changes`] against the still-Active closure cannot see any of
-/// it: the objects it created are not orphans, and the objects it changed do
-/// not read as changed.
+/// When a prior deploy stopped mid-wave, it may have created or modified some
+/// resources before aborting without updating the `Active` record. Diffing
+/// only against the `Active` closure would miss those partial changes.
 ///
-/// For a resource that differs between the active and failed closures, the
-/// cluster may hold either compiler output. Apply these rules:
-///
-/// - A `Skip` whose identity appears in a failed closure under a DIFFERENT
-///   hash becomes an `Apply`. The cluster holds either the new hash or that
-///   one, and applying is idempotent, so the cost of guessing wrong is a
-///   single unchanged apply. Leaving it a `Skip` when the cluster holds the
-///   other one is the bug.
-/// - An identity that only a failed closure has becomes an `Orphan`, under
-///   the same rules [`detect_changes`] uses: stamped, prunable, and not a
-///   record.
-///
-/// Every input is a compiler output. This function does not read live cluster
-/// state when deciding how to combine closures.
+/// For each resource in `failed_closures`:
+/// * A [`ChangeAction::Skip`] whose resource appears in a failed closure with a
+///   different identity hash is promoted to [`ChangeAction::Apply`] so the
+///   desired manifest is re-asserted if the failed deploy overwrote it.
+/// * A stamped, prunable resource that appears only in `failed_closures` and
+///   not in `new_manifests` is added as [`ChangeAction::Orphan`].
 pub(crate) fn fold_failed_closures(
     actions: Vec<ChangeAction>,
     new_manifests: &[Value],
@@ -313,9 +301,7 @@ pub(crate) fn fold_failed_closures(
         format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
     };
 
-    // Identity -> every hash a failed closure claims for it.
     let mut uncertain: HashMap<String, HashSet<String>> = HashMap::new();
-    // Identity -> a manifest for it, for the orphan rids.
     let mut failed_manifest: HashMap<String, &Value> = HashMap::new();
     for closure in failed_closures {
         for manifest in closure {
@@ -343,11 +329,7 @@ pub(crate) fn fold_failed_closures(
                 let new_hash = new_by_id.get(&id).and_then(|m| manifest_identity_hash(m));
                 let all_agree = match (uncertain.get(&id), new_hash) {
                     (None, _) => true,
-                    // Every hash a failed closure has for this resource is the
-                    // one we are about to apply, so nothing can have changed.
                     (Some(hashes), Some(h)) => hashes.iter().all(|candidate| candidate == h),
-                    // No hash on the new side means detect_changes already
-                    // treated it as opaque; leave its verdict alone.
                     (Some(_), None) => true,
                 };
                 if all_agree {
@@ -367,8 +349,7 @@ pub(crate) fn fold_failed_closures(
         }
     }
 
-    // Anything only a failed closure knows about. Sorted so a plan is
-    // byte-identical across runs.
+    // Sort leftover orphans for deterministic plan output.
     let mut leftovers: Vec<&String> = uncertain
         .keys()
         .filter(|id| !new_by_id.contains_key(*id) && !seen_orphans.contains(*id))
@@ -385,15 +366,13 @@ pub(crate) fn fold_failed_closures(
     out
 }
 
-/// Add the orphans of builds an earlier deploy kept orphans from
-/// (`status.orphansKeptFrom`).
+/// Add orphans from builds listed in `status.orphansKeptFrom` to `actions`.
 ///
-/// Every one of those builds was applied in full and then replaced, so unlike
-/// [`fold_failed_closures`] nothing here can turn a `Skip` into an `Apply`:
-/// the Active closure already describes every object the new build shares
-/// with them. What they add is the objects the new build no longer declares,
-/// under the same rules [`detect_changes`] uses: stamped, prunable, and not
-/// a record.
+/// Because each closure in `kept_closures` was previously superseded by a
+/// completed deploy, shared resources are already represented in the `Active`
+/// closure and do not need to be promoted from `Skip` to `Apply`. Only stamped,
+/// prunable resources absent from `new_manifests` are added as
+/// [`ChangeAction::Orphan`].
 pub(crate) fn fold_kept_closures(
     mut actions: Vec<ChangeAction>,
     new_manifests: &[Value],
@@ -411,7 +390,6 @@ pub(crate) fn fold_kept_closures(
             _ => None,
         })
         .collect();
-    // Sorted so a plan is byte-identical across runs.
     let mut added: Vec<ResourceId> = Vec::new();
     for manifest in kept_closures.iter().flatten() {
         if manifest_identity_hash(manifest).is_none() || !lifecycle_of(manifest).prunable() {
@@ -428,13 +406,11 @@ pub(crate) fn fold_kept_closures(
     actions
 }
 
-/// Whether `closure` has an object that prune would delete if `new_manifests`
-/// replaced it: stamped, prunable, of a kind `never_pruned` does not protect,
-/// and absent from `new_manifests` by Kubernetes identity.
+/// Return `true` if `closure` contains any stamped, prunable resource (excluding
+/// `never_pruned` kinds) that is absent from `new_manifests`.
 ///
-/// A deploy that keeps its orphans records each build this is true for, so
-/// the list on the record names only builds that still have something to
-/// delete.
+/// Used when a deploy keeps orphans so `status.orphansKeptFrom` records only
+/// builds that still have unpruned resources on the cluster.
 pub(crate) fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
     let id_of = |m: &Value| {
         let rid = ResourceId::from_value(m);
@@ -449,12 +425,11 @@ pub(crate) fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool
     })
 }
 
-/// The manifest set a plan should show and prune against: the Active closure,
-/// plus anything only a failed closure has.
+/// Return the baseline manifest set combining `active` with any manifests that
+/// appear only in `failed`.
 ///
-/// `run_deploy` needs this so `prune_order` can topologically sort orphans
-/// that exist in no current closure, and the plan display needs it so those
-/// orphans have a manifest to describe.
+/// Provides manifests for orphans originating from failed deploys so they can
+/// be topologically sorted for pruning and rendered in plan output.
 pub(crate) fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value> {
     let id_of = |m: &Value| {
         let rid = ResourceId::from_value(m);
@@ -473,25 +448,21 @@ pub(crate) fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec
     out
 }
 
-/// Detect changes by comparing desired manifests against live cluster resources.
+/// Detect changes by comparing desired manifests against live cluster objects.
 ///
-/// For each desired manifest:
-///   - Look up live resource by K8s identity (kind/namespace/name)
-///   - If not found → Apply (resource missing from cluster)
-///   - If identity-hash differs → Apply (drifted or changed)
-///   - If identity-hash matches → Skip
-///
-/// For each live resource not in desired set → Orphan
-///
-/// This replaces `detect_changes` for the operator, where the cluster
-/// is the source of truth for "old state" rather than a local manifest set.
+/// Used by the operator, where live cluster state is the baseline:
+/// * Desired resources absent from `live_resources` or with a differing
+///   `kix.run/identity-hash` produce [`ChangeAction::Apply`].
+/// * Desired resources whose `kix.run/identity-hash` matches the live object
+///   produce [`ChangeAction::Skip`].
+/// * Stamped, prunable live resources absent from `desired_manifests` produce
+///   [`ChangeAction::Orphan`].
 pub(crate) fn detect_changes_live(
     desired_manifests: &[Value],
     live_resources: &[DynamicObject],
 ) -> Vec<ChangeAction> {
-    // Index live resources by K8s identity → identity-hash. Live records
-    // stay in the index so an unchanged record comes out as Skip; they are
-    // kept out of the orphan set below.
+    // Keep live Activation records in the index so an unchanged record produces
+    // Skip; records are excluded from the orphan set via `live_prunable` below.
     let mut live_by_k8s_id: HashMap<String, Option<&str>> = HashMap::new();
     let mut live_rids: HashMap<String, ResourceId> = HashMap::new();
     let mut live_prunable: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -545,24 +516,20 @@ pub(crate) fn detect_changes_live(
 
         match (live_by_k8s_id.get(&k8s_id), desired_hash) {
             (Some(Some(live_hash)), Some(desired_h)) if *live_hash == desired_h => {
-                // Live hash matches desired → no drift, skip
                 matched_live_ids.insert(k8s_id);
                 actions.push(ChangeAction::Skip(rid));
             }
             (Some(_), _) => {
-                // Live exists but hash differs or missing → apply
                 matched_live_ids.insert(k8s_id);
                 actions.push(ChangeAction::Apply(manifest.clone()));
             }
             (None, _) => {
-                // Not on cluster → apply
                 actions.push(ChangeAction::Apply(manifest.clone()));
             }
         }
     }
 
-    // An orphan is a stamped live resource absent from desired manifests.
-    // Exclude unstamped objects and activation records from deletion.
+    // Only stamped, prunable live resources absent from desired manifests are orphans.
     for (k8s_id, rid) in &live_rids {
         let stamped = live_by_k8s_id.get(k8s_id).copied().flatten().is_some();
         if stamped && live_prunable.contains(k8s_id) && !matched_live_ids.contains(k8s_id) {
@@ -672,10 +639,10 @@ pub(crate) async fn apply_resource(
         Err(e) => return Err(e),
     };
 
-    // Compute the applied-content hash from the SSA response. It is the
-    // committed, canonicalized server representation, so a
-    // hash of its kix-owned projection is directly comparable to a hash of
-    // the live object at any later check.
+    // Compute the applied-content hash from the SSA response. Because the
+    // response is the canonicalized server representation, the hash of its
+    // Kix-owned projection can be compared directly against the live object on
+    // later drift checks.
     let applied_hash = if dry_run {
         None
     } else {
@@ -689,17 +656,14 @@ pub(crate) async fn apply_resource(
         h
     };
 
-    // Update kix bookkeeping annotations: merge the current activation into
-    // `kix.run/activations` and stamp `kix.run/applied-hash`.
+    // Update Kix bookkeeping annotations by merging the current activation into
+    // `kix.run/activations` and stamping `kix.run/applied-hash`.
     //
-    // This is a SEPARATE patch from the SSA above because we need read-modify-write
-    // semantics to merge into the existing comma-separated set without clobbering
-    // entries written by other activations. It traverses validating webhooks just
-    // like the SSA, so a transient webhook outage (e.g. ingress-nginx admission pod
-    // rolling) can fail it. The transport retries those; if the failure
-    // outlasts the retry budget it is surfaced as a hard error, because
-    // Dropping this update would corrupt reference counting and
-    // cause GC to delete the resource on the next deploy.
+    // Uses a separate read-modify-write merge patch so existing entries in the
+    // comma-separated `kix.run/activations` set written by other activations
+    // are preserved. If the patch fails after transport retries, surface a hard
+    // error because dropping this update would leave reference counts incomplete
+    // for garbage collection.
     if !dry_run && (activation_hash.is_some() || applied_hash.is_some()) {
         update_bookkeeping_annotations_checked(
             &api,
@@ -746,9 +710,8 @@ async fn apply_patch(
         .map_err(|e| classify_apply_error(rid, e))
 }
 
-/// Wrapper around [`update_bookkeeping_annotations`] that turns a failure
-/// into [`ApplyError::BookkeepingAnnotationsFailed`]. Under `on_error=stop`,
-/// the deploy halts before it can continue with incomplete activation data.
+/// Call [`update_bookkeeping_annotations`] and map errors to
+/// [`ApplyError::BookkeepingAnnotationsFailed`].
 async fn update_bookkeeping_annotations_checked(
     api: &Api<DynamicObject>,
     name: &str,
@@ -765,12 +728,8 @@ async fn update_bookkeeping_annotations_checked(
         })
 }
 
-// ---------------------------------------------------------------------------
-// Ceded fields (`kix.run/cede-fields`)
-// ---------------------------------------------------------------------------
-
-/// One step of an apiserver field path: `.spec`, `[name="x"]`, `[0]`, or
-/// `[*]` in a ceded declaration for any list element.
+/// One segment of an API server field path: `.spec`, `[name="x"]`, `[0]`, or
+/// `[*]` (matching any list element in a `kix.run/cede-fields` declaration).
 #[derive(Debug, Clone, PartialEq)]
 enum Seg {
     Field(String),
@@ -779,8 +738,8 @@ enum Seg {
     Any,
 }
 
-/// Parse `.webhooks[name="x"].rules` (leading dot optional) into segments.
-/// `None` on anything malformed.
+/// Parse a field path such as `.webhooks[name="x"].rules` (with an optional
+/// leading dot) into segments, returning `None` if malformed.
 fn parse_path(path: &str) -> Option<Vec<Seg>> {
     let mut segs = Vec::new();
     let mut rest = path.strip_prefix('.').unwrap_or(path);
@@ -812,7 +771,8 @@ fn parse_path(path: &str) -> Option<Vec<Seg>> {
     if segs.is_empty() { None } else { Some(segs) }
 }
 
-/// The paths the resource declared ceded, parsed.
+/// Parse the field paths declared in `manifest`'s `kix.run/cede-fields`
+/// annotation.
 fn ceded_fields(manifest: &Value) -> Vec<Vec<Seg>> {
     manifest
         .pointer("/metadata/annotations")
@@ -822,9 +782,8 @@ fn ceded_fields(manifest: &Value) -> Vec<Vec<Seg>> {
         .unwrap_or_default()
 }
 
-/// The field paths a 409 message names. The apiserver writes them as
-/// dot-led tokens (`conflict with "cdi-operator" using v1: .spec.versions`,
-/// one per line or comma separated when there are several).
+/// Extract the dot-prefixed field paths named in an HTTP 409 conflict message
+/// (for example, `conflict with "cdi-operator" using v1: .spec.versions`).
 fn conflict_paths(message: &str) -> Vec<String> {
     message
         .split(|c: char| c.is_whitespace() || c == ',')
@@ -833,8 +792,8 @@ fn conflict_paths(message: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether a ceded declaration covers a conflicting path: the declaration
-/// is a prefix, with `[*]` standing for any list element.
+/// Return `true` if `ceded` is a prefix of `path`, where [`Seg::Any`] (`[*]`)
+/// matches any list key or index segment.
 fn covers(ceded: &[Seg], path: &[Seg]) -> bool {
     ceded.len() <= path.len()
         && ceded.iter().zip(path).all(|(c, p)| match (c, p) {
@@ -882,9 +841,10 @@ fn remove_path(v: &mut Value, path: &[Seg]) -> bool {
     }
 }
 
-/// The manifest without the fields a 409 names, when every one of them is
-/// ceded; `None` when nothing is ceded, the message names no field, or
-/// any conflicting field is outside the declaration.
+/// Strip the conflicting fields named in `message` from `manifest` if every
+/// conflicting path is covered by `kix.run/cede-fields`. Return `None` if no
+/// fields are ceded, `message` names no field paths, or any conflicting path
+/// falls outside the ceded declaration.
 fn without_ceded_conflicts(manifest: &Value, message: &str) -> Option<Value> {
     let ceded = ceded_fields(manifest);
     if ceded.is_empty() {
@@ -904,10 +864,13 @@ fn without_ceded_conflicts(manifest: &Value, message: &str) -> Option<Value> {
     Some(stripped)
 }
 
-/// Classify a `kube::Error` from an SSA patch into the
-/// right `ApplyError` variant. 409 Conflict → `Conflict`. 422 Invalid with an
-/// immutable-field message → `ImmutableConflict`. Everything else falls
-/// through to `PatchFailed`.
+/// Classify a `kube::Error` from a server-side apply patch into the
+/// corresponding [`ApplyError`] variant.
+///
+/// Maps HTTP 409 conflicts to [`ApplyError::Conflict`], HTTP 422 stored-version
+/// errors to [`ApplyError::CrdStoredVersion`], HTTP 422 immutable-field errors
+/// to [`ApplyError::ImmutableConflict`], and all other errors to
+/// [`ApplyError::PatchFailed`].
 fn classify_apply_error(rid: &ResourceId, err: kube::Error) -> ApplyError {
     match super::errors::classify(&err) {
         FailureClass::Conflict => {
@@ -988,15 +951,12 @@ fn merge_activation_set(
     hashes.into_iter().collect::<Vec<_>>().join(",")
 }
 
-/// Write kix's bookkeeping annotations in ONE merge patch (no extra round
-/// trips): read-modify-write `kix.run/activations` (merge `activation_hash`
-/// into the comma-separated set, drop entries naming activations that no
-/// longer exist) and overwrite `kix.run/applied-hash` with the hash computed
-/// from the SSA response echo.
+/// Update Kix's bookkeeping annotations in a single merge patch: merge
+/// `activation_hash` into `kix.run/activations` (dropping entries that are not
+/// in `live_activations`) and set `kix.run/applied-hash` when provided.
 ///
-/// `live_activations`, when `Some`, is the set of identity hashes of every
-/// Activation CR currently on the cluster. `None` means the set could not be
-/// established, in which case existing activation references are retained.
+/// When `live_activations` is `None`, existing activation references are
+/// retained without pruning.
 async fn update_bookkeeping_annotations(
     api: &Api<DynamicObject>,
     name: &str,
@@ -1008,8 +968,6 @@ async fn update_bookkeeping_annotations(
     let mut live: Option<DynamicObject> = None;
 
     if let Some(activation_hash) = activation_hash {
-        // Read current annotation so we merge instead of clobbering entries
-        // written by other activations.
         let current = api.get(name).await?;
         let existing = current
             .metadata
@@ -1020,8 +978,8 @@ async fn update_bookkeeping_annotations(
 
         let merged = merge_activation_set(existing, activation_hash, live_activations);
 
-        // Nothing to say: skip the write rather than bump resourceVersion on
-        // every unchanged resource, every deploy.
+        // Skip writing when the merged set is unchanged and no new applied-hash
+        // is being recorded, avoiding unnecessary resourceVersion bumps.
         if merged != existing || applied_hash.is_some() {
             annotations.insert(keys::ACTIVATIONS.to_string(), Value::String(merged));
         }
@@ -1039,27 +997,19 @@ async fn update_bookkeeping_annotations(
         return Ok(());
     }
 
-    // These are written by merge patch, not by server-side apply, so the
-    // `kix` field manager does not own them and an apply will not drop their
-    // retired spellings. Clear those by name, in the write that is happening
-    // anyway, and only for the keys this patch actually replaces. Inert when
-    // no domain has been retired.
+    // Because bookkeeping annotations are written via merge patch rather than
+    // server-side apply, explicitly null out any retired domain keys for the
+    // annotations replaced by this patch.
     let writing: Vec<&str> = annotations.keys().map(String::as_str).collect();
     for old in crate::legacy_domain::bookkeeping_null_outs(&writing) {
         annotations.insert(old, Value::Null);
     }
 
-    // Retired build-time keys the apply could not drop.
-    //
-    // Server-side apply removes those on its own, but only where the `kix`
-    // field manager owns them. On an object whose `managedFields` are empty,
-    // which client-side `kubectl apply` leaves behind, it owns nothing: the
-    // apply adds the current spelling and the retired one stays beside it,
-    // so the domain move never finishes on that object.
-    //
-    // Only on a real apply. `applied_hash` is None on the skipped path,
-    // where the resource was not re-applied and its retired keys are the
-    // only ones it has: clearing them there would blind drift for good.
+    // On a full apply (`applied_hash.is_some()`), also null out any retired
+    // build-time annotation keys remaining on the live object (for example,
+    // from an earlier client-side `kubectl apply` where `kix` did not own the
+    // field in `managedFields`). Skip this when `applied_hash` is `None` so an
+    // unapplied resource does not lose its only identity annotations.
     if applied_hash.is_some()
         && let Some(present) = live.as_ref().and_then(|o| o.metadata.annotations.as_ref())
     {
@@ -1068,11 +1018,8 @@ async fn update_bookkeeping_annotations(
         }
     }
 
-    // Use strategic merge to update these annotations without changing Kix's
-    // server-side apply field set.
-    // Name the field manager explicitly: kube's default would record this write
-    // under manager "unknown" in managedFields, which pollutes ownership-based
-    // drift attribution.
+    // Use a merge patch with `FIELD_MANAGER` so the update does not alter Kix's
+    // server-side apply field set or record an "unknown" manager in `managedFields`.
     let patch = serde_json::json!({
         "metadata": {
             "annotations": annotations,
@@ -1393,8 +1340,6 @@ mod tests {
         assert_ne!(ApplyAction::Created, ApplyAction::Configured);
     }
 
-    // -- detect_changes_live tests --
-
     fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> DynamicObject {
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert(keys::IDENTITY_HASH.to_string(), identity_hash.to_string());
@@ -1558,12 +1503,6 @@ mod tests {
         v
     }
 
-    // -- fold_kept_closures / leaves_orphans ------------------------------
-    //
-    // The situation: a warn-only deploy of A replaced K and kept K's orphans.
-    // A is Active and lists K under `status.orphansKeptFrom`; we are about to
-    // deploy N.
-
     #[test]
     fn an_object_only_a_kept_closure_has_is_an_orphan_again() {
         let active = vec![manifest("Deployment", "web", "app", "h1")];
@@ -1633,12 +1572,6 @@ mod tests {
         assert!(!leaves_orphans(&[ns], &new));
     }
 
-    // -- fold_failed_closures --------------------------------------------
-    //
-    // The situation throughout: a deploy of closure F started, applied some of
-    // it, and died. Its record is Failed and resolvable, so F is known. The
-    // cluster is running A, and we are about to deploy N.
-
     #[test]
     fn an_object_only_the_failed_closure_has_is_an_orphan() {
         let active = vec![manifest("Deployment", "web", "app", "h1")];
@@ -1657,9 +1590,9 @@ mod tests {
 
     #[test]
     fn an_object_the_failed_deploy_may_have_changed_is_reapplied() {
-        // The repair half of #82. Reverting the config makes N identical to A,
-        // so detect_changes skips everything, but the cluster may hold F's
-        // version of `web`.
+        // When N is identical to A, detect_changes marks `web` as Skip, but if
+        // a failed deploy F had a different hash for `web`, it must be
+        // re-applied in case F overwrote the live object before aborting.
         let active = vec![manifest("Deployment", "web", "app", "h1")];
         let new = vec![manifest("Deployment", "web", "app", "h1")];
         let failed = vec![manifest("Deployment", "web", "app", "h2")];
@@ -1772,8 +1705,6 @@ mod tests {
         assert_eq!(orphan_ids(&before), orphan_ids(&after));
     }
 
-    // -- baseline_manifests ----------------------------------------------
-
     #[test]
     fn baseline_keeps_active_and_adds_only_what_is_missing() {
         let active = vec![manifest("Deployment", "web", "app", "h1")];
@@ -1821,11 +1752,9 @@ mod tests {
         assert_eq!(apply_ids(&actions), vec!["Activation/stage1-680afyh7g9kd"]);
     }
 
-    /// An unchanged build keeps the same record name and hash. It must come
-    /// out as Skip on both paths, so `total_apply == 0` and the deploy can
-    /// short-circuit on "activation identical". Removing records from the
-    /// old side before matching (the first cut of this fix) broke that: the
-    /// record was Apply on every deploy and the short-circuit was dead code.
+    /// An unchanged build keeps the same record name and hash, and must
+    /// produce `Skip` on both paths so `total_apply == 0` and the deploy can
+    /// short-circuit when the activation is identical.
     #[test]
     fn unchanged_record_is_skip_not_apply() {
         let dep = manifest("Deployment", "web", "default", "d1");
@@ -1949,8 +1878,8 @@ mod tests {
         );
     }
 
-    /// The operator strips the record from the desired side and prunes with
-    /// delete. Before #59 that made every live record an orphan.
+    /// When the operator strips the record from the desired manifest set, live
+    /// Activation records must still not be reported as orphans.
     #[test]
     fn operator_shape_live_record_is_not_an_orphan() {
         let desired = vec![manifest("Deployment", "web", "default", "d1")];

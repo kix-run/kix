@@ -1,35 +1,29 @@
 //! The closures a plan compares against.
 //!
 //! A deploy or a rollback decides what to do by comparing compiler outputs:
-//! the closure it is about to apply, and the closure the cluster is already
-//! running. That second one comes from the Active Activation record.
+//! the closure it is about to apply and the closure the cluster is already
+//! running. That second closure comes from the Active Activation record.
 //!
-//! It is not the whole story. A deploy that stops part way applies some of its
-//! closure and never becomes Active, so its leftovers are described by neither
-//! side and the next plan cannot see them (kixpkgs#82). Since the record is
-//! now created before the first wave and marked `Failed` when the run stops,
-//! those closures can be recovered by hash and folded in.
+//! A deploy that stops partway applies some of its closure without becoming
+//! Active, so neither side of a two-way comparison describes its leftovers.
+//! Because the record is created before the first wave and marked `Failed`
+//! when the run stops, those closures can be recovered by hash and folded in.
 //!
 //! A deploy that keeps its orphans (warn-only, the default) leaves the same
-//! kind of hole: the next plan compares against the new record only, and the
-//! build that still knew about those objects is gone from the comparison. The
-//! record therefore names those builds under `status.orphansKeptFrom`, and
-//! [`load_kept`] resolves them the same way.
+//! gap: the next plan compares against the new record only, and the build that
+//! knew about those objects is no longer Active. The record therefore names
+//! those builds under `status.orphansKeptFrom`, and [`load_kept`] resolves
+//! them the same way.
 //!
 //! Everything here resolves a record to a closure in the local store. Nothing
-//! reads the cluster's objects, except `Baseline::of_cluster` when the
-//! Active record's build is not on this machine: the kix invariant is that
-//! live state is consulted to execute and to observe, never to decide
-//! (`v2_discussions/81_deploy_as_lifecycle_engine.md`, "Closure A to closure
-//! B"). Listing the records is a read of our own bookkeeping, not of the
-//! objects being reasoned about.
+//! reads the cluster's objects except `Baseline::of_cluster` when the Active
+//! record's build is not on this machine. Listing the records reads Kix's own
+//! bookkeeping rather than the managed objects.
 //!
-//! When the Active build is read from the cluster, so are the failed and
-//! kept builds: the sweep already lists every object that names them, and
-//! for a prune that is all a build is consulted for. A machine that built
-//! none of a cluster's deploys (every build came from CI) can then still
-//! consume its Failed records and shorten its kept list, instead of carrying
-//! both forward and warning about each entry on every deploy.
+//! When the Active build is read from the cluster, the failed and kept builds
+//! are read from the same sweep. A machine that built none of a cluster's
+//! deploys (for example, when every build came from CI) can still consume its
+//! Failed records and shorten its kept list instead of carrying both forward.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -85,7 +79,7 @@ pub(crate) enum ActiveSource {
 }
 
 impl Baseline {
-    /// No previous build: a first deploy.
+    /// Return an empty baseline for a first deploy.
     pub(crate) fn empty() -> Baseline {
         Baseline {
             active: None,
@@ -96,19 +90,19 @@ impl Baseline {
         }
     }
 
-    /// The Active record the plan compares against. `None` on a first
-    /// deploy.
+    /// Return the Active record that the plan compares against, or `None` on
+    /// a first deploy.
     pub fn active(&self) -> Option<&Record> {
         self.active.as_ref()
     }
 
-    /// The closures of the deploys that stopped part way, and the records
+    /// Return the closures of deploys that stopped partway and the records
     /// to supersede once the run finalizes.
     pub fn failed(&self) -> &FailedBaseline {
         &self.failed
     }
 
-    /// The Active record's build, when this machine has it.
+    /// Return the Active record's build when present on this machine.
     pub fn active_graph(&self) -> Option<&StoreGraph> {
         match &self.source {
             ActiveSource::Build(graph) => Some(graph.as_ref()),
@@ -116,13 +110,13 @@ impl Baseline {
         }
     }
 
-    /// The Active record's identity hash.
+    /// Return the Active record's identity hash.
     pub fn active_hash(&self) -> Option<&str> {
         self.active.as_ref()?.identity_hash.as_deref()
     }
 
-    /// The Active closure with the failed and kept ones merged in. The plan
-    /// display and the prune ordering both need a manifest for an object
+    /// Return the Active closure with the failed and kept closures merged in.
+    /// Both the plan display and prune ordering need a manifest for any object
     /// that exists only in a failed or kept closure.
     pub fn manifests(&self) -> Vec<Value> {
         apply::baseline_manifests(
@@ -135,9 +129,9 @@ impl Baseline {
         )
     }
 
-    /// The manifests of every build the cluster ran: the Active closure and
-    /// the failed and kept ones, unmerged. A write of one of their files is a
-    /// re-apply (see [`super::objects`]).
+    /// Return an iterator over the manifests of every build the cluster ran
+    /// (Active, failed, and kept) without merging. Writing one of their files
+    /// is a re-apply (see [`super::objects`]).
     pub(crate) fn ran(&self) -> impl Iterator<Item = &Value> {
         self.active_manifests
             .iter()
@@ -145,11 +139,10 @@ impl Baseline {
             .chain(self.kept.closures.iter().flatten())
     }
 
-    /// The old side of the package diff for `new`: the Active build when
-    /// this machine has it. Without it, the manifests the plan compares
-    /// against, grouped by their package stamps, so untouched packages show
-    /// as unchanged instead of everything added. With nothing standing in
-    /// for the Active build, an empty build: the engine applies every object.
+    /// Return the old side of the package diff for `new`. Uses the Active
+    /// build when present on this machine, or synthesizes a graph from the
+    /// baseline manifests so untouched packages show as unchanged. Returns an
+    /// empty graph when no Active closure is available.
     pub(crate) fn diff_side(&self, new: &StoreGraph) -> Cow<'_, StoreGraph> {
         let empty = || Cow::Owned(StoreGraph::empty(&new.cluster_name));
         match &self.source {
@@ -166,18 +159,14 @@ impl Baseline {
         }
     }
 
-    /// The change for each object of `new_manifests` and each orphan:
-    /// `new_manifests` against the Active closure, then what the failed
-    /// deploys may have left and the orphans kept deploys left, then
-    /// `reconcile`. The folds can turn a Skip into an Apply (repair) and can
-    /// add orphans (prune); they never invent a change the closures do not
-    /// justify.
+    /// Compute the change action for each object of `new_manifests` and each
+    /// orphan. Compares `new_manifests` against the Active closure, folds in
+    /// failed and kept closures, and applies `reconcile`.
     ///
-    /// Only the Active closure is compared. Folding a failed closure into the
-    /// old side would make an object that a failed deploy declared but never
-    /// created read as already present; if the new build declares it at the
-    /// same hash, the plan would skip it and the run would finalize claiming
-    /// an object that is not there.
+    /// Only the Active closure is compared directly. Folding a failed closure
+    /// into the old side would make an object that a failed deploy declared
+    /// but never created appear already present; if the new build declared it
+    /// at the same hash, the plan would skip it.
     pub(crate) fn changes(&self, new_manifests: &[Value], reconcile: bool) -> Vec<ChangeAction> {
         let actions = apply::fold_kept_closures(
             apply::fold_failed_closures(
@@ -207,18 +196,14 @@ impl Baseline {
             .collect()
     }
 
-    /// What the record a plan of `new_manifests` finalizes lists under
-    /// `status.orphansKeptFrom`: every build the plan compared against (the
-    /// Active one, folded-in failed ones, kept ones) that still has something
-    /// prune would delete, and every kept source this machine could not
-    /// resolve. See [`activation::KeptOrphans`] for which of them finalize
-    /// writes.
+    /// Compute the [`activation::KeptOrphans`] for `status.orphansKeptFrom`
+    /// when a plan of `new_manifests` finalizes. Includes every compared build
+    /// (Active, folded-in failed, and kept) that still leaves orphans, plus
+    /// every kept source this machine could not resolve.
     ///
-    /// A rollback whose current build this machine cannot read
-    /// ([`ActiveSource::Unavailable`]) cannot tell what that build leaves
-    /// behind, so the current record is listed as unexamined: the new
-    /// record keeps naming it, and a later prune that can read it removes
-    /// its objects.
+    /// When a rollback's current build cannot be read on this machine
+    /// ([`ActiveSource::Unavailable`]), the current record is listed as
+    /// unexamined so a later prune can still remove its objects.
     pub(crate) fn orphans_kept_from(&self, new_manifests: &[Value]) -> activation::KeptOrphans {
         let active_source = self.active.as_ref().and_then(|a| {
             Some(KeptOrphanSource {
@@ -272,11 +257,11 @@ impl Baseline {
         }
     }
 
-    /// The baseline under `--current-activation`, which does not connect:
-    /// the build the local activation cache names for `cluster`, as the
-    /// Active record. It has no `orphansKeptFrom` and no failed records, so
-    /// orphans kept by earlier deploys are not in its plan; finalize carries
-    /// the real record's list forward instead.
+    /// Build the baseline under `--current-activation` from the local
+    /// activation cache for `cluster` without connecting to the cluster.
+    /// Because the cache has no `orphansKeptFrom` or failed records, orphans
+    /// kept by earlier deploys are omitted from the plan and carried forward
+    /// from the live record on finalize.
     pub(crate) fn of_cache(cluster: &str, report: &dyn Fn(PlanEvent<'_>)) -> Baseline {
         let Some(dir) = crate::eval::store::load_activation_path(cluster) else {
             report(PlanEvent::NoCachedBuild);
@@ -307,12 +292,10 @@ impl Baseline {
         }
     }
 
-    /// The baseline of a plan of `build` against the cluster `client` reaches:
-    /// the Active record's build (`build`'s copy, then `built_via`, then the
-    /// local cache), or when this machine has none of them, the record's
-    /// objects as the cluster holds them; the builds its `orphansKeptFrom`
-    /// names; and every Failed record's build, unless another deploy of the
-    /// cluster is in flight.
+    /// Build the baseline for `build` against the cluster reached by `client`.
+    /// Resolves the Active record's build locally (or reconstructs it from
+    /// live cluster objects), resolves `orphansKeptFrom`, and resolves Failed
+    /// records unless another deploy is in flight.
     pub(crate) async fn of_cluster(
         client: &Client,
         build: &Build,
@@ -375,10 +358,10 @@ impl Baseline {
             baseline.kept = load_kept(active, Some(build), cluster, report, live.as_ref());
         }
 
-        // Closures from deploys that stopped part way. They applied objects
-        // and never became Active, so neither side of the comparison knows
-        // about them (kixpkgs#82). Resolved from the local store by hash, or
-        // from the sweep when the Active build was.
+        // Closures from deploys that stopped partway. Because they applied
+        // objects without becoming Active, neither side of a two-way
+        // comparison knows about them. Resolve them from the local store by
+        // hash, or from the live sweep when the Active build was read live.
         if let Some(records) = opened.records() {
             baseline.failed =
                 load_failed_unless_in_flight(records, Some(build), cluster, report, live.as_ref())
@@ -387,13 +370,9 @@ impl Baseline {
         Ok(baseline)
     }
 
-    /// The baseline of a rollback of `cluster`, which runs `current`: the
-    /// current record's build from this machine (`built_via`, else the local
-    /// cache), or nothing when it will not load; the builds its
-    /// `orphansKeptFrom` names; and every Failed record's build, unless
-    /// another deploy is in flight. A rollback is the most likely thing to
-    /// run straight after a deploy that stopped part way, and its baseline
-    /// has exactly the same hole as a deploy's.
+    /// Build the baseline for a rollback of `cluster` from `current`.
+    /// Resolves `current`'s build locally, resolves `orphansKeptFrom`, and
+    /// resolves Failed records unless another deploy is in flight.
     pub async fn of_record(
         records: &Records,
         cluster: &str,
@@ -480,10 +459,9 @@ pub struct KeptBaseline {
     pub unresolved: Vec<KeptOrphanSource>,
 }
 
-/// [`load_failed`], unless another deploy of `cluster` looks like it is
-/// still running ([`deploy_in_flight`]): that deploy would be applying the
-/// very objects this plan might prune, so its work is left alone rather than
-/// guessing which of the two is real.
+/// Call [`load_failed`] unless another deploy of `cluster` is still running
+/// ([`deploy_in_flight`]). When another deploy is in flight, leave its
+/// objects alone rather than pruning work it is still applying.
 async fn load_failed_unless_in_flight(
     records: &Records,
     build: Option<&Build>,
@@ -611,12 +589,10 @@ pub fn load_kept(
     out
 }
 
-/// What a live reconstruction found of each build other than the Active
-/// one: the swept objects that name the build in `kix.run/activations` and
-/// do not name the Active build, as kix-owned manifests. An object the
-/// Active build also names is in the Active closure already; what is left
-/// is what that build alone keeps on the cluster, which is what a prune
-/// asks a failed or kept build about.
+/// Objects from a live reconstruction that belong to builds other than the
+/// Active one. Holds the swept objects that name each build in
+/// `kix.run/activations` without naming the Active build, projected as
+/// Kix-owned manifests.
 #[derive(Debug, Default)]
 pub struct LiveClosures {
     by_hash: HashMap<String, Vec<Value>>,
@@ -640,16 +616,14 @@ impl LiveClosures {
         LiveClosures { by_hash }
     }
 
-    /// The objects only `identity_hash` keeps on the cluster. Empty when
-    /// nothing names it any more, which resolves the build to nothing left.
+    /// Return the objects that only `identity_hash` keeps on the cluster.
     pub fn closure_of(&self, identity_hash: &str) -> Vec<Value> {
         self.by_hash.get(identity_hash).cloned().unwrap_or_default()
     }
 }
 
-/// The result dir of the build of `identity_hash` on this machine, found and
-/// checked as [`record_graph`] finds and checks it. `Err` says why a build
-/// that was found is not that build.
+/// Return the result directory of the build matching `identity_hash` on this
+/// machine, validated by [`record_graph`].
 fn checked_dir(
     cluster: &str,
     identity_hash: &str,
@@ -658,17 +632,13 @@ fn checked_dir(
     record_graph(None, cluster, identity_hash, built_via).map(|g| g.map(|g| g.result_dir))
 }
 
-/// The result dir of the build the Active record `active` names, for a plan
-/// that uses it as the old state, with a warning to print when the local
-/// activation cache was set aside.
+/// Return the result directory of the build named by `active`, along with a
+/// warning when the local activation cache was ignored.
 ///
-/// The cache (`store::load_activation_path`) is keyed by cluster name alone,
-/// so it can hold the build another kube context deployed under the same
-/// name. It is used only when its identity hash is the Active record's.
-/// Otherwise the build comes from the record (`built_via`, else the store by
-/// hash), used only when it is the record's ([`record_graph`]); the warning
-/// then says why one that was found is not. With no Active record there is
-/// no old build.
+/// Because `store::load_activation_path` is keyed by cluster name alone, it
+/// can hold a build that another kube context deployed under the same cluster
+/// name. The cached path is used only when its identity hash matches `active`.
+/// Otherwise, the build is resolved from `active` via [`record_graph`].
 pub fn active_build_dir(
     cluster: &str,
     cached: Option<PathBuf>,
@@ -677,7 +647,7 @@ pub fn active_build_dir(
     active_build_dir_with(cluster, cached, active, checked_dir)
 }
 
-/// [`active_build_dir`], with `find` in place of [`checked_dir`].
+/// Run [`active_build_dir`] using `find` in place of [`checked_dir`].
 fn active_build_dir_with(
     cluster: &str,
     cached: Option<PathBuf>,
@@ -724,14 +694,12 @@ fn short(hash: &str) -> &str {
     &hash[..8.min(hash.len())]
 }
 
-/// The build an Activation record names, stamped: from the new `build`
-/// (`Build::deployed_build`) by its identity hash, else from `built_via`
-/// or the local activation cache. `Ok(None)` when this machine has none of
-/// them.
+/// Load the stamped build named by an Activation record from `build`,
+/// `built_via`, or the local activation cache. Returns `Ok(None)` when none of
+/// those sources are present on this machine.
 ///
-/// A build from `built_via` must be the build the record names: it is
-/// written by whoever deployed, so a record could point at any store path
-/// on this machine.
+/// Because `built_via` is written by whoever deployed, the loaded build is
+/// verified against `identity_hash`.
 pub fn record_graph(
     build: Option<&Build>,
     cluster: &str,
@@ -752,10 +720,8 @@ pub fn record_graph(
     )
 }
 
-/// The build a rollback returns to, the record `name` with `identity_hash`
-/// and `built_via`, found and checked as [`record_graph`] does. A build that
-/// is not on this machine is refused as `kix rollback` words it; the other
-/// refusals are `record_graph`'s.
+/// Load the target build for a rollback to record `name`, verified by
+/// [`record_graph`].
 pub fn target_build(
     cluster: &str,
     name: &str,
@@ -770,18 +736,15 @@ pub fn target_build(
     })
 }
 
-/// Load the build in a result dir, stamped. A record's build can predate
-/// the domain move, so it is not refused for one ([`Build::installable`]).
+/// Load the build in a result directory with stamps applied. A record's build
+/// can predate a domain move, so it is not checked with [`Build::installable`].
 fn load_build(dir: &Path) -> Result<StoreGraph, crate::eval::KixEvalError> {
     Build::local(dir, &|_| {}).map(Build::into_graph)
 }
 
-/// The first of `built_via` and the cached build (`cached`) that loads and
-/// is the build `identity_hash` names. The cache is tried when `built_via`
-/// is absent, will not load, or holds another build, so a path reused for
-/// another build does not hide the record's own build on this machine.
-/// When neither is the record's build, the refusal is `built_via`'s: the
-/// build there will not load, or is another activation.
+/// Load the first of `built_via` and `cached` that loads and matches
+/// `identity_hash`. Falls back to `cached` when `built_via` is absent, fails
+/// to load, or holds a different build.
 fn checked_build(
     identity_hash: &str,
     built_via: Option<PathBuf>,
@@ -816,10 +779,9 @@ fn checked_build(
     }
 }
 
-/// The stamped manifests of a build, from `build`, from `built_via` when
-/// that store path is on this machine, else through the local activation
-/// cache by identity hash. `Ok(None)` when none is available, and an error
-/// when one is but will not load.
+/// Resolve the stamped manifests of a build from `build`, `built_via`, or the
+/// local activation cache by identity hash. Returns `Ok(None)` when none of
+/// those sources are present locally, or `Err` when a found build fails to load.
 fn resolve_closure(
     build: Option<&Build>,
     cluster: &str,
@@ -837,11 +799,9 @@ fn manifests_of(graph: &StoreGraph) -> Vec<Value> {
         .collect()
 }
 
-/// Keep a Nix GC root for every build `recorded` lists that this machine
-/// can resolve and is that build ([`record_graph`]), and drop the roots of
-/// builds it no longer lists. A listed
-/// build that loses its store path cannot be read by the next plan, so its
-/// orphans would be carried unexamined until `kix gc --hard`.
+/// Keep a Nix GC root for every build in `recorded` that resolves locally and
+/// matches its hash ([`record_graph`]), and drop roots for builds no longer
+/// listed.
 pub fn sync_kept_roots(cluster: &str, recorded: &[KeptOrphanSource]) {
     let listed: Vec<(String, Option<PathBuf>)> = recorded
         .iter()
@@ -855,25 +815,17 @@ pub fn sync_kept_roots(cluster: &str, recorded: &[KeptOrphanSource]) {
     crate::eval::store::sync_kept_roots(cluster, &listed);
 }
 
-/// Whether another deploy of this cluster looks like it is still running, in
-/// which case the failed closures must not be folded in.
+/// Return a `Deploying` record for `cluster` if another CLI deploy appears to
+/// be running.
 ///
 /// A `Deploying` record is either a live deploy or one whose process died
-/// before it could mark itself `Failed`, and nothing here can tell those
-/// apart. The difference matters in one direction only: folding in a closure
-/// that another machine is still applying could prune objects out from under
-/// it. So this does not refuse, it drops the fold, which leaves the plan
-/// exactly as it was before any of this existed. A wrong guess costs the user
-/// one deploy that does not reconcile the leftovers, not a command they
-/// cannot run.
+/// before it could mark itself `Failed`. Because folding in a closure that
+/// another machine is still applying could prune objects out from under it,
+/// callers skip folding failed closures when a `Deploying` record is present
+/// rather than blocking the command.
 ///
-/// Refusing outright was the first shape of this and it was worse: a deploy
-/// killed with SIGKILL leaves a `Deploying` record forever, and every deploy
-/// and rollback of that cluster would have been blocked behind a manual
-/// `kubectl patch`.
-///
-/// Operator-driven records are ignored. Those belong to the controller, which
-/// resumes them itself.
+/// Operator-driven records are ignored because the controller resumes them
+/// itself.
 async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
     match records.deploying(cluster).await {
         Ok(found) => found.into_iter().find(|record| !record.operator_driven),
@@ -886,28 +838,21 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
 
 /// Reconstruct the previous deploy's manifest set from live cluster state.
 ///
-/// Fallback for when the old activation's store path is gone (garbage-
-/// collected, or the deploy came from another machine). Every kix-managed
-/// resource carries the identity-hash and depends-on annotations that
-/// change detection and prune ordering read, so live objects projected
-/// back to manifests substitute for the old store graph. Activation CRs
-/// are excluded: their lifecycle is supersede-managed, never prune (same
-/// policy as the operator's reconcile).
+/// Used when the old activation's store path is not present locally. Every
+/// Kix-managed resource carries the `identity-hash` and `depends-on`
+/// annotations that change detection and prune ordering read, so live objects
+/// projected back to manifests can stand in for the old store graph.
+/// Activation CRs are excluded because their lifecycle is managed by
+/// superseding rather than pruning.
 ///
-/// Only objects naming the Active record, a Failed record of this cluster,
-/// or a build the Active record lists under `status.orphansKeptFrom`: the
-/// closures the store-graph path would read. Objects of other Kix clusters
-/// on the same Kubernetes cluster name none of these, so they never become
-/// orphans. This cluster's objects that name only older builds are left out
-/// too, and [`PlanEvent::OlderBuildsLeftOut`] says how many.
+/// Includes only objects naming the Active record, a Failed record of this
+/// cluster, or a build listed under `status.orphansKeptFrom`. Objects of other
+/// Kix clusters on the same Kubernetes cluster name none of these, so they
+/// never become orphans. Objects of this cluster that name only older builds
+/// are excluded and reported via [`PlanEvent::OlderBuildsLeftOut`].
 ///
-/// A failed sweep is an error, not an empty previous state. Planning
-/// against an empty old set would show every resource as "added" and,
-/// with `--prune`, would compute no orphans at all: a plan that looks
-/// plausible and is wrong.
-///
-/// Returns the manifests, and the same objects grouped by the other builds
-/// they name ([`LiveClosures`]) for `load_kept` and `load_failed`.
+/// Returns an error if the sweep fails so the planner never falls back to an
+/// empty baseline when the apiserver is unhealthy.
 async fn of_live(
     client: &Client,
     opened: &OpenedRecords,
@@ -988,8 +933,8 @@ mod tests {
         }
     }
 
-    /// The baseline of a cluster that runs `closure` under the record
-    /// `active`, with `failed` and `kept` folded in.
+    /// Build a test baseline running `closure` under `active`, with `failed`
+    /// and `kept` folded in.
     fn baseline(
         active: Record,
         closure: Vec<Value>,
@@ -1089,7 +1034,7 @@ mod tests {
         assert_eq!(names(&got.found), vec!["f1"]);
     }
 
-    /// A result dir whose `activation` link names build `hash`.
+    /// Create a result directory whose `activation` symlink points to `hash`.
     fn result_dir_of(root: &std::path::Path, hash: &str) -> PathBuf {
         let dir = root.join(hash);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1198,10 +1143,10 @@ mod tests {
         })
     }
 
-    /// The previous state of `a`, rebuilt from live objects, is the closures
-    /// of its Active record, its Failed record and the build its Active
-    /// record kept orphans from. Leftovers of a Superseded build, and every
-    /// object only `b` deploys, are not in it.
+    /// The previous state of `a`, rebuilt from live objects, contains the
+    /// closures of its Active record, its Failed record, and the build its
+    /// Active record kept orphans from. Leftovers of a Superseded build and
+    /// objects that only `b` deploys are excluded.
     #[tokio::test]
     async fn the_previous_state_is_the_active_failed_and_kept_closures() {
         let api = FakeApi::new([
@@ -1302,10 +1247,9 @@ mod tests {
         );
     }
 
-    /// A rollback whose current build will not load, with a Failed record
-    /// whose build will not load either. Both records name a result
-    /// directory that is not a build, so neither is looked up in this
-    /// machine's activation cache.
+    /// Build a rollback baseline whose current and failed builds both fail to
+    /// load. Both records point to a result directory that is not a valid
+    /// build, so neither falls back to this machine's activation cache.
     async fn rollback_baseline(extra: Value) -> (Baseline, Vec<String>) {
         let cluster = "of-record-test";
         let dir = tempfile::tempdir().unwrap();

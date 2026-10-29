@@ -1,15 +1,13 @@
-//! The deploy log: what `kix deploy --log-format json` prints, one [`Line`]
-//! of JSON per [`DeployEvent`], then one `summary` line.
+//! JSON deploy log emitted by `kix deploy --log-format json`.
 //!
-//! Programs read this log, so its shape is a contract. The JSON Schema of
-//! [`Line`] is committed at `kix-cli/schema/deploy-log.schema.json`, beside
-//! the CLI that prints the log; a test there fails when the type and the file
-//! disagree. Set [`SCHEMA_VERSION`] to the day's date when a change is not
-//! backward compatible: a field removed or renamed, or a value's meaning
-//! changed.
+//! Each [`DeployEvent`] produces one JSON [`Line`], followed by a final
+//! `summary` line. The JSON Schema for [`Line`] is committed at
+//! `kix-cli/schema/deploy-log.schema.json` and checked by a test. Update
+//! [`SCHEMA_VERSION`] to the current date when making a breaking change (such
+//! as removing or renaming a field, or changing a value's meaning).
 //!
-//! These types mirror the events rather than serialize them directly, so the
-//! events can change without the log changing by accident.
+//! These types mirror [`DeployEvent`] rather than serializing it directly so
+//! internal event changes do not alter the log format.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20,16 +18,15 @@ use super::stream::{
 };
 use crate::manifest::types::ResourceId;
 
-/// Version of the log's shape: the date, `YYYY-MM-DD`, of its last change
-/// that was not backward compatible. Readers should refuse a version they
-/// do not know.
+/// Schema version (`YYYY-MM-DD`) of the last breaking change to the log format.
+/// Readers should reject versions they do not recognize.
 pub const SCHEMA_VERSION: &str = "2026-10-09";
 
 /// One line of the log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Line {
-    /// The date, `YYYY-MM-DD`, of the log shape's last change that was not
-    /// backward compatible. On every line, so each line can be read alone.
+    /// Schema version (`YYYY-MM-DD`), included on every line so lines can be
+    /// parsed independently.
     pub schema_version: String,
     /// Milliseconds since the deploy started.
     pub elapsed_ms: u64,
@@ -38,9 +35,8 @@ pub struct Line {
 }
 
 impl Line {
-    /// The line for `event`, `elapsed_ms` into the run. `None` for readiness
-    /// progress, which the log leaves out: it reports each node's outcome,
-    /// not every poll on the way.
+    /// Build the log line for `event` at `elapsed_ms` into the run. Returns
+    /// `None` for intermediate readiness progress polls.
     pub fn of(event: &DeployEvent, elapsed_ms: u64) -> Option<Line> {
         Some(Line {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -49,8 +45,8 @@ impl Line {
         })
     }
 
-    /// The run's last line, in place of the text summary line. `succeeded`
-    /// matches the exit status.
+    /// Build the final summary line of the run. `succeeded` matches the process
+    /// exit status.
     pub fn summary(r: &DeployResult, dry_run: bool, succeeded: bool, elapsed_ms: u64) -> Line {
         Line {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -87,9 +83,10 @@ pub enum Event {
     },
     /// CRDs were applied, so API discovery ran again.
     CrdRediscovery,
-    /// The orphans: `resources` may be deleted, in prune order, and `count`
-    /// is how many. `delete` says whether this run deletes them or only
-    /// reports them. `kept` are orphans no prune policy deletes.
+    /// Start of orphan pruning. `resources` lists orphans in prune order,
+    /// `count` is `resources.len()`, `delete` indicates whether this run
+    /// deletes or only reports them, and `kept` lists orphans retained by
+    /// prune policy.
     PruneStart {
         count: usize,
         delete: bool,
@@ -103,7 +100,7 @@ pub enum Event {
         activation: String,
         previous: Option<String>,
     },
-    /// The run stopped: cancelled, or halted at a failure.
+    /// The run stopped due to cancellation or a failure.
     Stopped { reason: String },
     /// Nothing has happened for `idle_ms`. `aborting` is true on the last
     /// one, when the run gives up.
@@ -387,7 +384,8 @@ impl State {
 }
 
 impl Detail {
-    /// `None` for `ReadinessProgress`, which the log leaves out.
+    /// Convert `detail` into its log representation, or return `None` for
+    /// `ReadinessProgress`.
     fn of(detail: &NodeDetail) -> Option<Detail> {
         Some(match detail {
             NodeDetail::Applied(action) => Detail::Applied(action.clone()),

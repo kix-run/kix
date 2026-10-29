@@ -3,30 +3,30 @@
 //! Every apiserver call and every other piece of I/O the deploy engine
 //! performs goes through three seams:
 //!
-//! - `ResourceIo`: the objects of the plan. Apply, read, recreate, wait
-//!   for readiness, refresh discovery, prune.
-//! - `DeployRecord`: the engine's view of the run's Activation record.
-//!   Begin, checkpoint, stamp unchanged objects, abort, finalize. Built on
+//! - `ResourceIo` manages the objects of the plan (apply, read, recreate, wait
+//!   for readiness, refresh discovery, and prune).
+//! - `DeployRecord` manages the engine's view of the run's Activation record
+//!   (begin, checkpoint, stamp unchanged objects, abort, and finalize), built on
 //!   `activation::Records`.
-//! - `SecretHydrator`: decrypt SOPS-backed Secret data before an apply.
+//! - `SecretHydrator` decrypts SOPS-backed Secret data before an apply.
 //!
-//! A run reaches them through one `Cluster`. Its implementations:
+//! A run reaches them through one `Cluster`, which has three implementations:
 //!
-//! - `KubeResources`, `ActivationRecord` and `SopsHydrator` work
+//! - `KubeResources`, `ActivationRecord`, and `SopsHydrator` operate
 //!   against a real cluster. `resources.rs` is the only file in the engine
-//!   that knows `kube::Api`.
+//!   that uses `kube::Api`.
 //! - `DryRun` wraps `KubeResources` and `SopsHydrator` and sends every
 //!   write with `dryRun=All`, journaling what the apiserver answered. A dry
-//!   run has no record. Whether a run is dry is decided here, by which
-//!   `Cluster` constructor made it, and nowhere else.
+//!   run has no record. Whether a run is dry is decided by which
+//!   `Cluster` constructor created it.
 //! - `scripted::ScriptedOps` is the fake the engine's tests run against.
-//!   Its calls do not complete on their own: a test scripts each one to
-//!   complete now, after a virtual delay, when the test releases a gate, or
-//!   never. That is what makes a parked future visible to a test.
+//!   Each call is scripted to complete immediately, after a virtual delay,
+//!   when the test opens a gate, or never, making parked futures visible to
+//!   tests.
 //!
 //! The engine never sees an `ApiResource`. Kind resolution, discovery
-//! refresh and the Activation record's writes live behind the seams, so
-//! `run_deploy` is about ordering, admission and verdicts and nothing else.
+//! refresh, and the Activation record's writes live behind these seams, so
+//! `run_deploy` handles only ordering, admission, and verdicts.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,15 +79,15 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// Server-side apply one manifest, resolving its kind from discovery.
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError>;
 
-    /// Read the live object, `Ok(None)` when there is none. A read even
-    /// under dry run.
+    /// Read the live object, returning `Ok(None)` when absent. Performs a real
+    /// read even during a dry run.
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError>;
 
-    /// Delete the live object, wait for it to go, re-apply. Called after an
-    /// immutable-field conflict when the engine has pre-authorized the
-    /// delete (the rid is in the orphan set), and for a live resource that
+    /// Delete the live object, wait for it to disappear, and re-apply. Called
+    /// after an immutable-field conflict when the engine has pre-authorized the
+    /// delete (the resource is in the orphan set), and for a live resource that
     /// carries `kix.run/rerun` and must run again. A missing object is not
-    /// an error; an object still present after the wait is.
+    /// an error, whereas an object still present after the wait is.
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError>;
 
     /// Wait for the object (or, for an import marker, the object it
@@ -101,11 +101,11 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
         on_status: OnStatus<'_>,
     ) -> Result<ReadinessResult, ReadinessError>;
 
-    /// Refresh discovery after CRDs landed. An error stops the run: a stale
-    /// discovery view is a partial view (rule from kixpkgs#60).
-    /// [`KubeResources`] first waits out listed group versions that answer
-    /// 404 (`discovery::discover_resources`), so an error here means discovery
-    /// did not settle within `discovery::DISCOVERY_SETTLE` or failed outright.
+    /// Refresh discovery after CRDs land. An error stops the run because a stale
+    /// discovery view is a partial view. [`KubeResources`] first waits out listed
+    /// group versions that answer 404 (`discovery::discover_resources`), so an
+    /// error here means discovery did not settle within
+    /// `discovery::DISCOVERY_SETTLE` or failed outright.
     async fn rediscover(&self) -> Result<(), FetchError>;
 
     /// Delete an orphan, unless another Kix cluster still deploys it or it
@@ -115,32 +115,31 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
 
 /// The run's Activation record, as the engine writes it.
 ///
-/// Every method is best-effort from the engine's point of view: it reports
-/// a failure as a `BestEffortFailed` event and carries on, except that a
+/// Every method is best-effort from the engine's point of view. The engine
+/// reports a failure as a `BestEffortFailed` event and continues, except that a
 /// failed [`DeployRecord::finalize`] means the run did not succeed. The
-/// engine bounds each call in time; [`ActivationRecord`] also bounds its
-/// checkpoint, abort and finalize with a shorter limit of its own.
+/// engine bounds each call in time, and [`ActivationRecord`] also bounds its
+/// checkpoint, abort, and finalize with a shorter limit of its own.
 /// [`DeployRecord::discovery_refreshed`] runs inside the discovery refresh,
-/// which the watchdog watches.
+/// which the watchdog monitors.
 #[async_trait]
 pub(crate) trait DeployRecord: Send + Sync + 'static {
-    /// Start of run. Creates the Activation record, marks it Deploying, and
-    /// reads the set of live Activations used to prune `kix.run/activations`.
-    /// Nothing is in flight yet, so the engine may await this inline.
+    /// Create the Activation record, mark it `Deploying`, and read the set of
+    /// live Activations used to prune `kix.run/activations`. Nothing is in
+    /// flight yet, so the engine may await this inline.
     ///
-    /// The record is created here rather than only as the last node of the
-    /// plan so that a run which stops part way still leaves something that
-    /// says what it was attempting (kixpkgs#82). On a cluster's first deploy
-    /// the record's own CRD is not served yet, so the implementation may
-    /// defer the create to [`DeployRecord::discovery_refreshed`].
+    /// Creating the record before the first node ensures that a run stopping
+    /// midway still leaves a record of what it attempted. On a cluster's first
+    /// deploy, the record's own CRD is not served yet, so the implementation
+    /// may defer creation to [`DeployRecord::discovery_refreshed`].
     ///
-    /// An error stops the run before its first node: there is a record to
-    /// write and it cannot be written ([`RecordWriteError::Domain`]).
+    /// Returns an error to stop the run before its first node when a record is
+    /// configured but cannot be written ([`RecordWriteError::Domain`]).
     async fn begin(&self) -> Result<(), RecordWriteError>;
 
-    /// Discovery was refreshed after CRDs landed. On a cluster's first
-    /// deploy this is the first moment the Activation CRD is established,
-    /// so a create deferred by [`DeployRecord::begin`] happens here.
+    /// Retry creating a pending Activation record after CRD discovery refreshes.
+    /// On a cluster's first deploy, this is the first moment the Activation CRD
+    /// is established.
     async fn discovery_refreshed(&self);
 
     /// Record progress. `applied` and `failed` are running totals.
@@ -155,15 +154,15 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// because it was unchanged.
     async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError>;
 
-    /// The run is ending without finalizing: cancelled, stopped on a failed
-    /// node, discovery broke, or a task panicked. Marks the record Failed so
-    /// the next deploy can see that this closure was partially applied.
-    /// Called at most once, and only after [`DeployRecord::begin`].
+    /// Mark the Activation record `Failed` when the run ends without finalizing
+    /// (cancelled, stopped on a failed node, discovery failed, or a task
+    /// panicked) so the next deploy can see that this closure was partially
+    /// applied. Called at most once, and only after [`DeployRecord::begin`].
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError>;
 
-    /// Finalize the Activation lifecycle: new one Active (or Degraded), old
-    /// one Superseded. `Ok(None)` when there is no Activation to finalize
-    /// (no name configured, CRD absent).
+    /// Finalize the Activation lifecycle by marking the new record Active (or
+    /// Degraded) and the old one Superseded. Returns `Ok(None)` when there is
+    /// no Activation to finalize (no name configured or CRD absent).
     ///
     /// `orphans_left` is true when the run reported orphans it did not delete
     /// (warn-only, skip, or a failed delete), so the record must keep naming
@@ -181,9 +180,8 @@ pub(crate) trait SecretHydrator: Send + Sync + 'static {
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError>;
 }
 
-/// The cluster as one run of the engine reaches it. Made only by the
-/// constructors below, so a run is either a real one with a record or a
-/// dry one without.
+/// The cluster interface used by a single deploy run. Constructed either as a
+/// live cluster with an Activation record or as a dry run without one.
 pub(crate) struct Cluster {
     resources: Arc<dyn ResourceIo>,
     secrets: Arc<dyn SecretHydrator>,
@@ -192,9 +190,7 @@ pub(crate) struct Cluster {
 }
 
 impl Cluster {
-    /// A run that writes: the objects, and the record that tracks them,
-    /// written through those same objects. Also returns the record, for
-    /// what its finalize wrote.
+    /// Construct a live cluster interface and its [`ActivationRecord`].
     pub(crate) fn new(
         resources: KubeResources,
         record: RecordConfig,
@@ -210,7 +206,7 @@ impl Cluster {
         (cluster, record)
     }
 
-    /// A dry run: every write goes with `dryRun=All`, and there is no record.
+    /// Construct a dry-run cluster interface (`dryRun=All`, no deploy record).
     pub(crate) fn dry_run(dry: Arc<DryRun>) -> Self {
         Cluster {
             resources: dry.clone(),
@@ -219,7 +215,7 @@ impl Cluster {
         }
     }
 
-    /// The scripted fake as all three seams, dry when the fake is set to be.
+    /// Construct a cluster interface backed by [`scripted::ScriptedOps`] for tests.
     #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn scripted(ops: Arc<scripted::ScriptedOps>) -> Self {
         let record: Option<Arc<dyn DeployRecord>> = if ops.is_dry_run() {
@@ -242,7 +238,7 @@ impl Cluster {
         &self.secrets
     }
 
-    /// The run's record, `None` for a dry run.
+    /// Return the run's deploy record, or `None` for a dry run.
     pub(crate) fn record(&self) -> Option<&Arc<dyn DeployRecord>> {
         self.record.as_ref()
     }
@@ -298,8 +294,8 @@ pub(crate) enum RecreateError {
     NotDiscovered(#[from] NotDiscovered),
     #[error("delete failed: {}", describe(.0))]
     Delete(kube::Error),
-    /// The object outlived the wait for it to go, so it was not re-applied:
-    /// the apply would fail with the same immutable-field 422.
+    /// The object outlived the deletion wait and was not re-applied because the
+    /// apply would fail with the same immutable-field 422.
     #[error("{rid} still exists {}s after delete (stuck finalizer?); not re-applied", .waited.as_secs())]
     StillExists { rid: ResourceId, waited: Duration },
     #[error("re-apply failed: {0}")]

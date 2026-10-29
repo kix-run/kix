@@ -44,7 +44,7 @@ source path or the local activation cache. A build made on another machine or
 removed by `nix-collect-garbage` cannot be rolled back to from here. How many
 records exist depends on `kix gc` retention.
 
-A build from a kix library before 2026-10-02 cannot be rolled back to if it
+A build from a Kix library before 2026-10-02 cannot be rolled back to if it
 imports a CRD (`scope.mkCRDRef`, or `kix.mkImport` with `crds`). Its CRD ref
 markers lack the `kix.run/crd-served-versions` annotation, and Kix refuses the
 build before applying anything (with `--operator`, the operator refuses it).

@@ -55,13 +55,13 @@ use serde_json::Value;
 use super::document::{ObjectDelete, ObjectWrite, Objects, WriteChange};
 use super::{CLUSTER_LEVEL_KEY, Shown};
 
-/// The writes and deletes of `plan` and `deletes`, each matched to what
-/// `shown` lists, or why some are not.
+/// Verify that every write and delete in `plan` and `deletes` matches an entry
+/// in `shown`, and return the [`Objects`] list.
 ///
-/// `graph` is the new build `plan` was made from. `deletes` are the
-/// orphans the prune deletes; `listed_deletes` are the orphans the plan's
-/// `prune` section lists, none when it did not read the cluster. `old` are
-/// the manifests of the builds the cluster ran (see the module docs).
+/// `graph` is the new build `plan` was made from. `deletes` are the orphans
+/// the prune deletes; `listed_deletes` are the orphans the plan's `prune`
+/// section lists (empty when the plan did not read the cluster). `old` are the
+/// manifests of the builds the cluster ran.
 pub(crate) fn of<'a>(
     shown: &Shown,
     graph: &StoreGraph,
@@ -162,12 +162,12 @@ pub(crate) fn of<'a>(
     })
 }
 
-/// `sha256:` and the hex SHA-256 of the compact JSON
+/// Compute `sha256:` followed by the hex SHA-256 of the compact JSON
 /// `{"writes":[[kind,namespace,name,store_hash,package],...],"deletes":[[kind,namespace,name],...]}`
-/// of `objects`, each list sorted by its arrays' strings in byte order.
-/// serde_json escapes `"`, `\` and control characters and writes the rest of
-/// the text as UTF-8. A write's `change` is left out: it says how the plan
-/// shows the write, not what is written.
+/// of `objects`, with each list sorted by its string arrays in byte order.
+/// `serde_json` escapes `"`, `\`, and control characters and writes the rest
+/// of the text as UTF-8. A write's `change` is omitted because it describes how
+/// the plan displays the write rather than what is written.
 pub fn digest(objects: &Objects) -> String {
     use sha2::{Digest, Sha256};
 
@@ -238,13 +238,13 @@ impl fmt::Display for Unshown {
 
 impl std::error::Error for Unshown {}
 
-/// `id` for an error, its build-supplied text escaped.
+/// Format `id` for an error message with build-supplied text escaped.
 fn shown_id(id: &ResourceId) -> String {
     crate::text::printable_up_to(&id.display_id(), 300)
 }
 
-/// The key of the package that owns the file at `path`, as the diff names
-/// it, or [`CLUSTER_LEVEL_KEY`].
+/// Return the key of the package that owns the file at `path`, or
+/// [`CLUSTER_LEVEL_KEY`] when unowned.
 fn owner(graph: &StoreGraph, path: &Path) -> String {
     let package = graph
         .resource_owner

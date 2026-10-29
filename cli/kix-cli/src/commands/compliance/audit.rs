@@ -56,24 +56,19 @@ pub fn run(args: &ComplianceAuditArgs, ctx: &mut CommandContext) -> Result<()> {
         .and_then(|r| r.get("findings").and_then(|f| f.as_array()).cloned())
         .unwrap_or_default();
 
-    // 1. SARIF
     let sarif = build_sarif(&scorecard_findings);
     write_json(&out_dir.join("scorecard-results.sarif"), &sarif)?;
 
-    // 2. SBOM
     let sbom = sbom::build_sbom(&graph, &ctx.global.flake);
     write_json(&out_dir.join("sbom.json"), &sbom)?;
 
-    // 3. Provenance
     let provenance =
         attest::build_attestation(&graph, &ctx.global.flake, args.builder_id.as_deref(), None);
     write_json(&out_dir.join("provenance.json"), &provenance)?;
 
-    // 4. OSCAL assessment results
     let oscal = build_oscal(&graph, &scorecard_findings, args.framework);
     write_json(&out_dir.join("assessment-results.json"), &oscal)?;
 
-    // 5. Markdown summary
     let md = build_markdown_summary(&graph, &scorecard_findings, args.framework);
     fs::write(out_dir.join("audit-report.md"), md).into_diagnostic()?;
 
@@ -114,11 +109,9 @@ fn count_findings(findings: &[Value]) -> (usize, usize, usize) {
     (errors, warnings, infos)
 }
 
-// --- SARIF ------------------------------------------------------------------
-
 fn build_sarif(findings: &[Value]) -> Value {
-    // Duplicates the shape used by `kix check --sarif` so the audit bundle
-    // stays drop-in compatible with GitHub Code Scanning.
+    // Match the SARIF structure emitted by `kix check --sarif` so the audit
+    // bundle is compatible with GitHub Code Scanning.
     let mut rules: Vec<Value> = Vec::new();
     let mut rule_indices: BTreeMap<String, usize> = BTreeMap::new();
 
@@ -199,8 +192,6 @@ fn build_sarif(findings: &[Value]) -> Value {
         }]
     })
 }
-
-// --- OSCAL ------------------------------------------------------------------
 
 fn build_oscal(graph: &StoreGraph, findings: &[Value], framework: ComplianceFramework) -> Value {
     let activation_hash = shared::activation_identity_hash(graph);
@@ -302,8 +293,8 @@ struct Control {
     title: &'static str,
     narrative: &'static str,
     /// Rule name prefixes (or exact rule IDs) whose error-level findings mark
-    /// the control as not-satisfied. Empty = "always satisfied by kix's mere
-    /// existence" (e.g. inventory controls answered by the SBOM alone).
+    /// the control as not-satisfied. When empty, the control is satisfied by
+    /// the generated bundle artifacts (such as the SBOM) alone.
     required_rules: &'static [&'static str],
 }
 
@@ -342,9 +333,7 @@ fn framework_label(f: ComplianceFramework) -> &'static str {
     }
 }
 
-/// Static control-to-rule mapping tables. These intentionally live in code
-/// so that scorecard rule renames (which would silently drop coverage) show
-/// up as compile-time diffs rather than data-file drift.
+/// Return the static control-to-rule mapping table for `f`.
 fn framework_controls(f: ComplianceFramework) -> &'static [Control] {
     match f {
         ComplianceFramework::Soc2 => SOC2,
@@ -503,8 +492,6 @@ static NIS2: &[Control] = &[
         required_rules: &["reliability.hasBackup"],
     },
 ];
-
-// --- Markdown summary -------------------------------------------------------
 
 fn build_markdown_summary(
     graph: &StoreGraph,

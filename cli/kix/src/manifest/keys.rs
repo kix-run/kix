@@ -1,5 +1,5 @@
-//! The Kubernetes domain Kix owns, and the annotations, labels and API names
-//! built on it that the CLI and operator read or write. Keys only the Nix
+//! The Kubernetes domain Kix owns, and the annotations, labels, and API names
+//! built on it that the CLI and operator read or write. Keys that only the Nix
 //! library writes are listed in `kix/lib/core/annotations.nix`.
 //!
 //! # One literal
@@ -202,17 +202,17 @@ pub const CONTENT_HASH: &str = key!("content-hash");
 #[cfg(test)]
 pub(crate) const SECRET_KEYS: &str = key!("secret-keys");
 
-/// Is this one of Kix's own annotation or label keys?
+/// Return whether `key` is one of Kix's own annotation or label keys.
 ///
-/// Used where Kix strips its own stamps: `kix export --for=exit` and the
-/// content hash that drift compares.
+/// Used where Kix strips its own stamps (`kix export --for=exit` and the
+/// content hash that drift compares).
 pub fn is_kix_key(key: &str) -> bool {
     key.starts_with(PREFIX) || crate::legacy_domain::is_legacy_key(key)
 }
 
-/// Is `key` under Kix's domain, a subdomain of it (`operator.kix.run/`),
-/// or a retired domain? Kix reads such keys off the records it writes, so
-/// no one else may set them there.
+/// Return whether `key` is under Kix's domain, a subdomain of it
+/// (`operator.kix.run/`), or a retired domain. Kix reads such keys from the
+/// records it writes, so user-supplied record annotations cannot use them.
 pub fn is_kix_domain_key(key: &str) -> bool {
     let prefix = key.split_once('/').map_or("", |(p, _)| p);
     std::iter::once(DOMAIN)
@@ -322,17 +322,16 @@ mod tests {
             // The one Nix literal.
             "kix/lib/core/annotations.nix",
             // Test fixtures and integration tests: literal API objects and
-            // literal cluster YAML. These are the independent restatement
-            // that catches a constant changed by mistake, so they spell the
-            // domain directly and a move updates them explicitly. The
-            // checklist is in v2_discussions/archive/137_kix_run_domain_migration.md.
+            // literal cluster YAML. These serve as an independent check
+            // that catches accidental changes to the constants, so they spell
+            // the domain directly.
             "cli/kix/tests/fixtures",
             "cli/kix-operator/tests",
             // The Python half of the compatibility layer. It declares both
             // domains for the same reason `legacy_domain` does, and it
             // cannot reach either constants file.
             "scripts/parity/normalize.py",
-            // Read live objects straight from the apiserver with jq or
+            // Read live objects straight from the API server with jq or
             // Python, so they carry their own fallback to a retired domain
             // and have no constant to import.
             "tools/k9s-plugin/plugins.yaml",
@@ -342,10 +341,8 @@ mod tests {
 
         let domains = ["kix.dev", "kix.run"];
         let mut offenders: Vec<String> = Vec::new();
-        // Every tree that can carry a Kix domain into something that runs.
-        // `kix` and `cli` alone left the domain free to appear in scripts,
-        // plugins and cluster definitions, which is exactly where this move
-        // had to update every occurrence explicitly.
+        // Walk every tree that can carry a Kix domain into executable code or
+        // cluster definitions.
         let mut stack: Vec<std::path::PathBuf> = ["kix", "cli", "scripts", "tools", "clusters"]
             .iter()
             .map(|d| root.join(d))
@@ -365,10 +362,8 @@ mod tests {
                 if allowed.iter().any(|a| rel.starts_with(a)) {
                     continue;
                 }
-                // `nix build` leaves a `result` symlink into the store, and
-                // built manifests are full of Kix domains by design. Walking
-                // into one turns "somebody built a cluster" into a failing
-                // test with a confusing message.
+                // Skip symlinks such as `result` directories created by `nix build`,
+                // whose rendered manifests contain Kix domain strings.
                 if entry.file_type().is_ok_and(|t| t.is_symlink()) {
                     continue;
                 }
@@ -406,7 +401,8 @@ mod tests {
         );
     }
 
-    /// Does a comment start here? `#` in Nix, `//` in Rust.
+    /// Return whether a line comment starts at `c` (`#` in Nix/Python/YAML,
+    /// `//` in Rust).
     fn starts_comment(c: char, next: Option<&char>, is_nix: bool) -> bool {
         if is_nix {
             c == '#'
@@ -417,9 +413,6 @@ mod tests {
 
     #[test]
     fn the_domain_walker_sees_lines_inside_multi_line_strings() {
-        // The hole that let six spellings through: a line in the middle of
-        // a Nix `''` block or a Rust raw string opens no quote of its own,
-        // so a scanner looking for quoted spans found nothing on it.
         assert!(code_part("  group: kix.run", true).contains("kix.run"));
         assert!(code_part("  name: activations.kix.run", false).contains("kix.run"));
         // Comments stay exempt, wherever they start.
@@ -430,14 +423,11 @@ mod tests {
         assert!(code_part("x = \"# kix.run/a\"", true).contains("kix.run"));
     }
 
-    /// The part of one line that is not a comment.
+    /// Return the portion of `line` before any unquoted line comment.
     ///
-    /// Everything else on the line counts as code. This is
-    /// broader than "inside a string literal". The earlier version of this
-    /// walked a line for double-quoted spans and reset that state at every
-    /// newline, so a domain anywhere inside a Nix `''` block or a Rust raw
-    /// string was invisible to it. It passed with six such spellings in the
-    /// tree. Only prose is exempt now, and prose is what a comment is.
+    /// Everything outside a line comment counts as code, so domains inside
+    /// multi-line Nix `''` blocks or Rust raw strings are still checked even
+    /// when a line has no opening quote of its own.
     fn code_part(line: &str, hash_comments: bool) -> String {
         let chars: Vec<char> = line.chars().collect();
         let mut out = String::new();

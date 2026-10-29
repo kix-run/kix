@@ -39,7 +39,7 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed]] [-
 
 | Mode | Old side | What is deleted |
 | --- | --- | --- |
-| Soft | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from the local Nix store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
+| Soft | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from the local Nix store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace, and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
 | `--hard` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
@@ -64,7 +64,7 @@ records to decide whose each resource is:
   unless you pass `--include-unattributed`. With only one Kix cluster on the
   Kubernetes cluster, such a resource is judged like any other.
 
-Soft gc, `kix deploy --prune` and `kix rollback --prune` apply the same rule to
+Soft gc, `kix deploy --prune`, and `kix rollback --prune` apply the same rule to
 a resource both clusters deploy: when the named cluster's build drops it and
 another cluster's current build still contains it, the plan lists it as kept.
 

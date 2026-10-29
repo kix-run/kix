@@ -1,24 +1,23 @@
-//! Moving a cluster's Kix records from a retired API group to the current
-//! one, behind `kix migrate domain <cluster>`.
+//! Migrate a cluster's Kix records from a retired API group to the current
+//! group (`kix migrate domain <cluster>`).
 //!
-//! # Why it is a command and not part of deploy
+//! # Why migration is a separate command
 //!
-//! It deletes CustomResourceDefinitions and rewrites deploy history. Both
-//! deserve a person, a dry run and a prompt. The gate in
-//! [`super::check_discovery`] is what makes it unmissable: until it has run,
-//! every command that reads a Kix record refuses and names it.
+//! Migrating deletes CustomResourceDefinitions and rewrites deploy history, so
+//! it requires an explicit dry run and confirmation prompt rather than running
+//! implicitly during `kix deploy`. Until the cluster is migrated,
+//! [`super::check_discovery`] rejects any command that reads Kix records and
+//! prints the migration command to run.
 //!
-//! # Order, and why it is fixed
+//! # Operation order
 //!
-//! `ResourceId` has no group field and kind lookup in discovery is
-//! first-wins, so while `activations.<retired>` and `activations.<current>`
-//! both exist, `Activation/_cluster/<name>` names two objects and the CLI
-//! cannot say which one it read. The old CRDs therefore go in the same run
-//! that creates the new ones.
+//! `ResourceId` has no API group field and kind lookup in discovery is
+//! first-wins. While `activations.<retired>` and `activations.<current>` both
+//! exist, `Activation/_cluster/<name>` is ambiguous, so the migration deletes
+//! the retired CRDs in the same run that creates the new ones.
 //!
-//! PackageInstance records are not copied. They are in every activation's
-//! manifest set, so the deploy that follows re-creates them, import markers
-//! included.
+//! `PackageInstance` records are not copied because every activation includes
+//! them in its manifest set and the next deploy re-creates them.
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -52,21 +51,21 @@ pub const PACKAGE_INSTANCE: RecordKind = RecordKind {
     cluster_scoped: false,
 };
 
-/// `<plural>.<domain>`, the CRD name.
+/// Format `<plural>.<domain>` as a CustomResourceDefinition name.
 pub fn crd_name(record: RecordKind, domain: &str) -> String {
     format!("{}.{}", record.plural, domain)
 }
 
-/// Everything the migration does to a cluster.
+/// Cluster operations required by the domain migration.
 ///
-/// A trait so the steps can be tested without an apiserver.
-/// [`super::KubeMigrationOps`] is the real implementation.
+/// Abstracted behind a trait so migration steps can be tested without an
+/// apiserver. [`super::KubeMigrationOps`] is the production implementation.
 #[async_trait]
 pub trait MigrationOps: Send + Sync {
-    /// Is this CustomResourceDefinition registered?
+    /// Return whether the CustomResourceDefinition `name` is registered.
     async fn crd_exists(&self, name: &str) -> Result<bool, String>;
 
-    /// Every record of this kind in this group.
+    /// List every record of `record` kind in `group`.
     async fn list_records(&self, group: &str, record: RecordKind) -> Result<Vec<Value>, String>;
 
     /// Server-side apply a CustomResourceDefinition.
@@ -144,12 +143,12 @@ pub struct Report {
 }
 
 impl Report {
-    /// Nothing to do: no retired group on this cluster.
+    /// Return a report indicating that no retired group was found on the cluster.
     pub(crate) fn nothing_to_do() -> Self {
         Self::default()
     }
 
-    /// Did this cluster need migrating at all?
+    /// Return whether the cluster had a retired group to migrate.
     pub fn needed(&self) -> bool {
         self.from_group.is_some()
     }
@@ -384,12 +383,12 @@ pub async fn run(ops: &dyn MigrationOps, crds: &[Value], dry_run: bool) -> Resul
     Ok(report)
 }
 
-/// The first retired group with an Activation CRD on this cluster.
+/// Return the first retired group that still has an Activation or
+/// PackageInstance CRD registered on the cluster.
 async fn find_legacy_group(ops: &dyn MigrationOps) -> Result<Option<String>, String> {
     for domain in DOMAINS {
-        // Both kinds, so a run that deleted one CRD and then failed leaves a
-        // cluster the next run still recognises rather than one that reports
-        // "nothing to do" with a retired CRD stranded on it for ever.
+        // Check both kinds so an interrupted run that deleted only one CRD is
+        // still detected on retry rather than leaving the second CRD stranded.
         for record in [ACTIVATION, PACKAGE_INSTANCE] {
             if ops.crd_exists(&crd_name(record, domain)).await? {
                 return Ok(Some((*domain).to_string()));
@@ -407,14 +406,10 @@ fn phase_of(record: &Value) -> Option<&str> {
     record.pointer("/status/phase").and_then(Value::as_str)
 }
 
-/// Does this record carry a Kix finalizer under a retired domain?
+/// Remove every retired-domain Kix finalizer from `records`.
 ///
-/// The operator puts one on every record it reconciles, so its presence is
-/// how the migration knows an operator is watching the retired group.
-/// Remove every retired-domain Kix finalizer from these records.
-///
-/// Idempotent: a record without one is patched to the same value it already
-/// has.
+/// Idempotent: patching a record that no longer carries the finalizer leaves
+/// its finalizer list unchanged.
 async fn strip_finalizers(
     ops: &dyn MigrationOps,
     group: &str,
@@ -432,6 +427,7 @@ async fn strip_finalizers(
     Ok(())
 }
 
+/// Return whether `record` carries a Kix finalizer under a retired domain.
 fn has_legacy_finalizer(record: &Value) -> bool {
     let Some(finalizers) = record
         .pointer("/metadata/finalizers")
@@ -445,12 +441,13 @@ fn has_legacy_finalizer(record: &Value) -> bool {
         .any(super::is_legacy_key)
 }
 
-/// One record under the current group, plus its status if it has one.
+/// Convert a legacy record into a manifest under the current API group along
+/// with its optional status object.
 ///
-/// Name, spec, annotations and labels carry over; the annotations and labels
-/// have their retired keys renamed. Server-set metadata does not carry over,
-/// and neither do finalizers: the upgraded operator adds its own when it
-/// first reconciles the record.
+/// Preserves the name, spec, annotations, and labels (upgrading retired Kix
+/// keys to the current domain), while dropping server-set metadata and
+/// finalizers so the upgraded operator can attach its own finalizer on first
+/// reconcile.
 fn port_record(record: &Value) -> (Value, Option<Value>) {
     let mut metadata = json!({ "name": record.pointer("/metadata/name") });
     let mut upgraded = record.clone();
@@ -578,9 +575,8 @@ mod tests {
         async fn crd_exists(&self, name: &str) -> Result<bool, String> {
             Ok(self.crds.lock().unwrap().iter().any(|c| c == name))
         }
-        /// Errors when the CRD is not registered, as the apiserver does.
-        /// Without this a test cannot tell a stranded half-deleted pair from
-        /// a healthy one.
+        /// Return an error when the CRD is not registered, matching the
+        /// apiserver's behavior.
         async fn list_records(&self, group: &str, r: RecordKind) -> Result<Vec<Value>, String> {
             let crd = crd_name(r, group);
             if !self.crds.lock().unwrap().contains(&crd) {
@@ -798,9 +794,9 @@ mod tests {
         assert_eq!(report.crds_deleted.len(), 2);
     }
 
-    /// The same finalizer, with something still putting it back. The probe
-    /// clears it, waits and reads again; a finalizer that returns is the one
-    /// signal that an operator is running. Nothing may be copied or deleted.
+    /// When an operator is still re-adding its finalizer, the probe clears it,
+    /// waits, and reads again; a finalizer that returns indicates a running
+    /// operator and stops the migration before copying or deleting anything.
     #[tokio::test]
     async fn an_operator_that_re_adds_its_finalizer_stops_the_migration_before_any_copy() {
         let Some(legacy) = DOMAINS.first() else {

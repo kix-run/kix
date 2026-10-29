@@ -131,7 +131,7 @@ fn diff_arrays(a: &[Value], b: &[Value], path: &str, config: &DiffConfig) -> Vec
     diff_content_arrays(a, b, path, config)
 }
 
-/// Whether the items both lists hold, by key, sit in another order. A
+/// Check whether the items both lists hold, by key, sit in another order. A
 /// repeated item counts as often as the side with fewer copies holds it.
 fn reordered(a: &[&String], b: &[&String]) -> bool {
     let shared = |side: &[&String], other: &[&String]| -> Vec<String> {

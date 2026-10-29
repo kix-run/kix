@@ -2,9 +2,9 @@
 //!
 //! A thin wrapper over `tokio_util::sync::CancellationToken`. The engine's
 //! supervisor loop selects on `CancelToken::cancelled` so a cancel from the
-//! caller (Ctrl-C, operator supersession) or from the progress watchdog is
-//! observed even while every node is in flight. Readiness polls keep checking
-//! the flag between polls as before.
+//! caller (Ctrl-C or operator supersession) or from the progress watchdog is
+//! observed even while every node is in flight. Readiness loops also check
+//! the flag between polls.
 //!
 //! The token also carries the *reason* for the cancel, when the canceller
 //! has one. The watchdog uses this to say "no progress for 10m" instead of
@@ -15,9 +15,8 @@ use std::sync::{Arc, Mutex, Once};
 
 use tokio_util::sync::CancellationToken;
 
-/// Interrupt watchers from [`CancelToken::cancel_on_interrupt`] still
-/// waiting for a signal or past one, so the fallback leaves the signal to
-/// them.
+/// Count of active interrupt watchers from [`CancelToken::cancel_on_interrupt`].
+/// When non-zero, the fallback handler leaves the signal to them.
 static WATCHING: AtomicUsize = AtomicUsize::new(0);
 static FALLBACK: Once = Once::new();
 
@@ -54,34 +53,31 @@ pub struct CancelToken {
 }
 
 impl CancelToken {
-    /// A fresh, un-cancelled token.
+    /// Return a fresh, uncancelled token.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Signal cancellation. Idempotent.
+    /// Signal cancellation. Subsequent calls are no-ops.
     pub fn cancel(&self) {
         self.inner.cancel();
     }
 
     /// Cancel when the process is interrupted or asked to terminate.
     ///
-    /// Must be called from inside a tokio runtime; the watcher task ends when
-    /// the token is cancelled by anything, so it does not outlive the run.
+    /// Call this from inside a Tokio runtime. The watcher task exits when the
+    /// token is cancelled, so it does not outlive the run.
     ///
-    /// This is what turns Ctrl-C into an orderly stop rather than a killed
-    /// process. It matters more than it used to: the deploy record is now
-    /// created before the first wave, so a run that dies without cancelling
-    /// leaves the record `Deploying` and nothing to say the run is over. A
-    /// cancel takes the engine through its abort path, which marks the record
-    /// `Failed` and lets the next deploy reconcile what this one applied.
+    /// Turning Ctrl-C into a cancellation lets the deploy engine run its abort
+    /// path and mark the deploy record `Failed` so the next deploy can
+    /// reconcile applied resources. If the process dies without cancelling,
+    /// the deploy record remains in the `Deploying` state.
     ///
-    /// A second interrupt exits the process immediately. That has to be done
-    /// explicitly: registering a signal with tokio replaces the OS default for
-    /// the life of the process, so after the first Ctrl-C nothing but SIGKILL
-    /// would end it, and an orderly stop against an unresponsive apiserver
-    /// can sit through a 60 second bound. Exiting this way leaves the record
-    /// `Deploying`, which the next deploy reports rather than guesses at.
+    /// A second interrupt exits the process immediately. Registering a signal
+    /// with Tokio replaces the OS default handler for the life of the process,
+    /// and an orderly stop against an unresponsive API server can wait up to
+    /// 60 seconds. Exiting immediately leaves the deploy record in the
+    /// `Deploying` state, which the next deploy reports.
     pub fn cancel_on_interrupt(&self) {
         exit_on_unwatched_interrupt();
         let token = self.clone();
@@ -118,7 +114,7 @@ impl CancelToken {
         });
     }
 
-    /// Signal cancellation and record why. The first reason wins.
+    /// Signal cancellation and record the reason if none is set.
     pub(crate) fn cancel_with_reason(&self, reason: impl Into<String>) {
         if let Ok(mut slot) = self.reason.lock()
             && slot.is_none()
@@ -133,14 +129,14 @@ impl CancelToken {
         self.inner.is_cancelled()
     }
 
-    /// The reason given to [`cancel_with_reason`](Self::cancel_with_reason),
+    /// Return the reason passed to [`cancel_with_reason`](Self::cancel_with_reason),
     /// if any.
     pub(crate) fn reason(&self) -> Option<String> {
         self.reason.lock().ok().and_then(|r| r.clone())
     }
 
-    /// Resolves when the token is cancelled. Resolves at once if it already
-    /// is.
+    /// Wait until the token is cancelled, or return immediately if it is
+    /// already cancelled.
     pub(crate) async fn cancelled(&self) {
         self.inner.cancelled().await
     }

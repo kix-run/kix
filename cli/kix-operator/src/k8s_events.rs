@@ -181,9 +181,12 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
     }
 }
 
-/// Events for a node's verdict transition. Suppresses Pending and most
-/// Running events; emits one Event per terminal verdict plus a few
-/// mid-flight milestones (SOPS hydration, in-place recreate).
+/// Build a Kubernetes Event for a node's verdict transition, or return `None`
+/// to suppress.
+///
+/// Suppresses `Pending` and most `Running` transitions, emitting one Event per
+/// terminal verdict plus selected mid-flight milestones (SOPS hydration and
+/// in-place recreation).
 fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> Option<KEvent> {
     let resource = node_label(node);
     match verdict {
@@ -248,9 +251,9 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
                 note.push('\n');
                 note.push_str(&output.join("\n"));
             }
-            // Event notes are capped at 1 KiB by the apiserver; a note over
-            // the cap is rejected and the event vanishes. Keep the head: the
-            // resource, the reason and the first output lines.
+            // Event notes are capped at 1 KiB by the API server; a note over
+            // the cap is rejected and the event is dropped. Keep the head: the
+            // resource, the reason, and the first output lines.
             const NOTE_CAP: usize = 900;
             if note.len() > NOTE_CAP {
                 let mut cut = NOTE_CAP;
@@ -298,10 +301,8 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
     }
 }
 
-/// The `PruneStart` Event note: the orphans prune deletes or reports, then
-/// the ones no prune policy deletes. Event notes are capped at 1 KiB by the
-/// apiserver, and a note over the cap is rejected and the event vanishes, so
-/// each list names at most `SHOWN` resources.
+/// Format the `PruneStart` Event note, listing at most `SHOWN` resources per
+/// category so the note stays within the API server's 1 KiB Event note limit.
 fn prune_note(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> String {
     const SHOWN: usize = 5;
     let names = |rids: &[ResourceId]| {

@@ -64,7 +64,6 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
         )
     };
 
-    // 1. Packages → application components
     for pkg in graph.packages.values() {
         let version = pkg.version.clone().unwrap_or_else(|| "unknown".into());
         let purl = format!(
@@ -91,9 +90,8 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
         }));
     }
 
-    // 2. Container images → container components, deduped by image ref
+    // Map each unique container image reference to `Vec<(owning_pkg_bomref, container_name)>`.
     let mut image_refs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    // image -> Vec<(owning pkg bomref, container name)>
     for pkg in graph.packages.values() {
         let bomref = pkg_bomref(pkg);
         for res_path in &pkg.resource_paths {
@@ -123,7 +121,6 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
         components.push(comp);
     }
 
-    // 3. Nix flake inputs → library components
     let flake_path = crate::commands::resolve_flake_path(flake_ref).ok();
     let mut flake_input_bomrefs: Vec<String> = Vec::new();
     if let Some(path) = &flake_path
@@ -162,13 +159,11 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
         }
     }
 
-    // 4. Dependency graph
     let mut dep_edges: Vec<Value> = Vec::new();
     for pkg in graph.packages.values() {
         let bomref = pkg_bomref(pkg);
         let mut deps: Vec<String> = Vec::new();
 
-        // Cross-package deps (other kix packages).
         for cd in &pkg.cross_deps {
             if let Some(target) = graph.packages.get(&cd.target_package) {
                 deps.push(pkg_bomref(target));
@@ -177,7 +172,6 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
         deps.sort();
         deps.dedup();
 
-        // Images consumed by this package.
         let mut pkg_images: Vec<String> = image_refs
             .iter()
             .filter(|(_, users)| users.iter().any(|(r, _)| r == &bomref))

@@ -3,7 +3,7 @@
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality label
-//! selector) and DELETE (honouring `preconditions`) on the objects it holds.
+//! selector), and DELETE (honoring `preconditions`) on the objects it holds.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. Anything else answers 404.
 //!
@@ -135,7 +135,7 @@ impl FakeApi {
         self.state.lock().unwrap().retired_records = true;
     }
 
-    /// Names of the objects of `kind` still held, sorted.
+    /// Return the sorted names of held objects of `kind`.
     pub fn names(&self, kind: &str) -> Vec<String> {
         let st = self.state.lock().unwrap();
         let mut v: Vec<String> = st
@@ -148,7 +148,8 @@ impl FakeApi {
         v
     }
 
-    /// `METHOD path` of every request so far, with `?query` when it has one.
+    /// Return `METHOD path` for every request seen so far, including `?query`
+    /// when present.
     pub fn requests(&self) -> Vec<String> {
         self.state.lock().unwrap().requests.clone()
     }
@@ -322,7 +323,7 @@ impl Target {
     }
 }
 
-/// The discovery document at `path` for the served `kinds`.
+/// Return the discovery document at `path` for the served `kinds`.
 fn discovery(kinds: &[(&str, &str, &str, &str, bool)], path: &str) -> Option<Value> {
     let resources = |group: &str, version: &str| -> Value {
         let list: Vec<Value> = kinds
@@ -352,8 +353,8 @@ fn discovery(kinds: &[(&str, &str, &str, &str, bool)], path: &str) -> Option<Val
         ),
         ["api", "v1"] => Some(resources("", "v1")),
         ["apis"] => {
-            // Each group once, its versions in the order KINDS first lists
-            // them; the first is the preferred version.
+            // Emit each group once with its versions in `KINDS` order. The
+            // first version is preferred.
             let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
             for (g, v, ..) in kinds.iter().filter(|(g, ..)| !g.is_empty()) {
                 match groups.iter_mut().find(|(name, _)| name == g) {
@@ -381,7 +382,7 @@ fn discovery(kinds: &[(&str, &str, &str, &str, bool)], path: &str) -> Option<Val
     }
 }
 
-/// `k=v` pairs of a `labelSelector` query parameter.
+/// Parse `k=v` pairs from a `labelSelector` query parameter.
 fn label_selector(query: &str) -> Vec<(String, String)> {
     query
         .split('&')

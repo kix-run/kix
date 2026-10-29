@@ -1,7 +1,4 @@
-//! Tail logs for a package's primary workload.
-//!
-//! Shells out to `kubectl logs -n <ns> -l <selector>`. The point of this
-//! command is a convenience wrapper around kubectl.
+//! Tail logs for a package's primary workload via `kubectl logs`.
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -30,9 +27,9 @@ pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
     cmd.arg("logs");
     cmd.args(["-n", &target.namespace]);
     cmd.args(["-l", &target.selector]);
-    // Multi-pod: default to streaming from all matching pods so the user
-    // sees every replica's logs. --max-log-requests raises kubectl's default
-    // ceiling of 5 so large ReplicaSets don't drop pods.
+    // Stream from all matching pods by default so multi-replica workloads show
+    // every replica's logs. Raise `--max-log-requests` above kubectl's default
+    // of 5 so larger ReplicaSets do not drop pods.
     cmd.arg("--all-containers=true");
     cmd.args(["--max-log-requests", "20"]);
     cmd.arg("--prefix=true");
@@ -47,8 +44,7 @@ pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
         cmd.args(["--tail", &tail.to_string()]);
     }
     if let Some(container) = args.container.as_deref() {
-        // When --container is set, --all-containers is ignored by kubectl;
-        // kubectl ignores --all-containers when a container is selected.
+        // kubectl ignores `--all-containers` when `-c` selects a specific container.
         cmd.args(["-c", container]);
     }
     if let Some(since) = args.since.as_deref() {
@@ -58,9 +54,7 @@ pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
         cmd.arg("--previous");
     }
 
-    // `exec` replaces this process so Ctrl-C / SIGINT goes straight to
-    // kubectl instead of being intercepted here. On Unix this never
-    // returns on success.
+    // Replace the current process so SIGINT goes directly to kubectl.
     let err = cmd.exec();
     Err(miette!("could not start kubectl logs: {err}"))
 }

@@ -1,5 +1,4 @@
-//! Graphs for tests: a small `web` package, its record, helpers to compare
-//! two lists of manifests as a build and a cluster, and a real build.
+//! Test fixtures and helpers for comparing manifest sets and builds.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,8 +15,7 @@ use crate::eval::store_graph::StoreGraph;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
-/// An object of package `pkg` (`namespace`, `name`) with the stamps a
-/// build writes.
+/// Build a manifest in package `pkg` (`namespace`, `name`) with build stamps.
 pub fn stamped(
     kind: &str,
     ns: &str,
@@ -74,27 +72,26 @@ pub fn record(name: &str, hash: &str) -> Value {
     })
 }
 
-/// A 32-character identity hash made from `seed`.
+/// Build a 32-character identity hash from `seed`.
 pub fn h(seed: &str) -> String {
     format!("{seed:a<32}")
 }
 
-/// New side is a build; old side is whatever the cluster (or a
-/// snapshot) said, synthesized against that build.
+/// Diff `old` against `new` after synthesizing `old` against `new`'s build graph.
 pub fn diff_of(old: &[Value], new: &[Value]) -> PackageDiff {
     let (old_graph, new_graph) = graphs_of(old, new);
     diff_graphs(&old_graph, &new_graph)
 }
 
-/// The old and new graphs [`diff_of`] compares.
+/// Build the old and new graphs that [`diff_of`] compares.
 pub fn graphs_of(old: &[Value], new: &[Value]) -> (StoreGraph, StoreGraph) {
     let new_graph = StoreGraph::synthesize(new, &StoreGraph::empty("c"));
     let old_graph = StoreGraph::synthesize(old, &new_graph);
     (old_graph, new_graph)
 }
 
-/// The record, the `app` Namespace, and package `app/web` with a
-/// ConfigMap and a Deployment.
+/// Return the default test baseline containing the record, the `app`
+/// Namespace, and package `app/web` with a ConfigMap and a Deployment.
 pub fn baseline() -> Vec<Value> {
     vec![
         record("c-old", &h("rec1")),
@@ -136,7 +133,7 @@ pub fn crd(name: &str, pkg: (&str, &str), hash: &str) -> Value {
     })
 }
 
-/// An object of package `app/web` with `fields` in place of `spec`.
+/// Build an object in package `app/web` with `fields` in place of `spec`.
 pub fn web_resource(kind: &str, hash: &str, fields: Value) -> Value {
     let mut v = stamped(kind, "app", "web", ("app", "web"), hash, json!(null));
     let map = v.as_object_mut().unwrap();
@@ -147,11 +144,7 @@ pub fn web_resource(kind: &str, hash: &str, fields: Value) -> Value {
     v
 }
 
-/// The `kix-enterprise-test` build, a real build of 26 manifests on stage1, as
-/// [`StoreGraph::assemble`] reads it and [`StoreGraph::validate`] accepts
-/// it. The fixture holds each store file's text and references;
-/// `kix-bundle` checks that its bundle of the same build reads as this
-/// graph.
+/// Load and validate the `kix-enterprise-test` fixture graph (26 manifests).
 pub fn kix_enterprise_test() -> StoreGraph {
     #[derive(serde::Deserialize)]
     struct File {
@@ -188,7 +181,7 @@ pub fn kix_enterprise_test() -> StoreGraph {
     graph
 }
 
-/// The planning flags `extra` sets, as `kix deploy` parses them.
+/// Parse planning flags from `extra` as `kix deploy` does.
 pub fn flags(extra: &[&str]) -> PlanFlags {
     let mut flags = PlanFlags {
         prune: false,
@@ -217,7 +210,7 @@ pub fn flags(extra: &[&str]) -> PlanFlags {
     flags
 }
 
-/// The baseline of a cluster that runs `old`, or nothing.
+/// Build the baseline for a cluster running `old`, or an empty baseline when `None`.
 pub fn deployed(old: Option<&StoreGraph>) -> Baseline {
     match old {
         Some(old) => {
@@ -232,8 +225,8 @@ pub fn deployed(old: Option<&StoreGraph>) -> Baseline {
     }
 }
 
-/// [`Planner::plan`] for a deploy of `new` over `baseline` with `flags`,
-/// before the plan reads the cluster.
+/// Run [`Planner::plan`] for `new` over `baseline` with `flags` without
+/// connecting to a cluster.
 pub fn plan(
     baseline: &Baseline,
     new: &StoreGraph,
@@ -255,8 +248,7 @@ pub fn stamp(graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
     (graph, manifests)
 }
 
-/// The baseline of a cluster whose Active objects are `manifests`, its
-/// build not on this machine.
+/// Build a baseline whose Active objects are `manifests` without a local build.
 pub fn deployed_objects(manifests: Vec<Value>) -> Baseline {
     Baseline {
         source: ActiveSource::Live,
@@ -265,18 +257,18 @@ pub fn deployed_objects(manifests: Vec<Value>) -> Baseline {
     }
 }
 
-/// What a deploy with `prune` deletes of the plan's `orphans`.
+/// Return the orphans that a deploy with `prune` deletes.
 pub fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<ResourceId> {
     super::planner::deletes_of(prune, orphans)
 }
 
-/// Whether the field at `path` set to `value` is the same as unset.
+/// Return true when setting the field at `path` to `value` is equivalent to
+/// leaving it unset.
 pub fn equivalent_to_unset(path: &str, value: &Value) -> bool {
     crate::manifest::diff::equivalence::equivalent_to_unset(path, value)
 }
 
-/// The old side a plan over `baseline` compares `new` with, and the Active
-/// record's manifests.
+/// Return the old graph and Active manifests for a plan of `new` over `baseline`.
 pub fn old_side<'a>(baseline: &'a Baseline, new: &StoreGraph) -> (StoreGraph, &'a [Value]) {
     (
         baseline.diff_side(new).into_owned(),
@@ -284,7 +276,7 @@ pub fn old_side<'a>(baseline: &'a Baseline, new: &StoreGraph) -> (StoreGraph, &'
     )
 }
 
-/// What `--detail manifests` shows for `manifest`, written over `old`.
+/// Return what `--detail manifests` renders for `manifest` over `old`.
 pub fn shown_manifest(manifest: &Value, old: Option<&Value>) -> Value {
     let is_secret = crate::manifest::types::is_secret(manifest)
         || old.is_some_and(crate::manifest::types::is_secret);
@@ -297,7 +289,7 @@ pub fn shown_manifest(manifest: &Value, old: Option<&Value>) -> Value {
     )
 }
 
-/// The Nix store directory store paths are made in.
+/// The Nix store directory where store paths live.
 pub const STORE_DIR: &str = crate::eval::store_path::STORE_DIR;
 /// The kind of a package's PackageInstance.
 pub const PACKAGE_INSTANCE_KIND: &str = crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
@@ -306,7 +298,7 @@ pub const RERUN: &str = crate::manifest::keys::RERUN;
 /// The `kix.run/sops-source` annotation key.
 pub const SOPS_SOURCE: &str = crate::manifest::keys::SOPS_SOURCE;
 
-/// The retired spellings of the annotation key `key`.
+/// Return the retired domain spellings of annotation `key`.
 pub fn legacy_spellings(key: &str) -> Vec<String> {
     crate::legacy_domain::legacy_spellings(key)
 }

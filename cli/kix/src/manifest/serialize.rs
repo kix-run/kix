@@ -1,4 +1,4 @@
-//! JSON attrset → YAML manifest serialization, directory loading.
+//! YAML manifest serialization and directory loading.
 
 use std::path::Path;
 
@@ -14,13 +14,9 @@ pub enum ManifestLoadError {
     Yaml(#[from] serde_yml::Error),
 }
 
-/// Recursively remove null values from a JSON value (in-place).
-///
-/// Only nulls. An empty object is content in a Kubernetes manifest:
-/// `emptyDir: {}` is a volume, `subresources: {status: {}}` enables a CRD's
-/// status subresource, `securityContext: {}` is an explicit choice. This
-/// used to drop objects left empty after stripping, and `kix build` and
-/// `kix export` wrote YAML that no longer said what the build said.
+/// Recursively remove `null` values from a JSON value in place while preserving
+/// empty objects (`{}`), which carry meaning in Kubernetes manifests (such as
+/// `emptyDir: {}`, `subresources: {status: {}}`, or `securityContext: {}`).
 pub fn strip_nulls(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Array(arr) => {

@@ -78,13 +78,13 @@ impl ResourceGraph {
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
                 {
-                    // Tagged format: bare hash (implicit), requires:<hash>, extra:<hash>
+                    // Dependencies may be bare hashes or prefixed with `requires:` or `extra:`.
                     let dep_hash = dep_entry
                         .strip_prefix("requires:")
                         .or_else(|| dep_entry.strip_prefix("extra:"))
                         .unwrap_or(dep_entry);
                     if let Some(&to_idx) = hash_to_node.get(dep_hash) {
-                        // Edge: from depends on to
+                        // Directed edge from dependent to dependency.
                         graph.add_edge(from_idx, to_idx, ());
                     }
                     // Dependencies may refer to imported resources outside this set.
@@ -96,9 +96,7 @@ impl ResourceGraph {
         // Rewriting them to PackageInstance nodes creates cycles when packages
         // depend on each other.
 
-        // Reject cycles before scheduling.
         if petgraph::algo::is_cyclic_directed(&graph) {
-            // Name one node in the cycle.
             let cycle_node = petgraph::algo::toposort(&graph, None)
                 .err()
                 .map(|cycle| graph[cycle.node_id()].id.display_id())
@@ -125,22 +123,19 @@ impl ResourceGraph {
         self.graph.edge_count()
     }
 
-    /// Reverse-topological ordering of the resource IDs: every node appears
-    /// after all of its dependents. Used for safe deletion / prune ordering
-    /// where we must remove consumers before the providers they reference.
+    /// Return resource IDs in reverse topological order so every node appears
+    /// after all of its dependents.
     ///
-    /// Falls back to the natural (kind, namespace, name) order when the
-    /// graph has a cycle. Deletion is best-effort, and a cycle among
-    /// orphans is not an error we want to propagate.
+    /// Used during pruning to remove consumers before the providers they
+    /// reference. Falls back to natural `(kind, namespace, name)` order when
+    /// the graph has a cycle.
     pub fn reverse_topo_ids(&self) -> Vec<ResourceId> {
         use petgraph::Direction;
         use std::collections::HashMap;
 
         let dag = &self.graph;
-        // Out-degree in the ResourceGraph model = number of dependencies of a
-        // node. Reverse-topo = delete leaves (zero dependents) first, then
-        // work inward. We pop nodes with zero *incoming* edges (no dependents
-        // left) because edges point from dependent to predecessor.
+        // Pop nodes with zero incoming edges (no remaining dependents) first,
+        // since edges point from dependent to dependency.
         let mut in_degree: HashMap<_, usize> = dag
             .node_indices()
             .map(|i| (i, dag.neighbors_directed(i, Direction::Incoming).count()))
@@ -303,13 +298,12 @@ impl ResourceGraph {
         visited.pop();
     }
 
-    /// The graph as `kix graph --format json` prints it.
+    /// Serialize the graph to the JSON format emitted by `kix graph --format json`.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self.listing()).expect("a GraphListing serializes")
     }
 
-    /// Every node and edge, in the graph's order: the order of the
-    /// manifests it was built from.
+    /// Return every node and edge in manifest order.
     pub fn listing(&self) -> GraphListing {
         let nodes = self
             .graph
@@ -390,7 +384,7 @@ mod tests {
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
-    /// The nodes `id` has an edge to: what it depends on.
+    /// Return the nodes that `id` depends on.
     fn dependencies<'a>(graph: &'a ResourceGraph, id: &ResourceId) -> Vec<&'a ResourceNode> {
         let dag = &graph.graph;
         dag.node_indices()
@@ -454,7 +448,7 @@ mod tests {
         assert!(matches!(result.unwrap_err(), GraphError::CycleDetected(_)));
     }
 
-    /// Helper: manifest with a `kix.run/package` annotation set.
+    /// Build a manifest with `kix.run/package` set.
     fn pkg_manifest(
         kind: &str,
         name: &str,
@@ -482,15 +476,8 @@ mod tests {
 
     #[test]
     fn cross_package_edge_is_not_collapsed_to_pi() {
-        // Package A: pi_a, workload_a. Package B: pi_b, consumer_b, where
-        // consumer_b has a direct edge to workload_a (cross-package).
-        //
-        // The graph keeps that direct edge as written and synthesizes no
-        // consumer_b-to-pi_a edge. PI collapse is disabled because it
-        // produced cycles whenever two packages referenced each other. The
-        // "wait for the whole package" semantics will come back as a wave
-        // gate, not as a DAG edge. This test pins the current contract so
-        // the disabled block cannot silently come back half-way.
+        // Cross-package edges point directly to the referenced resource without
+        // synthesizing an edge to the target's `PackageInstance`.
         let manifests = vec![
             pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
             pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
@@ -523,8 +510,8 @@ mod tests {
 
     #[test]
     fn intra_package_edges_are_not_collapsed() {
-        // Two resources in the same package: no PI rewrite. The PI edge
-        // would collapse to the source's own PI, which is skipped.
+        // Intra-package edges point directly to the referenced resource without
+        // adding a `PackageInstance` edge.
         let manifests = vec![
             pkg_manifest("ConfigMap", "cm", "ns-a", "h_cm", "", "pkg-a"),
             pkg_manifest("Deployment", "dep", "ns-a", "h_dep", "h_cm", "pkg-a"),
@@ -546,16 +533,13 @@ mod tests {
         };
         let deps = dependencies(&graph, &dep_id);
 
-        // Deployment depends only on ConfigMap; no PI edge is added.
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].id.name, "cm");
     }
 
     #[test]
     fn cross_package_edge_duplicate_is_not_added_twice() {
-        // Consumer already has a direct edge to pi_a (e.g. because the
-        // package author wrote `root = { ...; requires = [ otherPkg ]; }`).
-        // The cross-package rewrite must not add a duplicate edge.
+        // Explicit edges to a `PackageInstance` are preserved without duplication.
         let manifests = vec![
             pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
             pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
@@ -583,13 +567,11 @@ mod tests {
 
     #[test]
     fn unpackaged_resources_are_not_rewritten() {
-        // Activation CR style: no kix.run/package annotation. An edge from
-        // an unpackaged node to a packaged resource should not be rewritten,
-        // since the src has no package identity.
+        // Edges from resources without `kix.run/package` (such as `Activation`)
+        // point directly to the referenced resource.
         let manifests = vec![
             pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
             pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
-            // No kix.run/package on this one.
             manifest("Activation", "root", CLUSTER_SCOPED, "h_act", "h_wa"),
         ];
 
@@ -600,7 +582,6 @@ mod tests {
             name: "root".into(),
         };
         let deps = dependencies(&graph, &act_id);
-        // Only the direct edge to controller remains.
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].id.name, "controller");
     }

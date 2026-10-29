@@ -1,8 +1,8 @@
-//! Check cluster integrity by walking identity-hash dependencies.
+//! Check cluster integrity by walking `kix.run/identity-hash` dependencies.
 //!
-//! No nix build required. Finds the active Activation CR, fetches all
-//! kix-managed resources, builds an identity-hash index, and walks the
-//! dependency graph to verify integrity.
+//! Locates the active Activation CR, fetches Kix-managed resources for the
+//! cluster, indexes them by identity hash, and walks their dependency graph
+//! without evaluating a Nix flake.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -20,7 +20,6 @@ use super::CommandContext;
 use kix::manifest::keys;
 use kix::manifest::lifecycle::declares_own_deletion;
 
-// Annotation keys
 const IDENTITY_HASH: &str = keys::IDENTITY_HASH;
 const DEPENDS_ON: &str = keys::DEPENDS_ON;
 const PACKAGE: &str = keys::PACKAGE;
@@ -38,20 +37,20 @@ struct LiveResource {
     raw: serde_json::Value,
 }
 
-/// Per-resource health status after graph walk.
+/// Per-resource health status after walking the dependency graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ResourceHealth {
-    /// Reachable from activation root, all deps present.
+    /// Reachable from the activation root with all dependencies present.
     Healthy,
     /// Import marker for an external resource.
     External,
-    /// Referenced in depends-on but not found in live resources.
+    /// Referenced in `depends-on` but absent from live resources.
     Missing { expected_by: String },
-    /// Run-to-completion resource that declared its own deletion (a hook Job
-    /// with `hook-succeeded` delete policy, or `ttlSecondsAfterFinished`) and
-    /// is gone. Absence is the success path, not a fault.
+    /// Run-to-completion resource that declared its own deletion (such as a
+    /// hook Job with a `hook-succeeded` delete policy or
+    /// `ttlSecondsAfterFinished`) and has already been removed.
     Reaped { expected_by: String },
-    /// Resource itself is OK, but depends on something unhealthy.
+    /// Resource is present on the cluster, but depends on an unhealthy resource.
     AtRisk { reason: String },
 }
 
@@ -127,7 +126,6 @@ impl PackageHealth {
 pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
 
-    // 1. Connect to cluster
     crate::say!("Connecting to cluster...");
 
     let (activation, resources) = ctx.runtime.block_on(async {
@@ -139,7 +137,6 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .await
             .map_err(|e| miette!("{e}"))?;
 
-        // 2. Find active Activation CR
         let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
         let active = records
@@ -148,7 +145,6 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .map_err(|e| miette!("{e}"))?
             .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
 
-        // 3. Fetch this cluster's kix-managed resources
         let live_objects = inventory::fetch_managed_resources(
             &client,
             &discovery,
@@ -167,14 +163,12 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         activation.identity_hash.as_deref().unwrap_or("unknown"),
     );
 
-    // 4. Parse live resources and build identity-hash index
     let mut live_by_hash: HashMap<String, LiveResource> = HashMap::new();
 
     for obj in resources {
-        // Whole object: metadata lives on the typed field, not in `.data`.
+        // `DynamicObject` stores metadata on its typed `metadata` field rather than in `data`.
         let rid = ResourceId::from_value(&to_manifest_value(&obj));
 
-        // Read annotations from typed metadata (more reliable than raw data)
         let annotations = obj.metadata.annotations.as_ref();
         let identity_hash = annotations
             .and_then(|a| keys::get_meta(a, IDENTITY_HASH))
@@ -199,7 +193,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| {
-                // Strip an optional dependency type prefix.
+                // Strip an optional `<kind>:` prefix from the dependency entry.
                 s.rsplit_once(':')
                     .map(|(_, hash)| hash)
                     .unwrap_or(s)
@@ -208,7 +202,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .collect();
 
         if identity_hash.is_empty() {
-            continue; // Skip resources without identity hash (not kix-stamped)
+            continue;
         }
 
         live_by_hash.insert(
@@ -225,9 +219,8 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         );
     }
 
-    // 5. Filter to only resources reachable from the active activation.
-    //    Old/superseded activations and their orphaned deps are excluded so
-    //    they don't pollute the health report.
+    // Keep only resources reachable from the active activation so superseded
+    // activations and orphaned dependencies do not appear in the report.
     let active_hash = activation.identity_hash.as_deref().unwrap_or("");
     let reachable = reachable_from(active_hash, &live_by_hash);
     let live_by_hash: HashMap<String, LiveResource> = live_by_hash
@@ -237,10 +230,8 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 
     crate::say!("{} kix-managed resources on cluster", live_by_hash.len());
 
-    // 6. Walk the dependency graph from activation root
     let health_map = walk_graph(&activation, &live_by_hash, ctx.global.verbose);
 
-    // 7. Group by package and display
     let packages = group_by_package(&live_by_hash, &health_map);
     display_results(&packages, ctx.global.verbose);
 
@@ -252,23 +243,19 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-/// Check every resource's dependencies against the live index.
-/// Checks all resources directly; no root is required.
+/// Evaluate each resource's dependencies against `live_by_hash`.
 fn walk_graph(
     _activation: &Record,
     live_by_hash: &HashMap<String, LiveResource>,
     verbose: u8,
 ) -> BTreeMap<String, ResourceHealth> {
     let mut health: BTreeMap<String, ResourceHealth> = BTreeMap::new();
-    let mut missing_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash to expected_by
-    let mut reaped_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash to expected_by
+    let mut missing_hashes: BTreeMap<String, String> = BTreeMap::new();
+    let mut reaped_hashes: BTreeMap<String, String> = BTreeMap::new();
 
-    // Pre-pass: an absent dependency is only a fault if it was supposed to
-    // still be there. Hook Jobs delete themselves on success (delete policy)
-    // or are reaped by the TTL controller, so their absence is the success
-    // path. The manifest is not on the cluster to ask, but the seal that
-    // minted the hash is in the local Nix store. That is what
-    // `resolve_hash_to_rid` already reads to name missing resources.
+    // Identify absent dependencies whose sealed manifest in `/nix/store`
+    // declares self-deletion (such as a hook Job with a delete policy or TTL)
+    // so they are reported as `Reaped` rather than `Missing`.
     let reaped: std::collections::HashSet<String> = live_by_hash
         .values()
         .filter(|r| !r.is_import)
@@ -280,9 +267,7 @@ fn walk_graph(
         .cloned()
         .collect();
 
-    // First pass: check each resource's direct dependencies
     for (hash, resource) in live_by_hash {
-        // Import markers refer to external resources.
         if resource.is_import {
             health.insert(hash.clone(), ResourceHealth::External);
             continue;
@@ -344,8 +329,8 @@ fn walk_graph(
         }
     }
 
-    // Second pass: propagate at-risk forward through transitive deps.
-    // If resource A depends on B and B is at-risk, A becomes at-risk too.
+    // Propagate `AtRisk` transitively to resources that depend on an `AtRisk`
+    // resource.
     let mut changed = true;
     while changed {
         changed = false;
@@ -372,14 +357,12 @@ fn walk_graph(
         }
     }
 
-    // Record missing resources
     for (hash, expected_by) in missing_hashes {
         health
             .entry(hash)
             .or_insert(ResourceHealth::Missing { expected_by });
     }
 
-    // Record reaped run-to-completion resources
     for (hash, expected_by) in reaped_hashes {
         health
             .entry(hash)
@@ -389,7 +372,7 @@ fn walk_graph(
     health
 }
 
-/// BFS from a root hash to find all transitively reachable identity hashes.
+/// Return all identity hashes transitively reachable from `root_hash`.
 fn reachable_from(
     root_hash: &str,
     live_by_hash: &HashMap<String, LiveResource>,
@@ -415,7 +398,6 @@ fn reachable_from(
     visited
 }
 
-/// Group resources by package for display.
 fn group_by_package(
     live_by_hash: &HashMap<String, LiveResource>,
     health_map: &BTreeMap<String, ResourceHealth>,
@@ -423,7 +405,6 @@ fn group_by_package(
     let mut pkg_map: BTreeMap<(String, String), Vec<(ResourceId, ResourceHealth)>> =
         BTreeMap::new();
 
-    // Add live resources grouped by package
     for (hash, resource) in live_by_hash {
         let health = health_map
             .get(hash)
@@ -436,8 +417,8 @@ fn group_by_package(
             .push((resource.rid.clone(), health));
     }
 
-    // Add resources that exist only as a hash: never applied (missing) or
-    // applied, completed and removed on purpose (reaped).
+    // Bucket missing and reaped dependencies, which exist only in `health_map`
+    // and not in `live_by_hash`.
     for (hash, health) in health_map {
         if live_by_hash.contains_key(hash) {
             continue;
@@ -482,7 +463,6 @@ fn group_by_package(
 fn display_results(packages: &[PackageHealth], verbose: u8) {
     crate::say!();
 
-    // Package summary table
     println!("{}", output::bold("Packages:"));
     for pkg in packages {
         let total = pkg.resources.len();
@@ -549,9 +529,8 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
         }
     }
 
-    // Detailed resource-level output for anything not plainly in-sync.
-    // Reaped hooks are named too: they used to read as MISSING, so saying
-    // which ones completed is the point of the section.
+    // Print per-resource detail for unhealthy packages and packages with
+    // completed self-deleting hooks.
     let detailed_packages: Vec<&PackageHealth> = packages
         .iter()
         .filter(|p| !p.is_healthy() || p.reaped_count() > 0)
@@ -640,7 +619,6 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
         }
     }
 
-    // Summary line
     let total_healthy: usize = packages
         .iter()
         .flat_map(|p| &p.resources)
@@ -689,12 +667,8 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
     println!();
 }
 
-/// Locate the seal that minted an identity hash in the local nix store.
-///
-/// A hash names exactly one store path, so a directory scan for the
-/// `{hash}-` prefix is the whole lookup. Returns `None` when the store does
-/// not have it, for example when health runs on a machine that never built this
-/// activation, or after a `nix-collect-garbage`.
+/// Find the store path in `/nix/store` matching `{hash}-*`, or `None` if the
+/// local store does not have that derivation.
 fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
     let prefix = format!("{}-", hash);
     std::fs::read_dir("/nix/store")
@@ -704,25 +678,21 @@ fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
         .map(|e| e.path())
 }
 
-/// Read the sealed manifest behind an identity hash from the local nix store.
-/// The seal is the manifest JSON as it was at eval time, which is how health
-/// can still reason about a resource that is no longer on the cluster.
+/// Read the sealed manifest JSON for `hash` from `/nix/store` and upgrade
+/// legacy annotation keys to the current domain.
 fn read_seal(hash: &str) -> Option<serde_json::Value> {
     let path = store_path_for_hash(hash)?;
     let contents = std::fs::read_to_string(path).ok()?;
     let mut value: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    // Until the first deploy after the domain move, the hashes that reach
-    // here are pre-move store hashes, so the seal behind them spells its
-    // annotations under the retired domain. These are Nix-rendered keys, not
-    // CLI stamps, and readers here look them up by exact name: an
-    // un-upgraded seal makes every self-deleting hook Job read as Missing
-    // and `kix health` exit 1 on a healthy cluster.
+    // Upgrade pre-migration annotation keys in the sealed manifest so
+    // `declares_own_deletion` recognizes hook delete policies on clusters that
+    // have been migrated but not yet redeployed.
     kix::legacy_domain::upgrade_manifest(&mut value);
     Some(value)
 }
 
-/// Try to resolve a nix store hash to a ResourceId.
-/// Store paths follow the convention: /nix/store/{hash}-k8s-{Kind}-{namespace}-{name}
+/// Parse a `ResourceId` from the `/nix/store/{hash}-k8s-{Kind}-{namespace}-{name}`
+/// store path filename, or fall back to an `Unknown` placeholder.
 fn resolve_hash_to_rid(hash: &str) -> ResourceId {
     if let Some(path) = store_path_for_hash(hash)
         && let Some(filename) = path.file_name()
@@ -748,7 +718,6 @@ fn resolve_hash_to_rid(hash: &str) -> ResourceId {
         }
     }
 
-    // Fallback: just show the hash
     let display_hash = &hash[..12.min(hash.len())];
     ResourceId {
         kind: "Unknown".to_string(),

@@ -22,15 +22,12 @@ use super::{
 };
 use crate::build_source::SopsSources;
 
-/// [`KubeResources`] and [`SopsHydrator`] with every write sent as
-/// `dryRun=All`: the resources are made here, as dry-run ones, so no path
-/// through them persists a write. Nothing persists, so nothing is written to
-/// the Activation record either: a run made with [`super::Cluster::dry_run`]
-/// has none.
+/// Dry-run wrapper over [`KubeResources`] and [`SopsHydrator`].
 ///
-/// Keeps what the apiserver answered for each object in a [`Journal`]: the
-/// object an apply would produce, a recreate, a prune answer, or the typed
-/// reason it was refused.
+/// Every write is sent with `dryRun=All` so nothing persists to the cluster,
+/// and no Activation record is created. The [`Journal`] records what the
+/// apiserver returned for each object: the previewed apply result, a recreate,
+/// a prune outcome, or the typed refusal.
 pub(crate) struct DryRun {
     resources: KubeResources,
     secrets: SopsHydrator,
@@ -59,8 +56,7 @@ impl DryRun {
         }
     }
 
-    /// What the apiserver answered for each object so far. Drains the
-    /// journal.
+    /// Drain and return the recorded dry-run answers from the journal.
     pub(crate) fn take_answers(&self) -> Vec<DryRunAnswer> {
         self.journal.take()
     }
@@ -104,12 +100,11 @@ impl ResourceIo for DryRun {
         let rid = ResourceId::from_value(manifest);
         let (ar, scope, api, _) = self.resources.delete_for_recreate(&rid).await?;
 
-        // The delete was checked but nothing went away, so the dry-run apply
-        // of the changed manifest hits the immutable-field 422 the real path
-        // avoids by deleting first. Every other answer (schema, admission,
-        // RBAC, field conflicts) is the validation a dry run promises, so
-        // the apply still runs; only that one error is the expected "would
-        // be created after the delete".
+        // Because the dry-run delete does not remove the live object, the
+        // subsequent dry-run apply still sees the old immutable fields and may
+        // fail with a 422 immutable-field conflict. We still run the apply to
+        // validate schema, admission, RBAC, and field ownership, and treat an
+        // immutable-field conflict as a successful recreate preview.
         let existing = api
             .get_opt(&rid.name)
             .await
@@ -152,7 +147,7 @@ impl ResourceIo for DryRun {
             .await
     }
 
-    /// A dry run persists no CRD, so there is nothing new to discover.
+    /// Do nothing because a dry run persists no CRDs.
     async fn rediscover(&self) -> Result<(), FetchError> {
         Ok(())
     }
@@ -163,8 +158,8 @@ impl ResourceIo for DryRun {
             Ok(Pruned::Deleted | Pruned::Gone) => PruneAnswer::Deleted,
             Ok(Pruned::Kept(shared)) => PruneAnswer::KeptShared(shared.describe()),
             Ok(Pruned::Changed(_)) => PruneAnswer::KeptChanged,
-            // No answer to keep: the delete never reached the apiserver. The
-            // engine reports the failed node with this error.
+            // Skip recording an answer when the delete never reached the
+            // apiserver. The engine reports the failed node with this error.
             Err(DeleteError::NotDiscovered(_)) => return deleted,
             Err(e) => PruneAnswer::Refused(e.to_string()),
         };

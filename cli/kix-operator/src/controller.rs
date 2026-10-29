@@ -1,4 +1,4 @@
-//! Reconcile Activation resources for the kix operator.
+//! Reconcile Activation resources for the Kix operator.
 //!
 //! # Phase-based lifecycle
 //!
@@ -16,7 +16,7 @@
 //!
 //! Both new deployments and drift correction use the same path:
 //! 1. Load desired manifests from `spec.source.path`
-//! 2. Fetch the live kix-managed resources of the record's Kix cluster
+//! 2. Fetch the live Kix-managed resources of the record's Kix cluster
 //! 3. Compare identity-hashes (desired vs live) to determine Apply/Skip/Orphan
 //! 4. Wave-plan and apply
 //!
@@ -103,10 +103,6 @@ pub enum OperatorError {
     LifecycleError(String),
 }
 
-// ---------------------------------------------------------------------------
-// Helpers for reading Activation CR fields
-// ---------------------------------------------------------------------------
-
 /// Extract the source store path from an Activation CR.
 fn source_path(activation: &DynamicObject) -> Option<std::path::PathBuf> {
     activation
@@ -116,16 +112,12 @@ fn source_path(activation: &DynamicObject) -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-// ---------------------------------------------------------------------------
-// Store graph loading
-// ---------------------------------------------------------------------------
-
-/// The stamped manifests of the build in the result directory `path`.
+/// Load the stamped manifests of the build in `path`.
 ///
-/// Not refused for a retired domain ([`Build::installable`]): the record
-/// may name a build from before the domain move, as `kix rollback
-/// --operator` does, and `kix deploy` has already checked a new build
-/// before it writes the record.
+/// Does not reject retired domains ([`Build::installable`]): the record may
+/// reference a build created before a domain migration (such as during
+/// `kix rollback --operator`), and `kix deploy` validates new builds before
+/// writing the record.
 fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
     let build = Build::local(path, &|_| {}).map_err(|e| OperatorError::StoreGraphError {
         path: path.display().to_string(),
@@ -139,8 +131,7 @@ fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
         .collect())
 }
 
-/// The operator's error for a live plan that could not be made, worded as
-/// the step that failed.
+/// Map a [`LivePlanError`] to the corresponding [`OperatorError`] variant.
 fn operator_error(e: LivePlanError) -> OperatorError {
     match e {
         LivePlanError::Fetch(_) | LivePlanError::Domain(_) => {
@@ -152,13 +143,7 @@ fn operator_error(e: LivePlanError) -> OperatorError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main reconcile function
-// ---------------------------------------------------------------------------
-
-/// Main reconcile function called by the kube-rs controller runtime.
-///
-/// Dispatch reconciliation according to the Activation phase.
+/// Reconcile an Activation resource according to its current phase.
 pub async fn reconcile_activation(
     activation: Arc<DynamicObject>,
     ctx: Arc<Context>,
@@ -174,7 +159,6 @@ pub async fn reconcile_activation(
         own_cluster.clone()
     };
 
-    // Handle deletion (finalizer)
     if activation.metadata.deletion_timestamp.is_some() {
         return handle_delete(&activation, &ctx, name, &own_cluster).await;
     }
@@ -183,22 +167,16 @@ pub async fn reconcile_activation(
     let phase = record.phase.as_str();
 
     match phase {
-        // Superseded activations require no further work.
         s if s == PHASE_SUPERSEDED => {
             tracing::debug!(name, "Activation is Superseded, skipping");
             Ok(Action::await_change())
         }
 
-        // Queued or new (no phase yet): handle activation switchover.
-        //
-        // A record with no phase is not necessarily a queued deploy waiting
-        // for us. The CLI creates its record at the start of a run and marks
-        // it Deploying a round trip later (kixpkgs#82), so for a moment it
-        // looks exactly like this. Adopting one would supersede the Active
-        // record before the CLI had applied anything, stamp our finalizer on
-        // a record we do not own, and put two writers on one closure.
-        // `spec.source` is the discriminator: we write it when we adopt a
-        // deploy, and the CLI never does. Same rule as the Deploying arm.
+        // Ignore records without `spec.source`. The CLI creates an Activation
+        // record before marking it `Deploying`, so a newly created CLI record
+        // briefly has an empty phase. Adopting it here would supersede the
+        // Active record before the CLI applies anything, attach the operator
+        // finalizer to a CLI-owned record, and run two writers concurrently.
         s if s.is_empty() || s == PHASE_QUEUED => {
             if source_path(&activation).is_none() {
                 tracing::debug!(name, "record has no spec.source; not ours to drive");
@@ -206,14 +184,13 @@ pub async fn reconcile_activation(
             }
             tracing::info!(name, cluster = %cluster, "Processing Queued activation");
 
-            // 1. Find all Queued activations for this cluster
             let queued = ctx
                 .records
                 .queued(&cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
-            // 2. If there are newer Queued CRs, supersede this one
+            // If a newer Queued activation exists, supersede this one.
             if let Some(newest) = queued.first()
                 && newest.name != name
             {
@@ -229,7 +206,7 @@ pub async fn reconcile_activation(
                 return Ok(Action::await_change());
             }
 
-            // 3. Supersede all other Queued activations (older ones)
+            // Supersede any older Queued activations.
             for q in &queued {
                 if q.name != name {
                     tracing::info!(name, superseding = %q.name, "Superseding older Queued activation");
@@ -240,7 +217,6 @@ pub async fn reconcile_activation(
                 }
             }
 
-            // 4. Find and supersede current Active activation
             let old_active = ctx
                 .records
                 .active(&cluster)
@@ -255,18 +231,16 @@ pub async fn reconcile_activation(
                     .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
             }
 
-            // 5. Ensure finalizer is set, then fall through to reconcile
             ensure_finalizer(&ctx.records, name, &activation).await?;
 
-            // Run reconcile with lifecycle management (will set phase to Active on success)
             return run_reconcile(&activation, &ctx, name, true).await;
         }
 
-        // Active and Degraded records run drift detection on requeue. Degraded means the
-        // last deploy completed with some failures; the CR is still the
-        // current intended state and we want drift correction to keep trying.
+        // Active and Degraded records run drift detection on requeue. Degraded
+        // means the last deploy completed with some failures, but the CR is
+        // still the current intended state.
         s if s == PHASE_ACTIVE || s == PHASE_DEGRADED => {
-            // Yield to a queued Activation so it can perform the transition.
+            // Yield to any queued Activation so it can perform the transition.
             let queued = ctx
                 .records
                 .queued(&cluster)
@@ -282,23 +256,14 @@ pub async fn reconcile_activation(
                 return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
             }
 
-            // Ensure finalizer
             ensure_finalizer(&ctx.records, name, &activation).await?;
 
-            // Run reconcile without lifecycle management (already Active)
             return run_reconcile(&activation, &ctx, name, false).await;
         }
 
-        // Deploying: a resume, the same as a Queued one already transitioning.
-        //
-        // Unless nobody asked us. The CLI now creates its record at the start
-        // of a deploy rather than the end (kixpkgs#82), so a `Deploying`
-        // record is just as likely to be a `kix deploy` in flight on
-        // somebody's laptop. `spec.source` is what tells the two apart: the
-        // operator writes it when it adopts a deploy, and the CLI never does.
-        // Reconciling one of those would mean two writers on the same
-        // closure, and stamping our finalizer on it would leave the CLI's
-        // record undeletable by anything but us.
+        // Resume an interrupted operator deployment. Records without
+        // `spec.source` belong to an in-flight CLI `kix deploy` and must not
+        // be adopted by the operator.
         s if s == PHASE_DEPLOYING => {
             if source_path(&activation).is_none() {
                 tracing::debug!(
@@ -327,21 +292,18 @@ pub async fn reconcile_activation(
     }
 }
 
-/// Unified reconcile: load desired state, fetch live state, diff, wave-plan, apply.
+/// Load desired state, fetch live state, diff, wave-plan, and apply.
 ///
-/// If `manage_lifecycle` is true, the run writes the record's lifecycle
-/// (begin_deploy/record_waves/finalize_deploy). Used for new deployments.
-/// If false, run drift correction without lifecycle changes.
+/// When `manage_lifecycle` is true, records deployment lifecycle transitions
+/// on the Activation CR (`begin_deploy`, `record_waves`, and `finalize_deploy`).
+/// When false, runs drift correction without modifying the Activation phase.
 async fn run_reconcile(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
     manage_lifecycle: bool,
 ) -> Result<Action, OperatorError> {
-    // 1. Resolve source store path
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
-
-    // 2. Load desired manifests
     let new_manifests = load_manifests(&path)?;
 
     if new_manifests.is_empty() {
@@ -349,10 +311,9 @@ async fn run_reconcile(
         return Ok(Action::requeue(requeue_interval()));
     }
 
-    // 3. Filter out CRDs and Activation CRs
-    //    CRDs: re-applying triggers API watch restarts.
-    //    Activation CRs: the Activation is the control input. Applying the
-    //    Nix-generated manifest would overwrite spec.source via SSA.
+    // Exclude CRDs (re-applying them triggers API watch restarts) and
+    // Activation CRs (applying the Nix-generated manifest would overwrite
+    // `spec.source` via server-side apply).
     let managed_manifests: Vec<Value> = new_manifests
         .iter()
         .filter(|m| {
@@ -367,8 +328,6 @@ async fn run_reconcile(
         return Ok(Action::requeue(requeue_interval()));
     }
 
-    // 4. Compare desired vs live by identity-hash, over this Kix cluster's
-    //    live objects only, and plan the changes.
     let plan = LivePlan::sweep(&ctx.client, activation, &managed_manifests)
         .await
         .map_err(operator_error)?;
@@ -395,11 +354,8 @@ async fn run_reconcile(
         "Live change detection complete"
     );
 
-    // 5. Run the DAG-streaming scheduler.
-    //
     // TODO(operator-cancel): wire this token to a per-Activation supervisor
-    // so a newer Activation can cancel the in-flight loop. This caller does
-    // not currently trigger cancellation.
+    // so a newer Activation can cancel the in-flight loop.
     let config = SchedulerConfig {
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
@@ -447,11 +403,11 @@ async fn run_reconcile(
 
 /// Handle deletion of an Activation CR (finalizer cleanup).
 ///
-/// Only Active, Deploying or Degraded activations trigger resource cleanup,
-/// and it keeps the kinds `never_pruned` protects and the objects another
-/// Kix cluster's current build still contains (see [`delete_closure`]).
-/// Superseded activations just get the finalizer removed (the Active
-/// activation owns those resources now).
+/// Only Active, Deploying, or Degraded activations trigger resource cleanup,
+/// keeping kinds protected by `never_pruned` and objects still referenced by
+/// another Kix cluster's active build (see [`delete_closure`]). Superseded
+/// activations simply have their finalizer removed because the Active
+/// activation now owns their resources.
 async fn handle_delete(
     activation: &DynamicObject,
     ctx: &Context,
@@ -467,7 +423,6 @@ async fn handle_delete(
     let record = Record::of(activation);
     let phase = record.phase.as_str();
 
-    // Only clean up resources for current activations
     if phase == PHASE_ACTIVE || phase == PHASE_DEPLOYING || phase == PHASE_DEGRADED {
         tracing::info!(
             name,
@@ -516,7 +471,6 @@ async fn handle_delete(
         );
     }
 
-    // Remove finalizer
     let rest: Vec<String> = finalizers
         .iter()
         .filter(|f| f.as_str() != FINALIZER)
@@ -531,11 +485,11 @@ async fn handle_delete(
     Ok(Action::await_change())
 }
 
-/// Delete a deleted record's closure in `ordered` order through
-/// [`PruneGuard`]: an object another Kix cluster's current build contains,
-/// such as a shared ClusterRole, stays. `cluster` is the record's Kix
-/// cluster; the record is still listed while its finalizer holds it, so its
-/// own hash counts as this cluster's.
+/// Delete a deleted record's resources in `ordered` order through
+/// [`PruneGuard`], preserving any object still referenced by another Kix
+/// cluster's current build (such as a shared ClusterRole). `cluster` is the
+/// record's Kix cluster; because the record remains listed while its finalizer
+/// is present, its own hash still counts as belonging to `cluster`.
 async fn delete_closure(
     client: &Client,
     records: &Records,
@@ -567,10 +521,6 @@ async fn delete_closure(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Finalizer management
-// ---------------------------------------------------------------------------
-
 /// Ensure the finalizer is set on the Activation CR.
 async fn ensure_finalizer(
     records: &Records,
@@ -594,11 +544,7 @@ async fn ensure_finalizer(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Error policy
-// ---------------------------------------------------------------------------
-
-/// Error policy: requeue with backoff on errors.
+/// Requeue failed reconciliations after [`ERROR_REQUEUE_INTERVAL`].
 pub fn error_policy(
     _activation: Arc<DynamicObject>,
     error: &OperatorError,

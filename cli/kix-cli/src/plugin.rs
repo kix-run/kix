@@ -1,14 +1,12 @@
-//! `kix NAME ARGS...` runs the plugin `kix-NAME ARGS...` from PATH, the way
-//! git and cargo run their external commands. A plugin is any program: kix
-//! loads no code and has no plugin interface beyond this one.
+//! External subcommand dispatch (`kix <NAME> <ARGS>...` runs `kix-<NAME>` from `PATH`).
 //!
-//! kix replaces itself with the plugin, so the plugin's exit status and
-//! signals are kix's own. The global flags given before NAME reach the
-//! plugin as the environment variables kix reads them from (`KIX_FLAKE`,
-//! `KIX_CONTEXT`, `KIX_OUTPUT` and the rest, on `GlobalArgs`), and
-//! `--no-color` as `NO_COLOR`. A kix the plugin runs reads the same
-//! variables, so it runs with the flags the user gave. `KIX_BIN` names this
-//! kix binary, so the plugin can run the same version.
+//! `kix` replaces its own process with the plugin executable so the plugin's
+//! exit status and signal handling apply directly. Global flags passed before
+//! `<NAME>` are forwarded via their corresponding `KIX_*` environment
+//! variables (`KIX_FLAKE`, `KIX_CONTEXT`, `KIX_OUTPUT`, and others on
+//! `GlobalArgs`), and `--no-color` is forwarded as `NO_COLOR`. `KIX_BIN` is
+//! set to the path of the current `kix` binary so the plugin can invoke the
+//! exact same version.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
@@ -19,14 +17,14 @@ use clap::ValueEnum;
 
 use crate::cli::{self, GlobalArgs};
 
-/// Runs the plugin `args` names, in place of kix. Returns only on failure.
+/// Execute the external plugin named by `args`, replacing the current process.
+/// Returns only if the plugin cannot be found or executed.
 pub fn run(args: &[OsString], global: &GlobalArgs) -> miette::Result<()> {
     let (name, rest) = args.split_first().expect("clap passes the name first");
     let path = std::env::var_os("PATH").unwrap_or_default();
     let Some(program) = name.to_str().and_then(|name| find(name, &path)) else {
-        // Not a plugin either. clap's own error says so, and suggests a
-        // command with a similar name. clap allows external commands
-        // whenever a value parser for them is set, so that goes too.
+        // Re-parse with external subcommands disabled so clap emits its
+        // standard unknown-subcommand error and "did you mean" suggestion.
         cli::command()
             .allow_external_subcommands(false)
             .external_subcommand_value_parser(clap::builder::Resettable::Reset)
@@ -49,7 +47,7 @@ pub fn run(args: &[OsString], global: &GlobalArgs) -> miette::Result<()> {
         )
     })?;
     let error = command(&program, rest, global, &kix).exec();
-    // The file exists, so "not found" means its #! interpreter is missing.
+    // The file exists, so `NotFound` from `exec` indicates a missing `#!` interpreter.
     let hint = match error.kind() {
         std::io::ErrorKind::NotFound => " (is its #! interpreter installed?)",
         _ => "",
@@ -60,11 +58,11 @@ pub fn run(args: &[OsString], global: &GlobalArgs) -> miette::Result<()> {
     ))
 }
 
-/// The first executable `kix-NAME` in an absolute directory of `path`.
+/// Find the first executable `kix-<name>` in an absolute directory of `path`.
 ///
-/// A NAME other than letters, digits, `-` and `_` is never a plugin, so
-/// `kix ../x` cannot run a file outside PATH. A relative directory in PATH
-/// is skipped for the same reason.
+/// Rejects names containing characters other than ASCII letters, digits, `-`,
+/// and `_`, and skips relative `PATH` entries so `kix ../x` cannot execute
+/// paths outside `PATH`.
 fn find(name: &str, path: &OsStr) -> Option<PathBuf> {
     let word = !name.is_empty()
         && name
@@ -82,8 +80,8 @@ fn find(name: &str, path: &OsStr) -> Option<PathBuf> {
         })
 }
 
-/// The plugin's command: its arguments, and the global flags as the
-/// environment variables kix reads them from.
+/// Build the [`std::process::Command`] for `program`, forwarding global flags
+/// via the environment variables `kix` reads them from.
 fn command(
     program: &Path,
     args: &[OsString],
@@ -125,7 +123,7 @@ mod tests {
     use super::*;
     use clap::FromArgMatches;
 
-    /// The variables `command` sets for the flags in `argv`.
+    /// Return the environment variables set by `command` for `argv`.
     fn vars(argv: &[&str]) -> Vec<(String, String)> {
         let matches = cli::command().get_matches_from(argv);
         let global = cli::Cli::from_arg_matches(&matches).unwrap().global;
@@ -138,10 +136,9 @@ mod tests {
             .collect()
     }
 
-    /// Each global flag has an environment variable, and a plugin gets it.
-    /// `--no-color` is the exception: it reaches a plugin as `NO_COLOR`,
-    /// which kix reads on its own terms (any value turns colour off).
-    /// `KIX_OVERRIDE_INPUT` is read by `main`, not by clap.
+    // Verify that every global flag is forwarded to plugins via an environment
+    // variable (`--no-color` maps to `NO_COLOR`, and `--override-input` maps to
+    // `KIX_OVERRIDE_INPUT`).
     #[test]
     fn every_global_flag_reaches_a_plugin() {
         let set = vars(&[

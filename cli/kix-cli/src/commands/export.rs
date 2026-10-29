@@ -1,19 +1,16 @@
 //! Export a built cluster activation as Kubernetes YAML.
 //!
-//! Two modes, selected via `--for`:
+//! `--for` selects one of two export modes:
 //!
-//! - `exit` (default): strip all `kix.run/*` annotations, skip kix-internal CRs
-//!   (Activation, PackageInstance). Produces kix-neutral YAML the operator can
-//!   pass to another tool such as kubectl, Flux, or Argo.
+//! - `exit` (default) strips all `kix.run/*` annotations and omits Kix-internal
+//!   custom resources (`Activation`, `PackageInstance`), producing standard
+//!   Kubernetes YAML for tools such as `kubectl`, Flux, or Argo CD.
+//! - `audit` preserves `kix.run/*` provenance annotations and all manifests so
+//!   auditors can trace which build produced each resource.
 //!
-//! - `audit`: preserve `kix.run/*` provenance annotations and all manifests.
-//!   This mode preserves the same rendered
-//!   state but with its kix provenance intact so auditors can trace who
-//!   deployed what when.
-//!
-//! Output layout: `<out>/<namespace>/<Kind>-<name>.yaml` (nested), matching
-//! what `manifest::serialize::load_manifests_from_dir` expects, so `kix diff
-//! --from <dir>` can round-trip against the exported tree.
+//! Files are written to `<out>/<namespace>/<Kind>-<name>.yaml`, matching the
+//! layout expected by `manifest::serialize::load_manifests_from_dir` so
+//! `kix diff --from <dir>` can compare against an exported tree.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,8 +29,7 @@ use super::CommandContext;
 
 pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
     crate::esay!("Building cluster '{}'...", args.cluster);
-    // Stamped, as the deploy and diff pipelines see it. `--for=audit` keeps
-    // the annotations; `--for=exit` strips them again below.
+    // Build the full stamped graph; `--for=exit` strips Kix annotations below.
     let status = |msg: &str| {
         crate::esay!("  {msg}");
     };
@@ -53,12 +49,10 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
                 args.out
             ));
         }
-        // A forced export must remove stale YAML. Overwriting files in place
-        // leaves resources from the previous export behind, and a later
-        // `kubectl apply -R` would recreate them.
-        //
-        // Clear only a directory that has the shape of an earlier export.
-        // `--out` is user input, so deleting an arbitrary directory is unsafe.
+        // Remove the previous export directory before writing so stale YAML
+        // files do not survive into a later `kubectl apply -R`. Because `--out`
+        // is user input, refuse to delete a directory that contains anything
+        // other than exported `.yaml` files.
         if let Some(intruder) = first_non_export_entry(&out_dir)? {
             return Err(miette!(
                 "cannot overwrite '{}': it contains '{}', which Kix does not recognize as an exported file. \
@@ -78,9 +72,8 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
         let manifest = &node.manifest;
         let rid = ResourceId::from_value(manifest);
 
-        // Exit mode: drop kix-internal CRs wholesale (they only make sense to
-        // a live kix deployment and would be garbage in a neutral handoff).
-        // Audit mode keeps them.
+        // In `exit` mode, omit Kix-internal custom resources that only apply to
+        // Kix deployments.
         if matches!(args.for_mode, ExportMode::Exit)
             && kix::manifest::lifecycle::is_kix_internal_kind(&rid.kind)
         {
@@ -121,9 +114,8 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-/// Apply the per-mode manifest transform. `Exit` strips kix.run/* annotations
-/// (using the shared helper in `manifest::hash`) and null values. `Audit`
-/// is a passthrough because compliance needs the full stamped manifest.
+/// Strip nulls from `manifest`, and in `Exit` mode also strip `kix.run/*`
+/// annotations.
 fn transform_manifest(manifest: &Value, mode: ExportMode) -> Value {
     let mut v = manifest.clone();
     match mode {
@@ -138,20 +130,17 @@ fn transform_manifest(manifest: &Value, mode: ExportMode) -> Value {
     v
 }
 
-/// Serialize a single manifest to sorted-key YAML. Shares the sorting
-/// behavior of `manifests_to_yaml` so exported files match snapshot output.
+/// Serialize a single manifest to sorted-key YAML matching snapshot output.
 fn manifest_to_yaml(manifest: &Value) -> Result<String> {
-    // manifest::serialize only exposes a multi-doc writer and a dir writer
-    // that uses the flat layout. For the nested layout we want here we
-    // serialize one manifest at a time via the public multi-doc API with a
-    // one-element slice.
+    // Use the single-slice multi-document serializer because `manifest::serialize`
+    // only exposes a flat directory writer.
     let yaml = kix::manifest::serialize::manifests_to_yaml(std::slice::from_ref(manifest))
         .map_err(|e| miette!("failed to serialize manifest: {e}"))?;
     Ok(yaml)
 }
 
-/// Nested output layout: `<out>/<namespace>/<Kind>-<name>.yaml`. Cluster-scoped
-/// resources land in `<out>/_cluster/`.
+/// Return the output path `<out>/<namespace>/<Kind>-<name>.yaml` (using
+/// `_cluster` for cluster-scoped resources).
 fn output_path_for(out_dir: &Path, rid: &ResourceId) -> PathBuf {
     let ns = if rid.namespace.is_empty() {
         CLUSTER_SCOPED
@@ -173,7 +162,7 @@ fn first_non_export_entry(dir: &std::path::Path) -> Result<Option<PathBuf>> {
         let path = entry.path();
         let file_type = entry.file_type().into_diagnostic()?;
 
-        // A symlink is never followed: whatever it points at is not ours.
+        // Refuse symlinks rather than following them outside the export directory.
         if file_type.is_symlink() {
             return Ok(Some(path));
         }
@@ -219,7 +208,7 @@ mod force_guard_tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Refuse to delete a user-selected output directory containing other data.
+    /// Verify that `--force` refuses to delete an output directory containing non-YAML files.
     #[test]
     fn anything_else_stops_the_overwrite() {
         let dir = tmpdir("mixed");

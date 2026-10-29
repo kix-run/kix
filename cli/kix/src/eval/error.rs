@@ -1,4 +1,4 @@
-//! Error types for kix-eval.
+//! Error types for Nix evaluation.
 
 use thiserror::Error;
 
@@ -21,7 +21,7 @@ pub enum KixEvalError {
     #[error(transparent)]
     Nix(#[from] super::nix::NixCommandError),
 
-    /// A manifest of the build that the one parser refused.
+    /// A manifest or package index in the build could not be parsed as strict JSON.
     #[error("could not read the built resources and their dependencies: {0}")]
     NotJson(#[from] super::manifest_json::NotJson),
 }

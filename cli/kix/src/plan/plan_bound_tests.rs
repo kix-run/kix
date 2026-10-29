@@ -23,9 +23,8 @@ pub(crate) fn build() -> StoreGraph {
     super::fixtures::kix_enterprise_test()
 }
 
-/// What the planner checks for a deploy of `new` to a cluster that runs
-/// `old`, or nothing, with the flags `extra`, before the plan reads the
-/// cluster.
+/// Run the planner's objects check for a deploy of `new` over `old` with flags
+/// `extra`, before connecting to the cluster.
 fn objects(old: Option<&StoreGraph>, new: &StoreGraph, extra: &[&str]) -> Result<Objects, Unshown> {
     match plan(&deployed(old), new, flags(extra)) {
         Ok(checked) => Ok(checked.objects().clone()),
@@ -34,7 +33,7 @@ fn objects(old: Option<&StoreGraph>, new: &StoreGraph, extra: &[&str]) -> Result
     }
 }
 
-/// A store path whose hash is `seed`, padded, for a file named `name`.
+/// Build a store path with `seed` padded to 32 characters for `name`.
 fn path(seed: &str, name: &str) -> PathBuf {
     PathBuf::from(format!("/nix/store/{seed:0<32}-k8s-{name}"))
 }
@@ -414,7 +413,7 @@ fn an_object_without_a_namespace_and_one_in_default_are_both_shown() {
 
 /// The build's one-record rule counts every manifest of kind
 /// Activation, whatever its API group, so another group's Activation
-/// cannot sit beside kix's record.
+/// cannot sit beside Kix's record.
 #[test]
 fn another_groups_activation_is_refused_by_the_build() {
     let mut new = build();
@@ -462,9 +461,8 @@ fn another_groups_package_instance_is_shown_with_its_store_hash() {
     );
 }
 
-/// Whether a deploy of `deployed` from a plan reviewed for `reviewed`,
-/// both over `old`, is refused, and on which rules. Both builds carry
-/// one Activation record, so the build rule alone lets it through.
+/// Return the [`super::saved::Rule`] mismatches when deploying `deployed`
+/// against a plan reviewed for `reviewed`, both over `old`.
 fn saved_rules(
     old: Option<&StoreGraph>,
     reviewed: &StoreGraph,

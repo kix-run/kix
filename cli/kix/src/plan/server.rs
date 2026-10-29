@@ -37,7 +37,7 @@ const SERVER_METADATA: &[&str] = &[
 /// a DaemonSet's template generation moves with every template change.
 const SERVER_ANNOTATIONS: &[&str] = &["deprecated.daemonset.template.generation"];
 
-/// `obj` without server-maintained metadata, or `status`, which an apply
+/// Return `obj` without server-maintained metadata or `status`, which an apply
 /// does not write.
 pub fn comparable(obj: &Value) -> Value {
     let mut obj = obj.clone();
@@ -57,8 +57,7 @@ pub fn comparable(obj: &Value) -> Value {
     obj
 }
 
-/// What applying the build changes on the live object: `live` compared with
-/// the dry-run `result`, with every secret value hidden.
+/// Diff `live` against the dry-run `result` with secret values redacted.
 pub(crate) fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
     let config = DiffConfig::new("live", "planned");
     let mut diffs = structural_diff(&comparable(live), &comparable(result), "$", &config);
@@ -191,8 +190,7 @@ impl Overlay<'_> {
     }
 }
 
-/// Changes still from the build comparison are the commit's: the old side
-/// is the deployed build.
+/// Label remaining diffs from the build comparison as `Intended`.
 fn label_build_changes(diff: &mut PackageDiff) {
     let PackageDiff {
         changed,
@@ -209,9 +207,8 @@ fn label_build_changes(diff: &mut PackageDiff) {
     }
 }
 
-/// Package key and version for each resource of the build, the package's
-/// own PackageInstance included. Resources no package owns map to
-/// [`CLUSTER_LEVEL_KEY`].
+/// Map each resource in `graph` (including each package's PackageInstance) to
+/// its package key and version, or [`CLUSTER_LEVEL_KEY`] when unowned.
 fn membership(graph: &StoreGraph) -> HashMap<ResourceId, (String, Option<String>)> {
     let mut out = HashMap::new();
     for pkg in graph.packages.values() {
@@ -236,9 +233,8 @@ fn membership(graph: &StoreGraph) -> HashMap<ResourceId, (String, Option<String>
     out
 }
 
-/// The diff entry for package `key`, made when the package was unchanged.
-/// `None` for an added package, every resource of which is already listed
-/// as added.
+/// Return or create the [`PackageChangeDiff`] entry for package `key`, or
+/// return `None` when the package is newly added.
 fn entry<'d>(
     diff: &'d mut PackageDiff,
     key: &str,
@@ -516,7 +512,7 @@ mod tests {
         }
     }
 
-    /// The object lists of a plan's packages section, by bucket.
+    /// Return the object lists of a plan's `packages` section grouped by bucket.
     fn objects(p: &super::super::document::Packages) -> Vec<(String, Vec<String>)> {
         let mut out = Vec::new();
         for c in p.changed.iter().chain(p.cluster_level.iter()) {

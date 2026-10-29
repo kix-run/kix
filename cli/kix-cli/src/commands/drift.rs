@@ -1,6 +1,7 @@
-//! Check runtime content drift through the applied-hash stamp. This command
-//! needs a kubeconfig but no flake or Nix build because the hash is cached on
-//! the object at apply time.
+//! Check runtime content drift using the `kix.run/applied-hash` annotation.
+//!
+//! Because Kix stamps the hash on each object at apply time, this command needs
+//! only a kubeconfig and does not evaluate the flake or run a Nix build.
 
 use miette::{IntoDiagnostic, Result, miette};
 
@@ -27,8 +28,8 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
         let discovery = discovery::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
-        // Past the domain gate: on a cluster whose records sit under a
-        // retired group no object could be attributed to a Kix cluster.
+        // Open `Records` to enforce the domain gate; without it, objects under a
+        // retired API group could not be attributed to a Kix cluster.
         let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
         let (reports, tenancy) =
             drift::check_cluster(&client, &discovery, &records, args.cluster.as_deref())
@@ -48,8 +49,8 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     if json {
         print_json(&reports)?;
     } else {
-        // Name each object's clusters only when the check covered more than
-        // one, so a Kubernetes cluster with one Kix cluster reads as before.
+        // Show cluster names beside resources only when the check spans multiple
+        // Kix clusters.
         let clusters: std::collections::BTreeSet<&str> = reports
             .iter()
             .flat_map(|r| r.clusters.iter().map(String::as_str))
@@ -172,7 +173,8 @@ fn print_owner(owner: &ForeignOwner) {
     }
 }
 
-/// One line for a replicas change that Kubernetes recorded no owner for.
+/// Format a drift line for a replica-count change that Kubernetes did not record
+/// in `managedFields`.
 fn scale_line(scale: &UnrecordedScale) -> String {
     if scale.deployed == scale.live {
         format!(
@@ -188,7 +190,7 @@ fn scale_line(scale: &UnrecordedScale) -> String {
     }
 }
 
-/// The clusters a report names beside an object.
+/// Format the Kix cluster names owning a resource.
 fn owners_label(clusters: &[String]) -> String {
     if clusters.is_empty() {
         "no Kix cluster".to_string()

@@ -18,14 +18,14 @@ pub(crate) enum FailureClass {
     /// HTTP 429. The server refused the request before doing any work. Safe to
     /// retry for every method, after the interval it asked for.
     RateLimited,
-    /// HTTP 502, 503 or 504. The request may or may not have reached the server.
+    /// HTTP 502, 503, or 504. The request may or may not have reached the server.
     /// Safe to retry for idempotent methods.
     Unavailable,
     /// Any other 5xx. Safe to retry for idempotent methods.
     ServerError,
-    /// The connection failed or dropped: refused, reset, TLS, EOF.
+    /// The connection failed or dropped (refused, reset, TLS error, or EOF).
     Transport,
-    /// A deadline set by kix expired before the server answered.
+    /// A deadline set by Kix expired before the server answered.
     Timeout,
     /// HTTP 401.
     Unauthorized,
@@ -83,15 +83,15 @@ pub(crate) fn classify_service_error(err: &(dyn StdError + 'static)) -> FailureC
 
 /// Render an error with its whole `source()` chain, outermost first.
 ///
-/// kube's `Display` stops at the top: a refused connection prints as
-/// "ServiceError: client error (Connect)" and the "connection refused"
-/// underneath is lost. Command output should carry the cause.
+/// Kube's `Display` implementation prints only the top-level error (for
+/// example, `ServiceError: client error (Connect)`), hiding the underlying
+/// cause such as `connection refused`.
 pub fn describe(err: &(dyn StdError + 'static)) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut current: Option<&(dyn StdError + 'static)> = Some(err);
     while let Some(e) = current {
         let text = e.to_string();
-        // Wrappers often repeat their source's text; keep each once.
+        // Skip duplicate text when a wrapper repeats its source.
         if parts.last().is_none_or(|last| !last.ends_with(&text)) {
             parts.push(text);
         }
@@ -145,10 +145,7 @@ pub enum FetchError {
     #[error("failed to create Kubernetes client: {0}")]
     ClientError(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-    /// The endpoint swallowed the first-contact probe: no answer at all
-    /// within the deadline. A stale `server:` address, a routing blackhole, a
-    /// VPN or tailnet that is not up, or a load balancer that terminates TLS
-    /// in front of an apiserver that has stopped answering all land here.
+    /// The endpoint did not respond to the first-contact probe within `timeout`.
     #[error(
         "no response from the Kubernetes API server at {endpoint} within {}s. \
          Check the server address in your kubeconfig, or try --context <name>. \
@@ -157,8 +154,8 @@ pub enum FetchError {
     )]
     Unreachable { endpoint: String, timeout: Duration },
 
-    /// First contact failed outright: DNS, connection refused, TLS, or a
-    /// credential plugin that could not produce a token.
+    /// First contact failed due to DNS, connection refusal, TLS, or a
+    /// credential plugin error.
     #[error(
         "cannot reach the Kubernetes API server at {endpoint}: {}. \
          Check your kubeconfig, or try --context <name>.",

@@ -1,19 +1,18 @@
-//! Preflight for topology labels: do the nodes carry the labels the plan's
-//! placement rules name?
+//! Preflight check verifying that cluster nodes carry the topology labels
+//! referenced by the plan's placement rules.
 //!
-//! The compiler derives `topologySpreadConstraints` on the cluster's zone
-//! and host labels (`kix/lib/plugins/availability/module.nix`) and never
-//! sees a node. Under `DoNotSchedule` a node without the label is not a
-//! domain and cannot host the pod, so on a cluster whose nodes are labelled
-//! with custom labels, a wrong `cluster.topology.zoneKey` leaves every replica Pending.
-//! Without this check the first sign is a readiness stall that names the
-//! Deployment and nothing else. One LIST of nodes before apply turns that
-//! into a line that names the label and the nodes lacking it.
+//! The compiler derives `topologySpreadConstraints` from the cluster's zone
+//! and host labels (`kix/lib/plugins/availability/module.nix`) without
+//! inspecting live nodes. Under `DoNotSchedule`, a node without the label is not
+//! a domain and cannot host the pod. On a cluster with custom node labels, a
+//! wrong `cluster.topology.zoneKey` leaves every replica Pending. Without this
+//! check, the first sign is a readiness stall naming only the Deployment.
+//! Listing nodes once before apply reports the missing label and the affected
+//! nodes directly.
 //!
-//! Three pure steps and one call: [`topology_keys`] reads the keys out of
-//! the manifests, [`list_nodes`] fetches the labels, [`assess`] compares
-//! them, and each [`Finding`] describes itself. Only the fetch touches the
-//! cluster, so the rest is unit-tested without one.
+//! [`topology_keys`] extracts keys from the manifests, [`list_nodes`] fetches
+//! node labels from the cluster, [`assess`] compares them, and [`Finding`]
+//! formats each mismatch.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,11 +26,11 @@ use crate::manifest::workload::pod_spec;
 /// Which workloads name a topology key, split by how hard the rule is.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyUse {
-    /// `DoNotSchedule` spread or `requiredDuringScheduling` (anti-)affinity:
-    /// a node without the label cannot take the pod.
+    /// Workloads using `DoNotSchedule` spread or `requiredDuringScheduling`
+    /// affinity/anti-affinity, where a node without the label cannot run the pod.
     pub hard: BTreeSet<String>,
-    /// `ScheduleAnyway` spread or preferred (anti-)affinity: a node without
-    /// the label is merely not counted.
+    /// Workloads using `ScheduleAnyway` spread or preferred
+    /// affinity/anti-affinity, where a node without the label is simply ignored.
     pub soft: BTreeSet<String>,
 }
 
@@ -46,12 +45,12 @@ pub struct NodeLabels {
     pub labels: BTreeMap<String, String>,
 }
 
-/// What listing the nodes returned.
+/// Result of listing cluster nodes for the topology preflight check.
 #[derive(Debug)]
 pub enum NodesOutcome {
     Listed(Vec<NodeLabels>),
-    /// The account may not list nodes. A fact about the account, not a
-    /// failure of the deploy; the check is skipped and says so.
+    /// The caller's service account may not list nodes, so the preflight check
+    /// is skipped.
     Forbidden,
 }
 
@@ -70,7 +69,7 @@ pub struct Finding {
 }
 
 impl Finding {
-    /// True when the finding means pods will not schedule.
+    /// Return whether the finding prevents pods from scheduling.
     pub fn is_warning(&self) -> bool {
         !self.hard.is_empty()
     }
@@ -91,7 +90,8 @@ impl Finding {
         s
     }
 
-    /// One line, plain language, naming the label, the nodes and the effect.
+    /// Format a one-line summary naming the label, the affected nodes, and the
+    /// scheduling effect.
     pub fn describe(&self) -> String {
         let all = self.missing.len() == self.placeable;
         let where_ = if all {
@@ -130,9 +130,9 @@ impl Finding {
     }
 }
 
-/// Every topology key the manifests' placement rules name, with the
-/// workloads that name it. Reads every kind with a pod template
-/// (`manifest::workload::pod_spec`).
+/// Extract every topology key referenced by pod placement rules in
+/// `manifests`, grouped by workload and strictness. Inspects every kind with a
+/// pod template (`manifest::workload::pod_spec`).
 pub fn topology_keys(manifests: &[Value]) -> BTreeMap<String, KeyUse> {
     let mut keys: BTreeMap<String, KeyUse> = BTreeMap::new();
     for m in manifests {
@@ -198,7 +198,7 @@ fn workload_name(m: &Value) -> String {
     }
 }
 
-/// List the nodes and reduce each to its name, placeability and labels.
+/// List the nodes and reduce each to its name, placeability, and labels.
 pub async fn list_nodes(client: &Client) -> Result<NodesOutcome, kube::Error> {
     let api: Api<Node> = Api::all(client.clone());
     match api.list(&ListParams::default()).await {

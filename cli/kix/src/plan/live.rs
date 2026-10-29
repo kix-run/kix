@@ -5,9 +5,9 @@
 //! its Kix cluster instead: those already include what failed and kept
 //! deploys left, and the same loop corrects drift. [`LivePlan::sweep`]
 //! takes the Activation record being reconciled, opens the records, reads
-//! the live objects itself and plans from them, and it is the only way to
-//! make a [`LivePlan`]. So the plan the operator runs is always one made
-//! from the live objects, and the run writes the record it was made for. No
+//! the live objects itself, and plans from them. Because [`LivePlan::sweep`]
+//! is the only way to construct a [`LivePlan`], the operator always runs a
+//! plan made from live objects and writes the record it was made for. No
 //! check holds the plan to a package diff.
 
 use std::collections::BTreeMap;
@@ -35,9 +35,8 @@ use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
-/// The Kix cluster an Activation record belongs to: its `kix.run/cluster`
-/// label, which the compiler stamps on every record, else `spec.cluster`,
-/// which a record built by Nix lacks until the CLI finalizes it.
+/// Return the Kix cluster that `activation` belongs to, reading its
+/// `kix.run/cluster` label before `spec.cluster`.
 pub fn cluster_of(activation: &DynamicObject) -> Option<String> {
     activation
         .metadata
@@ -151,35 +150,35 @@ impl LivePlan {
         })
     }
 
-    /// Objects the build applies.
+    /// Return the number of objects the build applies.
     pub fn applies(&self) -> usize {
         self.applies
     }
 
-    /// Objects the build leaves as they are.
+    /// Return the number of objects the build leaves unchanged.
     pub fn unchanged(&self) -> usize {
         self.unchanged
     }
 
-    /// Orphans the prune may delete.
+    /// Return the orphans that pruning may delete.
     pub fn orphans(&self) -> &[ResourceId] {
         &self.orphans
     }
 
-    /// Orphans another Kix cluster's current build still contains, which
-    /// the prune keeps.
+    /// Return the orphans that another Kix cluster's current build still
+    /// contains, which pruning preserves.
     pub fn shared_orphans(&self) -> &[SharedOrphan] {
         &self.shared_orphans
     }
 
-    /// Live objects the sweep left out because they belong only to other
-    /// Kix clusters, counted per owner.
+    /// Return the count of live objects excluded from the sweep per other Kix
+    /// cluster.
     pub fn foreign(&self) -> &BTreeMap<String, usize> {
         &self.foreign
     }
 
-    /// Live objects that name no record of any Kix cluster, which the sweep
-    /// left out when another Kix cluster has records here.
+    /// Return the number of live objects naming no record of any Kix cluster
+    /// that the sweep excluded.
     pub fn unattributed(&self) -> usize {
         self.unattributed
     }
@@ -363,7 +362,7 @@ mod tests {
         assert!(shared.is_empty());
     }
 
-    /// One Kix cluster: every stale object is an orphan, as before scoping.
+    /// On a single Kix cluster, every stale object is an orphan.
     #[test]
     fn reconcile_on_a_single_cluster_is_unchanged() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");

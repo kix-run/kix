@@ -1,11 +1,11 @@
-//! The plan as people read it: text for the terminal and Markdown for a PR
-//! comment, for deploy, gc, diff, plan, and rollback.
+//! Terminal text and GitHub-flavored Markdown rendering for `kix plan`,
+//! `kix diff`, `kix deploy`, `kix gc`, and `kix rollback`.
 //!
-//! Package-grouped, changes-only output inspired by nvd (nix-version-diff).
-//! Shows version changes per package and resource-level diffs in verbose mode.
-//! The diff itself, [`kix::plan::PackageDiff`], and the plan document,
-//! [`kix::plan::document::Plan`], come from the library; this module and
-//! [`render`] only display them.
+//! Renders package-grouped, changes-only summaries (inspired by `nvd`) with
+//! resource-level diffs in verbose mode. The underlying diff
+//! ([`kix::plan::PackageDiff`]) and plan document
+//! ([`kix::plan::document::Plan`]) are computed in `kix`; this module and
+//! [`render`] format them for display.
 
 pub mod progress;
 pub mod render;
@@ -30,11 +30,13 @@ use kix::plan::{
 
 use crate::output;
 
-/// Write `doc`, a plan made at `--detail manifests`, and the dependency
-/// graph of `build` to `path` as a plan file, and give its SHA-256. The
-/// file is written beside `path`, read back with `PlanFile::verify`, and
-/// only then renamed to `path`, so a file that would be refused is never
-/// left there.
+/// Write `doc` (a plan generated at `--detail manifests`) and the dependency
+/// graph of `build` to `path` as a `.kixplan` file, returning its SHA-256 hex
+/// digest.
+///
+/// Writes to a temporary file in the same directory, verifies it with
+/// [`file::PlanFile::verify`], and atomically renames it into place so an
+/// invalid plan file is never left at `path`.
 pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result<String> {
     let graph = file::graph_of(build).map_err(|e| miette!("{e}"))?;
     let dir = match path.parent() {
@@ -65,11 +67,6 @@ pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result
         .map_err(|e| miette!("cannot write the plan {}: {e}", path.display()))?;
     Ok(sha256)
 }
-
-// These are the canonical PackageDiff Markdown producers. The deploy modal,
-// `kix diff`, rollback change summary, and the CI PR-comment GitHub Action
-// all consume the same output here so formats stay in sync. See
-// v2_discussions/84_m0_m1_implementation_plan.md §5.
 
 fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
     use std::fmt::Write;
@@ -269,20 +266,18 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
     out
 }
 
-/// Print a package-grouped plan, on the way to an answer. Only shows
-/// changes.
+/// Print a package-grouped plan showing only changed packages.
 pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
     output::progress_text(&render_package_plan(diff, verbose));
 }
 
-/// The text `print_package_plan` prints.
+/// Render the package-grouped text plan printed by [`print_package_plan`].
 pub fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let color = output::color_enabled();
     let config = DiffConfig::new("old", "new");
 
-    // Group packages by namespace
     let mut by_ns: BTreeMap<String, Vec<PlanEntry>> = BTreeMap::new();
 
     for p in &diff.added {
@@ -472,8 +467,8 @@ pub fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
     out
 }
 
-/// The parenthesised count after a package name: `3 resources`, or for a
-/// removed package that leaves kept resources behind, `2 removed, 1 kept`.
+/// Format the resource count summary for `info` (e.g., `3 resources` or
+/// `2 removed, 1 kept`).
 fn counts(info: &PackageInfo) -> String {
     if info.kept.is_empty() {
         return format!("{} resources", info.resource_count);
@@ -486,7 +481,8 @@ fn counts(info: &PackageInfo) -> String {
     }
 }
 
-/// A resource that left the build, but deploy and gc never delete.
+/// Write a line for a resource that left the build but is never deleted
+/// automatically.
 fn write_kept_line(out: &mut String, id: &ResourceId) {
     use std::fmt::Write;
     let _ = writeln!(
@@ -498,8 +494,8 @@ fn write_kept_line(out: &mut String, id: &ResourceId) {
     );
 }
 
-/// List resources that left the build and stay in place because deleting
-/// them would also delete objects outside the build.
+/// Print resources that left the build and are retained because deleting them
+/// would also delete objects outside the build.
 pub fn print_never_pruned(kept: &[ResourceId]) {
     print!("{}", render_never_pruned(kept));
 }
@@ -532,21 +528,19 @@ pub fn render_never_pruned(kept: &[ResourceId]) -> String {
     out
 }
 
-/// This binary, as a plan document names the Kix that made it: its own
-/// crate version, not the library's.
+/// Return the [`kix::plan::document::KixBuild`] metadata for this CLI binary.
 pub fn kix_build() -> kix::plan::document::KixBuild {
     kix::plan::document::KixBuild::current(kix::VERSION)
 }
 
-/// What deletes the orphans a warn-only run keeps. Both work because the
-/// record the run finalizes lists the builds they came from under
-/// `status.orphansKeptFrom`.
+/// Hint explaining how to delete orphans retained by a deploy without
+/// `--prune` (recorded under `status.orphansKeptFrom` on the finalized
+/// Activation).
 pub const KEPT_ORPHANS_HINT: &str = "`kix deploy --prune` or `kix gc` deletes them";
 
-/// The orphan lines of a deploy's or rollback's plan. `fate` says what the
-/// run does with the orphans prune may delete; the kinds
-/// `lifecycle::never_pruned` protects are listed apart and are never
-/// counted as orphans.
+/// Render the orphaned and protected-resource sections of a deploy or rollback
+/// plan. `fate` describes how prunable orphans will be handled, while kinds
+/// protected by `lifecycle::never_pruned` are listed separately.
 pub fn render_plan_orphans(orphans: &[ResourceId], fate: &str) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -562,8 +556,7 @@ pub fn render_plan_orphans(orphans: &[ResourceId], fate: &str) -> String {
     out
 }
 
-/// One line per orphan the prune keeps because another Kix cluster still
-/// deploys it.
+/// Print each orphan retained because another Kix cluster still deploys it.
 pub fn print_shared(shared: &[SharedOrphan]) {
     for s in shared {
         crate::say!("  {} prune: {}", output::yellow("="), s.describe());
@@ -650,7 +643,7 @@ mod render_tests {
     use kix::plan::{ManifestIndex, diff_garbage, diff_graphs};
     use serde_json::{Value, json};
 
-    /// The `packages` section of the plan document for `diff`.
+    /// Serialize the `packages` section of the plan document for `diff`.
     fn packages_json(diff: &PackageDiff, detail: Detail) -> Value {
         serde_json::to_value(Packages::of(diff, detail)).expect("packages serialize")
     }

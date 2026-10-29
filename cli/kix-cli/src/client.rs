@@ -1,18 +1,19 @@
-//! The cluster connection every command makes. The transport policy comes
-//! from the `KIX_*` environment variables, read here and nowhere else in
-//! the CLI.
+//! Shared Kubernetes client constructor for CLI commands.
+//!
+//! Transport resilience settings are read from `KIX_*` environment variables
+//! here so every command uses the same client policy.
 
 use kix::cluster::client::ResiliencePolicy;
 use kix::cluster::errors::FetchError;
 use kube::Client;
 
-/// The transport policy the environment sets.
+/// Return the transport resilience policy configured via environment variables.
 pub fn policy() -> ResiliencePolicy {
     ResiliencePolicy::from_env()
 }
 
-/// Connect through the kube context `context` (`None` for the current one)
-/// with [`policy`].
+/// Connect to the cluster using `context` (or the current kubeconfig context
+/// if `None`) and [`policy`].
 pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
     kix::cluster::client::make_client(context, policy()).await
 }

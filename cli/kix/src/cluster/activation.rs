@@ -1,24 +1,23 @@
 //! Activation CR lifecycle management.
 //!
-//! The Activation CR is the cluster-level record of "what is deployed."
-//! This module manages the state machine:
+//! The Activation CR is the cluster-level record of what is deployed. This
+//! module manages its state machine:
 //!
-//! A deploy creates a Deploying record before applying resources. Completion
-//! moves it to Active or Failed. A later deploy supersedes the current record;
-//! garbage collection removes superseded records after their resources.
+//! A deploy creates a `Deploying` record before applying resources. Completion
+//! moves it to `Active` or `Failed`. A later deploy supersedes the current
+//! record, and garbage collection removes superseded records after their
+//! resources are pruned.
 //!
-//! The record is created at the start of the deploy, not at the end. It is
-//! also a node of the plan, and by construction the last one: its spec lists
-//! every PackageInstance, so its identity hash is the root of the closure's
-//! Merkle tree. Creating it early and re-asserting it in the last wave keeps
-//! that property while making a deploy that dies mid-wave leave a truthful
-//! record of what it was attempting. Without it the next deploy has no way to
-//! know that anything was applied at all (kixpkgs#82).
+//! The record is created at the start of the deploy and re-asserted in the
+//! final wave. Because its spec lists every `PackageInstance`, its identity
+//! hash is the root of the closure's Merkle tree. Creating it early preserves
+//! that property while ensuring that a deploy interrupted mid-wave leaves an
+//! accurate record of what was attempted so the next deploy can fold its
+//! partial state into the baseline.
 //!
-//! [`Records`] is the one way to read or write the records. Opening it runs
-//! the legacy-domain gate, so no command can reach a record on a cluster
-//! whose records still sit under a retired API group. A record comes back
-//! as a [`Record`], the fields Kix reads off it.
+//! [`Records`] is the sole interface for reading and writing Activation
+//! records. Opening [`Records`] runs the legacy-domain check so commands cannot
+//! operate on records under a retired API group.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -35,8 +34,8 @@ use kube::{
 use serde_json::{Value, json};
 use thiserror::Error;
 
-/// The apiserver failed `op` on the record `name`, or on the list of
-/// records when `name` is `None`.
+/// Error returned when the API server fails an operation on an Activation
+/// record or on the list of records.
 #[derive(Error, Debug)]
 #[error("failed to {op} {}: {source}", target(.name))]
 pub struct RecordsError {
@@ -54,7 +53,7 @@ fn target(name: &Option<String>) -> String {
 }
 
 impl RecordsError {
-    /// A failed list of the records.
+    /// Construct an error for a failed record list operation.
     fn list(source: kube::Error) -> Self {
         RecordsError {
             op: "list",
@@ -63,7 +62,7 @@ impl RecordsError {
         }
     }
 
-    /// Whether the apiserver refused the request with HTTP 403.
+    /// Return `true` if the API server refused the request with HTTP 403.
     pub fn forbidden(&self) -> bool {
         matches!(
             crate::cluster::errors::classify(&self.source),
@@ -71,7 +70,7 @@ impl RecordsError {
         )
     }
 
-    /// A failed `op` on the record `name`.
+    /// Construct an error constructor for a failed `op` on the record `name`.
     fn on(op: &'static str, name: &str) -> impl FnOnce(kube::Error) -> Self {
         let name = name.to_string();
         move |source| RecordsError {
@@ -82,7 +81,7 @@ impl RecordsError {
     }
 }
 
-/// Why [`Records::open_installed`] has no records to open.
+/// Errors returned by [`Records::open_installed`].
 #[derive(Error, Debug)]
 pub enum OpenError {
     #[error(transparent)]
@@ -94,68 +93,65 @@ pub enum OpenError {
     NotInstalled,
 }
 
-/// One Activation record, read: the fields Kix reads off it.
+/// Parsed fields of an Activation record.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
     pub name: String,
-    /// `status.phase`, or "" when the record has none yet.
+    /// `status.phase`, or `""` when the record has no phase yet.
     pub phase: String,
-    /// The identity-hash annotation value. Without it the record cannot be
-    /// resolved to a closure.
+    /// `kix.run/identity-hash` annotation value used to resolve the record to a
+    /// closure.
     pub identity_hash: Option<String>,
-    /// Store path of the activation result dir (contains kix-packages.json).
+    /// Store path of the activation result directory containing `kix-packages.json`.
     pub built_via: Option<String>,
-    /// `kix.run/deployed-at`. Only a finalize writes it, so a record has it
-    /// exactly when a deploy of its closure ran to completion.
+    /// `kix.run/deployed-at` annotation value, written only by
+    /// [`Records::finalize_deploy`] when a deploy runs to completion.
     pub deployed_at: Option<String>,
-    /// `status.previousActivation`, the record this one superseded. Lets the
-    /// history walk reconstruct the deploy chain for `kix rollback --list`.
+    /// `status.previousActivation`, naming the record superseded by this one so
+    /// `kix rollback --list` can reconstruct the deploy chain.
     pub previous_activation: Option<String>,
-    /// `status.failure.reason`, for the message the next deploy prints.
+    /// `status.failure.reason`, reported by the next deploy.
     pub failure_reason: Option<String>,
-    /// `status.failure.at`, RFC 3339. Also the retention sort key once the
-    /// record is superseded, since it has no `deployed-at`.
+    /// `status.failure.at` (RFC 3339), also used as the retention sort key when
+    /// a failed record has no `deployed-at` timestamp.
     pub failed_at: Option<String>,
-    /// `metadata.creationTimestamp`. The only age a Deploying or Queued
-    /// record has.
+    /// `metadata.creationTimestamp`, used as the age of a `Deploying` or
+    /// `Queued` record.
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// True when `spec.source` is set, which the operator writes and the CLI
-    /// does not. The discriminator for "who is driving this deploy".
+    /// `true` when `spec.source` is set, indicating an operator-driven deploy.
     pub operator_driven: bool,
-    /// `status.orphansKeptFrom`: builds whose orphans are still on the cluster.
+    /// `status.orphansKeptFrom`, listing builds whose orphans remain on the cluster.
     pub orphans_kept_from: Vec<KeptOrphanSource>,
-    /// `status.waves` and `status.totalWaves`: deploy progress, for a
-    /// command that waits on the operator.
+    /// `status.waves`, recording per-wave progress for commands waiting on the operator.
     pub waves: Vec<WaveRecord>,
     pub total_waves: usize,
-    /// Whether the record is being deleted (`metadata.deletionTimestamp`).
+    /// `true` when `metadata.deletionTimestamp` is set.
     pub deleting: bool,
-    /// `metadata.uid` and `metadata.resourceVersion` as the cluster served
-    /// the record, which [`Records::retire`] makes its delete conditional
-    /// on. Empty for a record built by hand.
+    /// `metadata.uid` from the server, used as a precondition by
+    /// [`Records::retire`]. Empty for records constructed in memory without
+    /// server metadata.
     pub uid: String,
     pub resource_version: String,
-    /// `spec.interfaces`: the interface each platform gave this cluster as
-    /// its consumer, as the build pinned it, by platform name.
+    /// `spec.interfaces`: consumer interface pins keyed by platform name.
     pub interfaces: BTreeMap<String, PinnedInterface>,
-    /// `spec.consumers.<consumer>.sha256`: the hash of the interface this
-    /// cluster publishes to each of its consumers, by consumer name.
+    /// `spec.consumers.<consumer>.sha256`: published interface hashes keyed by
+    /// consumer name.
     pub published_interfaces: BTreeMap<String, String>,
 }
 
-/// A platform's interface file as a consumer's build loaded it.
+/// Platform interface file metadata pinned by a consumer build.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PinnedInterface {
-    /// The consumer name the platform gave this cluster.
+    /// Consumer name assigned to this cluster by the platform.
     pub consumer: String,
-    /// The file, relative to the flake root.
+    /// Interface file path relative to the flake root.
     pub path: String,
-    /// The hash of the file as the platform's build writes it.
+    /// SHA-256 hash of the interface file produced by the platform build.
     pub sha256: String,
 }
 
 impl Record {
-    /// Read the fields of an Activation object.
+    /// Parse a [`Record`] from a live Activation `DynamicObject`.
     pub fn of(obj: &DynamicObject) -> Record {
         let annotations = obj.metadata.annotations.as_ref();
         let annotation = |key: &str| {
@@ -204,32 +200,27 @@ impl Record {
         }
     }
 
-    /// Whether this record was ever the cluster's state, and so whether it is
-    /// a legitimate rollback target.
+    /// Return `true` if this record ever completed a deploy and is therefore a
+    /// valid rollback target.
     ///
-    /// `kix.run/deployed-at` is written by [`Records::finalize_deploy`] and
-    /// nothing else, so it is present exactly when a deploy of this closure
-    /// ran to completion. A record superseded out of `Failed` has none, and
-    /// applying it would put the cluster into a state it has never been in.
-    ///
-    /// Deliberately not "does it carry a `status.failure`". A rollback
-    /// re-asserts its target's record and marks it Deploying, so a rollback
-    /// that is then interrupted leaves a failure on a record that really was
-    /// current once, and that record is still a valid target.
+    /// [`Records::finalize_deploy`] is the only caller that writes
+    /// `kix.run/deployed-at`, so the annotation is present if and only if a
+    /// deploy of this closure ran to completion. A record superseded directly
+    /// from `Failed` lacks `kix.run/deployed-at`, whereas a previously deployed
+    /// record whose later rollback was interrupted retains `kix.run/deployed-at`
+    /// alongside `status.failure` and remains a valid rollback target.
     fn was_ever_current(&self) -> bool {
         self.deployed_at
             .as_deref()
             .is_some_and(|at| !at.trim().is_empty())
     }
 
-    /// When the record last mattered, for retention ordering.
+    /// Return the timestamp used to order this record during retention checks.
     ///
-    /// `kix.run/deployed-at` when the record finished a deploy. A record that
-    /// was superseded out of `Failed` never did, so it falls back to when it
-    /// failed, then to when it was created. Without the fallback every such
-    /// record sorts oldest and is retired as `UnknownAge` on the first
-    /// `kix gc`, which loses the history of what went wrong just when it is
-    /// most wanted.
+    /// Uses `kix.run/deployed-at` when present, falling back to
+    /// `status.failure.at` and then `metadata.creationTimestamp` for records
+    /// that never completed a deploy so they are not immediately retired as
+    /// [`RetireReason::UnknownAge`].
     fn retention_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         [&self.deployed_at, &self.failed_at]
             .into_iter()
@@ -238,8 +229,8 @@ impl Record {
     }
 }
 
-/// The object at `pointer`, each entry read by `read`. An entry `read`
-/// cannot read is left out.
+/// Parse the JSON object at `pointer` into a map, skipping entries for which
+/// `read` returns `None`.
 fn spec_map<T>(
     obj: &DynamicObject,
     pointer: &str,
@@ -257,49 +248,45 @@ fn spec_map<T>(
         .unwrap_or_default()
 }
 
-/// A build whose orphans a deploy reported and did not delete.
+/// A build whose orphans a deploy reported and kept on the cluster.
 ///
-/// A deploy finds orphans by comparing its build with the builds it replaces.
-/// When it keeps them (warn-only, `--prune-mode=no`, or a failed delete), the
-/// record it finalizes lists those builds under `status.orphansKeptFrom`, so
-/// the next `kix deploy --prune`, `kix rollback --prune` or soft `kix gc` can
-/// compare against them again. Without the list, the new record becomes the
-/// only baseline and the orphans are invisible to everything but
-/// `kix gc --hard`.
+/// A deploy detects orphans by comparing its build with the builds it replaces.
+/// When orphans are kept (in warn-only mode, `--prune-mode=no`, or after a
+/// failed delete), the finalized record records those builds under
+/// `status.orphansKeptFrom` so a subsequent `kix deploy --prune`,
+/// `kix rollback --prune`, or soft `kix gc` can still compare against them.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeptOrphanSource {
-    /// The Activation record the build belonged to, for people reading the
-    /// status. The record may since have been retired.
+    /// Name of the Activation record that owned the build (which may since have
+    /// been retired).
     pub activation: String,
     /// The build's `kix.run/identity-hash`, resolved through the local
-    /// activation cache when `built_via` is not in this machine's store.
+    /// activation cache when `built_via` is not in the local Nix store.
     pub identity_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub built_via: Option<String>,
 }
 
-/// What a finalizing run writes to `status.orphansKeptFrom`.
+/// Orphan sources accumulated during a deploy to write to `status.orphansKeptFrom`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KeptOrphans {
-    /// Builds this run's plan found orphans in. Recorded only when the run
-    /// leaves an orphan on the cluster: a run that deleted them all has
-    /// nothing left to describe.
+    /// Builds in which this run's plan found orphans. Written only when at
+    /// least one orphan remains on the cluster after pruning.
     pub found: Vec<KeptOrphanSource>,
-    /// Listed sources the plan could not examine because their build is not
-    /// in this machine's store. Recorded whatever the run did, since it could
-    /// not have deleted their orphans.
+    /// Sources the plan could not inspect because their builds are absent from
+    /// the local Nix store. Always preserved because their orphans could not be
+    /// pruned.
     pub unexamined: Vec<KeptOrphanSource>,
-    /// Also carry forward the list on the record current at finalize, as
-    /// unexamined sources. For a plan that never read that record
-    /// (`kix deploy --current-activation`).
+    /// Whether to carry forward `status.orphansKeptFrom` from the record that
+    /// was current at finalize time (used when `--current-activation` bypassed
+    /// reading the live record during planning).
     pub carry_current: bool,
 }
 
 impl KeptOrphans {
-    /// The list to write, given the current record's list (read at finalize)
-    /// and whether the run left a prunable orphan in place. Deduplicated by
-    /// identity hash, first entry wins.
+    /// Return the deduplicated list of orphan sources to write to
+    /// `status.orphansKeptFrom`.
     pub fn recorded(
         &self,
         current: Option<&[KeptOrphanSource]>,
@@ -321,9 +308,8 @@ impl KeptOrphans {
     }
 }
 
-/// Read `status.orphansKeptFrom`. A malformed entry is skipped with a debug
-/// log: the list only widens a prune, so losing an entry keeps an orphan, it
-/// never deletes anything extra.
+/// Read `status.orphansKeptFrom` from an Activation object, skipping malformed
+/// entries with a debug log.
 fn orphans_kept_from(activation: &DynamicObject) -> Vec<KeptOrphanSource> {
     let Some(entries) = activation
         .data
@@ -344,8 +330,9 @@ fn orphans_kept_from(activation: &DynamicObject) -> Vec<KeptOrphanSource> {
         .collect()
 }
 
-/// The Activation `ApiResource` under the current group, if discovery has
-/// it. Not the gate: [`Records::open`] is.
+/// Return the Activation `ApiResource` under the current API group if present
+/// in `discovery`. Callers must still go through [`Records::open`] to enforce
+/// the legacy-domain check.
 fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&ApiResource> {
     discovery
         .iter()
@@ -355,13 +342,11 @@ fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&ApiResource> {
         .map(|(ar, _)| ar)
 }
 
-/// Whether any Activation record carries `cluster` in its `kix.run/cluster`
-/// label, in any phase. Needs no discovery: the record kind is Kix's own. A
-/// cluster without Kix's CRD has no records, so a 404 is `false`.
+/// Return `true` if any Activation record under the current API group carries
+/// `cluster` in its `kix.run/cluster` label, or `false` if none exists or the
+/// Activation CRD is not installed.
 ///
-/// Outside [`Records`] and its gate: it only decides how a command-line
-/// argument is read, and a cluster that has not migrated has no records
-/// under the current group to find.
+/// Used for CLI argument disambiguation before full discovery runs.
 pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, RecordsError> {
     let version = keys::API_VERSION
         .rsplit_once('/')
@@ -385,7 +370,7 @@ pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, Recor
     }
 }
 
-/// The label selector of every record a Kix cluster owns.
+/// Build the label selector matching all Activation records for `cluster`.
 fn cluster_selector(cluster: &str) -> String {
     format!(
         "app.kubernetes.io/managed-by=kix,{}={cluster}",
@@ -399,8 +384,8 @@ fn parse_time(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|t| t.with_timezone(&chrono::Utc))
 }
 
-/// A record's `kix.run/deployed-at`, parsed, or None when it is absent or
-/// malformed. A record that never finished a deploy has none.
+/// Parse a record's `kix.run/deployed-at` annotation, returning `None` when
+/// absent or malformed.
 fn parsed_deployed_at(item: &DynamicObject) -> Option<chrono::DateTime<chrono::Utc>> {
     item.metadata
         .annotations
@@ -409,24 +394,23 @@ fn parsed_deployed_at(item: &DynamicObject) -> Option<chrono::DateTime<chrono::U
         .and_then(parse_time)
 }
 
-/// Which of several current records is *the* current one.
+/// Select the current record from a list of candidates by choosing the most
+/// recent `deployed-at` timestamp and breaking ties by name.
 ///
-/// A cluster should only ever hold one Active or Degraded record, but nothing
-/// enforces that: a partial supersede, two deploys racing, or an externally edited
-/// status can all leave two. Picking whichever the apiserver listed first
-/// makes the plan depend on list order, so the newest `deployed-at` wins and
-/// the name breaks ties. Split out from [`current_record`] so it can be
-/// tested without objects.
+/// Although a cluster normally has at most one `Active` or `Degraded` record,
+/// a partial supersede, concurrent deploys, or manual status edits can leave
+/// multiple candidates. Sorting by timestamp and name keeps selection
+/// independent of API server list order.
 fn pick_current<T>(
     mut candidates: Vec<(T, Option<chrono::DateTime<chrono::Utc>>, String)>,
 ) -> Option<T> {
-    // Newest first; a record with no usable timestamp sorts oldest.
+    // Sort newest first; records without a valid timestamp sort last.
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
     candidates.into_iter().next().map(|(value, _, _)| value)
 }
 
-/// The current record among `records`, chosen as [`Records::active`]
-/// chooses: phase Active or Degraded, the most recently deployed first.
+/// Return the current (`Active` or `Degraded`) record from `records`, choosing
+/// the most recently deployed when multiple exist.
 pub fn current_record<'a>(
     records: impl IntoIterator<Item = &'a DynamicObject>,
 ) -> Option<&'a DynamicObject> {
@@ -445,12 +429,13 @@ pub fn current_record<'a>(
     )
 }
 
-/// Whether a record in this phase describes what the cluster runs.
+/// Return `true` if `phase` represents the cluster's current state (`Active` or
+/// `Degraded`).
 fn is_current_phase(phase: &str) -> bool {
     phase == PHASE_ACTIVE || phase == PHASE_DEGRADED
 }
 
-/// Read `status.phase` from an activation, or "" when it has none yet.
+/// Read `status.phase` from an Activation object, returning `""` when absent.
 fn read_phase(activation: &DynamicObject) -> &str {
     activation
         .data
@@ -459,28 +444,25 @@ fn read_phase(activation: &DynamicObject) -> &str {
         .unwrap_or("")
 }
 
-/// The Activation records of one Kubernetes cluster: Kix's deploy records.
+/// Client handle for reading and writing Activation records on a Kubernetes
+/// cluster.
 ///
-/// Made only by [`Records::open`], which refuses a cluster whose records
-/// still sit under a retired API group, so holding one means the
-/// legacy-domain gate has run. Reads take the Kix cluster whose records
-/// they want, by its `kix.run/cluster` label.
+/// Constructed only via [`Records::open`], which verifies that the cluster does
+/// not serve records under a retired API group.
 #[derive(Clone)]
 pub struct Records {
     client: Client,
     resource: ApiResource,
 }
 
-/// What [`Records::open`] found past the domain gate: the records, or that
-/// the cluster does not serve the Activation kind, which also means it has
-/// no records. Only `open` makes one from discovery, so a caller holding
-/// one knows the gate ran, and "no records" cannot be mistaken for a gate
-/// that refused.
+/// Result of [`Records::open`] after passing the legacy-domain check: either a
+/// [`Records`] handle or `None` when the Activation CRD is not installed.
 #[derive(Clone)]
 pub struct OpenedRecords(Option<Records>);
 
 impl OpenedRecords {
-    /// The records, or `None` when the cluster serves no Activation kind.
+    /// Return a reference to the [`Records`] handle, or `None` if the cluster
+    /// does not serve the Activation kind.
     pub fn records(&self) -> Option<&Records> {
         self.0.as_ref()
     }
@@ -497,12 +479,12 @@ impl From<Records> for OpenedRecords {
 }
 
 impl Records {
-    /// The records `discovery` shows, past the domain gate.
+    /// Validate `discovery` against retired API groups and open a [`Records`]
+    /// handle if the Activation CRD is served.
     ///
-    /// The gate. A cluster whose records still sit under a retired group is
-    /// refused here, so every command that reads or writes a record is
-    /// covered: deploy, plan, rollback, gc, health, status, compliance and
-    /// the operator.
+    /// Rejects clusters that still serve Activation records under a retired API
+    /// group so that deploy, plan, rollback, gc, health, status, compliance,
+    /// and the operator all enforce the domain migration check.
     pub fn open(
         client: &Client,
         discovery: &[(ApiResource, Scope)],
@@ -516,8 +498,8 @@ impl Records {
         })))
     }
 
-    /// [`Records::open`] for a command that needs the records: a cluster
-    /// without the Activation kind is an error.
+    /// Open [`Records`] for commands that require the Activation CRD to be
+    /// installed, returning [`OpenError::NotInstalled`] when it is absent.
     pub fn open_installed(
         client: &Client,
         discovery: &[(ApiResource, Scope)],
@@ -527,13 +509,13 @@ impl Records {
             .ok_or(OpenError::NotInstalled)
     }
 
-    /// The Activation kind as the cluster serves it, which the operator's
-    /// reflector and controller are keyed by.
+    /// Return the Activation `ApiResource` used by the operator's reflector and
+    /// controller.
     pub fn watch_resource(&self) -> &ApiResource {
         &self.resource
     }
 
-    /// A watch of every record, for the operator.
+    /// Return a watch stream over all Activation records for the operator.
     pub fn watcher(
         &self,
         config: kube::runtime::watcher::Config,
@@ -548,7 +530,7 @@ impl Records {
         Api::all_with(self.client.clone(), &self.resource)
     }
 
-    /// Every record `cluster` owns, whatever its phase.
+    /// List all Activation objects for `cluster` regardless of phase.
     async fn list_of(&self, cluster: &str) -> Result<Vec<DynamicObject>, RecordsError> {
         let lp = ListParams::default().labels(&cluster_selector(cluster));
         Ok(self
@@ -559,7 +541,7 @@ impl Records {
             .items)
     }
 
-    /// `cluster`'s records in `phase`.
+    /// List all [`Record`]s for `cluster` in `phase`.
     async fn in_phase(&self, cluster: &str, phase: &str) -> Result<Vec<Record>, RecordsError> {
         Ok(self
             .list_of(cluster)
@@ -570,28 +552,22 @@ impl Records {
             .collect())
     }
 
-    /// The current record of a given cluster.
+    /// Return the current (`Active` or `Degraded`) record for `cluster`, or
+    /// `None` on a first deploy.
     ///
-    /// Returns None if no current activation exists (first deploy).
-    /// Matches `status.phase` against `Active` or `Degraded`, both of which
-    /// represent "the cluster's current state" for diffing purposes. A Degraded
-    /// activation is one whose deploy completed with some resource failures; it is
-    /// still the most recent description of intended state and the next deploy
-    /// should diff against it instead of treating the cluster as empty.
+    /// Both `Active` and `Degraded` represent the cluster's current state for
+    /// diffing. A `Degraded` activation completed with some resource failures
+    /// but remains the most recent description of intended state.
     ///
-    /// `Failed` is excluded because it describes a deploy that
-    /// stopped part way, so it is not what the cluster is running, and diffing
-    /// against it would read every object only the Active closure has as an
-    /// orphan. `Deploying` is not matched either: it is in flight.
+    /// Excludes `Failed` (which stopped mid-deploy and does not represent the
+    /// full running closure) and `Deploying` (which is still in flight).
     pub async fn active(&self, cluster: &str) -> Result<Option<Record>, RecordsError> {
         let items = self.list_of(cluster).await?;
         Ok(current_of(&items, cluster).map(Record::of))
     }
 
-    /// Every Failed record for a cluster, oldest first.
-    ///
-    /// Oldest first because that is the order a deploy consumed them in, so a
-    /// stack of them folds into the baseline the same way it accumulated.
+    /// List all `Failed` records for `cluster`, sorted oldest first so they
+    /// fold into the baseline in the order they accumulated.
     pub async fn failed(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.in_phase(cluster, PHASE_FAILED).await?;
         records.sort_by(|a, b| {
@@ -602,8 +578,7 @@ impl Records {
         Ok(records)
     }
 
-    /// Every Deploying record for a cluster, oldest first: deploys still in
-    /// flight, or that were when they last wrote.
+    /// List all `Deploying` records for `cluster`, sorted oldest first.
     pub async fn deploying(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.in_phase(cluster, PHASE_DEPLOYING).await?;
         records.sort_by(|a, b| {
@@ -614,18 +589,15 @@ impl Records {
         Ok(records)
     }
 
-    /// Queued records for a cluster, newest first.
+    /// List operator-driven `Queued` records for `cluster`, sorted newest first.
     ///
-    /// The operator's queue, so only records it owns: `spec.source` is what it
-    /// writes when it adopts a deploy, and the CLI never does. Without that
-    /// filter a CLI record, which is phase-less for the round trip between being
-    /// created and being marked Deploying, reads as a queued deploy and the
-    /// operator supersedes either it or itself over the difference.
+    /// Filters to records with `spec.source` set (`operator_driven`), which only
+    /// the operator writes. CLI-created records have an empty phase between
+    /// creation and `begin_deploy`, so filtering by `operator_driven` prevents
+    /// the operator from mistaking an in-flight CLI record for a queued job.
     pub async fn queued(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
-        // An empty phase is a new record without status yet, which reads as
-        // Queued. Only the operator's own, as above: a CLI record looks
-        // exactly like this for a round trip, and permanently if the process
-        // is killed in between.
+        // Treat an empty phase on an operator-driven record as Queued because
+        // newly submitted records have no status subresource yet.
         let mut queued: Vec<Record> = self
             .list_of(cluster)
             .await?
@@ -637,40 +609,33 @@ impl Records {
         Ok(queued)
     }
 
-    /// Every Superseded record for a cluster, most recent first by
-    /// `Record::retention_time`.
+    /// List all `Superseded` records for `cluster`, sorted most recent first by
+    /// [`Record::retention_time`].
     ///
-    /// Every Superseded record, including ones that never finished a deploy,
-    /// so that `kix gc` can retire them: a listing that hid them would leave a
-    /// permanent record for every failed deploy, each keeping a hash alive in
-    /// the `kix.run/activations` annotation of everything it stamped. A caller
-    /// choosing a rollback target wants [`Records::rollback_targets`].
+    /// Includes records that were superseded out of `Failed` without ever
+    /// completing a deploy so `kix gc` can retire them and prune their hashes
+    /// from `kix.run/activations`. Callers selecting a rollback target should
+    /// use [`Records::rollback_targets`] instead.
     pub async fn superseded(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.in_phase(cluster, PHASE_SUPERSEDED).await?;
         sort_newest_first(&mut records);
         Ok(records)
     }
 
-    /// The Superseded records that really were the cluster's state
-    /// (`Record::was_ever_current`), most recent first. A deploy that
-    /// stopped part way is Superseded once a later plan folded its leftovers
-    /// in, but it was never running, so rolling back to it would apply a state
-    /// the cluster has never been in.
+    /// List `Superseded` records for `cluster` that completed a deploy
+    /// ([`Record::was_ever_current`]), sorted most recent first.
+    ///
+    /// Excludes records that were superseded out of `Failed` without ever
+    /// completing, because rolling back to them would apply a state the cluster
+    /// never ran in full.
     pub async fn rollback_targets(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.superseded(cluster).await?;
         records.retain(Record::was_ever_current);
         Ok(records)
     }
 
-    /// The deploy receipt on a cluster's current record.
-    ///
-    /// This is the read half of the record. A deploy writes provenance into the
-    /// Activation's status subresource; this reads it back, so a question like
-    /// "what is running here and where did it come from" can be answered by
-    /// anyone who can reach the cluster, without the machine that built it and
-    /// without a rebuild.
-    ///
-    /// `Ok(None)` when there is no current record, or it predates receipts.
+    /// Return the deploy receipt from `cluster`'s current record, or `None` if
+    /// no current record exists or the record has no receipt.
     pub async fn receipt(&self, cluster: &str) -> Result<Option<Value>, RecordsError> {
         let items = self.list_of(cluster).await?;
         Ok(current_of(&items, cluster).and_then(|current| {
@@ -681,21 +646,22 @@ impl Records {
         }))
     }
 
-    /// The identity hash of the record named `name`, or `None` when no such
-    /// record exists. `Some("")` for a record without the annotation.
+    /// Return the `kix.run/identity-hash` of the record named `name`,
+    /// `Some("")` if the record exists without that annotation, or `None` if no
+    /// such record exists.
     ///
-    /// A record's name carries only the first 12 characters of the build's
-    /// hash, so two builds can share a name. Applying one over the other would
-    /// rewrite the history of what was deployed.
+    /// Because a record's name includes only the first 12 characters of the
+    /// build's hash, two distinct builds can collide on name; checking the full
+    /// identity hash prevents one build from overwriting another's record.
     pub async fn identity_hash_of(&self, name: &str) -> Result<Option<String>, RecordsError> {
         let item = self
             .api()
             .get_opt(name)
             .await
             .map_err(RecordsError::on("get", name))?;
-        // The exact key, without the retired spelling `Record::of` falls
-        // back to: a record this check passes is one this build will
-        // overwrite, so it must carry the current identity stamp.
+        // Require the current annotation key directly rather than falling back
+        // to legacy keys, because a record that passes this check will be
+        // overwritten by the current build.
         Ok(item.map(|o| {
             o.metadata
                 .annotations
@@ -706,18 +672,13 @@ impl Records {
         }))
     }
 
-    /// Identity hashes of every Activation CR on the cluster, across all clusters
-    /// and all phases.
+    /// Return the identity hashes of all Activation CRs across all clusters and
+    /// phases, or `None` if listing fails.
     ///
-    /// This is the authority for pruning `kix.run/activations`: a hash in that set
-    /// that names no Activation here is a reference to something that no longer
-    /// exists. Do not filter by cluster label because one resource can be
-    /// referenced by activations of more than one cluster, and pruning another
-    /// cluster's live reference would be worse than keeping a dead one.
-    ///
-    /// Returns `None` when the set cannot be established (list failed).
-    /// Callers must treat `None` as "do not prune" rather than as an empty
-    /// set.
+    /// Used when pruning dead hashes from `kix.run/activations` annotations.
+    /// Queries across all clusters because a cluster-scoped resource can be
+    /// referenced by more than one cluster. Callers must treat `None` as "skip
+    /// pruning" rather than as an empty set.
     pub(crate) async fn live_hashes(&self) -> Option<HashSet<String>> {
         let all = self
             .all()
@@ -731,8 +692,8 @@ impl Records {
         )
     }
 
-    /// Every record on the cluster, of every Kix cluster and phase, as
-    /// objects, for [`super::tenancy::read`].
+    /// List every Activation object on the cluster across all Kix clusters and
+    /// phases.
     pub(crate) async fn all(&self) -> Result<Vec<DynamicObject>, RecordsError> {
         Ok(self
             .api()
@@ -758,14 +719,14 @@ impl Records {
         Ok(())
     }
 
-    /// Delete a record only if it is still the object that was read (same
-    /// uid and resourceVersion). A status change since the listing, such as
-    /// a rollback making it Active again, bumps resourceVersion and the
-    /// apiserver refuses with 409, so nothing that changed underneath the
-    /// plan is deleted.
+    /// Delete `record` only if its `uid` and `resourceVersion` still match the
+    /// object that was read.
     ///
-    /// The preconditions are sent even when empty, as for a record built by
-    /// hand: the apiserver compares an empty uid like any other, and refuses.
+    /// Any update since the listing (such as a rollback making the record
+    /// `Active` again) increments `resourceVersion` and causes the API server
+    /// to reject the delete with HTTP 409. Preconditions are sent even when
+    /// empty so records constructed in memory without server metadata cannot
+    /// delete a live object on the cluster.
     pub async fn retire(&self, record: &Record) -> Result<(), RecordsError> {
         let dp = DeleteParams {
             preconditions: Some(Preconditions {
@@ -781,8 +742,8 @@ impl Records {
         Ok(())
     }
 
-    /// Remove `status.orphansKeptFrom` from a record, once something has
-    /// deleted the orphans it describes.
+    /// Clear `status.orphansKeptFrom` on `name` after its orphans have been
+    /// deleted.
     pub async fn clear_orphans_kept_from(&self, name: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
@@ -791,7 +752,7 @@ impl Records {
         .await
     }
 
-    /// List one record, to check that this client may read them.
+    /// Verify that the client has permission to list Activation records.
     pub async fn reachable(&self) -> Result<(), RecordsError> {
         self.api()
             .list(&ListParams::default().limit(1))
@@ -800,7 +761,7 @@ impl Records {
         Ok(())
     }
 
-    /// The record named `name`, or `None` when there is no such record.
+    /// Fetch the [`Record`] named `name`, returning `None` if it does not exist.
     pub async fn get(&self, name: &str) -> Result<Option<Record>, RecordsError> {
         let item = self
             .api()
@@ -810,11 +771,11 @@ impl Records {
         Ok(item.as_ref().map(Record::of))
     }
 
-    /// Create or update a record for the operator to deploy: the build at
-    /// `source_path`, of Kix cluster `cluster`.
+    /// Create or update an Activation record for the operator to deploy from
+    /// `source_path` on `cluster`.
     ///
-    /// The record carries no phase. The operator treats it as Queued and
-    /// advances it through Deploying to Active.
+    /// Leaves `status.phase` unset so the operator treats the record as `Queued`
+    /// and advances it through `Deploying` to `Active`.
     pub async fn submit(
         &self,
         name: &str,
@@ -864,15 +825,13 @@ impl Records {
         Ok(())
     }
 
-    /// Write a deploy receipt to a record's status. A merge patch on the
-    /// status subresource leaves everything else alone, so it does not
-    /// matter whether the operator has already started on the record.
+    /// Write a deploy receipt to `name`'s status subresource via merge patch.
     pub async fn write_receipt(&self, name: &str, receipt: &Value) -> Result<(), RecordsError> {
         self.patch_status(name, &json!({ "status": { keys::RECEIPT_FIELD: receipt } }))
             .await
     }
 
-    /// Set a record's `metadata.finalizers`, for the operator's own.
+    /// Set `metadata.finalizers` on `name`.
     pub async fn set_finalizers(
         &self,
         name: &str,
@@ -886,14 +845,13 @@ impl Records {
         Ok(())
     }
 
-    /// Supersede the old activation and finalize the new one as Active or
-    /// Degraded. The new record stores its predecessor, deployment timestamp,
-    /// cluster label, and receipt. Consumed Failed records are also superseded.
-    /// Degraded remains current so the next deploy can compute its diff.
+    /// Supersede the previous activation and finalize the new one as `Active`
+    /// or `Degraded`.
     ///
-    /// `orphans_kept_from` replaces the record's `status.orphansKeptFrom`; an
-    /// empty slice removes the field.
-    // The parameters have distinct types and this function has one call site.
+    /// Records the predecessor link, deployment timestamp, cluster label, and
+    /// receipt on the new record, and marks any `Failed` records consumed by
+    /// this plan as `Superseded`. `orphans_kept_from` replaces
+    /// `status.orphansKeptFrom` (an empty slice clears the field).
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn finalize_deploy(
         &self,
@@ -907,22 +865,14 @@ impl Records {
     ) -> Result<(), RecordsError> {
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Supersede the old activation.
         if let Some(old) = old_activation {
             self.supersede(&old.name).await?;
         }
 
-        // Supersede Failed records folded into this plan. Their leftovers have
-        // now been re-applied or pruned, so they describe nothing outstanding
-        // and belong in history with everything else.
-        //
-        // Skipping the record being finalized matters: retrying the same
-        // closure that failed reuses its name, and superseding it here would
-        // immediately undo the Active phase set below.
-        //
-        // Best-effort. A record that will not supersede is cosmetic, and
-        // failing the deploy over it after every resource has landed would be
-        // a worse trade.
+        // Supersede Failed records folded into this plan, skipping the record
+        // being finalized (which shares a name when retrying the same closure).
+        // Failures here are logged rather than failing the deploy after all
+        // resources have been applied.
         for name in consumed_failed {
             if name == new_activation_name {
                 continue;
@@ -936,8 +886,8 @@ impl Records {
             }
         }
 
-        // Lifecycle annotations on the new record, by merge patch, so the
-        // identity hash and the other annotations the apply set stay.
+        // Patch lifecycle annotations with a merge patch so the identity hash
+        // and other annotations written during apply are preserved.
         let mut annotations = serde_json::Map::new();
         annotations.insert(keys::DEPLOYED_AT.to_string(), Value::String(now));
         if let Some(old) = old_activation
@@ -966,7 +916,6 @@ impl Records {
             .await
             .map_err(RecordsError::on("patch", new_activation_name))?;
 
-        // Set the final phase and predecessor link.
         let new_phase = if had_failures {
             PHASE_DEGRADED
         } else {
@@ -980,8 +929,7 @@ impl Records {
         if let Some(receipt) = receipt {
             status.insert(keys::RECEIPT_FIELD.to_string(), receipt.clone());
         }
-        // A same-name redeploy finalizes a record that may already carry a list,
-        // so an empty one is written as null to remove it.
+        // Write null when empty so a same-name redeploy clears any previous list.
         status.insert(
             keys::ORPHANS_KEPT_FROM_FIELD.to_string(),
             if orphans_kept_from.is_empty() {
@@ -998,7 +946,7 @@ impl Records {
         Ok(())
     }
 
-    /// Read one record's `status.phase`, or "" when it has none yet.
+    /// Read one record's `status.phase`, or `""` when it has none yet.
     async fn phase_of(&self, name: &str) -> Result<String, RecordsError> {
         let item = self
             .api()
@@ -1008,12 +956,12 @@ impl Records {
         Ok(read_phase(&item).to_string())
     }
 
-    /// Set the Activation phase to Deploying and initialize wave status.
+    /// Set the Activation phase to `Deploying` and initialize wave counters.
     ///
-    /// Called at the start of the apply loop, after the record itself has been
-    /// created. Sets `status.phase = Deploying` and `status.totalWaves = n`,
-    /// unless the record is the current one being re-deployed (see
-    /// [`phase_on_begin`]), in which case only the wave counters are reset.
+    /// Called at the start of the apply loop after the record is created. Sets
+    /// `status.phase = Deploying` and `status.totalWaves = total_waves`, unless
+    /// the record is already current (see [`phase_on_begin`]), in which case
+    /// only the wave counters and failure field are reset.
     pub(crate) async fn begin_deploy(
         &self,
         activation_name: &str,
@@ -1027,20 +975,18 @@ impl Records {
         }
         status.insert("totalWaves".to_string(), json!(total_waves));
         status.insert("waves".to_string(), json!([]));
-        // A retry clears the previous attempt's verdict, so a record that goes on
-        // to succeed does not keep a stale failure hanging off its status.
+        // Clear any failure status from a prior attempt on the same record.
         status.insert("failure".to_string(), Value::Null);
 
         self.patch_status(activation_name, &json!({ "status": status }))
             .await
     }
 
-    /// Mark a record Failed because its deploy stopped before finalizing.
+    /// Mark a record `Failed` when its deploy stops before finalizing.
     ///
-    /// Best-effort by nature: the run is already ending, and a cluster that will
-    /// not take this patch is one the next deploy has to cope with anyway. It is
-    /// conditional on the record still being `Deploying`, so a re-deploy of the
-    /// current closure that aborts leaves the Active record alone.
+    /// Transitions the phase only if [`phase_on_abort`] permits it, so an
+    /// aborted re-deploy of the currently `Active` closure leaves the `Active`
+    /// record intact.
     pub(crate) async fn fail_deploy(
         &self,
         activation_name: &str,
@@ -1073,9 +1019,8 @@ impl Records {
 
     /// Record the completion status of waves on the Activation CR.
     ///
-    /// Patches `status.waves` with the full accumulated list. The caller
-    /// tracks wave records in memory and passes the complete list each time,
-    /// eliminating the need for a GET-before-PATCH round-trip.
+    /// Patches `status.waves` with the full accumulated list tracked in memory
+    /// by the caller, avoiding a GET-before-PATCH round-trip.
     pub(crate) async fn record_waves(
         &self,
         activation_name: &str,
@@ -1101,8 +1046,8 @@ impl Records {
     }
 }
 
-/// The current record among `cluster`'s `items`, with a warning when there
-/// is more than one to choose from.
+/// Return the current record for `cluster` from `items`, logging a warning if
+/// multiple `Active` or `Degraded` records exist.
 fn current_of<'a>(items: &'a [DynamicObject], cluster: &str) -> Option<&'a DynamicObject> {
     let current: Vec<&DynamicObject> = items
         .iter()
@@ -1122,7 +1067,8 @@ fn current_of<'a>(items: &'a [DynamicObject], cluster: &str) -> Option<&'a Dynam
     current_record(current)
 }
 
-/// Most recent first by `Record::retention_time`, ties broken on name.
+/// Sort `records` most recent first by [`Record::retention_time`], breaking
+/// ties by name.
 fn sort_newest_first(records: &mut [Record]) {
     records.sort_by(|a, b| {
         b.retention_time()
@@ -1131,79 +1077,73 @@ fn sort_newest_first(records: &mut [Record]) {
     });
 }
 
-/// Defaults for [`RetentionPolicy`]: always keep the 10 newest records and
-/// never more than 50. `kix gc --keep-for` adds the age rule, 30 days by
-/// default. Helm 3 and Argo CD keep 10 by default; the cap and the age rule
-/// exist because each record still on the cluster keeps one hash alive in
-/// `kix.run/activations` on every managed resource, and that annotation is
-/// capped at 256 KiB.
+/// Default minimum and maximum number of `Superseded` records kept by
+/// [`RetentionPolicy`].
+///
+/// Each retained record keeps one hash in the `kix.run/activations` annotation
+/// on every managed resource (which is subject to Kubernetes's 256 KiB
+/// annotation size limit).
 pub const DEFAULT_KEEP_MIN: usize = 10;
 pub const DEFAULT_KEEP_MAX: usize = 50;
 
-/// How many Superseded records to keep, by count and by age.
+/// Retention policy governing how many `Superseded` records to keep by count
+/// and age.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetentionPolicy {
-    /// Always keep this many of the newest, whatever their age.
+    /// Minimum number of newest rollback targets to keep regardless of age.
     pub keep_min: usize,
-    /// Never keep more than this many.
+    /// Maximum total number of `Superseded` records to keep.
     pub keep_max: usize,
-    /// Beyond `keep_min`, retire records older than this. `None` disables
-    /// the age rule.
+    /// Maximum age for records beyond `keep_min`, or `None` to disable
+    /// age-based retirement.
     pub keep_for: Option<chrono::Duration>,
-    /// The clock the age rule uses. Injected so plans are testable.
+    /// Reference timestamp used to evaluate `keep_for`.
     pub now: chrono::DateTime<chrono::Utc>,
 }
 
-/// Why a record is retired.
+/// Reason a `Superseded` record was selected for retirement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetireReason {
-    /// Past the cap of `keep_max` records kept: a rollback target past the
-    /// `keep_max` newest, or a record of a deploy that never finished,
-    /// oldest first, once everything kept would exceed the cap.
+    /// Exceeded the `keep_max` cap on retained records.
     BeyondMax(usize),
-    /// Older than `keep_for`: a rollback target past the `keep_min` newest,
-    /// or any record of a deploy that never finished, which the floor does
-    /// not cover.
+    /// Older than `keep_for` and not protected by the `keep_min` floor.
     OlderThan(chrono::Duration),
-    /// No usable timestamp at all, so its age is unknown and it sorts oldest.
-    /// A record that never finished a deploy still has `status.failure.at` or
-    /// a creation timestamp to go on (see `Record::retention_time`), so
-    /// reaching this means every one of those was missing or malformed.
+    /// Missing or malformed timestamps in `deployed-at`, `status.failure.at`,
+    /// and `metadata.creationTimestamp`.
     UnknownAge,
 }
 
-/// A record the plan retires, and why.
+/// A record selected for retirement along with the reason it was retired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Retired {
     pub record: Record,
     pub reason: RetireReason,
 }
 
-/// Which Superseded records to keep and which to retire.
+/// Partition of `Superseded` records into kept and retired sets.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Retirement {
-    /// Records that stay, newest first. Those that were ever current are
-    /// the rollback targets.
+    /// Records to retain, sorted newest first.
     pub kept: Vec<Record>,
-    /// Records to delete, newest first, each with its reason.
+    /// Records to delete, sorted newest first, each paired with its [`RetireReason`].
     pub retire: Vec<Retired>,
 }
 
-/// Split a cluster's Superseded records into kept and retired under a
-/// [`RetentionPolicy`] (`kix gc --keep`, kixpkgs#59 follow-up).
+/// Partition a cluster's `Superseded` records into kept and retired sets under
+/// `policy`.
 ///
-/// Newest first by `Record::retention_time` (parsed, so offsets and
-/// precision do not matter); a record with no usable timestamp is treated as
-/// the oldest. Ties break on name so the plan is deterministic.
-/// Then, among the records that were ever current (rollback targets): the
-/// first `keep_min` are kept whatever their age; past `keep_max` everything
-/// is retired; in between, a record is retired when the age rule is on and
-/// it is older than `keep_for` (or its age is unknown). A record that never
-/// finished a deploy is judged by the age rule, and takes no place in the
-/// floor, so a run of failed deploys cannot push the last rollback target
-/// out. The cap still holds for everything kept: past `keep_max`, the
-/// oldest records that never finished a deploy are retired. The Active
-/// record is never in the input.
+/// Sorts records newest first by [`Record::retention_time`] (with missing
+/// timestamps sorting oldest and ties broken by name). Among records that
+/// completed a deploy ([`Record::was_ever_current`]):
+/// * The newest `keep_min` are always kept regardless of age.
+/// * Records beyond `keep_max` are retired with [`RetireReason::BeyondMax`].
+/// * Records between `keep_min` and `keep_max` are retired when `keep_for` is
+///   set and the record is older than `keep_for` (or has [`RetireReason::UnknownAge`]).
+///
+/// Records that never completed a deploy do not count toward `keep_min` so a
+/// series of failed deploys cannot displace the last valid rollback target.
+/// They are subject to `keep_for`, and if the total number of kept records
+/// still exceeds `keep_max`, the oldest incomplete records are retired first.
 pub fn retire_plan(mut superseded: Vec<Record>, policy: &RetentionPolicy) -> Retirement {
     let keep_max = policy.keep_max.max(policy.keep_min);
     sort_newest_first(&mut superseded);
@@ -1238,10 +1178,8 @@ pub fn retire_plan(mut superseded: Vec<Record>, policy: &RetentionPolicy) -> Ret
             (Some(_), Some(_)) => plan.kept.push(record),
         }
     }
-    // The cap holds for the whole list: each record kept keeps a hash on
-    // every managed object. The records that were ever current are within
-    // it already, so the excess is records that never finished a deploy,
-    // and the oldest of them go first.
+    // Enforce keep_max across all kept records by retiring the oldest records
+    // that never completed a deploy.
     while plan.kept.len() > keep_max {
         let Some(i) = plan.kept.iter().rposition(|r| !r.was_ever_current()) else {
             break;
@@ -1259,10 +1197,6 @@ pub fn retire_plan(mut superseded: Vec<Record>, policy: &RetentionPolicy) -> Ret
     });
     plan
 }
-
-// ---------------------------------------------------------------------------
-// Wave progress persistence
-// ---------------------------------------------------------------------------
 
 /// Status of a single wave in the deploy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1290,15 +1224,12 @@ impl WaveStatus {
     }
 }
 
-/// The phase a record should move to when a deploy begins, or None to leave
-/// it where it is.
+/// Return the phase a record should transition to when a deploy begins, or
+/// `None` to leave its current phase unchanged.
 ///
-/// Re-deploying the closure that is already current hits this with an `Active`
-/// record, and that record must keep its phase. Demoting it to `Deploying`
-/// means a run that then dies leaves the cluster with no current record at
-/// all, and the next deploy plans as a first deploy: no orphans, no repairs.
-/// Everything else is either not current or already in flight, so it is safe
-/// to mark.
+/// When re-deploying the closure that is already `Active` or `Degraded`, its
+/// phase is preserved so an interrupted re-deploy does not leave the cluster
+/// without a current record.
 fn phase_on_begin(current: &str) -> Option<&'static str> {
     match current {
         PHASE_ACTIVE | PHASE_DEGRADED => None,
@@ -1306,29 +1237,22 @@ fn phase_on_begin(current: &str) -> Option<&'static str> {
     }
 }
 
-/// The phase a record should move to when a deploy stops without finalizing,
-/// or None to leave it alone.
+/// Return the phase a record should transition to when a deploy aborts before
+/// finalizing, or `None` to leave its phase unchanged.
 ///
-/// Only a record this run put into `Deploying` is ours to fail. One left
-/// `Active` by [`phase_on_begin`] is still the truthful current state and must
-/// stay that way.
+/// Transitions only records in `Deploying` or with an empty phase (when the
+/// deploy aborted between creating the record and marking it `Deploying`).
+/// Leaves `Active`, `Degraded`, `Queued`, `Superseded`, and `Failed` records
+/// untouched.
 fn phase_on_abort(current: &str) -> Option<&'static str> {
     match current {
         PHASE_DEPLOYING => Some(PHASE_FAILED),
-        // No phase at all means the record was created and the run died
-        // before it could be marked, which only this run can have done: the
-        // create and the mark are two round trips inside `begin`. Leaving it
-        // blank would make it invisible to every reader, which is the hole
-        // this whole change exists to close.
-        //
-        // `Queued` is excluded on purpose. That is somebody's stated intent,
-        // usually the operator's, and not ours to overwrite.
         "" => Some(PHASE_FAILED),
         _ => None,
     }
 }
 
-/// Data for recording a single wave's result.
+/// Result summary for a single wave in `status.waves`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaveRecord {
     pub wave_index: usize,
@@ -1339,8 +1263,8 @@ pub struct WaveRecord {
 }
 
 impl WaveRecord {
-    /// One entry of `status.waves`, as [`Records::record_waves`] writes it.
-    /// A missing number reads as 0 and a missing status as Pending.
+    /// Parse a [`WaveRecord`] from an entry in `status.waves`, defaulting
+    /// missing counts to `0` and missing status to [`WaveStatus::Pending`].
     fn of(wave: &Value) -> WaveRecord {
         let number = |key: &str| wave.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
         WaveRecord {
@@ -1648,7 +1572,7 @@ mod retire_plan_tests {
         }
     }
 
-    /// A record deployed `days` days before `now()`.
+    /// Construct a record deployed `days` days before `now()`.
     fn aged(name: &str, days: i64) -> Record {
         rec(name, &(now() - Duration::days(days)).to_rfc3339())
     }
@@ -1756,7 +1680,7 @@ mod retire_plan_tests {
         );
     }
 
-    /// A record superseded out of `Failed`, `days` days before `now()`.
+    /// Construct a record superseded out of `Failed` `days` days before `now()`.
     fn failed(name: &str, days: i64) -> Record {
         Record {
             name: name.into(),
@@ -1892,8 +1816,9 @@ mod retire_plan_properties {
     use chrono::{Duration, TimeZone, Utc};
     use proptest::prelude::*;
 
-    /// A record by kind (0: a finished deploy, 1: a failed one, 2: one with
-    /// only a creation time) and age in hours before `now()`.
+    /// Construct a test record by kind (`0` for a finished deploy, `1` for a
+    /// failed deploy, and `2` for a record with only a creation timestamp) and
+    /// age in hours before `now()`.
     fn record(i: usize, kind: u8, hours: i64) -> Record {
         let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 0).unwrap();
         let at = now - Duration::hours(hours);
@@ -2062,9 +1987,10 @@ mod listing_tests {
         assert_eq!(names, vec!["c-interrupted", "c-ran"]);
     }
 
-    /// A record built by hand carries an empty uid and resourceVersion,
-    /// which the delete still sends as preconditions, so the record of that
-    /// name on the cluster is not deleted.
+    /// A record constructed in memory without server metadata has an empty
+    /// `uid` and `resourceVersion`, which `retire` still sends as
+    /// preconditions so the live record of that name on the cluster is not
+    /// deleted.
     #[tokio::test]
     async fn a_record_not_read_from_the_cluster_is_not_retired() {
         let api = crate::cluster::fake_api::FakeApi::new([json!({

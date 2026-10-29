@@ -21,7 +21,6 @@ impl CommandResponse for InspectResponse {
         out.push_str(&format!("Cluster: {}\n", self.cluster_name));
         out.push_str(&format!("Total resources: {}\n\n", self.total_resources));
 
-        // Namespaces
         out.push_str(&format!("Namespaces ({}):\n", self.by_namespace.len()));
         for (ns, resources) in &self.by_namespace {
             let ns_display = if ns == CLUSTER_SCOPED {
@@ -37,7 +36,6 @@ impl CommandResponse for InspectResponse {
         }
         out.push('\n');
 
-        // Kind breakdown
         out.push_str("Resource kinds:\n");
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
@@ -50,7 +48,6 @@ impl CommandResponse for InspectResponse {
         out.push_str(&table.to_string());
         out.push_str("\n\n");
 
-        // Resource listing by namespace
         out.push_str("Resources:\n");
         for (ns, resources) in &self.by_namespace {
             let ns_display = if ns == CLUSTER_SCOPED {
@@ -94,7 +91,6 @@ pub fn run(args: &InspectArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let manifests = &cluster.raw_manifests;
 
-    // Group resources by namespace and kind
     let mut by_namespace: BTreeMap<String, Vec<ResourceId>> = BTreeMap::new();
     let mut kind_counts: BTreeMap<String, usize> = BTreeMap::new();
 

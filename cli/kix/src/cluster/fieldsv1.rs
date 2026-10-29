@@ -1,11 +1,9 @@
 //! Interpret fieldsV1 for applied-content drift detection.
 //!
-//! Extracts kix's server-side-apply
-//! managedFields entry from a live object and projects the object onto that
-//! fieldset: "the subset of the live object that kix put there". Hashing the
-//! projection at apply time (from the SSA response echo) and again at check
-//! time (from a GET) makes runtime content drift a hash comparison between
-//! two server representations.
+//! Extracts Kix's server-side apply managedFields entry from a live object and
+//! projects the object onto that fieldset. Hashing the projection at apply time
+//! (from the SSA response) and again at check time (from a GET) reduces runtime
+//! content drift to a hash comparison between two server representations.
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry;
 use kube::api::DynamicObject;
@@ -13,11 +11,11 @@ use serde_json::{Map, Value};
 
 use crate::manifest::hash;
 
-/// The field manager kix uses for server-side apply.
+/// Field manager Kix uses for server-side apply.
 pub(crate) const KIX_FIELD_MANAGER: &str = "kix";
 
-/// Extract the fieldsV1 tree of kix's SSA entry: manager == "kix",
-/// operation == "Apply", no subresource.
+/// Extract the fieldsV1 tree of Kix's server-side apply entry (`manager == "kix"`,
+/// `operation == "Apply"`, and no subresource).
 ///
 /// Reads typed `metadata.managed_fields`. LIST responses split metadata
 /// out of `obj.data`, so the raw data must never be consulted for this.
@@ -27,7 +25,8 @@ pub fn kix_fieldset(obj: &DynamicObject) -> Option<Value> {
         .map(|f| f.0.clone())
 }
 
-/// The managedFields entry kix's SSA writes, if present.
+/// Return the `managedFields` entry written by Kix's server-side apply, if
+/// present.
 pub(crate) fn kix_apply_entry(entries: &[ManagedFieldsEntry]) -> Option<&ManagedFieldsEntry> {
     entries.iter().find(|e| {
         e.manager.as_deref() == Some(KIX_FIELD_MANAGER)
@@ -36,26 +35,25 @@ pub(crate) fn kix_apply_entry(entries: &[ManagedFieldsEntry]) -> Option<&Managed
     })
 }
 
-/// Project a live value onto a fieldsV1 tree, keeping exactly the fields the
-/// fieldset lists, at the granularity the server tracked them.
+/// Project a live value onto a fieldsV1 tree, keeping the fields the fieldset
+/// lists at the granularity the server tracked them.
 ///
-/// fieldsV1 semantics implemented:
-/// - `f:<name>`: member of a map. An empty subtree means the server tracks
-///   the field as one atomic leaf; copy the whole live value. A non-empty
-///   subtree recurses into it.
-/// - `k:{...}`: associative-list element, matched by every key/value pair
+/// Supported fieldsV1 keys:
+/// - `f:<name>`: map member. An empty subtree means the server tracks the field
+///   as an atomic leaf and copies the whole live value. A non-empty subtree
+///   recurses into it.
+/// - `k:{...}`: associative-list element matched by every key-value pair
 ///   against live array elements.
-/// - `v:<json>`: set element, matched by value.
+/// - `v:<json>`: set element matched by value.
 /// - `i:<n>`: positional element.
-/// - `.`: the node itself; marks existence and contributes no content. An
-///   element owned only via `.` still appears in the projection (as an empty
-///   object), so its deletion is detected.
+/// - `.`: the node itself, which marks existence and contributes no content. An
+///   element owned only via `.` still appears in the projection as an empty
+///   object so its deletion is detected.
 ///
-/// Live array order is preserved and arrays are never sorted: both hash
-/// inputs are server representations, so order is stable unless someone
-/// actually changed it. Fieldset entries with no matching live counterpart
-/// are skipped. This detects deletions because the projection shrinks and
-/// the hash changes.
+/// Live array order is preserved because both hash inputs are server
+/// representations. Fieldset entries with no matching live counterpart are
+/// skipped, which shrinks the projection and changes the hash when a field is
+/// deleted.
 pub fn project(live: &Value, fields: &Value) -> Value {
     let Some(fmap) = fields.as_object() else {
         return live.clone();
@@ -67,8 +65,8 @@ pub fn project(live: &Value, fields: &Value) -> Value {
     match live {
         Value::Object(lmap) => project_object(lmap, fmap),
         Value::Array(larr) => project_array(larr, fmap),
-        // Scalar with a non-empty fieldset only happens if the live value
-        // changed type since apply; keep the live value so the hash differs.
+        // A scalar with a non-empty fieldset only occurs if the live value
+        // changed type since apply. Keep the live value so the hash differs.
         other => other.clone(),
     }
 }
@@ -174,16 +172,15 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
     value
 }
 
-/// The applied-content hash recipe used at stamp time on the
-/// SSA response and at check time on a GET or LIST result:
+/// Compute the applied-content hash of `obj`:
 ///
 /// 1. Merge typed metadata back into the data `Value`.
-/// 2. Project onto kix's fieldsV1 (the subset kix owns).
-/// 3. Strip `kix.run/*` annotations (self-reference: the stamp must not
-///    change its own hash).
-/// 4. Blake3 over canonical (sorted-keys) JSON.
+/// 2. Project onto Kix's `fieldsV1` fieldset.
+/// 3. Strip `kix.run/*` annotations so the stamp does not change its own hash.
+/// 4. Compute Blake3 over canonical (sorted-keys) JSON.
 ///
-/// Returns `None` when the object has no kix SSA managedFields entry.
+/// Returns `None` when the object has no Kix server-side apply `managedFields`
+/// entry.
 pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
     // TODO: exclude PI spec.driftIgnore pointers here. Compiled
     // delegation drops the listed JSON pointers from the projection on both
@@ -192,18 +189,16 @@ pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
     kix_owned_projection(obj).map(projection_hash)
 }
 
-/// Steps 3 and 4 of [`applied_content_hash`], for a projection the caller
-/// has already built or edited.
+/// Strip `kix.run/*` annotations from `projection` and return its canonical
+/// Blake3 hash.
 pub(crate) fn projection_hash(mut projection: Value) -> String {
     hash::strip_kix_annotations(&mut projection);
     hash::hash_value(&hash::sort_keys(&projection))
 }
 
-/// The part of a live object kix's server-side apply owns: typed metadata
-/// merged back, then projected onto kix's `Apply` fieldset. Steps 1 and 2
-/// of the applied-content hash, and the whole of what `kix diff` and
-/// `kix snapshot save` look at (see `owned_view::kix_owned_view`). `None` when
-/// the object has no kix SSA managedFields entry.
+/// Project `obj` onto Kix's server-side apply fieldset after merging typed
+/// metadata back into its data. Returns `None` when `obj` has no Kix `Apply`
+/// `managedFields` entry.
 pub(crate) fn kix_owned_projection(obj: &DynamicObject) -> Option<Value> {
     let fields = kix_fieldset(obj)?;
     Some(project(&merge_typed_metadata(obj), &fields))
@@ -246,7 +241,7 @@ mod tests {
             {"name": "b", "image": "img-b", "extra": "server-added"},
             {"name": "a", "image": "img-a"}
         ]);
-        // kix owns only container "a" (and within it only image).
+        // Kix owns only container "a" (and within it only image).
         let fields = json!({
             "k:{\"name\":\"a\"}": {".": {}, "f:name": {}, "f:image": {}}
         });
@@ -278,8 +273,8 @@ mod tests {
             "k:{\"name\":\"a\"}": {"f:name": {}, "f:v": {}},
             "k:{\"name\":\"b\"}": {"f:name": {}, "f:v": {}}
         });
-        // serde_json object keys iterate sorted (a before b); the projection
-        // must follow LIVE order (b before a) regardless.
+        // `serde_json` object keys iterate in sorted order (a before b), while
+        // the projection preserves live array order (b before a).
         assert_eq!(
             project(&live, &fields),
             json!([{"name": "b", "v": 2}, {"name": "a", "v": 1}])

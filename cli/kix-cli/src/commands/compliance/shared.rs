@@ -24,7 +24,7 @@ pub fn build_and_load(ctx: &CommandContext, cluster: &str) -> Result<StoreGraph>
     Ok(build.into_graph())
 }
 
-/// 32-char identity hash of the activation store path (the kix "root" hash).
+/// Return the 32-character Nix store hash of the activation path in `graph`.
 pub fn activation_identity_hash(graph: &StoreGraph) -> String {
     store_hash(&graph.activation_path)
 }
@@ -36,7 +36,7 @@ pub fn read_flake_lock(flake_path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&contents).ok()
 }
 
-/// BLAKE3 hex hash of a string (used for SLSA subject digests).
+/// Compute the BLAKE3 hex digest of `input`.
 pub fn blake3_hex(input: &str) -> String {
     blake3::Hasher::new()
         .update(input.as_bytes())
@@ -45,36 +45,26 @@ pub fn blake3_hex(input: &str) -> String {
         .to_string()
 }
 
-/// Current wall-clock time in RFC3339 format.
+/// Format the current UTC wall-clock time as an RFC 3339 string.
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// Where the source stood when this ran: the commit, and whether the working
-/// tree matched it.
+/// Git commit and working-tree cleanliness of the source directory at build time.
 ///
-/// The second half is the part that was missing, and it mattered. Recording
-/// `git rev-parse HEAD` alone says "this deploy came from commit X" even when
-/// the tree that was built has uncommitted changes, which is exactly the
-/// state CI used to deploy production from. An attestation that names a
-/// commit not containing the deployed content is worse than no attestation,
-/// because it will be believed.
-///
-/// Nix takes the same position and states it more strongly: a flake with a
-/// dirty worktree gets no revision at all. Kix records the revision and the
-/// dirty flag, and spells the combination the way Nix does, `<rev>-dirty`, so
-/// the two agree when someone compares them.
+/// Recording `dirty` alongside `rev` ensures provenance receipts and SLSA
+/// attestations distinguish clean commits from builds that included uncommitted
+/// working-tree changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitState {
-    /// The commit HEAD points at.
+    /// The commit `HEAD` points at.
     pub rev: String,
-    /// Whether the working tree differs from that commit, including
-    /// untracked files.
+    /// Whether the working tree differs from `rev`, including untracked files.
     pub dirty: bool,
 }
 
 impl GitState {
-    /// Nix's spelling: the revision, plus `-dirty` when the tree has changes.
+    /// Format the revision using Nix's convention (`<rev>-dirty` when dirty).
     pub fn dirty_rev(&self) -> String {
         if self.dirty {
             format!("{}-dirty", self.rev)
@@ -84,16 +74,15 @@ impl GitState {
     }
 }
 
-/// Read the git state at the given path. `None` when the directory is not a
-/// git checkout or `git` is unavailable.
+/// Read the Git commit and working-tree status at `flake_path`, returning `None`
+/// if `flake_path` is not in a Git worktree or `git` is unavailable.
 pub fn git_state(flake_path: &Path) -> Option<GitState> {
     let rev = run_git(flake_path, &["rev-parse", "HEAD"])?;
     if rev.is_empty() {
         return None;
     }
-    // `--porcelain` lists modified, staged and untracked files. Untracked
-    // counts: our own CI staged an edit precisely so Nix would pick it up, so
-    // "staged but not committed" is the case this has to catch.
+    // `git status --porcelain` reports modified, staged, and untracked files,
+    // all of which can affect what Nix evaluates in a local directory.
     let status = run_git(flake_path, &["status", "--porcelain"])?;
     Some(GitState {
         rev,
@@ -114,9 +103,8 @@ fn run_git(path: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
 }
 
-/// UUID v4 as a string. kix doesn't pull in `uuid` as a workspace dep, and
-/// OSCAL only requires the value be a syntactically valid UUID, so we build
-/// one from `blake3` over a random-ish seed.
+/// Generate a syntactically valid UUID v4 string from a BLAKE3 hash of the
+/// timestamp, PID, and a monotonic counter.
 pub fn new_uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()

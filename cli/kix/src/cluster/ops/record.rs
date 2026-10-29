@@ -16,29 +16,30 @@ use super::super::apply;
 use super::super::errors::{FailureClass, classify};
 use super::{DeployRecord, Finalized, KubeResources, RecordWriteError, StampError};
 
-/// Best-effort writes (checkpoint, finalize) get this long. They run on
-/// their own tasks so a slow one parks nothing, but the end of the run
-/// awaits the last checkpoint and finalize inline; this keeps that bounded.
+/// Timeout for best-effort writes (checkpoint and finalize). These writes run
+/// on their own tasks so a slow write does not block the scheduler, and this
+/// bound caps how long the end of the run waits for the final checkpoint and
+/// finalize.
 const BEST_EFFORT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What a run writes to its Activation record, beyond the cluster and the
 /// identity hash its [`KubeResources`] carry.
 pub(crate) struct RecordConfig {
-    /// The record's name. `None` writes no lifecycle: the operator
-    /// correcting drift.
+    /// The record's name, or `None` when the run writes no lifecycle (such as
+    /// the operator correcting drift).
     pub(crate) name: Option<String>,
     /// The record's own stamped manifest, so [`DeployRecord::begin`] can
-    /// create it before the first node instead of waiting for it to come
-    /// round as the last node of the plan.
+    /// create it before the first node instead of waiting for it to run as the
+    /// last node of the plan.
     ///
-    /// The same manifest either way, applied by the same field manager with
-    /// the same identity hash, so the last-node apply of it is a no-op that
-    /// re-asserts spec once everything it depends on is Ready. `None` for
-    /// the operator: it created the record itself and owns `spec.source`.
+    /// Both places apply the same manifest with the same field manager and
+    /// identity hash, so the final node's apply is a no-op that re-asserts
+    /// `spec` once its dependencies are Ready. `None` for the operator, which
+    /// created the record itself and owns `spec.source`.
     pub(crate) manifest: Option<Value>,
     /// Provenance to record on the Activation when the deploy finishes. The
-    /// CLI computes it; the operator does not, because it never had a source
-    /// tree to compute it from.
+    /// CLI computes this from the source tree, whereas the operator leaves it
+    /// `None`.
     pub(crate) receipt: Option<Value>,
     /// Failed records whose leftovers this run's plan folded in. Superseded
     /// on finalize, because by then they describe nothing outstanding.
@@ -48,8 +49,7 @@ pub(crate) struct RecordConfig {
     /// Whether [`DeployRecord::abort`] should mark the record Failed.
     ///
     /// True for the CLI, which owns the run end to end. False for the
-    /// operator, whose model is resume-on-requeue: a reconcile that returns
-    /// early will be retried, so failing the record would fight it.
+    /// operator, which resumes on requeue when a reconcile returns early.
     pub(crate) mark_failed_on_abort: bool,
 }
 
@@ -80,15 +80,15 @@ impl ActivationRecord {
         }
     }
 
-    /// The `status.orphansKeptFrom` the run's finalize wrote, or `None` when
-    /// it did not finalize (no-op run, failure).
+    /// Return the `status.orphansKeptFrom` written by `finalize`, or `None` if
+    /// the run did not finalize.
     pub(crate) fn orphans_kept_from(&self) -> Option<Vec<KeptOrphanSource>> {
         self.recorded_kept.lock().ok().and_then(|g| g.clone())
     }
 
-    /// The records, for a write the run can do without: `None` when the
-    /// record CRD is not served yet or the domain gate refuses, which is
-    /// logged. The later writes report the refusal.
+    /// Open the `Activation` records API for optional writes, logging any
+    /// domain-gate error and returning `None` when the CRD is not served or the
+    /// gate refuses.
     async fn logged_records(&self) -> Option<Records> {
         self.resources.records().await.unwrap_or_else(|e| {
             tracing::error!("{e}");
@@ -96,10 +96,10 @@ impl ActivationRecord {
         })
     }
 
-    /// The record's name and the records to write it through. `None` when
-    /// the run writes no lifecycle or the record CRD is not served yet; the
-    /// gate's refusal is an error, so a run on a cluster whose records sit
-    /// under a retired group does not finalize as if it had none.
+    /// Return the configured record name and `Records` handle, or `None` when
+    /// lifecycle recording is disabled or the CRD is not yet served. Propagates
+    /// domain-gate errors so a cluster with retired records does not finalize
+    /// as if it had none.
     async fn named_records(&self) -> Result<Option<(&str, Records)>, RecordWriteError> {
         let Some(name) = self.config.name.as_deref() else {
             return Ok(None);
@@ -114,13 +114,13 @@ impl ActivationRecord {
 
     /// Create the Activation record and mark it Deploying.
     ///
-    /// Returns false when the record CRD is not served yet, which is a
-    /// cluster's first deploy: the caller sets `pending` and
-    /// [`DeployRecord::discovery_refreshed`] retries at the CRD barrier.
+    /// Returns false when the record CRD is not served yet (such as on a
+    /// cluster's first deploy) so the caller can set `pending` and let
+    /// [`DeployRecord::discovery_refreshed`] retry at the CRD barrier.
     ///
-    /// The apply goes through the same path the plan's own node will take, so
-    /// field manager, identity hash and annotation stamping all match and the
-    /// later apply is an unchanged no-op.
+    /// The apply uses the same path as the plan's own node, so field manager,
+    /// identity hash, and annotation stamping all match and the later apply is
+    /// an unchanged no-op.
     async fn create(&self) -> bool {
         let Some(name) = self.config.name.as_ref() else {
             return true;
@@ -129,10 +129,8 @@ impl ActivationRecord {
             return false;
         };
 
-        // Only the CLI brings a manifest. The operator's record already
-        // exists on the cluster, because the operator is reconciling it, so
-        // there is nothing to create and it goes straight to marking the
-        // phase, which is what `begin` has always done for it.
+        // Only the CLI provides a manifest. When the operator reconciles an
+        // existing Activation, it skips creation and marks the phase directly.
         if let Some(manifest) = self.config.manifest.as_ref() {
             let rid = ResourceId::from_value(manifest);
             let Some((manifest_ar, scope)) = self.resources.cached_kind(&rid.kind).await else {
@@ -140,9 +138,9 @@ impl ActivationRecord {
             };
 
             if let Err(e) = self.resources.apply_as(&manifest_ar, scope, manifest).await {
-                // Not fatal. Without the record the run behaves exactly as it
-                // did before this existed, and the deploy itself is what
-                // matters. Marking the phase below will 404 and be swallowed.
+                // Non-fatal: the deploy can still proceed and create the record
+                // as the final node in the plan. Marking the phase below will
+                // 404 and be ignored.
                 tracing::warn!(
                     activation = %name,
                     error = %e,
@@ -153,9 +151,9 @@ impl ActivationRecord {
         }
 
         if let Err(e) = records.begin_deploy(name, 1).await {
-            // 404 on a cluster whose record CRD is served but whose record
-            // does not exist yet: the create above failed, or this is the
-            // operator on a record that has since gone.
+            // 404 when the CRD is served but the record does not exist yet
+            // (either the up-front create failed or the operator's record was
+            // deleted).
             tracing::debug!(activation = %name, error = %e, "could not mark the record Deploying");
         }
         true
@@ -176,9 +174,9 @@ impl DeployRecord for ActivationRecord {
             None => self.logged_records().await,
         };
         let Some(records) = records else {
-            // No record CRD served yet. On a cluster's first deploy the CRD is
-            // in this very plan, so the record is created at the CRD barrier
-            // instead; see `discovery_refreshed`.
+            // No record CRD is served yet. On a cluster's first deploy, the CRD
+            // is in this plan and the record is created at the CRD barrier in
+            // `discovery_refreshed`.
             self.pending.store(true, Ordering::SeqCst);
             return Ok(());
         };
@@ -196,10 +194,9 @@ impl DeployRecord for ActivationRecord {
     }
 
     async fn discovery_refreshed(&self) {
-        // A cluster's first deploy carries the record's own CRD, so `begin`
-        // could not create the record. This is the first moment it can: the
-        // engine only refreshes discovery once a CRD it applied is
-        // Established.
+        // On a cluster's first deploy, `begin` defers creating the record until
+        // the Activation CRD applied by the plan is Established and discovery
+        // refreshes here.
         if self.pending.load(Ordering::SeqCst)
             && let Some(records) = self.logged_records().await
         {
@@ -220,8 +217,8 @@ impl DeployRecord for ActivationRecord {
         let Some((name, records)) = self.named_records().await? else {
             return Ok(());
         };
-        // One synthetic "wave" until the Activation schema moves to per-node
-        // progress; it still gives the operator a liveness pulse.
+        // Record progress as a single synthetic wave to provide a liveness
+        // pulse on the Activation status.
         let record = WaveRecord {
             wave_index: 0,
             status: if finalizing {
@@ -362,7 +359,7 @@ mod tests {
     }
 
     /// On a cluster whose records sit under a retired group, a run with a
-    /// record to write fails its begin, checkpoint, abort and finalize with
+    /// record to write fails its begin, checkpoint, abort, and finalize with
     /// the gate's refusal instead of finalizing as if there were no record. A
     /// run that writes no lifecycle is not affected.
     #[tokio::test]

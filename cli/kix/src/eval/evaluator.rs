@@ -28,12 +28,14 @@ pub struct ClusterOutput {
 }
 
 impl ClusterOutput {
-    /// The name the cluster definition gives `buildCluster`: the
-    /// `kix.run/cluster` label of the build's Activation record, which is
-    /// what finds the cluster's records on Kubernetes and in the activation
-    /// cache. It differs from [`Self::name`] when a flake maps
-    /// `clusters.harbor = ./test-harbor.nix` and that file sets
-    /// `name = "test-harbor"`. `None` when the build has no record.
+    /// Return the cluster name passed to `buildCluster`, read from the
+    /// `kix.run/cluster` label on the build's Activation record.
+    ///
+    /// This name identifies the cluster's records on Kubernetes and in the
+    /// activation cache. It differs from [`Self::name`] when a flake maps an
+    /// attribute like `clusters.harbor = ./test-harbor.nix` to a cluster
+    /// definition that sets `name = "test-harbor"`. Returns `None` when the
+    /// build has no Activation record.
     pub fn cluster_name(&self) -> Option<&str> {
         crate::manifest::lifecycle::record_of(&self.raw_manifests)?
             .pointer("/metadata/labels")?
@@ -167,25 +169,21 @@ impl KixEvaluator {
         let start = std::time::Instant::now();
         tracing::debug!(cluster = cluster_name, "evaluating");
 
-        // Compute cache key including source file fingerprint
         let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
         let cache_key =
             SqliteCache::compute_key_with_source(&self.flake_path, cluster_name, &fingerprint)?;
 
-        // Check cache
         if let Some(cached_json) = self.cache.get(&cache_key)? {
             if let Ok(output) = serde_json::from_str::<ClusterOutput>(&cached_json) {
                 tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "cache hit");
                 return Ok(output);
             }
-            // Re-evaluate a corrupted cache entry.
             tracing::warn!(
                 cluster = cluster_name,
                 "corrupted cache entry, re-evaluating"
             );
         }
 
-        // Evaluate a cache miss.
         let output = self.backend.eval_cluster(&self.flake_path, cluster_name)?;
 
         // Cache writes are non-fatal because evaluation already succeeded. A

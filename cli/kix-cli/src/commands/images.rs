@@ -11,9 +11,9 @@ use super::CommandContext;
 /// A single container image reference found in the cluster manifests.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct ImageEntry {
-    /// Full image reference (e.g. "quay.io/jetstack/cert-manager-controller:v1.21.2")
+    /// Full image reference (for example, `"quay.io/jetstack/cert-manager-controller:v1.21.2"`).
     image: String,
-    /// Resources that reference this image
+    /// Workload containers that reference this image.
     sources: Vec<ImageSource>,
 }
 
@@ -59,7 +59,6 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let cluster_output = cluster_output?;
 
-    // Collect images: image_ref -> Vec<source>
     let mut image_map: BTreeMap<String, Vec<ImageSource>> = BTreeMap::new();
 
     for manifest in &cluster_output.raw_manifests {
@@ -77,7 +76,6 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
             .unwrap_or("_cluster");
 
         if let Some(pod_spec) = kix::manifest::workload::pod_spec(manifest) {
-            // Extract from containers, initContainers, and ephemeralContainers
             for field in ["containers", "initContainers", "ephemeralContainers"] {
                 if let Some(containers) = pod_spec.get(field).and_then(|v| v.as_array()) {
                     for container in containers {
@@ -102,7 +100,7 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // Merge extra images declared by packages (operator-spawned images)
+    // Include operator-spawned images declared in package metadata.
     if let Some(extra) = &cluster_output.extra_images {
         for ei in extra {
             image_map
@@ -127,7 +125,6 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
     match output::format() {
         OutputFormat::Text | OutputFormat::Markdown => {
             if args.sources {
-                // Verbose text: show sources per image
                 for entry in &response.images {
                     println!("{}", entry.image);
                     for src in &entry.sources {

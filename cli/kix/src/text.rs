@@ -1,24 +1,24 @@
-//! Text from outside kix, made safe to print.
+//! Sanitize untrusted text for terminal output.
 
 use std::fmt::Write;
 
-/// The most characters of one piece of outside text that [`printable`]
-/// shows.
+/// Maximum number of characters that [`printable`] shows for a single string.
 pub(crate) const MAX_SHOWN_CHARS: usize = 512;
 
-/// `s` with every character that does not show as itself replaced by its
-/// code point, flagged: `cluster-admin⟨U+200B⟩`. Those are control
-/// characters, which can move the cursor or clear the screen, and Unicode's
-/// format characters and line and paragraph separators, which are
-/// invisible, reorder text (bidirectional controls), or break a line. For
-/// text kix did not write, such as a name from a build made elsewhere, so
-/// two names that differ always look different. Only the first
-/// `MAX_SHOWN_CHARS` characters show, and the rest is counted.
+/// Return `s` with non-printable or visually ambiguous characters replaced by
+/// their Unicode code points, such as `cluster-admin⟨U+200B⟩`.
+///
+/// Escapes control characters (which can move the cursor or clear the screen),
+/// Unicode format characters (including bidirectional controls), and line or
+/// paragraph separators. Use this for text that Kix did not generate, such as
+/// names from an external build, so that distinct strings always look
+/// distinct. Shows at most [`MAX_SHOWN_CHARS`] characters and summarizes any
+/// remaining bytes.
 pub fn printable(s: &str) -> String {
     printable_up_to(s, MAX_SHOWN_CHARS)
 }
 
-/// [`printable`] showing up to `max_chars` characters.
+/// Format `s` like [`printable`], showing at most `max_chars` characters.
 pub(crate) fn printable_up_to(s: &str, max_chars: usize) -> String {
     let (shown, rest) = match s.char_indices().nth(max_chars) {
         Some((i, _)) => s.split_at(i),
@@ -38,14 +38,14 @@ pub(crate) fn printable_up_to(s: &str, max_chars: usize) -> String {
     out
 }
 
-/// Whether [`printable`] shows `c` as its code point: a control character
-/// (General_Category Cc), a format character (Cf, which holds every
-/// Bidi_Control character), or a line or paragraph separator (Zl, Zp).
+/// Return whether [`printable`] escapes `c` as its code point: control
+/// characters (`Cc`), format characters (`Cf`, which includes every
+/// `Bidi_Control` character), or line and paragraph separators (`Zl`, `Zp`).
 pub(crate) fn is_hidden(c: char) -> bool {
     c.is_control() || is_format(c) || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
-/// Unicode's Bidi_Control characters.
+/// Return whether `c` is a Unicode `Bidi_Control` character.
 #[cfg(test)]
 fn is_bidi_control(c: char) -> bool {
     matches!(
@@ -54,9 +54,9 @@ fn is_bidi_control(c: char) -> bool {
     )
 }
 
-/// Unicode's format characters (General_Category Cf, Unicode 16), such as
-/// the zero-width space U+200B, the word joiner U+2060, the byte order mark
-/// U+FEFF, the soft hyphen U+00AD, and the tag characters.
+/// Return whether `c` is a Unicode format character (`General_Category=Cf`,
+/// Unicode 16), such as zero-width space (`U+200B`), word joiner (`U+2060`),
+/// byte order mark (`U+FEFF`), soft hyphen (`U+00AD`), or a tag character.
 fn is_format(c: char) -> bool {
     matches!(
         c,

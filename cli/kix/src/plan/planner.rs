@@ -15,7 +15,7 @@
 //! of the record it returns to ([`Baseline::of_record`]). The planner prints
 //! nothing: it reports what it finds through a [`PlanEvent`] callback.
 //!
-//! [`Planned`] is plain data: the build, its manifests, the baseline and the
+//! [`Planned`] is plain data: the build, its manifests, the baseline, and the
 //! [`CheckedPlan`]. A [`CheckedPlan`] comes only from the check, its fields
 //! are private, and after the check it changes only by the
 //! `--record-annotation` values on the record ([`Planned::annotate_record`]),
@@ -23,13 +23,12 @@
 //! orphans dropped from the prune ([`CheckedPlan::keep_shared`]).
 //! [`CheckedPlan::dry_run`] runs the engine over it with every write sent as
 //! a dry run, and [`CheckedPlan::run`] runs it for real, with the prune
-//! policy, conflict handling and Activation record the check used.
+//! policy, conflict handling, and Activation record the check used.
 //!
 //! The engine, `cluster::scheduler::run_deploy`, is private to the library.
-//! The only other way to it is the operator's [`super::live::LivePlan`],
-//! which plans from a sweep of the live objects it makes itself. No check
-//! holds that plan to a package diff (see
-//! `housekeeping/2026-10-08-operator-plans-from-live-objects-not-the-planner.md`).
+//! The only other way to reach it is the operator's [`super::live::LivePlan`],
+//! which plans from a sweep of the live objects it makes itself without
+//! holding the plan to a package diff.
 
 use std::sync::Arc;
 
@@ -112,8 +111,8 @@ impl Target {
         &self.client
     }
 
-    /// What the cluster served when the target connected. The run
-    /// refreshes it after CRDs land.
+    /// Return the API resources discovered when the target connected. The run
+    /// refreshes discovery after CRDs land.
     pub fn discovery(&self) -> &[(ApiResource, Scope)] {
         &self.discovery
     }
@@ -150,7 +149,7 @@ pub struct CheckedPlan {
 }
 
 impl CheckedPlan {
-    /// The flags the plan was made and checked with.
+    /// Return the flags that the plan was made and checked with.
     pub fn flags(&self) -> PlanFlags {
         self.flags
     }
@@ -159,8 +158,8 @@ impl CheckedPlan {
         &self.plan
     }
 
-    /// Orphans this cluster's prune may delete; ones another Kix cluster
-    /// still deploys are in [`CheckedPlan::shared_orphans`] instead.
+    /// Return the orphans that this cluster's prune may delete. Orphans that
+    /// another Kix cluster still deploys are in [`CheckedPlan::shared_orphans`].
     pub fn orphans(&self) -> &[ResourceId] {
         &self.orphans
     }
@@ -169,30 +168,30 @@ impl CheckedPlan {
         &self.shared_orphans
     }
 
-    /// The package-grouped comparison of the old side with the new build.
+    /// Return the package-grouped comparison of the old side with the new build.
     pub fn pkg_diff(&self) -> &PackageDiff {
         &self.pkg_diff
     }
 
-    /// Every object the plan writes and the prune deletes, each shown in
-    /// the package diff or re-applied; see [`super::objects`].
+    /// Return every object the plan writes and the prune deletes; see
+    /// [`super::objects`].
     pub fn objects(&self) -> &Objects {
         &self.objects
     }
 
-    /// The new build's Activation record's name.
+    /// Return the name of the new build's Activation record.
     pub fn activation_name(&self) -> Option<&str> {
         self.activation_name.as_deref()
     }
 
-    /// The new build's Activation record's identity hash.
+    /// Return the identity hash of the new build's Activation record.
     pub fn activation_identity_hash(&self) -> Option<&str> {
         self.activation_identity_hash.as_deref()
     }
 
-    /// For a plan made without a client (`--current-activation`): once
-    /// connected, keep apart the orphans another Kix cluster still deploys
-    /// ([`keep_shared`]). It only ever removes orphans from the prune.
+    /// Remove orphans that another Kix cluster still deploys ([`keep_shared`])
+    /// from the prune set and package diff on a plan made without a client
+    /// (`--current-activation`).
     pub fn keep_shared(&mut self, shared: &[SharedOrphan]) {
         self.orphans
             .retain(|rid| !shared.iter().any(|s| &s.rid == rid));
@@ -257,10 +256,10 @@ impl CheckedPlan {
             ),
             RecordConfig {
                 name: self.activation_name,
-                // Created before the first node, so a run that stops part
-                // way leaves something that says what it was attempting
-                // (kixpkgs#82). The plan applies this same manifest again as
-                // its last node, which is then an unchanged no-op.
+                // Created before the first node so a run that stops partway
+                // leaves a record of what it was attempting. The plan applies
+                // this same manifest again as its last node, which is then an
+                // unchanged no-op.
                 manifest: self.record,
                 receipt,
                 consumed_failed: self.consumed_failed,
@@ -303,7 +302,7 @@ pub struct Planned {
 }
 
 impl Planned {
-    /// `crate::build_source::Build::sops_sources` of the new build.
+    /// Return [`crate::build_source::Build::sops_sources`] for the new build.
     pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
         self.build.sops_sources(placeholders)
     }
@@ -441,13 +440,13 @@ impl<'a> Planner<'a> {
         })
     }
 
-    /// The changes of `new_graph` against `baseline` and the engine plan for
-    /// them, with the package diff, refused unless every write and delete of
-    /// the one is shown in the other. `cluster` is the Kix cluster whose
-    /// records the baseline came from. With a `client`, the orphans another
-    /// Kix cluster still deploys are kept, and the plan's prune section
-    /// lists every other orphan; without one, `kix deploy` checks the
-    /// orphans once it connects.
+    /// Compute the changes of `new_graph` against `baseline` and build the
+    /// checked deploy plan and package diff. Fails unless every write and
+    /// delete of the engine plan is shown in the package diff. `cluster` is
+    /// the Kix cluster whose records the baseline came from. With a `client`,
+    /// orphans that another Kix cluster still deploys are kept and the plan's
+    /// prune section lists every other orphan; without one, `kix deploy`
+    /// checks the orphans once it connects.
     pub async fn plan(
         &self,
         new_graph: &StoreGraph,
@@ -460,8 +459,8 @@ impl<'a> Planner<'a> {
             .await
     }
 
-    /// What `new_manifests` change against `baseline` ([`Baseline::changes`]),
-    /// and the builds the new record lists as having kept orphans.
+    /// Compute what `new_manifests` change against `baseline`
+    /// ([`Baseline::changes`]) and the kept-orphan sources for the new record.
     fn changes(&self, new_manifests: &[Value], baseline: &Baseline, read_records: bool) -> Changes {
         let actions = baseline.changes(new_manifests, self.flags.reconcile);
         let orphans = actions
@@ -482,7 +481,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// [`Planner::plan`] over the manifests of `new_graph`.
+    /// Run [`Planner::plan`] over the manifests of `new_graph`.
     async fn check(
         &self,
         new_graph: &StoreGraph,
@@ -553,8 +552,8 @@ fn manifests_of(graph: &StoreGraph) -> Vec<Value> {
         .collect()
 }
 
-/// The orphans a run's prune deletes: under `PrunePolicy::Delete`, all but
-/// the kinds `lifecycle::never_pruned` protects.
+/// Return the orphans that a run's prune deletes under `PrunePolicy::Delete`,
+/// excluding kinds protected by `lifecycle::never_pruned`.
 pub(crate) fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<ResourceId> {
     if prune != PrunePolicy::Delete {
         return Vec::new();
@@ -666,8 +665,8 @@ mod tests {
         assert_eq!(kept, vec!["shared", "shared-cm"]);
     }
 
-    /// The `kix-enterprise-test` build, carried, planned as a first deploy
-    /// without connecting.
+    /// Build a [`Planned`] for the `kix-enterprise-test` fixture as a first
+    /// deploy without connecting.
     fn planned() -> Planned {
         struct Carried;
         impl crate::build_source::CarriedBuild for Carried {
@@ -717,8 +716,8 @@ mod tests {
         }
     }
 
-    /// The record annotations the build's manifests, the record the run
-    /// creates first and the plan's node carry for `key`.
+    /// Return the value of annotation `key` on the build's manifests, the
+    /// initial record, and the plan's record node.
     fn record_annotation(p: &Planned, key: &str) -> Vec<Option<String>> {
         let applied = p.checked.plan.nodes.iter().filter_map(|n| match &n.action {
             ChangeAction::Apply(m) if lifecycle::is_record(m) => Some(m),

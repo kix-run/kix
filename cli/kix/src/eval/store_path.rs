@@ -1,14 +1,13 @@
 //! Nix store paths computed from content.
 //!
-//! The files a cluster build is made of are content-addressed: manifests and
-//! `kix-packages.json` come from `builtins.toFile` (a text path) and SOPS
-//! sources from `builtins.path` (a source path, hashed over its NAR
-//! serialisation). Their store path is a function of their bytes, their
-//! references and their name, so a path can be checked against a file
-//! without a Nix store. A reader of a build that holds no Nix store relies
-//! on this to refuse a file whose path was not made from it.
+//! The files in a cluster build are content-addressed: manifests and
+//! `kix-packages.json` come from `builtins.toFile` (a text path), and SOPS
+//! sources come from `builtins.path` (a source path hashed over its NAR
+//! serialization). Because a file's store path is a function of its bytes,
+//! its references, and its name, a reader can verify a store path against file
+//! contents without a local Nix store.
 //!
-//! The rules follow Nix's `makeStorePath`, `makeTextPath` and
+//! These calculations follow Nix's `makeStorePath`, `makeTextPath`, and
 //! `makeFixedOutputPath` for recursive SHA-256.
 
 use sha2::{Digest, Sha256};
@@ -16,7 +15,7 @@ use sha2::{Digest, Sha256};
 /// The store directory every path in a build lives under.
 pub(crate) const STORE_DIR: &str = "/nix/store";
 
-/// Nix's base32 alphabet: no `e`, `o`, `u` or `t`.
+/// Nix's base32 alphabet (omits `e`, `o`, `u`, and `t`).
 const BASE32: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
 
 /// How a content-addressed store path was made.
@@ -25,16 +24,16 @@ pub enum Method {
     /// `builtins.toFile`: the hash covers the file's bytes.
     Text,
     /// `builtins.path` of a single regular file: the hash covers the file's
-    /// NAR serialisation, which records whether the file is executable.
-    /// [`path_for`] gives the path of a file that is not.
+    /// NAR serialization, which records whether the file is executable.
+    /// [`path_for`] computes the path for a non-executable file.
     Source,
 }
 
 /// The longest store name Nix accepts (`StorePath::MaxPathLen`).
 pub(crate) const MAX_NAME_BYTES: usize = 211;
 
-/// The store path a file gets under `method`, given its bytes, the store
-/// paths it references, and its name (the part after `<hash>-`).
+/// Compute the store path for a file under `method` from its `bytes`, the
+/// store paths it `references`, and its `name` (the suffix after `<hash>-`).
 ///
 /// ```
 /// use kix::eval::store_path::{Method, path_for};
@@ -45,9 +44,9 @@ pub fn path_for(method: Method, bytes: &[u8], references: &[String], name: &str)
     path_with(method, false, bytes, references, name)
 }
 
-/// The method that makes `path` from `bytes`, `references` and the path's
-/// own name, or `None` if neither does. A source path may be of an
-/// executable file or not.
+/// Return the [`Method`] that produces `path` from `bytes`, `references`, and
+/// `path`'s store name, or `None` if neither method matches. Checks both
+/// non-executable and executable NAR encodings for [`Method::Source`].
 pub fn method_of<S: AsRef<str>>(path: &str, bytes: &[u8], references: &[S]) -> Option<Method> {
     let name = name_of(path)?;
     [
@@ -60,9 +59,8 @@ pub fn method_of<S: AsRef<str>>(path: &str, bytes: &[u8], references: &[S]) -> O
     .map(|(m, _)| m)
 }
 
-/// Nix's type string, `<kind>:<reference>:<reference>...`, can be as long
-/// as the references put together, so it goes into the hash piece by piece.
-/// `executable` applies to [`Method::Source`] only.
+/// Compute the store path for `bytes`, streaming `<kind>:<reference>...` into
+/// the fingerprint hash. `executable` applies only to [`Method::Source`].
 fn path_with<S: AsRef<str>>(
     method: Method,
     executable: bool,
@@ -87,8 +85,8 @@ fn path_with<S: AsRef<str>>(
     make_store_path(&fingerprint.finalize(), name)
 }
 
-/// The name part of a store path: what follows `/nix/store/<hash>-`. `None`
-/// unless the hash is Nix base32 and the name is one Nix accepts.
+/// Return the name suffix of `path` after `/nix/store/<hash>-`, or `None` if
+/// the hash is not valid Nix base32 or the name is rejected by Nix.
 pub fn name_of(path: &str) -> Option<&str> {
     let rest = path.strip_prefix(STORE_DIR)?.strip_prefix('/')?;
     let (hash, name) = rest.split_at_checked(32)?;
@@ -99,8 +97,9 @@ pub fn name_of(path: &str) -> Option<&str> {
     valid_name(name).then_some(name)
 }
 
-/// Nix's `checkName`: 1 to [`MAX_NAME_BYTES`] characters from
-/// `[A-Za-z0-9+-._?=]`, and not `.` or `..`, alone or before a `-`.
+/// Return whether `name` satisfies Nix's `checkName` rules: 1 to
+/// [`MAX_NAME_BYTES`] ASCII characters from `[A-Za-z0-9+-._?=]`, and not `.`
+/// or `..` (either alone or followed by `-`).
 fn valid_name(name: &str) -> bool {
     let allowed = |b: u8| b.is_ascii_alphanumeric() || b"+-._?=".contains(&b);
     !name.is_empty()
@@ -111,7 +110,7 @@ fn valid_name(name: &str) -> bool {
         && !name.starts_with("..-")
 }
 
-/// The store path whose fingerprint (`<type>:sha256:<hex>:<store>:<name>`)
+/// Format the store path whose fingerprint (`<type>:sha256:<hex>:<store>:<name>`)
 /// hashes to `full`.
 fn make_store_path(full: &[u8], name: &str) -> String {
     let mut short = [0u8; 20];
@@ -121,7 +120,7 @@ fn make_store_path(full: &[u8], name: &str) -> String {
     format!("{STORE_DIR}/{}-{name}", base32(&short))
 }
 
-/// Nix's base32: little-endian, five bits at a time, last character first.
+/// Encode `bytes` in Nix's little-endian base32 format.
 fn base32(bytes: &[u8]) -> String {
     let len = (bytes.len() * 8 - 1) / 5 + 1;
     (0..len)
@@ -142,7 +141,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The NAR serialisation of one regular file.
+/// Serialize a single regular file into NAR format.
 fn nar_of_file(contents: &[u8], executable: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(contents.len() + 160);
     for s in [b"nix-archive-1".as_slice(), b"(", b"type", b"regular"] {

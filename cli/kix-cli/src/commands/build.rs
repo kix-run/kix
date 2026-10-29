@@ -35,7 +35,7 @@ pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
         manifests: cluster_output.raw_manifests,
     };
 
-    // Build defaults to YAML; both Text and Yaml use multi-document YAML format
+    // Default to multi-document YAML unless JSON output is requested.
     match output::format() {
         OutputFormat::Yaml | OutputFormat::Text | OutputFormat::Markdown => {
             print!("{}", response.format_text());

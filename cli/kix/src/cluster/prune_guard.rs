@@ -4,12 +4,12 @@
 //! such as an identical ClusterRole. When one drops it from its build, its
 //! prune plans the object as an orphan while the other's current build still
 //! contains it. Every prune path (deploy and rollback through
-//! `super::ops::KubeResources`, soft and hard gc, the operator's reconcile and
-//! finalizer) deletes through [`PruneGuard::delete`], which reads the object,
-//! then the Activation records, and deletes only an object no other Kix
+//! `super::ops::KubeResources`, soft and hard gc, and the operator's reconcile
+//! and finalizer) deletes through [`PruneGuard::delete`], which reads the
+//! object, then the Activation records, and deletes only an object no other Kix
 //! cluster's current record names. The delete carries the read's uid and
-//! resourceVersion as preconditions, so an object that changed after the
-//! read (another cluster's deploy stamping it, say) is left in place.
+//! resourceVersion as preconditions, so an object that changed after the read
+//! is left in place.
 
 use kube::{
     Client,
@@ -39,7 +39,7 @@ pub enum Pruned {
 }
 
 impl Pruned {
-    /// The line a command prints for an object the guard left in place.
+    /// Format the line a command prints when the guard leaves an object in place.
     pub fn kept_reason(&self) -> Option<String> {
         match self {
             Pruned::Kept(shared) => Some(shared.describe()),
@@ -73,8 +73,9 @@ pub struct PruneGuard {
 }
 
 impl PruneGuard {
-    /// A guard for `cluster`'s prune. When `records` holds none, no other
-    /// cluster can have records, and the guard only adds the preconditions.
+    /// Create a prune guard for `cluster`. When `records` holds no `Activation`
+    /// API, no other cluster can have records, and the guard only attaches
+    /// delete preconditions.
     pub fn new(client: Client, records: OpenedRecords, cluster: &str) -> Self {
         PruneGuard {
             client,
@@ -122,10 +123,11 @@ impl PruneGuard {
         }
     }
 
-    /// A tenancy read after `obj` whenever `obj` names a record the cached
-    /// one lacks. A record's cluster never changes and a Superseded record
-    /// stays Superseded, so a cached tenancy that knows every hash can only
-    /// overstate what other clusters still deploy.
+    /// Return a [`Tenancy`] read after `obj` whenever `obj` names a record hash
+    /// absent from the cached tenancy. Because a record's cluster never changes
+    /// and a `Superseded` record stays `Superseded`, a cached tenancy that
+    /// recognizes every hash can only overstate what other clusters still
+    /// deploy.
     async fn tenancy_naming(&self, obj: &DynamicObject) -> Result<Tenancy, PruneError> {
         let mut slot = self.tenancy.lock().await;
         if let Some(t) = &*slot

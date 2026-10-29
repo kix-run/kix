@@ -17,9 +17,8 @@ use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 use super::store_graph::KixPackageIndex;
 use crate::text::printable;
 
-/// A manifest or index that [`parse_manifest`] refused. Its strings may
-/// hold text kix did not write, and its message shows them through
-/// [`printable`].
+/// Error returned when [`parse_manifest`] rejects a manifest or package index.
+/// Formats untrusted strings through [`printable`].
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("{} is not a JSON manifest: {}", printable(.path), printable(.message))]
 pub struct NotJson {
@@ -27,10 +26,11 @@ pub struct NotJson {
     pub message: String,
 }
 
-/// `bytes`, the manifest at `path`, parsed as JSON: the one parser for
-/// manifests and indexes. Refuses a key given twice and a key with
-/// serde_json's reserved prefix; serde_json refuses nesting past 128. An
-/// integer outside `i64` and `u64` reads as the nearest `f64`.
+/// Parse `bytes` from `path` as a strict JSON manifest.
+///
+/// Rejects duplicate object keys, keys starting with `serde_json`'s reserved
+/// prefix, and nesting deeper than `serde_json`'s limit of 128. Integers
+/// outside `i64` and `u64` are parsed as the nearest `f64`.
 pub fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Value, NotJson> {
     let mut de = serde_json::Deserializer::from_slice(bytes);
     Strict
@@ -42,7 +42,7 @@ pub fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Value, Not
         })
 }
 
-/// `kix-packages.json` at `path`, parsed with [`parse_manifest`].
+/// Parse `kix-packages.json` at `path` using [`parse_manifest`].
 pub fn parse_index(path: &str, bytes: &[u8]) -> Result<KixPackageIndex, NotJson> {
     serde_json::from_value(parse_manifest(path, bytes)?).map_err(|e| NotJson {
         path: path.to_string(),

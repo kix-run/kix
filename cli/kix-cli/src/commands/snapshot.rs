@@ -20,9 +20,10 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 }
 
-/// The objects of Kix cluster `cluster`, read past the domain gate: on a
-/// cluster whose records sit under a retired group none of them would be
-/// found, and every object would be read as `cluster`'s.
+/// Discover API resources and sweep all objects managed by `cluster`.
+///
+/// Runs the domain gate via [`Records::open`] so an unmigrated cluster is
+/// rejected rather than attributing all objects to `cluster`.
 async fn sweep_cluster(client: &Client, cluster: &str) -> Result<inventory::ManagedSweep> {
     crate::esay!("Discovering API resources...");
 
@@ -54,7 +55,6 @@ async fn sweep_cluster(client: &Client, cluster: &str) -> Result<inventory::Mana
 fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
     let out_dir = Path::new(&args.dir);
 
-    // Reject path traversal
     for component in out_dir.components() {
         if matches!(component, std::path::Component::ParentDir) {
             return Err(miette!(
@@ -79,7 +79,8 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
         }
         let resources = snapshot_resources(sweep.managed);
 
-        // Write to temp dir, then atomic swap
+        // Stage files in a sibling temporary directory and swap into place so
+        // an interrupted snapshot does not leave a partial output directory.
         let parent = out_dir.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(parent).into_diagnostic()?;
 
@@ -88,7 +89,6 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
         let written = write_resources(tmp_path, &resources)?;
 
-        // Write README
         let timestamp = chrono_timestamp();
         let readme = format!(
             "# Cluster Snapshot\n\n\
@@ -104,12 +104,10 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
         );
         std::fs::write(tmp_path.join("README.md"), &readme).into_diagnostic()?;
 
-        // Atomic swap: remove old, rename temp into place
         if out_dir.exists() {
             std::fs::remove_dir_all(out_dir).into_diagnostic()?;
         }
 
-        // Persist the tempdir (prevent auto-cleanup) then rename
         let persist_path = tmp_dir.keep();
         std::fs::rename(&persist_path, out_dir).into_diagnostic()?;
 
@@ -119,9 +117,9 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
     })
 }
 
-/// The kix-owned view of each object (same recipe as `kix diff`), so a
-/// snapshot compares to a build the way the live cluster does. A Secret's
-/// view holds no live value (`owned_view::kix_owned_view`).
+/// Extract the Kix-owned manifest view for each live object, redacting Secret
+/// values so snapshots can be compared against builds without exposing live
+/// secrets.
 fn snapshot_resources(objects: Vec<DynamicObject>) -> Vec<(ResourceId, Value)> {
     owned_view::kix_owned_manifests(objects)
         .into_iter()
@@ -200,8 +198,7 @@ mod tests {
     use kix::manifest::lifecycle::RECORD_KIND;
     use serde_json::json;
 
-    /// A Secret of cluster `a` with no kix Apply entry: its live values must
-    /// not reach the files a snapshot writes.
+    /// Verify that live Secret values are redacted before writing snapshot files.
     #[tokio::test]
     async fn a_snapshot_writes_no_live_secret_value() {
         let api = FakeApi::new([
@@ -244,8 +241,7 @@ mod tests {
         assert!(!text.contains("aHVudGVyMg=="), "{text}");
     }
 
-    /// On a cluster whose records sit under a retired group, a snapshot is
-    /// refused rather than written with every object as this cluster's.
+    /// Verify that [`sweep_cluster`] rejects clusters whose records sit under a retired API group.
     #[tokio::test]
     async fn a_snapshot_of_an_unmigrated_cluster_is_refused() {
         let api = FakeApi::new([]);

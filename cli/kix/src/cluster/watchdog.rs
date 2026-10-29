@@ -3,12 +3,12 @@
 //! Node tasks record phases in `Progress`, and every deploy event or
 //! readiness heartbeat resets its idle timer. `assess` decides whether a
 //! timer tick should warn or abort. `run` emits stall events and cancels the
-//! run through [`CancelToken`]; it does not access the cluster.
+//! run through [`CancelToken`] without accessing the cluster.
 //!
-//! A node that polls for readiness is activity to the idle timer, so a long
-//! wait on one object never reads as a stall. `run` reports such a wait
-//! separately: a `Waiting` event per node once it has been in its phase for
-//! [`WAIT_REPORT_AFTER`], repeated on [`wait_due`]'s schedule while it lasts.
+//! Readiness polling counts as activity on the idle timer, so a long wait on a
+//! single object is not treated as a stall. Instead, `run` emits a `Waiting`
+//! event per node once it has remained in its phase for [`WAIT_REPORT_AFTER`],
+//! and repeats the event on [`wait_due`]'s schedule while the wait continues.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,8 +27,8 @@ pub(crate) const STALL_TIMEOUT_ENV: &str = "KIX_STALL_TIMEOUT";
 /// Idle thresholds for warnings and cancellation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StallPolicy {
-    /// Idle time after which the first `Stalled` event fires; repeated at
-    /// this interval while the stall lasts.
+    /// Idle time after which the first `Stalled` event fires, and the interval
+    /// at which it repeats while the stall lasts.
     pub warn_after: Duration,
     /// Idle time after which the run is cancelled. `None` never aborts.
     pub abort_after: Option<Duration>,
@@ -44,7 +44,7 @@ impl Default for StallPolicy {
 }
 
 impl StallPolicy {
-    /// Defaults with `KIX_STALL_TIMEOUT` applied.
+    /// Return the default policy with `KIX_STALL_TIMEOUT` applied.
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(secs) = super::client::env_number(STALL_TIMEOUT_ENV) {
@@ -53,7 +53,7 @@ impl StallPolicy {
         policy
     }
 
-    /// Disable warnings and cancellation.
+    /// Return a policy with warnings and cancellation disabled.
     pub fn off() -> Self {
         Self {
             warn_after: Duration::MAX,
@@ -62,11 +62,11 @@ impl StallPolicy {
     }
 }
 
-/// A node has to be in one phase this long before `run` reports the wait.
+/// Duration a node must remain in one phase before `run` reports the wait.
 pub(crate) const WAIT_REPORT_AFTER: Duration = Duration::from_secs(10);
 
-/// The ages at which a wait is reported after the first report, then every
-/// [`WAIT_REPORT_EVERY`].
+/// Ages at which a wait is reported after the first report, before repeating
+/// every [`WAIT_REPORT_EVERY`].
 const WAIT_REPORT_AT: [Duration; 3] = [
     Duration::from_secs(30),
     Duration::from_secs(60),
@@ -74,8 +74,8 @@ const WAIT_REPORT_AT: [Duration; 3] = [
 ];
 const WAIT_REPORT_EVERY: Duration = Duration::from_secs(60);
 
-/// Whether a node that has waited `since` is due a report, given the age
-/// `reported` at which it was last reported.
+/// Return whether a node that has waited `since` is due for a report, given
+/// the `reported` age of its last report.
 pub(crate) fn wait_due(since: Duration, reported: Option<Duration>) -> bool {
     let next = match reported {
         None => WAIT_REPORT_AFTER,
@@ -99,7 +99,7 @@ struct Flight {
     reported: Option<Duration>,
 }
 
-/// Shared progress record between the engine, its node tasks and the
+/// Shared progress record between the engine, its node tasks, and the
 /// watchdog.
 #[derive(Debug)]
 pub(crate) struct Progress {
@@ -128,7 +128,7 @@ impl Progress {
         }
     }
 
-    /// The readiness timeout nodes wait against, named in `Waiting` events.
+    /// Set the readiness timeout reported in `Waiting` events.
     pub(crate) fn set_readiness_budget(&self, budget: Duration) {
         self.readiness_budget_ms
             .store(budget.as_millis() as u64, Ordering::Relaxed);
@@ -147,7 +147,7 @@ impl Progress {
         self.last_activity_ms.fetch_max(ms, Ordering::Relaxed);
     }
 
-    /// A node entered a phase.
+    /// Record that `node` entered `phase`.
     pub(crate) fn set_phase(&self, node: &NodeId, phase: Phase) {
         if let Ok(mut m) = self.in_flight.lock() {
             m.insert(
@@ -163,8 +163,8 @@ impl Progress {
         self.touch();
     }
 
-    /// A node in flight reported a readiness message. Not activity: the
-    /// scheduler's event for the same message already is.
+    /// Record the latest readiness message for `node` without resetting the
+    /// idle timer (the scheduler's event for the same message already resets it).
     pub(crate) fn set_status(&self, node: &NodeId, status: &str) {
         if let Ok(mut m) = self.in_flight.lock()
             && let Some(flight) = m.get_mut(node)
@@ -173,8 +173,8 @@ impl Progress {
         }
     }
 
-    /// The `Waiting` event for every node in flight whose wait is due a
-    /// report ([`wait_due`]), and mark each as reported at its current age.
+    /// Collect `Waiting` events for in-flight nodes due for a report
+    /// ([`wait_due`]) and mark each as reported at its current age.
     pub(crate) fn due_waits(&self) -> Vec<DeployEvent> {
         let now = Instant::now();
         let budget = self.readiness_budget();
@@ -205,7 +205,7 @@ impl Progress {
         out
     }
 
-    /// A node reached a terminal verdict.
+    /// Remove `node` from the in-flight set when it reaches a terminal verdict.
     pub(crate) fn clear(&self, node: &NodeId) {
         if let Ok(mut m) = self.in_flight.lock() {
             m.remove(node);
@@ -213,13 +213,13 @@ impl Progress {
         self.touch();
     }
 
-    /// How long since the last activity.
+    /// Return the duration elapsed since the last activity.
     pub(crate) fn idle(&self) -> Duration {
         let last = Duration::from_millis(self.last_activity_ms.load(Ordering::Relaxed));
         self.started.elapsed().saturating_sub(last)
     }
 
-    /// Snapshot of the nodes in flight, longest-waiting first.
+    /// Return a snapshot of in-flight nodes, sorted longest-waiting first.
     pub(crate) fn in_flight(&self) -> Vec<InFlight> {
         let now = Instant::now();
         let mut out: Vec<InFlight> = self
@@ -307,9 +307,8 @@ pub fn describe(idle: Duration, in_flight: &[InFlight]) -> String {
     )
 }
 
-/// One line for a `Waiting` event: the node, how long it has waited and
-/// against what budget, and the last readiness message or, without one,
-/// the phase.
+/// Format a one-line summary for a `Waiting` event naming the node, its wait
+/// duration and readiness budget, and the latest readiness message or phase.
 pub fn describe_wait(
     node: &NodeId,
     phase: Phase,
@@ -342,7 +341,8 @@ fn node_label(id: &NodeId) -> String {
 
 /// Check progress every `min(warn_after, abort_after, 5s)`, with a 100ms
 /// minimum interval. Emit `Stalled` events and cancel after the abort threshold.
-/// Return when cancellation fires; the engine aborts this task when the run ends.
+/// Returns when cancellation fires, or when the engine aborts this task at the
+/// end of the run.
 pub(crate) async fn run(
     policy: StallPolicy,
     progress: Arc<Progress>,
@@ -419,7 +419,7 @@ mod tests {
         }
     }
 
-    /// A wait is reported at 10s, then at 30, 60 and 120, then every 60.
+    /// A wait is reported at 10s, then at 30, 60, and 120, then every 60s.
     #[test]
     fn waits_are_reported_on_a_widening_schedule() {
         assert!(!wait_due(secs(9), None));
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn env_zero_disables_abort() {
         // SAFETY: tests in this module are the only readers of this variable
-        // and run in one process; the value is restored below.
+        // and run in one process. The value is restored below.
         unsafe { std::env::set_var(STALL_TIMEOUT_ENV, "0") };
         assert_eq!(StallPolicy::from_env().abort_after, None);
         unsafe { std::env::set_var(STALL_TIMEOUT_ENV, "90") };

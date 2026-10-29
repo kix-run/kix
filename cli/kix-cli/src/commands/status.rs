@@ -86,10 +86,8 @@ impl CommandResponse for OperatorStatusResponse {
     fn format_text(&self) -> String {
         let mut out = String::new();
 
-        // Cluster header
         out.push_str(&format!("Cluster: {}\n", output::bold(&self.cluster)));
 
-        // Activation info
         match &self.activation {
             Some(act) => {
                 let phase_str = match act.phase.as_str() {
@@ -126,7 +124,6 @@ impl CommandResponse for OperatorStatusResponse {
             return out;
         }
 
-        // Package summaries
         out.push_str("Packages:\n");
         for pkg in &self.packages {
             let degraded_label = format!("{} degraded", pkg.degraded);
@@ -149,8 +146,6 @@ impl CommandResponse for OperatorStatusResponse {
             ));
         }
 
-        // Detailed resource view for packages with degraded resources,
-        // or all packages in verbose mode (handled by caller via output format)
         let has_degraded: Vec<&PackageStatus> =
             self.packages.iter().filter(|p| p.degraded > 0).collect();
 
@@ -213,7 +208,6 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
         return run_operator(args, ctx);
     }
 
-    // Legacy: flat resource view
     let built = ctx.eval_cluster_or_suggest(&args.cluster)?;
     let cluster = match built.cluster_name() {
         Some(name) => name.to_string(),
@@ -232,7 +226,6 @@ fn run_operator(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
 async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
     let spinner = output::spinner("Fetching cluster status...");
 
-    // 1. Connect and discover
     let client = client::make_client(global.context.as_deref())
         .await
         .into_diagnostic()?;
@@ -240,7 +233,6 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         .await
         .into_diagnostic()?;
 
-    // 2. Find the Active Activation CR
     let opened = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
     let active = match opened.records() {
         Some(records) => records.active(cluster_name).await.into_diagnostic()?,
@@ -258,7 +250,8 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         name: act.name,
     });
 
-    // 3. Load store graph for package grouping (if we have a built-via path)
+    // Load the store graph from `built-via` when available locally so live
+    // resources can be grouped by package.
     let store_graph = built_via
         .as_ref()
         .map(std::path::PathBuf::from)
@@ -266,7 +259,6 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         .and_then(|result_dir| Build::local(&result_dir, &|_| {}).ok())
         .map(Build::into_graph);
 
-    // 4. Fetch this cluster's live resources
     let sweep = inventory::sweep_managed(
         &client,
         &discovery,
@@ -287,7 +279,6 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     }
     let live_resources = sweep.managed;
 
-    // Index live objects by resource identity.
     let live_by_id: HashMap<String, &kube::api::DynamicObject> = live_resources
         .iter()
         .map(|obj| {
@@ -296,11 +287,9 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         })
         .collect();
 
-    // 6. Build package-grouped output
     let (packages, unowned) = match &store_graph {
         Some(graph) => build_package_view(graph, &live_by_id),
         None => {
-            // Without a store graph, every resource is unowned.
             let unowned = live_resources
                 .iter()
                 .map(resource_status_from_obj)
@@ -319,9 +308,8 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     output::result(&response)
 }
 
-/// A line for each platform whose interface `cluster`'s live deploy was not
-/// built against the one that platform's live deploy publishes. Nothing when
-/// they match.
+/// Return a warning line for each upstream platform interface whose live digest
+/// differs from what `active` was built against.
 async fn interface_notes(records: &Records, cluster: &str, active: &Record) -> Result<Vec<String>> {
     let mut notes = vec![];
     for (platform, pinned) in &active.interfaces {
@@ -331,9 +319,11 @@ async fn interface_notes(records: &Records, cluster: &str, active: &Record) -> R
     Ok(notes)
 }
 
-/// What to say about the interface `pinned` from `platform`, given what
-/// reading `platform`'s live record gave. A refusal to read it is said, not
-/// raised: the consumer's own status stands without it.
+/// Compare a single pinned upstream interface against the platform's live
+/// `Activation` record.
+///
+/// Reports HTTP 403 as a note rather than an error so the consumer cluster's
+/// own status can still be displayed.
 fn interface_note(
     cluster: &str,
     platform: &str,
@@ -440,10 +430,8 @@ fn build_package_view(
         });
     }
 
-    // Sort packages alphabetically
     packages.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Unowned: live resources not matched to any package
     let mut unowned: Vec<PackageResourceStatus> = live_by_id
         .iter()
         .filter(|(id, _)| !matched_ids.contains(id.as_str()))
@@ -508,7 +496,7 @@ fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
     compute_age(obj.metadata.creation_timestamp.as_ref().map(|t| t.0))
 }
 
-/// How long ago `created` was, or "-" without one.
+/// Format the elapsed time since `created`, or `"-"` when `None`.
 fn compute_age(created: Option<chrono::DateTime<chrono::Utc>>) -> String {
     match created {
         Some(created) => {
