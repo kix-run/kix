@@ -42,10 +42,47 @@ Accepted optional fields are:
 | `ownership.cede` | CRD fields that another manager may own, commonly `spec.versions` or conversion-webhook fields. It has the same behavior as on [`mkResource`](/docs/reference/scope-helpers/mkresource/#field-ownership). |
 | `readiness` | Readiness rule stamped on every custom resource made from this declaration. Use either `{ path; equals; }` or `{ condition = { type; status; }; }`. |
 | `factBehavior` | Whether custom resources of this kind conduct endpoint facts or terminate them in operator-created pods. |
-| `runsAtLeast` | Function `cr: [ { pods; resources; } ]` returning the minimum pods the operator always runs for a custom resource. Each entry describes a group of `pods` identical pods and a single pod's container `resources` (`requests` and `limits`). Kix counts these pods when checking the namespace's [ResourceQuotas](/docs/reference/cluster-module/namespaces/#quota-check). |
+| `usesAtLeast` | Function from a custom resource to the least the operator always uses for it, keyed like a ResourceQuota's `spec.hard`: `pods`, `requests.cpu`, `limits.memory`, `persistentvolumeclaims`, `requests.storage`, `services`, and so on. Values are integers or quantity strings; a key left out or set to `null` counts as 0. Kix adds these up when checking the namespace's [ResourceQuotas](/docs/reference/cluster-module/namespaces/#quota-check). See [Declare what a custom resource uses](#declare-what-a-custom-resource-uses). |
 
 `readiness` describes the custom resources, not the CRD. The deploy engine
 handles the CRD's own availability through the CRD barrier.
+
+### Declare what a custom resource uses
+
+`usesAtLeast` gives the least, never the most: a figure that is too high makes
+Kix refuse a build that would work. Leave out anything that depends on fields
+you do not read, or on the operator's own choices.
+
+`kix.usage` builds the usage from the pods the operator runs:
+
+| Helper | Returns |
+| --- | --- |
+| `kix.usage.ofPod containers` | One pod's usage from a list of containers (or a pod spec with `containers`): `pods = 1`, plus each container's requests and limits. A container's missing request counts as its limit, as in Kubernetes. |
+| `kix.usage.times n use` | `use` with every value multiplied by `n`. |
+| `kix.usage.add [ use ... ]` | The sum of several usages. Values may be integers or quantity strings. |
+
+A database operator that runs `spec.instances` pods, each with one claim of
+`spec.storage.size`:
+
+```nix
+databases = scope.mkCRD {
+  spec = vendored "databases.example.com.json";
+  usesAtLeast =
+    cr:
+    let
+      instances = cr.spec.instances or 1;
+    in
+    kix.usage.add [
+      (kix.usage.times instances (
+        kix.usage.ofPod [ { resources = cr.spec.resources or { }; } ]
+      ))
+      (kix.usage.times instances {
+        persistentvolumeclaims = 1;
+        "requests.storage" = cr.spec.storage.size or null;
+      })
+    ];
+};
+```
 
 ## Refer to a CRD installed elsewhere
 
@@ -75,7 +112,7 @@ widgetCrd = scope.mkCRDRef {
 | `installedBy` | `null` | Resource, or list of resources, that installs the CRD. The CRD marker waits for them. |
 | `readiness` | `null` | Default readiness rule for custom resources. |
 | `factBehavior` | `null` | Endpoint fact behavior for this custom kind. |
-| `runsAtLeast` | `null` | Minimum pods the operator always runs for a custom resource, with the same shape as on `mkCRD`. |
+| `usesAtLeast` | `null` | The least the operator always uses for a custom resource, with the same shape as on `mkCRD`. |
 
 Kix does not install the CRD, so it cannot read the served versions from a
 spec. A missing `version` fails the build. Check the versions on a live

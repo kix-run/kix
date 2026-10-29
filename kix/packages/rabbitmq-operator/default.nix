@@ -338,8 +338,14 @@ in
         };
 
         crds.rabbitmqClusters = gate (
+          let
+            crdSpec = (readJSON ./crds/rabbitmqclusters.rabbitmq.com.json).spec;
+            specSchema = (builtins.head crdSpec.versions).schema.openAPIV3Schema.properties.spec.properties;
+            defaultResources = specSchema.resources.default;
+            defaultStorage = specSchema.persistence.properties.storage.default;
+          in
           scope.mkCRD {
-            spec = (readJSON ./crds/rabbitmqclusters.rabbitmq.com.json).spec;
+            spec = crdSpec;
             # The condition carries no observedGeneration, so the deploy
             # judges it by status.observedGeneration, which the operator
             # advances only after a reconcile succeeds
@@ -350,6 +356,54 @@ in
               type = "AllReplicasReady";
               status = "True";
             };
+            # Count `spec.replicas` server pods (default 1), or
+            # `spec.override.statefulSet.spec.replicas` when set, unless
+            # reconciliation is paused via the
+            # `rabbitmq.com/pauseReconciliation = "true"` label. Each pod has
+            # the `rabbitmq` container, sized by `spec.resources` (or the CRD
+            # schema default when unset) under its entry in the StatefulSet
+            # override, and every other container the override adds. Each
+            # pod has one claim of `spec.persistence.storage` (the CRD schema
+            # default when unset, none when it is 0), unless the override
+            # sets `volumeClaimTemplates`, which can change it. The operator
+            # makes two Services: the client Service and the headless one.
+            usesAtLeast =
+              cr:
+              let
+                spec = cr.spec or { };
+                sts = spec.override.statefulSet.spec or { };
+                containers = sts.template.spec.containers or [ ];
+                patch = lib.findFirst (c: (c.name or null) == "rabbitmq") { } containers;
+                extra = builtins.filter (c: (c.name or null) != "rabbitmq") containers;
+                paused = (cr.metadata.labels or { })."rabbitmq.com/pauseReconciliation" or null == "true";
+                pods = sts.replicas or spec.replicas or 1;
+                storage = spec.persistence.storage or defaultStorage;
+                claimed = !(sts ? volumeClaimTemplates) && kix.parseQuantity "memory" storage > 0;
+              in
+              if paused then
+                { }
+              else
+                kix.usage.add (
+                  [
+                    (kix.usage.times pods (
+                      kix.usage.ofPod (
+                        [
+                          {
+                            resources = lib.recursiveUpdate (spec.resources or defaultResources) (patch.resources or { });
+                          }
+                        ]
+                        ++ extra
+                      )
+                    ))
+                    { services = 2; }
+                  ]
+                  ++ lib.optional claimed (
+                    kix.usage.times pods {
+                      persistentvolumeclaims = 1;
+                      "requests.storage" = storage;
+                    }
+                  )
+                );
           }
         );
 

@@ -1,17 +1,20 @@
 # Compute the minimum resource usage of a namespace's workloads and compare it
 # against the namespace's ResourceQuotas. `buildCluster` fails the build when
 # the minimum usage exceeds a quota, because Kubernetes admission will reject
-# some of those pods at deploy time.
+# some of those objects at deploy time.
 #
-# Usage is represented as an attrset keyed by ResourceQuota metric names:
-# `pods`, plus `requests.<resource>` and `limits.<resource>` for each container
-# resource. Values are integers: millicores for CPU, and base units (bytes or
-# counts) for everything else.
+# Usage is an attrset keyed by the same names a ResourceQuota's `spec.hard`
+# uses: `pods`, `requests.cpu`, `limits.memory`, `requests.storage`,
+# `persistentvolumeclaims`, `services`, `count/<resource>.<group>`, and so on.
+# Values are integers: millicores for CPU, and base units (bytes or counts)
+# for everything else. A key that is missing counts as zero.
 #
 # Built-in workload kinds with a known minimum pod count are included
-# automatically. Custom resources are included when their CRD declares
-# `runsAtLeast` (via `scope.mkCRD` or `scope.mkCRDRef`), which returns a list
-# of pod groups `[ { pods = <count>; resources = <container resources>; } ]`.
+# automatically, counted by their pods and containers only. Custom resources
+# are included when their CRD declares `usesAtLeast` (via `scope.mkCRD` or
+# `scope.mkCRDRef`): a function from the custom resource to its usage, keyed
+# as above. Values may be integers or quantity strings (`"20Gi"`, `"500m"`).
+# Packages build that usage with `kix.usage` (`ofPod`, `times`, `add`).
 { lib }:
 
 let
@@ -76,7 +79,45 @@ let
     spec:
     sum (map (c: ofResources (c.resources or { })) (listOr (spec.containers or [ ]))) // { pods = 1; };
 
-  ofPods = n: spec: lib.mapAttrs (_: v: v * n) (ofPodSpec spec);
+  # Multiply every value of a usage by `n`.
+  times = n: use: lib.mapAttrs (_: v: v * n) (normalize use);
+
+  ofPods = n: spec: times n (ofPodSpec spec);
+
+  # Turn a declared usage into integers: parse quantity strings, and drop
+  # keys whose value is null (unknown, so counted as zero).
+  normalize =
+    use:
+    lib.mapAttrs (
+      key: v:
+      if builtins.isInt v then
+        v
+      else
+        let
+          parsed = parse key v;
+        in
+        if parsed == null then
+          throw "kix: usage ${key} = ${builtins.toJSON v} is not a Kubernetes quantity"
+        else
+          parsed
+    ) (lib.filterAttrs (_: v: v != null) use);
+
+  # Keys that count objects rather than measure a resource. Their values
+  # print as plain numbers.
+  isCount =
+    key:
+    builtins.elem key [
+      "pods"
+      "services"
+      "secrets"
+      "configmaps"
+      "persistentvolumeclaims"
+      "replicationcontrollers"
+      "resourcequotas"
+    ]
+    || lib.hasPrefix "services." key
+    || lib.hasPrefix "count/" key
+    || lib.hasSuffix "/persistentvolumeclaims" key;
   # Built-in kinds that create pods. DaemonSets and CronJobs are listed so
   # `refusals` can report them as uncounted; their minimum pod count is not
   # known statically.
@@ -94,10 +135,26 @@ in
 rec {
   inherit ofPodSpec sum podKinds;
 
+  # Helpers for a CRD's `usesAtLeast`, exposed to packages as `kix.usage`.
+  helpers = {
+    # One pod's usage from its regular containers (a list of containers, or
+    # a pod spec with `containers`). Applies Kubernetes' rule that a
+    # container's missing request counts as its limit, and sets `pods = 1`.
+    ofPod =
+      containersOrSpec:
+      ofPodSpec (
+        if builtins.isList containersOrSpec then { containers = containersOrSpec; } else containersOrSpec
+      );
+    # Multiply a usage by a number of pods or copies.
+    inherit times;
+    # Add a list of usages together.
+    add = uses: sum (map normalize uses);
+  };
+
   # Return the minimum quota usage of `manifest`, or null when the kind cannot
   # be counted statically (DaemonSet, CronJob, or a custom resource without
-  # `runsAtLeast`). `minReplicas` is the `minReplicas` of a targeting
-  # HorizontalPodAutoscaler, if any. `declared` is the CRD's `runsAtLeast`
+  # `usesAtLeast`). `minReplicas` is the `minReplicas` of a targeting
+  # HorizontalPodAutoscaler, if any. `declared` is the CRD's `usesAtLeast`
   # function, if any.
   useOf =
     {
@@ -112,11 +169,7 @@ rec {
       parallelism = intOr 1 (spec.parallelism or null);
     in
     if declared != null then
-      sum (
-        map (g: ofPods (intOr 1 g.pods) { containers = [ { resources = g.resources or { }; } ]; }) (
-          declared manifest
-        )
-      )
+      normalize (declared manifest)
     else if kind == "Pod" then
       ofPodSpec spec
     else if
@@ -136,16 +189,15 @@ rec {
       null;
 
   # Match a quota key and hard limit against `use`, returning `{ used; limit; }`
-  # or null when the key is not tracked (such as storage or object counts).
-  # Kubernetes accepts `cpu`, `memory`, and `ephemeral-storage` as shorthand
-  # for `requests.<resource>`.
+  # or null when the limit does not parse. Kubernetes accepts `cpu`, `memory`,
+  # and `ephemeral-storage` as shorthand for `requests.<resource>`. A key no
+  # workload reports, such as `services` when no custom resource declares
+  # any, is used 0, so it never refuses a build.
   compare =
     use: key: hard:
     let
       charged =
-        if key == "pods" then
-          "pods"
-        else if
+        if
           builtins.elem key [
             "cpu"
             "memory"
@@ -153,15 +205,11 @@ rec {
           ]
         then
           "requests.${key}"
-        else if
-          (lib.hasPrefix "requests." key || lib.hasPrefix "limits." key) && key != "requests.storage"
-        then
-          key
         else
-          null;
+          key;
       limit = parse key hard;
     in
-    if charged == null || limit == null then
+    if limit == null then
       null
     else
       {
@@ -177,7 +225,7 @@ rec {
     in
     if isCpu key then
       (if lib.mod n 1000 == 0 then toString (n / 1000) else "${toString n}m")
-    else if key == "pods" then
+    else if isCount key then
       toString n
     else if exact (1024 * 1024 * 1024) then
       "${toString (n / (1024 * 1024 * 1024))}Gi"
@@ -190,7 +238,7 @@ rec {
 
   # Return one error message per ResourceQuota in `quotas` (`{ name; hard; }`)
   # that the minimum usage of `resources` and `customResources`
-  # (`{ manifest; runsAtLeast; }`) exceeds.
+  # (`{ manifest; usesAtLeast; }`) exceeds.
   refusals =
     {
       namespace,
@@ -228,7 +276,7 @@ rec {
           name = nameOf c.manifest;
           use = useOf {
             inherit (c) manifest;
-            declared = c.runsAtLeast;
+            declared = c.usesAtLeast;
           };
         }) customResources;
 
@@ -260,7 +308,7 @@ rec {
       in
       lib.optional (over != [ ]) (
         "namespace ${namespace} needs more than ResourceQuota ${quota.name} allows (${builtins.concatStringsSep "; " over}), "
-        + "so Kubernetes would refuse some of its pods. Counted: ${names counted}."
+        + "so Kubernetes would refuse some of its objects. Counted: ${names counted}."
         + lib.optionalString (notCounted != [ ]) " Not counted: ${names notCounted}."
         + " Raise the quota or run less in the namespace."
       )

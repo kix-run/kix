@@ -1,6 +1,6 @@
-# Unit tests for namespace ResourceQuota usage calculation (`vocab/quota-use.nix`)
-# and `buildCluster` quota assertions, including custom resources with
-# `runsAtLeast` (`cnpg-operator` Cluster).
+# Unit tests for namespace ResourceQuota usage calculation (`vocab/quota-use.nix`),
+# the `kix.usage` helpers, `buildCluster` quota assertions, and the
+# `usesAtLeast` declarations on operator packages (`quota-use-<package>`).
 
 {
   lib,
@@ -60,6 +60,34 @@ let
       ];
       inherit resources;
     };
+
+  mi = 1024 * 1024;
+  gi = 1024 * mi;
+
+  # Evaluate the `usesAtLeast` declaration on the CRD at `path` in `package`
+  # against `manifest`.
+  declaredUse =
+    {
+      package,
+      path,
+      modules ? [ ],
+    }:
+    manifest:
+    let
+      cluster = mkCluster ([ { instances.ops.operator.package = package; } ] ++ modules);
+      handle = lib.getAttrFromPath path cluster.instances.ops.operator.raw;
+    in
+    q.useOf {
+      inherit manifest;
+      declared = (handle.out.cr { }).usesAtLeast;
+    };
+
+  cr = spec: {
+    metadata.name = "x";
+    inherit spec;
+  };
+
+  named = name: resources: [ { inherit name resources; } ];
 
   appPackage = replicas: {
     meta.version = "test";
@@ -137,8 +165,8 @@ in
     )
     || throw "a built-in kind was counted wrongly";
 
-  # Map `cpu` and `memory` shorthand keys to `requests.*`, and ignore storage
-  # and object-count keys.
+  # Map `cpu` and `memory` shorthand keys to `requests.*`, and compare every
+  # other key as it is, counting a key nothing reports as 0.
   quota-use-compare-keys =
     let
       use = {
@@ -162,8 +190,18 @@ in
           used = 0;
           limit = 2000;
         }
-      && q.compare use "requests.storage" "10Gi" == null
-      && q.compare use "count/deployments.apps" "3" == null
+      &&
+        q.compare use "requests.storage" "10Gi" == {
+          used = 0;
+          limit = 10 * gi;
+        }
+      &&
+        q.compare use "count/deployments.apps" "3" == {
+          used = 0;
+          limit = 3;
+        }
+      && q.format "services" 2048 == "2048"
+      && q.format "count/deployments.apps" 1024 == "1024"
       && q.format "requests.cpu" 1500 == "1500m"
       && q.format "requests.cpu" 2000 == "2"
       && q.format "requests.memory" (3 * 1024 * 1024 * 1024) == "3Gi"
@@ -195,6 +233,96 @@ in
         } [ (deployment 3) ] == [ ]
     )
     || throw "unexpected refusals: ${builtins.toJSON over}";
+
+  # `kix.usage` builds a pod's usage from its containers, multiplies it, and
+  # adds usages whose values are quantity strings.
+  quota-use-helpers =
+    let
+      inherit (q.helpers) ofPod times add;
+      pod = ofPod [
+        small
+        (container { limits.cpu = "1"; })
+      ];
+      total = add [
+        (times 2 pod)
+        {
+          services = 1;
+          "requests.storage" = "10Gi";
+          "limits.cpu" = null;
+        }
+      ];
+    in
+    (
+      ofPod podSpec == q.ofPodSpec podSpec
+      && pod."requests.cpu" == 1250
+      &&
+        total == {
+          pods = 2;
+          services = 1;
+          "requests.cpu" = 2500;
+          "limits.cpu" = 2000;
+          "requests.memory" = 128 * mi;
+          "limits.memory" = 256 * mi;
+          "requests.storage" = 10 * gi;
+        }
+      && !(builtins.tryEval (builtins.deepSeq (add [ { "requests.storage" = "lots"; } ]) true)).success
+    )
+    || throw "unexpected usage: ${builtins.toJSON total}";
+
+  # A custom resource's declared usage counts against storage and object
+  # quotas, which built-in workloads never report.
+  quota-use-refuses-declared-storage-and-services =
+    let
+      database = {
+        apiVersion = "example.com/v1";
+        kind = "Database";
+        metadata.name = "db";
+        spec.instances = 3;
+      };
+      declared = m: {
+        pods = m.spec.instances;
+        persistentvolumeclaims = m.spec.instances;
+        "requests.storage" = "${toString (m.spec.instances * 10)}Gi";
+        services = 2;
+      };
+      refused =
+        hard:
+        q.refusals {
+          namespace = "app";
+          quotas = [
+            {
+              name = "app-quota";
+              inherit hard;
+            }
+          ];
+          resources = [ (deployment 1) ];
+          customResources = [
+            {
+              manifest = database;
+              usesAtLeast = declared;
+            }
+          ];
+        };
+      storage = refused {
+        "requests.storage" = "20Gi";
+        persistentvolumeclaims = "5";
+      };
+      services = refused { services = "1"; };
+    in
+    (
+      builtins.length storage == 1
+      && lib.hasInfix "requests.storage: at least 30Gi, quota 20Gi" (builtins.head storage)
+      && !(lib.hasInfix "persistentvolumeclaims" (builtins.head storage))
+      && lib.hasInfix "Counted: Deployment/w, Database/db." (builtins.head storage)
+      && lib.hasInfix "services: at least 2, quota 1" (builtins.head services)
+      &&
+        refused {
+          "requests.storage" = "30Gi";
+          services = "2";
+          pods = "4";
+        } == [ ]
+    )
+    || throw "unexpected refusals: ${builtins.toJSON { inherit storage services; }}";
 
   # When a HorizontalPodAutoscaler targets a workload, use its `minReplicas`
   # (default 1) instead of the workload's static `replicas`.
@@ -252,7 +380,7 @@ in
         customResources = [
           {
             manifest = widget;
-            runsAtLeast = null;
+            usesAtLeast = null;
           }
         ];
       };
@@ -306,7 +434,7 @@ in
     )
     || throw "a build over its namespace's quota was not refused, or one within it was";
 
-  # Count custom resources via the CRD's `runsAtLeast` declaration
+  # Count custom resources via the CRD's `usesAtLeast` declaration
   # (`cnpg-operator` Cluster: `spec.instances` * `spec.resources`).
   quota-use-package-declares-custom-kind =
     let
@@ -327,5 +455,511 @@ in
         ];
     in
     (evalFails (cnpg "4Gi") && builtins.deepSeq (manifests (cnpg "6Gi")) true)
-    || throw "the Cluster's runsAtLeast was not counted";
+    || throw "the Cluster's usesAtLeast was not counted";
+  # Verify `usesAtLeast` for `ClickHouseInstallation` and
+  # `ClickHouseKeeperInstallation`: shards * replicas hosts per cluster, each
+  # a pod with every container in the cluster's pod template, a Service, and
+  # a claim per named volume claim template; pods and Services only when
+  # shards override the templates.
+  quota-use-clickhouse-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/clickhouse-operator;
+          path = [
+            "crds"
+            part
+          ];
+          modules = [
+            {
+              instances.ops.credentials = {
+                package = import ../../../packages/secret;
+                config.stringData = {
+                  username = "operator";
+                  password = "test";
+                };
+              };
+            }
+          ];
+        };
+      chi = use "clickHouseInstallations";
+      chk = use "clickHouseKeeperInstallations";
+      templates = {
+        podTemplates = [
+          {
+            name = "server";
+            spec.containers =
+              named "clickhouse" { limits.memory = "1Gi"; } ++ named "sidecar" { requests.cpu = "100m"; };
+          }
+        ];
+        volumeClaimTemplates = [
+          {
+            name = "data";
+            spec.resources.requests.storage = "10Gi";
+          }
+        ];
+      };
+      installation = chi (cr {
+        defaults.templates = {
+          podTemplate = "server";
+          dataVolumeClaimTemplate = "data";
+          logVolumeClaimTemplate = "data";
+        };
+        inherit templates;
+        configuration.clusters = [
+          {
+            name = "a";
+            layout = {
+              shardsCount = 2;
+              replicasCount = 3;
+            };
+          }
+          {
+            name = "b";
+            layout.shards = [
+              { }
+              { templates.podTemplate = "other"; }
+            ];
+          }
+        ];
+      });
+      keeper = chk (cr {
+        defaults.templates.podTemplate = "keeper";
+        templates.podTemplates = [
+          {
+            name = "keeper";
+            spec.containers = named "clickhouse-keeper" { requests.cpu = "250m"; };
+          }
+        ];
+        configuration.clusters = [
+          {
+            name = "k";
+            layout.replicasCount = 3;
+          }
+        ];
+      });
+    in
+    (
+      installation == {
+        pods = 8;
+        services = 8;
+        "requests.memory" = 6 * gi;
+        "limits.memory" = 6 * gi;
+        "requests.cpu" = 600;
+        persistentvolumeclaims = 6;
+        "requests.storage" = 60 * gi;
+      }
+      &&
+        keeper == {
+          pods = 3;
+          services = 3;
+          "requests.cpu" = 750;
+        }
+      &&
+        chi (cr { }) == {
+          pods = 1;
+          services = 1;
+        }
+      &&
+        chi (cr {
+          stop = "yes";
+        }) == { }
+      &&
+        chk (cr { }) == {
+          pods = 1;
+          services = 1;
+        }
+    )
+    || throw "unexpected ClickHouse use: ${builtins.toJSON { inherit installation keeper; }}";
+
+  # Verify `usesAtLeast` for `SGCluster` (`spec.instances`, lowered by
+  # horizontal autoscaling `minInstances` or backup initialization), with one
+  # claim per pod, and `SGDistributedLogs` (1 pod and its claim).
+  quota-use-stackgres-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/stackgres-operator;
+          path = [
+            "crds"
+            part
+          ];
+        };
+      sg = use "sgClusters";
+    in
+    (
+      sg (cr {
+        instances = 3;
+        pods.persistentVolume.size = "10Gi";
+      }) == {
+        pods = 3;
+        persistentvolumeclaims = 3;
+        "requests.storage" = 30 * gi;
+      }
+      &&
+        sg (cr {
+          instances = 3;
+          autoscaling.minInstances = 2;
+        }) == {
+          pods = 2;
+          persistentvolumeclaims = 2;
+        }
+      &&
+        sg (cr {
+          instances = 3;
+          autoscaling = {
+            mode = "vertical";
+            minInstances = 1;
+          };
+        }) == {
+          pods = 3;
+          persistentvolumeclaims = 3;
+        }
+      &&
+        sg (cr {
+          instances = 3;
+          replication.initialization.mode = "FromNewlyCreatedBackup";
+        }) == {
+          pods = 1;
+          persistentvolumeclaims = 1;
+        }
+      &&
+        use "sgDistributedLogs" (cr {
+          persistentVolume.size = "5Gi";
+        }) == {
+          pods = 1;
+          persistentvolumeclaims = 1;
+          "requests.storage" = 5 * gi;
+        }
+    )
+    || throw "unexpected SGCluster use";
+
+  # Verify `usesAtLeast` for `Prometheus`, `PrometheusAgent`, `Alertmanager`,
+  # and `ThanosRuler`, including the Thanos sidecar, extra containers, claims,
+  # the 200Mi default memory request on Alertmanager and ThanosRuler, and
+  # DaemonSet-mode skipping on PrometheusAgent.
+  quota-use-prometheus-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/prometheus-operator;
+          path = [
+            "crds"
+            part
+          ];
+        };
+      prometheus = use "prometheuses";
+      sharded = prometheus (cr {
+        replicas = 2;
+        shards = 2;
+        resources.requests.memory = "1Gi";
+        thanos.resources.requests.cpu = "100m";
+        storage.volumeClaimTemplate.spec.resources.requests.storage = "20Gi";
+        containers =
+          named "prometheus" { limits.cpu = "1"; }
+          ++ named "config-reloader" { requests.cpu = "1"; }
+          ++ named "proxy" { requests.memory = "64Mi"; };
+      });
+    in
+    (
+      sharded == {
+        pods = 4;
+        "requests.memory" = 4 * gi + 256 * mi;
+        "requests.cpu" = 4400;
+        "limits.cpu" = 4000;
+        persistentvolumeclaims = 4;
+        "requests.storage" = 80 * gi;
+      }
+      && prometheus (cr { }) == { pods = 1; }
+      &&
+        prometheus (cr {
+          paused = true;
+        }) == { }
+      &&
+        use "alertmanagers" (cr { }) == {
+          pods = 1;
+          "requests.memory" = 200 * mi;
+        }
+      &&
+        use "thanosRulers" (cr {
+          replicas = 2;
+          resources.requests.memory = "1Gi";
+        }) == {
+          pods = 2;
+          "requests.memory" = 2 * gi;
+        }
+      &&
+        use "prometheusAgents" (cr {
+          mode = "DaemonSet";
+        }) == { }
+    )
+    || throw "unexpected Prometheus use: ${builtins.toJSON sharded}";
+
+  # Verify `usesAtLeast` for `VMCluster`, `VMAgent`, and single-component
+  # VictoriaMetrics CRDs, including HPA `minReplicas`, VPA pods-only fallback,
+  # extra containers, claims, one Service per app, and `daemonSetMode`
+  # skipping.
+  quota-use-victoria-metrics-operator =
+    let
+      use =
+        part:
+        declaredUse {
+          package = import ../../../packages/victoria-metrics-operator;
+          path = [
+            "crds"
+            part
+          ];
+        };
+      cluster = use "vmClusters" (cr {
+        vmstorage = {
+          replicaCount = 2;
+          resources.requests.memory = "1Gi";
+          containers = named "sidecar" { requests.cpu = "100m"; };
+          storage.volumeClaimTemplate.spec.resources.requests.storage = "10Gi";
+        };
+        vmselect = {
+          replicaCount = 5;
+          hpa = {
+            minReplicas = 2;
+            maxReplicas = 5;
+          };
+          resources.requests.cpu = "500m";
+        };
+        vminsert = {
+          vpa.updatePolicy.updateMode = "Auto";
+          resources.requests.cpu = "1";
+        };
+      });
+      agent = use "vmAgents";
+    in
+    (
+      cluster == {
+        pods = 5;
+        services = 3;
+        "requests.memory" = 2 * gi;
+        "requests.cpu" = 1200;
+        persistentvolumeclaims = 2;
+        "requests.storage" = 20 * gi;
+      }
+      &&
+        agent (cr {
+          replicaCount = 2;
+          shardCount = 3;
+        }) == {
+          pods = 6;
+          services = 1;
+        }
+      &&
+        agent (cr { }) == {
+          pods = 1;
+          services = 1;
+        }
+      &&
+        agent (cr {
+          daemonSetMode = true;
+        }) == { }
+      && use "vmClusters" (cr { }) == { }
+      &&
+        use "vmAlertmanagers" (cr {
+          replicaCount = 3;
+        }) == {
+          pods = 3;
+          services = 1;
+        }
+      &&
+        use "vmSingles" (cr {
+          storage.resources.requests.storage = "5Gi";
+        }) == {
+          pods = 1;
+          services = 1;
+          persistentvolumeclaims = 1;
+          "requests.storage" = 5 * gi;
+        }
+    )
+    || throw "unexpected VictoriaMetrics use: ${builtins.toJSON cluster}";
+
+  # Verify `usesAtLeast` for `AutoscalingRunnerSet` (`minRunners` capped by
+  # `maxRunners`, each with every container in the template).
+  quota-use-arc =
+    let
+      use = declaredUse {
+        package = import ../../../packages/arc;
+        path = [
+          "crds"
+          "autoscalingRunnerSets"
+        ];
+      };
+      runners = use (cr {
+        minRunners = 3;
+        maxRunners = 2;
+        template.spec.containers =
+          named "runner" { requests.cpu = "1"; } ++ named "dind" { requests.memory = "512Mi"; };
+      });
+    in
+    (
+      runners == {
+        pods = 2;
+        "requests.cpu" = 2000;
+        "requests.memory" = gi;
+      }
+      && use (cr { }) == { pods = 0; }
+    )
+    || throw "unexpected runner set use: ${builtins.toJSON runners}";
+
+  # Verify `usesAtLeast` for `RabbitmqCluster`, including StatefulSet overrides,
+  # CRD schema default resources and storage, the two Services, and
+  # `rabbitmq.com/pauseReconciliation`.
+  quota-use-rabbitmq-operator =
+    let
+      use = declaredUse {
+        package = import ../../../packages/rabbitmq-operator;
+        path = [
+          "crds"
+          "rabbitmqClusters"
+        ];
+        modules = [
+          { instances.cert-manager.cert-manager.package = import ../../../packages/cert-manager; }
+        ];
+      };
+    in
+    (
+      use (cr {
+        replicas = 3;
+        resources.requests.memory = "1Gi";
+        override.statefulSet.spec = {
+          replicas = 2;
+          template.spec.containers =
+            named "rabbitmq" { requests.cpu = "500m"; } ++ named "proxy" { requests.cpu = "100m"; };
+        };
+      }) == {
+        pods = 2;
+        services = 2;
+        "requests.memory" = 2 * gi;
+        "requests.cpu" = 1200;
+        persistentvolumeclaims = 2;
+        "requests.storage" = 20 * gi;
+      }
+      &&
+        use (cr { }) == {
+          pods = 1;
+          services = 2;
+          "requests.cpu" = 1000;
+          "requests.memory" = 2 * gi;
+          "limits.cpu" = 2000;
+          "limits.memory" = 2 * gi;
+          persistentvolumeclaims = 1;
+          "requests.storage" = 10 * gi;
+        }
+      &&
+        (use (cr {
+          persistence.storage = "0";
+        })) ? persistentvolumeclaims == false
+      &&
+        (use (cr {
+          override.statefulSet.spec.volumeClaimTemplates = [ ];
+        })) ? persistentvolumeclaims == false
+      &&
+        use {
+          metadata.labels."rabbitmq.com/pauseReconciliation" = "true";
+          spec = { };
+        } == { }
+    )
+    || throw "unexpected RabbitmqCluster use";
+
+  # Verify `usesAtLeast` for KubeVirt `VirtualMachine` across `runStrategy` and
+  # `running` states.
+  quota-use-kubevirt =
+    let
+      use = declaredUse {
+        package = import ../../../packages/kubevirt;
+        path = [
+          "crds"
+          "virtualMachines"
+        ];
+      };
+    in
+    (
+      use (cr {
+        runStrategy = "Always";
+      }) == {
+        pods = 1;
+      }
+      &&
+        use (cr {
+          running = true;
+        }) == {
+          pods = 1;
+        }
+      &&
+        use (cr {
+          runStrategy = "Halted";
+        }) == {
+          pods = 0;
+        }
+      && use (cr { }) == { pods = 0; }
+    )
+    || throw "unexpected VirtualMachine use";
+
+  # Verify `usesAtLeast` for CloudNativePG `Pooler` (`spec.instances`, each
+  # with every container in `spec.template`, and its Service) and `Cluster`
+  # (instances, claims, and the managed Services).
+  quota-use-cnpg-operator =
+    let
+      use = declaredUse {
+        package = operatorPackage;
+        path = [
+          "crds"
+          "poolers"
+        ];
+      };
+      cluster = declaredUse {
+        package = operatorPackage;
+        path = [
+          "crds"
+          "clusters"
+        ];
+      };
+    in
+    (
+      use (cr {
+        instances = 2;
+        template.spec.containers =
+          named "pgbouncer" { requests.cpu = "100m"; } ++ named "exporter" { requests.cpu = "50m"; };
+      }) == {
+        pods = 2;
+        services = 1;
+        "requests.cpu" = 300;
+      }
+      &&
+        use (cr { }) == {
+          pods = 1;
+          services = 1;
+        }
+      &&
+        cluster (cr {
+          instances = 3;
+          resources.requests.memory = "2Gi";
+          storage.size = "10Gi";
+          walStorage.pvcTemplate.resources.requests.storage = "5Gi";
+          managed.services.disabledDefaultServices = [
+            "ro"
+            "r"
+          ];
+        }) == {
+          pods = 3;
+          services = 1;
+          "requests.memory" = 6 * gi;
+          persistentvolumeclaims = 6;
+          "requests.storage" = 45 * gi;
+        }
+      &&
+        cluster (cr { }) == {
+          pods = 1;
+          services = 3;
+        }
+    )
+    || throw "unexpected CloudNativePG use";
 }

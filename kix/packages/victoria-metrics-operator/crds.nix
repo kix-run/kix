@@ -22,6 +22,7 @@
   config,
   scope,
   lib,
+  kix,
   ...
 }:
 let
@@ -83,8 +84,78 @@ let
     };
   };
 
+  # Compute the least a VictoriaMetrics app uses. Uses `hpa.minReplicas`
+  # (default 1) when an HPA is configured, or `replicaCount` (default 1)
+  # otherwise. Each pod has the main `container`, sized by `app.resources`
+  # under its entry in `app.containers`, and every other `app.containers`
+  # entry, which the operator adds as it is. With a VPA, which can lower
+  # requests, only pods are counted. Operator-sized sidecars
+  # (`config-reloader`, `vmbackuper`) are left out. The operator makes one
+  # Service per app, and one claim per pod when `storage.volumeClaimTemplate`
+  # is set without `storage.emptyDir`.
+  replicasOf =
+    app: if (app.hpa or null) != null then app.hpa.minReplicas or 1 else app.replicaCount or 1;
+  appUse =
+    container: pods: app:
+    let
+      patches = app.containers or [ ];
+      patch = lib.findFirst (c: (c.name or null) == container) { } patches;
+      extra = builtins.filter (
+        c:
+        !(builtins.elem (c.name or null) [
+          container
+          "config-reloader"
+          "vmbackuper"
+        ])
+      ) patches;
+      storage = app.storage or { };
+      claim = if storage ? emptyDir then null else storage.volumeClaimTemplate or null;
+    in
+    kix.usage.add (
+      [
+        (kix.usage.times pods (
+          if (app.vpa or null) != null then
+            { pods = 1; }
+          else
+            kix.usage.ofPod (
+              [ { resources = lib.recursiveUpdate (app.resources or { }) (patch.resources or { }); } ] ++ extra
+            )
+        ))
+        { services = 1; }
+      ]
+      ++ lib.optional (claim != null) (
+        kix.usage.times pods {
+          persistentvolumeclaims = 1;
+          "requests.storage" = claim.spec.resources.requests.storage or null;
+        }
+      )
+    );
+  unlessPaused = cr: use: if cr.spec.paused or false then { } else use;
+  singleApp = container: cr: unlessPaused cr (appUse container (replicasOf cr.spec) cr.spec);
+
   kindExtras = {
     VMCluster = {
+      # Count each configured component (`vmstorage`, `vmselect`, and
+      # `vminsert`), omitting the optional `requestsLoadBalancer`.
+      usesAtLeast =
+        cr:
+        unlessPaused cr (
+          kix.usage.add (
+            builtins.concatMap
+              (
+                name:
+                let
+                  app = cr.spec.${name} or null;
+                in
+                lib.optional (app != null) (appUse name (replicasOf app) app)
+              )
+              [
+                "vmstorage"
+                "vmselect"
+                "vminsert"
+              ]
+          )
+        );
       factBehavior.endpoint = "conduct";
       printerColumns = [
         {
@@ -100,9 +171,47 @@ let
       ]
       ++ ageColumn;
     };
-    VMAgent.factBehavior = operandFactBehavior "vmagent";
-    VMAlert.factBehavior = operandFactBehavior "vmalert";
-    VMAlertmanager.factBehavior = operandFactBehavior "vmalertmanager";
+    VMAgent = {
+      factBehavior = operandFactBehavior "vmagent";
+      # Count `replicaCount` pods per shard (`shardCount`, default 1, or
+      # `hpa.minReplicas` when an HPA scales the shards). Skip
+      # `daemonSetMode` because the pod count depends on cluster nodes.
+      # `statefulStorage` claims are not counted.
+      usesAtLeast =
+        cr:
+        let
+          spec = cr.spec or { };
+          shards =
+            if (spec.hpa or null) != null then spec.hpa.minReplicas or 1 else lib.max 1 (spec.shardCount or 1);
+        in
+        if spec.daemonSetMode or false then
+          { }
+        else
+          unlessPaused cr (appUse "vmagent" ((spec.replicaCount or 1) * shards) spec);
+    };
+    VMAlert = {
+      factBehavior = operandFactBehavior "vmalert";
+      usesAtLeast = singleApp "vmalert";
+    };
+    VMAlertmanager = {
+      factBehavior = operandFactBehavior "vmalertmanager";
+      usesAtLeast = singleApp "alertmanager";
+    };
+    VMSingle.usesAtLeast =
+      cr:
+      let
+        size = cr.spec.storage.resources.requests.storage or null;
+      in
+      # VMSingle's `spec.storage` is a claim spec: one claim when it asks for
+      # storage.
+      kix.usage.add (
+        [ (singleApp "vmsingle" (cr // { spec = removeAttrs (cr.spec or { }) [ "storage" ]; })) ]
+        ++ lib.optional (!(cr.spec.paused or false) && size != null) {
+          persistentvolumeclaims = 1;
+          "requests.storage" = size;
+        }
+      );
+    VMAuth.usesAtLeast = singleApp "vmauth";
   };
 
   # The operator's health convention: a VM CR is ready when
@@ -199,6 +308,9 @@ let
       }
       // lib.optionalAttrs (extras ? factBehavior) {
         inherit (extras) factBehavior;
+      }
+      // lib.optionalAttrs (extras ? usesAtLeast) {
+        inherit (extras) usesAtLeast;
       }
     );
 

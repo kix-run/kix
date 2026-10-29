@@ -859,7 +859,7 @@
         in
         builtins.concatMap ofInstance allInstancesList;
 
-      # Fail the build when the minimum pod usage in a namespace exceeds any
+      # Fail the build when the minimum usage in a namespace exceeds any
       # of its unscoped ResourceQuotas (`vocab/quota-use.nix`). Checked quotas
       # include `namespaces.<ns>.resourceQuota` (or the quota from a consumer's
       # platform interface) and any ResourceQuota rendered by an instance in
@@ -902,17 +902,17 @@
               quotaCheck.refusals {
                 namespace = nsName;
                 inherit quotas resources;
-                # Include custom resources that declare `runsAtLeast` or
+                # Include custom resources that declare `usesAtLeast` or
                 # terminate endpoints in operator-managed pods (`factBehavior.endpoint == "terminate"`).
                 customResources =
                   map
                     (r: {
                       manifest = r.rawManifest;
-                      runsAtLeast = r.runsAtLeast or null;
+                      usesAtLeast = r.usesAtLeast or null;
                     })
                     (
                       builtins.filter (
-                        r: (r.runsAtLeast or null) != null || ((r.factBehavior or null).endpoint or null) == "terminate"
+                        r: (r.usesAtLeast or null) != null || ((r.factBehavior or null).endpoint or null) == "terminate"
                       ) sealed
                     );
               }

@@ -88,7 +88,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `vocab/postgres-database.nix` | `kix.contracts.postgresDatabase`: PostgreSQL database contract (`host`, `port`, `database`, `credentials`, `username`, `extensions`, `tls`). |
 | `vocab/pins.nix` | `kix.pins`: loads and validates committed JSON pin files. |
 | `vocab/quantity.nix` | Kubernetes quantity grammar (`kix.types.quantity`) and parser (`kix.parseQuantity`). |
-| `vocab/quota-use.nix` | The least a namespace's objects use of its ResourceQuota, from built-in pod kinds and CRD `runsAtLeast` declarations; `buildCluster` refuses a build whose least use is over a quota. |
+| `vocab/quota-use.nix` | The least a namespace's objects use of its ResourceQuota, from built-in pod kinds and CRD `usesAtLeast` declarations; `buildCluster` refuses a build whose least use is over a quota. |
 | `vocab/storage-class.nix` | `kix.types.storageClass` and `kix.storage.mkClasses` for StorageClass provider packages. |
 | `vocab/durations.nix` | Prometheus duration type/helpers (`kix.types.promDuration`, `kix.durations.*`) and cron staleness helper (`kix.schedules.staleAfter`). |
 | `vocab/rbac.nix` / `crd.nix` / `fragments.nix` | Pipeable RBAC and CRD builders, and multi-file cluster fragment merging. |

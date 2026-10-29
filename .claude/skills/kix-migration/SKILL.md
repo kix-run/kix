@@ -417,15 +417,16 @@ edge but NO netpol hole. Consequences when authoring:
   Cluster) can still read as ready from its previous status right after
   a spec change.
 
-- **Declare `runsAtLeast` on CRDs whose operator always runs pods.** When an operator always runs pods
-  for a custom resource, declare them on `scope.mkCRD` or `scope.mkCRDRef`:
-  `runsAtLeast = cr: [ { pods = cr.spec.instances or 1; resources = cr.spec.resources or { }; } ]`,
-  with one entry per group of identical pods and `resources` shaped like a single
-  container's `resources` (see `cnpg-operator` for `Cluster`). Only include the
-  minimum pods the operator always runs: the build fails when a namespace's
-  minimum usage exceeds a ResourceQuota. If a CRD sets `factBehavior.endpoint = "terminate"`
-  without `runsAtLeast`, its custom resources are listed as `Not counted` in
-  quota failure messages.
+- **Declare `usesAtLeast` on CRDs whose operator always runs pods or makes claims.** On `scope.mkCRD`
+  or `scope.mkCRDRef`, return the least the operator always uses for a custom resource, keyed like a
+  ResourceQuota's `spec.hard`. Build it with `kix.usage`:
+  `usesAtLeast = cr: kix.usage.times (cr.spec.instances or 1) (kix.usage.ofPod [ { resources = cr.spec.resources or { }; } ])`.
+  Add `persistentvolumeclaims`, `requests.storage` or `services` with `kix.usage.add` when the
+  operator always makes them (see `cnpg-operator` for `Cluster`). Count every container the operator
+  always runs and whose size the custom resource sets; leave out anything the operator sizes itself.
+  A figure that is too high fails a valid build, so when unsure, leave a key out. If a CRD sets
+  `factBehavior.endpoint = "terminate"` without `usesAtLeast`, its custom resources are listed as
+  `Not counted` in quota failure messages.
 
 ### Composition helpers (kix.*)
 
