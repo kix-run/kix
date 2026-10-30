@@ -213,13 +213,14 @@ in
         ) config.kubernetesAuth.roles
       );
       declared = policyNames ++ roleNames ++ enginePaths;
-      tagVersion = builtins.match "v?([0-9]+\\.[0-9]+)(\\..*)?" config.image.tag;
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+      tagVersion = builtins.match "v?([0-9]+\\.[0-9]+)(\\..*)?" imageTag;
     in
     [
       {
         assertion =
           tagVersion == null || builtins.compareVersions (builtins.head tagVersion) minVersion >= 0;
-        message = "image.tag \"${config.image.tag}\" is older than OpenBao ${minVersion}, which added the tls_auto_reload listener option the package sets. Remove image.tag or set a ${minVersion} or later tag.";
+        message = "image.tag \"${imageTag}\" is older than OpenBao ${minVersion}, which added the tls_auto_reload listener option the package sets. Remove image.tag or set a ${minVersion} or later tag.";
       }
       {
         assertion = config.seal.type == "static" || declared == [ ];

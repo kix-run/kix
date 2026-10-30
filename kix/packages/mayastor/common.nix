@@ -72,10 +72,11 @@ rec {
     image:
     let
       minor = v: builtins.match "v?([0-9]+)\\.([0-9]+)\\..*" v;
+      tag = builtins.unsafeDiscardStringContext image.tag;
     in
-    if minor image.tag != minor release then
+    if minor tag != minor release then
       throw (
-        "${who}: image tag \"${image.tag}\" is not a ${lib.concatStringsSep "." (minor release)} release, "
+        "${who}: image tag \"${tag}\" is not a ${lib.concatStringsSep "." (minor release)} release, "
         + "and the DiskPool CRD version and the RBAC in kix/packages/mayastor are written for ${release}. "
         + "To move to another release, change release in kix/packages/mayastor/common.nix."
       )

@@ -62,8 +62,9 @@ in
     let
       minor = "v${lib.concatStringsSep "." releaseMinor}";
       check =
-        option: tag:
+        option: rawTag:
         let
+          tag = builtins.unsafeDiscardStringContext rawTag;
           m = minorOf tag;
           fix =
             if option == "image.tag" then

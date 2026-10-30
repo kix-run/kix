@@ -8,7 +8,7 @@
 # namespace, aliased `valkeyPassword`, with key `password`. Auth is always
 # on.
 #
-# out: `name`, `fqdn`, `port`, and the password as `authSecret` and
+# `out`: `name`, `fqdn`, `port`, and the password as `authSecret` and
 # `authPasswordKey`; with Sentinel also `sentinelPort` and `primarySet`.
 # Consumers run in this namespace (`meta.scope`). With Sentinel the Service
 # also reaches replicas, so a client that writes asks Sentinel for the

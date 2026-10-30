@@ -60,7 +60,7 @@
 # spec; `partsOverlays`; `scope.mkCR kubevirt.out.crds.VirtualMachine` for a
 # VirtualMachine out.mkVirtualMachine refuses.
 #
-# Exposes:
+# `out`:
 #   out.crds.VirtualMachine
 #   out.mkVirtualMachine scope { name; spec; annotations ? { }; requires ? [ ]; ... }
 #       A VirtualMachine the deploy waits on: until printableStatus is
@@ -184,10 +184,13 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
     [
       {
-        assertion = minorOf config.image.tag == minorOf release;
-        message = "image.tag \"${config.image.tag}\" is not a ${minorOf release} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${minorOf release} tag. To move to another release, change release in kix/packages/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
+        assertion = minorOf imageTag == minorOf release;
+        message = "image.tag \"${imageTag}\" is not a ${minorOf release} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${minorOf release} tag. To move to another release, change release in kix/packages/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
       }
     ]
     ++ map (n: {
@@ -264,9 +267,9 @@ in
       # the strategy Job runs the value as its image.
       operatorImage =
         if kix.image.isPinned config.image then
-          "${config.image.repository}@${config.image.digest}"
+          builtins.unsafeDiscardStringContext "${config.image.repository}@${config.image.digest}"
         else
-          "${config.image.repository}:${config.image.tag}";
+          kix.image.ref config.image;
 
       # Without infra.replicas, virt-operator runs two virt-controller
       # replicas and max(2, nodes / 10) virt-api replicas, so the package
@@ -487,7 +490,7 @@ in
                   env = [
                     {
                       name = "KUBEVIRT_VERSION";
-                      value = config.image.tag;
+                      value = builtins.unsafeDiscardStringContext config.image.tag;
                     }
                     {
                       name = "VIRT_OPERATOR_IMAGE";

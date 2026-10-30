@@ -17,13 +17,13 @@
 # `deps.storage = ref.<ns>.<claim>` as kix.modules.monitoring does.
 # Otherwise both pods mount the one ReadWriteOnce claim.
 #
-# DI deps:
+# Dependencies:
 #   storage (required)     a persistent-volume-claim instance, mounted at
 #                          /var/loki
 #   prometheus (optional)  ServiceMonitor on Loki's /metrics and the
 #                          alerts below
 #
-# Exposes:
+# `out`:
 #   out.serviceUrl  "http://<name>.<ns>.svc.<clusterDomain>:3100"
 #   out.url { }     the same address, from the root Service
 #

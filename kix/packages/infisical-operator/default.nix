@@ -18,7 +18,7 @@
 #
 #   instances.infisical.infisical-operator.package = packages.infisical-operator;
 #
-# DI deps:
+# Dependencies:
 #   prometheus (optional)  metrics Service and ServiceMonitor.
 #
 # Network policy: the package's intent opens TCP 443 to destinations outside
@@ -30,7 +30,7 @@
 # Escape hatches: `extraArgs` and `env` for the operator; `partsOverlays` on
 # parts `deployment` and `connection`.
 #
-# Exposes:
+# `out`:
 #   out.mkInfisicalSecret scope { name; spec; }        (v1alpha1)
 #   out.mkInfisicalStaticSecret scope { name; spec; }  (v1beta1)
 #       Build the two kinds that write Secrets and ConfigMaps. Each target's
@@ -206,11 +206,13 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
     [
       {
-        assertion =
-          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
-        message = "image.tag \"${config.image.tag}\" is not a v${lib.concatStringsSep "." releaseMinor} release, and the CRDs and RBAC in kix/packages/infisical-operator are from ${release}. Remove image.tag or set a v${lib.concatStringsSep "." releaseMinor} tag. To move the package to another release, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole with config/rbac/role.yaml at the new tag.";
+        assertion = versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
+        message = "image.tag \"${imageTag}\" is not a v${lib.concatStringsSep "." releaseMinor} release, and the CRDs and RBAC in kix/packages/infisical-operator are from ${release}. Remove image.tag or set a v${lib.concatStringsSep "." releaseMinor} tag. To move the package to another release, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole with config/rbac/role.yaml at the new tag.";
       }
       {
         assertion = sourceUrls != [ ] && lib.all (lib.hasInfix "/${release}/") sourceUrls;

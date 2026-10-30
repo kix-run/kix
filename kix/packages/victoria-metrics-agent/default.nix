@@ -12,7 +12,7 @@
 # every ServiceMonitor / PodMonitor) in the cluster is scraped, matching
 # the prometheus package's posture.
 #
-# DI deps:
+# Dependencies:
 #   vmOperator (required)   provides the VMAgent CRD + mkVMAgent
 #   vmCluster (required)    out.remoteWriteUrl (remote-write target),
 #                           out.scrapeInterval (dedup coupling)

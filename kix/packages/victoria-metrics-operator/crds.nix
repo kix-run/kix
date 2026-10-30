@@ -44,13 +44,15 @@ let
         + "indexers\") when any of these CRDs is absent; restore them in kinds.nix."
       );
 
+  imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+
   labels = {
     "app.kubernetes.io/part-of" = "victoria-metrics-operator";
-    "app.kubernetes.io/version" = config.image.tag;
+    "app.kubernetes.io/version" = imageTag;
   };
 
   annotations = {
-    "operator.victoriametrics.com/version" = lib.removePrefix "v" config.image.tag;
+    "operator.victoriametrics.com/version" = lib.removePrefix "v" imageTag;
   };
 
   ageColumn = [

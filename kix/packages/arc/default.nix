@@ -35,11 +35,11 @@
 # Not modelled: `--watch-single-namespace` and image pull secrets for the
 # listener. Escape hatches: `extraArgs`, `env`, `partsOverlays`, `extra`.
 #
-# DI deps:
+# Dependencies:
 #   prometheus (optional)  metrics Service, ServiceMonitor `<name>`, and
 #                          PodMonitor `<name>-listeners`.
 #
-# Exposes:
+# `out`:
 #   out.mkAutoscalingRunnerSet consumerScope { name; spec; }
 #       The AutoscalingRunnerSet and the three objects the controller expects
 #       beside it; see runner-set.nix.
@@ -240,15 +240,16 @@ in
     [
       (
         let
-          parts = versionParts config.image.tag;
+          imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+          parts = versionParts imageTag;
         in
         {
           assertion = parts != null && lib.take 2 parts == releaseMinor;
           message =
             if parts == null then
-              "image.tag \"${config.image.tag}\" is not a version the controller can parse (digits as major.minor.patch, no \"v\" prefix). The tag becomes every runner set's version label, and the controller deletes a runner set whose label it cannot parse. Remove image.tag or set a ${releaseMinorText} tag."
+              "image.tag \"${imageTag}\" is not a version the controller can parse (digits as major.minor.patch, no \"v\" prefix). The tag becomes every runner set's version label, and the controller deletes a runner set whose label it cannot parse. Remove image.tag or set a ${releaseMinorText} tag."
             else
-              "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/arc/crds are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
+              "image.tag \"${imageTag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/arc/crds are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
         }
       )
     ];

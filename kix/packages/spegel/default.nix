@@ -18,7 +18,7 @@
 # hostPort, the NodePort, and the files under the registry config directory
 # are per node as well.
 #
-# DI deps:
+# Dependencies:
 #   prometheus (optional)  metrics Service and ServiceMonitor.
 #
 # Minimal instance, on a cluster whose nodes keep unpacked layers:

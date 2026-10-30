@@ -1,3 +1,0 @@
-# 2026-10-24 · `kix/packages` · 22 packages interpolate `config.image.tag` themselves, so a Nix-built tag breaks them.
-
-`kix.image.ref` drops a tag's Nix string context, which is what lets `kix-image-sources.json` report an image as `nix_built`. Packages that write `"${config.image.repository}:${config.image.tag}"` or put the tag in a label keep the context, and `builtins.toFile` then refuses the manifest ("files created by builtins.toFile may not reference derivations"). Find them with `grep -rlE '\$\{[a-zA-Z.]*image\.tag\}' kix/packages`. Until they render through `kix.image.ref`, a cluster has to discard the context itself and its Nix-built images report `code`.

@@ -13,7 +13,7 @@
 # The app depends on this instance rather than on the cluster: a Secret is
 # readable only in its own namespace, and the cluster's holds the superuser.
 #
-# DI deps:
+# Dependencies:
 #   postgres (required)  a stackgres-cluster, or an import of an SGCluster
 #                        whose out has name, fqdn, port, and extensions.
 #                        The `extensions` option is added to its

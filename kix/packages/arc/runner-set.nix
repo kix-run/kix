@@ -134,7 +134,7 @@ rec {
       namespace = consumerScope.namespaceName;
       problem = refusal { inherit namespace name spec; };
 
-      objectLabels.${versionKey} = config.image.tag;
+      objectLabels.${versionKey} = builtins.unsafeDiscardStringContext config.image.tag;
 
       supporting =
         args:

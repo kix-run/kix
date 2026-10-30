@@ -65,10 +65,10 @@
 #     `async_insert` is deduplicated only with `async_insert_deduplicate`
 #     on (off by default).
 #
-# DI deps:
+# Dependencies:
 #   clickhouse (required)  anything honouring the clickhouse contract
 #
-# Exposes:
+# `out`:
 #   out.httpUrl, out.nativeEndpoint, out.host, out.ports
 #                       the server's, carrying an edge to the bootstrap Job
 #                       so a consumer starts after its database exists

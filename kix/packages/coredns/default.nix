@@ -27,12 +27,12 @@
 #     config.clusterIP = "10.96.0.10"; # the kubelet's clusterDNS
 #   };
 #
-# DI deps:
+# Dependencies:
 #   prometheus (optional)  the Service's metrics port, a ServiceMonitor, and
 #                          three alerts scoped to the instance, with
 #                          `metrics.enabled`.
 #
-# out: root is the Service, so `out.name`, `out.fqdn`, `out.selector`, and
+# `out`: root is the Service, so `out.name`, `out.fqdn`, `out.selector`, and
 # `out.port` (53) are the Service's.
 #
 # Escape hatches: `servers` takes any plugin with its arguments and block

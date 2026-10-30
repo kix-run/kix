@@ -37,7 +37,7 @@
 # come from the two ConfigMaps in workloads.nix (`podLabels`) and their
 # traffic from the `dataPathEgress` and `externalStoreEgress` policies.
 #
-# DI deps:
+# Dependencies:
 #   cloudCredentials (required)  a secret or secret-ref with key `cloud`, the
 #                                object-store credentials file, mounted at
 #                                /credentials and named by the locations.
@@ -73,7 +73,7 @@
 # (KubePodCrashLooping) and a node-agent pod that does not start
 # (KubeDaemonSetRolloutStuck).
 #
-# Exposes:
+# `out`:
 #   out.crds.<Kind>              the 13 CRDs. Velero reads its CRs only in
 #                                its own namespace, so build one there:
 #                                (scope.forService velero).mkCR

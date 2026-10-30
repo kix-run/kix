@@ -264,7 +264,7 @@ in
     version       = "1.2.0";
     description   = "Short, single-line.";
     owner         = "platform";               # "platform" or "app-team"; governance.hasOwner warns without it
-    lifecycle     = "stateless";              # "stateless" (default) | "stateful" | "durable" | "ephemeral"
+    lifecycle     = "stateful";               # "stateless" (default, omit) | "stateful" | "ephemeral"
     scope         = "namespace";              # "cluster" (default) | "namespace": resolution skips it for consumers in other namespaces; an explicit ref from one fails
     roles         = [ "storageClasses" ];     # infra-role claim, closed registry (kix/lib/eval/roles.nix); role name doubles as a DI alias. Infra packages only.
     defaultAliases = [ "storage" ];           # DI aliases when no instance-level aliases set
@@ -315,7 +315,7 @@ in
     # attrset; two entries defining the same part name are an error.
     # This is how kix.expose / kix.monitor compose: they're build entries that
     # declare their own DI deps.
-    ({ self, config, clusterConfig, database, storage, scope, kix, machineLearning ? null, prometheus ? null, ... }:
+    ({ self, config, database, storage, scope, kix, reloader ? null, ... }:
     let
       healthCheck = { httpGet.path = "/health"; httpGet.port = "http"; periodSeconds = 10; };
     in
@@ -333,8 +333,15 @@ in
               image = kix.image.ref config.image;   # repository:tag@digest
               # The package owns the variables it wires from dependencies;
               # an instance that sets one in `env` gets an error naming it.
+              # Optional dependencies (such as prometheus on kix.monitor) must
+              # not mutate a disruptive workload's pod env directly when they
+              # resolve; gate pod-template changes on an explicit option
+              # (`config.metrics.enabled`) instead.
               env = kix.mkEnvVars (kix.mergeEnv {
                 inherit who;
+                defaults = lib.optionalAttrs config.metrics.enabled {
+                  METRICS_ENABLED = "true";
+                };
                 owned = [ {
                   vars = {
                     DB_HOST = database.out.host;
@@ -345,10 +352,6 @@ in
                   };
                   from = "the database dependency";
                   fix = "Wire a different database instance through deps.database instead.";
-                } {
-                  vars.ML_URL = if machineLearning != null then "http://${machineLearning.out.fqdn}" else null;
-                  from = "the machineLearning dependency";
-                  fix = "Wire a worker through deps.machineLearning instead.";
                 } ];
               } config.env);
               resources = config.resources;
@@ -359,6 +362,7 @@ in
           };
         }
         |> kix.withMounts [ self.libraryMount ]
+        |> (if reloader != null then reloader.out.withReloadOn [ database.out.credentials ] else lib.id)
         |> scope.mkDeployment;
 
       service = self.deployment |> kix.service.fromWorkload { name = "${name}-server"; } |> scope.mkResource;
@@ -1061,15 +1065,16 @@ For full DI control, custom root selection, CRD refs, capability declarations, i
 # kix/packages/<pkg>/default.nix
 { scope, lib, kix }:
 let
+  release = "1.2.3";
   chart = scope.helm.fetchHelmChart {
     repo = "oci://registry-1.docker.io/bitnamicharts";
     name = "valkey";
-    version = "1.2.3";
+    version = release;
     hash = "sha256-...";
   };
 in
 {
-  meta.version = "1.2.3";
+  meta.version = release;
   options = { values = lib.mkOption { type = lib.types.anything; default = {}; }; };
   build = { config, scope, ... }:
     let resources = scope.helm.importChart {

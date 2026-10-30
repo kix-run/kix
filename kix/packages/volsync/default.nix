@@ -18,7 +18,7 @@
 #
 #   instances.volsync.volsync.package = packages.volsync;
 #
-# DI deps:
+# Dependencies:
 #   snapshotController (required)  the VolumeSnapshot API. The operator
 #                                  watches VolumeSnapshots whatever the
 #                                  copy method, and does not start
@@ -66,7 +66,7 @@
 # outside the cluster. A resource name longer than 51 characters is
 # refused, because VolSync then hashes the Job name.
 #
-# Exposes:
+# `out`:
 #   out.mkReplicationSource scope { name; claim; schedule; copyMethod;
 #                                   restic; extraSpec ? { }; requires ? [ ]; }
 #       A folder of two parts: `replicationSource`, the custom resource, and
@@ -163,10 +163,13 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
     [
       {
-        assertion = minorOf config.image.tag == minorOf release;
-        message = "image.tag \"${config.image.tag}\" is not a ${minorOf release} release, and the CRDs and ClusterRole under kix/packages/volsync/{crds,rbac} are vendored from v${release}. Set image.tag to a ${minorOf release}.x tag. To move to another release, change release in kix/packages/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
+        assertion = minorOf imageTag == minorOf release;
+        message = "image.tag \"${imageTag}\" is not a ${minorOf release} release, and the CRDs and ClusterRole under kix/packages/volsync/{crds,rbac} are vendored from v${release}. Set image.tag to a ${minorOf release}.x tag. To move to another release, change release in kix/packages/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
       }
     ];
 

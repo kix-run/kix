@@ -115,10 +115,13 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
     [
       {
-        assertion = minorOf config.image.tag == minorOf release;
-        message = "image.tag \"${config.image.tag}\" is not a ${toString (minorOf release)} release (upstream tags look like ${release}), and the CRDs and ClusterRole under kix/packages/prometheus-operator/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${toString (minorOf release)} tag. To move to another release, change release in kix/packages/prometheus-operator/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py prometheus-operator.";
+        assertion = minorOf imageTag == minorOf release;
+        message = "image.tag \"${imageTag}\" is not a ${toString (minorOf release)} release (upstream tags look like ${release}), and the CRDs and ClusterRole under kix/packages/prometheus-operator/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${toString (minorOf release)} tag. To move to another release, change release in kix/packages/prometheus-operator/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py prometheus-operator.";
       }
       {
         assertion = config.operandImages.prometheus-config-reloader.pullPolicy == null;

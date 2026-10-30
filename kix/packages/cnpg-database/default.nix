@@ -13,7 +13,7 @@
 # readable only in its own namespace, and CloudNativePG reads a role's
 # password, a DatabaseRole, and a Database only in the Cluster's namespace.
 #
-# DI deps:
+# Dependencies:
 #   postgres (required)      a cnpg-cluster, or a cnpg-pooler in front of
 #                            one. The package reads its Service and its
 #                            Cluster's name, so an import without
@@ -46,7 +46,7 @@
 #     DB_PASSWORD = "password";
 #   });
 #
-# Exposes:
+# `out`:
 #   out.host, out.port      the postgres dependency's Service: the
 #                           cluster's -rw Service, or the pooler's. They
 #                           carry the Database, so a consumer's workload

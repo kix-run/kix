@@ -18,7 +18,7 @@
 #   - Store its credentials under `client_id` and `client_secret` in a Secret
 #     in this namespace and wire it as `oauthCredentials`.
 #
-# DI deps:
+# Dependencies:
 #   oauthCredentials (required)  Secret with keys `client_id` and `client_secret`.
 #   prometheus (optional)        Metrics Service and ServiceMonitor.
 #
@@ -160,8 +160,11 @@ in
       }
       {
         assertion =
-          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
-        message = "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/tailscale/crds and the rules in kix/packages/tailscale/rbac.nix come from ${release}. Remove image.tag or set a v${releaseMinorText} tag. To move to another release, change release in kix/packages/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix with that release's operator-rbac.yaml and proxy-rbac.yaml.";
+          let
+            imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+          in
+          versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
+        message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/tailscale/crds and the rules in kix/packages/tailscale/rbac.nix come from ${release}. Remove image.tag or set a v${releaseMinorText} tag. To move to another release, change release in kix/packages/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix with that release's operator-rbac.yaml and proxy-rbac.yaml.";
       }
       (reservedKeys "proxyClasses" "scope.mkCR tailscale.out.crds.ProxyClass" (
         builtins.attrNames config.proxyClasses

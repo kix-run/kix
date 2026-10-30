@@ -27,7 +27,7 @@
 # The package claims no alias: `postgres` belongs to the cluster, so a
 # cnpg-database names the pooler with a `ref`.
 #
-# DI deps:
+# Dependencies:
 #   postgres (required)      a cnpg-cluster in this namespace. The package
 #                            reads its Cluster's name and instance pod
 #                            labels, so an import without out.clusterName

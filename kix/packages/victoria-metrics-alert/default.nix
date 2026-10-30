@@ -17,7 +17,7 @@
 # operator-created pods with no endpoint fact in any Kix manifest,
 # like the intra-VMCluster traffic.
 #
-# DI deps:
+# Dependencies:
 #   vmOperator (required)   VMAlert/VMAlertmanager CRDs + builders
 #   vmCluster (required)    out.serviceUrl (datasource + remoteRead),
 #                           out.insertBaseUrl (remoteWrite; vmalert

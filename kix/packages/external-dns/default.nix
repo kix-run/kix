@@ -22,7 +22,7 @@
 #     };
 #   };
 #
-# DI deps:
+# Dependencies:
 #   providerCredentials (optional)  a secret or secret-ref instance in the
 #                                   same namespace holding the provider's API
 #                                   credentials. With `secretEnv` empty the
@@ -54,7 +54,7 @@
 # (domain filters, TXT prefix, provider endpoints), `env`, and the
 # instance's `partsOverlays` for pod labels, placement, and extra RBAC rules.
 #
-# out: root is the Deployment, and `out` adds nothing beyond root's defaults.
+# `out`: root is the Deployment, and `out` adds nothing beyond root's defaults.
 
 {
   scope,
@@ -496,13 +496,12 @@ in
 
         # sources.nix and providers.nix follow `release`; another release
         # may need other RBAC rules or accept other providers.
+        imageTag = builtins.unsafeDiscardStringContext config.image.tag;
         imageRef =
-          if
-            lib.versions.majorMinor (lib.removePrefix "v" config.image.tag) == lib.versions.majorMinor release
-          then
+          if lib.versions.majorMinor (lib.removePrefix "v" imageTag) == lib.versions.majorMinor release then
             kix.image.ref config.image
           else
-            throw "${who}: image.tag \"${config.image.tag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}. To move to another release, change `release` in kix/packages/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
+            throw "${who}: image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}. To move to another release, change `release` in kix/packages/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
 
         probe = {
           httpGet = {

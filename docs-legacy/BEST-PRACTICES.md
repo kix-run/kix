@@ -28,7 +28,7 @@ code. Principle → consequence → concrete example. Companion to
 
 ## 1. What kix is
 
-A Nix-based Kubernetes manifest generator that treats **the dependency graph as
+Kix is a Kubernetes compiler that treats **the dependency graph as
 the source of truth**. Every cluster is a closure-complete derivation rooted at
 an `Activation` CR; the Nix store is its IR. Same inputs → same closure → same
 cluster.
@@ -179,16 +179,24 @@ before introducing kix-only ones.
 
 ### 5.3 Always-available escape hatches
 
-If someone needs a field, annotation, or kind kix hasn't modeled, they reach
-for it directly without leaving kix:
+If someone needs a field, annotation, or kind Kix hasn't modeled, they reach
+for it directly without leaving Kix. Escape hatches exist at two layers:
 
-- `extra = { ... }` for top-level passthrough fields kix doesn't model.
-- `kix.untrackedRef "name"` for resource names not managed by kix.
-- `scope.mkResource` to author any K8s manifest that the convenience builders
-  don't cover.
-- `partsOverlays` for instance-level post-build transforms.
+**Library and cluster escape hatches** (used when authoring a package or overriding an instance from a cluster definition):
 
-If the escape hatch is the only way to express something common, that's a
+- `extra = { ... }` for top-level passthrough fields on a resource that a builder doesn't model.
+- `kix.untrackedRef { by = "..."; }` for resource names managed outside Kix.
+- `scope.mkResource` to author any non-workload K8s manifest that the convenience builders don't cover.
+- `partsOverlays` for instance-level post-build transforms on a package's rendered parts.
+
+**Package option escape hatches** (exposed by each package on its `options` so cluster authors can set upstream configuration the package does not model directly, with DI-owned paths locked via `kix.mergeGuarded`, `kix.mergeEnv`, and `kix.guardArgs`, see package-review E1):
+
+- `values` for Helm chart packages (`importChart`).
+- `extraSpec` for custom-resource or built-in resource specs.
+- `settings` for a program's structured configuration file.
+- `extraArgs` and `env` for CLI flags and environment variables on native workloads.
+
+If an escape hatch is the only way to express something common, that's a
 signal to upstream the pattern.
 
 ### 5.4 Upstream CRDs are vendored, not restated
@@ -249,12 +257,12 @@ Consumers query the resource directly through `out`:
 ```nix
 # Right
 env = { DB_HOST = database.out.host; DB_NAME = database.out.database; };
-sm  = prometheus.out.mkServiceMonitor scope { ... };
+pm  = prometheus.out.mkPodMonitor scope { ... };
 ing = svc |> clusterIssuer.out.withCert |> scope.mkResource;
 
 # Wrong
 env = { DB_HOST = "postgres.${ns}.svc.cluster.local"; ... };       # no DAG edge, no FQDN context
-sm  = scope.mkResource { kind = "ServiceMonitor"; ... };            # bypasses capability owner
+pm  = scope.mkResource { kind = "PodMonitor"; ... };                # bypasses capability owner
 ing = svc |> manualWithCertHelper |> scope.mkResource;              # inverts the DI direction
 ```
 
@@ -264,26 +272,29 @@ ing = svc |> manualWithCertHelper |> scope.mkResource;              # inverts th
 |---|---|
 | **Plain value** (`storageClasses.out.storageClassName`) | Single field consumer needs |
 | **Transformer** (`clusterIssuer.out.withCert`, takes a resource → returns a transformed resource) | Fields the consumer would forget (e.g. cert-manager annotations) |
-| **Builder** (`prometheus.out.mkServiceMonitor scope { ... }`) | Creating CRD instances on behalf of the consumer |
+| **Builder** (`prometheus.out.mkPodMonitor scope { ... }`) | Creating CRD instances on behalf of the consumer |
 
 Builders take `scope` so the result lands in the consumer's namespace with the
 consumer's labels. Transformers don't.
 
-When hand-building a ServiceMonitor (rather than using `kix.monitor`), source
-the selector from the **Service's** labels — `self.service.out.selector` —
-never from the workload's pod selector. Monitor selectors match Service
-metadata labels; a pod-shaped selector drops every target at relabeling and
-the job silently vanishes from `up`. The
+For Service-backed metrics and alerting rules, use the `kix.monitor { service =
+"..."; port = "..."; alerts = ...; }` composable build entry rather than
+calling `prometheus.out.mkServiceMonitor` or `mkPrometheusRule` directly (for a
+PodMonitor scrape over pods with no metrics Service, pair
+`prometheus.out.mkPodMonitor` with `kix.alerts`). `kix.monitor` gates both
+resources on `config.metrics.enabled` and `prometheus != null`, and sources the
+ServiceMonitor selector from the **Service's** labels
+(`self.<service>.out.selector`), never from the workload's pod selector.
+Monitor selectors match Service metadata labels; a pod-shaped selector drops
+every target at relabeling and the job vanishes from `up`. The
 `architecture.monitorSelectorMatchesService` scorecard rule enforces this at
-build time (it caught four shipped instances the day it was written).
+build time.
 
-Caveat: this is the **single-Service** idiom. A Service's `out.selector` is
-its metadata labels, which are instance-common — in a package with two
-Services (main + headless is the classic shape) it matches both, and each pod
-gets scraped once per Service. Multi-Service packages need a per-Service
-discriminator (explicit `labels` on the Service, selected explicitly); a
-first-class `kix.run/part` identity label is an open design question in
-ROADMAP.
+Caveat: a Service's `out.selector` is its metadata labels, which are
+instance-common by default. In a package with two Services (main and headless
+is the classic shape), an unadorned selector matches both, and each pod gets
+scraped once per Service. Multi-Service packages give each Service a
+distinguishing component label (`app.kubernetes.io/component`).
 
 Under default deny the scrape path is derived like any other edge: the
 netpol plugin joins each Prometheus with the monitors it selects and opens
@@ -575,12 +586,23 @@ DI concern resolved by the cluster.
 Build args declare DI deps. Required deps have no default; optional deps get `? null`:
 
 ```nix
-build = { self, config, database, storage, machineLearning ? null, prometheus ? null, ... }: { ... };
+build = [
+  ({ self, config, database, storage, reloader ? null, ... }: { ... })
+  (kix.expose  { service = "service"; })
+  (kix.monitor { service = "service"; port = "metrics"; })
+];
 ```
 
-`database` and `storage` are required: the package can't function without them.
-`machineLearning` and `prometheus` are optional capabilities — the package
-gracefully omits resources when they're absent.
+`database` and `storage` are required: the package cannot function without them.
+`reloader` (and `prometheus` on `kix.monitor`, or `ingressNginx`/`gateway` on
+`kix.expose`) are optional capabilities (`? null`). An optional dependency's
+mere presence in the cluster must not enable a feature with side effects or
+change the pod template of a disruptive workload (for example, adding an env
+var or container port when an instance in another namespace resolves): gate
+pod-template changes on an explicit option (`config.metrics.enabled`, or
+`config.oidc.enabled` which then requires `oidcProvider` and `oidcClient`), and
+gate only non-disruptive resources (a Service, a ServiceMonitor, or a route) on
+the dependency.
 
 ### 8.2 What goes on `meta.roles`
 
@@ -1105,11 +1127,11 @@ option a `defaultText` naming the value in the last two cases.
 
 | Change | Update |
 |---|---|
-| New `kix.lib` API or behavior | The relevant `kix/lib/*.nix` file. If the new behavior changes a non-obvious pattern, update `kix/lib/architecture.md`. If it changes user-facing API, update `docs/HANDBOOK.md` (mechanics) and possibly `docs/BEST-PRACTICES.md` (philosophy). Update `docs/FEATURE-CATALOG.md` to keep the inventory current. |
-| New CLI command or flag | `cli/README.md` (authoritative). `docs/HANDBOOK.md` §3 (cheat sheet). |
-| New cluster-level option | `kix/lib/modules.nix`. `docs/HANDBOOK.md` §14. |
-| New flavor | `kix/lib/flavors/`, register in `kix/lib/default.nix`. `docs/HANDBOOK.md` §15 (capability matrix). |
-| New scorecard rule | `kix/lib/rules/`, register in `kix/lib/rules/default.nix`. `docs/HANDBOOK.md` §17. |
+| New `kix.lib` API or behavior | The relevant `kix/lib/*.nix` file. If the new behavior changes a non-obvious pattern, update `kix/lib/architecture.md`. If it changes user-facing API, update `docs-legacy/HANDBOOK.md` (mechanics) and possibly `docs-legacy/BEST-PRACTICES.md` (philosophy). Update `docs-legacy/FEATURE-CATALOG.md` to keep the inventory current. |
+| New CLI command or flag | `cli/README.md` (authoritative). `docs-legacy/HANDBOOK.md` §3 (cheat sheet). |
+| New cluster-level option | `kix/lib/modules.nix`. `docs-legacy/HANDBOOK.md` §14. |
+| New flavor | `kix/lib/flavors/`, register in `kix/lib/default.nix`. `docs-legacy/HANDBOOK.md` §15 (capability matrix). |
+| New scorecard rule | `kix/lib/rules/`, register in `kix/lib/rules/default.nix`. `docs-legacy/HANDBOOK.md` §17. |
 | New non-obvious pattern (edge case, escape hatch, weird interaction) | `kix/lib/architecture.md` "Non-obvious patterns" section. |
 | New or reworked package | Review it with `.claude/skills/package-review/SKILL.md`; add a checklist item when the review finds a new kind of mistake. |
 | Migration learning (new pattern that came up while migrating) | `.claude/skills/kix-migration/SKILL.md` — but **ask the user first** before editing. |
@@ -1153,7 +1175,7 @@ PRINCIPLES.md                          2026-04-27
 kix/lib/architecture.md                2026-04-27
 .claude/skills/kix-migration/SKILL.md  2026-04-27
 cli/README.md                          2026-04-14
-docs/FEATURE-CATALOG.md                2026-04-09
+docs-legacy/FEATURE-CATALOG.md         2026-04-09
 ludo/                                  2026-05-06
 ROADMAP.md                             2026-05-06
 ```

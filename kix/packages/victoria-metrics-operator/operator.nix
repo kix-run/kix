@@ -27,7 +27,7 @@ let
     "app.kubernetes.io/name" = "victoria-metrics-operator";
     "app.kubernetes.io/instance" = name;
     "app.kubernetes.io/part-of" = "victoria-metrics-operator";
-    "app.kubernetes.io/version" = config.image.tag;
+    "app.kubernetes.io/version" = builtins.unsafeDiscardStringContext config.image.tag;
   };
 
   inherit (scope.rbac)

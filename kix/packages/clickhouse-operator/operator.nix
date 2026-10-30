@@ -32,7 +32,7 @@ let
     "app.kubernetes.io/name" = "clickhouse-operator";
     "app.kubernetes.io/instance" = name;
     "app.kubernetes.io/part-of" = "clickhouse-operator";
-    "app.kubernetes.io/version" = config.image.tag;
+    "app.kubernetes.io/version" = builtins.unsafeDiscardStringContext config.image.tag;
   };
 
   configRoot = "/etc/clickhouse-operator";

@@ -50,9 +50,12 @@ let
   releaseMinor = minorOf release;
   checkedRef =
     image:
-    if minorOf image.tag != releaseMinor then
+    let
+      tag = builtins.unsafeDiscardStringContext image.tag;
+    in
+    if minorOf tag != releaseMinor then
       throw (
-        "${who}: image.tag \"${image.tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
+        "${who}: image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
         + "and the CRDs under kix/packages/zfs-localpv/crds are vendored from ${release}. To move to "
         + "another release, change release in kix/packages/zfs-localpv/default.nix and run "
         + "uv run scripts/vendor-crds.py zfs-localpv."

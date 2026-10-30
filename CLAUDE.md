@@ -1,6 +1,6 @@
 # kixpkgs
 
-Nix-based Kubernetes manifest generator. Packages in `packages/` produce K8s resources; cluster definitions in `clusters/` wire them together.
+Kix is a Kubernetes compiler. Packages in `packages/` produce K8s resources; cluster definitions in `clusters/` wire them together.
 
 ## Key rule
 

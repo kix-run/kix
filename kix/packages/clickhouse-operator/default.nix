@@ -16,7 +16,7 @@
 # so two of them would reconcile the same installation against each other.
 # Operand pods keep serving while it is away.
 #
-# DI deps:
+# Dependencies:
 #   credentials (required)  a secret or secret-ref instance with `username`
 #                           and `password` keys. The operator logs in to
 #                           every server it manages with them (port 8123) to
@@ -27,7 +27,7 @@
 #                           and this package ships no default.
 #   prometheus (optional)   ServiceMonitor on both metrics ports
 #
-# Exposes:
+# `out`:
 #   out.mkClickHouseInstallation scope { name; spec; }
 #   out.mkKeeperInstallation scope { name; spec; }
 #       CR builders. The CR waits for its CRD and for the operator

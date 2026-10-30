@@ -39,13 +39,13 @@
 #
 #   instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
 #
-# DI deps: none.
+# Dependencies: none.
 #
 # Escape hatches: `sgConfig` (SGConfig spec), `env` (operator variables such
 # as OPERATOR_LOG_LEVEL or JAVA_OPTS), `webhookCheck.image`, and the
 # instance's `partsOverlays`.
 #
-# Exposes:
+# `out`:
 #   out.crds.<Kind>   CRD references for scope.mkCR, one per stackgres.io kind
 #                     except SGConfig, which this package owns:
 #                       scope.mkCR stackgresOperator.out.crds.SGCluster { ... }
@@ -181,11 +181,12 @@ in
     { config, ... }:
     let
       refused = builtins.filter (k: config.sgConfig ? ${k}) refusedSgConfigKeys;
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
     in
     [
       {
-        assertion = lib.removeSuffix "-jvm" config.image.tag == release;
-        message = "image.tag \"${config.image.tag}\" is not StackGres ${release}, the release this package's version table and CRD list describe. Move the operator by following the steps in the header of kix/packages/stackgres-operator/default.nix.";
+        assertion = lib.removeSuffix "-jvm" imageTag == release;
+        message = "image.tag \"${imageTag}\" is not StackGres ${release}, the release this package's version table and CRD list describe. Move the operator by following the steps in the header of kix/packages/stackgres-operator/default.nix.";
       }
       {
         assertion = lib.hasSuffix operatorSuffix config.image.repository;
@@ -265,8 +266,9 @@ in
     }:
     let
       registry = registryOf config.image.repository;
-      nativeTag = lib.removeSuffix "-jvm" config.image.tag;
-      jvm = lib.hasSuffix "-jvm" config.image.tag;
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+      nativeTag = lib.removeSuffix "-jvm" imageTag;
+      jvm = lib.hasSuffix "-jvm" imageTag;
       uid = if jvm then 185 else 1000;
       pullPolicy = config.image.pullPolicy;
 
@@ -325,7 +327,7 @@ in
             }
             {
               vars = {
-                OPERATOR_IMAGE_VERSION = config.image.tag;
+                OPERATOR_IMAGE_VERSION = imageTag;
                 OPERATOR_NATIVE_IMAGE_VERSION = nativeTag;
                 OPERATOR_JVM_IMAGE_VERSION = "${nativeTag}-jvm";
                 SG_CONTAINER_REGISTRY = registry;
@@ -939,7 +941,7 @@ in
             { who, version }:
             resolvePostgres {
               inherit who version registry;
-              operatorTag = config.image.tag;
+              operatorTag = imageTag;
             };
         };
       };

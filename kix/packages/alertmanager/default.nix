@@ -213,7 +213,7 @@ in
       baseSpec = {
         inherit replicas;
         image = kix.image.ref config.image;
-        version = config.image.tag;
+        version = builtins.unsafeDiscardStringContext config.image.tag;
         serviceAccountName = self.serviceAccount.out.name;
         serviceName = self.service.out.name;
         resources = config.resources;

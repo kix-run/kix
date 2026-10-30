@@ -27,7 +27,7 @@
 #     };
 #   };
 #
-# DI deps:
+# Dependencies:
 #   stackgresOperator (required)   the operator whose SGObjectStorage kind
 #                                  this instance uses.
 #   storageCredentials (required)  the Secret the selectors name. The keys
@@ -53,7 +53,7 @@
 # `endpointService`, the endpoint are locked. An endpoint written here is
 # treated as outside the cluster.
 #
-# Exposes:
+# `out`:
 #   out.name             the SGObjectStorage's name.
 #   out.worldEgressPort  the TCP port backups reach outside the cluster: the
 #                        endpoint's port, else 80 or 443 from its scheme,

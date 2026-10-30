@@ -225,3 +225,56 @@ fn moving_a_pin_drops_its_note() {
     set("13.1.6", 'c', Some("Watch memory after this one."));
     assert_eq!(note(&file), "Watch memory after this one.");
 }
+
+#[test]
+fn rm_removes_package_and_instance_pins_and_reverts_version_to_1() {
+    let file = pins_file("rm");
+    for (key, repo) in [("nginx", "docker.io/library/nginx"), ("ns/app", "r/app")] {
+        kix()
+            .args([
+                "pin",
+                "set",
+                key,
+                "--init",
+                "--repository",
+                repo,
+                "--tag",
+                "1.0",
+            ])
+            .args(["--digest", &digest('a')])
+            .arg("--pins-file")
+            .arg(&file)
+            .assert()
+            .success();
+    }
+    assert_eq!(read(&file)["version"], 2);
+
+    kix()
+        .args(["pin", "rm", "nginx", "--pins-file"])
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed nginx"));
+    assert!(read(&file)["images"]["nginx"].is_null());
+    assert_eq!(read(&file)["version"], 2);
+
+    kix()
+        .args(["pin", "rm", "ns/app", "--pins-file"])
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed ns/app image"));
+    let doc = read(&file);
+    assert_eq!(doc["version"], 1);
+    assert!(doc.get("instances").is_none());
+
+    kix()
+        .args(["pin", "rm", "ns/app", "--pins-file"])
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("has no pin named")
+                .and(predicate::str::contains("'ns/app image'")),
+        );
+}

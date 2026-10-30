@@ -30,7 +30,7 @@
 # One instance per cluster: the CRDs, webhook configurations, and
 # ClusterRoles are cluster-scoped (`meta.conflictsWith`).
 #
-# DI deps:
+# Dependencies:
 #   prometheus (optional)  metrics Services, three ServiceMonitors, and the
 #                          alerts.
 #
@@ -49,7 +49,7 @@
 # `cainjector.extraArgs`; the controller's `env`; the instance's
 # `partsOverlays` for placement and exact replica counts.
 #
-# Exposes:
+# `out`:
 #   out.crds.{Certificate,Issuer,ClusterIssuer,CertificateRequest,Order,Challenge}
 #       For `scope.mkCR`; each custom resource requires the API check.
 #   out.clusterResourceNamespace
