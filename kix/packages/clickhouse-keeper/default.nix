@@ -16,12 +16,12 @@
 # knows about, so no address can carry that edge. The package states it as
 # a policy over the operator's pod labels.
 #
-# DI deps:
+# Dependencies:
 #   clickhouseOperator (required)  the CRD and out.mkKeeperInstallation
 #   storageClasses (optional)      storageClassName when the option is
 #                                  unset; absent means the cluster default
 #
-# Exposes:
+# `out`:
 #   out.host    "keeper-<name>.<ns>.svc..." (the operator's Service)
 #   out.port    "2181"
 #

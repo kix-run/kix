@@ -28,7 +28,7 @@
 #     # config.policy.profiles.default.pluginConfig.LowNodeUtilization.thresholds.cpu = 30;
 #   };
 #
-# out: none beyond what root (the Deployment) provides; no package depends
+# `out`: none beyond what root (the Deployment) provides; no package depends
 # on the descheduler.
 #
 # Escape hatches: `extraArgs` for flags (the flags the package sets from

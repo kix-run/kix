@@ -67,33 +67,36 @@ pre-commit:
     - merge
     - rebase
   commands:
-    # rustfmt does no compilation, so it does not need devenv: running it
-    # on the host keeps this well under a second.
+    # Use the active toolchain when `cargo-fmt` works in the current shell
+    # (`nix develop`, `devenv shell`, or a configured rustup toolchain), and
+    # fall back to `nix develop` when the host has no default rustup toolchain.
+    # Invoke `cargo-fmt` directly rather than `cargo fmt` so cargo does not
+    # dispatch through a broken rustup shim in $CARGO_HOME/bin.
     format-rust:
       glob: "cli/**/*.rs"
-      run: bash -c 'cd cli && cargo fmt --check'
+      run: |
+        if cargo-fmt --version >/dev/null 2>&1; then
+          (cd cli && cargo-fmt --check)
+        else
+          nix develop -c bash -c 'cd cli && cargo-fmt --check'
+        fi
 
-    # Clippy compiles, so it runs in the devenv shell, which has the Rust
-    # toolchain and pkg-config.
-    #
-    # This is affordable only because of two things, and it goes back to
-    # being unusable if either regresses:
-    #   1. Every package in `packages` must actually build. Nix does not
-    #      cache failed builds, so one broken package (for example, `wrangler`
-    #      on aarch64-darwin) makes EVERY shell entry re-attempt it (60-105s
-    #      each, twice per commit), and the hook then fails without ever
-    #      running clippy.
-    #   2. devenv.nix sets CARGO_TARGET_DIR to its own directory. Sharing
-    #      cli/target/ with a host rustup toolchain makes the two compiler
-    #      versions invalidate each other's fingerprints, so every run is a
-    #      cold build.
-    # With both holding: ~6s shell entry + ~3s warm clippy.
-    #
-    # Nothing else covers this: the only CI workflow (pages.yml) builds the
-    # site and never lints, so it must not simply be dropped.
+    # Run clippy directly when the current shell already provides a working
+    # `cargo-clippy` (`nix develop`, `devenv shell`, or a configured rustup
+    # toolchain), falling back to `devenv shell` when devenv is on PATH, or
+    # `nix develop` otherwise. Keep CARGO_TARGET_DIR under ~/.cache so a host
+    # rustup run never writes cli/target/ inside the checkout.
     clippy-rust:
       glob: "cli/**/*.rs"
-      run: devenv shell -- bash -c 'cd cli && cargo clippy --workspace --all-targets -- -D warnings'
+      run: |
+        if cargo-clippy --version >/dev/null 2>&1; then
+          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)}"
+          (cd cli && cargo-clippy --workspace --all-targets -- -D warnings)
+        elif command -v devenv >/dev/null 2>&1; then
+          devenv shell -- bash -c 'cd cli && cargo-clippy --workspace --all-targets -- -D warnings'
+        else
+          nix develop -c bash -c 'cd cli && cargo-clippy --workspace --all-targets -- -D warnings'
+        fi
 
     # The .nix files under docs/src/snippets are region extracts, not
     # standalone Nix files: each one starts mid-expression at the
@@ -122,7 +125,14 @@ pre-commit:
 
     format-python:
       glob: "scripts/**/*.py"
-      run: devenv shell -- treefmt {staged_files}
+      run: |
+        if command -v devenv >/dev/null 2>&1; then
+          devenv shell -- treefmt {staged_files}
+        elif command -v ruff >/dev/null 2>&1; then
+          ruff format --check {staged_files}
+        else
+          nix shell --inputs-from . nixpkgs#ruff -c ruff format --check {staged_files}
+        fi
 
     # Type-check the landing page. This is the check the Pages deploy runs
     # first (`npm run build` starts with `astro check`). A failure only

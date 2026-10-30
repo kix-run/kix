@@ -4,30 +4,31 @@
 # `settings`, a ConfigMap holds Immich's config file. With a `prometheus`
 # dependency, a ServiceMonitor scrapes the API and job metrics.
 #
-# Required dependencies:
-#   database  a PostgreSQL database honouring the Postgres database
-#             contract (kix.contracts.postgresDatabase), such as a
-#             stackgres-database instance. The package adds the extensions
-#             Immich needs to that instance's `extensions`, and a
-#             stackgres-database forwards them to its stackgres-cluster.
-#             Declare `stackgres-operator` once, in its own namespace.
-#   valkey    the job queue. An auto-instantiated valkey lands in this
-#             namespace and reads its password from a `secret` aliased
-#             `valkeyPassword` (key `password`) in this namespace. A valkey
-#             running Sentinel is reached through Sentinel.
-#   storage   the photo library: a ReadWriteOnce claim, such as a
-#             persistent-volume-claim instance.
-# Optional dependencies:
-#   machineLearning  an immich-machine-learning instance in this namespace,
-#                    or a kix.mkImport aliased `machineLearning` whose out
-#                    sets `fqdn` and `port`. A worker serves only its own
-#                    namespace, so a worker elsewhere is reached through such
-#                    an import, and no egress is derived to an import.
-#                    Without the dependency the server turns machine
-#                    learning off.
-#   prometheus       scrapes the metrics ports while `metrics.enabled`.
-#   oidcProvider, oidcClient (with `oidc.enabled`)
-#                    single sign-on; see below.
+# Dependencies:
+#   database (required)         a PostgreSQL database honouring the Postgres
+#                               database contract (kix.contracts.postgresDatabase),
+#                               such as a stackgres-database instance. The package
+#                               adds the extensions Immich needs to that instance's
+#                               `extensions`, and a stackgres-database forwards
+#                               them to its stackgres-cluster. Declare
+#                               `stackgres-operator` once, in its own namespace.
+#   valkey (required)           the job queue. An auto-instantiated valkey lands in
+#                               this namespace and reads its password from a `secret`
+#                               aliased `valkeyPassword` (key `password`) in this
+#                               namespace. A valkey running Sentinel is reached
+#                               through Sentinel.
+#   storage (required)          the photo library: a ReadWriteOnce claim, such as a
+#                               persistent-volume-claim instance.
+#   machineLearning (optional)  an immich-machine-learning instance in this
+#                               namespace, or a kix.mkImport aliased `machineLearning`
+#                               whose out sets `fqdn` and `port`. A worker serves only
+#                               its own namespace, so a worker elsewhere is reached
+#                               through such an import, and no egress is derived to
+#                               an import. Without the dependency the server turns
+#                               machine learning off.
+#   prometheus (optional)       scrapes the metrics ports while `metrics.enabled`.
+#   oidcProvider, oidcClient (optional, with `oidc.enabled`)
+#                               single sign-on; see below.
 #
 # A minimal instance, in namespace `photos`:
 #
@@ -38,7 +39,7 @@
 #     valkey-password = { package = packages.secret; aliases = [ "valkeyPassword" ]; config.stringData.password = "<password>"; };
 #   };
 #
-# out: the `<instance>-server` Service on port 2283. The public URL is the
+# `out`: the `<instance>-server` Service on port 2283. The public URL is the
 # instance's `exposure` part.
 #
 # Escape hatches: `env` takes any server variable outside the groups the
@@ -330,10 +331,11 @@ in
         # for a tag that names no release and on a dependency that is not the
         # immich-machine-learning package; either skips the check.
         mlVersion = machineLearning.out.version or null;
-        serverVersion = release.of config.image.tag;
+        imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+        serverVersion = release.of imageTag;
         mlUrl =
           if mlVersion != null && serverVersion != null && mlVersion != serverVersion then
-            throw "${who}: immich-server runs release ${serverVersion} (image.tag ${config.image.tag}) but its machineLearning dependency runs ${mlVersion}. Immich publishes both images under one tag; set image.tag to the same release on both instances."
+            throw "${who}: immich-server runs release ${serverVersion} (image.tag ${imageTag}) but its machineLearning dependency runs ${mlVersion}. Immich publishes both images under one tag; set image.tag to the same release on both instances."
           else
             "http://${depOut "machineLearning" machineLearning "fqdn"}:${
               toString (depOut "machineLearning" machineLearning "port")

@@ -52,9 +52,12 @@ rec {
   releaseMinor = builtins.match "v([0-9]+)\\.([0-9]+)\\..*" release;
   checkedRef =
     image:
-    if builtins.match "v([0-9]+)\\.([0-9]+)\\..*" image.tag != releaseMinor then
+    let
+      tag = builtins.unsafeDiscardStringContext image.tag;
+    in
+    if builtins.match "v([0-9]+)\\.([0-9]+)\\..*" tag != releaseMinor then
       throw (
-        "${who}: image.tag \"${image.tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
+        "${who}: image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
         + "and the CRDs under kix/packages/velero/crds are vendored from ${release}. To move to "
         + "another release, change release in kix/packages/velero/default.nix and run "
         + "uv run scripts/vendor-crds.py velero."

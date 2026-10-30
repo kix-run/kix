@@ -16,13 +16,13 @@
 # fallback is 1ms: enough for replication twins, useless for HA-pair
 # duplicates, which land with distinct timestamps.)
 #
-# DI deps:
+# Dependencies:
 #   vmOperator (required)        provides the VMCluster CRD + mkVMCluster
 #   storageClasses (optional)    supplies vmstorage's storageClassName when
 #                                the option is unset; absent = cluster
 #                                default StorageClass
 #
-# Exposes:
+# `out`:
 #   out.serviceUrl: "http://vmselect-<name>.<ns>.svc:8481/select/0/prometheus" (the operator's Service)
 #     Prometheus-compatible read path; Grafana auto-wires any
 #     `prometheusServer`-aliased instance exposing this.

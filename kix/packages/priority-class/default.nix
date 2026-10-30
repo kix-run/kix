@@ -15,7 +15,7 @@
 # and the cluster wires it explicitly:
 #   deps.priorityClass = ref.platform.batch-low;
 #
-# out: the PriorityClass's `out` (`out.name`). Labels and annotations go through
+# `out`: the PriorityClass's `out` (`out.name`). Labels and annotations go through
 # partsOverlays. `value` and `preemptionPolicy` cannot change after creation.
 
 {

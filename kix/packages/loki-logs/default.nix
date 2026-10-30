@@ -11,7 +11,7 @@
 # Without a `loki` instance in the namespace, auto-instantiation from
 # `availablePackages` adds one, and that Loki needs a `storage` claim.
 #
-# DI deps:
+# Dependencies:
 #   loki (required)           an in-cluster Loki; `out.serviceUrl` is the
 #                             base URL of its HTTP API
 #   priorityClass (optional)  a priority-class instance; the pods run at
@@ -19,7 +19,7 @@
 #                             it. Wire it with deps.priorityClass = ref.<ns>.<name>.
 #   prometheus (optional)     ServiceMonitor on Vector's own metrics
 #
-# Exposes:
+# `out`:
 #   out.metricsUrl  every agent's Prometheus endpoint, through the headless
 #                   metrics Service (root)
 #

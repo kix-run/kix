@@ -65,9 +65,12 @@ let
   releaseMinor = minorOf release;
   checkedRef =
     image:
-    if minorOf image.tag != releaseMinor then
+    let
+      tag = builtins.unsafeDiscardStringContext image.tag;
+    in
+    if minorOf tag != releaseMinor then
       throw (
-        "${who}: image.tag \"${image.tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
+        "${who}: image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
         + "and the CRDs under kix/packages/snapshot-controller/crds are vendored from v${release}. "
         + "To move to another release, change release in kix/packages/snapshot-controller/default.nix "
         + "and run uv run scripts/vendor-crds.py snapshot-controller."

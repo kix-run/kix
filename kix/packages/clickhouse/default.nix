@@ -27,7 +27,7 @@
 # `builtinServerConfig` below; a cluster overrides a value by naming the same
 # fragment and path, or adds a fragment of its own.
 #
-# DI deps:
+# Dependencies:
 #   storage (required)      a persistent-volume-claim instance, mounted at
 #                           /var/lib/clickhouse
 #   credentials (required)  a secret or secret-ref instance with a `password`
@@ -590,7 +590,7 @@ in
               authSecret = credentials;
               authPasswordKey = passwordKey;
               inherit (config) clusterName;
-              version = lib.versions.majorMinor config.image.tag;
+              version = builtins.unsafeDiscardStringContext (lib.versions.majorMinor config.image.tag);
               replicas = "1";
               replicaHosts = [ self.service.out.fqdn ];
             };

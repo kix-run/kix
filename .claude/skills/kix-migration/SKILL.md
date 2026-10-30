@@ -667,11 +667,13 @@ If the cluster installs its own managed package (e.g. `storage-classes`), it aut
 **Tier 2: Real package with `importChart`** (full control: DI, CRD refs, custom root):
 ```nix
 { scope, lib }:
-let chart = scope.helm.fetchHelmChart { repo = "oci://..."; name = "x"; version = "1.0"; hash = "sha256-..."; };
+let
+  release = "1.0.0";
+  chart = scope.helm.fetchHelmChart { repo = "oci://..."; name = "x"; version = release; hash = "sha256-..."; };
 in {
-  meta.version = "1.0.0";
+  meta.version = release;
   build = { config, scope, ... }:
-    let resources = scope.helm.importChart { inherit chart scope; values = config.values or {}; releaseName = "x"; };
+    let resources = scope.helm.importChart { inherit chart scope; values = config.values or {}; releaseName = scope.instanceName; };
     in resources.mkParts { root = resources.get "Deployment" "x"; };
 }
 ```
@@ -721,7 +723,7 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 
 ```nix
 meta = {
-  lifecycle = "stateful";   # "stateless" (default) | "stateful"
+  lifecycle = "stateful";   # "stateless" (default, omit) | "stateful" | "ephemeral"
   scope = "namespace";      # "cluster" (default) | "namespace": resolution skips it for consumers in other namespaces; an explicit ref from one fails
   version = "1.2.0";        # the upstream release the package deploys (used for version constraint checks)
   description = "...";      # required: governance.hasDescription warns without it
@@ -733,7 +735,7 @@ meta = {
 };
 ```
 
-- `lifecycle = "stateful"`: this package **provides state that other packages depend on**. Triggers `kix diff` protection (PVC deletion = error) and migration pair detection. Examples: `persistent-volume-claim`, `stackgres-cluster`, `valkey`. A package that merely *consumes* stateful services is **not** stateful.
+- `lifecycle`: `"stateless"` (default; omit per M5), `"stateful"`, or `"ephemeral"` (`kix/lib/core/activation.nix` passes any non-null string through to `PackageInstance.spec.lifecycle`). `lifecycle = "stateful"` marks a package that **provides state that other packages depend on**, triggering `kix diff` protection (PVC deletion = error) and migration pair detection (`persistent-volume-claim`, `stackgres-cluster`, `valkey`); a package that merely *consumes* stateful services is **not** stateful. `lifecycle = "ephemeral"` marks a package whose local state is expendable on a storage swap (`prometheus`, `alertmanager`, `victoria-metrics-cluster`), suppressing migration pair detection.
 - `scope = "namespace"`: automatic resolution skips it for consumers in other namespaces (a required dep then fails as not found and names the skipped instances); an explicit `deps.<x> = ref.<ns>.<instance>` to it fails.
 - `version`: enables dependency version compatibility checks via `checkMetaStatic`. Set it only on a package that deploys upstream software; a package that only writes another package's CRs or a built-in kind omits it. Read `kix/lib/meta.nix` for `parseVersion`, `versionAtLeast`, `versionAtMost`.
 - `owner`: every package in the tree declares one, `"platform"` for infrastructure and `"app-team"` for user-facing applications. `governance.hasOwner` warns without it.

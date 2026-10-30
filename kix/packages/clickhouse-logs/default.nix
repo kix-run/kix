@@ -20,11 +20,11 @@
 # A dashboard reads through a second clickhouse-database instance on the
 # same database with [ "SELECT" ].
 #
-# DI deps:
+# Dependencies:
 #   clickhouseDatabase (required)  the database and the inserting user
 #   prometheus (optional)          ServiceMonitor on Vector's own metrics
 #
-# Exposes:
+# `out`:
 #   out.database, out.table   where the rows land
 #   out.metricsUrl            every agent's Prometheus endpoint, through the
 #                             headless metrics Service (root)

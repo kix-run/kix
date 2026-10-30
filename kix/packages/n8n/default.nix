@@ -98,7 +98,7 @@
 # with `namespaces.<ns>.networkPolicies.directions` plus an ingress intent
 # on the target.
 #
-# Exposes: `out.name`, `out.fqdn`, `out.port` (the main instance's Service).
+# `out`: `out.name`, `out.fqdn`, `out.port` (the main instance's Service).
 # root = that Service; it requires the worker Deployment.
 #
 # Escape hatches: `env` (both n8n containers), `runners.env` (the sidecar),

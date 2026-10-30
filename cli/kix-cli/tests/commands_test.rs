@@ -168,3 +168,62 @@ fn nonexistent_cluster_fails() {
         .failure()
         .stderr(predicate::str::contains("not found").or(predicate::str::contains("not a valid")));
 }
+
+#[test]
+fn pin_rm_removes_package_and_instance_pins_and_errors_when_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("pins.json");
+    let digest = format!("sha256:{}", "a".repeat(64));
+
+    for (key, repo) in [("nginx", "docker.io/library/nginx"), ("ns/app", "r/app")] {
+        kix()
+            .args([
+                "pin",
+                "set",
+                key,
+                "--init",
+                "--repository",
+                repo,
+                "--tag",
+                "1.0",
+                "--digest",
+                &digest,
+            ])
+            .arg("--pins-file")
+            .arg(&file)
+            .assert()
+            .success();
+    }
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(doc["version"], 2);
+
+    kix()
+        .args(["pin", "rm", "nginx", "--pins-file"])
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed nginx"));
+
+    kix()
+        .args(["pin", "rm", "ns/app", "--pins-file"])
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed ns/app image"));
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(doc["version"], 1);
+    assert!(doc.get("instances").is_none());
+
+    kix()
+        .args(["pin", "rm", "nginx", "--pins-file"])
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("has no pin named").and(predicate::str::contains("'nginx'")),
+        );
+}

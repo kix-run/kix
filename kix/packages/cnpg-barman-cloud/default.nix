@@ -31,7 +31,7 @@
 # A cnpg-cluster with `backup` set takes this instance as its `barmanCloud`
 # dependency.
 #
-# DI deps:
+# Dependencies:
 #   cnpgOperator (required)  the cnpg-operator instance, in this namespace.
 #                            The package opens its pods' traffic to the
 #                            plugin.
@@ -45,7 +45,7 @@
 # Escape hatches: `extraArgs` (the operator subcommand's flags, such as
 # `--log-level`), `env`, and the instance's `partsOverlays`.
 #
-# Exposes:
+# `out`:
 #   out.mkObjectStore scope { name; spec; requires ? [ ]; }
 #       Builds an ObjectStore in the caller's namespace, which must be the
 #       namespace of the Cluster that uses it. Refuses a `{ name; key; }`
@@ -144,14 +144,18 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+      sidecarTag = builtins.unsafeDiscardStringContext config.sidecar.image.tag;
+    in
     [
       {
-        assertion = minorOf config.image.tag == minorOf release;
-        message = "image.tag \"${config.image.tag}\" is not a plugin-barman-cloud ${minorOf release} release, and the definition under kix/packages/cnpg-barman-cloud/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
+        assertion = minorOf imageTag == minorOf release;
+        message = "image.tag \"${imageTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the definition under kix/packages/cnpg-barman-cloud/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
       }
       {
-        assertion = minorOf config.sidecar.image.tag == minorOf release;
-        message = "sidecar.image.tag \"${config.sidecar.image.tag}\" is not a plugin-barman-cloud ${minorOf release} release, and the plugin expects the sidecar of its own release. Set sidecar.image.tag to a ${minorOf release}.x tag, or leave it to follow image.tag.";
+        assertion = minorOf sidecarTag == minorOf release;
+        message = "sidecar.image.tag \"${sidecarTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the plugin expects the sidecar of its own release. Set sidecar.image.tag to a ${minorOf release}.x tag, or leave it to follow image.tag.";
       }
     ];
 

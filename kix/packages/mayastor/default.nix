@@ -27,7 +27,7 @@
 #   hugepages pre-allocated, free host ports 10124, 8420, and 4421,
 #   `nvme_core.multipath=Y`, and dedicated unpartitioned pool disks.
 #
-# DI deps:
+# Dependencies:
 #   storageClasses (optional)     etcd's StorageClass (must not be Mayastor's).
 #   snapshotController (optional) Snapshot API (`csi-snapshotter` and
 #                                 `volumeSnapshotClasses`).

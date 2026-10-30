@@ -35,7 +35,7 @@
 # approve their CSRs, or add `extraArgs = [ "--kubelet-insecure-tls" ];`
 # (clusters/test-metrics-server.nix).
 #
-# out: none beyond what root (the Deployment) provides; consumers find the
+# `out`: none beyond what root (the Deployment) provides; consumers find the
 # API through the cluster's metricsApi role.
 #
 # Escape hatches: `extraArgs` (the secure port, certificate directory, bind

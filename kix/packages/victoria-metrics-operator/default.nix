@@ -287,7 +287,10 @@ in
             # vmalert / vmalertmanager pods, not in any Kix-generated
             # manifest. Default image per upstream internal/config/config.go.
             extraImages = [
-              "victoriametrics/operator:config-reloader-${config.image.tag}"
+              (kix.image.ref {
+                repository = "victoriametrics/operator";
+                tag = "config-reloader-${builtins.unsafeDiscardStringContext config.image.tag}";
+              })
             ];
           };
         };

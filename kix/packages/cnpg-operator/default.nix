@@ -41,7 +41,7 @@
 #
 #   instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
 #
-# DI deps: none.
+# Dependencies: none.
 #
 # Replicas: one at availability none and pod, two from node up. The
 # replicas elect a leader for reconciling, and each serves the webhooks.
@@ -51,7 +51,7 @@
 # or DRAIN_TAINTS), `webhookCheck.image`, and the instance's
 # `partsOverlays`.
 #
-# Exposes:
+# `out`:
 #   out.crds.<Kind>   CRD handles for scope.mkCR: Cluster, Database,
 #                     DatabaseRole, ImageCatalog, ClusterImageCatalog,
 #                     Publication, Subscription, ScheduledBackup, and
@@ -189,10 +189,13 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
     [
       {
-        assertion = minorOf config.image.tag == minorOf release;
-        message = "image.tag \"${config.image.tag}\" is not a CloudNativePG ${minorOf release} release, and the definitions under kix/packages/cnpg-operator/crds and the ClusterRole under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
+        assertion = minorOf imageTag == minorOf release;
+        message = "image.tag \"${imageTag}\" is not a CloudNativePG ${minorOf release} release, and the definitions under kix/packages/cnpg-operator/crds and the ClusterRole under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
       }
     ];
 

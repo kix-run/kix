@@ -271,7 +271,7 @@ pattern table has each form.
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
 - Bind `who = "<pkg> ${scope.namespaceName}/${name}"` once in the `let` and
-  pass it to every helper (P9).
+  pass it to every helper (Pr9).
 
 ### 8. Option surface
 
@@ -292,7 +292,7 @@ references.
 ### Header
 
 The header is the package's contract for a reader who will not open the code
-(P2). Order, with the labels new packages use (older packages also carry
+(Pr2). Order, with the labels new packages use (older packages also carry
 `DI deps:` and `Exposes:`; do not copy those):
 
 1. `# <directory name>: <what it runs>`, then what it installs.

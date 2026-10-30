@@ -33,10 +33,10 @@ Durable tenets that guide design and decision-making. Not features, not a roadma
 
 ## Operational model
 
-16. **Day-2 is where the value lives.** Day-1 deploys are table stakes. Upgrades, drift, restore, capacity, and migration are first-class, not afterthoughts.
-17. **Compliance evidence is a build output, not a post-hoc scan.** SBOM, SLSA, SARIF, and attestations emerge from compilation because the graph already knows.
-18. **Diff belongs in the planner, not the executor.** Plan, Transition, and Verdict primitives with structured readiness, not wall-clock timeouts and retries.
+15. **Day-2 is where the value lives.** Day-1 deploys are table stakes. Upgrades, drift, restore, capacity, and migration are first-class, not afterthoughts.
+16. **Compliance evidence is a build output, not a post-hoc scan.** SBOM, SLSA, SARIF, and attestations emerge from compilation because the graph already knows.
+17. **Diff belongs in the planner, not the executor.** Plan, Transition, and Verdict primitives with structured readiness, not wall-clock timeouts and retries.
 
 ## AI and tooling
 
-19. **AI is a multiplier on typed surfaces.** Agents compound on validated APIs and structured diagnostics; they hallucinate on YAML. We design APIs assuming an LLM will use them.
+18. **AI is a multiplier on typed surfaces.** Agents compound on validated APIs and structured diagnostics; they hallucinate on YAML. We design APIs assuming an LLM will use them.

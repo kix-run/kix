@@ -30,7 +30,7 @@
 #
 #   instances.rabbitmq-system.rabbitmq-operator.package = packages.rabbitmq-operator;
 #
-# DI deps:
+# Dependencies:
 #   certManager (required)  the cert-manager instance whose Issuer and
 #                           Certificate handles the package builds from.
 #   prometheus (optional)   a metrics Service and ServiceMonitor for the
@@ -44,7 +44,7 @@
 # as LEASE_DURATION or DEFAULT_IMAGE_PULL_SECRETS), `webhookCheck.image`,
 # and the instance's `partsOverlays`.
 #
-# Exposes:
+# `out`:
 #   out.crds.RabbitmqCluster  the CRD handle for scope.mkCR. Use the
 #                             rabbitmq-cluster package rather than building
 #                             RabbitmqClusters directly.
@@ -165,10 +165,13 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
     [
       {
-        assertion = minorOf config.image.tag == minorOf release;
-        message = "image.tag \"${config.image.tag}\" is not a RabbitMQ Cluster Operator ${minorOf release} release, and the definition under kix/packages/rabbitmq-operator/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
+        assertion = minorOf imageTag == minorOf release;
+        message = "image.tag \"${imageTag}\" is not a RabbitMQ Cluster Operator ${minorOf release} release, and the definition under kix/packages/rabbitmq-operator/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
       }
     ];
 

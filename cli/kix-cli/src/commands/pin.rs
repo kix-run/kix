@@ -1,12 +1,12 @@
 //! Promote and verify container image pins in a pin file.
 //!
 //! `kix pin set` resolves an image tag against the registry, rejects tags that
-//! do not exist, and writes the resolved digest into a pin file. `kix pin check`
-//! verifies that every recorded digest is still present in the registry and,
-//! when `--source-rev` is given, that pinned images match the expected source
-//! revision.
+//! do not exist, and writes the resolved digest into a pin file. `kix pin rm`
+//! removes an entry from a pin file. `kix pin check` verifies that every
+//! recorded digest is still present in the registry and, when `--source-rev` is
+//! given, that pinned images match the expected source revision.
 //!
-//! Both subcommands operate directly on the pin file without evaluating the
+//! Each subcommand operates directly on the pin file without evaluating the
 //! flake, so broken or missing pins can be repaired even when Nix evaluation
 //! fails.
 
@@ -15,7 +15,9 @@ use miette::{IntoDiagnostic, Result, miette};
 use kix::pins::{Pin, PinFile, PinKey};
 use kix::registry::{Reference, RegistryClient, RegistryError, is_sha256_digest};
 
-use crate::cli::{GlobalArgs, OutputFormat, PinCheckArgs, PinCommand, PinListArgs, PinSetArgs};
+use crate::cli::{
+    GlobalArgs, OutputFormat, PinCheckArgs, PinCommand, PinListArgs, PinRmArgs, PinSetArgs,
+};
 use crate::output;
 
 mod locate;
@@ -23,6 +25,7 @@ mod locate;
 pub fn run(command: &PinCommand, global: &GlobalArgs) -> Result<()> {
     match command {
         PinCommand::Set(args) => set(args, global),
+        PinCommand::Rm(args) => rm(args, global),
         PinCommand::Check(args) => check(args, global),
         PinCommand::List(args) => list(args, global),
     }
@@ -205,6 +208,58 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
             "  {}",
             output::dim("unchanged, so the file was not rewritten")
         );
+    }
+    Ok(())
+}
+
+fn rm(args: &PinRmArgs, global: &GlobalArgs) -> Result<()> {
+    let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
+    let pins_file = located.path.as_path();
+    if output::format() != OutputFormat::Json
+        && let Some(note) = located.note()
+    {
+        crate::say!("{}", output::dim(&note));
+    }
+
+    let mut file = PinFile::read(pins_file).into_diagnostic()?;
+    let key = PinKey::parse(&args.key, args.option.as_deref()).map_err(|e| miette!("{e}"))?;
+    let Some(removed) = file.remove(&key) else {
+        let present = if file.is_empty() {
+            "none".to_string()
+        } else {
+            file.entries()
+                .map(|(k, _)| k.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        return Err(miette!(
+            "{} has no pin named '{key}'. Pins in that file: {present}.",
+            pins_file.display(),
+        ));
+    };
+
+    file.write(args.force).into_diagnostic()?;
+
+    if output::format() == OutputFormat::Json {
+        let doc = serde_json::json!({
+            "pinsFile": pins_file.display().to_string(),
+            "key": args.key,
+            "option": option_of(&key),
+            "pin": removed,
+        });
+        println!("{}", serde_json::to_string_pretty(&doc).into_diagnostic()?);
+        return Ok(());
+    }
+
+    crate::say!(
+        "{} {} from {}",
+        output::green("removed"),
+        key,
+        pins_file.display()
+    );
+    crate::say!("  was {}:{}", removed.repository, removed.tag);
+    if let Some(d) = &removed.digest {
+        crate::say!("  {d}");
     }
     Ok(())
 }
@@ -663,5 +718,103 @@ mod tests {
             std::env::remove_var("GITHUB_WORKFLOW");
             std::env::remove_var("GITHUB_RUN_ID");
         }
+    }
+
+    fn test_global() -> GlobalArgs {
+        GlobalArgs {
+            output: None,
+            verbose: 0,
+            quiet: true,
+            no_color: true,
+            context: None,
+            flake: ".".into(),
+            no_cache: false,
+            override_input: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rm_removes_package_and_instance_pins_and_reverts_version_to_1() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pins.json");
+        let mut file = PinFile::empty(&path);
+        file.insert(PinKey::Image("nginx".into()), pin("1.27", None));
+        file.insert(PinKey::Image("web".into()), pin("v1", None));
+        file.insert(
+            PinKey::parse("ns/app", None).unwrap(),
+            pin("v2", Some(&format!("sha256:{}", "a".repeat(64)))),
+        );
+        file.write(false).unwrap();
+
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["version"], 2);
+
+        rm(
+            &PinRmArgs {
+                key: "nginx".into(),
+                option: None,
+                force: false,
+                pins_file: Some(path.clone()),
+            },
+            &test_global(),
+        )
+        .unwrap();
+
+        let after_pkg = PinFile::read(&path).unwrap();
+        assert!(!after_pkg.pins.contains_key("nginx"));
+        assert!(after_pkg.pins.contains_key("web"));
+        assert!(after_pkg.instances.contains_key("ns/app"));
+
+        rm(
+            &PinRmArgs {
+                key: "ns/app".into(),
+                option: None,
+                force: false,
+                pins_file: Some(path.clone()),
+            },
+            &test_global(),
+        )
+        .unwrap();
+
+        let after_inst = PinFile::read(&path).unwrap();
+        assert!(after_inst.instances.is_empty());
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["version"], 1);
+        assert!(on_disk.get("instances").is_none());
+    }
+
+    #[test]
+    fn rm_errors_when_target_is_not_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pins.json");
+        let mut file = PinFile::empty(&path);
+        file.insert(PinKey::Image("nginx".into()), pin("1.27", None));
+        file.write(false).unwrap();
+
+        let err = rm(
+            &PinRmArgs {
+                key: "missing".into(),
+                option: None,
+                force: false,
+                pins_file: Some(path.clone()),
+            },
+            &test_global(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("has no pin named 'missing'"));
+
+        let err = rm(
+            &PinRmArgs {
+                key: "ns/app".into(),
+                option: None,
+                force: false,
+                pins_file: Some(path),
+            },
+            &test_global(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("has no pin named 'ns/app image'"));
     }
 }

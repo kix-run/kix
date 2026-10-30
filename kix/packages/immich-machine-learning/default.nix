@@ -24,7 +24,7 @@
 # ReadWriteOnce, so with `modelCache` the worker runs one pod and rolls out
 # with Recreate. To run several pods, leave it unset.
 #
-# out: the Service's `name`, `fqdn`, and `port`, and `version`, the release
+# `out`: the Service's `name`, `fqdn`, and `port`, and `version`, the release
 # the image tag names (absent for a tag that names none).
 #
 # Escape hatches: `env` takes the worker's `MACHINE_LEARNING_*` settings;
@@ -127,7 +127,7 @@ in
         failureThreshold = 3;
       };
       cached = modelCache != null;
-      version = release.of config.image.tag;
+      version = release.of (builtins.unsafeDiscardStringContext config.image.tag);
     in
     {
       cacheMount =

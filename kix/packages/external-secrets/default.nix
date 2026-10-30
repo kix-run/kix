@@ -30,7 +30,7 @@
 #
 #   instances.external-secrets.external-secrets.package = packages.external-secrets;
 #
-# DI deps:
+# Dependencies:
 #   prometheus (optional)  metrics Services and ServiceMonitors for the three
 #                          components. The package ships no alerts.
 #
@@ -48,7 +48,7 @@
 # Escape hatches: `extraArgs` and `env` for the controller;
 # `webhookCheck.image`; `partsOverlays` on any part.
 #
-# Exposes:
+# `out`:
 #   out.mkSecretStore scope { name; spec; }
 #       Builds a SecretStore in the caller's namespace. Refuses a
 #       `{ name; key; }` Secret selector anywhere in the spec whose name is a
@@ -215,12 +215,12 @@ in
           lib.hasPrefix "--unsafe-allow-generic-targets=" a && a != "--unsafe-allow-generic-targets=false"
         )
       ) config.extraArgs;
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
     in
     [
       {
-        assertion =
-          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
-        message = "image.tag \"${config.image.tag}\" is not a v${releaseMinorText} release, and the CRDs and RBAC in kix/packages/external-secrets are from ${release}. Remove image.tag or set a v${releaseMinorText}.x tag.";
+        assertion = versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
+        message = "image.tag \"${imageTag}\" is not a v${releaseMinorText} release, and the CRDs and RBAC in kix/packages/external-secrets are from ${release}. Remove image.tag or set a v${releaseMinorText}.x tag.";
       }
       {
         assertion = generic == [ ];

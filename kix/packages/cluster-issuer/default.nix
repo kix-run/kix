@@ -25,7 +25,7 @@
 #     config.spec.selfSigned = { };
 #   };
 #
-# DI deps:
+# Dependencies:
 #   certManager (required)        the cert-manager instance; supplies the CRD
 #                                 handle, the schema, and the namespace.
 #   issuerCredentials (optional)  a `secret` or `secret-ref` that declares
@@ -55,7 +55,7 @@
 # policy admits the ingress controller to them. The warning does not read
 # `networkPolicy.platformIntents`, so it stays after an intent admits them.
 #
-# out:
+# `out`:
 #   out.name       the ClusterIssuer's name.
 #   out.withCert   adds `cert-manager.io/cluster-issuer` to a resource's
 #                  annotations; `kix.expose` calls it for Ingress TLS.

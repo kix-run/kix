@@ -10,7 +10,7 @@
 #
 #   instances.data.postgres.package = packages.stackgres-cluster;
 #
-# DI deps:
+# Dependencies:
 #   stackgresOperator (required)  Managed `stackgres-operator` instance.
 #   storageClasses (optional)     StorageClass when
 #                                 `persistentVolume.storageClass` is null.

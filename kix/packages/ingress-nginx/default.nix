@@ -31,7 +31,7 @@
 #
 #   instances.ingress-nginx.ingress-nginx.package = packages.ingress-nginx;
 #
-# Exposes:
+# `out`:
 #   out.ingressClassName
 #       The IngressClass name. A consumer that reads it orders its Ingress
 #       after the controller is serving and the webhook has its CA.

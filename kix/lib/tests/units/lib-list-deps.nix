@@ -247,4 +247,67 @@ in
     in
     lib.hasInfix "appns/consumer: deps.logins is a list that mixes ref" (result.thrown or "")
     || throw "mixed list: ${builtins.toJSON result}";
+
+  # A list of instance handles in `deps.<arg>` records dependency links for each
+  # handle so the annotation-domain check recognizes operators declared in the list.
+  lib-list-deps-direct-handles-record-dep-links =
+    let
+      handle = ns: inst: {
+        _meta = {
+          namespaceName = ns;
+          instanceName = inst;
+        };
+      };
+      cluster = mkCluster [
+        baseInstances
+        {
+          scorecard = {
+            enable = true;
+            rules.architecture = import ../../rules/architecture.nix { inherit lib; };
+          };
+          instances.infra.op1.package = target {
+            name = "op1";
+            metaExtra.annotationDomains = [ "op1.example.io" ];
+          };
+          instances.infra.op2.package = target {
+            name = "op2";
+            metaExtra.annotationDomains = [ "op2.example.io" ];
+          };
+          instances.appns.writer = {
+            package = {
+              meta.version = "test";
+              build =
+                {
+                  self,
+                  scope,
+                  operators ? [ ],
+                  ...
+                }:
+                {
+                  cm = scope.mkResource {
+                    apiVersion = "v1";
+                    kind = "ConfigMap";
+                    name = "writer-${toString (builtins.length operators)}";
+                    annotations = {
+                      "op1.example.io/enabled" = "true";
+                      "op2.example.io/enabled" = "true";
+                    };
+                  };
+                  root = self.cm;
+                };
+            };
+            deps.operators = [
+              (handle "infra" "op1")
+              (handle "infra" "op2")
+            ];
+          };
+        }
+      ];
+      findings = builtins.filter (f: lib.hasSuffix "annotationDomainOwnership" (f.rule or "")) (
+        (cluster.scorecardReport or { findings = [ ]; }).findings
+      );
+      depIds = map (l: l.id) cluster.instances.appns.writer._depLinks;
+    in
+    (findings == [ ] && builtins.elem "infra/op1" depIds && builtins.elem "infra/op2" depIds)
+    || throw "direct handle list dep links: findings=${builtins.toJSON findings} depIds=${builtins.toJSON depIds}";
 }

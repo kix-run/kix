@@ -40,7 +40,7 @@
 # CR has no way to take it from a Secret, so on this path Keeper's
 # protection is network policy (only these servers may reach it).
 #
-# DI deps:
+# Dependencies:
 #   clickhouseOperator (required)  the CRD, out.mkClickHouseInstallation,
 #                                  out.podSelector
 #   clickhouseKeeper (required)    the coordination quorum
@@ -560,7 +560,7 @@ in
               authSecret = credentials;
               authPasswordKey = passwordKey;
               inherit (config) clusterName;
-              version = lib.versions.majorMinor config.image.tag;
+              version = builtins.unsafeDiscardStringContext (lib.versions.majorMinor config.image.tag);
               replicas = toString config.replicas;
               replicaHosts = map (svc: svc.out.fqdn) self.replicaServices;
               extraImages = [ (kix.image.ref config.image) ];

@@ -16,7 +16,7 @@
 #     tempo.package = packages.tempo;
 #   };
 #
-# DI deps:
+# Dependencies:
 #   storage (required)           Persistent-volume-claim mounted at /var/tempo.
 #   prometheus (optional)        ServiceMonitor and PrometheusRule alerts.
 #   storageCredentials           Secret or secret-ref with S3 keys

@@ -64,7 +64,7 @@
 # `partsOverlays`; `scope.mkCR cdi.out.crds.DataVolume` for a DataVolume the
 # deploy should not wait for.
 #
-# Exposes:
+# `out`:
 #   out.crds.DataVolume
 #   out.mkDataVolume scope { name; spec; annotations ? { }; ... }
 #       A DataVolume that binds its claim at once, so it completes on a
@@ -177,10 +177,13 @@ in
 
   assertions =
     { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
     [
       {
-        assertion = minorOf config.image.tag == minorOf release;
-        message = "image.tag \"${config.image.tag}\" is not a ${minorOf release} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/cdi/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${minorOf release} tag. To move to another release, change release in kix/packages/cdi/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py cdi.";
+        assertion = minorOf imageTag == minorOf release;
+        message = "image.tag \"${imageTag}\" is not a ${minorOf release} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/cdi/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${minorOf release} tag. To move to another release, change release in kix/packages/cdi/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py cdi.";
       }
     ]
     ++ map (n: {
@@ -422,7 +425,7 @@ in
                     }
                     {
                       name = "OPERATOR_VERSION";
-                      value = config.image.tag;
+                      value = builtins.unsafeDiscardStringContext config.image.tag;
                     }
                     {
                       name = "VERBOSITY";

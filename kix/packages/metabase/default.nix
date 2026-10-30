@@ -64,6 +64,9 @@
 # anonymous usage statistics; set `env.MB_ANON_TRACKING_ENABLED = "true"` to
 # send them.
 #
+# Replicas follow the cluster's availability level (one at `none`, two
+# above); the instance's `availability` overrides it.
+#
 # Network policy covers the database and the route. The databases Metabase
 # queries (its data sources) differ per instance, and the package declares
 # no egress to them. Under default-deny, add a NetworkPolicy or a

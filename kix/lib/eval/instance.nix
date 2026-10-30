@@ -543,25 +543,29 @@ in
         # resolvedDepMeta covers auto-resolved dependencies, while directly
         # wired dependencies expose their identity through _meta.
         directDepLinks =
+          let
+            linkOf =
+              v:
+              let
+                m = if builtins.isAttrs v then v._meta or null else null;
+              in
+              if builtins.isAttrs m && m ? namespaceName && m ? instanceName then
+                [
+                  {
+                    id = "${m.namespaceName}/${m.instanceName}";
+                    instance = v;
+                  }
+                ]
+              else
+                [ ];
+          in
           map (depTarget: {
             id = "${depTarget.resolution.namespace}/${depTarget.resolution.instanceName}";
             instance = depTarget.instance;
           }) allDepTargets
-          ++ builtins.concatMap (
-            v:
-            let
-              m = if builtins.isAttrs v then v._meta or null else null;
-            in
-            if builtins.isAttrs m && m ? namespaceName && m ? instanceName then
-              [
-                {
-                  id = "${m.namespaceName}/${m.instanceName}";
-                  instance = v;
-                }
-              ]
-            else
-              [ ]
-          ) (builtins.attrValues deps);
+          ++ builtins.concatMap (v: if builtins.isList v then builtins.concatMap linkOf v else linkOf v) (
+            builtins.attrValues deps
+          );
 
         # Follow _depLinks transitively so annotation-domain checks recognize
         # declarers reached through another dependency.

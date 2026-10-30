@@ -20,7 +20,7 @@
 #     };
 #   };
 #
-# DI deps:
+# Dependencies:
 #   arc (required)                 the controller; its out.mkAutoscalingRunnerSet
 #                                  builds the runner set.
 #   githubConfigSecret (required)  Secret in this namespace with `github_token`,

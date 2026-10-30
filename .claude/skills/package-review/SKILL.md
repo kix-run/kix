@@ -148,7 +148,7 @@ when a check fails or the path is not evaluated by default.
 - D24. Does an `out` value that names a resource lack string context (a literal, `attrNames`)? Check a consumer's `kix.run/depends-on`. Fix: derive it from `self.<part>.out.name`.
 - D25. Does an `out` field exist only under a toggle, so a consumer's read fails with a missing attribute? Fix: always publish it (null when off), or state the condition in the header.
 - D26. Does a package read a dependency's resource by a fixed name that nothing in the pod spec names (velero's repository Secret)? A dependency view has no `outPath`, so it cannot go in `requires`. Fix: emit a `scope.mkSecretRef` for that name and have the workloads require it.
-- D27. Does a public `out.mk*` builder that creates a resource in the caller's scope derive its default name from the provider instead of the caller's `instanceName`? Fix: the caller's name. Errors it raises name the consumer resource from the arguments it receives (P9).
+- D27. Does a public `out.mk*` builder that creates a resource in the caller's scope derive its default name from the provider instead of the caller's `instanceName`? Fix: the caller's name. Errors it raises name the consumer resource from the arguments it receives (Pr9).
 - D28. Does the package read `self.exposure.urlOrNull` although it cannot work without a public URL, or `url` although it can? *(lib: reading `url` without a route or scheme throws)* Fix: `url` when the URL is required; `urlOrNull` with a comment saying what the program does without one.
 - D29. Does the package read a cluster field, or ask for a new one, that names one implementation of an environment-provided role (a CNI, a DNS server)? Fix: the flavour declares the implementation as a platform `kix.mkImport` claiming the role, with the facts the package needs in its `out`, and not `optional = true` (an optional dependency never activates an optional import); the package takes it as an optional dependency and refuses, at evaluation, every combination of that dependency and `cluster.roles.<role>.binding` it cannot serve (the `cilium` package and `platform-cilium`).
 - D30. Does a package take `deps.database` without holding it to `kix.contracts.postgresDatabase.assertions`, or provide the `database` alias without passing `root.out` through `kix.contracts.postgresDatabase.check`? Detect: `grep -n 'deps.database\|"database"' default.nix`. Fix: the contract on both sides, so a provider swap fails at eval naming the field. A `gateway` provider likewise passes `root.out` through `kix.contracts.gateway.check`; `kix.expose` is the consumer and holds the dependency with `require`. An OTLP endpoint (tempo, otel-collector) passes `root.out` through `kix.contracts.otlpEndpoint.check`, and a package that takes `deps.otlp` holds it with `kix.contracts.otlpEndpoint.assertions`. An OpenID Connect provider (keycloak) passes `root.out` through `kix.contracts.oidcProvider.check`; a package that signs users in takes `oidcProvider ? null` and `oidcClient ? null` read only under `oidc.enabled` (`kix.options.oidc`), holds the first with `kix.contracts.oidcProvider.assertions`, and calls `requireClient` before reading either.
@@ -282,7 +282,7 @@ when a check fails or the path is not evaluated by default.
 
 ### Escape hatches (E)
 
-- E1. Is there no escape hatch for what the package does not model? Fix: `values` (Helm), `extraSpec` (CR or resource spec), `settings` (program config), `extraArgs` and `env` (native workloads); `partsOverlays` and `extra` remain.
+- E1. Is there no package-option escape hatch for upstream configuration the package does not model? Fix: expose the appropriate option hatch for the package's shape: `values` (Helm), `extraSpec` (CR or resource spec), `settings` (program config), or `extraArgs` and `env` (native workloads). These complement the lib- and cluster-level escape hatches (`extra`, `kix.untrackedRef`, `scope.mkResource`, and `partsOverlays`, BEST-PRACTICES §5.3).
 - E2. Does a program-config passthrough use a name other than `settings`? Fix: rename.
 - E3. Can `extraSpec` or `settings` overwrite a path the package computes (an address with an edge, a Secret ref, a quorum, a port), or inject a newline into a line-based config (flag files, an ini file the package renders, such as grafana.ini, where a line break in a value or `]` in a section name starts a section past the locks)? Fix: `kix.mergeGuarded { who; locked; what; }`, locked paths in the description; refuse line breaks.
 - E4. Is a lock list wider than the leaves the package writes? `kix.mergeGuarded`'s message always ends "Use the option that owns it"; where no option owns the path, add a local check before the merge whose message says the package sets it.
@@ -318,23 +318,23 @@ when a check fails or the path is not evaluated by default.
 - L5. Do fixtures carry values strangers will copy (large sizes on kind, plaintext placeholders)? Fix: small, honest values.
 - L6. Does a native package justify a choice by "the upstream chart does"? Fix: justify from the program.
 
-### Comments and prose (P)
+### Comments and prose (Pr)
 
 These items also apply to text the change adds under `docs/`, `housekeeping/`, and `v2_discussions/`.
 
-- P1. Does the header describe things the code does not do? Read it against the code. Fix: correct it.
-- P2. Does the header miss the template: `# <package directory name>: <what it runs>`, what it installs, required deps and config, a minimal instance, the `out` contract, then escape hatches and known limits when the package has any (ceilings, untested paths, host prerequisites)? Fix: add what is missing.
-- P3. Do comments carry history (`removed`, `used to`, `no longer`, `matching the live cluster`, issue numbers, dates)? A dated "checked against upstream" note is history too. Fix: state the reason or delete. Housekeeping titles are dated by rule.
-- P4. Is there an em dash, or a list of three or more without the Oxford comma? Fix: comma, colon, or period; add the comma.
-- P5. Does a comment claim "always", "never", "only", or "safe" beyond what is enforced, describe upstream behaviour that the pinned upstream source does not show, state a measured number with no recorded run, or describe behaviour a later change will enforce? Fix: scope it, check it, or delete it.
-- P6. Is a footgun explained in a comment where an assertion would do? Fix: the assertion.
-- P7. Is a non-obvious choice (an alias that clears a default, an upstream inversion, a missing limit) uncommented? Fix: one line with the upstream file. Does a comment credit the upstream binary with a constraint that is really the package's choice (a fixed name, a pinned flag)? Check the upstream flags.
-- P8. Do option descriptions, code comments, or test comments cite plan numbers, review codes, or promise shapes the type refuses? Fix: describe behaviour.
-- P9. Does a throw lack the prefix `<package> <ns>/<instance>: `, the constraint, and the fix? Messages from `assertions` start with the constraint (the lib adds the prefix). Pass the same `who` to `mergeEnv`, `mergeGuarded`, `guardArgs`, and `checkSecretKeys`, with the component's option path in `who` for a multi-component package. An error raised inside a provider's `out` function on a consumer's behalf names the consumer resource from its arguments.
-- P10. Does an error ask a cluster author for something only a package author can do, name repo-internal tooling (agent skills, plan numbers), give a fix that does not clear it, or give the fix for one provider shape when another (`kix.mkImport`) triggers it? Evaluate the suggested fix. Does a warning keep firing after the user applies the fix it recommends?
-- P11. Does a package assertion never fire because a builder forced in `build` (`mkSecret`, `mkCR`, `keyRef`) throws first with a lib message? Eval with the condition true. Fix: check before the builder, or drop the dead assertion.
-- P12. Does a package-internal consistency check (vendored sources against `release`) sit in `assertions` that every cluster evaluates? Fix: a lib test or the vendoring script.
-- P13. Do docs or CLI text list packages by behaviour ("packages that hash a ConfigMap")? Fix: phrase them as examples, or give the grep that finds the current set.
+- Pr1. Does the header describe things the code does not do? Read it against the code. Fix: correct it.
+- Pr2. Does the header miss the template or its section labels: `# <package directory name>: <what it runs>`, what it installs, `Dependencies:` (required and optional deps and required config), a minimal instance, `` `out`: `` (the `out` contract), then `Escape hatches:` and `Limits:` when the package has any (ceilings, untested paths, host prerequisites)? Fix: add what is missing.
+- Pr3. Do comments carry history (`removed`, `used to`, `no longer`, `matching the live cluster`, issue numbers, dates)? A dated "checked against upstream" note is history too. Fix: state the reason or delete. Housekeeping titles are dated by rule.
+- Pr4. Is there an em dash, or a list of three or more without the Oxford comma? Fix: comma, colon, or period; add the comma.
+- Pr5. Does a comment claim "always", "never", "only", or "safe" beyond what is enforced, describe upstream behaviour that the pinned upstream source does not show, state a measured number with no recorded run, or describe behaviour a later change will enforce? Fix: scope it, check it, or delete it.
+- Pr6. Is a footgun explained in a comment where an assertion would do? Fix: the assertion.
+- Pr7. Is a non-obvious choice (an alias that clears a default, an upstream inversion, a missing limit) uncommented? Fix: one line with the upstream file. Does a comment credit the upstream binary with a constraint that is really the package's choice (a fixed name, a pinned flag)? Check the upstream flags.
+- Pr8. Do option descriptions, code comments, or test comments cite plan numbers, review codes, or promise shapes the type refuses? Fix: describe behaviour.
+- Pr9. Does a throw lack the prefix `<package> <ns>/<instance>: `, the constraint, and the fix? Messages from `assertions` start with the constraint (the lib adds the prefix). Pass the same `who` to `mergeEnv`, `mergeGuarded`, `guardArgs`, and `checkSecretKeys`, with the component's option path in `who` for a multi-component package. An error raised inside a provider's `out` function on a consumer's behalf names the consumer resource from its arguments.
+- Pr10. Does an error ask a cluster author for something only a package author can do, name repo-internal tooling (agent skills, plan numbers), give a fix that does not clear it, or give the fix for one provider shape when another (`kix.mkImport`) triggers it? Evaluate the suggested fix. Does a warning keep firing after the user applies the fix it recommends?
+- Pr11. Does a package assertion never fire because a builder forced in `build` (`mkSecret`, `mkCR`, `keyRef`) throws first with a lib message? Eval with the condition true. Fix: check before the builder, or drop the dead assertion.
+- Pr12. Does a package-internal consistency check (vendored sources against `release`) sit in `assertions` that every cluster evaluates? Fix: a lib test or the vendoring script.
+- Pr13. Do docs or CLI text list packages by behaviour ("packages that hash a ConfigMap")? Fix: phrase them as examples, or give the grep that finds the current set.
 
 ### Docs and tests (T)
 
@@ -481,8 +481,8 @@ E5 config\.(values|extraSpec|settings) //|// config\.(values|extraSpec|settings)
 E7 hasPrefix "-
 E11 releaseName|fullnameOverride|namePrefix|labelStyle
 Na4 "(component|role|app|release|tier)" =
-P3 #.*(20[0-9]{2}-[0-9]{2}|kixpkgs#[0-9]|live cluster|caught live|used to|no longer|was removed|removed in)
-P4 \x{2014}
+Pr3 #.*(20[0-9]{2}-[0-9]{2}|kixpkgs#[0-9]|live cluster|caught live|used to|no longer|was removed|removed in)
+Pr4 \x{2014}
 EOF
 rg -n 'mkForce' clusters ludo | rg '<name>'                 # E12
 rg -n -i -e "$SITES" "$PKG" clusters docs/src/content/docs  # L1
@@ -494,7 +494,7 @@ list outside the public repository; ask for it when you do not have it.
 
 **3. Read the code once, for the judgement items.** Read the package in
 checklist order and judge only what the automation and the grep hits do not
-settle: M2 to M15, O6 to O24, D, S, C4 to C23, W, I, N, Mo, E, Na, L, P, and
+settle: M2 to M15, O6 to O24, D, S, C4 to C23, W, I, N, Mo, E, Na, L, Pr, and
 T. Skip an item marked *(lib)* unless its check failed or its path is off by
 default. Evaluate the package once with every toggle on, once with each
 optional dependency present, and once with two instances in two namespaces

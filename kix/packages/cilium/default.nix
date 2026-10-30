@@ -34,7 +34,7 @@
 #     out.helmChartConfig = null;
 #   };
 #
-# DI deps:
+# Dependencies:
 #   platform-cilium (optional)  the environment's Cilium, as above. Without
 #                               it the instance installs the chart.
 #
@@ -43,7 +43,7 @@
 # two CiliumClusterwideNetworkPolicies: cluster DNS for every pod, and
 # Cilium's health probes between nodes.
 #
-# out: `out.crds.CiliumNetworkPolicy` and
+# `out`: `out.crds.CiliumNetworkPolicy` and
 # `out.crds.CiliumClusterwideNetworkPolicy` (build CRs with
 # `scope.mkCR dep.out.crds.<Kind>`), and `out.netpol`, the enforcer
 # contract the netpol plugin builds generated policy with. Every delivery

@@ -23,7 +23,7 @@
 #     AMQP_PASSWORD = rabbitmq.out.credentials.out.keyRef "password";
 #   };
 #
-# DI deps:
+# Dependencies:
 #   rabbitmqOperator (required)  a rabbitmq-operator instance; the package
 #                                reads its CRD handle, release, and pod
 #                                labels. An imported operator is refused.
@@ -134,7 +134,7 @@
 # an empty data directory, so changing it on a running cluster points
 # `out.vhost` at a vhost that does not exist.
 #
-# Exposes:
+# `out`:
 #   out.host, out.port  the client Service and its AMQP port (5672).
 #   out.vhost           the default vhost: `settings.default_vhost`, or "/".
 #   out.credentials     the default-user Secret (keys `username` and

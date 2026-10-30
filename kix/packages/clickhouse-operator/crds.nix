@@ -33,7 +33,7 @@ let
 
   labels = {
     "app.kubernetes.io/part-of" = "clickhouse-operator";
-    "app.kubernetes.io/version" = config.image.tag;
+    "app.kubernetes.io/version" = builtins.unsafeDiscardStringContext config.image.tag;
   };
 
   # The operator's health convention, the same for both operand kinds:

@@ -8,10 +8,17 @@ let
 
   listOr = v: if v == null then [ ] else v;
 
+  getPodSpec =
+    resource:
+    if (resource.kind or "") == "CronJob" then
+      resource.spec.jobTemplate.spec.template.spec or { }
+    else
+      resource.spec.template.spec or { };
+
   getContainers =
     resource:
     let
-      podSpec = resource.spec.template.spec or { };
+      podSpec = getPodSpec resource;
     in
     # Helm charts can render `initContainers: null`, and scorecard rules inspect
     # manifests before null fields are stripped.
@@ -22,7 +29,7 @@ let
   effectiveSecurity =
     resource: container: field:
     let
-      podLevel = resource.spec.template.spec.securityContext or { };
+      podLevel = (getPodSpec resource).securityContext or { };
       containerLevel = container.securityContext or { };
     in
     if containerLevel ? ${field} then
@@ -51,6 +58,7 @@ let
       "StatefulSet"
       "DaemonSet"
       "Job"
+      "CronJob"
     ];
 
   # Return true when `resource` is an import marker produced by `scope.mkSecretRef`.
@@ -250,7 +258,7 @@ in
     check =
       { resource, ... }:
       let
-        podSpec = resource.spec.template.spec or { };
+        podSpec = getPodSpec resource;
         violations = lib.concatLists [
           (lib.optional (podSpec.hostNetwork or false) { message = "pod uses hostNetwork"; })
           (lib.optional (podSpec.hostPID or false) { message = "pod uses hostPID"; })

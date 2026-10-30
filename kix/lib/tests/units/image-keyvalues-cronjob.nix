@@ -171,4 +171,65 @@ in
     || throw "CronJob name limit: 52 ${
       if evalFails (clusterWith "CronJob" (nameOf 52)) then "fails" else "passes"
     }, 53 ${if evalFails (clusterWith "CronJob" (nameOf 53)) then "fails" else "passes"}";
+
+  # Container security rules in `kix/lib/rules/security.nix` inspect a CronJob's
+  # pod spec (`spec.jobTemplate.spec.template.spec`), catching violations and
+  # passing a compliant CronJob.
+  image-keyvalues-cronjob-security-rules =
+    let
+      securityRules = import ../../rules/security.nix { inherit lib; };
+      cronJob = podSpec: {
+        apiVersion = "batch/v1";
+        kind = "CronJob";
+        metadata.name = "backup";
+        spec = {
+          schedule = "0 * * * *";
+          jobTemplate.spec.template.spec = podSpec;
+        };
+      };
+      findingsFor =
+        rule: resource:
+        if rule.appliesTo { inherit resource; } then rule.check { inherit resource; } else [ ];
+      bad = cronJob {
+        hostNetwork = true;
+        containers = [
+          {
+            name = "task";
+            image = "example/task:latest";
+            securityContext.privileged = true;
+          }
+        ];
+        initContainers = [
+          {
+            name = "init";
+            image = "example/init:REPLACE_ME";
+          }
+        ];
+      };
+      good = cronJob {
+        securityContext.runAsNonRoot = true;
+        containers = [
+          {
+            name = "task";
+            image = "example/task:1.0.0";
+            securityContext.readOnlyRootFilesystem = true;
+          }
+        ];
+      };
+      checkedRules = [
+        securityRules.nonRoot
+        securityRules.noPrivileged
+        securityRules.readOnlyRootfs
+        securityRules.noHostNetwork
+        securityRules.noLatestTag
+        securityRules.noUnresolvedPlaceholder
+      ];
+    in
+    (
+      builtins.all (rule: findingsFor rule bad != [ ]) checkedRules
+      && builtins.all (rule: findingsFor rule good == [ ]) checkedRules
+    )
+    || throw "CronJob security rules: bad=${
+      builtins.toJSON (map (r: findingsFor r bad) checkedRules)
+    } good=${builtins.toJSON (map (r: findingsFor r good) checkedRules)}";
 }
