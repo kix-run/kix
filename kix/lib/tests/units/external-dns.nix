@@ -15,6 +15,9 @@
   hasName,
   byName,
   evalFails,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -402,8 +405,8 @@ in
   # Two gateway-sourced instances in one namespace each declare their own CRD
   # reference markers. Overlapping sources list nodes and pods once. A Secret
   # built by Kix puts its identity hash on the pod template. With a
-  # prometheus dependency the alert selects the instance's metrics Service
-  # and also fires when the series is absent.
+  # prometheus dependency every alert selects the instance's metrics
+  # Service.
   external-dns-derived-resources =
     let
       ms = manifests (mkCluster [
@@ -458,16 +461,52 @@ in
       count = x: builtins.length (builtins.filter (y: y == x) coreResources);
       deployment = byName "edns" (ofKind "Deployment" ms);
       podAnnotations = deployment.spec.template.metadata.annotations or { };
-      rule = byName "edns-alerts" (ofKind "PrometheusRule" ms);
-      expr = (builtins.head (builtins.head rule.spec.groups).rules).expr;
+      rules = alertRulesOf "PrometheusRule" "edns" ms;
     in
     (
       builtins.all (n: builtins.elem n markerNames) expectedMarkers
       && count "nodes" == 1
       && count "pods" == 1
       && podAnnotations ? "checksum/provider-credentials"
-      && lib.hasInfix "namespace=\"dns\", service=\"edns\"" expr
-      && lib.hasInfix "or absent(" expr
+      && allSelect ''namespace="dns",service="edns"'' rules
+      &&
+        builtins.attrNames rules == [
+          "ExternalDNSDown"
+          "ExternalDNSSyncStale"
+        ]
     )
-    || throw "external-dns derived resources: markers ${builtins.toJSON markerNames}, core resources ${builtins.toJSON coreResources}, pod annotations ${builtins.toJSON podAnnotations}, alert ${expr}";
+    || throw "external-dns derived resources: markers ${builtins.toJSON markerNames}, core resources ${builtins.toJSON coreResources}, pod annotations ${builtins.toJSON podAnnotations}, alerts ${builtins.toJSON (builtins.attrNames rules)}";
+
+  # No alerts render without a prometheus dependency or with
+  # metrics.enabled = false; with one, the stale threshold follows the
+  # interval and never drops under 15 minutes.
+  external-dns-alerts-gated =
+    let
+      rulesOf =
+        {
+          extra ? { },
+          prometheus ? true,
+        }:
+        alertRulesOf "PrometheusRule" "edns" (
+          manifests (mkCluster [
+            {
+              instances.dns.edns = {
+                package = externalDnsPackage;
+                config = inmemory extra;
+              };
+            }
+            (lib.optionalAttrs prometheus { instances.monitoring.prometheus.package = prometheusStub; })
+          ])
+        );
+      staleExpr = extra: (rulesOf { inherit extra; }).ExternalDNSSyncStale.expr;
+    in
+    (
+      rulesOf { prometheus = false; } == null
+      && rulesOf { extra.metrics.enabled = false; } == null
+      && lib.hasSuffix "> 900" (staleExpr { })
+      && lib.hasSuffix "> 1800" (staleExpr {
+        interval = "10m";
+      })
+    )
+    || throw "external-dns alerts: ${staleExpr { }}, ${staleExpr { interval = "10m"; }}";
 }
