@@ -26,6 +26,8 @@
 #   kubeStateMetrics, nodeExporter, prometheusServer, alertmanager
 #                                  (optional) the scrape targets the rules
 #                                  name.
+#   dns (optional)                 the cluster DNS; read only for
+#                                  `out.scrapedByPrometheus`.
 #
 # Minimal instance:
 #
@@ -39,10 +41,20 @@
 # (TLS client certificates for etcd, intervals, relabelings), and the
 # instance's `partsOverlays`.
 #
-# Limits: on kubeadm clusters, kind included, kube-controller-manager,
-# kube-scheduler, kube-proxy, and etcd bind their metrics to 127.0.0.1, so
-# those targets stay down until the cluster binds them to the node address
-# or their monitors are turned off.
+# Turning a component's monitor off also leaves out the rule groups that
+# read only its series (`KubeSchedulerDown`, `KubeControllerManagerDown`,
+# `KubeProxyDown`, and the etcd group), which would otherwise fire on the
+# missing target. The monitoring module turns the control-plane monitors
+# off on kind and under a managed control plane.
+#
+# The CoreDNS monitor is left out when the `dns` provider reports that its
+# own ServiceMonitor scrapes it (`out.scrapedByPrometheus`, which the
+# coredns package publishes), so its series are not scraped twice.
+#
+# Limits: on kubeadm clusters, kube-controller-manager, kube-scheduler,
+# kube-proxy, and etcd bind their metrics to 127.0.0.1, so those targets
+# stay down until the cluster binds them to the node address or their
+# monitors are turned off.
 
 {
   scope,
@@ -120,6 +132,7 @@ let
       component = "kube-etcd";
       job = "kube-etcd";
       selector.component = "etcd";
+      ruleFiles = [ "etcd" ];
       port = 2381;
       endpoint.bearerTokenFile = saToken;
     };
@@ -127,6 +140,7 @@ let
       component = "kube-controller-manager";
       job = "kube-controller-manager";
       selector.component = "kube-controller-manager";
+      ruleFiles = [ "kubernetes-system-controller-manager" ];
       port = 10257;
       endpoint = {
         scheme = "https";
@@ -142,6 +156,10 @@ let
       component = "kube-scheduler";
       job = "kube-scheduler";
       selector.component = "kube-scheduler";
+      ruleFiles = [
+        "kube-scheduler.rules"
+        "kubernetes-system-scheduler"
+      ];
       port = 10259;
       endpoint = {
         scheme = "https";
@@ -157,6 +175,7 @@ let
       component = "kube-proxy";
       job = "kube-proxy";
       selector.k8s-app = "kube-proxy";
+      ruleFiles = [ "kubernetes-system-kube-proxy" ];
       port = 10249;
       endpoint.bearerTokenFile = saToken;
     };
@@ -182,7 +201,14 @@ let
       enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Scrape ${c.component}.";
+        description =
+          "Scrape ${c.component}."
+          +
+            lib.optionalString (c ? ruleFiles)
+              " Off also leaves out the rule groups that read only its series: ${lib.concatStringsSep ", " c.ruleFiles}."
+          + lib.optionalString (
+            c.component == "coredns"
+          ) " Skipped while the `dns` provider scrapes itself (`out.scrapedByPrometheus`).";
       };
       selector = lib.mkOption {
         type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
@@ -401,6 +427,7 @@ in
         nodeExporter ? null,
         prometheusServer ? null,
         alertmanager ? null,
+        dns ? null,
         ...
       }:
       let
@@ -487,9 +514,18 @@ in
         groupsOn = lib.filterAttrs (
           group: _: config.rules.enabled && config.rules.${group} && targetPresent group
         ) ruleFiles;
+        # A file that reads only one component's series goes with that
+        # component's monitor.
+        filesOff = lib.concatLists (
+          lib.mapAttrsToList (
+            key: c: lib.optionals (!config.monitors.${key}.enabled) (c.ruleFiles or [ ])
+          ) bridged
+        );
         rules = lib.listToAttrs (
           map (file: lib.nameValuePair "rule-${file}" (ruleFromFile file)) (
-            lib.concatLists (builtins.attrValues groupsOn)
+            builtins.filter (file: !(builtins.elem file filesOff)) (
+              lib.concatLists (builtins.attrValues groupsOn)
+            )
           )
         );
 
@@ -504,7 +540,14 @@ in
             ];
           } base config.monitors.${key}.endpoint;
 
-        monitorOn = key: config.monitors.enabled && config.monitors.${key}.enabled;
+        # A managed coredns with its own ServiceMonitor already scrapes the
+        # pods the CoreDNS bridge would select.
+        dnsScrapesItself = dns != null && (dns.out.scrapedByPrometheus or false);
+        monitorOn =
+          key:
+          config.monitors.enabled
+          && config.monitors.${key}.enabled
+          && !(key == "coredns" && dnsScrapesItself);
 
         # A headless Service in kube-system over the component's pods, or
         # over fixed addresses.
