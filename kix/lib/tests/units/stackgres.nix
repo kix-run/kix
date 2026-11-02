@@ -3,7 +3,8 @@
 # operands), the refusals of stackgres-operator, stackgres-cluster, and
 # stackgres-object-storage, the operand image table, the rendered
 # SGCluster, the webhook check that StackGres custom resources wait for,
-# stackgres-cluster's alert rules and what each is gated on, and
+# the alert rules of stackgres-operator and stackgres-cluster and what
+# each is gated on, and
 # stackgres-database's names in the cluster's namespace.
 
 {
@@ -650,4 +651,29 @@ in
       && plain == [ ]
     )
     || throw "stackgres-cluster job policies: ${builtins.toJSON { inherit dbOps backup; }}";
+
+  # The operator's rules select its metrics Service, which serves Quarkus's
+  # /q/metrics, and need a prometheus dependency and metrics.enabled.
+  stackgres-operator-alerts =
+    let
+      withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
+      msOf = args: manifests (sgCluster ({ extra = withPrometheus; } // args));
+      rulesOf = args: alertRulesOf "PrometheusRule" "stackgres-operator" (msOf args);
+      rules = rulesOf { };
+      monitor = byName "stackgres-operator" (ofKind "ServiceMonitor" (msOf { }));
+    in
+    (
+      allSelect ''namespace="stackgres-system",service="stackgres-operator-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "StackGresOperatorDown"
+          "StackGresOperatorReconcileErrors"
+        ]
+      && (builtins.head monitor.spec.endpoints).path == "/q/metrics"
+      && rulesOf { extra = { }; } == null
+      && rulesOf { operatorConfig.metrics.enabled = false; } == null
+    )
+    || throw "stackgres-operator alerts: ${
+      builtins.toJSON (if rules == null then null else builtins.attrNames rules)
+    }";
 }
