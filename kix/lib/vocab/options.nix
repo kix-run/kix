@@ -286,6 +286,17 @@ in
     };
   };
 
+  # The `metrics` options of a package whose scrape an operator configures,
+  # so the package renders only rules (`kix.alerts`) and has no scrape to
+  # switch or time.
+  alerts = {
+    enabled = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Render the package's alert rules when a `prometheus` dependency is present. The operator's scrape of the workload does not depend on it.";
+    };
+  };
+
   # Options read by `kix.healthCheck` for packages that define a post-deploy
   # probe.
   healthCheck = {

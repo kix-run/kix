@@ -1,8 +1,8 @@
-# kix.untrackedRef cannot name an object in another namespace
+# 2026-10-04 · `kix/lib/core/markers.nix` (`kix.untrackedRef`) · kix.untrackedRef cannot name an object in another namespace.
 
 `kix.untrackedRef { kind; name; by; }` records `apiVersion|kind|name` in the
 referring manifest's `kix.run/expects` annotation. `kix deploy`
-(`wait_for_expectations` in `cli/kix/src/cluster/readiness.rs`) looks the
+(`wait_for_expectations` in `cli/kix/src/cluster/readiness/imports.rs`) looks the
 object up in the referring manifest's namespace. A reference to a Secret in
 another namespace therefore waits for a Secret that is never there, and a
 cluster-scoped referrer fails at once with "the referring manifest has no

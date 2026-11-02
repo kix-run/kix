@@ -256,7 +256,7 @@ when a check fails or the path is not evaluated by default.
 
 ### Monitoring (Mo)
 
-- Mo1. Is `metrics` declared other than `kix.options.monitor` (or that `//` an `enabled` default of false)? Fix: use it.
+- Mo1. Is `metrics` declared other than `kix.options.monitor` (or that `//` an `enabled` default of false), or `kix.options.alerts` where an operator configures the scrape and the package only renders `kix.alerts`? Fix: use it.
 - Mo2. Is a ServiceMonitor or PrometheusRule built directly, or emitted without a `prometheus ? null` dep? Fix: `kix.monitor`; for a PodMonitor scrape, `prometheus.out.mkPodMonitor` plus `kix.alerts`.
 - Mo3. Is a metrics-only Service rendered when `metrics.enabled` is false or `prometheus` is null? Fix: gate on both. Exception: a Service that is `root` or the target of `kix.healthCheck` renders always.
 - Mo4. Do `prometheus.io` annotations stand in for a monitor? Fix: `kix.monitor` or delete.

@@ -710,7 +710,7 @@ These return functions whose own DI args are auto-discovered.
 
 The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme`, `tlsConfig`, `params`, and `honorLabels` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
 
-**`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
+**`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty. A package whose scrape the operator configures has no scrape interval to set, so it declares `metrics = kix.options.alerts;` (only `enabled`) instead of `kix.options.monitor` (the VictoriaMetrics packages).
 
 The PackageInstance requires every ServiceMonitor and PrometheusRule that `kix.monitor` and `kix.alerts` build, because no other part references them. A package does not list them in `root.requires`.
 
@@ -816,15 +816,15 @@ tests:
   - interval: 1m
     input_series:
       - series: 'up{namespace="observability",service="agent",instance="10.0.0.1:8888"}'
-        values: '1 1 0x10'
+        values: '1 1 0x14'
     alert_rule_test:
-      - eval_time: 9m
+      - eval_time: 14m
         alertname: OtelCollectorDown
         exp_alerts:
-          - exp_labels: { severity: critical, namespace: observability, service: agent, instance: "10.0.0.1:8888" }
+          - exp_labels: { severity: critical, namespace: observability, service: agent }
             exp_annotations:
               summary: An OpenTelemetry Collector is down.
-              description: Prometheus has not scraped the collector at 10.0.0.1:8888 for 5 minutes; telemetry sent to it may be lost.
+              description: Prometheus has scraped no collector of observability/agent for 10 minutes; telemetry sent to it is lost. Check the instance's pods.
 ```
 
 `clusters/test-otel-collector.rules-test.yaml` is the full example. Give each alert input series that break the condition and series that stay healthy (`exp_alerts: []`). Set `eval_time` past `for` plus one evaluation. `exp_labels` must list every label, including `severity`, and `exp_annotations` every annotation with its templates rendered. The check refuses a test file without `rule_files` and an entry that matches no rendered file, because promtool reads the entries as globs and would otherwise load nothing. The [Prometheus unit-testing docs](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) give the format.
