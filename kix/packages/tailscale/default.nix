@@ -20,7 +20,24 @@
 #
 # Dependencies:
 #   oauthCredentials (required)  Secret with keys `client_id` and `client_secret`.
-#   prometheus (optional)        Metrics Service and ServiceMonitor.
+#   prometheus (optional)        Metrics Service, ServiceMonitor, and alerts.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series,
+# which are controller-runtime's (the operator registers no metrics of its
+# own on that port).
+#   TailscaleOperatorDown (warning)             the operator answers no
+#                                               scrape. Running proxies keep
+#                                               serving; new or changed
+#                                               Services, Ingresses, and
+#                                               tailscale.com resources are
+#                                               not acted on.
+#   TailscaleOperatorReconcileErrors (warning)  reconciles fail, such as a
+#                                               refused OAuth client or a
+#                                               tailnet API error.
+# A proxy pod that crash-loops or stays unready is left to
+# prometheus-default-rules (KubePodCrashLooping,
+# KubeStatefulSetReplicasMismatch).
 #
 # Known limits:
 #   - No workload identity federation (`env.CLIENT_ID` is refused).
@@ -636,6 +653,30 @@ in
       }
     )
 
-    (kix.monitor { service = "metricsService"; })
+    (
+      let
+        sel = ''namespace="${ns}",service="${name}-metrics"'';
+        operator = "Tailscale operator ${ns}/${name}";
+      in
+      kix.monitor {
+        service = "metricsService";
+        alerts = {
+          TailscaleOperatorDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "The Tailscale operator is down.";
+            description = "The ${operator} has not answered a scrape for 10 minutes. Running proxies keep serving, but new or changed Services, Ingresses, and tailscale.com resources are not acted on. Check the operator Deployment in ${ns}.";
+          };
+          TailscaleOperatorReconcileErrors = {
+            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
+            "for" = "15m";
+            severity = "warning";
+            summary = "The Tailscale operator fails to reconcile resources.";
+            description = "The {{ $labels.controller }} controller of the ${operator} has failed reconciles for 15 minutes, so a proxy or tailnet device may not match its resource. The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause.";
+          };
+        };
+      }
+    )
   ];
 }
