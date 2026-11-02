@@ -1,7 +1,8 @@
 # Tests for the snapshotController role and `kix.mkImport { crds }` (an
 # environment import that hands out CRD handles and emits their markers),
 # and for the zfs-localpv and snapshot-controller packages: their refusals,
-# their wiring on the rke2 and kind flavours, and their optional parts.
+# their wiring on the rke2 and kind flavours, their optional parts, and
+# snapshot-controller's alert rules.
 # The role tests use a flavour-shaped module defined here, so they do not
 # depend on a real flavour's bindings; the package tests use the real ones.
 
@@ -17,6 +18,9 @@
   ofKind,
   byName,
   evalFails,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -239,35 +243,6 @@ let
         }
       )
     );
-
-  # The Prometheus builder snapshot-controller calls, returning a plain
-  # ConfigMap so the cluster needs no monitoring CRDs.
-  prometheusStub = {
-    meta = {
-      version = "test";
-      defaultAliases = [ "prometheus" ];
-    };
-    build =
-      { self, scope, ... }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "prometheus";
-        };
-        root = {
-          resource = self.cm;
-          out.mkServiceMonitor =
-            consumerScope: args:
-            consumerScope.mkResource {
-              apiVersion = "v1";
-              kind = "ConfigMap";
-              name = "${args.name}-monitor";
-              data.spec = builtins.toJSON args.spec;
-            };
-        };
-      };
-  };
 
   containerNamed = name: containers: lib.findFirst (c: c.name == name) null containers;
 in
@@ -699,7 +674,7 @@ in
         in
         {
           service = byName "snapshot-controller-metrics" (ofKind "Service" ms);
-          monitor = byName "snapshot-controller-monitor" (ofKind "ConfigMap" ms);
+          monitor = byName "snapshot-controller" (ofKind "ServiceMonitor" ms);
         };
       on = metricsParts {
         enabled = true;
@@ -723,4 +698,31 @@ in
       && noProvider.service == null
     )
     || throw "snapshot-controller metrics: enabled ${builtins.toJSON on}, disabled ${builtins.toJSON off}, no provider ${builtins.toJSON noProvider}";
+
+  # snapshot-controller's alerts render under `snapshot-controller-alerts`
+  # with a prometheus provider and metrics.enabled, and every expression
+  # selects the metrics Service.
+  snapshot-api-snapshot-controller-alerts =
+    let
+      rulesOf =
+        {
+          snapshotController ? { },
+          extraInstances ? {
+            prometheus.package = prometheusStub;
+          },
+        }:
+        alertRulesOf "PrometheusRule" "snapshot-controller" (
+          manifests (zfsCluster {
+            inherit snapshotController extraInstances;
+          })
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="storage",service="snapshot-controller-metrics"'' rules
+      && builtins.attrNames rules == [ "SnapshotControllerDown" ]
+      && rulesOf { extraInstances = { }; } == null
+      && rulesOf { snapshotController.metrics.enabled = false; } == null
+    )
+    || throw "snapshot-controller alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }

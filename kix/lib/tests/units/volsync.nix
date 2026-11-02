@@ -1,7 +1,7 @@
 # Tests for the volsync package: the VolumeSnapshot API it needs, one
 # instance per cluster, the image's release check, the refusals of
-# out.mkReplicationSource, and the network policy its movers get to an
-# in-cluster store and to one outside the cluster.
+# out.mkReplicationSource, the network policy its movers get to an
+# in-cluster store and to one outside the cluster, and its alert rules.
 
 {
   lib,
@@ -13,6 +13,9 @@
   netpolOn,
   containerBase,
   storageClassImport,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -407,4 +410,35 @@ in
       } worldEgress.spec.egress
       || throw "the mover pods have no egress policy to a store outside the cluster: ${builtins.toJSON worldEgress}"
     );
+
+  # The alerts render under `volsync-alerts` with a prometheus provider and
+  # metrics.enabled, and every expression selects the metrics Service.
+  volsync-alerts =
+    let
+      withPrometheus = {
+        monitoring.prometheus.package = prometheusStub;
+      };
+      rulesOf =
+        {
+          volsyncConfig ? { },
+          extraInstances ? withPrometheus,
+        }:
+        alertRulesOf "PrometheusRule" "volsync" (
+          manifests (cluster {
+            inherit volsyncConfig extraInstances;
+          })
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="volsync",service="volsync-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "VolSyncOperatorDown"
+          "VolSyncVolumeOutOfSync"
+        ]
+      && rulesOf { extraInstances = { }; } == null
+      && rulesOf { volsyncConfig.metrics.enabled = false; } == null
+    )
+    || throw "volsync alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }

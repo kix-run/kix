@@ -84,7 +84,23 @@
 #
 # Limits: mkReplicationSource writes restic to S3 only. Movers run in the
 # image's user unless `restic.moverSecurityContext` sets the application's.
-# The package ships no alerts.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   VolSyncOperatorDown (warning)       the operator answers no scrape. No
+#                                       sync starts, and the out-of-sync
+#                                       alert below cannot fire.
+#   VolSyncVolumeOutOfSync (warning)    a ReplicationSource or
+#                                       ReplicationDestination has not
+#                                       completed a sync since it was
+#                                       created, or missed its schedule's
+#                                       deadline, for an hour. The operator
+#                                       sets the gauge on the first missed
+#                                       deadline, so a daily schedule fires
+#                                       after one failed run.
+# A mover Job that fails is left to prometheus-default-rules
+# (KubeJobFailed); VolSync starts the next one itself. Reconcile errors
+# need no alert of their own: a sync they block shows as out of sync.
 #
 # root = the Deployment.
 
@@ -535,9 +551,34 @@ in
         };
       }
     )
-    (kix.monitor {
-      service = "metricsService";
-      port = "metrics";
-    })
+    (
+      let
+        sel = ''namespace="${ns}",service="${name}-metrics"'';
+      in
+      kix.monitor {
+        service = "metricsService";
+        port = "metrics";
+        alerts = {
+          VolSyncOperatorDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "The VolSync operator is down.";
+            description = "The VolSync operator ${ns}/${name} has not answered a scrape for 10 minutes. No backup or restore starts while it is down, and VolSyncVolumeOutOfSync cannot fire. Check the operator Deployment in ${ns}.";
+          };
+          # The operator sets the gauge to 1 until a resource's first sync
+          # completes and whenever a scheduled sync passes its deadline
+          # (internal/controller/statemachine/machine.go upstream). An hour
+          # leaves room for a first sync of a large claim.
+          VolSyncVolumeOutOfSync = {
+            expr = "max by (namespace, service, obj_namespace, obj_name, role) (volsync_volume_out_of_sync{${sel}}) == 1";
+            "for" = "1h";
+            severity = "warning";
+            summary = "A VolSync replication is out of sync.";
+            description = "The VolSync {{ $labels.role }} {{ $labels.obj_namespace }}/{{ $labels.obj_name }} has not completed a sync since it was created, or missed its schedule, for an hour, so its copy is older than the schedule promises. Read the resource's status conditions and the log of its latest mover Job in {{ $labels.obj_namespace }}.";
+          };
+        };
+      }
+    )
   ];
 }

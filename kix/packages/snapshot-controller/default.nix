@@ -27,6 +27,17 @@
 # out.crds.<Kind>: handles for VolumeSnapshotClass, VolumeSnapshotContent,
 #   and VolumeSnapshot, passed to `scope.mkCR`.
 #
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   SnapshotControllerDown (warning)  the controller answers no scrape.
+#                                     VolumeSnapshots are neither created
+#                                     nor deleted, so backups that take
+#                                     snapshots stall.
+# The controller records an operation's duration only when it succeeds
+# (pkg/metrics/metrics.go upstream), so its metrics show no failed
+# snapshot. A snapshot that never becomes ready is the CSI driver's fault
+# to report, and its consumer's (a backup tool) to alert on.
+#
 # Escape hatches: `extraArgs` (the leader election and HTTP endpoint flags
 # are refused), `env`, and `partsOverlays`.
 
@@ -41,7 +52,8 @@ let
   release = "8.6.0";
 
   name = scope.instanceName;
-  who = "snapshot-controller ${scope.namespaceName}/${name}";
+  ns = scope.namespaceName;
+  who = "snapshot-controller ${ns}/${name}";
   httpPort = 8080;
 
   vendored = file: builtins.fromJSON (builtins.readFile ./crds/${file});
@@ -360,9 +372,21 @@ in
       }
     )
 
-    (kix.monitor {
-      service = "metricsService";
-      port = "http";
-    })
+    (
+      let
+        sel = ''namespace="${ns}",service="${name}-metrics"'';
+      in
+      kix.monitor {
+        service = "metricsService";
+        port = "http";
+        alerts.SnapshotControllerDown = {
+          expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+          "for" = "10m";
+          severity = "warning";
+          summary = "The CSI snapshot controller is down.";
+          description = "The snapshot controller ${ns}/${name} has not answered a scrape for 10 minutes. VolumeSnapshots are neither created nor deleted while it is down, so backups that take snapshots stall. Check its Deployment in ${ns}.";
+        };
+      }
+    )
   ];
 }
