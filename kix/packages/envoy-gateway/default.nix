@@ -26,6 +26,11 @@
 # each exposed backend. With another controllerName, or `proxyNamespace =
 # null`, both are null and kix.expose warns that no policy admits the
 # gateway's pods.
+#
+# Alerts: none. The package runs no program, so it has no metrics to
+# scrape. The Envoy Gateway controller and the Envoy proxies it creates
+# come from the controller's own installation, so their scrape and alerts
+# belong with that installation.
 
 {
   scope,
