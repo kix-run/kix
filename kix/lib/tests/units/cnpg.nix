@@ -2,8 +2,8 @@
 # cnpg-cluster, cnpg-database, cnpg-barman-cloud, and cnpg-pooler, each
 # beside a positive control, the rendered Cluster, Database, DatabaseRole,
 # backups, and Pooler, the webhook check that every postgresql.cnpg.io
-# custom resource waits for, the vendored sources' release, and
-# cnpg-cluster's alert rules and what each is gated on.
+# custom resource waits for, the vendored sources' release, and the alert
+# rules of cnpg-operator and cnpg-cluster and what each is gated on.
 
 {
   lib,
@@ -1338,4 +1338,34 @@ in
       && plain { metrics.enabled = false; } == null
     )
     || throw "cnpg-cluster alerts: one ${builtins.toJSON (builtins.attrNames one)}, two ${builtins.toJSON (builtins.attrNames two)}, backup ${builtins.toJSON (builtins.attrNames backedUp)}";
+
+  # The operator's rules select its metrics Service and need a prometheus
+  # dependency and metrics.enabled.
+  cnpg-operator-alerts =
+    let
+      withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
+      rulesOf =
+        {
+          operatorConfig ? { },
+          extra ? withPrometheus,
+        }:
+        alertRulesOf "PrometheusRule" "cnpg-operator" (
+          ms (cnpg {
+            inherit operatorConfig extra;
+            database = null;
+          })
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="cnpg-system",service="cnpg-operator-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "CNPGOperatorDown"
+          "CNPGOperatorReconcileErrors"
+        ]
+      && rulesOf { extra = { }; } == null
+      && rulesOf { operatorConfig.metrics.enabled = false; } == null
+    )
+    || throw "cnpg-operator alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }
