@@ -9,7 +9,8 @@
 # (scripts/kind-spread-config.yaml). prometheus-operator in `monitoring`
 # answers the `prometheus` dependency, so the packages that take one render
 # their ServiceMonitors and alert rules; no Prometheus server runs.
-# test-operators.rules-test.yaml tests coredns's rules.
+# smartctl-exporter runs beside it. test-operators.rules-test.yaml tests
+# the rules of arc, coredns, infisical-operator, and smartctl-exporter.
 #
 # Build:  nix build .#cluster-operators --extra-experimental-features pipe-operators
 # Deploy: scripts/kind-operators.sh
@@ -37,6 +38,7 @@ kix.buildCluster {
         infisical = { };
         storage = { };
         mayastor = { };
+        monitoring = { };
       };
 
       instances = {
@@ -48,6 +50,7 @@ kix.buildCluster {
           config.clusterIP = "10.96.0.53";
         };
         monitoring.prometheus-operator.package = packages.prometheus-operator;
+        monitoring.smartctl-exporter.package = packages.smartctl-exporter;
         arc-systems.arc.package = packages.arc;
         cdi.cdi.package = packages.cdi;
         kubevirt.kubevirt.package = packages.kubevirt;

@@ -21,6 +21,20 @@
 # Dependencies:
 #   prometheus (optional)  metrics Service and ServiceMonitor.
 #
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   InfisicalOperatorDown (warning)             no operator replica answers a
+#                                               scrape. Synced Secrets and
+#                                               ConfigMaps stay as they are,
+#                                               but changes in Infisical do
+#                                               not reach them.
+#   InfisicalOperatorReconcileErrors (warning)  reconciles of one kind fail
+#                                               for 15 minutes, such as a
+#                                               sync that Infisical refuses.
+# The operator registers no admission webhooks. Fewer ready replicas than
+# desired is left to prometheus-default-rules
+# (KubeDeploymentReplicasMismatch).
+#
 # Network policy: the package's intent opens TCP 443 to destinations outside
 # the cluster. When the cluster enforces egress policy, an `address` inside
 # the cluster or on another port fails the build until a
@@ -122,6 +136,8 @@ let
 
   metricsPort = 8080;
   healthPort = 8081;
+  # The metrics Service, whose name the alerts select on.
+  metricsServiceName = "${name}-metrics";
 
   egress = import ./egress.nix { inherit lib; };
 
@@ -638,7 +654,7 @@ in
           if hasMetrics then
             self.deployment
             |> kix.service.fromWorkload {
-              name = "${name}-metrics";
+              name = metricsServiceName;
               ports = [
                 {
                   name = "metrics";
@@ -738,9 +754,31 @@ in
       }
     )
 
-    (kix.monitor {
-      service = "metricsService";
-      port = "metrics";
-    })
+    (
+      let
+        sel = ''namespace="${ns}",service="${metricsServiceName}"'';
+        operator = "Infisical operator ${ns}/${name}";
+      in
+      kix.monitor {
+        service = "metricsService";
+        port = "metrics";
+        alerts = {
+          InfisicalOperatorDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "The Infisical operator is down.";
+            description = "No replica of the ${operator} has answered a scrape for 10 minutes. Secrets and ConfigMaps it synced keep their values, but changes made in Infisical do not reach them. Check the operator Deployment in ${ns}.";
+          };
+          InfisicalOperatorReconcileErrors = {
+            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
+            "for" = "15m";
+            severity = "warning";
+            summary = "The Infisical operator fails to reconcile its resources.";
+            description = "The {{ $labels.controller }} controller of the ${operator} has failed reconciles for 15 minutes, so a Secret or ConfigMap it manages may be stale. The operator log and the conditions of the custom resource name the error, such as an authentication or connection failure.";
+          };
+        };
+      }
+    )
   ];
 }

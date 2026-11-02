@@ -1,12 +1,323 @@
-# promtool unit tests for the coredns alert rules that test-operators.nix
-# renders. The rules-cluster-operators check runs them from the rendered
-# rules, so each rule_files entry is <namespace>/<file> in the cluster's
-# manifests. Every rule file loads in every test, so a test that expects no
-# alert gives each instance healthy series.
+# promtool unit tests for the arc, coredns, infisical-operator, and
+# smartctl-exporter alert rules that test-operators.nix renders. The
+# rules-cluster-operators check runs them from the rendered rules, so each
+# rule_files entry is <namespace>/<file> in the cluster's manifests. Every
+# rule file loads in every test, so a test that expects no alert gives each
+# instance healthy series.
 rule_files:
+  - arc-systems/arc-alerts-prometheusrule.yaml
+  - monitoring/smartctl-exporter-alerts-prometheusrule.yaml
+  - infisical/infisical-operator-alerts-prometheusrule.yaml
   - dns/coredns-alerts-prometheusrule.yaml
 evaluation_interval: 1m
 tests:
+  # The controller stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ArcControllerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: arc-systems
+              service: arc-metrics
+            exp_annotations:
+              summary: "The Actions Runner Controller is down."
+              description: "The Actions Runner Controller arc-systems/arc has not answered a scrape for 10 minutes. Running jobs finish, but no runner set scales and no new runner starts, so queued jobs wait. Check the controller Deployment in arc-systems."
+  # No controller target at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="other",service="other",instance="10.0.0.9:8080"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ArcControllerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: arc-systems
+              service: arc-metrics
+            exp_annotations:
+              summary: "The Actions Runner Controller is down."
+              description: "The Actions Runner Controller arc-systems/arc has not answered a scrape for 10 minutes. Running jobs finish, but no runner set scales and no new runner starts, so queued jobs wait. Check the controller Deployment in arc-systems."
+  # A controller keeps failing its reconciles, and a runner set holds two
+  # failed runners. The runner set's own namespace is exported_namespace.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080",controller="autoscalingrunnerset"}'
+        values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080",controller="autoscalingrunnerset"}'
+        values: '0+2x30'
+      - series: 'gha_controller_failed_ephemeral_runners{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080",exported_namespace="arc-runners",name="linux",repository="example",organization="example",enterprise=""}'
+        values: '0 2x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ArcControllerReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: arc-systems
+              service: arc-metrics
+              controller: autoscalingrunnerset
+            exp_annotations:
+              summary: "The Actions Runner Controller fails to reconcile runner sets."
+              description: "The autoscalingrunnerset controller of the Actions Runner Controller arc-systems/arc has failed 50% of its reconciles over the last 30 minutes, so runner sets may not scale. The controller log names the error; a GitHub API error or a refused credential is the usual cause."
+      - eval_time: 25m
+        alertname: ArcEphemeralRunnersFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: arc-systems
+              service: arc-metrics
+              exported_namespace: arc-runners
+              name: linux
+            exp_annotations:
+              summary: "A GitHub Actions runner set holds failed runners."
+              description: "Runner set arc-runners/linux has held 2 failed ephemeral runners for 15 minutes. They stay until deleted and count against the set's maximum, so fewer jobs can run. Read the events of the failed EphemeralRunners in arc-runners, then delete them."
+  # Healthy controller: it answers, no reconcile fails, no runner failed.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080",controller="autoscalingrunnerset"}'
+        values: '4x30'
+      - series: 'gha_controller_failed_ephemeral_runners{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080",exported_namespace="arc-runners",name="linux",repository="example",organization="example",enterprise=""}'
+        values: '0x30'
+      - series: 'up{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ArcControllerDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ArcControllerReconcileErrors
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ArcEphemeralRunnersFailed
+        exp_alerts: []
+  # Every smartctl exporter pod stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633"}'
+        values: '1 1 0x15'
+      - series: 'up{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-b",instance="10.0.1.2:9633"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: SmartctlExporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring
+              service: smartctl-exporter-prometheus-smartctl-exporter
+            exp_annotations:
+              summary: "No smartctl exporter answers."
+              description: "No pod of the smartctl exporter in monitoring has answered a scrape for 10 minutes, so no disk's SMART health is watched. Check the DaemonSet in monitoring."
+  # One of two exporters down stays quiet here (TargetDown reports it).
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633"}'
+        values: '1 1 0x15'
+      - series: 'up{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-b",instance="10.0.1.2:9633"}'
+        values: '1x17'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: SmartctlExporterDown
+        exp_alerts: []
+  # A failing disk: SMART assessment failed, a critical warning bit, new
+  # media errors, and a high temperature, each on its own device.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633"}'
+        values: '1x30'
+      - series: 'smartctl_device_smart_status{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="sda"}'
+        values: '1 1 0x28'
+      - series: 'smartctl_device_critical_warning{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="nvme0"}'
+        values: '0 0 8x28'
+      - series: 'smartctl_device_media_errors{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="nvme1"}'
+        values: '3x10 5x20'
+      - series: 'smartctl_device_temperature{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="sdb",temperature_type="current"}'
+        values: '40 40 75x28'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SmartDeviceHealthFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+              service: smartctl-exporter-prometheus-smartctl-exporter
+              pod: smartctl-a
+              instance: "10.0.1.1:9633"
+              device: sda
+            exp_annotations:
+              summary: "A disk failed its SMART health assessment."
+              description: "Disk sda on the node of pod smartctl-a reports that its SMART health assessment failed, so the drive expects to fail. Move data off it and replace it; `smartctl -a` on the node shows the failing attributes."
+      - eval_time: 20m
+        alertname: SmartDeviceCriticalWarning
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+              service: smartctl-exporter-prometheus-smartctl-exporter
+              pod: smartctl-a
+              instance: "10.0.1.1:9633"
+              device: nvme0
+            exp_annotations:
+              summary: "An NVMe disk reports a critical warning."
+              description: "NVMe disk nvme0 on the node of pod smartctl-a reports critical warning bits 8: 1 spare below threshold, 2 temperature, 4 reliability degraded, 8 read-only, 16 volatile memory backup failed. Read `smartctl -a` on the node and plan to replace the drive."
+      - eval_time: 20m
+        alertname: SmartDeviceMediaErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring
+              service: smartctl-exporter-prometheus-smartctl-exporter
+              pod: smartctl-a
+              instance: "10.0.1.1:9633"
+              device: nvme1
+            exp_annotations:
+              summary: "An NVMe disk reports new media errors."
+              description: "NVMe disk nvme1 on the node of pod smartctl-a counted new unrecovered media errors in the last hour, so some data on it could not be read back. Check the filesystem or volume above it, and watch whether the count keeps rising."
+      - eval_time: 20m
+        alertname: SmartDeviceTemperatureHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring
+              service: smartctl-exporter-prometheus-smartctl-exporter
+              pod: smartctl-a
+              instance: "10.0.1.1:9633"
+              device: sdb
+              temperature_type: current
+            exp_annotations:
+              summary: "A disk runs hot."
+              description: "Disk sdb on the node of pod smartctl-a has been at 75°C for 15 minutes, above 70°C. Heat shortens its life and can throttle it. Check the node's cooling and airflow."
+  # Healthy disks: SMART passed, no warning bit, an old media error count
+  # that does not rise, and a normal temperature.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633"}'
+        values: '1x80'
+      - series: 'smartctl_device_smart_status{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="sda"}'
+        values: '1x80'
+      - series: 'smartctl_device_critical_warning{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="nvme0"}'
+        values: '0x80'
+      - series: 'smartctl_device_media_errors{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="nvme1"}'
+        values: '3x80'
+      - series: 'smartctl_device_temperature{namespace="monitoring",service="smartctl-exporter-prometheus-smartctl-exporter",pod="smartctl-a",instance="10.0.1.1:9633",device="sdb",temperature_type="current"}'
+        values: '65x80'
+      - series: 'up{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: SmartctlExporterDown
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: SmartDeviceHealthFailed
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: SmartDeviceCriticalWarning
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: SmartDeviceMediaErrors
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: SmartDeviceTemperatureHigh
+  # The operator's one replica stops answering scrapes.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: InfisicalOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "infisical"
+              service: "infisical-operator-metrics"
+            exp_annotations:
+              summary: "The Infisical operator is down."
+              description: "No replica of the Infisical operator infisical/infisical-operator has answered a scrape for 10 minutes. Secrets and ConfigMaps it synced keep their values, but changes made in Infisical do not reach them. Check the operator Deployment in infisical."
+  # The operator is not scraped at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: InfisicalOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "infisical"
+              service: "infisical-operator-metrics"
+            exp_annotations:
+              summary: "The Infisical operator is down."
+              description: "No replica of the Infisical operator infisical/infisical-operator has answered a scrape for 10 minutes. Secrets and ConfigMaps it synced keep their values, but changes made in Infisical do not reach them. Check the operator Deployment in infisical."
+  # The infisicalstaticsecret controller fails a reconcile every minute; the
+  # infisicalsecret controller does not.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080",controller="infisicalstaticsecret"}'
+        values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080",controller="infisicalstaticsecret"}'
+        values: '0+2x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080",controller="infisicalsecret"}'
+        values: '4x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: InfisicalOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "infisical"
+              service: "infisical-operator-metrics"
+              controller: "infisicalstaticsecret"
+            exp_annotations:
+              summary: "The Infisical operator fails to reconcile its resources."
+              description: "The infisicalstaticsecret controller of the Infisical operator infisical/infisical-operator has failed 50% of its reconciles over the last 30 minutes, so a Secret or ConfigMap it manages may be stale. The operator log and the conditions of the custom resource name the error, such as an authentication or connection failure."
+  # The operator answers and reconciles without errors.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080",controller="infisicalstaticsecret"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: InfisicalOperatorDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: InfisicalOperatorReconcileErrors
+  # ArcControllerReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080",controller="autoscalingrunnerset"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="arc-systems",service="arc-metrics",instance="10.0.0.1:8080",controller="autoscalingrunnerset"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ArcControllerReconcileErrors
+        exp_alerts: []
+  # InfisicalOperatorReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080",controller="infisicalstaticsecret"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="infisical",service="infisical-operator-metrics",pod="infisical-operator-0",instance="10.0.3.1:8080",controller="infisicalstaticsecret"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: InfisicalOperatorReconcileErrors
   # One answer in eleven is SERVFAIL, at 11 answers a second.
   - interval: 1m
     input_series:
@@ -54,4 +365,3 @@ tests:
     alert_rule_test:
       - eval_time: 25m
         alertname: CoreDNSErrorsHigh
-        exp_alerts: []
