@@ -493,7 +493,6 @@ in
             self.operandEgress
             self.operandIngress
             self.operatorEgress
-            self.prometheusRules
           ];
           out = {
             inherit (postgresService.out) name fqdn port;

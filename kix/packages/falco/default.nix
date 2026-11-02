@@ -596,8 +596,6 @@ in
           resource = self.daemonset;
           requires = builtins.filter (p: p != null) [
             self.metricsService
-            self.serviceMonitor
-            self.prometheusRules
           ];
         };
       }

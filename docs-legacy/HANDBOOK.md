@@ -698,6 +698,7 @@ These return functions whose own DI args are auto-discovered.
   scheme ? "http",               # primary endpoint only
   tlsConfig ? null,              # primary endpoint only; a ServiceMonitor endpoint tlsConfig
   params ? null,                 # primary endpoint only; query parameters, { format = [ "prometheus" ]; }
+  honorLabels ? null,            # primary endpoint only; true keeps the target's own `namespace` and `pod` (kube-state-metrics)
   alerts ? {},                   # { alertName = { expr, "for"?, keep_firing_for?, severity?, description?, summary?, runbook_url?, labels?, annotations? }; }
   extraEndpoints ? [],           # each over { scheme = "http"; path = "/metrics"; } and metrics.interval
   extraLabels ? {},
@@ -707,9 +708,11 @@ These return functions whose own DI args are auto-discovered.
 })
 ```
 
-The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme`, `tlsConfig`, and `params` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme`, `tlsConfig`, `params`, and `honorLabels` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
 
 **`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
+
+The PackageInstance requires every ServiceMonitor and PrometheusRule that `kix.monitor` and `kix.alerts` build, because no other part references them. A package does not list them in `root.requires`.
 
 ```nix
 (kix.alerts {

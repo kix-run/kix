@@ -646,8 +646,6 @@ in
           requires = builtins.filter (r: r != null) [
             self.headlessService
             self.metricsService
-            self.serviceMonitor
-            self.prometheusRules
           ];
         };
       }

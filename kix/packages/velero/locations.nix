@@ -196,11 +196,7 @@ in
     ++ builtins.filter (part: part != null) [
       self.dataPathEgress
       self.service
-      self.serviceMonitor
-      self.prometheusRules
       self.nodeAgentService
-      (self.nodeAgentMonitor or null)
-      (self.nodeAgentRules or null)
     ];
     out =
       let

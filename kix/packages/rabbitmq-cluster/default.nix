@@ -641,7 +641,6 @@ in
             self.operandEgress
             self.operandIngress
             self.operatorEgress
-            self.prometheusRules
           ];
           out = {
             host = self.client.out.fqdn;

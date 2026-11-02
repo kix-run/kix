@@ -260,8 +260,7 @@ in
               self.operatorServiceAccount
               self.operatorService
             ]
-            ++ lib.optional config.metrics.enabled self.operatorServiceScrape
-            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
+            ++ lib.optional config.metrics.enabled self.operatorServiceScrape;
 
           # Expose CRD builders; packages depend on these via DI
           # Usage: prometheus.out.mkServiceMonitor scope { ... }

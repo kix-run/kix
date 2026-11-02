@@ -254,9 +254,7 @@ in
 
         root = {
           resource = self.vmAgent;
-          requires =
-            lib.optional (self.agentEgress != null) self.agentEgress
-            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
+          requires = lib.optional (self.agentEgress != null) self.agentEgress;
           out = {
             # Operand pods are operator-created; image not in any Kix manifest.
             extraImages = [ (kix.image.ref config.image) ];

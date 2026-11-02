@@ -549,8 +549,7 @@ in
             self.vmCluster
             self.insertService
           ]
-          ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies)
-          ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
+          ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
           out = {
             # URLs are built on the refs' fqdn, so they carry the marker's
             # dependency context and the endpoint fact.

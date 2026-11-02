@@ -523,7 +523,7 @@ in
 
         root = {
           resource = self.deployment;
-          requires = crds ++ builtins.filter (r: r != null) [ self.serviceMonitor ];
+          requires = crds;
           out = {
             crds = {
               ReplicationSource = self.crds.replicationSources;

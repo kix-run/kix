@@ -239,10 +239,6 @@ in
           requires = [
             self.serviceAccount
             self.daemonset
-          ]
-          ++ builtins.filter (p: p != null) [
-            self.serviceMonitor
-            self.prometheusRules
           ];
         };
       }

@@ -498,9 +498,7 @@ in
 
         root = {
           resource = self.vmAlert;
-          requires =
-            builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies)
-            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
+          requires = builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
           out = {
             extraImages = [
               (kix.image.ref config.image)

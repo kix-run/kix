@@ -381,11 +381,7 @@ in
           ]
           ++ builtins.attrValues self.classes
           ++ builtins.attrValues self.snapshotClasses
-          ++ builtins.attrValues self.pools
-          ++ builtins.filter (r: r != null) [
-            self.serviceMonitor
-            self.prometheusRules
-          ];
+          ++ builtins.attrValues self.pools;
           out = {
             provisioner = self.csiDriver.out.name;
             inherit (sc) storageClassName;

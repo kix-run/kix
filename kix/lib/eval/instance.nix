@@ -353,7 +353,19 @@ in
           else
             throw "Instance '${instanceName}': root must be a resource or { resource, requires, postHooks }";
 
-        packageRequires = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
+        # kix.monitor and kix.alerts parts reference nothing else in the
+        # instance, so the PackageInstance requires them directly.
+        packageRequires =
+          let
+            declared = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
+            declaredPaths = map (r: builtins.unsafeDiscardStringContext (r.outPath or "")) declared;
+            monitorParts = builtins.filter (
+              r:
+              (r._kixMonitorPart or false)
+              && !(builtins.elem (builtins.unsafeDiscardStringContext r.outPath) declaredPaths)
+            ) _partResourcesFromParts;
+          in
+          declared ++ monitorParts;
 
         postHooks = if rawRoot ? resource then rawRoot.postHooks or [ ] else [ ];
 

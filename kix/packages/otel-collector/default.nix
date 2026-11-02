@@ -612,10 +612,6 @@ in
 
           root = {
             resource = self.service;
-            requires = builtins.filter (p: p != null) [
-              (self.serviceMonitor or null)
-              (self.prometheusRules or null)
-            ];
             # Without the receiver the addresses throw when a consumer reads
             # them; `check` would force them here.
             out =

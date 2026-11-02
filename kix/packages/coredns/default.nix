@@ -576,12 +576,6 @@ in
 
         root = {
           resource = self.service;
-          # The alert rules reference no other part of the instance, so the
-          # PackageInstance reaches them only through this list.
-          requires = builtins.filter (r: r != null) [
-            self.serviceMonitor
-            self.prometheusRules
-          ];
         };
       }
     )

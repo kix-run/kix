@@ -2,6 +2,11 @@
 { lib }:
 
 let
+  # Mark a part for the instance to add to its PackageInstance's requires.
+  # Monitor and rule objects reference no other part, so nothing else
+  # reaches them from the PackageInstance.
+  markPart = r: r // { _kixMonitorPart = true; };
+
   # Build the PrometheusRule part shared by `alerts` and `monitor`. Kept
   # separate because `monitor` takes an `alerts` argument that would shadow the
   # public `alerts` helper.
@@ -54,18 +59,20 @@ let
     {
       ${rulesPart} =
         if metricsEnabled && alerts != { } then
-          prometheus.out.mkPrometheusRule scope {
-            name = "${ruleName}-alerts";
-            labels = extraLabels;
-            spec = {
-              groups = [
-                {
-                  name = "${ruleName}-alerts";
-                  rules = alertRules;
-                }
-              ];
-            };
-          }
+          markPart (
+            prometheus.out.mkPrometheusRule scope {
+              name = "${ruleName}-alerts";
+              labels = extraLabels;
+              spec = {
+                groups = [
+                  {
+                    name = "${ruleName}-alerts";
+                    rules = alertRules;
+                  }
+                ];
+              };
+            }
+          )
         else
           null;
     };
@@ -74,8 +81,8 @@ in
   # Build a ServiceMonitor and optional PrometheusRule for a Service.
   #
   # Override `name`, `monitorPart`, and `rulesPart` when a package monitors
-  # multiple Services. `scheme`, `tlsConfig`, and `params` apply only to the
-  # primary endpoint. `extraEndpoints` inherit `scheme = "http"`,
+  # multiple Services. `scheme`, `tlsConfig`, `params`, and `honorLabels`
+  # apply only to the primary endpoint. `extraEndpoints` inherit `scheme = "http"`,
   # `path = "/metrics"`, and `config.metrics.interval`.
   monitor =
     {
@@ -85,6 +92,7 @@ in
       scheme ? "http",
       tlsConfig ? null,
       params ? null,
+      honorLabels ? null,
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
@@ -119,6 +127,7 @@ in
           path
           tlsConfig
           params
+          honorLabels
           ;
       }
       // intervalAttrs;
@@ -138,15 +147,17 @@ in
     {
       ${monitorPart} =
         if metricsEnabled then
-          prometheus.out.mkServiceMonitor scope {
-            name = monitorName;
-            labels = extraLabels;
-            spec = {
-              namespaceSelector.matchNames = [ scope.namespaceName ];
-              selector.matchLabels = svc.out.selector;
-              inherit endpoints;
-            };
-          }
+          markPart (
+            prometheus.out.mkServiceMonitor scope {
+              name = monitorName;
+              labels = extraLabels;
+              spec = {
+                namespaceSelector.matchNames = [ scope.namespaceName ];
+                selector.matchLabels = svc.out.selector;
+                inherit endpoints;
+              };
+            }
+          )
         else
           null;
     }

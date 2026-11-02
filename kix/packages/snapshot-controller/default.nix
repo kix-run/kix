@@ -266,9 +266,7 @@ in
 
         root = {
           resource = self.deployment;
-          # No other part references the ServiceMonitor, so the
-          # PackageInstance reaches it only through this list.
-          requires = crds ++ builtins.filter (r: r != null) [ self.serviceMonitor ];
+          requires = crds;
           out.crds = {
             VolumeSnapshotClass = self.crds.volumeSnapshotClasses;
             VolumeSnapshotContent = self.crds.volumeSnapshotContents;

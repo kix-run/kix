@@ -574,7 +574,6 @@ in
               self.dbOpsEgress
               self.backupJobEgress
               self.operatorEgress
-              self.prometheusRules
             ];
             out = {
               inherit (postgresService.out) name fqdn port;

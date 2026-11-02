@@ -678,7 +678,6 @@ in
             resource = self.deployment;
             requires = builtins.filter (r: r != null) [
               self.gateway
-              self.serviceMonitor
             ];
             out = kix.contracts.gateway.check who {
               gatewayRef = {
