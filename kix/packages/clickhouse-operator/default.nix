@@ -25,7 +25,26 @@
 #                           Without the Secret it falls back to a password
 #                           compiled into the binary, so the dep is required
 #                           and this package ships no default.
-#   prometheus (optional)   ServiceMonitor on both metrics ports
+#   prometheus (optional)   ServiceMonitor on both metrics ports, and the
+#                           alerts below
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the series of the Service
+# `<instance>-metrics`.
+#   ClickHouseOperatorDown (warning)              neither container of the
+#                                                 operator pod answers a
+#                                                 scrape. Installations keep
+#                                                 serving; changes to them
+#                                                 are not applied.
+#   ClickHouseOperatorReconcileAborted (warning)  the operator aborted a
+#                                                 ClickHouseInstallation's
+#                                                 reconcile in the last hour
+#                                                 and left it Aborted.
+# The operator counts no reconciles of a ClickHouseKeeperInstallation
+# (pkg/controller/chk/metrics upstream), so a failed one shows only in the
+# CR's status, and the deploy waits on it. The health of each server is
+# left to clickhouse-cluster's alerts, which read the servers' own
+# endpoint, and of Keeper to clickhouse-keeper's.
 #
 # `out`:
 #   out.mkClickHouseInstallation scope { name; spec; }
@@ -223,16 +242,42 @@ in
     # The Service carries both ports. The primary endpoint is the operator's
     # own metrics; the second is every installation's ClickHouse metrics,
     # relayed by the exporter.
-    (kix.monitor {
-      service = "operatorService";
-      port = "op-metrics";
-      extraEndpoints = [
-        {
-          port = "ch-metrics";
-          path = "/metrics";
-          scheme = "http";
-        }
-      ];
-    })
+    (
+      let
+        ns = scope.namespaceName;
+        sel = ''namespace="${ns}",service="${scope.instanceName}-metrics"'';
+        operator = "ClickHouse operator ${ns}/${scope.instanceName}";
+      in
+      kix.monitor {
+        service = "operatorService";
+        port = "op-metrics";
+        extraEndpoints = [
+          {
+            port = "ch-metrics";
+            path = "/metrics";
+            scheme = "http";
+          }
+        ];
+        alerts = {
+          ClickHouseOperatorDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "The ClickHouse operator is down.";
+            description = "Neither the operator nor its metrics exporter in the pod of the ${operator} has answered a scrape for 10 minutes. ClickHouse installations keep serving, but changes to ClickHouseInstallations and ClickHouseKeeperInstallations are not applied. Check the operator Deployment in ${ns}.";
+          };
+          # The operator labels these series with the installation's own
+          # namespace, which the scrape renames to exported_namespace
+          # (pkg/metrics/operator/labels.go upstream). The 1h window spans
+          # any restart, so the rule needs no `for`.
+          ClickHouseOperatorReconcileAborted = {
+            expr = "sum by (namespace, service, exported_namespace, chi) (increase(clickhouse_operator_chi_reconciles_aborted{${sel}}[1h])) > 0";
+            severity = "warning";
+            summary = "The ClickHouse operator aborted the reconcile of a ClickHouseInstallation.";
+            description = "The ${operator} aborted the reconcile of ClickHouseInstallation {{ $labels.exported_namespace }}/{{ $labels.chi }} in the last hour, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log.";
+          };
+        };
+      }
+    )
   ];
 }

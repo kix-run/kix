@@ -1,8 +1,9 @@
 # Tests for kix/packages/clickhouse-keeper, clickhouse-cluster, and
 # clickhouse: the contract's replicas and replicaHosts fields, the refusals of an even Keeper
 # quorum and of a cluster with no memory limit, the health check's
-# addresses for each replica, and the alert rules of both server packages
-# and what each rule is gated on.
+# addresses for each replica, Keeper's metrics endpoint, and the alert
+# rules of the operator, Keeper, and both server packages and what each
+# rule is gated on.
 # The operator runs in `clickhouse-system`, Keeper and the servers in `db`,
 # the prometheus stub in `monitoring`.
 # tryEval drops a throw's message, so each refusal is checked with
@@ -37,6 +38,7 @@ let
   # `modules` are added to the cluster, such as withPrometheus.
   replicated =
     {
+      operatorConfig ? { },
       keeperConfig ? { },
       clusterConfig ? { },
       modules ? [ ],
@@ -45,7 +47,10 @@ let
       [
         {
           instances.clickhouse-system = {
-            clickhouse-operator.package = operatorPackage;
+            clickhouse-operator = {
+              package = operatorPackage;
+              config = operatorConfig;
+            };
             clickhouse-operator-credentials = {
               package = secretPackage;
               aliases = [ "credentials" ];
@@ -299,4 +304,73 @@ in
         } == [ ]
     )
     || throw "clickhouse contract replicaHosts: ${builtins.toJSON (hostProblems { })}";
+
+  # The operator's rules select its metrics Service and need a prometheus
+  # dependency and metrics.enabled.
+  clickhouse-operator-alerts =
+    let
+      operatorRules = cluster: alertRulesOf "PrometheusRule" "clickhouse-operator" (manifests cluster);
+      rules = operatorRules (replicated {
+        modules = [ withPrometheus ];
+      });
+    in
+    (
+      allSelect ''namespace="clickhouse-system",service="clickhouse-operator-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "ClickHouseOperatorDown"
+          "ClickHouseOperatorReconcileAborted"
+        ]
+      && operatorRules (replicated { }) == null
+      &&
+        operatorRules (replicated {
+          operatorConfig.metrics.enabled = false;
+          modules = [ withPrometheus ];
+        }) == null
+    )
+    || throw "clickhouse-operator alerts: ${
+      builtins.toJSON (if rules == null then null else builtins.attrNames rules)
+    }";
+
+  # Keeper serves metrics on 7000 through its CHK settings. Its rules select
+  # the PodMonitor's job; the follower rule and the follower branch of the
+  # quorum rule need more than one replica; nothing renders without a
+  # prometheus dependency or with metrics off.
+  clickhouse-keeper-alerts =
+    let
+      keeperOf =
+        keeperConfig: modules:
+        manifests (replicated {
+          inherit keeperConfig modules;
+        });
+      keeperRules = ms: alertRulesOf "PrometheusRule" "keeper" ms;
+      three = keeperOf { } [ withPrometheus ];
+      one = keeperOf { replicas = 1; } [ withPrometheus ];
+      rules3 = keeperRules three;
+      rules1 = keeperRules one;
+      chk = builtins.head (ofKind "ClickHouseKeeperInstallation" three);
+      podMonitor = byName "keeper" (ofKind "PodMonitor" three);
+    in
+    (
+      chk.spec.configuration.settings."prometheus/port" == "7000"
+      && (builtins.head podMonitor.spec.podMetricsEndpoints).portNumber == 7000
+      && allSelect ''namespace="db",job="db/keeper"'' rules3
+      &&
+        builtins.attrNames rules3 == [
+          "ClickHouseKeeperDown"
+          "ClickHouseKeeperFollowersNotSynced"
+          "ClickHouseKeeperMemorySoftLimit"
+          "ClickHouseKeeperQuorumLost"
+        ]
+      && lib.hasInfix "KeeperSyncedFollowers{namespace=\"db\",job=\"db/keeper\"}) < 1 " rules3.ClickHouseKeeperQuorumLost.expr
+      && lib.hasInfix ") < 2 " rules3.ClickHouseKeeperFollowersNotSynced.expr
+      && !(rules1 ? ClickHouseKeeperFollowersNotSynced)
+      && !(lib.hasInfix "KeeperSyncedFollowers" rules1.ClickHouseKeeperQuorumLost.expr)
+      && keeperRules (keeperOf { } [ ]) == null
+      && ofKind "PodMonitor" (keeperOf { } [ ]) == [ ]
+      && keeperRules (keeperOf { metrics.enabled = false; } [ withPrometheus ]) == null
+    )
+    || throw "clickhouse-keeper alerts: three ${
+      builtins.toJSON (if rules3 == null then null else builtins.attrNames rules3)
+    }, one ${builtins.toJSON (if rules1 == null then null else builtins.attrNames rules1)}";
 }
