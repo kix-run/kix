@@ -4,8 +4,10 @@
 # filebrowser, in a namespace of its own, is exposed through kix.expose, so
 # it gets an HTTPRoute on the Traefik Gateway and a policy that admits the
 # Traefik pods to its pod port. The kind flavour binds the loadBalancer role
-# absent, so the Traefik Service is a NodePort. Metrics are on; with no
-# prometheus instance that renders only the flag.
+# absent, so the Traefik Service is a NodePort. prometheus-operator answers
+# the `prometheus` alias, so Traefik renders its metrics Service,
+# ServiceMonitor, and alert rules, which test-traefik.rules-test.yaml tests.
+# No Prometheus server runs.
 #
 # The Gateway API standard-channel CRDs (v1.6.1 or later) must be installed
 # before deploy:
@@ -39,6 +41,8 @@ kix.buildCluster {
             ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
           };
         };
+
+        monitoring.prometheus-operator.package = packages.prometheus-operator;
 
         gateway-system.traefik = {
           package = packages.traefik;
