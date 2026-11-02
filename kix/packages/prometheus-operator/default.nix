@@ -50,6 +50,13 @@
 # `extraArgs` refuses `--kubelet-endpointslice`, which needs EndpointSlice
 # access the vendored ClusterRole does not grant.
 #
+# Alerts: none in this package. prometheus-default-rules vendors upstream's
+# `prometheus-operator` rule group, scoped to this operator's metrics
+# Service: reconcile, sync, list, watch, and status-update errors, resources
+# the operator rejects (PrometheusOperatorRejectedResources), and the
+# operator not ready. Its TargetDown covers the operator not answering a
+# scrape, so the operator's alerts need that package.
+#
 # Limits: one replica (`meta.availability.max = "none"`); the operator has no
 # leader election. The operator watches every namespace; `--namespaces` in
 # `extraArgs` narrows what it reconciles but not its ClusterRole. Two
