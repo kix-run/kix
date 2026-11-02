@@ -361,7 +361,7 @@ in
           # certificate series below vanish with it, so neither of the other
           # alerts can fire then.
           CertManagerAbsent = {
-            expr = "absent(up{${selector}} == 1)";
+            expr = "sum by (namespace, service) (up{${selector}}) == 0 or absent(up{${selector}})";
             "for" = "10m";
             severity = "critical";
             summary = "The cert-manager controller has not been scraped for 10 minutes";

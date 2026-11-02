@@ -421,4 +421,34 @@ in
       && builtins.elem "metrics" with'
     )
     || throw "Service ports without Prometheus ${builtins.toJSON without}, with ${builtins.toJSON with'}";
+
+  # The alerts keep `namespace` and `service` in every result, the SERVFAIL
+  # ratio has a traffic floor, and `out.scrapedByPrometheus` says whether
+  # the instance's own monitor scrapes it.
+  coredns-alerts =
+    let
+      with' = corednsCluster { module = withPrometheus; };
+      cm = byName "coredns-alerts-rules" (ofKind "ConfigMap" (manifests with'));
+      rules = lib.listToAttrs (
+        map (r: lib.nameValuePair r.alert r) (
+          lib.concatMap (g: g.rules) (builtins.fromJSON cm.data.spec).groups
+        )
+      );
+      sel = ''namespace="kube-system", service="coredns"'';
+      scraped = cluster: cluster.instances.kube-system.coredns.out.scrapedByPrometheus;
+    in
+    (
+      builtins.attrNames rules == [
+        "CoreDNSDown"
+        "CoreDNSErrorsHigh"
+        "CoreDNSLatencyHigh"
+      ]
+      && lib.all (r: lib.hasInfix sel r.expr && !(lib.hasInfix "== 1)" r.expr)) (lib.attrValues rules)
+      && lib.all (r: lib.hasInfix "by (namespace, service" r.expr) (lib.attrValues rules)
+      && lib.hasSuffix "[5m])) > 1" rules.CoreDNSErrorsHigh.expr
+      && rules.CoreDNSErrorsHigh.labels.severity == "warning"
+      && scraped with'
+      && !(scraped (corednsCluster { }))
+    )
+    || throw "coredns alerts: ${builtins.toJSON rules}";
 }

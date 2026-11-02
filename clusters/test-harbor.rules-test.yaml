@@ -1,0 +1,158 @@
+# promtool unit tests for alert rules test-harbor.nix renders: Harbor's
+# down, 5xx, and request-duration alerts, and cert-manager's down alert.
+# The rules-cluster-harbor check runs them from the rendered rules, so each
+# rule_files entry is <namespace>/<file> in the cluster's manifests.
+rule_files:
+  - harbor/harbor-core-alerts-prometheusrule.yaml
+  - cert-manager/cert-manager-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # Every component answers and core serves few errors: nothing fires. One
+  # registry replica of two down is left to TargetDown.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="harbor",service="harbor-core",pod="core-0"}'
+        values: '1x20'
+      - series: 'up{namespace="harbor",service="harbor-registry",pod="registry-0"}'
+        values: '1x20'
+      - series: 'up{namespace="harbor",service="harbor-registry",pod="registry-1"}'
+        values: '0x20'
+      - series: 'up{namespace="harbor",service="harbor-jobservice",pod="jobservice-0"}'
+        values: '1x20'
+      - series: 'up{namespace="harbor",service="harbor-exporter",pod="exporter-0"}'
+        values: '1x20'
+      - series: 'up{namespace="cert-manager",service="cert-manager",pod="cm-0"}'
+        values: '1x20'
+      - series: 'harbor_core_http_request_total{namespace="harbor",service="harbor-core",pod="core-0",code="200",method="GET"}'
+        values: '0+120x20'
+      - series: 'harbor_core_http_request_total{namespace="harbor",service="harbor-core",pod="core-0",code="500",method="GET"}'
+        values: '0+1x20'
+      - series: 'harbor_core_http_request_duration_seconds_sum{namespace="harbor",service="harbor-core",pod="core-0",method="GET"}'
+        values: '0+12x20'
+      - series: 'harbor_core_http_request_duration_seconds_count{namespace="harbor",service="harbor-core",pod="core-0",method="GET"}'
+        values: '0+120x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HarborDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HarborComponentDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HarborCoreHttp5xxRequestErrors
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HarborCoreHighRequestDuration
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CertManagerAbsent
+        exp_alerts: []
+
+  # Every core target is down, the job service has no target at all, and
+  # cert-manager's controller is down: each alert carries the selector's
+  # namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="harbor",service="harbor-core",pod="core-0"}'
+        values: '0x20'
+      - series: 'up{namespace="harbor",service="harbor-core",pod="core-1"}'
+        values: '0x20'
+      - series: 'up{namespace="harbor",service="harbor-registry",pod="registry-0"}'
+        values: '1x20'
+      - series: 'up{namespace="harbor",service="harbor-exporter",pod="exporter-0"}'
+        values: '1x20'
+      - series: 'up{namespace="cert-manager",service="cert-manager",pod="cm-0"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HarborDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: harbor
+              service: harbor-core
+            exp_annotations:
+              summary: Harbor core or registry is down
+              description: Prometheus has scraped no target of Harbor harbor/harbor Service harbor-core for 10 minutes, so pushes and pulls fail. Check that component's pods.
+      - eval_time: 15m
+        alertname: HarborComponentDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: harbor
+              service: harbor-jobservice
+            exp_annotations:
+              summary: A Harbor background component is down
+              description: Prometheus has scraped no target of Harbor harbor/harbor Service harbor-jobservice for 10 minutes. Replication, garbage collection, and scans wait for the job service; the exporter's metrics and alerts stop. Check that component's pods.
+      - eval_time: 15m
+        alertname: CertManagerAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: cert-manager
+              service: cert-manager
+            exp_annotations:
+              summary: The cert-manager controller has not been scraped for 10 minutes
+              description: Prometheus has no reachable cert-manager controller target in namespace cert-manager. While the controller is down, certificates are not renewed. Check Deployment cert-manager/cert-manager and its Prometheus target.
+
+  # cert-manager has no target at all: the absent() branch fires.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: CertManagerAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: cert-manager
+              service: cert-manager
+            exp_annotations:
+              summary: The cert-manager controller has not been scraped for 10 minutes
+              description: Prometheus has no reachable cert-manager controller target in namespace cert-manager. While the controller is down, certificates are not renewed. Check Deployment cert-manager/cert-manager and its Prometheus target.
+
+  # Core serves two requests a second, a fifth of them 5xx, and GET takes
+  # 2.5 seconds on average: both fire with namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'harbor_core_http_request_total{namespace="harbor",service="harbor-core",pod="core-0",code="200",method="GET"}'
+        values: '0+96x20'
+      - series: 'harbor_core_http_request_total{namespace="harbor",service="harbor-core",pod="core-0",code="500",method="GET"}'
+        values: '0+24x20'
+      - series: 'harbor_core_http_request_duration_seconds_sum{namespace="harbor",service="harbor-core",pod="core-0",method="GET"}'
+        values: '0+300x20'
+      - series: 'harbor_core_http_request_duration_seconds_count{namespace="harbor",service="harbor-core",pod="core-0",method="GET"}'
+        values: '0+120x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HarborCoreHttp5xxRequestErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: harbor
+              service: harbor-core
+            exp_annotations:
+              summary: High rate of HTTP 5xx errors in Harbor core
+              description: 20% of Harbor harbor/harbor core requests return HTTP 5xx. Check the core pods' logs and the database.
+      - eval_time: 15m
+        alertname: HarborCoreHighRequestDuration
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: harbor
+              service: harbor-core
+              method: GET
+              pod: core-0
+            exp_annotations:
+              summary: High request duration in Harbor core
+              description: Harbor core pod core-0 has an average GET request duration above 1 second.
+
+  # Every request fails, but core serves one every ten seconds: below the
+  # traffic floor, so the 5xx alert stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'harbor_core_http_request_total{namespace="harbor",service="harbor-core",pod="core-0",code="500",method="GET"}'
+        values: '0+6x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HarborCoreHttp5xxRequestErrors
+        exp_alerts: []

@@ -539,17 +539,20 @@ in
           selector = ''namespace="${scope.namespaceName}",service="${name}"'';
         in
         {
+          # No `for`: the 15-minute window already spans a restart.
           ReloaderReloadFailed = {
             expr = ''increase(reloader_reload_executed_total{success="false",${selector}}[15m]) > 0'';
             "for" = "0m";
             severity = "warning";
             summary = "reloader ${scope.namespaceName}/${name} failed to restart a workload after a Secret change";
+            description = "Reloader in ${scope.namespaceName} failed to restart a workload in the last 15 minutes ({{ $value | humanize }} failures), so a workload may still run with an old Secret or ConfigMap. Check the reloader pod's log for the workload it names.";
           };
           ReloaderDown = {
-            expr = "absent(up{${selector}} == 1)";
+            expr = "sum by (namespace, service) (up{${selector}}) == 0 or absent(up{${selector}})";
             "for" = "10m";
             severity = "warning";
             summary = "no reloader pod in ${scope.namespaceName}/${name} is up; Secret rotations are applied once one is";
+            description = "Prometheus has scraped no reloader target of {{ $labels.namespace }}/{{ $labels.service }} for 10 minutes. Workloads are not restarted after a Secret or ConfigMap changes until reloader runs again. Check Deployment ${scope.namespaceName}/${name}.";
           };
         };
     })

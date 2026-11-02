@@ -38,6 +38,9 @@ rec {
   ];
 
   sel = s: ''namespace="${ns}",service="${s}"'';
+  down = lib.concatMapStringsSep " or " (
+    s: "sum by (namespace, service) (up{${sel s}}) == 0 or absent(up{${sel s}})"
+  );
 
   alerts = {
     HarborHealthCheckFailed = {
@@ -55,18 +58,20 @@ rec {
       description = "Harbor core pod {{ $labels.pod }} has more than 100 inflight requests.";
     };
     HarborCoreHighRequestDuration = {
-      expr = "(sum by (method, pod) (rate(harbor_core_http_request_duration_seconds_sum{${sel svc.core}}[1m])) / sum by (method, pod) (rate(harbor_core_http_request_duration_seconds_count{${sel svc.core}}[1m]))) > 1";
+      expr = "(sum by (namespace, service, method, pod) (rate(harbor_core_http_request_duration_seconds_sum{${sel svc.core}}[5m])) / sum by (namespace, service, method, pod) (rate(harbor_core_http_request_duration_seconds_count{${sel svc.core}}[5m]))) > 1";
       "for" = "10m";
       severity = "warning";
       summary = "High request duration in Harbor core";
       description = "Harbor core pod {{ $labels.pod }} has an average {{ $labels.method }} request duration above 1 second.";
     };
+    # The floor of one request a second keeps a single error on a quiet
+    # registry from firing it.
     HarborCoreHttp5xxRequestErrors = {
-      expr = ''sum(rate(harbor_core_http_request_total{code=~"5..",${sel svc.core}}[5m])) / sum(rate(harbor_core_http_request_total{${sel svc.core}}[5m])) > 0.1'';
+      expr = ''sum by (namespace, service) (rate(harbor_core_http_request_total{code=~"5..",${sel svc.core}}[5m])) / sum by (namespace, service) (rate(harbor_core_http_request_total{${sel svc.core}}[5m])) > 0.1 and sum by (namespace, service) (rate(harbor_core_http_request_total{${sel svc.core}}[5m])) > 1'';
       "for" = "10m";
-      severity = "critical";
+      severity = "warning";
       summary = "High rate of HTTP 5xx errors in Harbor core";
-      description = "More than 10% of Harbor ${ns}/${name} core requests return HTTP 5xx.";
+      description = "{{ $value | humanizePercentage }} of Harbor ${ns}/${name} core requests return HTTP 5xx. Check the core pods' logs and the database.";
     };
     HarborProjectQuotaUsageHigh = {
       expr = "(harbor_project_quota_usage_byte{${sel svc.exporter}} / harbor_project_quota_byte{${sel svc.exporter}}) > 0.8";
@@ -96,33 +101,27 @@ rec {
       summary = "High task concurrency in Harbor";
       description = "Harbor ${ns}/${name} runs more than 10 {{ $labels.type }} tasks at once.";
     };
-    # `up == 0` needs a target to report; this fires when a component
-    # has no scrape target at all.
-    HarborComponentAbsent = {
-      expr = lib.concatMapStringsSep " or " (s: "absent(up{${sel s}})") [
+    # Every target of a component down, or none at all. One replica of
+    # several down is left to the generic TargetDown.
+    HarborDown = {
+      expr = down [
         svc.core
         svc.registry
+      ];
+      "for" = "10m";
+      severity = "critical";
+      summary = "Harbor core or registry is down";
+      description = "Prometheus has scraped no target of Harbor ${ns}/${name} Service {{ $labels.service }} for 10 minutes, so pushes and pulls fail. Check that component's pods.";
+    };
+    HarborComponentDown = {
+      expr = down [
         svc.jobservice
         svc.exporter
       ];
       "for" = "10m";
-      severity = "critical";
-      summary = "Harbor component has no scrape target";
-      description = "Prometheus has no target for Harbor ${ns}/${name} Service {{ $labels.service }}.";
-    };
-    HarborInstanceDown = {
-      expr = ''up{namespace="${ns}",service=~"${
-        lib.concatStringsSep "|" [
-          svc.core
-          svc.registry
-          svc.jobservice
-          svc.exporter
-        ]
-      }"} == 0'';
-      "for" = "5m";
-      severity = "critical";
-      summary = "Harbor component is down";
-      description = "Harbor target {{ $labels.service }} ({{ $labels.pod }}) is down.";
+      severity = "warning";
+      summary = "A Harbor background component is down";
+      description = "Prometheus has scraped no target of Harbor ${ns}/${name} Service {{ $labels.service }} for 10 minutes. Replication, garbage collection, and scans wait for the job service; the exporter's metrics and alerts stop. Check that component's pods.";
     };
   };
 
