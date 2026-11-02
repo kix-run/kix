@@ -1,7 +1,7 @@
 # Tests for the descheduler package and the kix/lib behaviour it relies on:
 # kix.monitor scrapes over HTTPS when asked; the policy's startup checks,
 # defaults, merge behaviour, and renderer (policy.nix); the interval
-# assertion, owned flags, and replica mapping (default.nix).
+# assertion, owned flags, replica mapping, and alert rules (default.nix).
 
 {
   lib,
@@ -12,6 +12,9 @@
   byName,
   evalFails,
   multiZone,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -398,4 +401,34 @@ in
       })
     )
     || throw "descheduler: replicas pod ${toString (replicasAt "pod")}, zone ${toString (replicasAt "zone")}";
+
+  # The alerts render under `descheduler-alerts` with a prometheus provider
+  # and metrics.enabled, and every expression selects the metrics Service.
+  descheduler-alerts =
+    let
+      rulesOf =
+        {
+          config ? { },
+          prometheus ? true,
+        }:
+        alertRulesOf "PrometheusRule" "descheduler" (
+          manifests (mkCluster [
+            {
+              instances.descheduler.descheduler = {
+                package = import packagePath;
+                inherit config;
+              };
+            }
+            (lib.optionalAttrs prometheus { instances.monitoring.prometheus.package = prometheusStub; })
+          ])
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="descheduler",service="descheduler-metrics"'' rules
+      && builtins.attrNames rules == [ "DeschedulerDown" ]
+      && rulesOf { prometheus = false; } == null
+      && rulesOf { config.metrics.enabled = false; } == null
+    )
+    || throw "descheduler alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }

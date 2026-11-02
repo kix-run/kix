@@ -31,6 +31,16 @@
 # `out`: none beyond what root (the Deployment) provides; no package depends
 # on the descheduler.
 #
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   DeschedulerDown (warning)  no replica answers a scrape, so pods that
+#                              break their placement rules stay where they
+#                              are.
+# Failed evictions are not an alert: the descheduler counts a
+# PodDisruptionBudget's refusal as an error in
+# `descheduler_pods_evicted_total`, and that refusal is the budget working.
+# Its other metrics (evictions and loop durations) are for dashboards.
+#
 # Escape hatches: `extraArgs` for flags (the flags the package sets from
 # other options are refused), and `partsOverlays` replacing the
 # `policyConfigMap` part for policy fields policy.nix does not declare.
@@ -67,6 +77,7 @@
 let
   release = "0.36.0";
   name = scope.instanceName;
+  ns = scope.namespaceName;
   policyLib = import ./policy.nix { inherit lib; };
   metricsPort = 10258;
   policyDir = "/policy-dir";
@@ -415,11 +426,23 @@ in
     # /metrics is served only on the secure port, with a self-signed
     # certificate and no client authentication, so the scrape skips
     # verification.
-    (kix.monitor {
-      service = "metricsService";
-      port = "metrics";
-      scheme = "https";
-      tlsConfig.insecureSkipVerify = true;
-    })
+    (
+      let
+        sel = ''namespace="${ns}",service="${name}-metrics"'';
+      in
+      kix.monitor {
+        service = "metricsService";
+        port = "metrics";
+        scheme = "https";
+        tlsConfig.insecureSkipVerify = true;
+        alerts.DeschedulerDown = {
+          expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+          "for" = "10m";
+          severity = "warning";
+          summary = "The descheduler is down.";
+          description = "No replica of the descheduler ${ns}/${name} has answered a scrape for 10 minutes, so pods that break their placement rules or crowd busy nodes stay where they are. Check its Deployment in ${ns}.";
+        };
+      }
+    )
   ];
 }
