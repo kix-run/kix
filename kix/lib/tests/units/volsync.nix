@@ -395,6 +395,16 @@ in
       worldEgress != null
       && selects worldEgress
       && builtins.elem "dns-egress" (map (r: r.stubRule or null) worldEgress.spec.egress)
+      && builtins.elem {
+        stubRule = "intent-egress";
+        to = "world";
+        ports = [
+          {
+            port = 9000;
+            protocol = "TCP";
+          }
+        ];
+      } worldEgress.spec.egress
       || throw "the mover pods have no egress policy to a store outside the cluster: ${builtins.toJSON worldEgress}"
     );
 }

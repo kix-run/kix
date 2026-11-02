@@ -21,6 +21,7 @@
   alertRulesOf,
   allSelect,
   prometheusStub,
+  netpolOn,
   ...
 }:
 
@@ -604,4 +605,49 @@ in
       && rulesOf { config.extraSpec.configurations.observability.disableMetrics = true; } == null
     )
     || throw "stackgres-cluster alerts: one ${builtins.toJSON (builtins.attrNames one)}, two ${builtins.toJSON (builtins.attrNames two)}, backups ${builtins.toJSON (builtins.attrNames backedUp)}";
+
+  # SGDbOps and SGBackup Job pods reach DNS and the API server, SGDbOps Jobs
+  # reach PostgreSQL on 5432, and the PostgreSQL pods admit them. Without an
+  # enforcer the package writes none of these policies.
+  stackgres-cluster-job-policies =
+    let
+      policies = ofKind "CiliumNetworkPolicy" (
+        manifests (sgCluster {
+          extra = netpolOn;
+        })
+      );
+      dbOps = byName "postgres-dbops-egress" policies;
+      backup = byName "postgres-backup-job-egress" policies;
+      ingress = byName "postgres-operand-ingress" policies;
+      operandSelector = {
+        app = "StackGresCluster";
+        "stackgres.io/cluster-name" = "postgres";
+      };
+      stubRules = p: map (r: r.stubRule or null) p.spec.egress;
+      plain = ofKind "CiliumNetworkPolicy" (manifests (sgCluster { }));
+    in
+    (
+      dbOps.spec.endpointSelector.matchLabels == {
+        app = "StackGresDbOps";
+      }
+      &&
+        stubRules dbOps == [
+          "dns-egress"
+          "apiserver-egress"
+          "service-egress"
+        ]
+      && (lib.last dbOps.spec.egress).selector == operandSelector
+      && map (p: p.port) (lib.last dbOps.spec.egress).ports == [ 5432 ]
+      && backup.spec.endpointSelector.matchLabels == { app = "StackGresBackup"; }
+      &&
+        stubRules backup == [
+          "dns-egress"
+          "apiserver-egress"
+        ]
+      && builtins.any (
+        r: (r.callerSelector or null) == { app = "StackGresDbOps"; } && map (p: p.port) r.ports == [ 5432 ]
+      ) ingress.spec.ingress
+      && plain == [ ]
+    )
+    || throw "stackgres-cluster job policies: ${builtins.toJSON { inherit dbOps backup; }}";
 }

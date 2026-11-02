@@ -288,8 +288,8 @@ in
   # The receivers in settings decide the world egress ports: the keys each
   # integration dials, then `global`'s, then its built-in address. Links in
   # the message (icon_url, client_url, Pushover's url) are not read. The
-  # stub enforcer translates intents to nothing, so the derivation is
-  # checked through its pure function and the policy through its presence.
+  # derivation is checked through its pure function and the policy through
+  # its presence.
   monitoring-stack-alertmanager-receiver-ports =
     let
       portsOf = import ../../../packages/alertmanager/receiver-ports.nix {

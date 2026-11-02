@@ -46,10 +46,12 @@
 # pods run in the DataVolume's namespace and are the consumer's to allow: an
 # HTTP or registry import that pulls in a pod needs DNS, egress to its
 # source, and ingress from cdi-deployment, which out.mkImporterPolicy builds.
-# Imports with `pullMethod = "node"` and blank DataVolumes need neither. The
-# package publishes no selector or builder for upload server and cloner
-# pods, so uploads and host-assisted clones under an enforcer need a policy
-# the consumer writes from upstream's pod labels.
+# Imports with `pullMethod = "node"` and blank DataVolumes need neither. An
+# upload, or a host-assisted clone, runs an upload server pod in the target
+# namespace (out.mkUploadServerPolicy). A host-assisted clone also runs a
+# cloner pod in the source namespace, which sends to the upload server and
+# which cdi-deployment polls (out.mkClonerPolicy). A clone the storage
+# provider performs (a CSI or snapshot clone) runs neither pod.
 #
 # Priority: cdi-operator gives its operands the PriorityClass named in the
 # CDI resource, and without one `kubevirt-cluster-critical` (which the
@@ -77,9 +79,21 @@
 #       for a public registry), and ingress from cdi-deployment on 8443. The
 #       default name carries the calling instance's name. Null when the
 #       namespace has no enforcer.
-#   out.operandSelectors.{importer, deployment, uploadProxy}
-#       Pod labels of the importer pods and of the cdi-deployment and
-#       cdi-uploadproxy pods.
+#   out.mkUploadServerPolicy scope { name ? "<instance>-cdi-upload-server";
+#                                    cloneSourceNamespaces ? [ ]; }
+#       A policy in the caller's namespace for the upload server pods CDI
+#       starts there: ingress on 8443 from cdi-uploadproxy and from the
+#       cloner pods in each of `cloneSourceNamespaces`. Null without an
+#       enforcer.
+#   out.mkClonerPolicy scope { name ? "<instance>-cdi-cloner";
+#                              targetNamespaces ? [ <caller's namespace> ]; }
+#       A policy in the caller's namespace, the clone source's, for the
+#       cloner pods CDI starts there: DNS, egress on 8443 to the upload
+#       server pods in each of `targetNamespaces`, and ingress on 8443 from
+#       cdi-deployment. Null without an enforcer.
+#   out.operandSelectors.{importer, uploadServer, cloner, deployment, uploadProxy}
+#       Pod labels of the importer, upload server, and cloner pods, and of
+#       the cdi-deployment and cdi-uploadproxy pods.
 #   out.extraImages
 #       Every image cdi-operator runs, digest-pinned.
 #
@@ -144,13 +158,22 @@ let
   };
 
   # Labels cdi-operator and cdi-deployment put on the pods they create
-  # (pkg/operator/resources/namespaced and pkg/controller/import-controller.go
-  # at the release). cdi-operator labels each operand pod with
-  # `cdi.kubevirt.io=<deployment name>`, read from a running v1.62.0 install.
+  # (pkg/operator/resources/namespaced, pkg/controller/import-controller.go,
+  # upload-controller.go, and clone-controller.go at the release).
+  # cdi-operator labels each operand pod with `cdi.kubevirt.io=<deployment
+  # name>`, read from a running v1.62.0 install.
   operandSelectors = {
     importer = {
       app = "containerized-data-importer";
       "cdi.kubevirt.io" = "importer";
+    };
+    uploadServer = {
+      app = "containerized-data-importer";
+      "cdi.kubevirt.io" = "cdi-upload-server";
+    };
+    cloner = {
+      app = "containerized-data-importer";
+      "cdi.kubevirt.io" = "cdi-clone-source";
     };
     deployment = {
       app = "containerized-data-importer";
@@ -322,6 +345,75 @@ in
             netpol.mkEndpointSelector operandSelectors.importer
             // {
               egress = translated.egressRules;
+              ingress = [
+                (netpol.mkCallerIngressRule {
+                  callerSelector = operandSelectors.deployment;
+                  callerNamespace = ns;
+                  ports = [ (tcp 8443) ];
+                })
+              ];
+            };
+        };
+
+      # Upload server pods receive an upload from cdi-uploadproxy, or a
+      # host-assisted clone from a cloner pod in each source namespace.
+      mkUploadServerPolicy =
+        consumerScope:
+        {
+          name ? "${consumerScope.instanceName}-cdi-upload-server",
+          cloneSourceNamespaces ? [ ],
+        }:
+        kix.operandPolicy {
+          scope = consumerScope;
+          inherit name;
+          spec =
+            let
+              netpol = consumerScope.networkPolicyEnforcer.netpol;
+              from =
+                callerSelector: callerNamespace:
+                netpol.mkCallerIngressRule {
+                  inherit callerSelector callerNamespace;
+                  ports = [ (tcp 8443) ];
+                };
+            in
+            netpol.mkEndpointSelector operandSelectors.uploadServer
+            // {
+              ingress = [
+                (from operandSelectors.uploadProxy ns)
+              ]
+              ++ map (from operandSelectors.cloner) cloneSourceNamespaces;
+            };
+        };
+
+      # A cloner pod streams the source volume to the upload server pod in
+      # each target namespace, and cdi-deployment polls it for progress.
+      mkClonerPolicy =
+        consumerScope:
+        {
+          name ? "${consumerScope.instanceName}-cdi-cloner",
+          targetNamespaces ? [ consumerScope.namespaceName ],
+        }:
+        kix.operandPolicy {
+          scope = consumerScope;
+          inherit name;
+          spec =
+            let
+              netpol = consumerScope.networkPolicyEnforcer.netpol;
+            in
+            netpol.mkEndpointSelector operandSelectors.cloner
+            // {
+              egress = [
+                netpol.dnsEgressRule
+              ]
+              ++ map (
+                namespace:
+                netpol.mkServiceEgressRule {
+                  selector = operandSelectors.uploadServer;
+                  inherit namespace;
+                  sourceNamespace = consumerScope.namespaceName;
+                  ports = [ (tcp 8443) ];
+                }
+              ) targetNamespaces;
               ingress = [
                 (netpol.mkCallerIngressRule {
                   callerSelector = operandSelectors.deployment;
@@ -577,9 +669,20 @@ in
 
         out = {
           crds.DataVolume = self.crds.dataVolumes;
-          inherit mkDataVolume mkImporterPolicy;
+          inherit
+            mkDataVolume
+            mkImporterPolicy
+            mkUploadServerPolicy
+            mkClonerPolicy
+            ;
           operandSelectors = {
-            inherit (operandSelectors) importer deployment uploadProxy;
+            inherit (operandSelectors)
+              importer
+              uploadServer
+              cloner
+              deployment
+              uploadProxy
+              ;
           };
           extraImages = builtins.attrValues operandRefs;
         };

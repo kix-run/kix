@@ -18,6 +18,11 @@
 #                                 read when `backups` is set.
 #   prometheus (optional)         PodMonitor and PrometheusRule alerts.
 #
+# Network policy, with an enforcer: the PostgreSQL pods reach DNS, the API
+# server, each other, and the object store; the operator reaches Patroni.
+# The Job pods of every SGDbOps and manually created SGBackup in the
+# namespace reach DNS and the API server, and SGDbOps Jobs reach PostgreSQL.
+#
 # Exposes (`root.out`, `root` = the `SGCluster`):
 #   out.name, out.fqdn, out.port  Primary Service (port 5432).
 #   out.selector                  PostgreSQL pod labels.
@@ -496,6 +501,44 @@ in
                   callerNamespace = operatorNamespace;
                   ports = patroniPorts;
                 })
+                (netpol.mkCallerIngressRule {
+                  callerSelector = operator.operandSelectors.dbOps;
+                  callerNamespace = ns;
+                  ports = [ (tcp postgresPort) ];
+                })
+              ];
+            };
+          };
+          # SGDbOps Job pods carry no cluster label, so this selects every
+          # one in the namespace. They exec into the PostgreSQL pods through
+          # the API server, and vacuum and benchmark connect to PostgreSQL.
+          dbOpsEgress = kix.operandPolicy {
+            inherit scope;
+            name = "${name}-dbops-egress";
+            spec = {
+              endpointSelector.matchLabels = operator.operandSelectors.dbOps;
+              egress = [
+                netpol.dnsEgressRule
+                netpol.apiServerEgressRule
+                (netpol.mkServiceEgressRule {
+                  selector = operandSelector;
+                  namespace = ns;
+                  sourceNamespace = ns;
+                  ports = [ (tcp postgresPort) ];
+                })
+              ];
+            };
+          };
+          # The Job of a manually created SGBackup runs the backup through
+          # the API server, by exec into the primary.
+          backupJobEgress = kix.operandPolicy {
+            inherit scope;
+            name = "${name}-backup-job-egress";
+            spec = {
+              endpointSelector.matchLabels = operator.operandSelectors.backup;
+              egress = [
+                netpol.dnsEgressRule
+                netpol.apiServerEgressRule
               ];
             };
           };
@@ -528,6 +571,8 @@ in
               self.podMonitor
               self.operandEgress
               self.operandIngress
+              self.dbOpsEgress
+              self.backupJobEgress
               self.operatorEgress
               self.prometheusRules
             ];

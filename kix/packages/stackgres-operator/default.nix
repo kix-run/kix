@@ -51,6 +51,9 @@
 #                       scope.mkCR stackgresOperator.out.crds.SGCluster { ... }
 #   out.operandSelectors.sgCluster crName
 #                     the labels of an SGCluster's pods.
+#   out.operandSelectors.dbOps, out.operandSelectors.backup
+#                     the labels of the Job pods of every SGDbOps, and of
+#                     every manually created SGBackup, in a namespace.
 #   out.podSelector   the operator pods' labels.
 #   out.release       the StackGres release.
 #   out.resolvePostgres { who; version; }
@@ -63,7 +66,8 @@
 #                     k8sVersion, else every candidate.
 #
 # Network policy for operand pods comes from the package that builds the
-# custom resource: stackgres-cluster writes it for SGCluster pods. The pods
+# custom resource: stackgres-cluster writes it for SGCluster pods and for
+# the SGDbOps and SGBackup Job pods in its namespace. The pods
 # of an SGShardedCluster, SGDistributedLogs, or SGStream built from
 # out.crds get no policy, so under an enforcer's namespace default-deny they
 # cannot reach the API server or each other.
@@ -109,9 +113,16 @@ let
   # with it, so its kind gets no CRD reference.
   referencedKinds = removeAttrs kinds [ "SGConfig" ];
 
-  operandSelectors.sgCluster = crName: {
-    app = "StackGresCluster";
-    "stackgres.io/cluster-name" = crName;
+  # The Job pods of an SGDbOps and of a manually created SGBackup carry the
+  # operation's name, not the cluster's (LabelFactoryForDbOps and
+  # LabelFactoryForBackup at 1.19), so they are selected per namespace.
+  operandSelectors = {
+    sgCluster = crName: {
+      app = "StackGresCluster";
+      "stackgres.io/cluster-name" = crName;
+    };
+    dbOps.app = "StackGresDbOps";
+    backup.app = "StackGresBackup";
   };
 
   # Top-level SGConfig keys StackGres reads from chart values or operator
