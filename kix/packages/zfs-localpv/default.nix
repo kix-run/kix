@@ -26,6 +26,12 @@
 # `out.storageClassName`: the class annotated
 # `storageclass.kubernetes.io/is-default-class`, or the sole class; reading it
 # throws otherwise.
+#
+# Alerts: none. The ZFS driver registers no Prometheus metrics. The CSI
+# sidecars serve operation-latency metrics on their health ports, which the
+# package does not scrape. A claim that cannot be provisioned stays
+# Pending with an Event on it, and pool health is left to the node's own
+# monitoring, such as node-exporter's ZFS collector.
 
 {
   scope,

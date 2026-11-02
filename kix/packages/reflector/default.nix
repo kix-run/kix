@@ -8,6 +8,11 @@
 # to obtain the annotator bundle (ServiceAccount, Role, RoleBinding, Job)
 # owned by the consumer namespace.
 #
+# Alerts: none. Reflector serves no Prometheus metrics; it sends telemetry
+# only to a Seq server over OpenTelemetry (src/ES.Kubernetes.Reflector/
+# Program.cs upstream). A stopped Deployment is left to
+# prometheus-default-rules (KubeDeploymentReplicasMismatch).
+#
 # Chart:   https://emberstack.github.io/helm-charts
 # Name:    reflector
 # Version: 10.0.60
