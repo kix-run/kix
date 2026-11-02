@@ -31,8 +31,9 @@
 #   instances.external-secrets.external-secrets.package = packages.external-secrets;
 #
 # Dependencies:
-#   prometheus (optional)  metrics Services and ServiceMonitors for the three
-#                          components. The package ships no alerts.
+#   prometheus (optional)  metrics Services, ServiceMonitors, and alert
+#                          rules for the three components while
+#                          `metrics.enabled`.
 #
 # Network policy: the intents open TCP 443 to destinations outside the
 # cluster for provider APIs, and admit the API server to TCP 10250 for the
@@ -44,6 +45,32 @@
 # controller. A provider outside the cluster on another port, or one
 # inside it written as a literal address, needs a
 # `networkPolicy.platformIntents` entry for the controller's pods.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, one
+# PrometheusRule per component: `<instance>-alerts` for the controller,
+# `<instance>-webhook-alerts`, and `<instance>-cert-controller-alerts`.
+#   ExternalSecretsControllerDown (warning)      no controller replica
+#                                                answers a scrape, so no
+#                                                ExternalSecret is refreshed.
+#   ExternalSecretNotReady (warning)             an ExternalSecret's Ready
+#                                                condition is False: its
+#                                                sync fails.
+#   ExternalSecretsSecretStoreNotReady (warning) a SecretStore fails
+#                                                validation against its
+#                                                provider.
+#   ExternalSecretsClusterSecretStoreNotReady    the same for a
+#     (warning)                                  ClusterSecretStore.
+#   ExternalSecretsWebhookDown (warning)         no webhook replica answers,
+#                                                so the API server refuses
+#                                                ExternalSecret and store
+#                                                writes.
+#   ExternalSecretsCertControllerDown (warning)  no cert-controller replica
+#                                                answers, so nothing renews
+#                                                the webhook certificate or
+#                                                restores its CA.
+# PushSecrets, ClusterExternalSecrets, and generators have no alert; their
+# status conditions name failures. Fewer ready replicas than desired and
+# crash loops are left to prometheus-default-rules.
 #
 # Escape hatches: `extraArgs` and `env` for the controller;
 # `webhookCheck.image`; `partsOverlays` on any part.
@@ -467,7 +494,10 @@ in
     )
 
     # DI passes a build function only the arguments its formals name, so
-    # each wrapper names every argument kix.monitor reads.
+    # each wrapper names every argument kix.monitor reads. The controller
+    # scrape renames each series' own `namespace` label (the namespace of
+    # the ExternalSecret or SecretStore) to `exported_namespace`, because
+    # the target's `namespace` wins.
     (
       {
         self,
@@ -477,10 +507,44 @@ in
         prometheus ? null,
         ...
       }@args:
+      let
+        sel = ''namespace="${c.ns}",service="${c.name}-metrics"'';
+        operator = "External Secrets ${c.ns}/${c.name}";
+      in
       kix.monitor {
         service = "controllerMetricsService";
         monitorPart = "controllerMonitor";
         rulesPart = "controllerAlerts";
+        alerts = {
+          ExternalSecretsControllerDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "The External Secrets controller is down.";
+            description = "No replica of the controller of ${operator} has answered a scrape for 10 minutes. Secrets it already wrote stay in place, but no ExternalSecret is refreshed, so a credential changed in the store does not reach the cluster. Check the Deployment ${c.name} in ${c.ns}.";
+          };
+          ExternalSecretNotReady = {
+            expr = ''max by (namespace, service, exported_namespace, name) (externalsecret_status_condition{${sel},condition="Ready",status="False"}) == 1'';
+            "for" = "15m";
+            severity = "warning";
+            summary = "An ExternalSecret fails to sync.";
+            description = "ExternalSecret {{ $labels.exported_namespace }}/{{ $labels.name }} has not been Ready for 15 minutes, so the controller of ${operator} could not write its target Secret, which is missing or out of date. Its Ready condition names the error; check kubectl describe externalsecret {{ $labels.name }} -n {{ $labels.exported_namespace }}, and whether its store is Ready.";
+          };
+          ExternalSecretsSecretStoreNotReady = {
+            expr = ''max by (namespace, service, exported_namespace, name) (secretstore_status_condition{${sel},condition="Ready",status="False"}) == 1'';
+            "for" = "15m";
+            severity = "warning";
+            summary = "A SecretStore cannot reach its provider.";
+            description = "SecretStore {{ $labels.exported_namespace }}/{{ $labels.name }} has not been Ready for 15 minutes, so the controller of ${operator} cannot sync the ExternalSecrets that use it. The provider refused the store's credentials or did not answer. Its Ready condition names the error; check kubectl describe secretstore {{ $labels.name }} -n {{ $labels.exported_namespace }}.";
+          };
+          ExternalSecretsClusterSecretStoreNotReady = {
+            expr = ''max by (namespace, service, name) (clustersecretstore_status_condition{${sel},condition="Ready",status="False"}) == 1'';
+            "for" = "15m";
+            severity = "warning";
+            summary = "A ClusterSecretStore cannot reach its provider.";
+            description = "ClusterSecretStore {{ $labels.name }} has not been Ready for 15 minutes, so the controller of ${operator} cannot sync the ExternalSecrets that use it. The provider refused the store's credentials or did not answer. Its Ready condition names the error; check kubectl describe clustersecretstore {{ $labels.name }}.";
+          };
+        };
       } args
     )
     (
@@ -492,11 +556,21 @@ in
         prometheus ? null,
         ...
       }@args:
+      let
+        sel = ''namespace="${c.ns}",service="${c.webhookServiceName}"'';
+      in
       kix.monitor {
         name = "${scope.instanceName}-webhook";
         service = "webhookService";
         monitorPart = "webhookMonitor";
         rulesPart = "webhookAlerts";
+        alerts.ExternalSecretsWebhookDown = {
+          expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+          "for" = "10m";
+          severity = "warning";
+          summary = "The External Secrets webhook is down.";
+          description = "No replica of the admission webhook of External Secrets ${c.ns}/${c.name} has answered a scrape for 10 minutes. Its webhook configurations fail closed, so the API server refuses every create and update of an ExternalSecret, SecretStore, or ClusterSecretStore, and deploys that write one fail. Check the Deployment ${c.name}-webhook in ${c.ns}.";
+        };
       } args
     )
     (
@@ -508,11 +582,21 @@ in
         prometheus ? null,
         ...
       }@args:
+      let
+        sel = ''namespace="${c.ns}",service="${c.name}-cert-controller-metrics"'';
+      in
       kix.monitor {
         name = "${scope.instanceName}-cert-controller";
         service = "certControllerMetricsService";
         monitorPart = "certControllerMonitor";
         rulesPart = "certControllerAlerts";
+        alerts.ExternalSecretsCertControllerDown = {
+          expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+          "for" = "10m";
+          severity = "warning";
+          summary = "The External Secrets cert-controller is down.";
+          description = "No replica of the cert-controller of External Secrets ${c.ns}/${c.name} has answered a scrape for 10 minutes. The webhook keeps serving with its current certificate, but nothing renews it or writes the CA back into a webhook configuration that lost it, and the API server then refuses ExternalSecret and SecretStore writes. Check the Deployment ${c.name}-cert-controller in ${c.ns}.";
+        };
       } args
     )
   ];
