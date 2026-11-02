@@ -1,3 +1,0 @@
-# 2026-10-02 · `kix/packages/smartctl-exporter` · Nothing scrapes smartctl-exporter: the chart's ServiceMonitor and PrometheusRule are off and the package builds no monitor of its own.
-
-The chart renders prometheus-operator kinds, and a chart resource cannot depend on the package that declares them, so the cluster build refuses them (check 21 in `kix/lib/eval/validate.nix`). The package therefore sets `serviceMonitor.enabled` and `prometheusRules.enabled` to false. Disk health metrics reach Prometheus only if a cluster adds its own scrape. A `prometheus ? null` dependency with `kix.monitor` over the chart's Service, and the chart's alert rules rebuilt through the dependency's builder, would restore them.
