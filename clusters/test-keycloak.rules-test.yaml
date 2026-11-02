@@ -1,0 +1,72 @@
+# promtool unit tests for the keycloak alert rules test-keycloak.nix renders.
+# The rules-cluster-keycloak check runs them from the rendered rules, so the
+# rule_files entry is <namespace>/<file> in the cluster's manifests.
+rule_files:
+  - auth/keycloak-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # The one replica stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="auth",service="keycloak",pod="keycloak-0",instance="10.0.0.1:9000"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: KeycloakDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "auth"
+              service: "keycloak"
+            exp_annotations:
+              summary: "Keycloak is down."
+              description: "No replica of Keycloak auth/keycloak has answered a scrape for 10 minutes, so nobody can log in to the applications that use it, and their token refreshes fail. Check the pods of the Deployment keycloak in auth and their logs."
+  # No target is scraped at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="auth",service="other",pod="other-0",instance="10.0.0.9:9000"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KeycloakDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "auth"
+              service: "keycloak"
+            exp_annotations:
+              summary: "Keycloak is down."
+              description: "No replica of Keycloak auth/keycloak has answered a scrape for 10 minutes, so nobody can log in to the applications that use it, and their token refreshes fail. Check the pods of the Deployment keycloak in auth and their logs."
+  # Keycloak answers, and threads wait for a connection only briefly.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="auth",service="keycloak",pod="keycloak-0",instance="10.0.0.1:9000"}'
+        values: '1x30'
+      - series: 'agroal_awaiting_count{namespace="auth",service="keycloak",pod="keycloak-0",instance="10.0.0.1:9000",datasource="default"}'
+        values: '0x10 4 6 0x18'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KeycloakDown
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: KeycloakDatabasePoolExhausted
+        exp_alerts: []
+  # Threads keep waiting for a database connection.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="auth",service="keycloak",pod="keycloak-0",instance="10.0.0.1:9000"}'
+        values: '1x30'
+      - series: 'agroal_awaiting_count{namespace="auth",service="keycloak",pod="keycloak-0",instance="10.0.0.1:9000",datasource="default"}'
+        values: '0 0 12x28'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KeycloakDatabasePoolExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "auth"
+              service: "keycloak"
+              pod: "keycloak-0"
+            exp_annotations:
+              summary: "Keycloak requests wait for a database connection."
+              description: "On Keycloak pod auth/keycloak-0, 12 threads have waited for a database connection at every check for 15 minutes, so logins and token requests are slow or time out. Check the database's load and slow queries before raising the pool size (`KC_DB_POOL_MAX_SIZE` in env), since more connections can overload the database."
