@@ -59,9 +59,19 @@
 # needs; the pods mount host paths, so `meta.podSecurity` is privileged.
 # Removing the instance leaves the `hosts.toml` files on the nodes;
 # containerd then gets connection refused from the mirrors and pulls from
-# the upstream registry. The package ships no alerts. The pods run at the
-# built-in system-node-critical priority, as upstream's chart sets, so node
-# pressure evicts them after application pods.
+# the upstream registry. The pods run at the built-in system-node-critical
+# priority, as upstream's chart sets, so node pressure evicts them after
+# application pods.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   SpegelDown (warning)  no Spegel pod answers a scrape. Pulls still work,
+#                         because containerd falls back to the upstream
+#                         registries, but every node now pulls from them,
+#                         which can hit their rate limits.
+# One node's pod down is left to prometheus-default-rules (TargetDown,
+# KubeDaemonSetRolloutStuck). A mirror miss falls back the same way, so
+# hit and miss counts (`spegel_mirror_requests_total`) are for dashboards.
 
 {
   scope,
@@ -468,9 +478,21 @@ in
         };
       }
     )
-    (kix.monitor {
-      service = "metricsService";
-      port = "metrics";
-    })
+    (
+      let
+        sel = ''namespace="${ns}",service="${name}-metrics"'';
+      in
+      kix.monitor {
+        service = "metricsService";
+        port = "metrics";
+        alerts.SpegelDown = {
+          expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+          "for" = "10m";
+          severity = "warning";
+          summary = "Spegel is down on every node.";
+          description = "No pod of Spegel ${ns}/${name} has answered a scrape for 10 minutes. containerd pulls every image from the upstream registries meanwhile, which can hit their rate limits. Check the DaemonSet in ${ns}.";
+        };
+      }
+    )
   ];
 }
