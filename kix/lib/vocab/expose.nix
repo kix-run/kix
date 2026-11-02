@@ -520,7 +520,11 @@ rec {
       controllerSelector = routerOut.podSelector or null;
       controllerNamespace = routerOut.podNamespace or null;
 
-      wantsControllerEdge = hasExposure && scope.networkPolicyEnforcer != null;
+      # A controller edge is an ingress-only policy. Where the cluster does
+      # not enforce ingress, it would be the first ingress policy on the
+      # backend and close it to every other client.
+      wantsControllerEdge =
+        hasExposure && scope.networkPolicyEnforcer != null && scope.networkPolicyEnforced.ingress;
 
       _controllerEdgeWarn =
         if wantsControllerEdge && useIngress && controllerSelector == null then
@@ -539,10 +543,35 @@ rec {
             + "no `out.podSelector`, so no network policy opens the backend to its data-plane pods. "
             + "Under default deny every request through this HTTPRoute will time out. Write a policy "
             + "outside Kix that admits the gateway's proxy pods to the backend, or use a gateway "
-            + "package that publishes its pods (traefik)."
+            + "package that publishes its pods (traefik, envoy-gateway)."
           )
         else
           lib.id;
+
+      # A Service without a selector (ExternalName, or one backed by
+      # EndpointSlices managed elsewhere) names no pods, and an empty
+      # endpoint selector would admit the controller to every pod in the
+      # namespace.
+      selectorOf = b: b.svc.rawManifest.spec.selector or { };
+      selectorlessBackends = builtins.filter (b: selectorOf b == { }) backends;
+      _selectorlessWarn =
+        if wantsControllerEdge && controllerSelector != null && selectorlessBackends != [ ] then
+          lib.warn (
+            "kix.expose (${scope.namespaceName}/${name}): Service "
+            + lib.concatMapStringsSep ", " (b: b.svc.name) selectorlessBackends
+            + " has no selector, so Kix writes no policy admitting the "
+            + (if useGateway then "gateway's proxy pods" else "ingress controller")
+            + " to its pods. Under default deny, requests to it time out until a policy written "
+            + "outside Kix admits them."
+          )
+        else
+          lib.id;
+
+      # cert-manager answers an HTTP-01 challenge from solver pods it starts
+      # in the Ingress's namespace, and the ingress controller forwards the
+      # challenge request to them.
+      acmeSolverSelector = if hasTls then clusterIssuer.out.http01SolverSelector or null else null;
+      acmeSolverPort = 8089;
 
       # Resolve the backend pod ports corresponding to the routed Service port.
       podPortsFor =
@@ -567,7 +596,7 @@ rec {
               ${kixKeys.policyType} = if useGateway then "gateway" else "ingress-controller";
             };
             spec = {
-              endpointSelector.matchLabels = b.svc.rawManifest.spec.selector or { };
+              endpointSelector.matchLabels = selectorOf b;
               ingress = [
                 (scope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
                   callerSelector = controllerSelector;
@@ -590,6 +619,33 @@ rec {
         version = "v1";
       };
 
+      acmeSolverEdge = scope.networkPolicyEnforcer.netpol.mkPolicy {
+        mkResource = scope.mkResource;
+        extraArgs = {
+          name = "${name}-acme-solver-from-ingress-controller";
+          labels = {
+            ${kixKeys.derived} = "true";
+            ${kixKeys.policyType} = "ingress-controller";
+          };
+          spec = {
+            endpointSelector.matchLabels = acmeSolverSelector;
+            ingress = [
+              (scope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
+                callerSelector = controllerSelector;
+                callerNamespace = controllerNamespace;
+                ports = [
+                  {
+                    port = acmeSolverPort;
+                    protocol = "TCP";
+                  }
+                ];
+              })
+            ];
+          };
+          extraDeps = [ ];
+        };
+      };
+
       controllerEdgeParts =
         if !(wantsControllerEdge && controllerSelector != null) then
           { }
@@ -597,9 +653,15 @@ rec {
           builtins.listToAttrs (
             map (b: {
               name = "${partName}-netpol-${b.part}";
-              value = controllerEdgeFor b;
+              # The part names must not read the Services, which are parts
+              # of the same instance, so a selectorless backend's part is
+              # null rather than absent.
+              value = if selectorOf b == { } then null else controllerEdgeFor b;
             }) backends
-          );
+          )
+          // lib.optionalAttrs (acmeSolverSelector != null) {
+            "${partName}-netpol-acme-solver" = acmeSolverEdge;
+          };
     in
     builtins.seq _modeCheck (
       controllerEdgeParts
@@ -656,6 +718,7 @@ rec {
                 |> scope.mkCR routeCrd
             )
             |> _controllerEdgeWarn
+            |> _selectorlessWarn
 
           else if hasExposure && useIngress then
             (
@@ -696,6 +759,7 @@ rec {
             )
             |> (if hasTls then clusterIssuer.out.withCert else lib.id)
             |> _controllerEdgeWarn
+            |> _selectorlessWarn
             |> scope.mkResource
 
           else

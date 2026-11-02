@@ -37,11 +37,11 @@
 # Network policy: the intents below open egress to issuer endpoints outside
 # the cluster on 443, 80, and 53, and admit the API server to the webhook.
 # They apply to every workload of the instance. An issuer on another port
-# (Vault on 8200, a private ACME server) needs its own policy. Under an
-# enforcer the ACME HTTP-01 solver pods the controller launches get no
-# policy and stay unreachable, so HTTP-01 issuance needs a
-# `networkPolicy.platformIntents` entry for the pods
-# `out.operandSelectors.acmesolver` selects, on port 8089. Prometheus
+# (Vault on 8200, a private ACME server) needs its own policy. The ACME
+# HTTP-01 solver pods the controller launches get a policy from `kix.expose`
+# for the Ingresses it builds, through cluster-issuer's
+# `out.http01SolverSelector`. A Certificate made another way needs a policy
+# for the pods `out.operandSelectors.acmesolver` selects, on port 8089. Prometheus
 # scrapes are also dropped under an enforcer, so CertManagerAbsent fires
 # there.
 #

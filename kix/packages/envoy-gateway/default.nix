@@ -13,9 +13,19 @@
 #
 # Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
 # for the two Gateway API kinds and, with an EnvoyProxy, for EnvoyProxy.
-# root = Gateway, with out.gatewayRef and out.listeners for kix.expose
-# (kix.contracts.gateway). out.podSelector is null, so under default-deny
-# network policy nothing admits the proxy pods to exposed backends.
+# root = Gateway, with out.gatewayRef, out.listeners, out.podSelector, and
+# out.podNamespace for kix.expose (kix.contracts.gateway).
+#
+# Network policy: Envoy Gateway's controller creates the proxy pods. It
+# labels them with the owning Gateway's name and namespace, or with the
+# owning GatewayClass when the EnvoyProxy sets `mergeGateways`
+# (internal/gatewayapi/helpers.go and
+# internal/infrastructure/kubernetes/proxy/resource.go at v1.9.1). By
+# default they run in the controller's namespace, which `proxyNamespace`
+# names. kix.expose reads the selector and namespace to admit the proxies to
+# each exposed backend. With another controllerName, or `proxyNamespace =
+# null`, both are null and kix.expose warns that no policy admits the
+# gateway's pods.
 
 {
   scope,
@@ -77,6 +87,20 @@ in
         kix.expose reads the rendered listeners: `protocol`, `hostname`,
         `port`, and `allowedRoutes.namespaces.from` decide whether an
         HTTPRoute can attach and which URL scheme and port it gets.
+      '';
+    };
+
+    proxyNamespace = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "envoy-gateway-system";
+      description = ''
+        Namespace of the Envoy proxy pods. Envoy Gateway runs them in the
+        controller's namespace, `envoy-gateway-system` in its install guide.
+        Set it to the controller's namespace when it is installed elsewhere,
+        or to this instance's namespace when the controller runs in
+        GatewayNamespace mode. kix.expose admits the proxy pods in this
+        namespace to each exposed backend. Null leaves `out.podSelector`
+        null, so no policy admits them.
       '';
     };
 
@@ -152,6 +176,29 @@ in
       activeListeners = gatewayListeners.active config.listeners;
 
       haveProxy = config.proxySpec != null;
+
+      # Labels Envoy Gateway puts on the proxy pods it creates. A merged
+      # GatewayClass shares one proxy fleet across its Gateways.
+      proxySelector =
+        let
+          owner =
+            if haveProxy && (config.proxySpec.mergeGateways or false) then
+              { "gateway.envoyproxy.io/owning-gatewayclass" = gatewayClassName; }
+            else
+              {
+                "gateway.envoyproxy.io/owning-gateway-name" = gatewayName;
+                "gateway.envoyproxy.io/owning-gateway-namespace" = scope.namespaceName;
+              };
+        in
+        if config.controllerName != envoyGatewayController || config.proxyNamespace == null then
+          null
+        else
+          {
+            "app.kubernetes.io/name" = "envoy";
+            "app.kubernetes.io/component" = "proxy";
+            "app.kubernetes.io/managed-by" = "envoy-gateway";
+          }
+          // owner;
 
       gatewayApiGroup = "gateway.networking.k8s.io";
     in
@@ -243,11 +290,8 @@ in
           # kix.expose matches a route's host and namespace against these
           # to pick the URL scheme and port.
           listeners = activeListeners;
-          # Envoy Gateway's controller creates the proxy pods, by default in
-          # its own namespace, which this package does not know. Without a
-          # selector kix.expose writes no policy admitting them to backends.
-          podSelector = null;
-          podNamespace = null;
+          podSelector = proxySelector;
+          podNamespace = if proxySelector == null then null else config.proxyNamespace;
         };
       };
     };

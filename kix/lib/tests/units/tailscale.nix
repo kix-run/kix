@@ -649,6 +649,31 @@ in
     )
     || throw "tailscale ingress: ${builtins.toJSON ingress}, rule ${builtins.toJSON rule}";
 
+  # The backend policies are ingress-only, so a cluster that enforces only
+  # egress gets none; the control enforces ingress only.
+  tailscale-backend-policy-follows-directions =
+    let
+      namesUnder =
+        directions:
+        map (m: m.metadata.name) (
+          ofKind "CiliumNetworkPolicy" (
+            manifests (clusterWith {
+              modules = [
+                netpolOn
+                { networkPolicy.directions = directions; }
+              ];
+            })
+          )
+        );
+      backendPolicies = ns: builtins.filter (lib.hasSuffix "-from-tailscale") ns;
+    in
+    (
+      backendPolicies (namesUnder "egress") == [ ]
+      && builtins.elem "web-ingress-from-tailscale" (namesUnder "ingress")
+      && builtins.elem "web-lb-from-tailscale" (namesUnder "ingress")
+    )
+    || throw "tailscale backend policies under egress: ${builtins.toJSON (namesUnder "egress")}";
+
   # One Service behind two Ingresses and two out.mkBackendPolicy calls gets
   # four policies with distinct names; a path that names the Service port
   # by name selects that port.

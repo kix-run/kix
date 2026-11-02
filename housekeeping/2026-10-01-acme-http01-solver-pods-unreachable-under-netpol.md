@@ -1,5 +1,0 @@
-# 2026-10-01 · `kix/packages/cert-manager` · ACME HTTP-01 solver pods get no network policy, so HTTP-01 issuance fails under an enforcer.
-
-The controller launches the solver pods (label `acme.cert-manager.io/http01-solver=true`, port 8089) in the namespace of the Certificate, outside any Kix scope. With `networkPolicy.enable` the namespace default deny drops the ingress controller's requests to them and the challenge never validates. The workaround is a clusterwide `networkPolicy.platformIntents` entry that selects that label (`out.operandSelectors.acmesolver`) and admits ingress on 8089; `docs/src/content/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods.mdx` shows it. Kix has no mechanism for ingress to pods a package creates by label in other namespaces.
-
-- Hit again 2026-10-02 while building `cluster-issuer`, which accepts any solver. Its build warns when a solver uses `http01` and a policy enforcer is present, as a stopgap. The fix is for `kix.expose` to admit pods labelled `acme.cert-manager.io/http01-solver=true` on 8089 when the issuer has an HTTP-01 solver, with a Gateway API variant, tested against pebble on kind.

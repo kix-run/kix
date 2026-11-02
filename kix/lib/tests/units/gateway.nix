@@ -251,19 +251,152 @@ in
     )
     || throw "traefik route or edge: ${builtins.toJSON (namesOf cnps)}";
 
-  # envoy-gateway publishes no data-plane selector, so the backend gets no
-  # policy admitting the proxy pods.
-  gateway-envoy-opens-no-backend =
+  # envoy-gateway publishes the labels Envoy Gateway puts on the proxy pods
+  # and their namespace, so the backend admits the proxies. A merged
+  # GatewayClass selects by class; with proxyNamespace null, or another
+  # controller, there is no selector and no policy.
+  gateway-envoy-opens-backend =
     let
+      edgeWith =
+        config:
+        byName "web-from-gateway" (
+          ofKind "CiliumNetworkPolicy" (
+            manifests (
+              exposedVia {
+                package = envoyGateway;
+                inherit config;
+              } netpolOn
+            )
+          )
+        );
+      rule = edge: builtins.head edge.spec.ingress;
+      plain = rule (edgeWith { });
+      merged = rule (edgeWith {
+        proxySpec.mergeGateways = true;
+      });
+      elsewhere = rule (edgeWith {
+        proxyNamespace = "gwns";
+      });
+    in
+    (
+      plain.callerNamespace == "envoy-gateway-system"
+      &&
+        plain.callerSelector == {
+          "app.kubernetes.io/name" = "envoy";
+          "app.kubernetes.io/component" = "proxy";
+          "app.kubernetes.io/managed-by" = "envoy-gateway";
+          "gateway.envoyproxy.io/owning-gateway-name" = "gw";
+          "gateway.envoyproxy.io/owning-gateway-namespace" = "gwns";
+        }
+      && (builtins.head plain.ports).port == 8080
+      && merged.callerSelector."gateway.envoyproxy.io/owning-gatewayclass" == "gw"
+      && !(merged.callerSelector ? "gateway.envoyproxy.io/owning-gateway-name")
+      && elsewhere.callerNamespace == "gwns"
+      && edgeWith { proxyNamespace = null; } == null
+      && edgeWith { controllerName = "example.com/other"; } == null
+    )
+    || throw "envoy-gateway edge: ${builtins.toJSON plain}";
+
+  # The edge is ingress-only, so a cluster that enforces only egress gets
+  # none; the control enforces ingress only.
+  gateway-edge-follows-directions =
+    let
+      edgeUnder =
+        directions:
+        byName "web-from-gateway" (
+          ofKind "CiliumNetworkPolicy" (
+            manifests (
+              exposedVia { package = traefik; } {
+                imports = [ netpolOn ];
+                networkPolicy.directions = directions;
+              }
+            )
+          )
+        );
+    in
+    (edgeUnder "egress" == null && edgeUnder "ingress" != null)
+    || throw "expected no gateway edge under directions = egress";
+
+  # A Service without a selector gets no edge, which would otherwise select
+  # every pod in the namespace. The selected Service beside it still does.
+  gateway-edge-skips-selectorless-service =
+    let
+      twoBackends = {
+        meta.version = "test";
+        build = [
+          (
+            { self, scope, ... }:
+            {
+              deployment = scope.mkDeployment {
+                name = "web";
+                spec = {
+                  replicas = 1;
+                  selector.matchLabels = scope.selectorLabels;
+                  template = {
+                    metadata.labels = scope.selectorLabels;
+                    spec.containers = [
+                      (
+                        {
+                          name = "web";
+                          image = "web:1";
+                          ports = [ { containerPort = 8080; } ];
+                        }
+                        // containerBase
+                      )
+                    ];
+                  };
+                };
+              };
+              selected = scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "selected";
+                spec = {
+                  selector = scope.selectorLabels;
+                  ports = [ { port = 8080; } ];
+                };
+              };
+              external = scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "external";
+                spec.ports = [ { port = 9090; } ];
+              };
+              root = {
+                resource = self.selected;
+                requires = [ self.deployment ];
+              };
+            }
+          )
+          (kixlib.expose {
+            paths = [
+              {
+                path = "/";
+                service = "selected";
+                port = 8080;
+              }
+              {
+                path = "/ext";
+                service = "external";
+                port = 9090;
+              }
+            ];
+          })
+        ];
+      };
       cnps = ofKind "CiliumNetworkPolicy" (
-        manifests (
-          exposedVia {
-            package = envoyGateway;
-          } netpolOn
-        )
+        manifests (mkCluster [
+          netpolOn
+          {
+            cluster.domain = "test.local";
+            instances.gwns.gw.package = traefik;
+            instances.appns.web.package = twoBackends;
+          }
+        ])
       );
     in
-    byName "web-from-gateway" cnps == null && cnps != [ ];
+    (byName "selected-from-gateway" cnps != null && byName "external-from-gateway" cnps == null)
+    || throw "selectorless edge: ${builtins.toJSON (namesOf cnps)}";
 
   # Each listener port is an entrypoint, a container port, and a Service
   # port; the Service is a NodePort on kind's absent loadBalancer binding
