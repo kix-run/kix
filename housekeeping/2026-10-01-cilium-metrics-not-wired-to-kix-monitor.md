@@ -1,4 +1,3 @@
 # 2026-10-01 · `kix/packages/cilium` · Cilium's agent and operator metrics are off and not wired to `kix.monitor`, because the enforcer cannot take a `prometheus` dependency.
 
 With `prometheus ? null` in cilium's build, a cluster whose Prometheus runs in another namespace fails with `infinite recursion encountered` at `roles.checkOutContract` (`kix/lib/eval/cluster.nix`). Evaluating cilium's role `out` runs `_crossNsCheck` in `kix/lib/eval/instance.nix`. That check reads `depTarget.instance._meta.packageMeta`, which builds the prometheus-operator instance, and its workloads need the enforcer's `out.netpol` again. So the cluster gets no Cilium metrics and no Cilium alerts. Scraping the host-network ports under default deny is not the obstacle: the netpol plugin already admits it.
-- Hit again 2026-11-02 while adding Cilium alerts.
