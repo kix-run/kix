@@ -14,8 +14,9 @@
 # to every alertmanager replica's pod FQDN, which is what Alertmanager
 # HA requires (fan-out to all replicas, not a load-balanced Service).
 # The vmalert -> alertmanager notifier traffic runs between
-# operator-created pods with no endpoint fact in any Kix manifest,
-# like the intra-VMCluster traffic.
+# operator-created pods with no endpoint fact in any Kix manifest, so the
+# package writes the network policy for it (`operandPolicies`), as
+# victoria-metrics-cluster does for the traffic between its components.
 #
 # Dependencies:
 #   vmOperator (required)   VMAlert/VMAlertmanager CRDs + builders
@@ -84,6 +85,7 @@ let
 
   defaultAlertmanagerSettings = import ../alertmanager/default-settings.nix;
   refuseInlineSecrets = import ../alertmanager/inline-secrets.nix { inherit lib who; };
+  receiverPorts = import ../alertmanager/receiver-ports.nix { inherit lib who; };
 in
 {
   meta = {
@@ -260,20 +262,19 @@ in
             };
         # The configuration Kix renders, as JSON (valid YAML), or null when
         # the dependency supplies it.
-        renderedConfig =
+        amSettings =
           if configDep != null then
             null
           else
-            builtins.toJSON (
-              refuseInlineSecrets (
-                if am.configRawYaml != null then
-                  am.configRawYaml
-                else if am.settings != null then
-                  am.settings
-                else
-                  defaultAlertmanagerSettings
-              )
+            refuseInlineSecrets (
+              if am.configRawYaml != null then
+                am.configRawYaml
+              else if am.settings != null then
+                am.settings
+              else
+                defaultAlertmanagerSettings
             );
+        renderedConfig = if amSettings == null then null else builtins.toJSON amSettings;
         configInCr = am.configRawYaml != null;
         # Build preferred anti-affinity for `component`. Operand pods are
         # rendered by the operator, so Kix's derived spread never sees them:
@@ -412,9 +413,92 @@ in
           } vmAlertBaseSpec config.extraSpec;
         };
 
+        # The operator creates the vmalert and Alertmanager pods, so no
+        # workload policy is derived for them. Both config-reloader sidecars
+        # call the API server. vmalert notifies every Alertmanager replica
+        # by pod address, the replicas gossip with each other, and
+        # Alertmanager delivers to the receivers its configuration names.
+        # vmalert's paths to vmselect and vminsert come from the VMAlert
+        # CRD's factBehavior, and the scrape paths from the netpol
+        # scrape join. A configuration from the alertmanagerConfig
+        # dependency opens no receiver ports.
+        operandPolicies =
+          let
+            netpol = scope.networkPolicyEnforcer.netpol;
+            amPort = {
+              port = 9093;
+              protocol = "TCP";
+            };
+            alertSelector = {
+              "app.kubernetes.io/name" = "vmalert";
+              "app.kubernetes.io/instance" = name;
+            };
+            amSelector = {
+              "app.kubernetes.io/name" = "vmalertmanager";
+              "app.kubernetes.io/instance" = name;
+            };
+            peers = netpol.mkSelfRules { selector = amSelector; };
+            ports = if amSettings == null then [ ] else receiverPorts amSettings;
+            replicas = config.alertmanager.replicaCount;
+          in
+          {
+            vmalert = kix.operandPolicy {
+              inherit scope;
+              name = "${name}-vmalert";
+              spec = {
+                endpointSelector.matchLabels = alertSelector;
+                egress = [
+                  netpol.dnsEgressRule
+                  netpol.apiServerEgressRule
+                  (netpol.mkServiceEgressRule {
+                    selector = amSelector;
+                    namespace = ns;
+                    sourceNamespace = ns;
+                    ports = [ amPort ];
+                  })
+                ];
+              };
+            };
+            alertmanager = kix.operandPolicy {
+              inherit scope;
+              name = "${name}-vmalertmanager";
+              spec = {
+                endpointSelector.matchLabels = amSelector;
+                egress = [
+                  netpol.dnsEgressRule
+                  netpol.apiServerEgressRule
+                ]
+                ++ lib.optionals (replicas > 1) peers.egress
+                ++
+                  lib.optionals (ports != [ ])
+                    (netpol.translateIntentRules {
+                      intents.receivers.egress = [
+                        {
+                          to = "world";
+                          ports = map (port: {
+                            inherit port;
+                            protocol = "TCP";
+                          }) ports;
+                        }
+                      ];
+                    }).egressRules;
+                ingress = [
+                  (netpol.mkCallerIngressRule {
+                    callerSelector = alertSelector;
+                    callerNamespace = ns;
+                    ports = [ amPort ];
+                  })
+                ]
+                ++ lib.optionals (replicas > 1) peers.ingress;
+              };
+            };
+          };
+
         root = {
           resource = self.vmAlert;
-          requires = lib.optional (self.prometheusRules != null) self.prometheusRules;
+          requires =
+            builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies)
+            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
           out = {
             extraImages = [
               (kix.image.ref config.image)

@@ -66,6 +66,66 @@ let
   mkVMOperatorCRD =
     attrs: scope.mkCRD (attrs |> scope.crd.withLabels labels |> scope.crd.withAnnotations annotations);
 
+  # The scrape objects the operator creates for an operand's own metrics
+  # (`factBehavior.selfScrapes`), so the netpol scrape join opens the paths
+  # from the VMAgents that select them. The operator makes a VMServiceScrape
+  # named and labelled like the operand's Service (factory/build/vmscrape.go
+  # at operator v0.74.1), scraping the `http` port and, with a
+  # config-reloader sidecar, its port 8435. A VMAgent in daemonSetMode gets
+  # a VMPodScrape labelled with the pod selector instead. A CR with
+  # `disableSelfServiceScrape`, or the operator variable
+  # VM_DISABLESELFSERVICESCRAPECREATION, turns them off.
+  selfScrapesOff = builtins.any (
+    e: e.name == "VM_DISABLESELFSERVICESCRAPECREATION" && (e.value or null) == "true"
+  ) config.env;
+  configReloaderPort = 8435;
+  portOf = port: default: lib.toInt (toString (if port == null then default else port));
+  # The labels of an operand's pods and Service, `component` being the
+  # app.kubernetes.io/name the operator gives them.
+  operandSelector = component: cr: {
+    "app.kubernetes.io/name" = component;
+    "app.kubernetes.io/instance" = cr.metadata.name;
+    "app.kubernetes.io/component" = "monitoring";
+    "managed-by" = "vm-operator";
+  };
+  # The labels of an operand's Service: the selector, `extraLabels`, and the
+  # CR's managedMetadata labels.
+  serviceLabels =
+    selector: extraLabels: cr:
+    ((cr.spec.managedMetadata or { }).labels or { }) // extraLabels // selector;
+  # The name the operator gives the operand's Service and scrape object.
+  # Legacy naming drops the prefix of a single-app CR.
+  prefixed =
+    component: cr:
+    if cr.spec.useLegacyNaming or false then cr.metadata.name else "${component}-${cr.metadata.name}";
+  selfScrape =
+    {
+      component,
+      defaultPort,
+      app ? cr: cr.spec,
+      name ? prefixed component,
+      configReloader ? _: false,
+      extraLabels ? { },
+      extraPorts ? _: [ ],
+    }:
+    cr:
+    let
+      spec = app cr;
+      selector = operandSelector component cr;
+      podScrape = component == "vmagent" && (spec.daemonSetMode or false);
+    in
+    lib.optional (!selfScrapesOff && !(spec.disableSelfServiceScrape or false)) {
+      kind = if podScrape then "VMPodScrape" else "VMServiceScrape";
+      name = name cr;
+      labels = if podScrape then selector else serviceLabels selector extraLabels cr;
+      podSelector = selector;
+      ports = [
+        (portOf (spec.port or null) defaultPort)
+      ]
+      ++ lib.optional (configReloader cr) configReloaderPort
+      ++ extraPorts spec;
+    };
+
   # Build factBehavior for kinds whose operator-created operand pods dial
   # endpoints embedded in the CR spec: terminate + the operand podSelector so
   # netpol opens egress for the operands, not for whoever references the CR:
@@ -76,13 +136,42 @@ let
   # VMCluster carries no external endpoints (vminsert/vmselect/vmstorage
   # only dial each other, operator-wired): explicit conduct so a fact
   # flowing through the CR never warns as undeclared.
-  operandFactBehavior = component: {
+  operandFactBehavior = component: selfScrapeArgs: {
     endpoint = "terminate";
     podSelector = cr: {
       "app.kubernetes.io/name" = component;
       "app.kubernetes.io/instance" = cr.metadata.name;
     };
+    selfScrapes = selfScrape ({ inherit component; } // selfScrapeArgs);
   };
+
+  # VMCluster components with their default `http` ports.
+  clusterComponents = {
+    vmstorage = 8482;
+    vmselect = 8481;
+    vminsert = 8480;
+  };
+  clusterSelfScrapes =
+    cr:
+    builtins.concatLists (
+      lib.mapAttrsToList (
+        component: defaultPort:
+        lib.optionals ((cr.spec.${component} or null) != null) (
+          selfScrape {
+            inherit component defaultPort;
+            app = cr: cr.spec.${component};
+            name = cr: "${component}-${cr.metadata.name}";
+            extraLabels."app.kubernetes.io/part-of" = "vmcluster";
+            # vmstorage's Service also carries vmbackupmanager's port.
+            extraPorts =
+              spec:
+              lib.optional (component == "vmstorage" && (spec.vmBackup or null) != null) (
+                portOf (spec.vmBackup.port or null) 8300
+              );
+          } cr
+        )
+      ) clusterComponents
+    );
 
   # Compute the least a VictoriaMetrics app uses. Uses `hpa.minReplicas`
   # (default 1) when an HPA is configured, or `replicaCount` (default 1)
@@ -156,7 +245,10 @@ let
               ]
           )
         );
-      factBehavior.endpoint = "conduct";
+      factBehavior = {
+        endpoint = "conduct";
+        selfScrapes = clusterSelfScrapes;
+      };
       printerColumns = [
         {
           jsonPath = ".spec.retentionPeriod";
@@ -172,7 +264,11 @@ let
       ++ ageColumn;
     };
     VMAgent = {
-      factBehavior = operandFactBehavior "vmagent";
+      factBehavior = operandFactBehavior "vmagent" {
+        defaultPort = 8429;
+        # The sidecar runs unless the agent only ingests.
+        configReloader = cr: !(cr.spec.ingestOnlyMode or false);
+      };
       # Count `replicaCount` pods per shard (`shardCount`, default 1, or
       # `hpa.minReplicas` when an HPA scales the shards). Skip
       # `daemonSetMode` because the pod count depends on cluster nodes.
@@ -190,11 +286,22 @@ let
           unlessPaused cr (appUse "vmagent" ((spec.replicaCount or 1) * shards) spec);
     };
     VMAlert = {
-      factBehavior = operandFactBehavior "vmalert";
+      factBehavior = operandFactBehavior "vmalert" {
+        defaultPort = 8080;
+        # The sidecar runs while the VMAlert selects rules.
+        configReloader =
+          cr:
+          (cr.spec.selectAllByDefault or false)
+          || (cr.spec.ruleSelector or null) != null
+          || (cr.spec.ruleNamespaceSelector or null) != null;
+      };
       usesAtLeast = singleApp "vmalert";
     };
     VMAlertmanager = {
-      factBehavior = operandFactBehavior "vmalertmanager";
+      factBehavior = operandFactBehavior "vmalertmanager" {
+        defaultPort = 9093;
+        configReloader = _: true;
+      };
       usesAtLeast = singleApp "alertmanager";
     };
     VMSingle.usesAtLeast =

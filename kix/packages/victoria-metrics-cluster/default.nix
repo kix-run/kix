@@ -370,33 +370,101 @@ in
             extraArgs = config.vminsert.extraArgs;
           };
         };
+
+        spec = kix.mergeGuarded {
+          inherit who;
+          # Everything here is computed (the storage class from the
+          # dep, the dedup flag) or has an option of its own.
+          locked = [
+            [ "retentionPeriod" ]
+            [ "replicationFactor" ]
+            [ "clusterVersion" ]
+            [
+              "vmstorage"
+              "storage"
+            ]
+            [
+              "vmstorage"
+              "extraArgs"
+            ]
+            [
+              "vmselect"
+              "extraArgs"
+            ]
+          ];
+        } baseSpec config.extraSpec;
+
+        storagePorts = {
+          vminsert = lib.toInt (toString (spec.vmstorage.vmInsertPort or 8400));
+          vmselect = lib.toInt (toString (spec.vmstorage.vmSelectPort or 8401));
+        };
       in
       {
         vmCluster = vmOperator.out.mkVMCluster scope {
-          inherit name;
-          spec = kix.mergeGuarded {
-            inherit who;
-            # Everything here is computed (the storage class from the
-            # dep, the dedup flag) or has an option of its own.
-            locked = [
-              [ "retentionPeriod" ]
-              [ "replicationFactor" ]
-              [ "clusterVersion" ]
-              [
-                "vmstorage"
-                "storage"
-              ]
-              [
-                "vmstorage"
-                "extraArgs"
-              ]
-              [
-                "vmselect"
-                "extraArgs"
-              ]
-            ];
-          } baseSpec config.extraSpec;
+          inherit name spec;
         };
+
+        # The operator creates the pods, so no workload policy is derived
+        # for them. vminsert writes to vmstorage on its vminsert port and
+        # vmselect reads from it on its vmselect port; every component
+        # resolves the others through DNS. Clients reach vminsert and
+        # vmselect through the ServiceRefs below, and VMAgents reach every
+        # component's metrics through the scrape join.
+        operandPolicies =
+          let
+            netpol = scope.networkPolicyEnforcer.netpol;
+            ns = scope.namespaceName;
+            tcp = port: {
+              inherit port;
+              protocol = "TCP";
+            };
+            toStorage =
+              component:
+              netpol.mkServiceEgressRule {
+                selector = componentSelector "vmstorage";
+                namespace = ns;
+                sourceNamespace = ns;
+                ports = [ (tcp storagePorts.${component}) ];
+              };
+            fromComponent =
+              component:
+              netpol.mkCallerIngressRule {
+                callerSelector = componentSelector component;
+                callerNamespace = ns;
+                ports = [ (tcp storagePorts.${component}) ];
+              };
+            policy =
+              component: rules:
+              kix.operandPolicy {
+                inherit scope;
+                name = "${name}-${component}";
+                spec = {
+                  endpointSelector.matchLabels = componentSelector component;
+                }
+                // rules;
+              };
+          in
+          {
+            vmstorage = policy "vmstorage" {
+              egress = [ netpol.dnsEgressRule ];
+              ingress = [
+                (fromComponent "vminsert")
+                (fromComponent "vmselect")
+              ];
+            };
+            vminsert = policy "vminsert" {
+              egress = [
+                netpol.dnsEgressRule
+                (toStorage "vminsert")
+              ];
+            };
+            vmselect = policy "vmselect" {
+              egress = [
+                netpol.dnsEgressRule
+                (toStorage "vmselect")
+              ];
+            };
+          };
 
         # The operator creates the operand Services itself: vmselect-<name>
         # on 8481 and vminsert-<name> on 8480, selecting the pods it stamps
@@ -436,6 +504,7 @@ in
             self.vmCluster
             self.insertService
           ]
+          ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies)
           ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
           out = {
             # URLs are built on the refs' fqdn, so they carry the marker's

@@ -10,10 +10,7 @@
 # the Prometheus datasource. The asserts below fail the build when Tempo's
 # config has no generator writing to vminsert, or the Tempo datasource has
 # no service map on the Prometheus datasource's uid.
-#
-# Network policy is off: the victoria-metrics packages render no policy for
-# the pods the operator creates, so under default deny vminsert cannot
-# reach vmstorage. ./test-tempo.nix covers Tempo under default deny.
+# Everything runs under Cilium default deny.
 #
 # Build:  nix build ./clusters#cluster-tempo-generator --extra-experimental-features pipe-operators
 
@@ -27,6 +24,16 @@ let
       (
         { ref, ... }:
         {
+          networkPolicy.enable = true;
+
+          # kind runs with the default CNI disabled, so the managed cilium
+          # instance fills the cni role.
+          cluster.roles.cni = {
+            binding = "absent";
+            provider = null;
+          };
+          instances.kube-system.cilium.package = packages.cilium;
+
           instances.monitoring = {
             vm-operator.package = packages.victoria-metrics-operator;
             vm-cluster.package = packages.victoria-metrics-cluster;

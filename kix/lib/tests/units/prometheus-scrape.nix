@@ -1111,4 +1111,19 @@ in
       ];
     in
     cnpsOf cluster == [ ] || throw "netpol off: ${show (map (m: m.metadata.name) (cnpsOf cluster))}";
+
+  # Targets in additionalScrapeConfigs get no policy, and Kix names them in
+  # a warning, with or without default deny.
+  prometheus-scrape-warns-on-additional-scrape-configs =
+    let
+      says = hasWarning "Prometheus monitoring/prometheus-server sets spec.additionalScrapeConfigs";
+      warned = clusterWith {
+        server.extraSpec.additionalScrapeConfigs = {
+          name = "extra-scrapes";
+          key = "scrapes.yaml";
+        };
+      };
+    in
+    (says warned && !(says (clusterWith { })) && scrapeEgress warned != null)
+    || throw "additionalScrapeConfigs warnings: ${show (warningsOf warned)}";
 }

@@ -70,7 +70,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `scope/labels.nix` | Standard label generation (`kix` and `helm` styles, selector labels). |
 | `plugins/netpol/module.nix` | Declares `networkPolicy.*` options and registers `workloadInterceptors`, `instanceProcessors`, and `clusterProcessors` hooks. |
 | `plugins/netpol/derive.nix` | Network policy derivation from `ctx.edges`: per-workload egress and self-ingress, caller-side ingress, API server egress, LoadBalancer ingress, default-deny, and platform intents. |
-| `plugins/netpol/scrape.nix` | Derives scrape egress and ingress policies by joining Prometheus CRs with selected ServiceMonitors, PodMonitors, and Alertmanager endpoints. |
+| `plugins/netpol/scrape.nix` | Derives scrape egress and ingress policies by joining scrapers (Prometheus and VMAgent CRs) with the scrape objects they select: ServiceMonitors, PodMonitors, VMServiceScrapes, VMPodScrapes, the operators' own scrape objects from `factBehavior.selfScrapes`, and Alertmanager endpoints. |
 | `plugins/netpol/interface.nix` | Network policy enforcer contract (`out.netpol`). |
 | `plugins/availability/module.nix` | Declares `cluster.availability.*` and `cluster.topology.*` options; injects `topologySpreadConstraints`, derives PodDisruptionBudgets, and enforces replica/ceiling invariants. |
 | `vocab/default.nix` | Assembles the public `kix.*` helper library from the `vocab/` modules, `core/availability.nix`, and `scorecard.nix`. |
