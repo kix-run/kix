@@ -38,9 +38,17 @@
 # traffic from the `dataPathEgress` and `externalStoreEgress` policies.
 #
 # Dependencies:
-#   cloudCredentials (required)  a secret or secret-ref with key `cloud`, the
-#                                object-store credentials file, mounted at
-#                                /credentials and named by the locations.
+#   cloudCredentials (required)  a secret or secret-ref in one of two forms:
+#                                - key `cloud`, the object-store credentials
+#                                  file, mounted at /credentials and named by
+#                                  the locations;
+#                                - keys AWS_ACCESS_KEY_ID and
+#                                  AWS_SECRET_ACCESS_KEY, set as environment
+#                                  variables of the server and node-agent. The
+#                                  locations name no credential, and the AWS
+#                                  plugin and kopia read the pair from the
+#                                  environment. A changed pair reaches the
+#                                  server and node-agent when they restart.
 #   repositoryPassword           a secret or secret-ref named
 #                                velero-repo-credentials with key
 #                                `repository-password`, the kopia repository
@@ -95,9 +103,13 @@
 # `partsOverlays` covers the rest.
 #
 # Known limits:
-# - `cloudCredentials` is a credentials file. A cloud identity (EKS IRSA,
-#   Azure workload identity) needs a profile in that file and a
-#   ServiceAccount annotation added with `partsOverlays`.
+# - A cloud identity (EKS IRSA, Azure workload identity) needs a profile in
+#   the `cloud` credentials file and a ServiceAccount annotation added with
+#   `partsOverlays`.
+# - With the key pair form, the AWS SDK prefers the pair in the environment
+#   to a location's own credentials file. Another location with a
+#   `credential` must set `config.profile` (for example "default") for its
+#   file to be read.
 # - Without an `objectStorage` dependency, Velero's pods may open
 #   connections to any address outside the cluster on the store's port (from
 #   `s3Url`, else 443), and on 443 when a snapshot location is set. A second
@@ -240,7 +252,7 @@ in
 
     volumeSnapshotLocation = lib.mkOption {
       default = null;
-      description = "The spec of a `default` VolumeSnapshotLocation, for a provider's native snapshots. Null builds none. Keys not listed pass through; `credential` is set by the package.";
+      description = "The spec of a `default` VolumeSnapshotLocation, for a provider's native snapshots. Null builds none. Keys not listed pass through; `credential` is set by the package when cloudCredentials is a file.";
       type = lib.types.nullOr (
         lib.types.submodule {
           freeformType = lib.types.attrsOf lib.types.anything;

@@ -27,9 +27,13 @@ let
   bsl = config.backupStorageLocation;
   metricsOn = config.metrics.enabled && prometheus != null;
 
-  credential = {
-    name = creds.out.name;
-    key = "cloud";
+  # A key pair in the pods' environment needs no `credential` on the
+  # locations: the AWS plugin and kopia fall back to the environment.
+  credentialSpec = lib.optionalAttrs (creds.envKeys == null) {
+    credential = {
+      name = creds.dep.out.name;
+      key = "cloud";
+    };
   };
 
   # The dependency's URL is what forms the location's network policy
@@ -148,8 +152,8 @@ in
         objectStorage = lib.filterAttrs (k: v: !(k == "prefix" && v == null)) bsl.objectStorage;
         config = locationConfig;
         default = true;
-        inherit credential;
-      };
+      }
+      // credentialSpec;
     requires = [ self.deployment ];
   };
 
@@ -159,9 +163,7 @@ in
     else
       self.crds.volumeSnapshotLocations.out.mkCR scope {
         name = "default";
-        spec = config.volumeSnapshotLocation // {
-          inherit credential;
-        };
+        spec = config.volumeSnapshotLocation // credentialSpec;
         requires = [ self.deployment ];
       };
 
