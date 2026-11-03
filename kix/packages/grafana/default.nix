@@ -580,7 +580,6 @@ in
           ]
           ++ builtins.filter (p: p != null) [
             self.scDashboardProvider
-            self.serviceMonitor
           ];
         };
       }

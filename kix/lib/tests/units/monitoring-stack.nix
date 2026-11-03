@@ -708,6 +708,159 @@ in
     )
     || throw "default-rules endpoint: ${show monitor}";
 
+  # A control-plane monitor turned off takes the rule groups that read only
+  # its series with it. A managed coredns that scrapes itself drops the
+  # CoreDNS bridge monitor, which would scrape the same pods again.
+  monitoring-stack-default-rules-monitor-off =
+    let
+      placeholder.instances.kube-system.placeholder = {
+        package = pkg "secret";
+        config.stringData.unused = "test-only";
+      };
+      rules =
+        config:
+        clusterWith {
+          instances = one "prometheus-default-rules" config;
+          extra = placeholder;
+        };
+      names = kind: cluster: map (m: m.metadata.name) (kindIn kind cluster);
+      on = rules { };
+      off = rules {
+        monitors.kubeScheduler.enabled = false;
+        monitors.etcd.enabled = false;
+      };
+      withCoredns =
+        metrics:
+        mkCluster [
+          {
+            instances.kube-system.coredns = {
+              package = pkg "coredns";
+              config = {
+                clusterIP = "10.96.0.10";
+                metrics.enabled = metrics;
+              };
+            };
+            instances.monitoring = {
+              prometheus-operator.package = pkg "prometheus-operator";
+            }
+            // one "prometheus-default-rules" { };
+          }
+        ];
+      bridged =
+        cluster: builtins.elem "prometheus-default-rules-coredns" (names "ServiceMonitor" cluster);
+    in
+    (
+      builtins.elem "prometheus-default-rules-kubernetes-system-scheduler" (names "PrometheusRule" on)
+      && builtins.elem "prometheus-default-rules-etcd" (names "PrometheusRule" on)
+      && !(builtins.elem "prometheus-default-rules-kubernetes-system-scheduler" (
+        names "PrometheusRule" off
+      ))
+      && !(builtins.elem "prometheus-default-rules-kube-scheduler.rules" (names "PrometheusRule" off))
+      && !(builtins.elem "prometheus-default-rules-etcd" (names "PrometheusRule" off))
+      && !(builtins.elem "prometheus-default-rules-kube-scheduler" (names "ServiceMonitor" off))
+      && builtins.elem "prometheus-default-rules-kubernetes-system" (names "PrometheusRule" off)
+      && bridged on
+      && !(bridged (withCoredns true))
+      && bridged (withCoredns false)
+    )
+    || throw "default-rules monitors off: ${show (names "PrometheusRule" off)}";
+
+  # The monitoring module turns off the monitors whose targets kind and a
+  # managed control plane hide.
+  monitoring-stack-module-unreachable-monitors =
+    let
+      packages = lib.genAttrs [
+        "alertmanager"
+        "kube-state-metrics"
+        "node-exporter"
+        "prometheus"
+        "prometheus-default-rules"
+        "prometheus-operator"
+        "secret"
+      ] pkg;
+      monitorsOn =
+        cluster:
+        map (m: m.metadata.name) (
+          kindIn "ServiceMonitor" (mkCluster [
+            ../../modules/monitoring.nix
+            {
+              _module.args.packages = packages;
+              monitoring = {
+                enabled = true;
+                grafana.enabled = false;
+                defaultRules.enabled = true;
+              };
+              instances.kube-system.placeholder = {
+                package = pkg "secret";
+                config.stringData.unused = "test-only";
+              };
+            }
+            cluster
+          ])
+        );
+      kind = monitorsOn { cluster.provider = "kind"; };
+      managed = monitorsOn { cluster.capabilities.managedControlPlane = true; };
+      plain = monitorsOn { };
+      has = name: ms: builtins.elem "default-rules-${name}" ms;
+    in
+    (
+      builtins.all (n: has n plain) [
+        "kube-etcd"
+        "kube-scheduler"
+        "kube-controller-manager"
+        "kube-proxy"
+      ]
+      && !(builtins.any (n: has n kind) [
+        "kube-etcd"
+        "kube-scheduler"
+        "kube-controller-manager"
+        "kube-proxy"
+      ])
+      && !(builtins.any (n: has n managed) [
+        "kube-etcd"
+        "kube-scheduler"
+        "kube-controller-manager"
+      ])
+      && has "kube-proxy" managed
+      && has "coredns" kind
+    )
+    || throw "monitoring module monitors: kind ${show kind}, managed ${show managed}";
+
+  # node-exporter renders its disk alerts unless the cluster runs the
+  # default rules, which carry alerts of the same names.
+  monitoring-stack-node-exporter-alerts =
+    let
+      alertsOf =
+        cfg:
+        let
+          rules = ruleNamed "nx-alerts" (clusterWith {
+            instances.nx = {
+              package = pkg "node-exporter";
+              config = cfg;
+            };
+          });
+        in
+        map (r: r.alert) (builtins.head rules.spec.groups).rules;
+      down = ruleNamed "nx-alerts" (clusterWith {
+        instances.nx = {
+          package = pkg "node-exporter";
+          config.metrics.hostAlerts = false;
+        };
+      });
+    in
+    (
+      alertsOf { } == [
+        "NodeExporterDown"
+        "NodeFilesystemAlmostOutOfSpace"
+        "NodeFilesystemSpaceFillingUp"
+      ]
+      && alertsOf { metrics.hostAlerts = false; } == [ "NodeExporterDown" ]
+      &&
+        (builtins.head (builtins.head down.spec.groups).rules).expr
+        == ''sum by (namespace, service) (up{namespace="monitoring", service="nx"}) == 0 or absent(up{namespace="monitoring", service="nx"})''
+    )
+    || throw "node-exporter alerts: ${show (alertsOf { })}";
+
   # kube-state-metrics refuses the flags its probes and Service read.
   monitoring-stack-kube-state-metrics-owned-flags =
     (

@@ -59,6 +59,18 @@ let
   # creates the class, and loki-logs reads its name through
   # deps.priorityClass, which also orders the DaemonSet after it.
   logShipperPriorityClass = "monitoring-log-shipper";
+  controlPlaneMonitors = [
+    "etcd"
+    "kubeControllerManager"
+    "kubeScheduler"
+  ];
+  unreachableMonitors =
+    if config.cluster.provider == "kind" then
+      controlPlaneMonitors ++ [ "kubeProxy" ]
+    else if config.cluster.capabilities.managedControlPlane == true then
+      controlPlaneMonitors
+    else
+      [ ];
 in
 {
   options.monitoring = {
@@ -164,8 +176,12 @@ in
         Deploy the prometheus-default-rules package: the standard Kubernetes
         alerting and recording rules, and ServiceMonitors for the API
         server, the kubelets, CoreDNS, etcd, kube-controller-manager,
-        kube-scheduler, and kube-proxy. Turn single rule groups or monitors
-        off through `instances.<namespace>.default-rules.config`.
+        kube-scheduler, and kube-proxy. On kind the etcd,
+        kube-controller-manager, kube-scheduler, and kube-proxy monitors
+        default to off, and under a managed control plane the first three,
+        because their metrics cannot be reached. Turn single rule groups or
+        monitors on or off through
+        `instances.<namespace>.default-rules.config`.
       '';
     };
 
@@ -220,16 +236,24 @@ in
             };
           };
 
+          # The default rules carry the same disk alerts by name.
           node-exporter = lib.mkIf cfg.nodeExporter.enabled {
             package = packages.node-exporter;
+            config.metrics.hostAlerts = lib.mkDefault (!cfg.defaultRules.enabled);
           };
 
           kube-state-metrics = lib.mkIf cfg.kubeStateMetrics.enabled {
             package = packages.kube-state-metrics;
           };
 
+          # kind's kubeadm binds these components' metrics to 127.0.0.1, and
+          # a managed control plane runs the first three outside the
+          # cluster, so their targets would always be down.
           default-rules = lib.mkIf cfg.defaultRules.enabled {
             package = packages.prometheus-default-rules;
+            config.monitors = lib.genAttrs unreachableMonitors (_: {
+              enabled = lib.mkDefault false;
+            });
           };
 
           # Storage lives as its own instance so cluster operators control

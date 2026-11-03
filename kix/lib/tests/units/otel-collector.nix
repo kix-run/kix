@@ -14,6 +14,8 @@
   byName,
   evalFails,
   prometheusStub,
+  alertRulesOf,
+  allSelect,
   ...
 }:
 
@@ -498,4 +500,31 @@ in
       && ofKind "ServiceMonitor" (manifests off) == [ ]
     )
     || throw "otel-collector metrics: plain ${builtins.toJSON (servicePortsOf plain)} scraped ${builtins.toJSON (servicePortsOf scraped)}";
+
+  # The down alert fires only when every target of the instance is down or
+  # none exists, in either mode, and keeps `namespace` and `service`.
+  otel-collector-alerts =
+    let
+      deployment = alertRulesOf "PrometheusRule" "collector" (
+        manifests (clusterWith (events // { prometheus = true; }))
+      );
+      daemonset = alertRulesOf "PrometheusRule" "collector" (
+        manifests (clusterWith {
+          prometheus = true;
+          traces = false;
+          config.mode = "daemonset";
+        })
+      );
+      sel = ''namespace="otel", service="collector"'';
+    in
+    (
+      allSelect sel deployment
+      && allSelect sel daemonset
+      && builtins.attrNames daemonset == [ "OtelCollectorDown" ]
+      &&
+        daemonset.OtelCollectorDown.expr
+        == "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})"
+      && alertRulesOf "PrometheusRule" "collector" (manifests (clusterWith events)) == null
+    )
+    || throw "otel-collector alerts: ${builtins.toJSON daemonset}";
 }

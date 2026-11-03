@@ -72,13 +72,13 @@ tests:
             exp_annotations:
               summary: A Velero schedule has no successful backup within its metrics.maxBackupAge
               description: Schedule daily of Velero in velero has not completed a backup within its threshold (daily 50h, weekly 338h, other schedules 50h). Check the backup location with velero backup-location get and the schedule's latest backups.
-      # absent() of a comparison keeps no labels of the selector, so this
-      # alert has no namespace label (housekeeping/2026-10-04-absent-up-alerts-lose-namespace-label.md).
       - eval_time: 75h
         alertname: VeleroServerDown
         exp_alerts:
           - exp_labels:
               severity: warning
+              namespace: velero
+              service: velero
             exp_annotations:
               summary: The Velero server is not being scraped
               description: Prometheus has scraped no running Velero server in velero for 15 minutes, so no backup runs. Check deployment/velero.

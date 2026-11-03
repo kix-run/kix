@@ -837,9 +837,6 @@ in
         # as root, the instance would report Ready before the controller.
         root = {
           resource = self.deployment;
-          # No other part references the ServiceMonitor, so the
-          # PackageInstance reaches it only through this list.
-          requires = builtins.filter (r: r != null) [ self.serviceMonitor ];
           out = {
             # Consumers depend through string context. The class name carries
             # the Deployment's and the patch Job's context as well as the

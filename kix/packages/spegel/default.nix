@@ -464,8 +464,7 @@ in
             self.serviceAccount
             self.bootstrap
             self.registryService
-          ]
-          ++ builtins.filter (r: r != null) [ self.serviceMonitor ];
+          ];
         };
       }
     )

@@ -1,3 +1,0 @@
-# 2026-10-02 · `kix/lib/vocab/compose.nix` (`kix.monitor`) · `kix.monitor` cannot set `honorLabels` on its endpoint, so kube-state-metrics builds its ServiceMonitor by hand.
-
-kube-state-metrics needs `honorLabels: true`: its series carry the `namespace` and `pod` of the objects they describe, and without it Prometheus renames them to `exported_namespace` and `exported_pod`, which breaks every bundled kube-state-metrics rule. `kix.monitor` passes only `port`, `path`, `scheme`, and `tlsConfig` to the primary endpoint, so `kix/packages/kube-state-metrics` calls `prometheus.out.mkServiceMonitor` itself and repeats the selector, namespace, and interval logic.

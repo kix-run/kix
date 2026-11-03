@@ -1,0 +1,170 @@
+# promtool unit tests for reloader's and node-exporter's alert rules, which
+# test-monitoring-netpol.nix renders. The rules-cluster-monitoring-netpol
+# check runs them from the rendered rules, so each rule_files entry is
+# <namespace>/<file> in the cluster's manifests.
+rule_files:
+  - reloader/reloader-alerts-prometheusrule.yaml
+  - monitoring-system/node-exporter-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # Everything answers and no reload fails: nothing fires. One node
+  # exporter of two down is left to TargetDown.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="reloader",service="reloader",pod="reloader-0"}'
+        values: '1x20'
+      - series: 'reloader_reload_executed_total{namespace="reloader",service="reloader",pod="reloader-0",success="false"}'
+        values: '0x20'
+      - series: 'up{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100"}'
+        values: '1x20'
+      - series: 'up{namespace="monitoring-system",service="node-exporter",instance="10.0.0.2:9100"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReloaderDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ReloaderReloadFailed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: NodeExporterDown
+        exp_alerts: []
+
+  # reloader is down and every node exporter is down: both down alerts keep
+  # the selector's namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="reloader",service="reloader",pod="reloader-0"}'
+        values: '0x20'
+      - series: 'up{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReloaderDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: reloader
+              service: reloader
+            exp_annotations:
+              summary: no reloader pod in reloader/reloader is up; Secret rotations are applied once one is
+              description: Prometheus has scraped no reloader target of reloader/reloader for 10 minutes. Workloads are not restarted after a Secret or ConfigMap changes until reloader runs again. Check Deployment reloader/reloader.
+      - eval_time: 20m
+        alertname: NodeExporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              service: node-exporter
+            exp_annotations:
+              summary: No node exporter is being scraped.
+              description: Prometheus has scraped no node exporter of monitoring-system/node-exporter for 10 minutes, so no node alert can fire. Check the DaemonSet's pods and the ServiceMonitor.
+
+  # Neither has a target at all: the absent() branches fire with the same
+  # labels.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReloaderDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: reloader
+              service: reloader
+            exp_annotations:
+              summary: no reloader pod in reloader/reloader is up; Secret rotations are applied once one is
+              description: Prometheus has scraped no reloader target of reloader/reloader for 10 minutes. Workloads are not restarted after a Secret or ConfigMap changes until reloader runs again. Check Deployment reloader/reloader.
+      - eval_time: 20m
+        alertname: NodeExporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              service: node-exporter
+            exp_annotations:
+              summary: No node exporter is being scraped.
+              description: Prometheus has scraped no node exporter of monitoring-system/node-exporter for 10 minutes, so no node alert can fire. Check the DaemonSet's pods and the ServiceMonitor.
+
+  # One rollout restart fails at minute 11.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="reloader",service="reloader",pod="reloader-0"}'
+        values: '1x20'
+      - series: 'reloader_reload_executed_total{namespace="reloader",service="reloader",pod="reloader-0",success="false"}'
+        values: '0x10 1x10'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReloaderReloadFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: reloader
+              service: reloader
+              pod: reloader-0
+              success: "false"
+            exp_annotations:
+              summary: reloader reloader/reloader failed to restart a workload after a Secret change
+              description: Reloader in reloader failed to restart a workload in the last 15 minutes (1 failures), so a workload may still run with an old Secret or ConfigMap. Check the reloader pod's log for the workload it names.
+
+  # The root filesystem has 3% left for 30 minutes and more. The data
+  # filesystem has plenty and stays flat.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '3x40'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '100x40'
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '80x40'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: NodeFilesystemAlmostOutOfSpace
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              service: node-exporter
+              instance: "10.0.0.1:9100"
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: A filesystem has less than 5% space left.
+              description: The filesystem on /dev/sda1 at / on 10.0.0.1:9100 has 3.00% space left. Free space or grow the disk before writes fail.
+      - eval_time: 35m
+        alertname: NodeFilesystemSpaceFillingUp
+        exp_alerts: []
+
+  # A 1000-byte filesystem loses 5 bytes a minute from 300 free: under 40%
+  # free, and empty within 24 hours. The data filesystem stays flat.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '300-1x100'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '1000x100'
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '800x100'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '1000x100'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: NodeFilesystemSpaceFillingUp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              service: node-exporter
+              instance: "10.0.0.1:9100"
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: A filesystem is predicted to run out of space within 24 hours.
+              description: The filesystem on /dev/sda1 at / on 10.0.0.1:9100 will fill within 24 hours at its current write rate. Find what is writing to it, and free space or grow the disk.
+      - eval_time: 90m
+        alertname: NodeFilesystemAlmostOutOfSpace
+        exp_alerts: []

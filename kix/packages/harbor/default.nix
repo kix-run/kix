@@ -477,19 +477,13 @@ in
         # Neither the core nor the jobservice Service carries a workload
         # edge (see core.nix and jobservice.nix), so both Deployments are
         # listed here; core's ConfigMap reaches every other component. No
-        # other part refers to the exporter or the monitors, so they are
-        # listed too.
+        # other part refers to the exporter Service, so it is listed too.
         root = {
           resource = if self.route != null then self.route else self.coreService;
           requires = builtins.filter (r: r != null) [
             self.coreDeployment
             self.jobserviceDeployment
             self.exporterService
-            self.coreMonitor
-            self.coreAlerts
-            self.registryMonitor
-            self.jobserviceMonitor
-            self.exporterMonitor
           ];
         };
       }

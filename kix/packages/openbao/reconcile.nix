@@ -233,8 +233,6 @@ in
       self.authDelegator
       self.reconcile
       self.metricsService
-      self.serviceMonitor
-      self.prometheusRules
     ];
     out = {
       url = serviceUrl;

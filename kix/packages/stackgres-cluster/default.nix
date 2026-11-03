@@ -568,13 +568,11 @@ in
             ++ builtins.filter (r: r != null) [
               self.poolingConfig
               self.scripts
-              self.podMonitor
               self.operandEgress
               self.operandIngress
               self.dbOpsEgress
               self.backupJobEgress
               self.operatorEgress
-              self.prometheusRules
             ];
             out = {
               inherit (postgresService.out) name fqdn port;

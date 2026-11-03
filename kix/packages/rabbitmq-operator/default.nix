@@ -706,8 +706,6 @@ in
           ]
           ++ builtins.filter (r: r != null) [
             self.metricsService
-            (self.serviceMonitor or null)
-            (self.prometheusRules or null)
           ];
           postHooks = [ self.webhookCheck ];
           out = {

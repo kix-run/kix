@@ -429,9 +429,6 @@ in
               self.certControllerDeployment
               self.controllerMetricsService
               self.certControllerMetricsService
-              (self.controllerMonitor or null)
-              (self.webhookMonitor or null)
-              (self.certControllerMonitor or null)
             ]
             ++ builtins.attrValues self.crds
           );

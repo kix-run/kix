@@ -143,11 +143,7 @@ in
 
     # The operator scrapes the agent whatever this says; `enabled` only
     # switches the package's alert rules.
-    metrics.enabled = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Render the package's alert rules when the `prometheus` dependency is the VictoriaMetrics operator. The operator's own scrape of the agent does not depend on it.";
-    };
+    metrics = kix.options.alerts;
 
     # After the agent is ready, run ./health-check.py as a Job in this
     # namespace: the agent's own samples are fresh, every replica is
@@ -254,9 +250,7 @@ in
 
         root = {
           resource = self.vmAgent;
-          requires =
-            lib.optional (self.agentEgress != null) self.agentEgress
-            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
+          requires = lib.optional (self.agentEgress != null) self.agentEgress;
           out = {
             # Operand pods are operator-created; image not in any Kix manifest.
             extraImages = [ (kix.image.ref config.image) ];

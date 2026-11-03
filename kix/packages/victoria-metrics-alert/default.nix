@@ -222,11 +222,7 @@ in
     };
     # The operator scrapes vmalert and Alertmanager whatever this says;
     # `enabled` only switches the package's alert rules.
-    metrics.enabled = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Render the package's alert rules, Watchdog included, when the `prometheus` dependency is the VictoriaMetrics operator. The operator's own scrape of vmalert and Alertmanager does not depend on it.";
-    };
+    metrics = kix.options.alerts;
     # After vmalert is ready, run ./health-check.py as a Job in this
     # namespace: every vmalert and alertmanager replica is up, rules
     # loaded, and no alert-send, datasource, or remote-write errors.
@@ -498,9 +494,7 @@ in
 
         root = {
           resource = self.vmAlert;
-          requires =
-            builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies)
-            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
+          requires = builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
           out = {
             extraImages = [
               (kix.image.ref config.image)

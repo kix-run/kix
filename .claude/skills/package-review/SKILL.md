@@ -256,7 +256,7 @@ when a check fails or the path is not evaluated by default.
 
 ### Monitoring (Mo)
 
-- Mo1. Is `metrics` declared other than `kix.options.monitor` (or that `//` an `enabled` default of false)? Fix: use it.
+- Mo1. Is `metrics` declared other than `kix.options.monitor` (or that `//` an `enabled` default of false), or `kix.options.alerts` where an operator configures the scrape and the package only renders `kix.alerts`? Fix: use it.
 - Mo2. Is a ServiceMonitor or PrometheusRule built directly, or emitted without a `prometheus ? null` dep? Fix: `kix.monitor`; for a PodMonitor scrape, `prometheus.out.mkPodMonitor` plus `kix.alerts`.
 - Mo3. Is a metrics-only Service rendered when `metrics.enabled` is false or `prometheus` is null? Fix: gate on both. Exception: a Service that is `root` or the target of `kix.healthCheck` renders always.
 - Mo4. Do `prometheus.io` annotations stand in for a monitor? Fix: `kix.monitor` or delete.
@@ -268,7 +268,6 @@ when a check fails or the path is not evaluated by default.
 - Mo10. Are secondary components' metrics dropped? Fix: another `kix.monitor` with `name`, `monitorPart`, `rulesPart`.
 - Mo11. Is `/metrics` served on the public route by default? Fix: off, `kix.expose { deriveHost = false; }` so only an instance that sets `ingress.host` is routed (Grafana), or state the trade-off.
 - Mo12. Does the program need a flag or setting before it serves the metrics the ServiceMonitor scrapes (ingress-nginx `--enable-metrics`)? Read upstream's flag defaults, not the chart's values.
-- Mo13. When `root` is an attrset with its own `requires`, does it omit the `kix.monitor` parts (`serviceMonitor`, `prometheusRules`, filtered for null), leaving them orphaned? Detection: a package-eval fixture with a real `prometheus` provider and the orphaned-part trace.
 - Mo14. Does an alert's result lose `namespace` (a bare `sum(...)`, a `by` list without it, a `without` list that includes it, or `absent()` over an expression such as `absent(up{...} == 1)`, which returns no labels)? Routing, grouping, and inhibition then span the cluster, and `$labels` templates render empty. Fix: `sum by (namespace, service) (up{sel}) == 0 or absent(up{sel})` (HANDBOOK §9.4 "Writing alerts").
 - Mo15. Is a rule's severity unset (the builder's default is `warning`), `critical` for a condition that is not an outage or data at risk now, or outside `critical`, `warning`, and `info`? The one exception is an always-firing `Watchdog` heartbeat, which carries `none` as kube-prometheus's does and which the alertmanager package's default settings route by name. Fix: set it on every rule, choosing the lower level when in doubt (BEST-PRACTICES §9.6).
 - Mo16. Does a rule lack `summary` or `description`, template the `summary`, put a value or other changing text in a label, or set `runbook_url` to anything but a maintained upstream runbook for the same condition? Fix: a fixed `summary`; a `description` naming the instance, the value, the meaning, and the first thing to check.

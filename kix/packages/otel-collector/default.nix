@@ -67,8 +67,10 @@
 # `events.enabled`), reading either address fails evaluation naming the
 # instance.
 #
-# Alerts, scoped to this instance's Service: a collector is not scraped for
-# 5 minutes.
+# Alerts, scoped to this instance's Service: no collector target has been
+# scraped for 10 minutes (`OtelCollectorDown`, critical). One pod of several
+# down, such as the agent on one node, is left to the generic `TargetDown`
+# and the node alerts.
 #
 # Escape hatches: `settings` (the collector's configuration; the locked
 # paths are listed in its description), `extraArgs`, `env`, and the
@@ -612,10 +614,6 @@ in
 
           root = {
             resource = self.service;
-            requires = builtins.filter (p: p != null) [
-              (self.serviceMonitor or null)
-              (self.prometheusRules or null)
-            ];
             # Without the receiver the addresses throw when a consumer reads
             # them; `check` would force them here.
             out =
@@ -658,11 +656,11 @@ in
         in
         {
           OtelCollectorDown = {
-            expr = "up{${scoped}} == 0";
-            "for" = "5m";
+            expr = "sum by (namespace, service) (up{${scoped}}) == 0 or absent(up{${scoped}})";
+            "for" = "10m";
             severity = "critical";
             summary = "An OpenTelemetry Collector is down.";
-            description = "Prometheus has not scraped the collector at {{ $labels.instance }} for 5 minutes; telemetry sent to it may be lost.";
+            description = "Prometheus has scraped no collector of {{ $labels.namespace }}/{{ $labels.service }} for 10 minutes; telemetry sent to it is lost. Check the instance's pods.";
           };
         };
     })

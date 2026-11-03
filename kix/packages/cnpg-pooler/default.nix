@@ -352,7 +352,6 @@ in
           self.service
         ]
         ++ builtins.filter (r: r != null) [
-          self.podMonitor
           self.poolerEgress
           self.instanceIngress
         ];

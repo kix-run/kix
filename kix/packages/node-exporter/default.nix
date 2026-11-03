@@ -17,9 +17,14 @@
 #
 # `out`: the Service's `name`, `fqdn`, and `port`.
 #
-# Alerts, scoped to this instance's Service: the exporter is down,
-# a filesystem is predicted to fill within 24 hours or has under 5% left,
-# and memory or CPU use stays above 90%.
+# Alerts, scoped to this instance's Service: no exporter target has been
+# scraped for 10 minutes (`NodeExporterDown`, warning). With
+# `metrics.hostAlerts` (the default), a filesystem predicted to fill within
+# 24 hours (`NodeFilesystemSpaceFillingUp`, warning) or under 5% free
+# (`NodeFilesystemAlmostOutOfSpace`, critical). prometheus-default-rules
+# ships those two under the same names in its `nodeExporter` group, with
+# memory, CPU, and the other host conditions, so a cluster that runs it
+# turns `hostAlerts` off. One exporter of several down is `TargetDown`.
 #
 # Escape hatches: `extraArgs` for node_exporter flags, and the instance's
 # `partsOverlays` (the DaemonSet tolerates every NoSchedule taint and runs
@@ -85,7 +90,13 @@ in
       default = true;
       description = "Read `*.prom` files from ${textfileDirectory} on each host, which other host jobs write.";
     };
-    metrics = kix.options.monitor;
+    metrics = kix.options.monitor // {
+      hostAlerts = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Render NodeFilesystemSpaceFillingUp and NodeFilesystemAlmostOutOfSpace. prometheus-default-rules ships alerts of the same names in its `nodeExporter` group, so turn this off on a cluster that runs those rules. The monitoring module sets it to the opposite of `monitoring.defaultRules.enabled`.";
+      };
+    };
   };
 
   build = [
@@ -239,59 +250,54 @@ in
           requires = [
             self.serviceAccount
             self.daemonset
-          ]
-          ++ builtins.filter (p: p != null) [
-            self.serviceMonitor
-            self.prometheusRules
           ];
         };
       }
     )
-    (kix.monitor {
-      service = "service";
-      port = "http-metrics";
-      alerts =
-        let
-          scoped = ''namespace="${ns}", service="${name}"'';
-          fs = ''${scoped}, fstype!="", mountpoint!=""'';
-        in
-        {
-          NodeExporterDown = {
-            expr = "up{${scoped}} == 0";
-            "for" = "5m";
-            severity = "critical";
-            summary = "A node exporter is down.";
-            description = "Prometheus has not scraped the node exporter at {{ $labels.instance }} for 5 minutes, so that node's other alerts cannot fire.";
-          };
+    # DI passes a build function only the arguments its formals name, so
+    # the wrapper names every argument kix.monitor reads.
+    (
+      {
+        self,
+        config,
+        scope,
+        lib,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        scoped = ''namespace="${ns}", service="${name}"'';
+        fs = ''${scoped}, fstype!="", mountpoint!=""'';
+        hostAlerts = lib.optionalAttrs config.metrics.hostAlerts {
           NodeFilesystemSpaceFillingUp = {
             expr = "predict_linear(node_filesystem_avail_bytes{${fs}}[6h], 24*60*60) < 0 and node_filesystem_avail_bytes{${fs}} / node_filesystem_size_bytes{${fs}} < 0.4";
             "for" = "1h";
-            summary = "Filesystem is predicted to run out of space within 24h.";
-            description = "Filesystem on {{ $labels.device }} at {{ $labels.instance }} is predicted to run out of space within the next 24 hours at current write rate.";
+            severity = "warning";
+            summary = "A filesystem is predicted to run out of space within 24 hours.";
+            description = "The filesystem on {{ $labels.device }} at {{ $labels.mountpoint }} on {{ $labels.instance }} will fill within 24 hours at its current write rate. Find what is writing to it, and free space or grow the disk.";
           };
           NodeFilesystemAlmostOutOfSpace = {
             expr = "node_filesystem_avail_bytes{${fs}} / node_filesystem_size_bytes{${fs}} * 100 < 5";
             "for" = "30m";
             severity = "critical";
-            summary = "Filesystem has less than 5% space left.";
-            description = ''Filesystem on {{ $labels.device }} at {{ $labels.instance }} has only {{ printf "%.2f" $value }}% available space left.'';
-          };
-          NodeHighMemoryUsage = {
-            expr = "(1 - node_memory_MemAvailable_bytes{${scoped}} / node_memory_MemTotal_bytes{${scoped}}) * 100 > 90";
-            "for" = "15m";
-            summary = "Node memory usage above 90%.";
-            # `| float64` is not a template function in Prometheus or
-            # vmalert. Prometheus fails such a template only when the alert
-            # fires; the VM operator's converter rejects the whole rule group.
-            description = ''Node {{ $labels.instance }} memory usage is {{ printf "%.0f" $value }}%.'';
-          };
-          NodeHighCPUUsage = {
-            expr = ''100 - (avg by (namespace, service, instance) (rate(node_cpu_seconds_total{${scoped}, mode="idle"}[5m])) * 100) > 90'';
-            "for" = "15m";
-            summary = "Node CPU usage above 90%.";
-            description = "Node {{ $labels.instance }} CPU usage is above 90% for more than 15 minutes.";
+            summary = "A filesystem has less than 5% space left.";
+            description = ''The filesystem on {{ $labels.device }} at {{ $labels.mountpoint }} on {{ $labels.instance }} has {{ printf "%.2f" $value }}% space left. Free space or grow the disk before writes fail.'';
           };
         };
-    })
+      in
+      kix.monitor {
+        service = "service";
+        port = "http-metrics";
+        alerts = hostAlerts // {
+          NodeExporterDown = {
+            expr = "sum by (namespace, service) (up{${scoped}}) == 0 or absent(up{${scoped}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "No node exporter is being scraped.";
+            description = "Prometheus has scraped no node exporter of {{ $labels.namespace }}/{{ $labels.service }} for 10 minutes, so no node alert can fire. Check the DaemonSet's pods and the ServiceMonitor.";
+          };
+        };
+      } args
+    )
   ];
 }

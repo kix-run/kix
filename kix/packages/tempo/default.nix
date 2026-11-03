@@ -626,8 +626,6 @@ in
           resource = self.service;
           requires = builtins.filter (part: part != null) [
             self.storeEgress
-            self.serviceMonitor
-            self.prometheusRules
           ];
           out = kix.contracts.otlpEndpoint.check who {
             otlpGrpcUrl = self.otlpService.out.url { port = otlpGrpcPort; };

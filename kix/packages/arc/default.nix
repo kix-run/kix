@@ -586,7 +586,6 @@ in
           ++ builtins.attrValues self.crds
           ++ builtins.filter (r: r != null) [
             self.metricsService
-            self.listenerPodMonitor
             self.listenerEgress
           ];
           out = {

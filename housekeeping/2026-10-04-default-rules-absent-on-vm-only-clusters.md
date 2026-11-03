@@ -8,3 +8,9 @@ TargetDown, KubePodCrashLooping, KubePersistentVolumeFillingUp, and Watchdog.
 Package-review item Mo19 tells authors to leave those conditions to the
 generic rules, which on such a cluster means nobody alerts on them.
 victoria-metrics-alert now ships its own Watchdog; the rest is still missing.
+
+Decision required from the maintainers: have prometheus-default-rules render through
+any rule and monitor builder (the VictoriaMetrics operator's `mkVMRule` and
+VMServiceScrape as well as prometheus-operator's), or keep it
+Prometheus-only and say in Mo19 that a VM-only cluster carries no generic
+rules. See `v2_discussions/101_monitoring_provider_landscape.md`.

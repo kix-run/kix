@@ -597,15 +597,7 @@ in
           };
         };
 
-        # The monitoring parts depend on the Deployment, not the reverse,
-        # so root lists them to keep them in the build.
-        root = {
-          resource = self.deployment;
-          requires = builtins.filter (r: r != null) [
-            self.serviceMonitor
-            self.prometheusRules
-          ];
-        };
+        root = self.deployment;
       }
       // clusterRoles
       // crdRefParts

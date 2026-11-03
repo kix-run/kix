@@ -33,7 +33,8 @@
 #                          `metrics.enabled`.
 #
 # `out`: root is the Service, so `out.name`, `out.fqdn`, `out.selector`, and
-# `out.port` (53) are the Service's.
+# `out.port` (53) are the Service's. `out.scrapedByPrometheus` is true while
+# the instance's own ServiceMonitor scrapes it.
 #
 # Escape hatches: `servers` takes any plugin with its arguments and block
 # lines; `env` sets Go runtime variables such as GOMEMLIMIT; the instance's
@@ -576,12 +577,9 @@ in
 
         root = {
           resource = self.service;
-          # The alert rules reference no other part of the instance, so the
-          # PackageInstance reaches them only through this list.
-          requires = builtins.filter (r: r != null) [
-            self.serviceMonitor
-            self.prometheusRules
-          ];
+          # prometheus-default-rules reads it to skip its own CoreDNS
+          # monitor, which would scrape these pods a second time.
+          out.scrapedByPrometheus = scrape;
         };
       }
     )
@@ -596,25 +594,27 @@ in
         in
         {
           CoreDNSDown = {
-            expr = "absent(up{${sel}} == 1)";
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
             "for" = "15m";
             severity = "critical";
             summary = "${instance} is down";
-            description = "No ${instance} target has been up for 15 minutes; cluster DNS lookups fail.";
+            description = "No ${instance} target has been up for 15 minutes; cluster DNS lookups fail. Check the Deployment's pods in ${scope.namespaceName}.";
           };
           CoreDNSLatencyHigh = {
-            expr = "histogram_quantile(0.99, sum by (server, zone, le) (rate(coredns_dns_request_duration_seconds_bucket{${sel}}[5m]))) > 4";
+            expr = "histogram_quantile(0.99, sum by (namespace, service, server, zone, le) (rate(coredns_dns_request_duration_seconds_bucket{${sel}}[5m]))) > 4";
             "for" = "10m";
-            severity = "critical";
+            severity = "warning";
             summary = "${instance} answers slowly";
-            description = "The 99th percentile of ${instance} request latency for server {{ $labels.server }} zone {{ $labels.zone }} is {{ $value }}s.";
+            description = "The 99th percentile of ${instance} request latency for server {{ $labels.server }} zone {{ $labels.zone }} is {{ $value }}s. Check the upstream servers it forwards to.";
           };
+          # The floor of one response a second keeps a single SERVFAIL on a
+          # quiet cluster from firing it.
           CoreDNSErrorsHigh = {
-            expr = ''sum(rate(coredns_dns_responses_total{${sel}, rcode="SERVFAIL"}[5m])) / sum(rate(coredns_dns_responses_total{${sel}}[5m])) > 0.03'';
+            expr = ''sum by (namespace, service) (rate(coredns_dns_responses_total{${sel}, rcode="SERVFAIL"}[5m])) / sum by (namespace, service) (rate(coredns_dns_responses_total{${sel}}[5m])) > 0.03 and sum by (namespace, service) (rate(coredns_dns_responses_total{${sel}}[5m])) > 1'';
             "for" = "10m";
-            severity = "critical";
+            severity = "warning";
             summary = "${instance} returns SERVFAIL";
-            description = "{{ $value | humanizePercentage }} of ${instance} responses are SERVFAIL.";
+            description = "{{ $value | humanizePercentage }} of ${instance} responses are SERVFAIL. Check the upstream servers it forwards to and its log.";
           };
         };
     })

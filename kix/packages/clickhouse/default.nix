@@ -571,13 +571,7 @@ in
 
           root = {
             resource = self.service;
-            requires = [
-              self.headlessService
-            ]
-            ++ builtins.filter (p: p != null) [
-              (self.serviceMonitor or null)
-              (self.prometheusRules or null)
-            ];
+            requires = [ self.headlessService ];
             out = contract.check "clickhouse (${name})" {
               httpUrl = "http://${self.service.out.fqdn}:${toString ports.http}";
               nativeEndpoint = "${self.service.out.fqdn}:${toString ports.native}";

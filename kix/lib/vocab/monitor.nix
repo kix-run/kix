@@ -74,8 +74,8 @@ in
   # Build a ServiceMonitor and optional PrometheusRule for a Service.
   #
   # Override `name`, `monitorPart`, and `rulesPart` when a package monitors
-  # multiple Services. `scheme`, `tlsConfig`, and `params` apply only to the
-  # primary endpoint. `extraEndpoints` inherit `scheme = "http"`,
+  # multiple Services. `scheme`, `tlsConfig`, `params`, and `honorLabels`
+  # apply only to the primary endpoint. `extraEndpoints` inherit `scheme = "http"`,
   # `path = "/metrics"`, and `config.metrics.interval`.
   monitor =
     {
@@ -85,6 +85,7 @@ in
       scheme ? "http",
       tlsConfig ? null,
       params ? null,
+      honorLabels ? null,
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
@@ -119,6 +120,7 @@ in
           path
           tlsConfig
           params
+          honorLabels
           ;
       }
       // intervalAttrs;

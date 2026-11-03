@@ -386,7 +386,6 @@ in
         ++ builtins.filter (p: p != null) [
           self.serverEgress
           self.podDisruptionBudget
-          self.selfMonitor
         ];
         out = {
           namespace = ns;

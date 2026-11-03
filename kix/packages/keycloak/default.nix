@@ -518,13 +518,7 @@ in
 
         root = {
           resource = self.service;
-          # The `kix.monitor` parts are listed because a root with
-          # `requires` must name every part it carries.
-          requires = builtins.filter (p: p != null) [
-            self.peers
-            (self.serviceMonitor or null)
-            (self.prometheusRules or null)
-          ];
+          requires = builtins.filter (p: p != null) [ self.peers ];
           out = kix.contracts.oidcProvider.check who {
             url = hostname;
             issuerUrl = realm: "${hostname}${realmPath "out.issuerUrl" realm}";

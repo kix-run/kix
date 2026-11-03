@@ -1,4 +1,4 @@
-# 2026-10-04 · `prometheus-default-rules` · KubePersistentVolumeFillingUp never fires for claims on local-path-provisioner.
+# 2026-10-04 · `kix/packages/prometheus-default-rules` · KubePersistentVolumeFillingUp never fires for claims on local-path-provisioner.
 
 The rule reads `kubelet_volume_stats_*`, and the kubelet reports none for
 hostPath-backed volumes, which is what kind's default StorageClass gives.

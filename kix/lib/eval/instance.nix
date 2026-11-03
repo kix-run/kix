@@ -353,7 +353,27 @@ in
           else
             throw "Instance '${instanceName}': root must be a resource or { resource, requires, postHooks }";
 
-        packageRequires = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
+        # Monitor and rule objects reference nothing else in the instance,
+        # so the PackageInstance requires them directly. Matching by kind
+        # also covers a part a partsOverlay replaces and a PodMonitor a
+        # package builds itself.
+        packageRequires =
+          let
+            declared = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
+            declaredPaths = map (r: builtins.unsafeDiscardStringContext (r.outPath or "")) declared;
+            monitorKinds = [
+              "ServiceMonitor"
+              "PodMonitor"
+              "PrometheusRule"
+              "VMRule"
+            ];
+            monitorParts = builtins.filter (
+              r:
+              builtins.elem (r.kind or null) monitorKinds
+              && !(builtins.elem (builtins.unsafeDiscardStringContext r.outPath) declaredPaths)
+            ) _partResourcesFromParts;
+          in
+          declared ++ monitorParts;
 
         postHooks = if rawRoot ? resource then rawRoot.postHooks or [ ] else [ ];
 

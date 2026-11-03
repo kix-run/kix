@@ -250,12 +250,7 @@ in
 
     # The operator scrapes the components whatever this says; `enabled`
     # only switches the package's alert rules.
-    metrics = {
-      enabled = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Render the package's alert rules when the `prometheus` dependency is the VictoriaMetrics operator. The operator's own scrape of vmstorage, vmselect, and vminsert does not depend on it.";
-      };
+    metrics = kix.options.alerts // {
       minFreeDiskPercent = lib.mkOption {
         type = lib.types.ints.between 1 99;
         default = 20;
@@ -549,8 +544,7 @@ in
             self.vmCluster
             self.insertService
           ]
-          ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies)
-          ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
+          ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
           out = {
             # URLs are built on the refs' fqdn, so they carry the marker's
             # dependency context and the endpoint fact.

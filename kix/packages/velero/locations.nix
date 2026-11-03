@@ -196,11 +196,7 @@ in
     ++ builtins.filter (part: part != null) [
       self.dataPathEgress
       self.service
-      self.serviceMonitor
-      self.prometheusRules
       self.nodeAgentService
-      (self.nodeAgentMonitor or null)
-      (self.nodeAgentRules or null)
     ];
     out =
       let
@@ -257,7 +253,7 @@ in
       }). Check the backup location with velero backup-location get and the schedule's latest backups.";
     };
     VeleroServerDown = {
-      expr = "absent(up{${server}} == 1)";
+      expr = "sum by (namespace, service) (up{${server}}) == 0 or absent(up{${server}})";
       "for" = "15m";
       severity = "warning";
       summary = "The Velero server is not being scraped";
