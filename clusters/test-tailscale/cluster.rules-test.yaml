@@ -1,0 +1,90 @@
+# promtool unit tests for the tailscale operator's alert rules, which
+# cluster.nix renders. The rules-cluster-tailscale check runs them from the
+# rendered rules, so the rule_files entry is <namespace>/<file> in the
+# cluster's manifests.
+rule_files:
+  - tailscale/tailscale-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # The operator stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: TailscaleOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tailscale
+              service: tailscale-metrics
+            exp_annotations:
+              summary: "The Tailscale operator is down."
+              description: "The Tailscale operator tailscale/tailscale has not answered a scrape for 10 minutes. Running proxies keep serving, but new or changed Services, Ingresses, and tailscale.com resources are not acted on. Check the operator Deployment in tailscale."
+  # No target at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="other",service="other",instance="10.0.0.9:8080"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TailscaleOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tailscale
+              service: tailscale-metrics
+            exp_annotations:
+              summary: "The Tailscale operator is down."
+              description: "The Tailscale operator tailscale/tailscale has not answered a scrape for 10 minutes. Running proxies keep serving, but new or changed Services, Ingresses, and tailscale.com resources are not acted on. Check the operator Deployment in tailscale."
+  # A controller keeps failing its reconciles.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '0+2x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TailscaleOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tailscale
+              service: tailscale-metrics
+              controller: connector
+            exp_annotations:
+              summary: "The Tailscale operator fails to reconcile resources."
+              description: "The connector controller of the Tailscale operator tailscale/tailscale has failed 50% of its reconciles over the last 30 minutes, so a proxy or tailnet device may not match its resource. The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause."
+      - eval_time: 25m
+        alertname: TailscaleOperatorDown
+        exp_alerts: []
+  # Healthy: the operator answers and no reconcile fails.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '3x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TailscaleOperatorDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TailscaleOperatorReconcileErrors
+        exp_alerts: []
+  # TailscaleOperatorReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: TailscaleOperatorReconcileErrors
+        exp_alerts: []

@@ -1,5 +1,5 @@
-# promtool unit tests for the stackgres-cluster alert rules test-metabase.nix
-# renders. The rules-cluster-metabase check runs them from the rendered rules,
+# promtool unit tests for the stackgres-cluster and stackgres-operator alert
+# rules test-metabase.nix renders. The rules-cluster-metabase check runs them from the rendered rules,
 # so each rule_files entry is <namespace>/<file> in the cluster's manifests.
 # `metabase-pg` has one instance and no backups; `pg-replicated` has two
 # instances and backups, so it renders the rules that need a standby or WAL
@@ -7,6 +7,7 @@
 rule_files:
   - analytics/metabase-pg-alerts-prometheusrule.yaml
   - data/pg-replicated-alerts-prometheusrule.yaml
+  - stackgres-system/stackgres-operator-alerts-prometheusrule.yaml
 evaluation_interval: 1m
 tests:
   # The exporter of metabase-pg runs and cannot reach PostgreSQL. Both rule
@@ -327,4 +328,84 @@ tests:
         exp_alerts: []
       - eval_time: 35m
         alertname: StackGresWALArchivingFailing
+        exp_alerts: []
+  # The operator's one replica stops answering scrapes.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: StackGresOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "stackgres-system"
+              service: "stackgres-operator-metrics"
+            exp_annotations:
+              summary: "The StackGres operator is down."
+              description: "No replica of the StackGres operator stackgres-system/stackgres-operator has answered a scrape for 10 minutes. Running PostgreSQL clusters keep serving, but changes to SGClusters and other stackgres.io resources are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in stackgres-system."
+  # The operator is not scraped at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: StackGresOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "stackgres-system"
+              service: "stackgres-operator-metrics"
+            exp_annotations:
+              summary: "The StackGres operator is down."
+              description: "No replica of the StackGres operator stackgres-system/stackgres-operator has answered a scrape for 10 minutes. Running PostgreSQL clusters keep serving, but changes to SGClusters and other stackgres.io resources are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in stackgres-system."
+  # Reconciles of sgcluster resources fail every minute; sgbackup ones
+  # failed once and stopped.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080"}'
+        values: '1x30'
+      - series: 'sg_operator_reconciliation_total_errors{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '0+1x30'
+      - series: 'sg_operator_reconciliation_total_performed{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '0+2x30'
+      - series: 'sg_operator_reconciliation_total_errors{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgbackup"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: StackGresOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "stackgres-system"
+              service: "stackgres-operator-metrics"
+              resource: "sgcluster"
+            exp_annotations:
+              summary: "The StackGres operator fails to reconcile its resources."
+              description: "The StackGres operator stackgres-system/stackgres-operator has failed 50% of its reconciles of sgcluster resources over the last 30 minutes, so one of them may not match its spec. The operator log names the resource and the error."
+  # The operator answers and its error count stays put.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080"}'
+        values: '1x30'
+      - series: 'sg_operator_reconciliation_total_errors{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '3x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: StackGresOperatorDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: StackGresOperatorReconcileErrors
+        exp_alerts: []
+  # StackGresOperatorReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'sg_operator_reconciliation_total_performed{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '0+10x40'
+      - series: 'sg_operator_reconciliation_total_errors{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: StackGresOperatorReconcileErrors
         exp_alerts: []

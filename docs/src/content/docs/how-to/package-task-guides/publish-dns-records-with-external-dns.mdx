@@ -141,10 +141,10 @@ HTTP 429 means Cloudflare is rate limiting the token; raise `interval` to call
 the API less often.
 
 When the cluster has a `prometheus` instance, the package also creates a
-ServiceMonitor and an `ExternalDNSSyncStale` alert. The alert fires five
-minutes after either condition starts: no synchronization has succeeded for
-three intervals (at least 15 minutes), or Prometheus has no samples from the
-pod. Under generated network policy, Prometheus cannot scrape
+ServiceMonitor and two alerts. `ExternalDNSSyncStale` fires when no
+synchronization has succeeded for three intervals (at least 15 minutes) and
+five minutes more. `ExternalDNSDown` fires when Prometheus has had no answer
+from the pod for 10 minutes. Under generated network policy, Prometheus cannot scrape
 the pod until you allow it, as described in
 [Allow the provider through network policy](#allow-the-provider-through-network-policy).
 
@@ -185,7 +185,7 @@ evaluation warns, and you add a NetworkPolicy for the port under
 `namespaces.<namespace>.networkPolicies`.
 
 Generated network policy does not admit Prometheus to the metrics port, TCP
-7979, so the ServiceMonitor's scrapes fail and the stale-sync alert fires.
+7979, so the ServiceMonitor's scrapes fail and `ExternalDNSDown` fires.
 Add a NetworkPolicy that allows ingress from Prometheus on that port in the
 same way.
 

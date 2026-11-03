@@ -1,8 +1,8 @@
 # Tests for the spegel package and the registryMirror role: the refusals
 # of nodes that cannot serve (one node, containerd discarding unpacked
 # layers), the exclusive binding of flavours that embed Spegel, one
-# instance per cluster, the owned registry flags, and the containerd paths
-# taken from the cluster definition.
+# instance per cluster, the owned registry flags, the containerd paths
+# taken from the cluster definition, and the alert rules.
 
 {
   lib,
@@ -11,6 +11,9 @@
   ofKind,
   byName,
   evalFails,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -214,4 +217,34 @@ in
       && volume.hostPath.path == "/etc/cri/conf.d/hosts"
     )
     || throw "spegel on Talos did not use /etc/cri/conf.d/hosts: ${builtins.toJSON init.args}";
+
+  # The alerts render under `spegel-alerts` with a prometheus provider and
+  # metrics.enabled, and every expression selects the metrics Service.
+  spegel-alerts =
+    let
+      rulesOf =
+        {
+          config ? { },
+          prometheus ? true,
+        }:
+        alertRulesOf "PrometheusRule" "spegel" (
+          manifests (cluster {
+            instances = {
+              spegel.spegel = {
+                package = spegelPackage;
+                inherit config;
+              };
+            }
+            // lib.optionalAttrs prometheus { monitoring.prometheus.package = prometheusStub; };
+          })
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="spegel",service="spegel-metrics"'' rules
+      && builtins.attrNames rules == [ "SpegelDown" ]
+      && rulesOf { prometheus = false; } == null
+      && rulesOf { config.metrics.enabled = false; } == null
+    )
+    || throw "spegel alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }

@@ -1,4 +1,5 @@
-# promtool unit tests for the cnpg-cluster alert rules test-cnpg.nix renders.
+# promtool unit tests for the cnpg-cluster and cnpg-operator alert rules
+# test-cnpg.nix renders.
 # The rules-cluster-cnpg check runs them from the rendered rules, so each
 # rule_files entry is <namespace>/<file> in the cluster's manifests. `pg`
 # has one instance and backups; `pg-replicated` has two instances and no
@@ -6,6 +7,7 @@
 rule_files:
   - data/pg-alerts-prometheusrule.yaml
   - data/pg-replicated-alerts-prometheusrule.yaml
+  - cnpg-system/cnpg-operator-alerts-prometheusrule.yaml
 evaluation_interval: 1m
 tests:
   # Every instance of pg reports PostgreSQL down while the instance manager
@@ -456,4 +458,86 @@ tests:
         exp_alerts: []
       - eval_time: 27h
         alertname: CNPGReplicationLagHigh
+        exp_alerts: []
+  # The operator's one replica stops answering scrapes.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: CNPGOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "cnpg-system"
+              service: "cnpg-operator-metrics"
+            exp_annotations:
+              summary: "The CloudNativePG operator is down."
+              description: "No replica of the CloudNativePG operator cnpg-system/cnpg-operator has answered a scrape for 10 minutes. Running PostgreSQL clusters keep serving, but no failover happens, changes to Clusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in cnpg-system."
+  # The operator is not scraped at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CNPGOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "cnpg-system"
+              service: "cnpg-operator-metrics"
+            exp_annotations:
+              summary: "The CloudNativePG operator is down."
+              description: "No replica of the CloudNativePG operator cnpg-system/cnpg-operator has answered a scrape for 10 minutes. Running PostgreSQL clusters keep serving, but no failover happens, changes to Clusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in cnpg-system."
+  # The cluster controller fails a reconcile every minute; the backup
+  # controller does not.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '0+2x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="backup"}'
+        values: '3x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CNPGOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "cnpg-system"
+              service: "cnpg-operator-metrics"
+              controller: "cluster"
+            exp_annotations:
+              summary: "The CloudNativePG operator fails to reconcile its resources."
+              description: "The cluster controller of the CloudNativePG operator cnpg-system/cnpg-operator has failed 50% of its reconciles over the last 30 minutes, so a resource of that kind may not match its spec. The operator log names the error and the resource."
+  # The operator answers and reconciles without errors.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CNPGOperatorDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CNPGOperatorReconcileErrors
+        exp_alerts: []
+  # CNPGOperatorReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: CNPGOperatorReconcileErrors
         exp_alerts: []

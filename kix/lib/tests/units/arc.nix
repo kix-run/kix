@@ -18,6 +18,8 @@
   ofKind,
   byName,
   evalFails,
+  alertRulesOf,
+  allSelect,
   prometheusStub,
   ...
 }:
@@ -466,6 +468,35 @@ in
       && ofKind "PodMonitor" off == [ ]
     )
     || throw "arc metrics: ${builtins.toJSON { inherit podMonitor; }}";
+
+  # The alerts render under `arc-alerts` with a prometheus provider and
+  # metrics.enabled, and every expression selects the controller's Service.
+  arc-alerts =
+    let
+      rulesOf =
+        {
+          arcConfig ? { },
+          modules ? [ { instances.monitoring.prometheus.package = prometheusStub; } ],
+        }:
+        alertRulesOf "PrometheusRule" "arc" (
+          manifests (clusterWith {
+            inherit arcConfig modules;
+          })
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="arc-systems",service="arc-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "ArcControllerDown"
+          "ArcControllerReconcileErrors"
+          "ArcEphemeralRunnersFailed"
+        ]
+      && rulesOf { modules = [ ]; } == null
+      && rulesOf { arcConfig.metrics.enabled = false; } == null
+    )
+    || throw "arc alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 
   # arc publishes the runner pod labels; the runner set's policy selects
   # them.

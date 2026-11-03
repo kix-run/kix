@@ -36,8 +36,28 @@
 # listener. Escape hatches: `extraArgs`, `env`, `partsOverlays`, `extra`.
 #
 # Dependencies:
-#   prometheus (optional)  metrics Service, ServiceMonitor `<name>`, and
-#                          PodMonitor `<name>-listeners`.
+#   prometheus (optional)  metrics Service, ServiceMonitor `<name>`,
+#                          PodMonitor `<name>-listeners`, and alerts.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the controller's metrics
+# Service. The controller's own series carry the runner set's namespace as
+# `exported_namespace`, because the scrape keeps the target's `namespace`.
+#   ArcControllerDown (warning)             the controller answers no
+#                                           scrape. Running jobs finish; no
+#                                           runner set scales, and no new
+#                                           runner starts.
+#   ArcControllerReconcileErrors (warning)  reconciles fail, such as a
+#                                           GitHub API error or a refused
+#                                           credential.
+#   ArcEphemeralRunnersFailed (warning)     a runner set holds failed
+#                                           ephemeral runners. The
+#                                           controller keeps them until they
+#                                           are deleted, and they count
+#                                           against `maxRunners`.
+# A listener that crash-loops is left to prometheus-default-rules
+# (KubePodCrashLooping). The listeners' job metrics (`gha_*`) are scraped
+# for dashboards; queue time against capacity is the site's to judge.
 #
 # `out`:
 #   out.mkAutoscalingRunnerSet consumerScope { name; spec; }
@@ -605,6 +625,45 @@ in
       }
     )
 
-    (kix.monitor { service = "metricsService"; })
+    (
+      let
+        sel = ''namespace="${ns}",service="${name}-metrics"'';
+        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
+        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
+        controller = "Actions Runner Controller ${ns}/${name}";
+      in
+      kix.monitor {
+        service = "metricsService";
+        alerts = {
+          ArcControllerDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "The Actions Runner Controller is down.";
+            description = "The ${controller} has not answered a scrape for 10 minutes. Running jobs finish, but no runner set scales and no new runner starts, so queued jobs wait. Check the controller Deployment in ${ns}.";
+          };
+          ArcControllerReconcileErrors = {
+            # controller-runtime counts an optimistic-lock conflict as an error
+            # and retries at once, so a busy healthy controller shows a few.
+            # Alert on the share of reconciles that fail, with a floor.
+            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
+            "for" = "15m";
+            severity = "warning";
+            summary = "The Actions Runner Controller fails to reconcile runner sets.";
+            description = "The {{ $labels.controller }} controller of the ${controller} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so runner sets may not scale. The controller log names the error; a GitHub API error or a refused credential is the usual cause.";
+          };
+          # The gauge counts EphemeralRunners in phase Failed. The runner
+          # set counts them with its pending and running runners
+          # (ephemeralrunnerset_controller.go upstream).
+          ArcEphemeralRunnersFailed = {
+            expr = "max by (namespace, service, exported_namespace, name) (gha_controller_failed_ephemeral_runners{${sel}}) > 0";
+            "for" = "15m";
+            severity = "warning";
+            summary = "A GitHub Actions runner set holds failed runners.";
+            description = "Runner set {{ $labels.exported_namespace }}/{{ $labels.name }} has held {{ $value | humanize }} failed ephemeral runners for 15 minutes. They stay until deleted and count against the set's maximum, so fewer jobs can run. Read the events of the failed EphemeralRunners in {{ $labels.exported_namespace }}, then delete them.";
+          };
+        };
+      }
+    )
   ];
 }

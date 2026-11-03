@@ -6,6 +6,8 @@
 # backend reached through an Ingress from `out.mkIngress` and through a
 # LoadBalancer Service with `out.loadBalancerClass`. Each gets a
 # `*-from-tailscale` policy and no ingress from outside the cluster.
+# prometheus-operator in `monitoring` gives the operator its ServiceMonitor
+# and alerts, which cluster.rules-test.yaml tests.
 #
 # Commands run from the repository root. Build:
 #
@@ -79,6 +81,8 @@ kix.buildCluster {
             ];
           };
         };
+
+        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
 
         instances.tailnet-demo.web.package = import ./consumer.nix;
       }

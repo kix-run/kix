@@ -15,6 +15,9 @@
   ofKind,
   byName,
   evalFails,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -906,4 +909,33 @@ in
       && supplements "replaced" != [ ]
     )
     || throw "tailscale external ingress: provider ${builtins.toJSON (supplements "provider")}";
+
+  # The alerts render under `<instance>-alerts` with a prometheus provider
+  # and metrics.enabled, and every expression selects the metrics Service.
+  tailscale-alerts =
+    let
+      withPrometheus = [ { instances.monitoring.prometheus.package = prometheusStub; } ];
+      rulesOf =
+        {
+          config ? { },
+          modules ? withPrometheus,
+        }:
+        alertRulesOf "PrometheusRule" "tailscale" (
+          manifests (clusterWith {
+            inherit config modules;
+          })
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="tailscale",service="tailscale-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "TailscaleOperatorDown"
+          "TailscaleOperatorReconcileErrors"
+        ]
+      && rulesOf { modules = [ ]; } == null
+      && rulesOf { config.metrics.enabled = false; } == null
+    )
+    || throw "tailscale alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }

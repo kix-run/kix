@@ -11,7 +11,8 @@
 #   It serves only its own namespace, so the instances above build without
 #   credentials.
 # - prometheus-operator gives every instance a metrics Service, a
-#   ServiceMonitor, and the stale-sync alert.
+#   ServiceMonitor, and alerts; test-external-dns.rules-test.yaml tests the
+#   rules of `nodes`.
 #
 # Bring up:  kind create cluster --name external-dns
 #            kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml

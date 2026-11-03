@@ -31,8 +31,21 @@
 #                                   the provider reads; `secretEnv` maps
 #                                   variables to differently named keys and
 #                                   injects only those.
-#   prometheus (optional)           metrics Service, ServiceMonitor, and a
-#                                   stale-sync alert.
+#   prometheus (optional)           metrics Service, ServiceMonitor, and
+#                                   alerts.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   ExternalDNSDown (warning)       the pod answers no scrape. Published
+#                                   records stay; changes are not published.
+#   ExternalDNSSyncStale (warning)  no successful synchronization for three
+#                                   intervals (at least 15 minutes), such as
+#                                   when the provider refuses the credential
+#                                   or rate-limits, or a source fails.
+# Source and registry errors (`external_dns_source_errors_total`,
+# `external_dns_registry_errors_total`) end the synchronization before its
+# timestamp is set, so the stale alert covers them without a rule of its
+# own. A crash loop is left to prometheus-default-rules.
 #
 # Credentials belong in the providerCredentials Secret, not in the rendered
 # manifests. external-dns reads every flag from `EXTERNAL_DNS_<FLAG>` as
@@ -250,7 +263,7 @@ in
       example = "5m";
       description = ''
         Time between two synchronizations (`--interval`), in seconds,
-        minutes, or hours, such as `"90s"` or `"5m"`. The stale-sync alert
+        minutes, or hours, such as `"90s"` or `"5m"`. ExternalDNSSyncStale
         fires after three intervals without a successful synchronization,
         and never sooner than 15 minutes. A longer interval lowers the rate
         of provider API calls.
@@ -620,24 +633,31 @@ in
         # interval set to stay under a provider's rate limit does not keep
         # the alert firing.
         staleAfter = lib.max 900 (3 * kix.durations.toSeconds config.interval);
-        forMinutes = 5;
-        # Rounded down: when the alert fires, the last synchronization is at
-        # least `staleAfter` seconds plus `forMinutes` old.
-        staleMinutes = staleAfter / 60 + forMinutes;
-        series = "external_dns_controller_last_sync_timestamp_seconds{namespace=\"${ns}\", service=\"${self.metricsService.out.name}\"}";
+        sel = ''namespace="${ns}",service="${name}"'';
       in
       kix.monitor {
         service = "metricsService";
         port = "metrics";
-        # The gauge is 0 until the first successful synchronization. It has
-        # no samples while the pod is down or unscraped, which `absent`
-        # covers.
-        alerts.ExternalDNSSyncStale = {
-          expr = "time() - ${series} > ${toString staleAfter} or absent(${series})";
-          "for" = "${toString forMinutes}m";
-          severity = "warning";
-          summary = "external-dns ${ns}/${name}: no successful DNS synchronization in the last ${toString staleMinutes} minutes, or no metrics from the pod.";
-          description = "The last successful synchronization is older than three intervals, or Prometheus has no samples from the pod. Check that the pod is running, then look for provider API errors, such as HTTP 429 rate limiting, in its log.";
+        alerts = {
+          ExternalDNSDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "external-dns is down.";
+            description = "external-dns ${ns}/${name} has not answered a scrape for 10 minutes. The records it published stay in place, but new and changed hostnames are not published. Check its Deployment in ${ns}.";
+          };
+          # The gauge is 0 until the first successful synchronization, so
+          # an instance that never synchronized fires too. A source or
+          # provider error that external-dns retries (a soft error) stops
+          # the gauge; any other error exits the process, which the down
+          # alert and prometheus-default-rules report.
+          ExternalDNSSyncStale = {
+            expr = "time() - max by (namespace, service) (external_dns_controller_last_sync_timestamp_seconds{${sel}}) > ${toString staleAfter}";
+            "for" = "5m";
+            severity = "warning";
+            summary = "external-dns has not synchronized DNS records recently.";
+            description = "external-dns ${ns}/${name} last synchronized with its DNS provider {{ $value | humanizeDuration }} ago, more than three intervals, so DNS records do not follow changed hostnames. Look in its log for provider API errors, such as HTTP 429 rate limiting or a refused credential, and for source errors.";
+          };
         };
       } args
     )

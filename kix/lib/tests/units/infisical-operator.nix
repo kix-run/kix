@@ -1,6 +1,6 @@
 # Tests for kix/packages/infisical-operator: the custom resource builders,
-# readiness, ordering, metrics gating, address handling, the egress check,
-# and refusals. The operator and a consumer both run in namespace
+# readiness, ordering, metrics and alert gating, address handling, the
+# egress check, and refusals. The operator and a consumer both run in namespace
 # `infisical`.
 
 {
@@ -13,6 +13,8 @@
   byName,
   evalFails,
   prometheusStub,
+  alertRulesOf,
+  allSelect,
   ...
 }:
 
@@ -296,8 +298,9 @@ in
     (connection.spec.address == "https://x" && env.INFISICAL_HOST_API == "https://x/api")
     || throw "infisical-operator address: connection ${builtins.toJSON connection.spec}, env ${builtins.toJSON env}";
 
-  # The metrics Service and ServiceMonitor render only with a prometheus
-  # provider and metrics.enabled.
+  # The metrics Service, ServiceMonitor, and alert rules render only with a
+  # prometheus provider and metrics.enabled, and every rule selects the
+  # metrics Service.
   infisical-operator-metrics =
     let
       withPrometheus =
@@ -312,15 +315,26 @@ in
       });
       service = byName "infisical-operator-metrics" (ofKind "Service" on);
       ports = map (p: p.port) service.spec.ports;
+      rules = alertRulesOf "PrometheusRule" "infisical-operator" on;
     in
     (
       ports == [ 8080 ]
       && byName "infisical-operator" (ofKind "ServiceMonitor" on) != null
+      && allSelect ''namespace="infisical",service="infisical-operator-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "InfisicalOperatorDown"
+          "InfisicalOperatorReconcileErrors"
+        ]
       && ofKind "Service" ms == [ ]
       && ofKind "Service" off == [ ]
       && ofKind "ServiceMonitor" off == [ ]
+      && alertRulesOf "PrometheusRule" "infisical-operator" ms == null
+      && alertRulesOf "PrometheusRule" "infisical-operator" off == null
     )
-    || throw "infisical-operator metrics: service ${builtins.toJSON service}";
+    || throw "infisical-operator metrics: service ${builtins.toJSON service}, rules ${
+      builtins.toJSON (if rules == null then null else builtins.attrNames rules)
+    }";
 
   # Under egress enforcement an address the package's intent does not cover
   # fails the build, and the platform intent the message gives makes it

@@ -6,9 +6,9 @@
 # login, that a passwordless login is refused, and that the {cluster} macro
 # and Keeper answer.
 #
-# prometheus-operator gives both ClickHouse packages their scrape and their
-# alert rules; test-clickhouse.rules-test.yaml beside this file tests the
-# rules.
+# prometheus-operator gives both ClickHouse packages, the operator, and
+# Keeper their scrape and their alert rules; test-clickhouse.rules-test.yaml
+# beside this file tests the rules.
 #
 # Bring up (three workers, no default CNI; Cilium comes from this cluster):
 #   kind create cluster --name kix-clickhouse --config - <<EOF

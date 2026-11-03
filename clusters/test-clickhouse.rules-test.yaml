@@ -2,6 +2,8 @@
 # renders: the bare package's (analytics/clickhouse, scraped through its
 # Service) and clickhouse-cluster's (analytics-ha/ch, scraped through a
 # PodMonitor, two replicas). Both come from kix/packages/clickhouse/alerts.nix.
+# Then the operator's (clickhouse-system/clickhouse-operator) and Keeper's
+# (analytics-ha/keeper, three replicas, scraped through a PodMonitor).
 # The rules-cluster-clickhouse check runs them from the rendered rules, so
 # each rule_files entry is <namespace>/<file> in the cluster's manifests.
 #
@@ -12,6 +14,8 @@
 rule_files:
   - analytics/clickhouse-alerts-prometheusrule.yaml
   - analytics-ha/ch-alerts-prometheusrule.yaml
+  - clickhouse-system/clickhouse-operator-alerts-prometheusrule.yaml
+  - analytics-ha/keeper-alerts-prometheusrule.yaml
 evaluation_interval: 1m
 tests:
   # Healthy servers on both instances fire nothing. The 70m evaluation is
@@ -239,3 +243,326 @@ tests:
             exp_annotations:
               summary: A ClickHouse replica keeps failing to fetch parts.
               description: chi-ch-default-0-1-0 of analytics-ha/ch failed 15 part fetches from other replicas in 15 minutes, for at least 15 minutes. Check the server log for the fetch error and the interserver port between replicas.
+  # The operator pod answers on neither port.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="op-metrics"}'
+        values: '1 1 0x15'
+      - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="ch-metrics"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ClickHouseOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "clickhouse-system"
+              service: "clickhouse-operator-metrics"
+            exp_annotations:
+              summary: "The ClickHouse operator is down."
+              description: "Neither the operator nor its metrics exporter in the pod of the ClickHouse operator clickhouse-system/clickhouse-operator has answered a scrape for 10 minutes. ClickHouse installations keep serving, but changes to ClickHouseInstallations and ClickHouseKeeperInstallations are not applied. Check the operator Deployment in clickhouse-system."
+  # The operator is not scraped at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ClickHouseOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "clickhouse-system"
+              service: "clickhouse-operator-metrics"
+            exp_annotations:
+              summary: "The ClickHouse operator is down."
+              description: "Neither the operator nor its metrics exporter in the pod of the ClickHouse operator clickhouse-system/clickhouse-operator has answered a scrape for 10 minutes. ClickHouse installations keep serving, but changes to ClickHouseInstallations and ClickHouseKeeperInstallations are not applied. Check the operator Deployment in clickhouse-system."
+  # analytics-ha/ch completes one reconcile, then a reconcile is aborted
+  # at minute 50 and nothing retries it. other/other has an abort that a
+  # completed reconcile follows 10 minutes later. Steps are 10 minutes.
+  - interval: 10m
+    input_series:
+      - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="op-metrics"}'
+        values: '1x200'
+      - series: 'clickhouse_operator_chi_reconciles_completed{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="analytics-ha",chi="ch"}'
+        values: '1x200'
+      - series: 'clickhouse_operator_chi_reconciles_aborted{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="analytics-ha",chi="ch"}'
+        values: '0x4 1x195'
+      - series: 'clickhouse_operator_chi_reconciles_completed{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="other",chi="other"}'
+        values: '0x5 1x194'
+      - series: 'clickhouse_operator_chi_reconciles_aborted{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="other",chi="other"}'
+        values: '0x4 1x195'
+    alert_rule_test:
+      # Still firing 20 hours after the abort, with nothing retried.
+      - eval_time: 21h
+        alertname: ClickHouseOperatorReconcileAborted
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "clickhouse-system"
+              service: "clickhouse-operator-metrics"
+              exported_namespace: "analytics-ha"
+              chi: "ch"
+            exp_annotations:
+              summary: "The ClickHouse operator aborted the reconcile of a ClickHouseInstallation."
+              description: "The ClickHouse operator clickhouse-system/clickhouse-operator aborted more reconciles of ClickHouseInstallation analytics-ha/ch than it completed in the last 24 hours, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log."
+  # The completed series is missing from the scrape: one abort fires it.
+  - interval: 10m
+    input_series:
+      - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="op-metrics"}'
+        values: '1x20'
+      - series: 'clickhouse_operator_chi_reconciles_aborted{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="analytics-ha",chi="ch"}'
+        values: '0 1x19'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ClickHouseOperatorReconcileAborted
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "clickhouse-system"
+              service: "clickhouse-operator-metrics"
+              exported_namespace: "analytics-ha"
+              chi: "ch"
+            exp_annotations:
+              summary: "The ClickHouse operator aborted the reconcile of a ClickHouseInstallation."
+              description: "The ClickHouse operator clickhouse-system/clickhouse-operator aborted more reconciles of ClickHouseInstallation analytics-ha/ch than it completed in the last 24 hours, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log."
+  # The operator answers and aborts nothing; Keeper is healthy: one leader
+  # with both followers in sync and no replica over its soft limit.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="op-metrics"}'
+        values: '1x30'
+      - series: 'clickhouse_operator_chi_reconciles_aborted{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="analytics-ha",chi="ch"}'
+        values: '2x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '2x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ClickHouseOperatorDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ClickHouseOperatorReconcileAborted
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ClickHouseKeeperDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ClickHouseKeeperQuorumLost
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ClickHouseKeeperFollowersNotSynced
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ClickHouseKeeperMemorySoftLimit
+        exp_alerts: []
+  # Every Keeper replica stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1 1 0x15'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '1 1 0x15'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ClickHouseKeeperDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "analytics-ha"
+              job: "analytics-ha/keeper"
+            exp_annotations:
+              summary: "No ClickHouse Keeper replica answers."
+              description: "No replica of ClickHouse Keeper analytics-ha/keeper has answered a scrape for 10 minutes. ClickHouse servers that use it lose their Keeper session, and their replicated tables go read-only. Check kubectl get chk keeper -n analytics-ha and its pods."
+  # Keeper is not scraped at all.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ClickHouseKeeperDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "analytics-ha"
+              job: "analytics-ha/keeper"
+            exp_annotations:
+              summary: "No ClickHouse Keeper replica answers."
+              description: "No replica of ClickHouse Keeper analytics-ha/keeper has answered a scrape for 10 minutes. ClickHouse servers that use it lose their Keeper session, and their replicated tables go read-only. Check kubectl get chk keeper -n analytics-ha and its pods."
+  # Every replica answers and none is the leader.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: ClickHouseKeeperQuorumLost
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "analytics-ha"
+              job: "analytics-ha/keeper"
+            exp_annotations:
+              summary: "ClickHouse Keeper has lost its quorum."
+              description: "For 5 minutes ClickHouse Keeper analytics-ha/keeper has had no leader, or a leader with too few in-sync followers for a majority of its 3 replicas, so it accepts no writes and replicated tables on the servers go read-only. Check that a majority of its replicas run and reach each other on the raft port, and read their logs."
+  # The leader has no follower in sync, below the one a majority of three
+  # needs. FollowersNotSynced fires beside it after 15 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: ClickHouseKeeperQuorumLost
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "analytics-ha"
+              job: "analytics-ha/keeper"
+            exp_annotations:
+              summary: "ClickHouse Keeper has lost its quorum."
+              description: "For 5 minutes ClickHouse Keeper analytics-ha/keeper has had no leader, or a leader with too few in-sync followers for a majority of its 3 replicas, so it accepts no writes and replicated tables on the servers go read-only. Check that a majority of its replicas run and reach each other on the raft port, and read their logs."
+  # One of the two followers is out of sync; the quorum holds.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ClickHouseKeeperFollowersNotSynced
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "analytics-ha"
+              job: "analytics-ha/keeper"
+            exp_annotations:
+              summary: "ClickHouse Keeper has followers out of sync."
+              description: "The leader of ClickHouse Keeper analytics-ha/keeper has had 1 in-sync followers of 2 for 15 minutes, so the quorum survives fewer replica losses than its 3 replicas allow. Check the replicas that are behind or not running."
+      - eval_time: 20m
+        alertname: ClickHouseKeeperQuorumLost
+        exp_alerts: []
+  # One replica is over its memory soft limit.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '2x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-0-0"}'
+        values: '0x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-1-0"}'
+        values: '1x30'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '1x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsLeader{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperSyncedFollowers{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+      - series: 'ClickHouseAsyncMetrics_KeeperIsExceedingMemorySoftLimitHit{namespace="analytics-ha",job="analytics-ha/keeper",pod="chk-keeper-keeper-0-2-0"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClickHouseKeeperMemorySoftLimit
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "analytics-ha"
+              job: "analytics-ha/keeper"
+              pod: "chk-keeper-keeper-0-1-0"
+            exp_annotations:
+              summary: "ClickHouse Keeper is over its memory soft limit."
+              description: "chk-keeper-keeper-0-1-0 of ClickHouse Keeper analytics-ha/keeper has been over its memory soft limit for 10 minutes, and refuses requests that would grow its memory, such as creating nodes. By default the limit is 90% of the container's memory. Raise resources.limits.memory, or find what fills Keeper with nodes or watches."
