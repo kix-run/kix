@@ -97,6 +97,35 @@ let
 
   # An app in namespace `apps` with a Deployment, a Service over it, and a
   # ServiceMonitor over the Service on port 8080.
+  # A Deployment whose container sets the environment variables `env`.
+  envWorkload = env: {
+    meta.version = "test";
+    build =
+      { self, scope, ... }:
+      {
+        deployment = scope.mkDeployment {
+          name = "other";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "other";
+                    image = "example/other:1";
+                    env = lib.mapAttrsToList (name: value: { inherit name value; }) env;
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root.resource = self.deployment;
+      };
+  };
+
   scrapedApp = {
     meta.version = "test";
     build =
@@ -314,6 +343,41 @@ in
       ]
     }";
 
+  # With vmstorage.vmBackup, vmbackupmanager in the vmstorage pods reaches
+  # the store outside the cluster: on customS3Endpoint's port, else 443. A
+  # local `fs://` destination and a cluster without backups open nothing.
+  victoria-metrics-cluster-backup-egress =
+    let
+      worldPorts =
+        vmBackup:
+        let
+          storage = policy "vm-cluster-vmstorage" (
+            netpolStack (
+              lib.optionalAttrs (vmBackup != null) { clusterConfig.extraSpec.vmstorage.vmBackup = vmBackup; }
+            )
+          );
+        in
+        builtins.concatMap (
+          r: lib.optionals (r.stubRule == "intent-egress" && r.to == "world") (portsOf r)
+        ) storage.spec.egress;
+      s3 = worldPorts { destination = "s3://backups/vm"; };
+      custom = worldPorts {
+        destination = "s3://backups/vm";
+        customS3Endpoint = "http://minio.example.com:9000";
+      };
+      local = worldPorts { destination = "fs:///backups"; };
+      none = worldPorts null;
+    in
+    (s3 == [ 443 ] && custom == [ 9000 ] && local == [ ] && none == [ ])
+    || throw "vmstorage backup egress: ${
+      show [
+        s3
+        custom
+        local
+        none
+      ]
+    }";
+
   # The agent reaches the operator's own scrape objects for every operand,
   # with the config-reloader port where a sidecar runs, and each operand
   # admits the agent. A disabled self-scrape opens nothing.
@@ -368,6 +432,52 @@ in
     (on != null && on.namespace == "apps" && portsOf on == [ "8080" ] && off == null)
     || throw "converted ServiceMonitor: on ${show on}, off ${show off}";
 
+  # The operator reads its boolean variables with Go's strconv.ParseBool.
+  # A workload outside the package, such as another operator install, may
+  # write the converter variable as "T"; the package's own operator turns
+  # the converter off here.
+  victoria-metrics-operator-variables-read-as-go-booleans =
+    let
+      converterSetTo =
+        value:
+        egressTo "web" (
+          scrapeEgress (vmCluster {
+            operatorConfig.convert.serviceMonitors = false;
+            extra = [
+              { instances.dns = baseInstances.instances.dns; }
+              netpolOn
+              { instances.apps.web.package = scrapedApp; }
+              {
+                instances.apps.other-operator.package = envWorkload {
+                  VM_ENABLEDPROMETHEUSCONVERTER_SERVICESCRAPE = value;
+                };
+              }
+            ];
+          })
+        );
+      selfScrapesSetTo =
+        value:
+        egressTo "vmstorage" (
+          scrapeEgress (netpolStack {
+            operatorConfig.env = [
+              {
+                name = "VM_DISABLESELFSERVICESCRAPECREATION";
+                inherit value;
+              }
+            ];
+          })
+        );
+    in
+    (
+      converterSetTo "T" != null
+      && converterSetTo "1" != null
+      && converterSetTo "0" == null
+      && selfScrapesSetTo "TRUE" == null
+      && selfScrapesSetTo "1" == null
+      && selfScrapesSetTo "false" != null
+    )
+    || throw "operator variables are not read as Go booleans";
+
   # With both selectors unset, selectAllByDefault decides. An object
   # selector alone reads only the agent's namespace, and a namespace
   # selector reads the namespaces it matches.
@@ -409,17 +519,32 @@ in
       ]
     }";
 
-  # vmalert notifies Alertmanager on 9093, and Alertmanager admits it.
+  # vmalert notifies Alertmanager on its port, 9093 unless
+  # alertmanager.extraSpec sets another, and Alertmanager admits it.
   victoria-metrics-alert-notifier-policies =
     let
       c = netpolStack { };
       notify = egressTo "vmalertmanager" (policy "vm-alert-vmalert" c);
       am = policy "vm-alert-vmalertmanager" c;
-      fromAlert = lib.findFirst (
-        r: r.stubRule == "caller-ingress" && r.callerSelector."app.kubernetes.io/name" == "vmalert"
-      ) null am.spec.ingress;
+      fromAlertIn =
+        p:
+        lib.findFirst (
+          r: r.stubRule == "caller-ingress" && r.callerSelector."app.kubernetes.io/name" == "vmalert"
+        ) null p.spec.ingress;
+      fromAlert = fromAlertIn am;
+      # alertmanager.extraSpec moves the port, as the self-scrape reads it.
+      moved = netpolStack { alertConfig.alertmanager.extraSpec.port = "9095"; };
+      movedNotify = egressTo "vmalertmanager" (policy "vm-alert-vmalert" moved);
+      movedFromAlert = fromAlertIn (policy "vm-alert-vmalertmanager" moved);
     in
-    (notify != null && portsOf notify == [ 9093 ] && fromAlert != null && portsOf fromAlert == [ 9093 ])
+    (
+      notify != null
+      && portsOf notify == [ 9093 ]
+      && fromAlert != null
+      && portsOf fromAlert == [ 9093 ]
+      && portsOf movedNotify == [ 9095 ]
+      && portsOf movedFromAlert == [ 9095 ]
+    )
     || throw "notifier policies: ${
       show [
         notify

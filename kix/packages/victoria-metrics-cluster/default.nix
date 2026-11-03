@@ -22,6 +22,12 @@
 #                                the option is unset; absent = cluster
 #                                default StorageClass
 #
+# Network policy, with an enforcer: vminsert and vmselect reach vmstorage.
+# When extraSpec sets vmstorage.vmBackup, vmbackupmanager in the vmstorage
+# pods reaches the object store outside the cluster on the port of
+# customS3Endpoint, else 443. A store inside the cluster needs a policy of
+# its own.
+#
 # `out`:
 #   out.serviceUrl: "http://vmselect-<name>.<ns>.svc:8481/select/0/prometheus" (the operator's Service)
 #     Prometheus-compatible read path; Grafana auto-wires any
@@ -394,6 +400,33 @@ in
           ];
         } baseSpec config.extraSpec;
 
+        # vmbackupmanager runs in the vmstorage pods when extraSpec sets
+        # vmstorage.vmBackup, and uploads to the object store outside the
+        # cluster: on the port of customS3Endpoint when it is set, else on
+        # 443. An `fs://` destination is a local volume and needs no egress.
+        vmBackup = spec.vmstorage.vmBackup or null;
+        backupPort =
+          let
+            endpoint = vmBackup.customS3Endpoint or null;
+            m =
+              if endpoint == null then
+                null
+              else
+                builtins.match "(https?)://(\\[[^]]*]|[^]/:?#[]*)(:([0-9]+))?([/?#].*)?" endpoint;
+          in
+          if vmBackup == null || lib.hasPrefix "fs://" (vmBackup.destination or "") then
+            null
+          else if endpoint == null then
+            443
+          else if m == null then
+            throw "${who}: extraSpec.vmstorage.vmBackup.customS3Endpoint \"${endpoint}\" is not an http or https URL, so the package cannot tell which port vmbackupmanager reaches. Write it as https://<host>[:<port>]."
+          else if builtins.elemAt m 3 != null then
+            lib.toInt (builtins.elemAt m 3)
+          else if builtins.elemAt m 0 == "https" then
+            443
+          else
+            80;
+
         storagePorts = {
           vminsert = lib.toInt (toString (spec.vmstorage.vmInsertPort or 8400));
           vmselect = lib.toInt (toString (spec.vmstorage.vmSelectPort or 8401));
@@ -446,7 +479,19 @@ in
           in
           {
             vmstorage = policy "vmstorage" {
-              egress = [ netpol.dnsEgressRule ];
+              egress = [
+                netpol.dnsEgressRule
+              ]
+              ++
+                lib.optionals (backupPort != null)
+                  (netpol.translateIntentRules {
+                    intents.backup.egress = [
+                      {
+                        to = "world";
+                        ports = [ (tcp backupPort) ];
+                      }
+                    ];
+                  }).egressRules;
               ingress = [
                 (fromComponent "vminsert")
                 (fromComponent "vmselect")

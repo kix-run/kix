@@ -30,6 +30,19 @@ let
   promGroup = "monitoring.coreos.com";
   inherit (import ./kinds.nix) vmCrdDefs indexedKinds promCompatDefs;
 
+  # Return true for the strings Go's strconv.ParseBool reads as true, which
+  # is how the operator reads its boolean variables.
+  isGoTrue =
+    v:
+    builtins.elem v [
+      "1"
+      "t"
+      "T"
+      "TRUE"
+      "true"
+      "True"
+    ];
+
   # Compile-time guard for the runtime invariant in kinds.nix.
   shippedKinds = lib.mapAttrsToList (_: def: def.kind) vmCrdDefs;
   missingIndexed = builtins.filter (k: !(builtins.elem k shippedKinds)) indexedKinds;
@@ -76,7 +89,7 @@ let
   # `disableSelfServiceScrape`, or the operator variable
   # VM_DISABLESELFSERVICESCRAPECREATION, turns them off.
   selfScrapesOff = builtins.any (
-    e: e.name == "VM_DISABLESELFSERVICESCRAPECREATION" && (e.value or null) == "true"
+    e: e.name == "VM_DISABLESELFSERVICESCRAPECREATION" && isGoTrue (e.value or null)
   ) config.env;
   configReloaderPort = 8435;
   portOf = port: default: lib.toInt (toString (if port == null then default else port));

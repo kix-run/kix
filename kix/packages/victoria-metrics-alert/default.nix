@@ -425,8 +425,10 @@ in
         operandPolicies =
           let
             netpol = scope.networkPolicyEnforcer.netpol;
+            # The port the operator serves Alertmanager on, which
+            # alertmanager.extraSpec may change.
             amPort = {
-              port = 9093;
+              port = lib.toInt (toString (self.vmAlertmanager.rawManifest.spec.port or 9093));
               protocol = "TCP";
             };
             alertSelector = {

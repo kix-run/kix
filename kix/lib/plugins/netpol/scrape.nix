@@ -96,6 +96,19 @@ let
     builtins.all (k: (labels.${k} or null) == matchLabels.${k}) (builtins.attrNames matchLabels)
     && builtins.all exprHolds (selector.matchExpressions or [ ]);
 
+  # Return true for the strings Go's strconv.ParseBool reads as true, which
+  # is how the VictoriaMetrics operator reads its boolean variables.
+  isGoTrue =
+    v:
+    builtins.elem v [
+      "1"
+      "t"
+      "T"
+      "TRUE"
+      "true"
+      "True"
+    ];
+
   isNumeric = p: builtins.isInt p || (builtins.isString p && builtins.match "[0-9]+" p != null);
 in
 {
@@ -369,7 +382,7 @@ in
         let
           values = envValues "VM_ENABLEDPROMETHEUSCONVERTER_${env}";
         in
-        values == [ ] || builtins.elem "true" values;
+        values == [ ] || builtins.any isGoTrue values;
 
       # Every scrape object in the build as
       # `{ group, kind, namespace, name, labels, targets, breakages }`.
