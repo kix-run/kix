@@ -47,8 +47,10 @@
 # Network policy: the netpol plugin derives the scrape egress from the
 # monitors this server selects and the Alertmanager egress from
 # `spec.alerting`; `serverEgress` adds DNS and the API server. Targets that
-# `extraSpec.additionalScrapeConfigs` or a ScrapeConfig names get no policy,
-# and neither does an Alertmanager in `extraSpec.additionalAlertManagerConfigs`.
+# `extraSpec.additionalScrapeConfigs`, a ScrapeConfig, or a Probe names get
+# no policy, and neither does an Alertmanager in
+# `extraSpec.additionalAlertManagerConfigs`. The netpol plugin warns about
+# each.
 #
 # Escape hatches: `extraSpec` for the Prometheus resource's spec, and the
 # instance's `partsOverlays`.
@@ -296,10 +298,6 @@ in
         inherit name spec;
       };
 
-      # Only the header warns that targets in additionalScrapeConfigs and
-      # Alertmanagers in additionalAlertManagerConfigs get no egress.
-      # Candidates for evaluation errors while network policy is on.
-      #
       # The operator creates the server pods, so no workload policy is
       # derived for them. Kubernetes service discovery needs the API server;
       # the netpol plugin adds the scrape and Alertmanager egress from the

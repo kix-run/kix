@@ -371,7 +371,10 @@ edge but NO netpol hole. Consequences when authoring:
   ```
 
   netpol then opens egress for the operand pods + caller-ingress into the
-  target namespace. Undeclared CR kinds absorbing an endpoint fact warn at
+  target namespace. An operator that creates scrape objects for its own
+  operands (the VictoriaMetrics operator's VMServiceScrapes) declares
+  `factBehavior.selfScrapes = cr: [ { kind; name; labels; podSelector; ports; } ]`,
+  and the scrape join opens them for the scrapers that select them. Undeclared CR kinds absorbing an endpoint fact warn at
   eval time (conduct is assumed). For CRs not built via the typed builder
   (helm-rendered, raw kind strings), or to fix a broken upstream
   declaration, cluster operators set

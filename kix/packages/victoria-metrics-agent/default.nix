@@ -20,7 +20,10 @@
 # The remoteWrite URL carries the store-path edge to the cluster's insert
 # Service, and the VMAgent CRD's terminate factBehavior points netpol at
 # the vmagent operand pods, so the egress hole lands on the pods that
-# actually dial vminsert.
+# actually dial vminsert. The netpol scrape join opens the paths to the
+# scrape objects the agent selects, the operator's own VMServiceScrapes for
+# VictoriaMetrics operands included, and `agentEgress` opens DNS and the
+# API server.
 #
 # Alerts (a VMRule `<instance>-alerts`, which vmalert evaluates and a
 # prometheus-operator Prometheus does not load). They render only when the
@@ -229,9 +232,31 @@ in
           } baseSpec config.extraSpec;
         };
 
+        # The operator creates the agent pods, so no workload policy is
+        # derived for them. Kubernetes service discovery and the
+        # config-reloader sidecar call the API server. The remote write to
+        # vminsert comes from the VMAgent CRD's factBehavior, and the scrape
+        # paths from the netpol scrape join.
+        agentEgress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-egress";
+          spec = {
+            endpointSelector.matchLabels = {
+              "app.kubernetes.io/name" = "vmagent";
+              "app.kubernetes.io/instance" = name;
+            };
+            egress = [
+              scope.networkPolicyEnforcer.netpol.dnsEgressRule
+              scope.networkPolicyEnforcer.netpol.apiServerEgressRule
+            ];
+          };
+        };
+
         root = {
           resource = self.vmAgent;
-          requires = lib.optional (self.prometheusRules != null) self.prometheusRules;
+          requires =
+            lib.optional (self.agentEgress != null) self.agentEgress
+            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
           out = {
             # Operand pods are operator-created; image not in any Kix manifest.
             extraImages = [ (kix.image.ref config.image) ];

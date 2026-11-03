@@ -1,24 +1,38 @@
-# Derive network policies for the scrape paths from each Prometheus server to
-# its selected ServiceMonitors, PodMonitors, and Alertmanagers.
+# Derive network policies for the scrape paths from each scraper to the
+# targets it selects: a Prometheus server to its ServiceMonitors,
+# PodMonitors, and Alertmanagers, and a VictoriaMetrics VMAgent to its
+# VMServiceScrapes and VMPodScrapes.
 #
 # The netpol cluster processor runs this pass after all instances are built
-# because scrape discovery is a cluster-wide label join. A Prometheus CR
-# selects monitors by label and namespace selectors, while ServiceMonitors
-# and PodMonitors select Services and pods by label. Those selectors carry no
-# endpoint facts and often cross namespaces, so per-workload edge analysis
-# cannot see the connection.
+# because scrape discovery is a cluster-wide label join. A scraper selects
+# scrape objects by label and namespace selectors, while the scrape objects
+# select Services and pods by label. Those selectors carry no endpoint facts
+# and often cross namespaces, so per-workload edge analysis cannot see the
+# connection.
 #
-# Scraper pods are identified by `factBehavior.podSelector` on the Prometheus
-# CRD. Targets are resolved against rendered Services, ServiceRef markers,
-# and workloads. A Service backed by pods outside Kix still gets a selector
-# egress rule on the pod network, while a monitor targeting an unrendered
-# Service without a ServiceRef marker gets no rule.
+# `scraperKinds` lists the scraper kinds. Each names the selector slots of
+# the scraper (`serviceMonitor`, `podScrape`, ...), the scrape object kinds
+# each slot selects, and how an unset selector reads. A VMAgent also selects
+# ServiceMonitors and PodMonitors while the VictoriaMetrics operator
+# converts them, which the operator's `VM_ENABLEDPROMETHEUSCONVERTER_*`
+# variables decide (on when no workload in the build sets them).
 #
-# Unresolvable scrape paths include Prometheus resources without a
-# `podSelector`, PodMonitor selectors that use `matchExpressions`, and named
-# target ports that no rendered container declares. Under default deny these
-# are build errors because the scrape traffic would be blocked. When default
-# deny is disabled they are reported as warnings.
+# Scraper pods are identified by `factBehavior.podSelector` on the
+# scraper's CRD. Scrape objects an operator creates for its own operands
+# come from `factBehavior.selfScrapes` on the operand's CRD. Targets are
+# resolved against rendered Services, ServiceRef markers, and workloads. A
+# Service backed by pods outside Kix still gets a selector egress rule on
+# the pod network, while a scrape object targeting an unrendered Service
+# without a ServiceRef marker gets no rule.
+#
+# Unresolvable scrape paths include scrapers without a `podSelector`, pod
+# scrape selectors that use `matchExpressions`, and named target ports that
+# no rendered container declares. Under default deny these are build errors
+# because the scrape traffic would be blocked. When default deny is
+# disabled they are reported as warnings. Scrape sources Kix does not read
+# (additional scrape configs, probes, static and node scrapes, scrape
+# configs) are always warnings: their targets are free-form addresses, and
+# the path may be opened outside the join, such as by a platform intent.
 #
 # When default deny is disabled, adding the first ingress policy to a target
 # pod would block all other callers. Target ingress policies are therefore
@@ -33,11 +47,26 @@ let
   inherit (import ../../eval/edges.nix { k8s = core; }) isWorkload isServiceRef;
 
   monitoringGroup = "monitoring.coreos.com";
+  vmGroup = "operator.victoriametrics.com";
   groupOf = r: lib.head (lib.splitString "/" (r.rawManifest.apiVersion or ""));
-  isMonitoringKind = kind: r: (r.kind or "") == kind && groupOf r == monitoringGroup;
+  isKindOf =
+    group: kind: r:
+    (r.kind or "") == kind && groupOf r == group;
 
   # Strip string context so a value can be used in attribute and resource names.
   plain = s: builtins.unsafeDiscardStringContext (toString s);
+
+  # Strip string context from every string in a value.
+  plainDeep =
+    v:
+    if builtins.isString v then
+      builtins.unsafeDiscardStringContext v
+    else if builtins.isList v then
+      map plainDeep v
+    else if builtins.isAttrs v then
+      lib.mapAttrs (_: plainDeep) v
+    else
+      v;
 
   nsOfRaw = raw: raw.metadata.namespace or null;
 
@@ -67,13 +96,26 @@ let
     builtins.all (k: (labels.${k} or null) == matchLabels.${k}) (builtins.attrNames matchLabels)
     && builtins.all exprHolds (selector.matchExpressions or [ ]);
 
+  # Return true for the strings Go's strconv.ParseBool reads as true, which
+  # is how the VictoriaMetrics operator reads its boolean variables.
+  isGoTrue =
+    v:
+    builtins.elem v [
+      "1"
+      "t"
+      "T"
+      "TRUE"
+      "true"
+      "True"
+    ];
+
   isNumeric = p: builtins.isInt p || (builtins.isString p && builtins.match "[0-9]+" p != null);
 in
 {
   inherit matchesSelector;
 
   # Derive `{ egressPolicies, ingressPolicies, warnings, errors }` for all
-  # Prometheus instances in Kix-managed namespaces. `extraPolicies` supplies
+  # scrapers (Prometheus and VMAgent resources) in Kix-managed namespaces. `extraPolicies` supplies
   # additional cluster-level policies (such as platform intents) that count
   # when checking whether target pods are already isolated for ingress.
   # `errors` is populated only when `defaultDeny` is enabled.
@@ -267,10 +309,12 @@ in
           lib.optional (ports != [ ]) (serviceTarget svc ports)
         ) matched;
 
-      # Build scrape targets for a PodMonitor. Skip monitors whose selector uses
-      # `matchExpressions`, which `podMonitorBreakage` reports separately.
-      podMonitorTargets =
-        mon:
+      # Build scrape targets for a pod scrape object (PodMonitor or
+      # VMPodScrape, which share the spec shape). Skip objects whose selector
+      # uses `matchExpressions`, which `podScrapeBreakage` reports separately.
+      # `idPrefix` keeps a VMPodScrape apart from a PodMonitor of one name.
+      podScrapeTargets =
+        idPrefix: mon:
         let
           sel = mon.spec.selector or { };
           podSelector = sel.matchLabels or { };
@@ -294,15 +338,15 @@ in
             namespace:
             mkTarget {
               key = "pods-${mon.metadata.name}";
-              id = "pods/${monNs}/${mon.metadata.name}";
+              id = "${idPrefix}/${monNs}/${mon.metadata.name}";
               inherit namespace podSelector ports;
             }
           ) (monitorNamespaces mon);
 
-      podMonitorBreakage =
-        mon:
+      podScrapeBreakage =
+        kind: mon:
         lib.optional ((mon.spec.selector or { }) ? matchExpressions)
-          "PodMonitor ${plain (nsOfRaw mon)}/${plain mon.metadata.name}: its selector uses matchExpressions, which Kix does not turn into a network policy selector, so no scrape policy opens its pods. Under default deny the scrape is dropped. Select the pods with matchLabels only.";
+          "${kind} ${plain (nsOfRaw mon)}/${plain mon.metadata.name}: its selector uses matchExpressions, which Kix does not turn into a network policy selector, so no scrape policy opens its pods. Under default deny the scrape is dropped. Select the pods with matchLabels only.";
 
       alertmanagerTargets =
         prom:
@@ -318,36 +362,233 @@ in
           lib.optional (svc != null && svcPorts != [ ]) (serviceTarget svc (map podPortOf svcPorts))
         ) (prom.spec.alerting.alertmanagers or [ ]);
 
-      monitors = {
-        serviceMonitor = builtins.filter (isMonitoringKind "ServiceMonitor") resources;
-        podMonitor = builtins.filter (isMonitoringKind "PodMonitor") resources;
-      };
+      # Return the value of environment variable `name` on every container of
+      # every workload in the build that sets it.
+      envValues =
+        name:
+        builtins.concatMap (
+          w:
+          builtins.concatMap (
+            c: map (e: e.value or null) (builtins.filter (e: e.name == name) (c.env or [ ]))
+          ) (w.rawManifest.spec.template.spec.containers or [ ])
+        ) (builtins.filter isWorkload resources);
 
-      # Return true when a Prometheus resource selects a monitor. A null monitor
-      # selector matches nothing while `{}` matches all monitors. A null
-      # namespace selector matches only the Prometheus namespace while `{}`
-      # matches every namespace.
-      selects =
-        prom: prefix: mon:
+      # Return true while the VictoriaMetrics operator converts the
+      # prometheus-operator kind its variable suffix `env` names. The
+      # operator's default is on, so a build that sets no such variable
+      # converts.
+      vmConverts =
+        env:
         let
-          sel = prom.spec."${prefix}Selector" or null;
-          nsSel = prom.spec."${prefix}NamespaceSelector" or null;
-          monNs = nsOfRaw mon;
+          values = envValues "VM_ENABLEDPROMETHEUSCONVERTER_${env}";
+        in
+        values == [ ] || builtins.any isGoTrue values;
+
+      # Every scrape object in the build as
+      # `{ group, kind, namespace, name, labels, targets, breakages }`.
+      # `targets` and `breakages` do not depend on the scraper.
+      renderedScrapeObjects =
+        let
+          object =
+            group: kind: targetsOf: breakagesOf: r:
+            let
+              raw = r.rawManifest;
+            in
+            {
+              inherit group kind;
+              namespace = plain (nsOfRaw raw);
+              name = plain raw.metadata.name;
+              labels = raw.metadata.labels or { };
+              targets = targetsOf raw;
+              breakages = breakagesOf raw;
+            };
+          ofKind =
+            group: kind: targetsOf: breakagesOf:
+            map (object group kind targetsOf breakagesOf) (builtins.filter (isKindOf group kind) resources);
+          noBreakage = _: [ ];
+          noTargets = _: [ ];
+        in
+        ofKind monitoringGroup "ServiceMonitor" serviceMonitorTargets noBreakage
+        ++ ofKind monitoringGroup "PodMonitor" (podScrapeTargets "pods") (podScrapeBreakage "PodMonitor")
+        ++ ofKind vmGroup "VMServiceScrape" serviceMonitorTargets noBreakage
+        ++ ofKind vmGroup "VMPodScrape" (podScrapeTargets "vmpodscrape") (podScrapeBreakage "VMPodScrape")
+        # Kinds Kix opens no path for. A scraper that selects one is warned.
+        ++ ofKind monitoringGroup "Probe" noTargets noBreakage
+        ++ ofKind monitoringGroup "ScrapeConfig" noTargets noBreakage
+        ++ builtins.concatMap (k: ofKind vmGroup k noTargets noBreakage) [
+          "VMProbe"
+          "VMStaticScrape"
+          "VMNodeScrape"
+          "VMScrapeConfig"
+        ];
+
+      # Scrape objects an operator creates at runtime for the pods of a
+      # custom resource, declared by `factBehavior.selfScrapes` on its CRD.
+      # Each entry is `{ kind, name, labels, podSelector, ports }`, where
+      # `ports` are pod port numbers.
+      selfScrapeObjects = builtins.concatMap (
+        r:
+        let
+          raw = r.rawManifest;
+          declared = (r.factBehavior or { }).selfScrapes or null;
+          namespace = plain (nsOfRaw raw);
+        in
+        if declared == null || !(nsResources ? ${namespace}) then
+          [ ]
+        else
+          map (s: {
+            group = vmGroup;
+            inherit (s) kind labels;
+            inherit namespace;
+            name = plain s.name;
+            targets = [
+              (mkTarget {
+                key = "svc-${plain s.name}";
+                id = "svc/${plain s.name}";
+                inherit namespace;
+                inherit (s) podSelector ports;
+              })
+            ];
+            breakages = [ ];
+          }) (declared raw)
+      ) resources;
+
+      scrapeObjects = renderedScrapeObjects ++ selfScrapeObjects;
+
+      # Return the scrape objects of `group`/`kind`.
+      objectsOf = group: kind: builtins.filter (o: o.group == group && o.kind == kind) scrapeObjects;
+
+      # Return true when a prometheus-operator resource selects `obj` through
+      # its `<slot>Selector` and `<slot>NamespaceSelector`. A null selector
+      # matches nothing while `{}` matches all objects. A null namespace
+      # selector matches only the scraper's namespace while `{}` matches
+      # every namespace.
+      prometheusSelects =
+        cr: slot: obj:
+        let
+          sel = cr.spec."${slot}Selector" or null;
+          nsSel = cr.spec."${slot}NamespaceSelector" or null;
         in
         sel != null
-        && matchesSelector sel (mon.metadata.labels or { })
-        && (if nsSel == null then monNs == nsOfRaw prom else matchesSelector nsSel (nsLabels monNs));
+        && matchesSelector sel obj.labels
+        && (
+          if nsSel == null then
+            obj.namespace == plain (nsOfRaw cr)
+          else
+            matchesSelector nsSel (nsLabels obj.namespace)
+        );
 
-      prometheuses = builtins.filter (
-        r: isMonitoringKind "Prometheus" r && nsResources ? ${plain (nsOfRaw r.rawManifest)}
-      ) resources;
-      hasPodSelector = r: ((r.factBehavior or null).podSelector or null) != null;
-      scrapers = builtins.filter hasPodSelector prometheuses;
+      # Return true when a VictoriaMetrics resource selects `obj`, as the
+      # operator's `k8stools.VisitSelected` does. With both selectors unset
+      # it selects everything when `selectAllByDefault` is true and nothing
+      # otherwise. An object selector without a namespace selector reads only
+      # the scraper's namespace. A namespace selector reads the namespaces it
+      # matches, and `{}` matches every namespace.
+      vmSelects =
+        cr: slot: obj:
+        let
+          sel = cr.spec."${slot}Selector" or null;
+          nsSel = cr.spec."${slot}NamespaceSelector" or null;
+        in
+        if sel == null && nsSel == null then
+          cr.spec.selectAllByDefault or false
+        else
+          (sel == null || matchesSelector sel obj.labels)
+          && (
+            if nsSel == null then
+              obj.namespace == plain (nsOfRaw cr)
+            else
+              matchesSelector nsSel (nsLabels obj.namespace)
+          );
+
+      # Scraper kinds. `slots` maps each selector slot to the scrape object
+      # kinds it selects, `unread` lists the slots whose objects Kix opens no
+      # path for, and `unreadFields` the spec fields that name targets
+      # directly. `stem` names the scraper in policy names.
+      scraperKinds = [
+        {
+          group = monitoringGroup;
+          kind = "Prometheus";
+          stem = name: name;
+          selects = prometheusSelects;
+          slots = {
+            serviceMonitor = [ "ServiceMonitor" ];
+            podMonitor = [ "PodMonitor" ];
+          };
+          slotGroup = monitoringGroup;
+          unread = {
+            probe = [ "Probe" ];
+            scrapeConfig = [ "ScrapeConfig" ];
+          };
+          unreadFields = [
+            "additionalScrapeConfigs"
+            "additionalAlertManagerConfigs"
+          ];
+          extraTargets = alertmanagerTargets;
+        }
+        {
+          group = vmGroup;
+          kind = "VMAgent";
+          stem = name: "vmagent-${name}";
+          selects = vmSelects;
+          slots = {
+            serviceScrape = [ "VMServiceScrape" ];
+            podScrape = [ "VMPodScrape" ];
+          };
+          slotGroup = vmGroup;
+          unread = {
+            probe = [ "VMProbe" ];
+            staticScrape = [ "VMStaticScrape" ];
+            nodeScrape = [ "VMNodeScrape" ];
+            scrapeConfig = [ "VMScrapeConfig" ];
+          };
+          unreadFields = [
+            "inlineScrapeConfig"
+            "additionalScrapeConfigs"
+          ];
+          extraTargets = _: [ ];
+          # The prometheus-operator kinds the operator converts into each
+          # slot's kind, by the suffix of its converter variable.
+          converted = {
+            serviceScrape = lib.optional (vmConverts "SERVICESCRAPE") "ServiceMonitor";
+            podScrape = lib.optional (vmConverts "PODMONITOR") "PodMonitor";
+            probe = lib.optional (vmConverts "PROBE") "Probe";
+            scrapeConfig = lib.optional (vmConverts "SCRAPECONFIG") "ScrapeConfig";
+          };
+        }
+      ];
+
+      # Return the scrape objects a scraper of kind `sk` may select through
+      # `slot`, from the slot table `table`.
+      candidatesOf =
+        sk: table: slot:
+        builtins.concatMap (objectsOf sk.slotGroup) table.${slot}
+        ++ builtins.concatMap (objectsOf monitoringGroup) ((sk.converted or { }).${slot} or [ ]);
+
+      # Return the objects `cr` selects through the slots of `table`.
+      selectedBy =
+        sk: cr: table:
+        builtins.concatMap (slot: builtins.filter (sk.selects cr slot) (candidatesOf sk table slot)) (
+          builtins.attrNames table
+        );
+
+      scraperResources = builtins.concatMap (
+        sk:
+        map (r: { inherit sk r; }) (
+          builtins.filter (
+            r: isKindOf sk.group sk.kind r && nsResources ? ${plain (nsOfRaw r.rawManifest)}
+          ) resources
+        )
+      ) scraperKinds;
+      hasPodSelector = s: ((s.r.factBehavior or null).podSelector or null) != null;
+      scrapers = builtins.filter hasPodSelector scraperResources;
       unnamedScraperBreakages = map (
-        r:
-        "Prometheus ${plain (nsOfRaw r.rawManifest)}/${plain r.rawManifest.metadata.name}: the Prometheus CRD declares no factBehavior.podSelector, so Kix cannot name the server pods and derives no scrape policy for them. Under default deny the server reaches no target. Set cluster.factBehavior.\"monitoring.coreos.com/Prometheus\" to { endpoint = \"terminate\"; podSelector = <the server pods' labels>; }."
-      ) (builtins.filter (r: !hasPodSelector r) prometheuses);
-
+        s:
+        let
+          inherit (s.sk) group kind;
+        in
+        "${kind} ${plain (nsOfRaw s.r.rawManifest)}/${plain s.r.rawManifest.metadata.name}: the ${kind} CRD declares no factBehavior.podSelector, so Kix cannot name the server pods and derives no scrape policy for them. Under default deny the server reaches no target. Set cluster.factBehavior.\"${group}/${kind}\" to { endpoint = \"terminate\"; podSelector = <the server pods' labels>; }."
+      ) (builtins.filter (s: !hasPodSelector s) scraperResources);
       # Return true when a policy isolates its selected pods for ingress. This
       # includes enforcer policies with `ingress` or `ingressDeny` rules and
       # Kubernetes NetworkPolicies whose `policyTypes` include `Ingress` (the
@@ -427,25 +668,32 @@ in
           "some";
 
       perScraper =
-        r:
+        { sk, r }:
         let
           prom = r.rawManifest;
           promNs = plain (nsOfRaw prom);
           promName = plain prom.metadata.name;
+          who = "${sk.kind} ${promNs}/${promName}";
+          stem = sk.stem promName;
           podSelectorDecl = r.factBehavior.podSelector;
           scraperSelector =
             if builtins.isFunction podSelectorDecl then podSelectorDecl prom else podSelectorDecl;
 
-          selectedPodMonitors = builtins.filter (
-            m: selects prom "podMonitor" m.rawManifest
-          ) monitors.podMonitor;
+          selected = selectedBy sk prom sk.slots;
 
-          rawTargets =
-            builtins.concatMap (m: serviceMonitorTargets m.rawManifest) (
-              builtins.filter (m: selects prom "serviceMonitor" m.rawManifest) monitors.serviceMonitor
-            )
-            ++ builtins.concatMap (m: podMonitorTargets m.rawManifest) selectedPodMonitors
-            ++ alertmanagerTargets prom;
+          rawTargets = builtins.concatMap (o: o.targets) selected ++ sk.extraTargets prom;
+
+          unreadObjects = selectedBy sk prom sk.unread;
+          unreadFields = builtins.filter (f: (prom.spec.${f} or null) != null) sk.unreadFields;
+          unreadWarnings =
+            map (
+              o:
+              "${who} selects ${o.kind} ${o.namespace}/${o.name}, whose targets Kix does not read, so no network policy opens them. Under an enforcer the scrape is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
+            ) unreadObjects
+            ++ map (
+              f:
+              "${who} sets spec.${f}, whose targets Kix does not read, so no network policy opens them. Under an enforcer that traffic is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
+            ) unreadFields;
 
           # Two monitors on one Service are one target with the union of
           # their ports.
@@ -469,29 +717,35 @@ in
           numericPorts = t: builtins.filter (p: isNumeric p.port) t.ports;
           namedPorts = t: builtins.filter (p: !isNumeric p.port) t.ports;
 
-          egressRules = lib.unique (
-            builtins.concatMap (
-              t:
-              if numericPorts t == [ ] then
-                [ ]
-              else if t.hostNetwork then
-                [ (enforcerApi.mkHostNetworkEgressRule { ports = numericPorts t; }) ]
-              else
-                [
-                  (enforcerApi.mkServiceEgressRule {
-                    selector = t.podSelector;
-                    namespace = t.namespace;
-                    sourceNamespace = promNs;
-                    ports = numericPorts t;
-                  })
-                ]
-            ) targets
+          # The rules carry no string context, so the policy does not wait
+          # for every target to be deployed. A scraper that is up before
+          # its last target can scrape the others, and admitting traffic to
+          # pods that do not exist yet opens nothing.
+          egressRules = plainDeep (
+            lib.unique (
+              builtins.concatMap (
+                t:
+                if numericPorts t == [ ] then
+                  [ ]
+                else if t.hostNetwork then
+                  [ (enforcerApi.mkHostNetworkEgressRule { ports = numericPorts t; }) ]
+                else
+                  [
+                    (enforcerApi.mkServiceEgressRule {
+                      selector = t.podSelector;
+                      namespace = t.namespace;
+                      sourceNamespace = promNs;
+                      ports = numericPorts t;
+                    })
+                  ]
+              ) targets
+            )
           );
 
           namedPortBreakage =
             t:
             let
-              target = "Prometheus ${promNs}/${promName}: target ${plain t.namespace}/${plain t.key}";
+              target = "${who}: target ${plain t.namespace}/${plain t.key}";
               names = lib.concatMapStringsSep ", " (p: toString p.port) (namedPorts t);
               fix = "Give the monitor endpoint a port number: a numeric targetPort on the Service or ServiceMonitor endpoint, or portNumber on a PodMonitor endpoint.";
             in
@@ -503,7 +757,7 @@ in
           egressPolicy = enforcerApi.mkPolicy {
             mkResource = core.mkResource;
             extraArgs = {
-              name = "${promName}-scrape-egress";
+              name = "${stem}-scrape-egress";
               namespace = nsResources.${promNs};
               labels = {
                 ${kixKeys.derived} = "true";
@@ -534,10 +788,10 @@ in
             t:
             let
               hash = builtins.substring 0 8 (
-                builtins.hashString "sha256" "${promNs}/${promName}/${plain t.namespace}/${plain t.id}"
+                builtins.hashString "sha256" "${promNs}/${stem}/${plain t.namespace}/${plain t.id}"
               );
             in
-            "${promNs}-${promName}-scrape-${plain t.key}-${hash}";
+            "${promNs}-${stem}-scrape-${plain t.key}-${hash}";
 
           ingressPolicy =
             t:
@@ -570,7 +824,7 @@ in
           warnings = lib.optionals enforced.ingress (
             map (
               t:
-              "Prometheus ${promNs}/${promName}: another ingress policy ${
+              "${who}: another ingress policy ${
                 if t.podLabelSets == [ ] then
                   "may isolate only some of the pods behind target ${plain t.namespace}/${plain t.key}, which Kix did not build, depending on labels outside the target's selector"
                 else
@@ -578,8 +832,9 @@ in
               }. Without default deny Kix adds scrape ingress only where it can show that every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy, or turn on networkPolicy.defaultDeny."
             ) partlyIsolatedTargets
           );
+          inherit unreadWarnings;
           breakages =
-            builtins.concatMap (m: podMonitorBreakage m.rawManifest) selectedPodMonitors
+            builtins.concatMap (o: o.breakages) selected
             ++ lib.optionals enforced.egress (
               map namedPortBreakage (builtins.filter (t: namedPorts t != [ ]) targets)
             );
@@ -592,7 +847,8 @@ in
       egressPolicies = builtins.concatMap (r: r.egressPolicies) results;
       ingressPolicies = builtins.concatMap (r: r.ingressPolicies) results;
       warnings = lib.unique (
-        builtins.concatMap (r: r.warnings) results ++ lib.optionals (!defaultDeny) breakages
+        builtins.concatMap (r: r.warnings ++ r.unreadWarnings) results
+        ++ lib.optionals (!defaultDeny) breakages
       );
       errors = lib.optionals defaultDeny breakages;
     };

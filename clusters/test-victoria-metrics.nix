@@ -18,8 +18,13 @@
 # 5. Each VM package renders its alert rules as a PrometheusRule through the
 #    operator's builder; test-victoria-metrics.rules-test.yaml runs promtool
 #    tests against them (the rules-cluster-victoria-metrics check).
+# 6. The stack runs under Cilium default deny: the packages' policies for
+#    the operator's pods, and the scrape join's paths from vmagent to every
+#    scrape object it selects, the operator's own VMServiceScrapes included.
 #
-# Build:  nix build .#cluster-victoria-metrics --extra-experimental-features pipe-operators
+# Build:  nix build ./clusters#cluster-victoria-metrics --extra-experimental-features pipe-operators
+# Deploy: kix deploy victoria-metrics --flake ./clusters --context <kind context> --timeout 20m
+#         on a kind cluster created with `disableDefaultCNI: true`.
 
 { kix, packages }:
 
@@ -110,7 +115,18 @@ in
 kix.buildCluster {
   name = "test-victoria-metrics";
   modules = [
+    kix.flavors.kind
     {
+      networkPolicy.enable = true;
+
+      # kind runs with the default CNI disabled, so the managed cilium
+      # instance fills the cni role.
+      cluster.roles.cni = {
+        binding = "absent";
+        provider = null;
+      };
+      instances.kube-system.cilium.package = packages.cilium;
+
       namespaces.monitoring-system = { };
 
       instances.monitoring-system = {

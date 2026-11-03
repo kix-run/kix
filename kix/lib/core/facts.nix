@@ -60,8 +60,12 @@ rec {
 
   conducts = kind: !(builtins.elem kind terminatorKinds);
 
-  # Validate a `factBehavior` declaration (`{ endpoint; podSelector?; podNamespace?; }`)
-  # from `mkCRD`, `mkCRDRef`, or `cluster.factBehavior`.
+  # Validate a `factBehavior` declaration
+  # (`{ endpoint; podSelector?; podNamespace?; selfScrapes?; }`) from `mkCRD`,
+  # `mkCRDRef`, or `cluster.factBehavior`. `selfScrapes` is a function
+  # `cr: [ { kind; name; labels; podSelector; ports; } ]` of the manifest,
+  # the scrape objects the controller creates for the custom resource's own
+  # pods, which the netpol scrape join reads.
   validateBehavior =
     source: kindKey: entry:
     let
@@ -103,8 +107,13 @@ rec {
           throw "kix: factBehavior for '${kindKey}' (${source}): podNamespace must be a namespace name or a function `cr: \"<namespace>\"` of the manifest"
         else
           null;
+      _scrapes =
+        if entry ? selfScrapes && !builtins.isFunction entry.selfScrapes then
+          throw "kix: factBehavior for '${kindKey}' (${source}): selfScrapes must be a function `cr: [ { kind; name; labels; podSelector; ports; } ]` of the manifest"
+        else
+          null;
     in
-    builtins.seq _enum (builtins.seq _sel (builtins.seq _ns entry));
+    builtins.seq _enum (builtins.seq _sel (builtins.seq _ns (builtins.seq _scrapes entry)));
 
   # Return true when `apiVersion` belongs to a custom API group outside
   # `*.k8s.io` and Kix's own group.
