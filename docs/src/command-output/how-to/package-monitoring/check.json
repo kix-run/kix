@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-package-monitoring",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    110 manifests evaluated      \n scorecard  pass    0 errors, 6 warnings, 4 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    97 manifests evaluated       \n scorecard  pass    0 errors, 2 warnings, 4 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 110 manifests evaluated\nscorecard pass 0 errors, 6 warnings, 4 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 97 manifests evaluated\nscorecard pass 0 errors, 2 warnings, 4 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }
