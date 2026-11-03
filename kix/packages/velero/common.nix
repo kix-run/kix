@@ -216,12 +216,38 @@ rec {
         + "those pods by it. Remove ${if builtins.length hits == 1 then "it" else "them"}.";
     };
 
+  # The cloudCredentials dependency in one of two forms: a credentials file
+  # in key `cloud`, or an AWS key pair the pods read as environment
+  # variables. `envKeys` is null for the file form.
   checkCloudCredentials =
     cloudCredentials:
-    kix.checkSecretKeys {
-      inherit who;
-      arg = "cloudCredentials";
-      dep = cloudCredentials;
-      keys = [ "cloud" ];
-    };
+    let
+      dep = kix.checkSecretKeys {
+        inherit who;
+        arg = "cloudCredentials";
+        dep = cloudCredentials;
+        anyOf = [
+          [ "cloud" ]
+          awsKeyPair
+        ];
+      };
+      declared = dep.out.keys or [ ];
+      isFile = builtins.elem "cloud" declared;
+    in
+    if isFile && builtins.any (k: builtins.elem k declared) awsKeyPair then
+      throw (
+        "${who}: deps.cloudCredentials resolved to secret \"${dep.out.name}\", which declares both `cloud` "
+        + "and ${lib.concatStringsSep ", " awsKeyPair}. Velero would read the key pair and ignore the file. "
+        + "Keep one form."
+      )
+    else
+      {
+        inherit dep;
+        envKeys = if isFile then null else awsKeyPair;
+      };
+
+  awsKeyPair = [
+    "AWS_ACCESS_KEY_ID"
+    "AWS_SECRET_ACCESS_KEY"
+  ];
 }

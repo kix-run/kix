@@ -148,13 +148,21 @@ let
     rule: cluster:
     builtins.filter (f: f.rule == rule && f.instance == "backup") cluster.scorecardReport.findings;
 
+  awsKeyPair = {
+    AWS_ACCESS_KEY_ID = "id";
+    AWS_SECRET_ACCESS_KEY = "secret";
+  };
+
   # The velero package with a bucket, `config` merged over it, the cloud
-  # credentials, and a repository Secret named `repository` (none when
-  # null). `withStore` wires the base instances' db Service as the store,
+  # credentials Secret holding `cloud`, and a repository Secret named
+  # `repository` (none when null). `withStore` wires the base instances' db Service as the store,
   # and `withPrometheus` adds a prometheus provider, so the alerts render.
   mkVelero =
     {
       config ? { },
+      cloud ? {
+        cloud = "[default]";
+      },
       repository ? "velero-repo-credentials",
       withStore ? false,
       netpol ? false,
@@ -170,7 +178,7 @@ let
               cloud = {
                 package = import ../../../packages/secret;
                 aliases = [ "cloudCredentials" ];
-                config.stringData.cloud = "[default]";
+                config.stringData = cloud;
               };
               velero = {
                 package = import ../../../packages/velero;
@@ -380,6 +388,18 @@ in
         owned-env = builds (mkVelero {
           config.nodeAgent.env.NODE_NAME = "node";
         });
+        owned-key-pair-env = builds (mkVelero {
+          cloud = awsKeyPair;
+          config.server.env.AWS_ACCESS_KEY_ID = "id";
+        });
+        file-and-key-pair = builds (mkVelero {
+          cloud = awsKeyPair // {
+            cloud = "[default]";
+          };
+        });
+        no-credentials-key = builds (mkVelero {
+          cloud.other = "x";
+        });
         s3-url-beside-store = builds (mkVelero {
           withStore = true;
           config.backupStorageLocation.config.s3Url = "https://s3.example.com";
@@ -388,6 +408,75 @@ in
       wrong = lib.attrNames (lib.filterAttrs (_: bad: bad) cases);
     in
     wrong == [ ] || throw "velero build refusals: these cases did not behave: ${toString wrong}";
+
+  # With the key pair form, the server and node-agent read the pair from the
+  # cloud Secret as environment variables, mount no credentials file, and
+  # the locations name no credential.
+  velero-key-pair-credentials =
+    let
+      cluster = mkVelero {
+        cloud = awsKeyPair;
+        config.volumeSnapshotLocation = {
+          provider = "velero.io/aws";
+          config.region = "gra";
+        };
+      };
+      ms = manifests cluster;
+      specOf = kind: n: (byName n (ofKind kind ms)).spec.template.spec;
+      envNames = c: map (e: e.name) c.env;
+      keyRefOf = c: n: (lib.findFirst (e: e.name == n) { } c.env).valueFrom.secretKeyRef or null;
+      checks =
+        lib.concatMap
+          (
+            { kind, n }:
+            let
+              spec = specOf kind n;
+              c = builtins.head spec.containers;
+            in
+            [
+              {
+                name = "${n}-key-id";
+                ok =
+                  keyRefOf c "AWS_ACCESS_KEY_ID" == {
+                    name = "cloud";
+                    key = "AWS_ACCESS_KEY_ID";
+                  };
+              }
+              {
+                name = "${n}-secret-key";
+                ok =
+                  keyRefOf c "AWS_SECRET_ACCESS_KEY" == {
+                    name = "cloud";
+                    key = "AWS_SECRET_ACCESS_KEY";
+                  };
+              }
+              {
+                name = "${n}-no-file-env";
+                ok = !(builtins.elem "AWS_SHARED_CREDENTIALS_FILE" (envNames c));
+              }
+              {
+                name = "${n}-no-file-volume";
+                ok = !(builtins.any (v: v.name == "cloud-credentials") spec.volumes);
+              }
+            ]
+          )
+          [
+            {
+              kind = "Deployment";
+              n = "velero";
+            }
+            {
+              kind = "DaemonSet";
+              n = "node-agent";
+            }
+          ];
+      locations = ofKind "BackupStorageLocation" ms ++ ofKind "VolumeSnapshotLocation" ms;
+      failed =
+        map (c: c.name) (builtins.filter (c: !c.ok) checks)
+        ++ lib.optional (builtins.length locations != 2) "location-count"
+        ++ lib.optional (builtins.any (l: l.spec ? credential) locations) "location-credential";
+    in
+    failed == [ ] || throw "velero key pair credentials: these checks failed: ${toString failed}";
 
   # With node-agent off, no repository Secret is needed; an unowned env var
   # reaches the container.

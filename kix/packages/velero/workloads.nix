@@ -74,12 +74,21 @@ let
     ++ lib.optional (config.volumeSnapshotLocation != null) 443
   );
 
-  credentialEnv = lib.genAttrs [
-    "AWS_SHARED_CREDENTIALS_FILE"
-    "AZURE_CREDENTIALS_FILE"
-    "GOOGLE_APPLICATION_CREDENTIALS"
-    "ALIBABA_CLOUD_CREDENTIALS_FILE"
-  ] (_: "/credentials/cloud");
+  credentialFile = creds.envKeys == null;
+
+  # Kubernetes resolves a secretKeyRef when a container starts, so a
+  # changed key pair reaches the server and node-agent only when they
+  # restart. The pods they launch start with the current one.
+  credentialEnv =
+    if credentialFile then
+      lib.genAttrs [
+        "AWS_SHARED_CREDENTIALS_FILE"
+        "AZURE_CREDENTIALS_FILE"
+        "GOOGLE_APPLICATION_CREDENTIALS"
+        "ALIBABA_CLOUD_CREDENTIALS_FILE"
+      ] (_: "/credentials/cloud")
+    else
+      lib.genAttrs creds.envKeys creds.dep.out.keyRef;
 
   # The root filesystem is read-only. kopia keeps its repository config
   # and cache under $HOME, so HOME points at the /scratch emptyDir;
@@ -88,8 +97,16 @@ let
   ownedEnv = extra: [
     {
       vars = credentialEnv;
-      from = "the cloudCredentials dependency, mounted at /credentials/cloud";
-      fix = "Remove it, and put the credentials in that Secret's `cloud` key.";
+      from =
+        if credentialFile then
+          "the cloudCredentials dependency, mounted at /credentials/cloud"
+        else
+          "the cloudCredentials dependency's key pair";
+      fix =
+        if credentialFile then
+          "Remove it, and put the credentials in that Secret's `cloud` key."
+        else
+          "Remove it, and put the key pair in the cloudCredentials Secret.";
     }
     {
       vars = {
@@ -110,20 +127,23 @@ let
       emptyDir = { };
     }) names;
 
-  commonMounts = [
-    {
+  credentialVolumes = lib.optional credentialFile (creds.dep.out.volume "cloud-credentials");
+
+  commonMounts =
+    lib.optional credentialFile {
       name = "cloud-credentials";
       mountPath = "/credentials";
     }
-    {
-      name = "scratch";
-      mountPath = "/scratch";
-    }
-    {
-      name = "tmpdir";
-      mountPath = "/tmp";
-    }
-  ];
+    ++ [
+      {
+        name = "scratch";
+        mountPath = "/scratch";
+      }
+      {
+        name = "tmpdir";
+        mountPath = "/tmp";
+      }
+    ];
 
   metricsContainerPort = {
     name = "http-monitoring";
@@ -332,14 +352,13 @@ in
             ];
           }
         ];
-        volumes = [
-          (creds.out.volume "cloud-credentials")
-        ]
-        ++ emptyDirs [
-          "plugins"
-          "scratch"
-          "tmpdir"
-        ];
+        volumes =
+          credentialVolumes
+          ++ emptyDirs [
+            "plugins"
+            "scratch"
+            "tmpdir"
+          ];
       };
     };
     requires = workloadRequires;
@@ -412,21 +431,22 @@ in
                   ];
                 }
               ];
-              volumes = [
-                (creds.out.volume "cloud-credentials")
-                {
-                  name = "host-pods";
-                  hostPath.path = "/var/lib/kubelet/pods";
-                }
-                {
-                  name = "host-plugins";
-                  hostPath.path = "/var/lib/kubelet/plugins";
-                }
-              ]
-              ++ emptyDirs [
-                "scratch"
-                "tmpdir"
-              ];
+              volumes =
+                credentialVolumes
+                ++ [
+                  {
+                    name = "host-pods";
+                    hostPath.path = "/var/lib/kubelet/pods";
+                  }
+                  {
+                    name = "host-plugins";
+                    hostPath.path = "/var/lib/kubelet/plugins";
+                  }
+                ]
+                ++ emptyDirs [
+                  "scratch"
+                  "tmpdir"
+                ];
             };
           };
         };
