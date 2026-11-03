@@ -388,6 +388,54 @@ in
     )
     || throw "Cluster spec: ${builtins.toJSON { inherit one two; }}";
 
+  # At `node`, two or more instances get required anti-affinity on the
+  # instance labels per host, which CloudNativePG also gives its join job.
+  # One instance, and the `pod` and `zone` levels, get none.
+  cnpg-cluster-node-level-separates-instances =
+    let
+      at =
+        level: instances:
+        (clusterSpec (cnpg {
+          database = null;
+          clusterConfig.instances = instances;
+          extra = {
+            cluster.capabilities.multiNode = true;
+            cluster.capabilities.availabilityZones = [
+              "a"
+              "b"
+            ];
+            instances.data.postgres.availability = level;
+          };
+        })).affinity;
+      node = at "node" 3;
+      required = node.additionalPodAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution or [ ];
+      none = a: !(a ? additionalPodAntiAffinity);
+    in
+    (
+      node.enablePodAntiAffinity == false
+      &&
+        required == [
+          {
+            labelSelector.matchLabels = {
+              "cnpg.io/cluster" = "postgres";
+              "cnpg.io/podRole" = "instance";
+            };
+            topologyKey = "kubernetes.io/hostname";
+          }
+        ]
+      && none (at "node" 1)
+      && none (at "pod" 3)
+      && none (at "zone" 3)
+    )
+    || throw "cnpg-cluster node-level anti-affinity: ${
+      builtins.toJSON {
+        inherit node;
+        one = at "node" 1;
+        pod = at "pod" 3;
+        zone = at "zone" 3;
+      }
+    }";
+
   # cnpg-cluster's assertions, one message each, and none for the defaults.
   cnpg-cluster-refusals =
     let
