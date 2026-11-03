@@ -304,7 +304,7 @@ tests:
             exp_annotations:
               summary: "The ClickHouse operator aborted the reconcile of a ClickHouseInstallation."
               description: "The ClickHouse operator clickhouse-system/clickhouse-operator aborted more reconciles of ClickHouseInstallation analytics-ha/ch than it completed in the last 24 hours, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log."
-  # An installation that never completed a reconcile: one abort fires it.
+  # The completed series is missing from the scrape: one abort fires it.
   - interval: 10m
     input_series:
       - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="op-metrics"}'

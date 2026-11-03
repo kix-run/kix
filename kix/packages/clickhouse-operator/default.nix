@@ -275,8 +275,9 @@ in
           # installation sees no new reconcile until its spec changes or a
           # host recovers, so the counters stop moving. The 24h window keeps
           # the alert firing for a day after the abort; a completed reconcile
-          # in that day clears it. An installation that never completed has
-          # no completed series, so the right side falls back to zero.
+          # in that day clears it. The operator creates the completed series
+          # at zero with the first reconcile. The right side still falls back
+          # to zero, so the rule holds for a scrape that lost that series.
           ClickHouseOperatorReconcileAborted = {
             expr = "${aborted} > (${completed} or ${aborted} * 0)";
             "for" = "15m";
