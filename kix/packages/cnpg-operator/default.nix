@@ -234,14 +234,17 @@ in
       description = "Operator image. Its major.minor must be the package's release. The operator also runs it as the init container of every PostgreSQL pod (OPERATOR_IMAGE_NAME).";
     };
 
-    # The release manifest's values.
+    # Requests and the memory limit are the release manifest's values. The
+    # manifest also caps CPU at its 100m request, which throttles the
+    # operator whenever it reconciles many objects at once, as during a
+    # rolling restart of a Cluster; the limit here lets it burst to one core.
     resources = kix.options.resources {
       requests = {
         cpu = "100m";
         memory = "100Mi";
       };
       limits = {
-        cpu = "100m";
+        cpu = "1";
         memory = "200Mi";
       };
     };
