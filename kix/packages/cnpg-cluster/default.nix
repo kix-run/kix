@@ -206,6 +206,17 @@ in
           }
         );
 
+        # At `node`, no two instances share a node. The spread alone does not
+        # hold that for a new instance: CloudNativePG first runs a join job,
+        # whose pod lacks the `cnpg.io/podRole=instance` label the spread
+        # counts, so the job can land beside an instance. On node-local
+        # storage the claim binds where the job ran, and the instance can
+        # then never schedule. CloudNativePG gives its job pods the Cluster's
+        # affinity, so required anti-affinity on the instance labels keeps
+        # the job off those nodes too. Below `node`, instances may share a
+        # node; at `zone`, several may share a zone.
+        separateNodes = config.instances > 1 && availability == "node";
+
         quantity = q: if builtins.isString q then q else toString q;
 
         backupOn = config.backup != null;
@@ -300,7 +311,17 @@ in
             size = quantity config.storage.size;
           }
           // lib.optionalAttrs (storageClass != null) { inherit storageClass; };
-          affinity.enablePodAntiAffinity = false;
+          affinity = {
+            enablePodAntiAffinity = false;
+          }
+          // lib.optionalAttrs separateNodes {
+            additionalPodAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution = [
+              {
+                labelSelector.matchLabels = instanceSelector;
+                topologyKey = clusterConfig.cluster.topology.hostKey;
+              }
+            ];
+          };
           enablePDB = config.instances > 1;
         }
         // lib.optionalAttrs (config.image.pullPolicy != null) {
