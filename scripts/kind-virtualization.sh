@@ -5,7 +5,8 @@
 #
 # Deploys clusters/test-virtualization.nix with `kix deploy`, which waits
 # for the KubeVirt and CDI resources to be Deployed, VirtualMachine `demo`
-# to be Running, DataVolume `scratch` to be Succeeded, and VirtualMachine
+# to be Running, DataVolumes `scratch` and `scratch-copy` (a host-assisted
+# clone from vm-demo into vm-clone) to be Succeeded, and VirtualMachine
 # `halted` to be Stopped. Then checks:
 #   - both resources report phase Deployed
 #   - the aggregated APIs of virt-api and cdi-apiserver are Available
@@ -14,8 +15,9 @@
 #   - the deploy applied the VirtualMachines after the KubeVirt resource was
 #     ready, and `demo` after the DataVolume CRD marker
 #   - a second deploy with no change succeeds
+#   - the clone ran through a cloner pod and an upload server pod
 #   - no Cilium agent dropped a packet by policy to or from a pod in the
-#     kubevirt, cdi, or vm-demo namespace
+#     kubevirt, cdi, vm-demo, or vm-clone namespace
 # Each agent's drops are saved to $OUT/drops-<pod>.log, each line followed
 # by the namespaces of its numeric source and destination identities,
 # resolved when the drop is seen.
@@ -186,6 +188,10 @@ done
 check "VirtualMachine demo is Running" test "$(k -n vm-demo get vm demo -o jsonpath='{.status.printableStatus}')" = Running
 check "VirtualMachine halted is Stopped" test "$(k -n vm-demo get vm halted -o jsonpath='{.status.printableStatus}')" = Stopped
 check "DataVolume scratch is Succeeded" test "$(k -n vm-demo get dv scratch -o jsonpath='{.status.phase}')" = Succeeded
+check "DataVolume scratch-copy is Succeeded" test "$(k -n vm-clone get dv scratch-copy -o jsonpath='{.status.phase}')" = Succeeded
+# CDI records a host-assisted clone in the target claim's annotations.
+check "scratch-copy was cloned through a cloner pod" \
+  test "$(k -n vm-clone get pvc scratch-copy -o jsonpath='{.metadata.annotations.cdi\.kubevirt\.io/cloneType}')" = copy
 # Line of the first deploy-log entry for an object, by its log prefix.
 log_line() { grep -n -F -m1 "$1" "$OUT/deploy-1.log" | cut -d: -f1; }
 before() { local a b; a=$(log_line "$1"); b=$(log_line "$2"); [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; }
@@ -223,11 +229,11 @@ done
 # meets vm-demo's default-deny; it is counted but does not fail the run.
 guest_drops=$(cat "$OUT"/drops-*.log | grep 'Policy denied' | grep -c '/virt-launcher' || true)
 echo "      $guest_drops policy drops of virtual machine guest traffic"
-fixture_drops=$(cat "$OUT"/drops-*.log | grep 'Policy denied' | grep -E '\|namespaces:.* (kubevirt|cdi|vm-demo)( |$)' || true)
+fixture_drops=$(cat "$OUT"/drops-*.log | grep 'Policy denied' | grep -E '\|namespaces:.* (kubevirt|cdi|vm-demo|vm-clone)( |$)' || true)
 if [ -z "$fixture_drops" ]; then
-  echo "ok:   no policy drops for kubevirt, cdi, or vm-demo pods"
+  echo "ok:   no policy drops for kubevirt, cdi, vm-demo, or vm-clone pods"
 else
-  echo "FAIL: policy drops for kubevirt, cdi, or vm-demo pods:"
+  echo "FAIL: policy drops for kubevirt, cdi, vm-demo, or vm-clone pods:"
   echo "$fixture_drops" | head -20
   fail=1
 fi

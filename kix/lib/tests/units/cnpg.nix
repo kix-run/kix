@@ -722,6 +722,9 @@ in
           "cnpg.io/cluster" = "postgres";
           "cnpg.io/podRole" = "instance";
         }
+      && builtins.any (
+        r: (r.stubRule or null) == "intent-egress" && r.to == "world" && map (p: p.port) r.ports == [ 9000 ]
+      ) egress.spec.egress
     )
     || throw "backup resources: ${
       builtins.toJSON {

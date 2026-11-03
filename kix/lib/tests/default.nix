@@ -820,11 +820,15 @@ let
             rule "caller-ingress" { inherit callerSelector callerNamespace ports; };
           portsToCilium = ports: ports;
           mkEndpointSelector = matchLabels: { inherit matchLabels; };
+          # Echo each intent rule, so a test can assert its target and ports.
           translateIntentRules =
             { intents }:
+            let
+              all = builtins.attrValues intents;
+            in
             {
-              egressRules = [ ];
-              ingressRules = [ ];
+              egressRules = builtins.concatMap (i: map (r: rule "intent-egress" r) (i.egress or [ ])) all;
+              ingressRules = builtins.concatMap (i: map (r: rule "intent-ingress" r) (i.ingress or [ ])) all;
             };
           materializePlatformIntent =
             {

@@ -70,7 +70,7 @@ let
   metaLib = import ../../meta.nix { inherit lib; };
 
   # The real cilium package in environment mode, so policies carry the
-  # translated rules (the stub enforcer translates intents to nothing).
+  # rules Cilium translates intents into.
   ciliumOn = {
     cluster.roles.cni = {
       binding = "shadowable";
@@ -749,9 +749,91 @@ in
             "cdi.kubevirt.io" = "cdi-deployment";
           };
           uploadProxy."cdi.kubevirt.io" = "cdi-uploadproxy";
+          uploadServer = {
+            app = "containerized-data-importer";
+            "cdi.kubevirt.io" = "cdi-upload-server";
+          };
+          cloner = {
+            app = "containerized-data-importer";
+            "cdi.kubevirt.io" = "cdi-clone-source";
+          };
         }
     )
     || throw "mkImporterPolicy: ${builtins.toJSON a}, selectors ${builtins.toJSON selectors}";
+
+  # A host-assisted clone from `golden` into `vms`: the upload server policy
+  # in `vms` admits cdi-uploadproxy and the cloner pods of `golden` on 8443,
+  # and the cloner policy in `golden` sends to the upload server pods of
+  # `vms` and admits cdi-deployment. Without an enforcer both are null.
+  kubevirt-cdi-clone-and-upload-policies =
+    let
+      consumer = build: {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            cdi,
+            ...
+          }:
+          {
+            policy = build cdi scope;
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "${scope.instanceName}-cm";
+            };
+            root = {
+              resource = self.cm;
+              requires = lib.optional (self.policy != null) self.policy;
+            };
+          };
+      };
+      target = consumer (
+        cdi: scope: cdi.out.mkUploadServerPolicy scope { cloneSourceNamespaces = [ "golden" ]; }
+      );
+      source = consumer (cdi: scope: cdi.out.mkClonerPolicy scope { targetNamespaces = [ "vms" ]; });
+      instances = {
+        instances.cdi.cdi.package = cdiPackage;
+        instances.vms.disk.package = target;
+        instances.golden.image.package = source;
+      };
+      on = mkCluster [
+        ciliumOn
+        instances
+      ];
+      off = mkCluster [ instances ];
+      selectors = (outOf on "cdi").operandSelectors;
+      withNs = sel: ns: sel // { "k8s:io.kubernetes.pod.namespace" = ns; };
+      upload = find on "CiliumNetworkPolicy" "disk-cdi-upload-server";
+      clonerPolicy = find on "CiliumNetworkPolicy" "image-cdi-cloner";
+      fromOf = p: map (r: r.fromEndpoints) p.spec.ingress;
+      portsOf = rule: map (p: p.port) (builtins.head rule.toPorts).ports;
+      clonerEgressText = builtins.toJSON clonerPolicy.spec.egress;
+    in
+    (
+      upload.metadata.namespace == "vms"
+      && upload.spec.endpointSelector.matchLabels == selectors.uploadServer
+      &&
+        fromOf upload == [
+          [ { matchLabels = withNs selectors.uploadProxy "cdi"; } ]
+          [ { matchLabels = withNs selectors.cloner "golden"; } ]
+        ]
+      &&
+        map portsOf upload.spec.ingress == [
+          [ "8443" ]
+          [ "8443" ]
+        ]
+      && !(upload.spec ? egress)
+      && clonerPolicy.metadata.namespace == "golden"
+      && clonerPolicy.spec.endpointSelector.matchLabels == selectors.cloner
+      && lib.hasInfix "kube-dns" clonerEgressText
+      && lib.hasInfix (builtins.toJSON (withNs selectors.uploadServer "vms")) clonerEgressText
+      && fromOf clonerPolicy == [ [ { matchLabels = withNs selectors.deployment "cdi"; } ] ]
+      && find off "CiliumNetworkPolicy" "disk-cdi-upload-server" == null
+      && find off "CiliumNetworkPolicy" "image-cdi-cloner" == null
+    )
+    || throw "clone and upload policies: ${builtins.toJSON { inherit upload clonerPolicy; }}";
 
   # A priorityClass dependency names the class in the CDI resource, orders
   # the resource after the class, and locks the field; without one the field
