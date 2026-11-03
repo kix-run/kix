@@ -388,6 +388,22 @@ in
     )
     || throw "Cluster spec: ${builtins.toJSON { inherit one two; }}";
 
+  # The operator requests 100m CPU and may burst to one core.
+  cnpg-operator-cpu-bursts =
+    let
+      container =
+        builtins.head
+          (byName "cnpg-operator" (
+            ofKind "Deployment" (
+              ms (cnpg {
+                database = null;
+              })
+            )
+          )).spec.template.spec.containers;
+    in
+    (container.resources.requests.cpu == "100m" && container.resources.limits.cpu == "1")
+    || throw "cnpg-operator resources: ${builtins.toJSON container.resources}";
+
   # At `node`, two or more instances get required anti-affinity on the
   # instance labels per host, which CloudNativePG also gives its join job.
   # One instance, and the `pod` and `zone` levels, get none.
