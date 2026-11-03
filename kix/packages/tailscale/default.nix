@@ -656,6 +656,8 @@ in
     (
       let
         sel = ''namespace="${ns}",service="${name}-metrics"'';
+        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
+        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         operator = "Tailscale operator ${ns}/${name}";
       in
       kix.monitor {
@@ -669,11 +671,14 @@ in
             description = "The ${operator} has not answered a scrape for 10 minutes. Running proxies keep serving, but new or changed Services, Ingresses, and tailscale.com resources are not acted on. Check the operator Deployment in ${ns}.";
           };
           TailscaleOperatorReconcileErrors = {
-            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
+            # controller-runtime counts an optimistic-lock conflict as an error
+            # and retries at once, so a busy healthy controller shows a few.
+            # Alert on the share of reconciles that fail, with a floor.
+            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
             "for" = "15m";
             severity = "warning";
             summary = "The Tailscale operator fails to reconcile resources.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed reconciles for 15 minutes, so a proxy or tailnet device may not match its resource. The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause.";
+            description = "The {{ $labels.controller }} controller of the ${operator} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so a proxy or tailnet device may not match its resource. The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause.";
           };
         };
       }

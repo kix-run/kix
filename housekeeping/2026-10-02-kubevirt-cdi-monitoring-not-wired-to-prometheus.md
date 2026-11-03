@@ -15,7 +15,7 @@ cdi-operator only whether the PrometheusRule kind resolves
 `monitorAccount` and `MONITORING_NAMESPACE` only name the subject of a
 RoleBinding, which the prometheus package's ClusterRole makes unneeded.
 
-Decision required from Adam: keep the operators' own monitors and add a
+Decision required from the maintainers: keep the operators' own monitors and add a
 `prometheus ? null` dependency that only opens the scrape edge, or scrape
 through `kix.monitor` with package alerts and accept that the operators'
 duplicate monitors and rules stay.

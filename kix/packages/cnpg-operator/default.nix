@@ -856,6 +856,8 @@ in
       }@args:
       let
         sel = ''namespace="${ns}",service="${metricsServiceName}"'';
+        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
+        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         operator = "CloudNativePG operator ${ns}/${name}";
       in
       kix.monitor {
@@ -869,11 +871,14 @@ in
             description = "No replica of the ${operator} has answered a scrape for 10 minutes. Running PostgreSQL clusters keep serving, but no failover happens, changes to Clusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in ${ns}.";
           };
           CNPGOperatorReconcileErrors = {
-            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
+            # controller-runtime counts an optimistic-lock conflict as an error
+            # and retries at once, so a busy healthy controller shows a few.
+            # Alert on the share of reconciles that fail, with a floor.
+            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
             "for" = "15m";
             severity = "warning";
             summary = "The CloudNativePG operator fails to reconcile its resources.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed reconciles for 15 minutes, so a resource of that kind may not match its spec. The operator log names the error and the resource.";
+            description = "The {{ $labels.controller }} controller of the ${operator} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so a resource of that kind may not match its spec. The operator log names the error and the resource.";
           };
         };
       } args

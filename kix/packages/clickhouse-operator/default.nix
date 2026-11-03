@@ -36,10 +36,11 @@
 #                                                 scrape. Installations keep
 #                                                 serving; changes to them
 #                                                 are not applied.
-#   ClickHouseOperatorReconcileAborted (warning)  the operator aborted a
-#                                                 ClickHouseInstallation's
-#                                                 reconcile in the last hour
-#                                                 and left it Aborted.
+#   ClickHouseOperatorReconcileAborted (warning)  the operator aborted more
+#                                                 reconciles of a
+#                                                 ClickHouseInstallation than
+#                                                 it completed in the last
+#                                                 24 hours.
 # The operator counts no reconciles of a ClickHouseKeeperInstallation
 # (pkg/controller/chk/metrics upstream), so a failed one shows only in the
 # CR's status, and the deploy waits on it. The health of each server is
@@ -246,6 +247,8 @@ in
       let
         ns = scope.namespaceName;
         sel = ''namespace="${ns}",service="${scope.instanceName}-metrics"'';
+        aborted = "sum by (namespace, service, exported_namespace, chi) (increase(clickhouse_operator_chi_reconciles_aborted{${sel}}[24h]))";
+        completed = "sum by (namespace, service, exported_namespace, chi) (increase(clickhouse_operator_chi_reconciles_completed{${sel}}[24h]))";
         operator = "ClickHouse operator ${ns}/${scope.instanceName}";
       in
       kix.monitor {
@@ -268,13 +271,18 @@ in
           };
           # The operator labels these series with the installation's own
           # namespace, which the scrape renames to exported_namespace
-          # (pkg/metrics/operator/labels.go upstream). The 1h window spans
-          # any restart, so the rule needs no `for`.
+          # (pkg/metrics/operator/labels.go upstream). An aborted
+          # installation sees no new reconcile until its spec changes or a
+          # host recovers, so the counters stop moving. The 24h window keeps
+          # the alert firing for a day after the abort; a completed reconcile
+          # in that day clears it. An installation that never completed has
+          # no completed series, so the right side falls back to zero.
           ClickHouseOperatorReconcileAborted = {
-            expr = "sum by (namespace, service, exported_namespace, chi) (increase(clickhouse_operator_chi_reconciles_aborted{${sel}}[1h])) > 0";
+            expr = "${aborted} > (${completed} or ${aborted} * 0)";
+            "for" = "15m";
             severity = "warning";
             summary = "The ClickHouse operator aborted the reconcile of a ClickHouseInstallation.";
-            description = "The ${operator} aborted the reconcile of ClickHouseInstallation {{ $labels.exported_namespace }}/{{ $labels.chi }} in the last hour, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log.";
+            description = "The ${operator} aborted more reconciles of ClickHouseInstallation {{ $labels.exported_namespace }}/{{ $labels.chi }} than it completed in the last 24 hours, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log.";
           };
         };
       }

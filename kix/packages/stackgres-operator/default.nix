@@ -1020,6 +1020,8 @@ in
       }@args:
       let
         sel = ''namespace="${ns}",service="${metricsServiceName}"'';
+        reconcileErrors = "sum by (namespace, service, resource) (increase(sg_operator_reconciliation_total_errors{${sel}}[30m]))";
+        reconciles = "sum by (namespace, service, resource) (increase(sg_operator_reconciliation_total_performed{${sel}}[30m]))";
         operator = "StackGres operator ${ns}/${name}";
       in
       kix.monitor {
@@ -1037,11 +1039,14 @@ in
           # (io.stackgres.operator.common.Metrics upstream), and publishes
           # the series after the first error, so rate() sees the second.
           StackGresOperatorReconcileErrors = {
-            expr = "sum by (namespace, service, resource) (rate(sg_operator_reconciliation_total_errors{${sel}}[5m])) > 0";
+            # Both counters are gauges that only grow, so increase() reads them.
+            # Alert on the share of reconciles that fail, with a floor, so a
+            # retried conflict on a busy operator stays quiet.
+            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
             "for" = "15m";
             severity = "warning";
             summary = "The StackGres operator fails to reconcile its resources.";
-            description = "The ${operator} has failed reconciles of {{ $labels.resource }} resources for 15 minutes, so one of them may not match its spec. The operator log names the resource and the error.";
+            description = "The ${operator} has failed {{ $value | humanizePercentage }} of its reconciles of {{ $labels.resource }} resources over the last 30 minutes, so one of them may not match its spec. The operator log names the resource and the error.";
           };
         };
       } args

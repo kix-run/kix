@@ -275,18 +275,24 @@ tests:
             exp_annotations:
               summary: "The ClickHouse operator is down."
               description: "Neither the operator nor its metrics exporter in the pod of the ClickHouse operator clickhouse-system/clickhouse-operator has answered a scrape for 10 minutes. ClickHouse installations keep serving, but changes to ClickHouseInstallations and ClickHouseKeeperInstallations are not applied. Check the operator Deployment in clickhouse-system."
-  # One reconcile of analytics-ha/ch is aborted at minute 5; the other
-  # installation's reconciles complete.
-  - interval: 1m
+  # analytics-ha/ch completes one reconcile, then a reconcile is aborted
+  # at minute 50 and nothing retries it. other/other has an abort that a
+  # completed reconcile follows 10 minutes later. Steps are 10 minutes.
+  - interval: 10m
     input_series:
       - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="op-metrics"}'
-        values: '1x80'
+        values: '1x200'
+      - series: 'clickhouse_operator_chi_reconciles_completed{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="analytics-ha",chi="ch"}'
+        values: '1x200'
       - series: 'clickhouse_operator_chi_reconciles_aborted{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="analytics-ha",chi="ch"}'
-        values: '0x4 1x75'
+        values: '0x4 1x195'
+      - series: 'clickhouse_operator_chi_reconciles_completed{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="other",chi="other"}'
+        values: '0x5 1x194'
       - series: 'clickhouse_operator_chi_reconciles_aborted{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="other",chi="other"}'
-        values: '0x80'
+        values: '0x4 1x195'
     alert_rule_test:
-      - eval_time: 10m
+      # Still firing 20 hours after the abort, with nothing retried.
+      - eval_time: 21h
         alertname: ClickHouseOperatorReconcileAborted
         exp_alerts:
           - exp_labels:
@@ -297,11 +303,27 @@ tests:
               chi: "ch"
             exp_annotations:
               summary: "The ClickHouse operator aborted the reconcile of a ClickHouseInstallation."
-              description: "The ClickHouse operator clickhouse-system/clickhouse-operator aborted the reconcile of ClickHouseInstallation analytics-ha/ch in the last hour, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log."
-      # An hour after the abort the alert clears.
-      - eval_time: 70m
+              description: "The ClickHouse operator clickhouse-system/clickhouse-operator aborted more reconciles of ClickHouseInstallation analytics-ha/ch than it completed in the last 24 hours, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log."
+  # An installation that never completed a reconcile: one abort fires it.
+  - interval: 10m
+    input_series:
+      - series: 'up{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",endpoint="op-metrics"}'
+        values: '1x20'
+      - series: 'clickhouse_operator_chi_reconciles_aborted{namespace="clickhouse-system",service="clickhouse-operator-metrics",pod="clickhouse-operator-0",exported_namespace="analytics-ha",chi="ch"}'
+        values: '0 1x19'
+    alert_rule_test:
+      - eval_time: 2h
         alertname: ClickHouseOperatorReconcileAborted
-        exp_alerts: []
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "clickhouse-system"
+              service: "clickhouse-operator-metrics"
+              exported_namespace: "analytics-ha"
+              chi: "ch"
+            exp_annotations:
+              summary: "The ClickHouse operator aborted the reconcile of a ClickHouseInstallation."
+              description: "The ClickHouse operator clickhouse-system/clickhouse-operator aborted more reconciles of ClickHouseInstallation analytics-ha/ch than it completed in the last 24 hours, so its servers may not match its spec. The operator does not retry until the spec changes or a host recovers. Check the status and events of the ClickHouseInstallation and the operator log."
   # The operator answers and aborts nothing; Keeper is healthy: one leader
   # with both followers in sync and no replica over its soft limit.
   - interval: 1m

@@ -112,8 +112,8 @@ in
   options.metrics = kix.options.monitor // {
     maxTemperature = lib.mkOption {
       type = lib.types.ints.positive;
-      default = 60;
-      description = "Drive temperature in degrees Celsius above which SmartDeviceTemperatureHigh fires. The default is the chart's rule; many hard drives are specified to 60, and NVMe drives often to 70 or more.";
+      default = 70;
+      description = "Drive temperature in degrees Celsius above which SmartDeviceTemperatureHigh fires. The default suits NVMe drives, which are often specified to 70 or more and run warm under load. Hard drives are often specified to 60, so lower it on nodes with only hard drives.";
     };
   };
 

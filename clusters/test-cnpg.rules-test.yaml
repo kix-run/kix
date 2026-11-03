@@ -499,6 +499,8 @@ tests:
         values: '1x30'
       - series: 'controller_runtime_reconcile_errors_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
         values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '0+2x30'
       - series: 'controller_runtime_reconcile_errors_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="backup"}'
         values: '3x30'
     alert_rule_test:
@@ -512,7 +514,7 @@ tests:
               controller: "cluster"
             exp_annotations:
               summary: "The CloudNativePG operator fails to reconcile its resources."
-              description: "The cluster controller of the CloudNativePG operator cnpg-system/cnpg-operator has failed reconciles for 15 minutes, so a resource of that kind may not match its spec. The operator log names the error and the resource."
+              description: "The cluster controller of the CloudNativePG operator cnpg-system/cnpg-operator has failed 50% of its reconciles over the last 30 minutes, so a resource of that kind may not match its spec. The operator log names the error and the resource."
   # The operator answers and reconciles without errors.
   - interval: 1m
     input_series:
@@ -525,5 +527,17 @@ tests:
         alertname: CNPGOperatorDown
         exp_alerts: []
       - eval_time: 25m
+        alertname: CNPGOperatorReconcileErrors
+        exp_alerts: []
+  # CNPGOperatorReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="cnpg-system",service="cnpg-operator-metrics",pod="cnpg-operator-0",instance="10.0.2.1:8080",controller="cluster"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
         alertname: CNPGOperatorReconcileErrors
         exp_alerts: []

@@ -628,6 +628,8 @@ in
     (
       let
         sel = ''namespace="${ns}",service="${name}-metrics"'';
+        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
+        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         controller = "Actions Runner Controller ${ns}/${name}";
       in
       kix.monitor {
@@ -641,11 +643,14 @@ in
             description = "The ${controller} has not answered a scrape for 10 minutes. Running jobs finish, but no runner set scales and no new runner starts, so queued jobs wait. Check the controller Deployment in ${ns}.";
           };
           ArcControllerReconcileErrors = {
-            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
+            # controller-runtime counts an optimistic-lock conflict as an error
+            # and retries at once, so a busy healthy controller shows a few.
+            # Alert on the share of reconciles that fail, with a floor.
+            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
             "for" = "15m";
             severity = "warning";
             summary = "The Actions Runner Controller fails to reconcile runner sets.";
-            description = "The {{ $labels.controller }} controller of the ${controller} has failed reconciles for 15 minutes, so runner sets may not scale. The controller log names the error; a GitHub API error or a refused credential is the usual cause.";
+            description = "The {{ $labels.controller }} controller of the ${controller} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so runner sets may not scale. The controller log names the error; a GitHub API error or a refused credential is the usual cause.";
           };
           # The gauge counts EphemeralRunners in phase Failed. The runner
           # set counts them with its pending and running runners

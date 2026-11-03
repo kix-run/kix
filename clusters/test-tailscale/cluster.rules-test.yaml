@@ -45,6 +45,8 @@ tests:
         values: '1x30'
       - series: 'controller_runtime_reconcile_errors_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
         values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '0+2x30'
     alert_rule_test:
       - eval_time: 25m
         alertname: TailscaleOperatorReconcileErrors
@@ -56,7 +58,7 @@ tests:
               controller: connector
             exp_annotations:
               summary: "The Tailscale operator fails to reconcile resources."
-              description: "The connector controller of the Tailscale operator tailscale/tailscale has failed reconciles for 15 minutes, so a proxy or tailnet device may not match its resource. The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause."
+              description: "The connector controller of the Tailscale operator tailscale/tailscale has failed 50% of its reconciles over the last 30 minutes, so a proxy or tailnet device may not match its resource. The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause."
       - eval_time: 25m
         alertname: TailscaleOperatorDown
         exp_alerts: []
@@ -72,5 +74,17 @@ tests:
         alertname: TailscaleOperatorDown
         exp_alerts: []
       - eval_time: 25m
+        alertname: TailscaleOperatorReconcileErrors
+        exp_alerts: []
+  # TailscaleOperatorReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="tailscale",service="tailscale-metrics",instance="10.0.0.1:8080",controller="connector"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
         alertname: TailscaleOperatorReconcileErrors
         exp_alerts: []

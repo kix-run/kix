@@ -366,7 +366,9 @@ tests:
       - series: 'up{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080"}'
         values: '1x30'
       - series: 'sg_operator_reconciliation_total_errors{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
-        values: '1+1x30'
+        values: '0+1x30'
+      - series: 'sg_operator_reconciliation_total_performed{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '0+2x30'
       - series: 'sg_operator_reconciliation_total_errors{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgbackup"}'
         values: '1x30'
     alert_rule_test:
@@ -380,7 +382,7 @@ tests:
               resource: "sgcluster"
             exp_annotations:
               summary: "The StackGres operator fails to reconcile its resources."
-              description: "The StackGres operator stackgres-system/stackgres-operator has failed reconciles of sgcluster resources for 15 minutes, so one of them may not match its spec. The operator log names the resource and the error."
+              description: "The StackGres operator stackgres-system/stackgres-operator has failed 50% of its reconciles of sgcluster resources over the last 30 minutes, so one of them may not match its spec. The operator log names the resource and the error."
   # The operator answers and its error count stays put.
   - interval: 1m
     input_series:
@@ -393,5 +395,17 @@ tests:
         alertname: StackGresOperatorDown
         exp_alerts: []
       - eval_time: 25m
+        alertname: StackGresOperatorReconcileErrors
+        exp_alerts: []
+  # StackGresOperatorReconcileErrors: a busy, healthy operator retries a conflict now and then,
+  # one reconcile in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'sg_operator_reconciliation_total_performed{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '0+10x40'
+      - series: 'sg_operator_reconciliation_total_errors{namespace="stackgres-system",service="stackgres-operator-metrics",pod="stackgres-operator-0",instance="10.0.3.1:8080",resource="sgcluster"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
         alertname: StackGresOperatorReconcileErrors
         exp_alerts: []

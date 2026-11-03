@@ -99,7 +99,7 @@ in
   smartctl-exporter-alerts =
     let
       rules = rulesOf { };
-      hot = rulesOf { config.metrics.maxTemperature = 70; };
+      cool = rulesOf { config.metrics.maxTemperature = 60; };
     in
     (
       allSelect ''namespace="monitoring",service="${serviceName}"'' rules
@@ -111,8 +111,8 @@ in
           "SmartDeviceTemperatureHigh"
           "SmartctlExporterDown"
         ]
-      && lib.hasSuffix "> 60" rules.SmartDeviceTemperatureHigh.expr
-      && lib.hasSuffix "> 70" hot.SmartDeviceTemperatureHigh.expr
+      && lib.hasSuffix "> 70" rules.SmartDeviceTemperatureHigh.expr
+      && lib.hasSuffix "> 60" cool.SmartDeviceTemperatureHigh.expr
       && rulesOf { prometheus = false; } == null
       && rulesOf { config.metrics.enabled = false; } == null
     )
