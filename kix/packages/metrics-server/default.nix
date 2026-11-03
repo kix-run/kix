@@ -38,6 +38,20 @@
 # `out`: none beyond what root (the Deployment) provides; consumers find the
 # API through the cluster's metricsApi role.
 #
+# Alerts: none. metrics-server serves /metrics only on its secure port,
+# behind delegated authentication and authorization, so a scrape must send
+# a bearer token. `kix.monitor` sets no token on its primary endpoint, so
+# the package renders no ServiceMonitor and has no series of its own to
+# alert on. The API server's view covers the outage
+# that matters: prometheus-default-rules' KubeAggregatedAPIDown fires when
+# APIService v1beta1.metrics.k8s.io is unavailable, and
+# KubeAggregatedAPIErrors when requests to it fail. Pods that crash or are
+# not ready are left to KubePodCrashLooping and
+# KubeDeploymentReplicasMismatch. A kubelet that metrics-server fails to
+# scrape while the API stays up drops its node and pods from the API
+# (`kubectl top` and HorizontalPodAutoscalers report missing metrics), and
+# no rule catches that.
+#
 # Escape hatches: `extraArgs` (the secure port, certificate directory, bind
 # address, and kubelet port flags are refused), `env`, and `partsOverlays`.
 #
@@ -51,8 +65,7 @@
 #   default deny.
 # - The secure port is fixed at 10250, which EKS reserves on Fargate nodes,
 #   so the pods cannot run on Fargate.
-# - No ServiceMonitor: /metrics is served on the secure port behind
-#   delegated authorization, and the package grants no scraper access.
+# - No ServiceMonitor (see Alerts above).
 
 {
   scope,

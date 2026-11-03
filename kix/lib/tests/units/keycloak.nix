@@ -1,7 +1,8 @@
 # Tests for kix/packages/keycloak: the variables and flags the package owns,
 # the public URL and the issuer URLs, the database sslmode, the
 # bootstrapAdmin key check, the metrics toggle and the prometheus
-# dependency, and the JGroups peer policy. Keycloak runs in namespace `auth`
+# dependency, the alert rules and what they are gated on, and the JGroups
+# peer policy. Keycloak runs in namespace `auth`
 # with a database stub and a `secret` bootstrap administrator.
 # Nothing routes to the instance, so the URL comes from env.KC_HOSTNAME.
 
@@ -14,6 +15,8 @@
   evalFails,
   prometheusStub,
   netpolOn,
+  alertRulesOf,
+  allSelect,
   ...
 }:
 
@@ -325,6 +328,31 @@ in
       })
     )
     || throw "keycloak metrics: plain ${builtins.toJSON (servicePortsOf plain)} scraped ${builtins.toJSON (servicePortsOf scraped)}";
+
+  # The rules select the instance's Service and need a prometheus
+  # dependency and metrics.enabled.
+  keycloak-alerts =
+    let
+      rulesOf = cluster: alertRulesOf "PrometheusRule" "keycloak" (manifests cluster);
+      rules = rulesOf (clusterWith {
+        prometheus = true;
+      });
+    in
+    (
+      allSelect ''namespace="auth",service="keycloak"'' rules
+      &&
+        builtins.attrNames rules == [
+          "KeycloakDatabasePoolExhausted"
+          "KeycloakDown"
+        ]
+      && rulesOf (clusterWith { }) == null
+      &&
+        rulesOf (clusterWith {
+          prometheus = true;
+          config.metrics.enabled = false;
+        }) == null
+    )
+    || throw "keycloak alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 
   # With more than one replica, the policy keycloak-jgroups selects the
   # Deployment's pods (instance label included) and admits ingress from and

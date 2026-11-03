@@ -122,6 +122,21 @@
 # the cluster. Wire it with `deps.oidcProvider = ref.<ns>.<instance>`, or
 # give the one instance `aliases = [ "oidcProvider" ]`.
 #
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the Service's series.
+#   KeycloakDown (critical)                   no replica answers a scrape,
+#                                             so no login succeeds.
+#   KeycloakDatabasePoolExhausted (warning)   threads on a pod keep waiting
+#                                             for a database connection.
+# A database outage keeps the management port answering but fails the
+# readiness probe, so it shows as KubeDeploymentReplicasMismatch from
+# prometheus-default-rules, beside the database's own alerts. Server-error
+# and latency objectives (`http_server_requests_seconds`) are left to the
+# site. Failed logins need `KC_EVENT_METRICS_USER_ENABLED` in `env`, and
+# the site alerts on `keycloak_user_events_total`. Keycloak marks its
+# `vendor_jgroups_*` clustering metrics as unfit for alerting, so a split
+# cache cluster has no alert.
+#
 # Escape hatches: `env` for Keycloak options (`KC_*`), `extraArgs` for
 # options of `kc.sh start`, and the instance's `partsOverlays` for probes,
 # resources, and placement.
@@ -540,6 +555,41 @@ in
       }
     )
     (kix.expose { service = "service"; })
-    (kix.monitor { service = "service"; })
+    # DI passes a build function only the arguments its formals name, so
+    # the wrapper names every argument kix.monitor reads.
+    (
+      {
+        self,
+        config,
+        scope,
+        lib,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        ns = scope.namespaceName;
+        # The Service carries the instance name.
+        sel = ''namespace="${ns}",service="${name}"'';
+      in
+      kix.monitor {
+        service = "service";
+        alerts = {
+          KeycloakDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "critical";
+            summary = "Keycloak is down.";
+            description = "No replica of Keycloak ${ns}/${name} has answered a scrape for 10 minutes, so nobody can log in to the applications that use it, and their token refreshes fail. Check the pods of the Deployment ${name} in ${ns} and their logs.";
+          };
+          KeycloakDatabasePoolExhausted = {
+            expr = "max by (namespace, service, pod) (agroal_awaiting_count{${sel}}) > 0";
+            "for" = "15m";
+            severity = "warning";
+            summary = "Keycloak requests wait for a database connection.";
+            description = "On Keycloak pod {{ $labels.namespace }}/{{ $labels.pod }}, {{ $value | humanize }} threads have waited for a database connection at every check for 15 minutes, so logins and token requests are slow or time out. Check the database's load and slow queries before raising the pool size (`KC_DB_POOL_MAX_SIZE` in env), since more connections can overload the database.";
+          };
+        };
+      } args
+    )
   ];
 }

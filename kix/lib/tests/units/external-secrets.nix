@@ -1,6 +1,7 @@
 # Tests for kix/packages/external-secrets: the webhook check gate on every
 # custom resource, the builders' pinning and edges, the webhook
-# configurations, metrics gating, the release checks, and refusals. The
+# configurations, metrics gating, the alert rules of the three components,
+# the release checks, and refusals. The
 # operator runs in namespace `external-secrets` and the consumer in `app`.
 
 {
@@ -13,6 +14,8 @@
   byName,
   evalFails,
   prometheusStub,
+  alertRulesOf,
+  allSelect,
   ...
 }:
 
@@ -373,6 +376,44 @@ in
     )
     || throw "external-secrets metrics: monitors ${
       builtins.toJSON (map (m: m.spec.selector) monitors)
+    }";
+
+  # Each component's rules render under its own name, select its own
+  # metrics Service, and need a prometheus dependency and metrics.enabled.
+  external-secrets-alerts =
+    let
+      withPrometheus =
+        config:
+        manifests (clusterWith {
+          inherit config;
+          modules = [ { instances.monitoring.prometheus.package = prometheusStub; } ];
+        });
+      on = withPrometheus { };
+      off = withPrometheus { metrics.enabled = false; };
+      rulesOf = m: name: alertRulesOf "PrometheusRule" name m;
+      controller = rulesOf on "external-secrets";
+      webhook = rulesOf on "external-secrets-webhook";
+      certController = rulesOf on "external-secrets-cert-controller";
+      sel = service: ''namespace="external-secrets",service="${service}"'';
+    in
+    (
+      allSelect (sel "external-secrets-metrics") controller
+      && allSelect (sel "external-secrets-webhook") webhook
+      && allSelect (sel "external-secrets-cert-controller-metrics") certController
+      &&
+        builtins.attrNames controller == [
+          "ExternalSecretNotReady"
+          "ExternalSecretsClusterSecretStoreNotReady"
+          "ExternalSecretsControllerDown"
+          "ExternalSecretsSecretStoreNotReady"
+        ]
+      && builtins.attrNames webhook == [ "ExternalSecretsWebhookDown" ]
+      && builtins.attrNames certController == [ "ExternalSecretsCertControllerDown" ]
+      && ofKind "PrometheusRule" ms == [ ]
+      && ofKind "PrometheusRule" off == [ ]
+    )
+    || throw "external-secrets alerts: ${
+      builtins.toJSON (map (r: r.metadata.name) (ofKind "PrometheusRule" on))
     }";
 
   # The definitions keep the vendored label the cert-controller's partial

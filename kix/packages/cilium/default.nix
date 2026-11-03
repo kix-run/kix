@@ -58,7 +58,9 @@
 # - meta.version is the chart version. In the other deliveries the
 #   environment picks the Cilium version.
 # - Agent, operator, and Hubble metrics are off and not wired to
-#   kix.monitor.
+#   kix.monitor, so the package ships no alerts. A `prometheus`
+#   dependency makes evaluation recurse: the enforcer's `out` would wait on
+#   a Prometheus instance whose workloads need that `out`.
 # - helmChartConfig delivery: RKE2 also applies any rke2-cilium
 #   HelmChartConfig in the server's manifests directory, so a cluster that
 #   keeps that file has two writers for one object. Remove the file.

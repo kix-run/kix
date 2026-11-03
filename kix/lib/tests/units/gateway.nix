@@ -1,7 +1,7 @@
 # Tests for the gateway contract (kix/lib/vocab/gateway.nix): `check` on
 # the provider side, `claims` and `require` on the consumer side,
 # kix.expose against envoy-gateway, traefik, and kix.mkImport gateways, and
-# the traefik package's refusals.
+# the traefik package's refusals and alert rules.
 
 {
   lib,
@@ -15,6 +15,9 @@
   byName,
   evalFails,
   containerBase,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -506,4 +509,46 @@ in
         }
       ];
     });
+
+  # traefik's rules select its metrics Service, take their thresholds from
+  # the metrics options, and need a prometheus dependency and
+  # metrics.enabled.
+  gateway-traefik-alerts =
+    let
+      withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
+      rulesOf =
+        config: extra:
+        alertRulesOf "PrometheusRule" "gw" (
+          manifests (
+            exposedVia {
+              package = traefik;
+              inherit config;
+            } extra
+          )
+        );
+      rules = rulesOf { } withPrometheus;
+      tuned = rulesOf {
+        metrics = {
+          minCertificateValidity = "21d";
+          backendErrorRatio = 0.25;
+          backendErrorMinRate = 2;
+        };
+      } withPrometheus;
+    in
+    (
+      allSelect ''namespace="gwns",service="gw-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "TraefikBackendErrorsHigh"
+          "TraefikCertificateExpiringSoon"
+          "TraefikDown"
+        ]
+      && lib.hasSuffix "< 604800" rules.TraefikCertificateExpiringSoon.expr
+      && lib.hasSuffix "< 1814400" tuned.TraefikCertificateExpiringSoon.expr
+      && lib.hasInfix "> 0.250000 and" tuned.TraefikBackendErrorsHigh.expr
+      && lib.hasSuffix "> 2" tuned.TraefikBackendErrorsHigh.expr
+      && rulesOf { } { } == null
+      && rulesOf { metrics.enabled = false; } withPrometheus == null
+    )
+    || throw "traefik alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }

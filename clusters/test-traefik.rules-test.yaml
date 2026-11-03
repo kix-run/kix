@@ -1,0 +1,107 @@
+# promtool unit tests for the traefik alert rules test-traefik.nix renders.
+# The rules-cluster-traefik check runs them from the rendered rules, so the
+# rule_files entry is <namespace>/<file> in the cluster's manifests.
+# Prometheus renames Traefik's own `service` label to `exported_service`,
+# because the scrape target already carries `service`.
+rule_files:
+  - gateway-system/traefik-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # The only Traefik replica stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: TraefikDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "gateway-system"
+              service: "traefik-metrics"
+            exp_annotations:
+              summary: "Traefik is down."
+              description: "No replica of Traefik gateway-system/traefik has answered a scrape for 10 minutes, so requests to its Gateway's listeners get no answer. Check the Deployment traefik in gateway-system and its pods' events."
+  # No replica is scraped at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TraefikDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "gateway-system"
+              service: "traefik-metrics"
+            exp_annotations:
+              summary: "Traefik is down."
+              description: "No replica of Traefik gateway-system/traefik has answered a scrape for 10 minutes, so requests to its Gateway's listeners get no answer. Check the Deployment traefik in gateway-system and its pods' events."
+  # A served certificate has three days left. The renewed certificate for
+  # another name has a stale series under its old serial, which the newer
+  # serial's expiry outweighs.
+  - interval: 1m
+    input_series:
+      - series: 'traefik_tls_certs_not_after{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",cn="old.example.test",serial="1",sans="old.example.test"}'
+        values: '259200x30'
+      - series: 'traefik_tls_certs_not_after{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",cn="renewed.example.test",serial="2",sans="renewed.example.test"}'
+        values: '259200x30'
+      - series: 'traefik_tls_certs_not_after{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",cn="renewed.example.test",serial="3",sans="renewed.example.test"}'
+        values: '7776000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TraefikCertificateExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "gateway-system"
+              service: "traefik-metrics"
+              cn: "old.example.test"
+              sans: "old.example.test"
+            exp_annotations:
+              summary: "A certificate Traefik serves expires soon."
+              description: "The certificate for old.example.test (old.example.test) that Traefik gateway-system/traefik serves expires in 2d 23h 40m 0s; after that clients refuse the connection. Check the Secret a Gateway listener names in certificateRefs, and the Certificate that renews it. A certificate Traefik stopped serving keeps its series until Traefik restarts."
+  # Half of a backend's requests end in 503.
+  - interval: 1m
+    input_series:
+      - series: 'traefik_service_requests_total{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",exported_service="files-filebrowser-http-80",code="200",method="GET",protocol="http"}'
+        values: '0+60x30'
+      - series: 'traefik_service_requests_total{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",exported_service="files-filebrowser-http-80",code="503",method="GET",protocol="http"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TraefikBackendErrorsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "gateway-system"
+              service: "traefik-metrics"
+              exported_service: "files-filebrowser-http-80"
+            exp_annotations:
+              summary: "Traefik cannot reach a backend for many requests."
+              description: "50% of the requests Traefik gateway-system/traefik sent to backend files-filebrowser-http-80 have ended in 502, 503, or 504 for 15 minutes. Traefik answers so when the backend Service has no ready endpoints, refuses the connection, or times out. The count also includes 503s the backend returns itself, such as while it is overloaded or in maintenance. Check the backend's pods and the HTTPRoute's backendRefs."
+  # Healthy: Traefik answers, its certificates have months left, one backend
+  # fails under 2% of its requests, and another fails every request at one a
+  # minute, under the traffic floor.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080"}'
+        values: '1x30'
+      - series: 'traefik_tls_certs_not_after{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",cn="example.test",serial="1",sans="example.test"}'
+        values: '7776000x30'
+      - series: 'traefik_service_requests_total{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",exported_service="files-filebrowser-http-80",code="200",method="GET",protocol="http"}'
+        values: '0+60x30'
+      - series: 'traefik_service_requests_total{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",exported_service="files-filebrowser-http-80",code="502",method="GET",protocol="http"}'
+        values: '0+1x30'
+      - series: 'traefik_service_requests_total{namespace="gateway-system",service="traefik-metrics",pod="traefik-0",instance="10.0.0.1:8080",exported_service="rarely-used-http-80",code="503",method="GET",protocol="http"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TraefikDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TraefikCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TraefikBackendErrorsHigh
+        exp_alerts: []

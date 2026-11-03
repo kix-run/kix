@@ -7,7 +7,6 @@
 # with the instance's listeners. Only the kubernetesGateway provider is on.
 # `metrics.enabled` turns on Traefik's Prometheus metrics; with the optional
 # `prometheus` dep it also adds Service <name>-metrics and a ServiceMonitor.
-# The package ships no alerts.
 #
 # The Gateway API standard-channel CRDs (v1.6.1 or later) arrive outside Kix,
 # as for envoy-gateway. The package references every kind Traefik watches,
@@ -40,6 +39,25 @@
 #   out.podSelector, out.podNamespace
 #                     the Traefik pods, for the policy kix.expose writes so
 #                     they can reach each exposed backend.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   TraefikDown (critical)                    no Traefik replica answers a
+#                                             scrape, so nothing serves the
+#                                             Gateway's listeners.
+#   TraefikCertificateExpiringSoon (warning)  a certificate Traefik serves
+#                                             expires within
+#                                             `metrics.minCertificateValidity`.
+#   TraefikBackendErrorsHigh (warning)        more than
+#                                             `metrics.backendErrorRatio` of a
+#                                             backend's requests end in 502,
+#                                             503, or 504, the answers Traefik
+#                                             gives when it cannot reach a
+#                                             backend or it has no endpoints.
+# Traefik exposes no metric for a failed configuration reload: it logs
+# provider errors and keeps the last good configuration. Fewer ready
+# replicas than desired is left to prometheus-default-rules, and latency and
+# other error rates to the site's own objectives.
 #
 # Escape hatches: `extraArgs`, `env`, `service.spec`, `service.annotations`,
 # and the instance's `partsOverlays`.
@@ -256,7 +274,26 @@ in
         removes a default.
       '';
     };
-    metrics = kix.options.monitor;
+    metrics = kix.options.monitor // {
+      minCertificateValidity = lib.mkOption {
+        type = kix.types.promDuration;
+        default = "7d";
+        example = "21d";
+        description = "How long a certificate Traefik serves must still be valid before TraefikCertificateExpiringSoon fires, as a Prometheus duration. cert-manager and Traefik's ACME resolver renew a 90-day certificate 30 days before it expires, so 7 days left means renewal has failed for weeks. Lower it for certificates that live only a few days.";
+      };
+      backendErrorRatio = lib.mkOption {
+        type = lib.types.numbers.between 0 1;
+        default = 0.05;
+        example = 0.01;
+        description = "Share of a backend's requests that may end in 502, 503, or 504 before TraefikBackendErrorsHigh fires.";
+      };
+      backendErrorMinRate = lib.mkOption {
+        type = lib.types.numbers.nonnegative;
+        default = 0.1;
+        example = 1;
+        description = "Requests per second a backend must receive before TraefikBackendErrorsHigh considers its error ratio, so a few failures on a rarely used route do not fire it.";
+      };
+    };
   };
 
   config =
@@ -694,9 +731,58 @@ in
         }
     )
 
-    (kix.monitor {
-      service = "metricsService";
-      port = "metrics";
-    })
+    # DI passes a build function only the arguments its formals name, so
+    # the wrapper names every argument kix.monitor reads.
+    (
+      {
+        self,
+        config,
+        scope,
+        lib,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        sel = ''namespace="${scope.namespaceName}",service="${name}-metrics"'';
+        instance = "Traefik ${scope.namespaceName}/${name}";
+        # The metric's own `service` label names Traefik's backend service.
+        # Prometheus keeps the scrape target's `service` and renames the
+        # metric's to `exported_service`.
+        backendRequests =
+          filter:
+          "sum by (namespace, service, exported_service) (rate(traefik_service_requests_total{${sel}${filter}}[5m]))";
+        failed = backendRequests '',code=~"502|503|504"'';
+        total = backendRequests "";
+      in
+      kix.monitor {
+        service = "metricsService";
+        port = "metrics";
+        alerts = {
+          TraefikDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "critical";
+            summary = "Traefik is down.";
+            description = "No replica of ${instance} has answered a scrape for 10 minutes, so requests to its Gateway's listeners get no answer. Check the Deployment ${name} in ${scope.namespaceName} and its pods' events.";
+          };
+          # A renewed certificate keeps its old serial's series until
+          # Traefik restarts, so the newest expiry per name counts.
+          TraefikCertificateExpiringSoon = {
+            expr = "max by (namespace, service, cn, sans) (traefik_tls_certs_not_after{${sel}}) - time() < ${toString (kix.durations.toSeconds config.metrics.minCertificateValidity)}";
+            "for" = "15m";
+            severity = "warning";
+            summary = "A certificate Traefik serves expires soon.";
+            description = "The certificate for {{ $labels.cn }} ({{ $labels.sans }}) that ${instance} serves expires in {{ $value | humanizeDuration }}; after that clients refuse the connection. Check the Secret a Gateway listener names in certificateRefs, and the Certificate that renews it. A certificate Traefik stopped serving keeps its series until Traefik restarts.";
+          };
+          TraefikBackendErrorsHigh = {
+            expr = "${failed} / ${total} > ${toString config.metrics.backendErrorRatio} and ${total} > ${toString config.metrics.backendErrorMinRate}";
+            "for" = "15m";
+            severity = "warning";
+            summary = "Traefik cannot reach a backend for many requests.";
+            description = "{{ $value | humanizePercentage }} of the requests ${instance} sent to backend {{ $labels.exported_service }} have ended in 502, 503, or 504 for 15 minutes. Traefik answers so when the backend Service has no ready endpoints, refuses the connection, or times out. The count also includes 503s the backend returns itself, such as while it is overloaded or in maintenance. Check the backend's pods and the HTTPRoute's backendRefs.";
+          };
+        };
+      } args
+    )
   ];
 }
