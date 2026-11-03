@@ -323,7 +323,6 @@ in
             ++ builtins.filter (p: p != null) [
               self.peerEgress
               self.peerIngress
-              self.podMonitor
             ];
             out = {
               host = self.service.out.fqdn;

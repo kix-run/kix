@@ -4,10 +4,7 @@
 # coredns, arc, cdi, kubevirt, infisical-operator, zfs-localpv,
 # snapshot-controller, and mayastor, every workload sealed through the
 # typed builders: derived spread, PodDisruptionBudgets, network-policy
-# edges. prometheus-operator gives the packages that take a `prometheus`
-# dependency their monitors and alerts, and smartctl-exporter runs beside
-# it; test-operators.rules-test.yaml tests the alerts of arc and
-# smartctl-exporter. multiNode and three zones are declared so the derivation has
+# edges. multiNode and three zones are declared so the derivation has
 # domains to spread over; the kind cluster matches
 # (scripts/kind-spread-config.yaml). prometheus-operator in `monitoring`
 # answers the `prometheus` dependency, so the packages that take one render
