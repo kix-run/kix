@@ -1,8 +1,8 @@
 # Tests for the cluster-issuer package: the rendered ClusterIssuer, the
 # Secret key selector fill from `issuerCredentials`, the ACME account key
 # default, the refusals checked against cert-manager's vendored CRD schema,
-# the namespace rule, the HTTP-01 warning under an enforcer, and
-# `out.withCert`. cert-manager runs as instance `cert-manager` in namespace
+# the namespace rule, `out.http01SolverSelector` and the solver policy
+# kix.expose writes from it, and `out.withCert`. cert-manager runs as instance `cert-manager` in namespace
 # `cert-manager`. The refusal tests see only that evaluation fails, not which
 # message it fails with.
 
@@ -11,6 +11,8 @@
   eval,
   kixKeys,
   mkCluster,
+  kixlib,
+  containerBase,
   manifests,
   ofKind,
   byName,
@@ -99,8 +101,69 @@ let
     (mkCluster ([ certManager ] ++ modules)).instances.cert-manager.solver._diagnostics.warnings;
   http01Issuer = issuer "cert-manager" "solver" (acmeSpec [
     { http01.ingress.ingressClassName = "nginx"; }
-  ]) { };
-  hasHttp01Warning = ws: builtins.any (lib.hasInfix "uses an HTTP-01 solver") ws;
+  ]) { aliases = [ "clusterIssuer" ]; };
+  dns01Issuer = issuer "cert-manager" "solver" (acmeSpec [ cloudflare ]) {
+    aliases = [ "clusterIssuer" ];
+  };
+
+  # A Deployment and Service on 8080, exposed through ingress-nginx with TLS
+  # from the `clusterIssuer` alias.
+  backend = {
+    meta.version = "test";
+    build = [
+      (
+        {
+          self,
+          scope,
+          kix,
+          ...
+        }:
+        {
+          deployment = scope.mkDeployment {
+            name = "web";
+            spec = {
+              replicas = 1;
+              selector.matchLabels = scope.selectorLabels;
+              template = {
+                metadata.labels = scope.selectorLabels;
+                spec.containers = [
+                  (
+                    {
+                      name = "web";
+                      image = "web:1";
+                      ports = [ { containerPort = 8080; } ];
+                    }
+                    // containerBase
+                  )
+                ];
+              };
+            };
+          };
+          service = self.deployment |> kix.service.fromWorkload { name = "web"; } |> scope.mkResource;
+          root = self.service;
+        }
+      )
+      (kixlib.expose { service = "service"; })
+    ];
+  };
+  solverPolicyWith =
+    issuerModule: extra:
+    byName "web-acme-solver-from-ingress-controller" (
+      ofKind "CiliumNetworkPolicy" (
+        manifests (mkCluster [
+          certManager
+          netpolOn
+          extra
+          (credentials "cert-manager" [ "api-token" ] { aliases = [ "issuerCredentials" ]; })
+          issuerModule
+          {
+            cluster.domain = "test.local";
+            instances.ingress.ingress-nginx.package = import ../../../packages/ingress-nginx;
+            instances.appns.web.package = backend;
+          }
+        ])
+      )
+    );
 in
 {
   # The spec renders as given, named after the instance.
@@ -290,17 +353,54 @@ in
     ])
     || throw "expected an explicit cross-namespace issuerCredentials to fail";
 
-  # An HTTP-01 solver warns when an enforcer is present, and only then.
-  cluster-issuer-http01-warns-under-enforcer =
+  # An HTTP-01 issuer publishes the solver pods' labels and no longer warns;
+  # a DNS-01 issuer publishes null.
+  cluster-issuer-http01-solver-selector =
     let
-      withEnforcer = warningsOf [
+      outOf =
+        issuerModule:
+        (mkCluster [
+          certManager
+          (credentials "cert-manager" [ "api-token" ] { aliases = [ "issuerCredentials" ]; })
+          issuerModule
+        ]).instances.cert-manager.solver.out.http01SolverSelector;
+      warnings = warningsOf [
         netpolOn
         http01Issuer
       ];
-      without = warningsOf [ http01Issuer ];
     in
-    (hasHttp01Warning withEnforcer && !(hasHttp01Warning without))
-    || throw "expected the HTTP-01 warning only under an enforcer; with: ${builtins.toJSON withEnforcer}; without: ${builtins.toJSON without}";
+    (
+      outOf http01Issuer == {
+        "acme.cert-manager.io/http01-solver" = "true";
+      }
+      && outOf dns01Issuer == null
+      && !(builtins.any (lib.hasInfix "HTTP-01") warnings)
+    )
+    || throw "http01SolverSelector: ${builtins.toJSON (outOf http01Issuer)}; warnings ${builtins.toJSON warnings}";
+
+  # kix.expose admits the ingress controller to the solver pods on 8089 in
+  # the Ingress's namespace when the issuer solves HTTP-01, and writes
+  # nothing for a DNS-01 issuer or where ingress is not enforced.
+  cluster-issuer-expose-admits-http01-solver =
+    let
+      policy = solverPolicyWith http01Issuer { };
+      rule = builtins.head policy.spec.ingress;
+    in
+    (
+      policy.metadata.namespace == "appns"
+      && policy.spec.endpointSelector.matchLabels == { "acme.cert-manager.io/http01-solver" = "true"; }
+      && rule.callerNamespace == "ingress"
+      &&
+        rule.ports == [
+          {
+            port = 8089;
+            protocol = "TCP";
+          }
+        ]
+      && solverPolicyWith dns01Issuer { } == null
+      && solverPolicyWith http01Issuer { networkPolicy.directions = "egress"; } == null
+    )
+    || throw "solver policy: ${builtins.toJSON policy}";
 
   # A certManager dependency answered by a kix.mkImport fails the build.
   cluster-issuer-imported-cert-manager-refused =
@@ -368,4 +468,35 @@ in
       && annotations.keep or null == "yes"
     )
     || throw "unexpected consumer annotations: ${builtins.toJSON annotations}";
+
+  # An imported issuer does not say whether it solves HTTP-01, so kix.expose
+  # writes no solver policy and warns. One that publishes the selector gets
+  # the policy.
+  cluster-issuer-imported-issuer-solver-policy =
+    let
+      imported = out: {
+        instances.cert-manager.solver = {
+          package = eval.mkImport {
+            out = {
+              withCert =
+                args:
+                args
+                // {
+                  annotations = (args.annotations or { }) // {
+                    "cert-manager.io/cluster-issuer" = "external";
+                  };
+                };
+            }
+            // out;
+          };
+          aliases = [ "clusterIssuer" ];
+        };
+      };
+      silent = solverPolicyWith (imported { }) { };
+      declared = solverPolicyWith (imported {
+        http01SolverSelector."acme.cert-manager.io/http01-solver" = "true";
+      }) { };
+    in
+    (silent == null && declared != null)
+    || throw "imported issuer solver policy: ${builtins.toJSON { inherit silent declared; }}";
 }

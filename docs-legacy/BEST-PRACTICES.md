@@ -540,10 +540,11 @@ The `gateway` contract, `kix.contracts.gateway`
 implementations: envoy-gateway and traefik pass their `out` through
 `check`, and `kix.expose` holds its `gateway` dependency to it.
 `checks.gateway-swap` builds File Browser behind each and requires the
-same manifests but for the HTTPRoute's parentRef. Prefer traefik on a
-cluster with default-deny network policy: it publishes its pods, so
-`kix.expose` opens each backend to them, while Envoy Gateway's proxy pods
-are placed by its controller and get no derived policy.
+same manifests but for the HTTPRoute's parentRef. Both publish their data
+plane pods, so under default-deny network policy `kix.expose` opens each
+backend to them. Envoy Gateway's controller places its proxy pods, so the
+envoy-gateway package names their namespace with `proxyNamespace`, which
+must match where the controller runs.
 
 The OpenID Connect contract, `kix.contracts.oidcProvider`
 (`kix/lib/vocab/oidc-provider.nix`), lets an application sign users in

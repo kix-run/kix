@@ -67,6 +67,14 @@ kind does not provide a load balancer, so Envoy Gateway's default
 allows the Gateway to become ready. Omit this setting on a cluster where a
 load balancer assigns addresses to `LoadBalancer` Services.
 
+Envoy Gateway runs its proxy pods in the controller's namespace,
+`envoy-gateway-system` in the install command above. The package's
+`proxyNamespace` option names that namespace, and its default is
+`envoy-gateway-system`. When the cluster enforces network policy,
+`kix.expose` writes a policy that admits the proxy pods in that namespace to
+each application it routes to. If you install the controller in another
+namespace, set `proxyNamespace` to it.
+
 Deploy the Kix cluster:
 
 <Command

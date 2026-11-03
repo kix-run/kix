@@ -50,15 +50,19 @@
 # Ingress, IngressClass, and Gateway references, and anything inside a
 # webhook solver's `config` (a free-form object in the CRD).
 #
-# HTTP-01 solvers are accepted, and warn when a network policy enforcer is
-# present: cert-manager creates the solver pods at runtime, and no derived
-# policy admits the ingress controller to them. The warning does not read
-# `networkPolicy.platformIntents`, so it stays after an intent admits them.
+# HTTP-01 solvers: cert-manager starts the solver pods at runtime in each
+# Certificate's namespace. For an Ingress that `kix.expose` builds, expose
+# reads `out.http01SolverSelector` and writes a policy admitting the ingress
+# controller to those pods on TCP 8089. A Certificate made any other way
+# needs its own policy under an enforcer.
 #
 # `out`:
 #   out.name       the ClusterIssuer's name.
 #   out.withCert   adds `cert-manager.io/cluster-issuer` to a resource's
 #                  annotations; `kix.expose` calls it for Ingress TLS.
+#   out.http01SolverSelector
+#                  the labels of cert-manager's HTTP-01 solver pods when a
+#                  solver uses `http01`, else null.
 
 {
   scope,
@@ -262,22 +266,6 @@ in
     '';
   };
 
-  warnings =
-    { config, ... }:
-    let
-      http01Paths = map (s: s.path) (
-        builtins.filter (s: builtins.isAttrs s.solver && (s.solver.http01 or null) != null) (
-          solversOf config.spec
-        )
-      );
-    in
-    lib.optionals (scope.networkPolicyEnforcer != null) (
-      map (
-        path:
-        "${path} uses an HTTP-01 solver. cert-manager creates the solver pods at runtime in each Certificate's namespace, and Kix's derived network policy does not admit the ingress controller to them on TCP 8089. While policy is enforced, the challenge completes only if a networkPolicy.platformIntents entry admits ingress from all-pods on TCP 8089 to pods labelled acme.cert-manager.io/http01-solver=true. Kix does not read platform intents for this warning, so it stays after such an entry is added. A dns01 solver needs no intent."
-      ) http01Paths
-    );
-
   build =
     {
       self,
@@ -461,6 +449,15 @@ in
 
       root = {
         resource = self.issuer;
+        out.http01SolverSelector =
+          if
+            builtins.any (s: builtins.isAttrs s.solver && (s.solver.http01 or null) != null) (
+              solversOf config.spec
+            )
+          then
+            cmOut.operandSelectors.acmesolver
+          else
+            null;
         out.withCert =
           args:
           args

@@ -49,7 +49,10 @@ let
       selector;
 
   # Validate selector and ports regardless of whether an enforcer is present so
-  # enabling network policy later cannot uncover a latent error.
+  # enabling network policy later cannot uncover a latent error. The policy is
+  # ingress-only, so it is null where the cluster does not enforce ingress:
+  # it would be the backend's first ingress policy and close it to every
+  # other client.
   backendPolicy =
     what: consumerScope:
     {
@@ -64,7 +67,7 @@ let
     in
     builtins.seq selector (
       builtins.deepSeq ports (
-        if enforcer == null then
+        if enforcer == null || !consumerScope.networkPolicyEnforced.ingress then
           null
         else
           enforcer.netpol.mkPolicy {

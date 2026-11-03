@@ -63,10 +63,11 @@ source`.
 ## Example: ACME HTTP-01 solver pods
 
 cert-manager's controller launches an HTTP-01 solver pod in the namespace of
-each Certificate that an HTTP-01 issuer handles. Kix does not render these
-pods, so the namespace's default deny drops the ingress controller's requests
-to them and the challenge never validates. This intent admits them in every
-namespace:
+each Certificate that an HTTP-01 issuer handles. For an Ingress that
+`kix.expose` builds, Kix already admits the ingress controller to those pods.
+A Certificate created another way gets no policy, so the namespace's default
+deny drops the ingress controller's requests to its solver pods and the
+challenge never validates. This intent admits them in every namespace:
 
 ```nix
 networkPolicy.platformIntents.acme-http01-solvers = {
