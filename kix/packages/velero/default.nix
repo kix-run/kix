@@ -98,7 +98,8 @@
 # Escape hatches: the location, snapshot location, and schedule options pass
 # unknown keys through to their CR spec; `server.extraArgs`,
 # `nodeAgent.extraArgs`, `server.env`, and `nodeAgent.env` reach the
-# containers; `nodeAgent.settings` and `repositoryMaintenance.settings` are
+# containers; `server.annotations` and `nodeAgent.annotations` reach the
+# workloads; `nodeAgent.settings` and `repositoryMaintenance.settings` are
 # Velero's own configuration; `extraPlugins` adds plugin images; instance
 # `partsOverlays` covers the rest.
 #
@@ -311,6 +312,14 @@ in
     };
 
     server = {
+      annotations = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = {
+          "secret.reloader.stakater.com/reload" = "velero-credentials";
+        };
+        description = "Annotations on the server Deployment, for a controller that reads them, such as one that restarts the workload when a Secret it reads changes.";
+      };
       resources = kix.options.resources {
         requests = {
           cpu = "500m";
@@ -334,6 +343,14 @@ in
     };
 
     nodeAgent = {
+      annotations = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = {
+          "secret.reloader.stakater.com/reload" = "velero-credentials";
+        };
+        description = "Annotations on the node-agent DaemonSet, for a controller that reads them, such as one that restarts the workload when a Secret it reads changes.";
+      };
       enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;

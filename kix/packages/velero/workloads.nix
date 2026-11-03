@@ -289,6 +289,7 @@ in
 
   deployment = scope.mkDeployment {
     name = "velero";
+    inherit (config.server) annotations;
     # One server: it has no leader election, and a second would race
     # the first over the same backups.
     availability.max = "none";
@@ -370,6 +371,7 @@ in
     else
       scope.mkDaemonSet {
         name = "node-agent";
+        inherit (config.nodeAgent) annotations;
         spec = {
           # Velero finds node-agent pods by `role` (pkg/nodeagent/node_agent.go).
           selector.matchLabels =

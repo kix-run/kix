@@ -478,6 +478,24 @@ in
     in
     failed == [ ] || throw "velero key pair credentials: these checks failed: ${toString failed}";
 
+  # `server.annotations` and `nodeAgent.annotations` land on the workloads'
+  # own metadata, where a controller such as Reloader reads them.
+  velero-workload-annotations =
+    let
+      ms = manifests (mkVelero {
+        config = {
+          server.annotations.a = "server";
+          nodeAgent.annotations.a = "node-agent";
+        };
+      });
+      annotationOf = kind: n: (byName n (ofKind kind ms)).metadata.annotations.a or null;
+    in
+    (
+      annotationOf "Deployment" "velero" == "server"
+      && annotationOf "DaemonSet" "node-agent" == "node-agent"
+    )
+    || throw "velero workload annotations: server ${toString (annotationOf "Deployment" "velero")}, node-agent ${toString (annotationOf "DaemonSet" "node-agent")}";
+
   # With node-agent off, no repository Secret is needed; an unowned env var
   # reaches the container.
   velero-optional-parts =
