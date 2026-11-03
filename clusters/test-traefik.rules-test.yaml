@@ -79,7 +79,7 @@ tests:
               exported_service: "files-filebrowser-http-80"
             exp_annotations:
               summary: "Traefik cannot reach a backend for many requests."
-              description: "50% of the requests Traefik gateway-system/traefik sent to backend files-filebrowser-http-80 have ended in 502, 503, or 504 for 15 minutes. Traefik answers so when the backend Service has no ready endpoints, refuses the connection, or times out. Check the backend's pods and the HTTPRoute's backendRefs."
+              description: "50% of the requests Traefik gateway-system/traefik sent to backend files-filebrowser-http-80 have ended in 502, 503, or 504 for 15 minutes. Traefik answers so when the backend Service has no ready endpoints, refuses the connection, or times out. The count also includes 503s the backend returns itself, such as while it is overloaded or in maintenance. Check the backend's pods and the HTTPRoute's backendRefs."
   # Healthy: Traefik answers, its certificates have months left, one backend
   # fails under 2% of its requests, and another fails every request at one a
   # minute, under the traffic floor.

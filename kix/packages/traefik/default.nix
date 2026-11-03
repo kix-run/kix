@@ -779,7 +779,7 @@ in
             "for" = "15m";
             severity = "warning";
             summary = "Traefik cannot reach a backend for many requests.";
-            description = "{{ $value | humanizePercentage }} of the requests ${instance} sent to backend {{ $labels.exported_service }} have ended in 502, 503, or 504 for 15 minutes. Traefik answers so when the backend Service has no ready endpoints, refuses the connection, or times out. Check the backend's pods and the HTTPRoute's backendRefs.";
+            description = "{{ $value | humanizePercentage }} of the requests ${instance} sent to backend {{ $labels.exported_service }} have ended in 502, 503, or 504 for 15 minutes. Traefik answers so when the backend Service has no ready endpoints, refuses the connection, or times out. The count also includes 503s the backend returns itself, such as while it is overloaded or in maintenance. Check the backend's pods and the HTTPRoute's backendRefs.";
           };
         };
       } args
