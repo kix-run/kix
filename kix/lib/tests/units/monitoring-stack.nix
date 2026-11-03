@@ -826,22 +826,40 @@ in
     )
     || throw "monitoring module monitors: kind ${show kind}, managed ${show managed}";
 
-  # node-exporter leaves the host conditions to the default rules' node
-  # group and alerts only when no exporter is scraped.
+  # node-exporter renders its disk alerts unless the cluster runs the
+  # default rules, which carry alerts of the same names.
   monitoring-stack-node-exporter-alerts =
     let
-      rules = ruleNamed "nx-alerts" (clusterWith {
-        instances.nx.package = pkg "node-exporter";
+      alertsOf =
+        cfg:
+        let
+          rules = ruleNamed "nx-alerts" (clusterWith {
+            instances.nx = {
+              package = pkg "node-exporter";
+              config = cfg;
+            };
+          });
+        in
+        map (r: r.alert) (builtins.head rules.spec.groups).rules;
+      down = ruleNamed "nx-alerts" (clusterWith {
+        instances.nx = {
+          package = pkg "node-exporter";
+          config.metrics.hostAlerts = false;
+        };
       });
-      alerts = (builtins.head rules.spec.groups).rules;
     in
     (
-      map (r: r.alert) alerts == [ "NodeExporterDown" ]
+      alertsOf { } == [
+        "NodeExporterDown"
+        "NodeFilesystemAlmostOutOfSpace"
+        "NodeFilesystemSpaceFillingUp"
+      ]
+      && alertsOf { metrics.hostAlerts = false; } == [ "NodeExporterDown" ]
       &&
-        (builtins.head alerts).expr
+        (builtins.head (builtins.head down.spec.groups).rules).expr
         == ''sum by (namespace, service) (up{namespace="monitoring", service="nx"}) == 0 or absent(up{namespace="monitoring", service="nx"})''
     )
-    || throw "node-exporter alerts: ${show rules}";
+    || throw "node-exporter alerts: ${show (alertsOf { })}";
 
   # kube-state-metrics refuses the flags its probes and Service read.
   monitoring-stack-kube-state-metrics-owned-flags =

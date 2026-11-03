@@ -1,0 +1,57 @@
+# promtool unit tests for the coredns alert rules that test-operators.nix
+# renders. The rules-cluster-operators check runs them from the rendered
+# rules, so each rule_files entry is <namespace>/<file> in the cluster's
+# manifests. Every rule file loads in every test, so a test that expects no
+# alert gives each instance healthy series.
+rule_files:
+  - dns/coredns-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # One answer in eleven is SERVFAIL, at 11 answers a second.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="dns",service="coredns",instance="10.0.0.1:9153"}'
+        values: '1x30'
+      - series: 'coredns_dns_responses_total{namespace="dns",service="coredns",instance="10.0.0.1:9153",rcode="NOERROR"}'
+        values: '0+600x30'
+      - series: 'coredns_dns_responses_total{namespace="dns",service="coredns",instance="10.0.0.1:9153",rcode="SERVFAIL"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CoreDNSErrorsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: dns
+              service: coredns
+            exp_annotations:
+              summary: CoreDNS dns/coredns returns SERVFAIL
+              description: 9.091% of CoreDNS dns/coredns responses are SERVFAIL. Check the upstream servers it forwards to and its log.
+      - eval_time: 25m
+        alertname: CoreDNSDown
+        exp_alerts: []
+  # Half the answers are SERVFAIL, but there are only 0.1 a second: below
+  # the traffic floor.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="dns",service="coredns",instance="10.0.0.1:9153"}'
+        values: '1x30'
+      - series: 'coredns_dns_responses_total{namespace="dns",service="coredns",instance="10.0.0.1:9153",rcode="NOERROR"}'
+        values: '0+3x30'
+      - series: 'coredns_dns_responses_total{namespace="dns",service="coredns",instance="10.0.0.1:9153",rcode="SERVFAIL"}'
+        values: '0+3x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CoreDNSErrorsHigh
+        exp_alerts: []
+  # Busy and healthy: no SERVFAIL at all.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="dns",service="coredns",instance="10.0.0.1:9153"}'
+        values: '1x30'
+      - series: 'coredns_dns_responses_total{namespace="dns",service="coredns",instance="10.0.0.1:9153",rcode="NOERROR"}'
+        values: '0+600x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CoreDNSErrorsHigh
+        exp_alerts: []

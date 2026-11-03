@@ -568,7 +568,6 @@ in
             ++ builtins.filter (r: r != null) [
               self.poolingConfig
               self.scripts
-              self.podMonitor
               self.operandEgress
               self.operandIngress
               self.dbOpsEgress

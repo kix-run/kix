@@ -6,7 +6,10 @@
 # typed builders: derived spread, PodDisruptionBudgets, network-policy
 # edges. multiNode and three zones are declared so the derivation has
 # domains to spread over; the kind cluster matches
-# (scripts/kind-spread-config.yaml).
+# (scripts/kind-spread-config.yaml). prometheus-operator in `monitoring`
+# answers the `prometheus` dependency, so the packages that take one render
+# their ServiceMonitors and alert rules; no Prometheus server runs.
+# test-operators.rules-test.yaml tests coredns's rules.
 #
 # Build:  nix build .#cluster-operators --extra-experimental-features pipe-operators
 # Deploy: scripts/kind-operators.sh
@@ -44,6 +47,7 @@ kix.buildCluster {
           package = packages.coredns;
           config.clusterIP = "10.96.0.53";
         };
+        monitoring.prometheus-operator.package = packages.prometheus-operator;
         arc-systems.arc.package = packages.arc;
         cdi.cdi.package = packages.cdi;
         kubevirt.kubevirt.package = packages.kubevirt;

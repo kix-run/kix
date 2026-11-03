@@ -40,6 +40,23 @@ tests:
             exp_annotations:
               summary: An OpenTelemetry Collector is down.
               description: Prometheus has scraped no collector of observability/agent for 10 minutes; telemetry sent to it is lost. Check the instance's pods.
+  # Every agent stops answering for 5 minutes during a rollout, then
+  # answers again: shorter than `for`, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.1:8888"}'
+        values: '1 1 0x4 1x10'
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.2:8888"}'
+        values: '1 1 0x4 1x10'
+      - series: 'up{namespace="observability",service="gateway",instance="10.0.0.3:8888"}'
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OtelCollectorDown
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: OtelCollectorDown
+        exp_alerts: []
   # The gateway has no target at all: absent() fires with the selector's
   # labels, while the agent's healthy series keep its alert quiet.
   - interval: 1m

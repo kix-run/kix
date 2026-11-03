@@ -712,7 +712,7 @@ The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPro
 
 **`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty. A package whose scrape the operator configures has no scrape interval to set, so it declares `metrics = kix.options.alerts;` (only `enabled`) instead of `kix.options.monitor` (the VictoriaMetrics packages).
 
-The PackageInstance requires every ServiceMonitor and PrometheusRule that `kix.monitor` and `kix.alerts` build, because no other part references them. A package does not list them in `root.requires`.
+The PackageInstance requires every part of kind ServiceMonitor, PodMonitor, PrometheusRule, or VMRule, because no other part references them. A package does not list them in `root.requires`, including a PodMonitor it builds itself or a monitor part a `partsOverlays` entry replaces.
 
 ```nix
 (kix.alerts {

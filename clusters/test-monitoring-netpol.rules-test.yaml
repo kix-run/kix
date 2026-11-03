@@ -106,3 +106,65 @@ tests:
             exp_annotations:
               summary: reloader reloader/reloader failed to restart a workload after a Secret change
               description: Reloader in reloader failed to restart a workload in the last 15 minutes (1 failures), so a workload may still run with an old Secret or ConfigMap. Check the reloader pod's log for the workload it names.
+
+  # The root filesystem has 3% left for 30 minutes and more. The data
+  # filesystem has plenty and stays flat.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '3x40'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '100x40'
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '80x40'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: NodeFilesystemAlmostOutOfSpace
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              service: node-exporter
+              instance: "10.0.0.1:9100"
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: A filesystem has less than 5% space left.
+              description: The filesystem on /dev/sda1 at / on 10.0.0.1:9100 has 3.00% space left. Free space or grow the disk before writes fail.
+      - eval_time: 35m
+        alertname: NodeFilesystemSpaceFillingUp
+        exp_alerts: []
+
+  # A 1000-byte filesystem loses 5 bytes a minute from 300 free: under 40%
+  # free, and empty within 24 hours. The data filesystem stays flat.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '300-1x100'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '1000x100'
+      - series: 'node_filesystem_avail_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '800x100'
+      - series: 'node_filesystem_size_bytes{namespace="monitoring-system",service="node-exporter",instance="10.0.0.1:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '1000x100'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: NodeFilesystemSpaceFillingUp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              service: node-exporter
+              instance: "10.0.0.1:9100"
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: A filesystem is predicted to run out of space within 24 hours.
+              description: The filesystem on /dev/sda1 at / on 10.0.0.1:9100 will fill within 24 hours at its current write rate. Find what is writing to it, and free space or grow the disk.
+      - eval_time: 90m
+        alertname: NodeFilesystemAlmostOutOfSpace
+        exp_alerts: []

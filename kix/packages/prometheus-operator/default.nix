@@ -185,7 +185,6 @@ in
             ++ [ self.operatorServiceAccount ]
             ++ builtins.filter (p: p != null) [
               self.operatorService
-              self.operatorServiceMonitor
             ];
           out = {
             crds = {

@@ -487,7 +487,6 @@ in
             self.postgresService
           ]
           ++ builtins.filter (r: r != null) [
-            self.podMonitor
             self.scheduledBackup
             self.backupEgress
             self.operandEgress

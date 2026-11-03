@@ -412,7 +412,6 @@ in
           self.egress
           self.peerIngress
           self.podDisruptionBudget
-          self.selfMonitor
         ];
         out = {
           namespace = ns;

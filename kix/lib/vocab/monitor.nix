@@ -2,11 +2,6 @@
 { lib }:
 
 let
-  # Mark a part for the instance to add to its PackageInstance's requires.
-  # Monitor and rule objects reference no other part, so nothing else
-  # reaches them from the PackageInstance.
-  markPart = r: r // { _kixMonitorPart = true; };
-
   # Build the PrometheusRule part shared by `alerts` and `monitor`. Kept
   # separate because `monitor` takes an `alerts` argument that would shadow the
   # public `alerts` helper.
@@ -59,20 +54,18 @@ let
     {
       ${rulesPart} =
         if metricsEnabled && alerts != { } then
-          markPart (
-            prometheus.out.mkPrometheusRule scope {
-              name = "${ruleName}-alerts";
-              labels = extraLabels;
-              spec = {
-                groups = [
-                  {
-                    name = "${ruleName}-alerts";
-                    rules = alertRules;
-                  }
-                ];
-              };
-            }
-          )
+          prometheus.out.mkPrometheusRule scope {
+            name = "${ruleName}-alerts";
+            labels = extraLabels;
+            spec = {
+              groups = [
+                {
+                  name = "${ruleName}-alerts";
+                  rules = alertRules;
+                }
+              ];
+            };
+          }
         else
           null;
     };
@@ -147,17 +140,15 @@ in
     {
       ${monitorPart} =
         if metricsEnabled then
-          markPart (
-            prometheus.out.mkServiceMonitor scope {
-              name = monitorName;
-              labels = extraLabels;
-              spec = {
-                namespaceSelector.matchNames = [ scope.namespaceName ];
-                selector.matchLabels = svc.out.selector;
-                inherit endpoints;
-              };
-            }
-          )
+          prometheus.out.mkServiceMonitor scope {
+            name = monitorName;
+            labels = extraLabels;
+            spec = {
+              namespaceSelector.matchNames = [ scope.namespaceName ];
+              selector.matchLabels = svc.out.selector;
+              inherit endpoints;
+            };
+          }
         else
           null;
     }

@@ -353,15 +353,23 @@ in
           else
             throw "Instance '${instanceName}': root must be a resource or { resource, requires, postHooks }";
 
-        # kix.monitor and kix.alerts parts reference nothing else in the
-        # instance, so the PackageInstance requires them directly.
+        # Monitor and rule objects reference nothing else in the instance,
+        # so the PackageInstance requires them directly. Matching by kind
+        # also covers a part a partsOverlay replaces and a PodMonitor a
+        # package builds itself.
         packageRequires =
           let
             declared = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
             declaredPaths = map (r: builtins.unsafeDiscardStringContext (r.outPath or "")) declared;
+            monitorKinds = [
+              "ServiceMonitor"
+              "PodMonitor"
+              "PrometheusRule"
+              "VMRule"
+            ];
             monitorParts = builtins.filter (
               r:
-              (r._kixMonitorPart or false)
+              builtins.elem (r.kind or null) monitorKinds
               && !(builtins.elem (builtins.unsafeDiscardStringContext r.outPath) declaredPaths)
             ) _partResourcesFromParts;
           in

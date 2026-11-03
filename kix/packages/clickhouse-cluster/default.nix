@@ -545,7 +545,6 @@ in
               self.replicaEgress
               self.replicaIngress
               self.operatorEgress
-              self.podMonitor
             ];
             out = contract.check "clickhouse-cluster (${name})" {
               httpUrl = "http://${self.service.out.fqdn}:${toString ports.http}";

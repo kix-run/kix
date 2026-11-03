@@ -637,7 +637,6 @@ in
           ]
           ++ builtins.filter (r: r != null) [
             self.podDisruptionBudget
-            self.podMonitor
             self.operandEgress
             self.operandIngress
             self.operatorEgress
