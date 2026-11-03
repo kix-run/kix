@@ -41,7 +41,10 @@
 # HTTP-01 solver pods the controller launches get a policy from `kix.expose`
 # for the Ingresses it builds, through cluster-issuer's
 # `out.http01SolverSelector`. A Certificate made another way needs a policy
-# for the pods `out.operandSelectors.acmesolver` selects, on port 8089. Prometheus
+# for the pods `out.operandSelectors.acmesolver` selects, on port 8089. The
+# controller's HTTP-01 self-check fetches the challenge through the public
+# URL, and where Cilium replaces kube-proxy that request can still be
+# dropped under default deny. Prometheus
 # scrapes are also dropped under an enforcer, so CertManagerAbsent fires
 # there.
 #

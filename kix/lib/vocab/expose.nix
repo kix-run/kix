@@ -573,6 +573,21 @@ rec {
       acmeSolverSelector = if hasTls then clusterIssuer.out.http01SolverSelector or null else null;
       acmeSolverPort = 8089;
 
+      # An issuer that is not the cluster-issuer package, such as a
+      # kix.mkImport, does not say whether it solves HTTP-01.
+      _acmeUnknownWarn =
+        if wantsControllerEdge && hasTls && !(clusterIssuer.out ? http01SolverSelector) then
+          lib.warn (
+            "kix.expose (${scope.namespaceName}/${name}): the clusterIssuer dependency publishes no "
+            + "`out.http01SolverSelector`, so Kix cannot tell whether it uses an HTTP-01 solver and "
+            + "writes no policy for cert-manager's solver pods. If it does, the challenge fails under "
+            + "default deny until a policy admits the ingress controller to pods labelled "
+            + "acme.cert-manager.io/http01-solver=true on TCP 8089 in this namespace. Set "
+            + "`out.http01SolverSelector` on the import (null for a DNS-01 issuer) to silence this."
+          )
+        else
+          lib.id;
+
       # Resolve the backend pod ports corresponding to the routed Service port.
       podPortsFor =
         b:
@@ -719,6 +734,7 @@ rec {
             )
             |> _controllerEdgeWarn
             |> _selectorlessWarn
+            |> _acmeUnknownWarn
 
           else if hasExposure && useIngress then
             (
@@ -760,6 +776,7 @@ rec {
             |> (if hasTls then clusterIssuer.out.withCert else lib.id)
             |> _controllerEdgeWarn
             |> _selectorlessWarn
+            |> _acmeUnknownWarn
             |> scope.mkResource
 
           else

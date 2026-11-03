@@ -468,4 +468,35 @@ in
       && annotations.keep or null == "yes"
     )
     || throw "unexpected consumer annotations: ${builtins.toJSON annotations}";
+
+  # An imported issuer does not say whether it solves HTTP-01, so kix.expose
+  # writes no solver policy and warns. One that publishes the selector gets
+  # the policy.
+  cluster-issuer-imported-issuer-solver-policy =
+    let
+      imported = out: {
+        instances.cert-manager.solver = {
+          package = eval.mkImport {
+            out = {
+              withCert =
+                args:
+                args
+                // {
+                  annotations = (args.annotations or { }) // {
+                    "cert-manager.io/cluster-issuer" = "external";
+                  };
+                };
+            }
+            // out;
+          };
+          aliases = [ "clusterIssuer" ];
+        };
+      };
+      silent = solverPolicyWith (imported { }) { };
+      declared = solverPolicyWith (imported {
+        http01SolverSelector."acme.cert-manager.io/http01-solver" = "true";
+      }) { };
+    in
+    (silent == null && declared != null)
+    || throw "imported issuer solver policy: ${builtins.toJSON { inherit silent declared; }}";
 }
