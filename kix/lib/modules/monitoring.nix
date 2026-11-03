@@ -239,7 +239,7 @@ in
           # The default rules carry the same disk alerts by name.
           node-exporter = lib.mkIf cfg.nodeExporter.enabled {
             package = packages.node-exporter;
-            config.metrics.hostAlerts = !cfg.defaultRules.enabled;
+            config.metrics.hostAlerts = lib.mkDefault (!cfg.defaultRules.enabled);
           };
 
           kube-state-metrics = lib.mkIf cfg.kubeStateMetrics.enabled {
