@@ -50,15 +50,35 @@ reads plan files through `kix::plan::file`.
 
 ### Releases
 
-The `release` job in `.github/workflows/cli-tests.yml` publishes `kix` to
-the public [kix-run/kix-releases](https://github.com/kix-run/kix-releases)
-after the tests pass on a push to main. It builds static musl binaries for
-x86_64 and aarch64 Linux with `cargo zigbuild`. The version is the workspace
-version with the workflow run number as semver build metadata (`0.1.0+250`),
-passed to the build as `KIX_VERSION`. `kix::VERSION` reads it at compile
-time and falls back to the crate version, and everything that reports a Kix
-version (`kix --version`, a plan's `kix.version`, compliance receipts) uses
-`kix::VERSION`.
+Kix uses semantic versioning. `CHANGELOG.md` lists what each release
+changed, and the `release` skill (`.claude/skills/release/SKILL.md`) cuts
+one. `CLAUDE.md` § Versioning and breaking changes says what counts as
+breaking.
+
+The `release` job in `.github/workflows/cli-tests.yml` runs after the tests
+pass on each push to main. It builds static musl binaries for x86_64 and
+aarch64 Linux with `cargo zigbuild` and publishes them to the public
+[kix-run/kix-releases](https://github.com/kix-run/kix-releases). The
+workspace version in `cli/Cargo.toml` decides what kind of build it is:
+
+- **A release**, when this repository has no `v<version>` tag for the
+  workspace version yet. Merging a version change is what makes one. The
+  binaries report the plain version (`0.5.0`). They are published as
+  `v0.5.0`, with that version's `CHANGELOG.md` section as the notes, and
+  become `latest`. The job then tags the commit `v0.5.0` here.
+- **A main build**, otherwise. The binaries report the version with the
+  workflow run number as semver build metadata (`0.5.0+311`), and replace
+  the `main-build` pre-release.
+
+A workspace version lower than the latest `v*` tag, or a release with no
+`CHANGELOG.md` section, fails the job. Running a failed release again is
+safe: the job skips a release that already exists in kix-releases and
+creates the tag last.
+
+The version reaches the build as `KIX_VERSION`. `kix::VERSION` reads it at
+compile time and falls back to the crate version, and everything that
+reports a Kix version (`kix --version`, a plan's `kix.version`, compliance
+receipts) uses `kix::VERSION`.
 
 ## Deploy pipeline
 

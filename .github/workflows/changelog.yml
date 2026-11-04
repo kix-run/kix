@@ -1,0 +1,44 @@
+name: Changelog
+
+# A pull request that changes `cli/` or `kix/` also changes CHANGELOG.md,
+# with a line under `## Unreleased`, unless it carries the `no-changelog`
+# label. A release's notes are that section, so a change with no line is
+# one users never hear about. Rules: CLAUDE.md § Versioning and breaking
+# changes.
+#
+# `labeled` and `unlabeled` run the check again when the label changes. A
+# job skipped by its `if` counts as passing.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+    runs-on: [self-hosted, spindle-2c-4g]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: CHANGELOG.md changed
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE...$HEAD")
+          grep -qE '^(cli|kix)/' <<<"$changed" || exit 0
+          grep -qx 'CHANGELOG.md' <<<"$changed" && exit 0
+          echo "This pull request changes cli/ or kix/ and not CHANGELOG.md."
+          echo "Add a line under '## Unreleased' in Breaking, Added, Changed, or Fixed,"
+          echo "or label the pull request no-changelog if nothing a Kix user sees changes."
+          exit 1

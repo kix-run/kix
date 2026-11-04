@@ -39,9 +39,13 @@ on:
 permissions:
   contents: read
 
+# A run on main is never cancelled once it starts, so a push that lands
+# during a release cannot stop it between publishing and tagging. A newer
+# push can still replace a main run that is waiting to start; the newer run
+# then makes the release, from its own commit.
 concurrency:
   group: cli-tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -92,10 +96,12 @@ jobs:
   # the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
   # fine-grained token with Contents read/write on that repository only.
   #
-  # The version is the workspace version from cli/Cargo.toml with this
-  # workflow's run number as semver build metadata, `0.1.0+250`. The run
-  # number counts pull request runs too, so released build numbers rise
-  # but skip. Raise the workspace version to start a new release line.
+  # The workspace version in cli/Cargo.toml decides what this push is. With
+  # no `v<version>` tag here yet, it is a release: the binaries report the
+  # plain version, become `latest` in kix-releases with the version's
+  # CHANGELOG.md section as notes, and the commit is tagged. Otherwise the
+  # binaries report `<version>+<run number>` and replace the `main-build`
+  # pre-release. cli/README.md § Releases has the whole process.
   #
   # A workflow_dispatch run builds and uploads the binaries as a workflow
   # artifact but publishes nothing, which is how to try a change to this
@@ -107,11 +113,17 @@ jobs:
     # nixpkgs has no musl standard library for its rustc in the binary
     # cache, while rustup's toolchains do not run on the NixOS image.
     runs-on: ubuntu-latest
+    # Write, to push the release tag to this repository.
+    permissions:
+      contents: write
     env:
       TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # The Version step reads the release tags.
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -131,10 +143,34 @@ jobs:
         run: |
           base=$(cargo metadata --manifest-path cli/Cargo.toml --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "kix-cli") | .version')
-          echo "version=${base}+${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+          if git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
+            echo "version=${base}+${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
+          if [ -n "$latest" ] && [ "$(printf '%s\n' "${latest#v}" "$base" | sort -V | tail -n1)" != "$base" ]; then
+            echo "cli/Cargo.toml has version $base, lower than the latest release tag $latest."
+            exit 1
+          fi
+
+          # The release notes: this version's CHANGELOG.md section, without
+          # its heading.
+          awk -v v="$base" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
+            CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "CHANGELOG.md has no '## $base' section, or it is empty. The release skill writes it."
+            exit 1
+          fi
+          printf '\nBuilt from kix-run/kixpkgs@%s.\n' "$GITHUB_SHA" >> release-notes.md
+
+          echo "version=$base" >> "$GITHUB_OUTPUT"
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
       # kix::VERSION reads KIX_VERSION at compile time, so `kix --version`,
-      # plan documents and compliance receipts carry the build number.
+      # plan documents and compliance receipts carry the version.
       - name: Build
         env:
           KIX_VERSION: ${{ steps.version.outputs.version }}
@@ -167,14 +203,54 @@ jobs:
           name: kix-${{ steps.version.outputs.version }}
           path: dist/
 
-      - name: Publish
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # A release that already exists in kix-releases is left alone, so a
+      # run that published and then failed to tag can be run again.
+      - name: Publish release
+        if: >-
+          steps.version.outputs.release == 'true'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          if gh release view "v$VERSION" --repo kix-run/kix-releases >/dev/null; then
+            echo "kix-run/kix-releases already has v$VERSION."
+            exit 0
+          fi
           gh release create "v$VERSION" dist/* \
             --repo kix-run/kix-releases \
             --title "kix $VERSION" \
-            --notes "Built from kix-run/kixpkgs@${GITHUB_SHA}." \
+            --notes-file release-notes.md \
             --latest
+
+      # Last, so a run that fails before this point leaves no tag and the
+      # next run tries the release again.
+      - name: Tag release
+        if: >-
+          steps.version.outputs.release == 'true'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git tag "v$VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/v$VERSION"
+
+      # The newest build from main, under one pre-release tagged `main-build`
+      # that each push replaces. It never becomes `latest`.
+      - name: Publish main build
+        if: >-
+          steps.version.outputs.release == 'false'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view main-build --repo kix-run/kix-releases >/dev/null; then
+            gh release delete main-build --repo kix-run/kix-releases --cleanup-tag --yes
+          fi
+          gh release create main-build dist/* \
+            --repo kix-run/kix-releases \
+            --title "kix $VERSION (main)" \
+            --notes "The newest build from main, not a release. Built from kix-run/kixpkgs@${GITHUB_SHA}." \
+            --prerelease \
+            --latest=false
