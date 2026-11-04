@@ -89,9 +89,10 @@ pub(crate) fn is_keyed_field(parent_field: &str) -> bool {
 }
 
 /// Try to build keyed indices for two lists. A known keyed field uses its
-/// own key; any other list is keyed by `name` when every item on both sides
-/// is an object with a non-empty string `name`. Returns `None` if:
-/// - The list is neither a known keyed field nor keyable by `name`
+/// own key. Any other list is keyed by `metadata.name`, or else by `name`,
+/// when every item on both sides has that field as a non-empty string.
+/// Returns `None` if:
+/// - The list is neither a known keyed field nor keyable by a name
 /// - Any item is not an object
 /// - Keys are not unique within either list
 ///
@@ -104,7 +105,8 @@ pub(crate) fn try_key_lists<'a>(
     b: &'a [Value],
 ) -> Option<KeyedListPair<'a>> {
     if !is_keyed_field(parent_field) {
-        return key_by_name(a, b);
+        return key_by_name(a, b, |item| item.get("metadata")?.get("name"))
+            .or_else(|| key_by_name(a, b, |item| item.get("name")));
     }
 
     // For ports, check if all items have names. If not, force containerPort:protocol keying.
@@ -144,14 +146,18 @@ pub(crate) fn try_key_lists<'a>(
 }
 
 /// Key two lists of named objects, such as a custom resource's list of
-/// extensions, by `name`, so an item changed in place reads as a change to
+/// extensions or a VirtualMachine's `dataVolumeTemplates`, by the name `get`
+/// finds in each item. An item changed in place then reads as a change to
 /// that item rather than as one item removed and another added.
-fn key_by_name<'a>(a: &'a [Value], b: &'a [Value]) -> Option<KeyedListPair<'a>> {
+fn key_by_name<'a>(
+    a: &'a [Value],
+    b: &'a [Value],
+    get: impl Fn(&'a Value) -> Option<&'a Value>,
+) -> Option<KeyedListPair<'a>> {
     let index = |items: &'a [Value]| -> Option<IndexMap<String, &'a Value>> {
         let mut map = IndexMap::new();
         for item in items {
-            let name = item
-                .get("name")
+            let name = get(item)
                 .and_then(Value::as_str)
                 .filter(|n| !n.is_empty())?;
             if map.insert(name.to_string(), item).is_some() {
@@ -252,6 +258,29 @@ mod tests {
         let repeated = vec![json!({"name": "cube"}), json!({"name": "cube"})];
         assert!(try_key_lists("extensions", &a, &repeated).is_none());
         assert!(try_key_lists("args", &[json!("a")], &[json!("b")]).is_none());
+    }
+
+    #[test]
+    fn lists_of_embedded_objects_key_by_metadata_name() {
+        let a = vec![
+            json!({"metadata": {"name": "root"}}),
+            json!({"metadata": {"name": "scratch"}}),
+        ];
+        let b = vec![
+            json!({"metadata": {"name": "scratch"}}),
+            json!({"metadata": {"name": "root", "creationTimestamp": null}}),
+        ];
+        let (a_map, b_map) = try_key_lists("dataVolumeTemplates", &a, &b).unwrap();
+        assert_eq!(a_map.keys().collect::<Vec<_>>(), ["root", "scratch"]);
+        assert_eq!(b_map.keys().collect::<Vec<_>>(), ["scratch", "root"]);
+
+        // Without `metadata.name` on every item, `name` is tried next.
+        let named = vec![
+            json!({"name": "x", "metadata": {"name": "y"}}),
+            json!({"name": "z"}),
+        ];
+        let (a_map, _) = try_key_lists("items", &named, &named).unwrap();
+        assert_eq!(a_map.keys().collect::<Vec<_>>(), ["x", "z"]);
     }
 
     #[test]
