@@ -7,8 +7,14 @@ name: Deploy site to Cloudflare Pages
 #   kix.run/             ← web/ (Astro build)
 #   kix.run/alt1/        ← web/ at ALT1_REF (pre-refactor variant)
 #   kix.run/alt2/        ← web/ at ALT2_REF (get-shit-done hero)
-#   kix.run/docs/        ← docs site (current tree)
-#   kix.run/docs/v0.1/   ← starlight-versions snapshot
+#   kix.run/docs/        ← docs at the latest release tag
+#   kix.run/docs/main/   ← docs at main
+#   kix.run/docs/vX.Y/   ← docs at each older minor release's newest tag
+#
+# Each version's docs are a separate build at that version's git revision,
+# so a release's pages, command output, and code snippets all match it.
+# The release job in cli-tests.yml starts this workflow after it tags a
+# release; a tag that job pushes starts no workflow by itself.
 #
 # web/public/ also carries the agent-facing surface, which Astro copies
 # into web/dist/ and the staging step merges into the site root:
@@ -144,21 +150,82 @@ jobs:
           build_alt alt1 "$ALT1_REF"
           build_alt alt2 "$ALT2_REF"
 
-      - name: Build docs site
+      # Which docs to build: main, the newest release tag, and the newest
+      # tag of each older minor release. The release builds are cached by
+      # the list of tags, since a tag's docs never change.
+      - name: Plan docs builds
+        id: docs
         working-directory: kixpkgs
         run: |
-          # Override kix-examples to the local checkout so we pick up
-          # uncommitted/in-PR changes. Its own kixpkgs input follows
-          # ours (docs/flake.nix), so there is no second copy to fetch;
-          # a lock that resolves one needs git credentials this runner
-          # does not have. The captures sidecars are read from the
-          # source tree (already gated by the check step above).
-          nix build ./docs#site \
+          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
+          archived=""
+          seen=" $(cut -d. -f1-2 <<<"$latest") "
+          for tag in $(git tag -l 'v[0-9]*' --sort=-v:refname); do
+            minor=$(cut -d. -f1-2 <<<"$tag")
+            case "$seen" in *" $minor "*) continue ;; esac
+            seen="$seen$minor "
+            archived="$archived $tag"
+          done
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "archived=${archived# }" >> "$GITHUB_OUTPUT"
+          echo "key=docs-releases-$(sha256sum <<<"$latest $archived" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "Latest release: ${latest:-none}. Older minor releases: ${archived:-none}."
+
+      - name: Restore release docs
+        id: release-docs
+        if: steps.docs.outputs.latest != ''
+        uses: actions/cache@v4
+        with:
+          path: docs-releases
+          key: ${{ steps.docs.outputs.key }}-${{ hashFiles('kixpkgs/.github/workflows/pages.yml') }}
+
+      # Each tag is built against the kix-examples commit its own
+      # docs/flake.lock names, so its snippets match it too.
+      - name: Build release docs
+        if: steps.docs.outputs.latest != '' && steps.release-docs.outputs.cache-hit != 'true'
+        working-directory: kixpkgs
+        env:
+          LATEST: ${{ steps.docs.outputs.latest }}
+          ARCHIVED: ${{ steps.docs.outputs.archived }}
+        run: |
+          build_release_docs() {
+            local tag="$1" output="$2" dest="$3"
+            git worktree add "../kixpkgs-$tag" "$tag"
+            rev=$(nix run --inputs-from . nixpkgs#jq -- -r '.nodes["kix-examples"].locked.rev' "../kixpkgs-$tag/docs/flake.lock")
+            git -C ../kix-examples worktree add "../kix-examples-$tag" "$rev"
+            nix build "../kixpkgs-$tag/docs#$output" \
+              --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples-$tag" \
+              --out-link "../docs-$tag" \
+              --print-build-logs
+            mkdir -p "$dest"
+            cp -r --no-preserve=mode "../docs-$tag/." "$dest/"
+          }
+          build_release_docs "$LATEST" site ../docs-releases/latest
+          for tag in $ARCHIVED; do
+            build_release_docs "$tag" site-archived "../docs-releases/$(cut -d. -f1-2 <<<"$tag")"
+          done
+
+      # main is built against the kix-examples checkout above, so in-PR
+      # changes there show up. Its own docs/flake.lock is not consulted, and
+      # its kixpkgs input follows ours (docs/flake.nix), so there is no
+      # second copy to fetch; a lock that resolves one needs git credentials
+      # this runner does not have. The captures sidecars are read from the
+      # source tree. Before the first release, main is the only version and
+      # is built as /docs.
+      - name: Build main docs
+        working-directory: kixpkgs
+        env:
+          OUTPUT: ${{ steps.docs.outputs.latest != '' && 'site-main' || 'site' }}
+        run: |
+          nix build "./docs#$OUTPUT" \
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
             --print-build-logs \
             --show-trace
 
       - name: Stage combined artifact
+        env:
+          LATEST: ${{ steps.docs.outputs.latest }}
+          ARCHIVED: ${{ steps.docs.outputs.archived }}
         run: |
           mkdir -p _site
           cp -r kixpkgs/web/dist/. _site/
@@ -169,7 +236,29 @@ jobs:
           mkdir -p _site/alt
           printf '<!doctype html><meta http-equiv="refresh" content="0; url=/alt1/">' > _site/alt/index.html
           mkdir -p _site/docs
-          cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
+          if [ -z "$LATEST" ]; then
+            cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
+            echo '[]' > _site/docs/versions.json
+          else
+            cp -r docs-releases/latest/. _site/docs/
+            mkdir -p _site/docs/main
+            cp -r --no-preserve=mode kixpkgs/result/. _site/docs/main/
+            # The version picker's list (docs/src/components/VersionSelect.astro),
+            # newest first. Labels match each build's own.
+            minor=$(cut -d. -f1-2 <<<"$LATEST")
+            {
+              echo "[{\"label\": \"$minor (latest)\", \"path\": \"/docs/\"}"
+              echo ", {\"label\": \"main\", \"path\": \"/docs/main/\"}"
+              for tag in $ARCHIVED; do
+                minor=$(cut -d. -f1-2 <<<"$tag")
+                mkdir -p "_site/docs/$minor"
+                cp -r "docs-releases/$minor/." "_site/docs/$minor/"
+                echo ", {\"label\": \"$minor\", \"path\": \"/docs/$minor/\"}"
+              done
+              echo "]"
+            } > _site/docs/versions.json
+            nix run --inputs-from kixpkgs nixpkgs#jq -- . _site/docs/versions.json
+          fi
           # The docs come out of the Nix store read-only; wrangler needs
           # to read every file it uploads.
           chmod -R a+rX _site

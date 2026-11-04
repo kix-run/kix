@@ -5,6 +5,13 @@ Astro Starlight site for Kix. Built as a true sibling Nix subflake.
 Deployed at **<https://kix.run/docs/>**. Cloudflare Pages serves the merged
 `web/` and `docs/` artifact. See `.github/workflows/pages.yml`.
 
+Each Kix version has its own docs, built at that version's git revision:
+`/docs` is the latest release, `/docs/main` is main, and `/docs/vX.Y` is
+each older minor release. The flake builds the docs in each of those roles:
+`site`, `site-main`, and `site-archived`. Pages link to each other as
+`/docs/...`, and a build under another path rewrites those links to its
+own (`src/lib/remark-docs-base.mjs`).
+
 ## Build
 
 ```bash

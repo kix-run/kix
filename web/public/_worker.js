@@ -31,15 +31,14 @@ const DOCS_PREFIX = '/docs/';
 // invents URLs. Serve HTML here and let the sidebar do the work.
 //
 // docs/src/components/Head.astro withholds its <link rel="alternate">
-// for the same routes. Keep the two lists in step.
-const NAVIGATION_ONLY = new Set([
-  '/docs',
-  '/docs/tutorials',
-  '/docs/how-to',
-  '/docs/reference',
-  '/docs/explanation',
-  '/docs/v0.1',
-]);
+// for the same routes. Keep the two lists in step. Paths are relative to
+// the version's root (see VERSION_ROOT).
+const NAVIGATION_ONLY = new Set(['', '/tutorials', '/how-to', '/reference', '/explanation']);
+
+// Each Kix version's docs are a separate build with its own root: /docs for
+// the latest release, /docs/main for main, and /docs/v<major>.<minor> for
+// an older minor release (.github/workflows/pages.yml).
+const VERSION_ROOT = /^\/docs(?:\/(?:main|v\d+\.\d+))?(?=\/|$)/;
 
 /**
  * True when the client explicitly asked for Markdown.
@@ -59,10 +58,12 @@ function prefersMarkdown(accept) {
  *   /docs/            -> /docs/index.md
  *   /docs/how-to/     -> /docs/how-to.md
  *   /docs/how-to/x/   -> /docs/how-to/x.md
+ *   /docs/main/       -> /docs/main/index.md
  */
 function markdownPathFor(pathname) {
   const path = pathname.replace(/\/+$/, '');
-  return path === '/docs' ? '/docs/index.md' : `${path}.md`;
+  const root = path.match(VERSION_ROOT)[0];
+  return path === root ? `${root}/index.md` : `${path}.md`;
 }
 
 /** Add `Accept` to Vary without duplicating an existing entry. */
@@ -88,7 +89,8 @@ function isNegotiablePage(url) {
   if (!url.pathname.startsWith(DOCS_PREFIX) || url.pathname.endsWith('.md')) {
     return false;
   }
-  return !NAVIGATION_ONLY.has(url.pathname.replace(/\/+$/, ''));
+  const path = url.pathname.replace(/\/+$/, '');
+  return !NAVIGATION_ONLY.has(path.slice(path.match(VERSION_ROOT)[0].length));
 }
 
 export default {

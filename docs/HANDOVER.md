@@ -52,12 +52,20 @@ design source is `kix-oss-handoff/design/kix-oss.pen.json`, frames `mJBvI`
 
 | Component | Ours | Plugin pieces we now render |
 |---|---|---|
-| `Header` | `Header.astro` | `VersionSelect` (starlight-versions), topics from `Astro.locals.starlightSidebarTopics` |
-| `ThemeSelect` | `ThemeSelect.astro` | `VersionSelect`; starlight-versions logs "already overridden" |
-| `PageTitle` | `PageTitle.astro` | `VersionNotice` (starlight-versions); starlight-page-actions' button moved to `PageSidebar` |
+| `Header` | `Header.astro` | `VersionSelect` (ours, see below), topics from `Astro.locals.starlightSidebarTopics` |
+| `ThemeSelect` | `ThemeSelect.astro` | `VersionSelect` |
+| `PageTitle` | `PageTitle.astro` | `VersionNotice` (ours); starlight-page-actions' button moved to `PageSidebar` |
 | `Sidebar` | `Sidebar.astro` | Wins over the vendored sidebar-topics override because `astro.config.mjs` components take precedence (the vendored plugin spreads `starlightConfig.components` after its own). The vendored code is unchanged. The topic list renders here for the mobile menu only. |
 | `TwoColumnContent`, `PageSidebar`, `Pagination`, `Footer` | ours | none |
-| `Search` | still starlight-versions' `VersionSearch` | trigger restyled from `kix.css`; phase 3 replaces it |
+| `Search` | still Starlight's | trigger restyled from `kix.css`; phase 3 replaces it |
+
+Each Kix version's docs are a separate build: CI builds the docs at each
+release tag and at main, and serves them at `/docs` (the latest release),
+`/docs/main`, and `/docs/v<major>.<minor>` (`.github/workflows/pages.yml`).
+`src/lib/docs-version.ts` reads which build this is from the environment
+`docs/flake.nix` sets. `VersionSelect` lists the versions from the
+`/docs/versions.json` CI writes, and `VersionNotice` marks main's and older
+releases' pages.
 
 starlight-page-actions stays installed with only `markdown: true`: it still
 generates the `.md` twins that Copy as Markdown fetches.
@@ -102,8 +110,7 @@ Line numbers keep the design's `#3E434C`; they are decorative.
 ### Known gaps
 
 - The search dialog is still Starlight's (phase 3).
-- Markdown twins show component tags (`<Command …/>`, `<Recap>`) as before;
-  the v0.1 twins are wrong (`housekeeping/2026-10-06-docs-v01-markdown-twins-show-current-pages.md`).
+- Markdown twins show component tags (`<Command …/>`, `<Recap>`) as before.
 - No `Related` list exists in content yet as `## Related` + list; the rows
   style in `kix.css` is ready for it.
 - The design highlights a line in tutorial 05's code fence; the page does not

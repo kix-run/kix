@@ -1,6 +1,7 @@
 # Kix documentation site: Astro Starlight, built as a Nix derivation.
 #
-# Build:  nix build ./docs#site
+# Build:  nix build ./docs#site        (as the latest release, at /docs)
+#         nix build ./docs#site-main   (as main, at /docs/main)
 # Dev:    nix run  ./docs#dev
 #
 # This is a true sibling subflake; the top-level kixpkgs flake does NOT
@@ -53,6 +54,9 @@
         "aarch64-darwin"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      # The Kix version the docs describe: the workspace version of the
+      # revision they are built from.
+      kixVersion = (builtins.fromTOML (builtins.readFile ../cli/Cargo.toml)).workspace.package.version;
     in
     {
       packages = forAllSystems (pkgs: rec {
@@ -125,15 +129,32 @@
             ];
           };
 
+        # The docs as one Kix version's build. CI builds them once per
+        # version, each at its own git revision, and serves each under its
+        # own path (.github/workflows/pages.yml):
+        #
+        # - `site`: the latest release, at /docs.
+        # - `site-main`: the main branch, at /docs/main.
+        # - `site-archived`: an older minor release, at
+        #   /docs/v<major>.<minor>.
+        #
+        # src/lib/docs-version.ts reads the channel and version, and
+        # astro.config.mjs reads the base path.
         site = pkgs.buildNpmPackage {
           pname = "kix-docs";
-          version = "0.0.0";
+          version = kixVersion;
+
+          env = {
+            KIX_DOCS_CHANNEL = "release";
+            KIX_DOCS_BASE = "/docs";
+            KIX_DOCS_VERSION = kixVersion;
+          };
 
           src = ./.;
 
           # To regenerate after dep changes: set to lib.fakeHash, rebuild,
           # paste the "got: sha256-…" hash from the error.
-          npmDepsHash = "sha256-8QeOzSXYNWl+S/y80hZJwIVI4k1oBG9Nmh1AvJ3ax6g=";
+          npmDepsHash = "sha256-Dyp2eMT8QVHnb2asLVq9sJgH9xSdu7dGNjHnFmg4HYQ=";
 
           # Astro/Starlight have no install scripts we care about; keep
           # the build hermetic.
@@ -180,6 +201,19 @@
             platforms = pkgs.lib.platforms.unix;
           };
         };
+
+        site-main = site.overrideAttrs (old: {
+          env = old.env // {
+            KIX_DOCS_CHANNEL = "main";
+            KIX_DOCS_BASE = "/docs/main";
+          };
+        });
+        site-archived = site.overrideAttrs (old: {
+          env = old.env // {
+            KIX_DOCS_CHANNEL = "archived";
+            KIX_DOCS_BASE = "/docs/v${pkgs.lib.versions.majorMinor kixVersion}";
+          };
+        });
 
         default = site;
       });
