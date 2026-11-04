@@ -226,9 +226,7 @@ Listing real page URLs matters: agents given no index invent paths and 404.
 `/docs/`. `web/public/sitemap-index.xml` is the whole-site index that
 `robots.txt` points at: it lists `/sitemap-0.xml` (the landing page) and
 `/docs/sitemap-0.xml` (all 558 documentation URLs). Adding a page outside
-`docs/` means adding it to `web/public/sitemap-0.xml` by hand. `/alt1/` and
-`/alt2/` are omitted so they do not compete with the real landing
-page.
+`docs/` means adding it to `web/public/sitemap-0.xml` by hand.
 
 Check the whole surface against a deployed URL with:
 
