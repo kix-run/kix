@@ -261,7 +261,7 @@ jobs:
               done
               echo "]"
             } > _site/docs/versions.json
-            nix run --inputs-from kixpkgs nixpkgs#jq -- . _site/docs/versions.json
+            nix run --inputs-from ./kixpkgs nixpkgs#jq -- . _site/docs/versions.json
           fi
           # The docs come out of the Nix store read-only; wrangler needs
           # to read every file it uploads.
