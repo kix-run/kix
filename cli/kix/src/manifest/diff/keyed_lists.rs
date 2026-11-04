@@ -2,6 +2,11 @@
 //!
 //! Instead of comparing list items by index, we match them by natural keys
 //! (e.g. containers by `name`, ports by `name` or `containerPort:protocol`).
+//!
+//! These rules approximate the list keys Kubernetes declares in its schemas
+//! with `x-kubernetes-list-type: map` and `x-kubernetes-list-map-keys`. A
+//! lookup of those schema keys would go in [`try_key_lists`], ahead of the
+//! name rules.
 
 use indexmap::IndexMap;
 use serde_json::Value;

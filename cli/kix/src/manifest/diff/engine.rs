@@ -201,10 +201,10 @@ fn diff_keyed_arrays(
 /// list moved is a different item.
 ///
 /// Items with equal content pair up wherever they sit. If the items left over
-/// sit at the same positions in both lists, each was changed in place, so it
-/// is diffed against the item at its position and one changed field reads as
-/// one change. Otherwise the leftovers are reported as removed at their index
-/// in `a` and added at their index in `b`. Pairing by position only when the
+/// sit at the same positions in both lists, each one that [`same_item`]
+/// accepts was changed in place. It is diffed against the item at its
+/// position, so one changed field reads as one change. Every other leftover
+/// is reported as removed at its index in `a` and added at its index in `b`. Pairing by position only when the
 /// positions agree keeps an insertion or a removal from shifting every later
 /// item into a false change.
 fn diff_content_arrays(
@@ -243,26 +243,31 @@ fn diff_content_arrays(
     let mut left_a: Vec<usize> = unpaired_a.into_values().flatten().collect();
     left_a.sort_unstable();
 
-    let mut diffs = Vec::new();
-    if left_a == left_b {
-        for &i in &left_a {
-            let child_path = format!("{path}[{i}]");
-            if !path_ignored(&child_path, &config.ignore_paths) {
-                diffs.extend(structural_diff(&a[i], &b[i], &child_path, config));
-            }
-        }
+    let (in_place, left_a, left_b): (Vec<usize>, Vec<usize>, Vec<usize>) = if left_a == left_b {
+        let (same, other): (Vec<usize>, Vec<usize>) =
+            left_a.into_iter().partition(|&i| same_item(&a[i], &b[i]));
+        (same, other.clone(), other)
     } else {
-        for &i in &left_a {
-            let child_path = format!("{path}[{i}]");
-            if !path_ignored(&child_path, &config.ignore_paths) {
-                diffs.push(Difference::missing_in_b(child_path, a[i].clone()));
-            }
+        (Vec::new(), left_a, left_b)
+    };
+
+    let mut diffs = Vec::new();
+    for &i in &in_place {
+        let child_path = format!("{path}[{i}]");
+        if !path_ignored(&child_path, &config.ignore_paths) {
+            diffs.extend(structural_diff(&a[i], &b[i], &child_path, config));
         }
-        for &j in &left_b {
-            let child_path = format!("{path}[{j}]");
-            if !path_ignored(&child_path, &config.ignore_paths) {
-                diffs.push(Difference::extra_in_b(child_path, b[j].clone()));
-            }
+    }
+    for &i in &left_a {
+        let child_path = format!("{path}[{i}]");
+        if !path_ignored(&child_path, &config.ignore_paths) {
+            diffs.push(Difference::missing_in_b(child_path, a[i].clone()));
+        }
+    }
+    for &j in &left_b {
+        let child_path = format!("{path}[{j}]");
+        if !path_ignored(&child_path, &config.ignore_paths) {
+            diffs.push(Difference::extra_in_b(child_path, b[j].clone()));
         }
     }
 
@@ -277,6 +282,20 @@ fn diff_content_arrays(
     }
 
     diffs
+}
+
+/// Check whether two unkeyed items at the same position can be one item
+/// changed in place. Two objects qualify when they share a top-level member
+/// with the same scalar value, so `[A, B]` turning into `[B', A']` does not
+/// read as A turning into B. Two values that are not objects always qualify.
+fn same_item(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Object(a), Value::Object(b)) => a.iter().any(|(k, av)| {
+            !av.is_object() && !av.is_array() && !av.is_null() && b.get(k) == Some(av)
+        }),
+        (Value::Object(_), _) | (_, Value::Object(_)) => false,
+        _ => true,
+    }
 }
 
 /// Return `value` without the members that mean the same as an absent field,
@@ -652,6 +671,32 @@ mod tests {
             [
                 ("$.disks[1]", DiffKind::MissingInB),
                 ("$.disks[2]", DiffKind::ExtraInB)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_changed_scalar_in_an_unkeyed_list_is_one_value_change() {
+        let a = json!({"args": ["--port", "80", "--verbose"]});
+        let b = json!({"args": ["--port", "8080", "--verbose"]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [("$.args[1]", DiffKind::ValueMismatch)]
+        );
+    }
+
+    #[test]
+    fn unrelated_items_at_the_same_position_are_not_paired() {
+        let item = |id: &str, size: &str| json!({"id": id, "storage": size});
+        let a = json!({"disks": [item("a", "1Gi"), item("b", "2Gi")]});
+        let b = json!({"disks": [item("b", "3Gi"), item("a", "4Gi")]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [
+                ("$.disks[0]", DiffKind::MissingInB),
+                ("$.disks[1]", DiffKind::MissingInB),
+                ("$.disks[0]", DiffKind::ExtraInB),
+                ("$.disks[1]", DiffKind::ExtraInB)
             ]
         );
     }
