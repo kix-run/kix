@@ -39,9 +39,13 @@ on:
 permissions:
   contents: read
 
+# A run on main is never cancelled once it starts, so a push that lands
+# during a release cannot stop it between publishing and tagging. A newer
+# push can still replace a main run that is waiting to start; the newer run
+# then makes the release, from its own commit.
 concurrency:
   group: cli-tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -87,28 +91,86 @@ jobs:
       - name: Tests
         run: nix develop --command bash -c 'cd cli && cargo test --workspace'
 
-  # Publishes the kix binary after the tests pass on a push to main. This
-  # repository is private and so are its releases, so the binaries go to
-  # the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
-  # fine-grained token with Contents read/write on that repository only.
-  #
-  # The version is the workspace version from cli/Cargo.toml with this
-  # workflow's run number as semver build metadata, `0.1.0+250`. The run
-  # number counts pull request runs too, so released build numbers rise
-  # but skip. Raise the workspace version to start a new release line.
+  # Decides whether this push is a release, from the workspace version in
+  # cli/Cargo.toml: it is when this repository has no `v<version>` tag yet.
+  # A version lower than the latest tag, or one with no CHANGELOG.md
+  # section, fails here, before anything is built. cli/README.md § Releases
+  # has the whole process.
+  version:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      notes: ${{ steps.version.outputs.notes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Reads the release tags.
+          fetch-depth: 0
+
+      - name: Version
+        id: version
+        run: |
+          base=$(cargo metadata --manifest-path cli/Cargo.toml --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "kix-cli") | .version')
+
+          if git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
+            echo "version=${base}+${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
+          if [ -n "$latest" ] && [ "$(printf '%s\n' "${latest#v}" "$base" | sort -V | tail -n1)" != "$base" ]; then
+            echo "cli/Cargo.toml has version $base, lower than the latest release tag $latest."
+            exit 1
+          fi
+
+          # The release notes: this version's CHANGELOG.md section, without
+          # its heading.
+          awk -v v="$base" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
+            CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "CHANGELOG.md has no '## $base' section, or it is empty. The release skill writes it."
+            exit 1
+          fi
+          printf '\nBuilt from kix-run/kixpkgs@%s.\n' "$GITHUB_SHA" >> release-notes.md
+
+          echo "version=$base" >> "$GITHUB_OUTPUT"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          {
+            echo 'notes<<KIX_RELEASE_NOTES_END'
+            cat release-notes.md
+            echo 'KIX_RELEASE_NOTES_END'
+          } >> "$GITHUB_OUTPUT"
+
+  # Builds the kix binary for a release, after the tests pass, and publishes
+  # it. Pushes to main that are not releases build nothing. This repository
+  # is private and so are its releases, so the binaries go to the public
+  # kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a fine-grained token
+  # with Contents read/write on that repository only.
   #
   # A workflow_dispatch run builds and uploads the binaries as a workflow
   # artifact but publishes nothing, which is how to try a change to this
   # job from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
   release:
-    needs: test
-    if: github.event_name != 'pull_request'
+    needs: [test, version]
+    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     # GitHub-hosted rather than Spindle. The binaries are static musl, and
     # nixpkgs has no musl standard library for its rustc in the binary
     # cache, while rustup's toolchains do not run on the NixOS image.
     runs-on: ubuntu-latest
+    # Write, to push the release tag to this repository and to start the
+    # docs deploy.
+    permissions:
+      contents: write
+      actions: write
     env:
       TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+      VERSION: ${{ needs.version.outputs.version }}
+      PUBLISH: ${{ needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -126,18 +188,11 @@ jobs:
         with:
           tool: cargo-zigbuild
 
-      - name: Version
-        id: version
-        run: |
-          base=$(cargo metadata --manifest-path cli/Cargo.toml --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "kix-cli") | .version')
-          echo "version=${base}+${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-
       # kix::VERSION reads KIX_VERSION at compile time, so `kix --version`,
-      # plan documents and compliance receipts carry the build number.
+      # plan documents and compliance receipts carry the version.
       - name: Build
         env:
-          KIX_VERSION: ${{ steps.version.outputs.version }}
+          KIX_VERSION: ${{ needs.version.outputs.version }}
         run: |
           for target in $TARGETS; do
             cargo zigbuild --manifest-path cli/Cargo.toml --locked --release \
@@ -145,8 +200,6 @@ jobs:
           done
 
       - name: Package
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           bin=cli/target/x86_64-unknown-linux-musl/release/kix
           file "$bin" | grep -Eq 'statically linked|static-pie linked' || { file "$bin"; exit 1; }
@@ -164,17 +217,41 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kix-${{ steps.version.outputs.version }}
+          name: kix-${{ needs.version.outputs.version }}
           path: dist/
 
-      - name: Publish
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # A release that already exists in kix-releases is left alone, so a
+      # run that published and then failed to tag can be run again.
+      - name: Publish release
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          NOTES: ${{ needs.version.outputs.notes }}
         run: |
+          if gh release view "v$VERSION" --repo kix-run/kix-releases >/dev/null; then
+            echo "kix-run/kix-releases already has v$VERSION."
+            exit 0
+          fi
+          printf '%s\n' "$NOTES" > release-notes.md
           gh release create "v$VERSION" dist/* \
             --repo kix-run/kix-releases \
             --title "kix $VERSION" \
-            --notes "Built from kix-run/kixpkgs@${GITHUB_SHA}." \
+            --notes-file release-notes.md \
             --latest
+
+      # Last, so a run that fails before this point leaves no tag and the
+      # next run tries the release again.
+      - name: Tag release
+        if: env.PUBLISH == 'true'
+        run: |
+          git tag "v$VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/v$VERSION"
+
+      # kix.run/docs serves the latest release tag's docs (pages.yml). A tag
+      # pushed with this job's token starts no workflow, so the deploy is
+      # started here.
+      - name: Deploy the release's docs
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main

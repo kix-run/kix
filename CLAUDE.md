@@ -90,9 +90,15 @@ belongs above the fold), read `CLAUDE.hero-design.md` for the researched
 consensus on dev-tool hero anatomy.
 
 
-## Breaking changes
+## Versioning and breaking changes
 
-The Kix API is in active development. Breaking changes are fine: none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
+Kix uses semantic versioning and is still below 1.0. A breaking change may go in a minor release (0.5 to 0.6), never in a patch release. Prioritize clean design over backwards compatibility, and give each breaking change a line under `### Breaking` in `CHANGELOG.md` that says what users change when they upgrade.
+
+These count as breaking: removing or renaming a CLI command or flag, or changing an exit code; changing `-o json` output (which also moves the plan document's `SCHEMA_VERSION`); changing the `kix` Nix library or the package shape `{ scope, lib }: { meta, options, build }`; removing or renaming a package option; and changing the state Kix writes into a cluster (Activation records, `kix.run/*` annotations, PackageInstance, and Kix's CRDs). The Rust crates are not a public API.
+
+One rule holds even before 1.0: a Kix release reads the cluster state the previous minor release wrote. Cluster state outlives the binary that wrote it, so a change to that state keeps a way to read the old form for at least one minor release.
+
+Every pull request that changes something a Kix user sees adds a line under `## Unreleased` in `CHANGELOG.md`, and the Changelog workflow checks pull requests that change `cli/` or `kix/` for one. Label a pull request `no-changelog` when nothing a user sees changes, such as tests, CI, or an internal refactor. To cut a release, use the `release` skill (`.claude/skills/release/SKILL.md`).
 
 ## DSL design principles
 
