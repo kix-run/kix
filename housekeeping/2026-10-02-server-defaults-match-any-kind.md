@@ -2,3 +2,4 @@
 
 The table matches on the path suffix (`.readinessProbe.failureThreshold` and others), and `equivalent_to_unset` is not told the object's kind. A custom resource field of the same name, set to the core default on one side and absent on the other, reads as unchanged in `kix diff` and in `StoreGraph::synthesize`'s content match, although its operator may default it differently. This can hide a change of effective value. A custom resource that defaults the field differently from the core default reads as equal when one side sets the core default and the other omits it: a Strimzi `Kafka` probe whose build sets `timeoutSeconds: 1` against a live object that omits it reads unchanged, although Strimzi defaults that probe's `timeoutSeconds` to 5.
 - Hit again 2026-10-03 during a red-team review of the kix diff fixes.
+- Hit again 2026-11-04 while reviewing the live-cluster diff issues (#287, #230).
