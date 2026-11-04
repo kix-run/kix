@@ -412,6 +412,10 @@ let
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];
+    service-ref.config = {
+      selector."app.kubernetes.io/name" = "old-db";
+      ports = [ { port = 5432; } ];
+    };
     # A Prometheus provider, so the metrics Service and the ServiceMonitor
     # are built.
     snapshot-controller.instances.prometheus-operator.package = packages.prometheus-operator;

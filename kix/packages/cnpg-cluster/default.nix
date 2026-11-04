@@ -19,6 +19,26 @@
 #   storageCredentials         Secret or secret-ref in this namespace with S3
 #                              access keys; required when `backup` is set.
 #   endpointService (optional) In-cluster S3 Service when `backup` is set.
+#   importSource               The server to copy from, as an instance with
+#                              out.fqdn and out.port, such as a cnpg-cluster,
+#                              a stackgres-cluster, or a service-ref; required
+#                              when `import` is set.
+#   importPassword             Secret or secret-ref in this namespace holding
+#                              the password of `import.user` under
+#                              `import.passwordKey`; required when `import` is
+#                              set.
+#   importCa (optional)        Secret or secret-ref with `ca.crt`, the CA that
+#                              signed the source's certificate. Required when
+#                              `import.sslMode` is verify-ca or verify-full.
+#
+# Import: with `import` set, the Cluster names the source in
+# `externalClusters` and copies `import.databases` from it when it is
+# created. A Cluster that exists already copies nothing, so a later change
+# to `import` changes nothing in its data. The operator makes the copy in a
+# Job before the primary starts. The instance and Job pods get egress to
+# the source's pods on its port, and the source's pods admit them. A large
+# database can take longer to copy than the deploy waits for the Cluster to
+# be ready; run the deploy again once the Cluster is ready.
 #
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
@@ -142,6 +162,26 @@ in
         message = "backup.schedule \"${config.backup.schedule}\" has ${toString (scheduleFields config.backup.schedule)} fields. CloudNativePG reads six cron fields with seconds first and reads a five-field crontab as one without a day-of-week field, so it would run at other times than a crontab does. Add the seconds field (\"0 0 2 * * *\" for 02:00 every day), or use a descriptor such as \"@daily\".";
       }
       {
+        assertion =
+          config.import == null
+          || config.import.type == "monolith"
+          || (builtins.length config.import.databases == 1 && config.import.databases != [ "*" ]);
+        message = "import.databases is ${builtins.toJSON config.import.databases}. A microservice import copies exactly one named database into the application database. List one, or set import.type = \"monolith\" to copy several.";
+      }
+      {
+        assertion = config.import == null || config.import.type == "monolith" || config.import.roles == [ ];
+        message = "import.roles is set, and a microservice import copies no roles. Remove import.roles, or set import.type = \"monolith\".";
+      }
+      {
+        assertion =
+          config.import == null
+          || !(
+            (config.extraSpec.bootstrap or { }) ? recovery
+            || (config.extraSpec.bootstrap or { }) ? pg_basebackup
+          );
+        message = "extraSpec sets bootstrap.recovery or bootstrap.pg_basebackup while import is set, and a Cluster bootstraps one way. Remove one of them.";
+      }
+      {
         assertion = !((config.extraSpec.monitoring or { }) ? enablePodMonitor);
         message = "extraSpec sets monitoring.enablePodMonitor, which has the operator create a PodMonitor that Kix does not track. Set metrics.enabled and wire a prometheus dependency instead.";
       }
@@ -175,6 +215,9 @@ in
         barmanCloud ? null,
         storageCredentials ? null,
         endpointService ? null,
+        importSource ? null,
+        importPassword ? null,
+        importCa ? null,
         ...
       }:
       let
@@ -304,6 +347,76 @@ in
           else
             443;
 
+        importOn = config.import != null;
+        im = config.import;
+        importSourceName = "import-source";
+        source =
+          if importSource == null then
+            throw "${who}: import is set and no importSource dependency resolved. Wire the server to copy from with deps.importSource = ref.<namespace>.<instance>. For a server Kix does not manage, add a service-ref instance for its Service."
+          else if !(importSource.out ? fqdn && importSource.out ? port) then
+            throw "${who}: the importSource dependency has no out.fqdn and out.port, so the package cannot tell where the source listens. Wire a cnpg-cluster, a stackgres-cluster, or a service-ref instance."
+          else
+            importSource.out;
+        importCredentials = kix.checkSecretKeys {
+          inherit who;
+          arg = "importPassword";
+          dep =
+            if importPassword == null then
+              throw "${who}: import is set and no importPassword dependency resolved in namespace ${ns}. Add a secret or secret-ref instance there with the key ${im.passwordKey} and wire it with deps.importPassword = ref.${ns}.<instance>."
+            else
+              importPassword;
+          keys = [ im.passwordKey ];
+        };
+        verifiesSource = builtins.elem im.sslMode [
+          "verify-ca"
+          "verify-full"
+        ];
+        importCaRef =
+          if importCa == null then
+            if verifiesSource then
+              throw "${who}: import.sslMode is ${im.sslMode}, which checks the source's certificate, and no importCa dependency resolved. Wire a secret with ca.crt, the CA that signed it, with deps.importCa = ref.${ns}.<instance>, or set import.sslMode = \"require\" to encrypt without checking."
+            else
+              null
+          else if !verifiesSource then
+            throw "${who}: the importCa dependency is wired and import.sslMode is ${im.sslMode}, which does not check the source's certificate. Set import.sslMode = \"verify-full\", or remove deps.importCa."
+          else
+            (
+              (kix.checkSecretKeys {
+                inherit who;
+                arg = "importCa";
+                dep = importCa;
+                keys = [ "ca.crt" ];
+              }).out.keyRef
+              "ca.crt"
+            ).valueFrom.secretKeyRef;
+        importSpec = kix.mergeGuarded {
+          inherit who;
+          what = "import.extraSpec";
+          locked = [
+            [ "type" ]
+            [ "databases" ]
+            [ "roles" ]
+            [ "source" ]
+          ];
+        } importBase im.extraSpec;
+        importBase = {
+          inherit (im) type databases;
+          source.externalCluster = importSourceName;
+        }
+        // lib.optionalAttrs (im.roles != [ ]) { inherit (im) roles; };
+        importSourceCluster = {
+          name = importSourceName;
+          connectionParameters = {
+            host = source.fqdn;
+            port = toString source.port;
+            inherit (im) user;
+            dbname = im.sourceDatabase;
+            sslmode = im.sslMode;
+          };
+          password = (importCredentials.out.keyRef im.passwordKey).valueFrom.secretKeyRef;
+        }
+        // lib.optionalAttrs (importCaRef != null) { sslRootCert = importCaRef; };
+
         baseSpec = {
           inherit (config) instances resources;
           imageName = kix.image.ref config.image;
@@ -341,6 +454,10 @@ in
               };
             }
           ];
+        }
+        // lib.optionalAttrs importOn {
+          bootstrap.initdb.import = importSpec;
+          externalClusters = [ importSourceCluster ];
         };
 
         _unownedPaths =
@@ -356,7 +473,17 @@ in
         spec = builtins.seq _unownedPaths (
           kix.mergeGuarded {
             inherit who;
-            locked = locked ++ lib.optional backupOn [ "plugins" ];
+            locked =
+              locked
+              ++ lib.optional backupOn [ "plugins" ]
+              ++ lib.optionals importOn [
+                [ "externalClusters" ]
+                [
+                  "bootstrap"
+                  "initdb"
+                  "import"
+                ]
+              ];
           } baseSpec config.extraSpec
         );
 

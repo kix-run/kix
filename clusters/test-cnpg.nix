@@ -14,6 +14,14 @@
 # extension by name and one by `{ name; version; }`. Metabase reads it
 # through `deps.database`, which under default deny gives Metabase egress
 # to the pooler and the pooler egress to the PostgreSQL pods on TCP 5432.
+# `pg-imported` copies `pg`'s `app` database when it is created, as from a
+# server Kix does not manage: `pg-source` is a service-ref for `pg-rw`, and
+# `pg-app` and `pg-ca` are secret-refs for the Secrets the operator makes
+# for `pg`, so the import signs in as `app` and checks `pg`'s certificate
+# (verify-full). `pg` creates the table `import_check` with 100 rows, and
+# after the deploy `pg-imported` should hold the same:
+#   kubectl -n data exec pg-imported-1 -c postgres -- \
+#     psql -At -d app -c 'select count(*) from import_check'
 #
 # Build:  nix build .#cluster-cnpg --extra-experimental-features pipe-operators
 # Deploy: kix deploy cnpg --flake ./clusters --context <kind context>
@@ -73,6 +81,12 @@ kix.buildCluster {
               storage.size = "1Gi";
               metrics.enabled = true;
               extraSpec.postgresql.parameters.max_connections = "50";
+              # Rows for pg-imported to copy, owned by the role it signs in as.
+              extraSpec.bootstrap.initdb.postInitApplicationSQL = [
+                "CREATE TABLE import_check (id integer PRIMARY KEY)"
+                "INSERT INTO import_check SELECT generate_series(1, 100)"
+                "ALTER TABLE import_check OWNER TO app"
+              ];
               backup = {
                 destinationPath = "s3://cnpg/data";
                 schedule = "@weekly";
@@ -87,6 +101,42 @@ kix.buildCluster {
             config = {
               metrics.enabled = true;
               extraSpec.pgbouncer.parameters.max_client_conn = "200";
+            };
+          };
+          pg-source = {
+            package = packages.service-ref;
+            config = {
+              name = "pg-rw";
+              selector = {
+                "cnpg.io/cluster" = "pg";
+                "cnpg.io/podRole" = "instance";
+              };
+              ports = [ { port = 5432; } ];
+            };
+          };
+          pg-app = {
+            package = packages.secret-ref;
+            config.keys = [ "password" ];
+          };
+          pg-ca = {
+            package = packages.secret-ref;
+            config.keys = [ "ca.crt" ];
+          };
+          pg-imported = {
+            package = packages.cnpg-cluster;
+            deps = {
+              importSource = ref.data.pg-source;
+              importPassword = ref.data.pg-app;
+              importCa = ref.data.pg-ca;
+            };
+            config = {
+              instances = 1;
+              storage.size = "1Gi";
+              import = {
+                databases = [ "app" ];
+                user = "app";
+                sourceDatabase = "app";
+              };
             };
           };
           pg-replicated = {

@@ -150,6 +150,89 @@
     '';
   };
 
+  import = lib.mkOption {
+    type = lib.types.nullOr (
+      lib.types.submodule {
+        options = {
+          type = lib.mkOption {
+            type = lib.types.enum [
+              "microservice"
+              "monolith"
+            ];
+            default = "microservice";
+            description = ''
+              `microservice` copies one database into the application
+              database (`bootstrap.initdb.database`, owned by
+              `bootstrap.initdb.owner`) and no roles. `monolith` copies the
+              listed databases and roles and keeps their owners.
+            '';
+          };
+          databases = lib.mkOption {
+            type = lib.types.nonEmptyListOf lib.types.nonEmptyStr;
+            example = [ "registry" ];
+            description = "Databases to copy from the source. `microservice` takes exactly one; `monolith` also takes `*` for every database.";
+          };
+          roles = lib.mkOption {
+            type = lib.types.listOf lib.types.nonEmptyStr;
+            default = [ ];
+            description = "Roles to copy, with `monolith` only. `*` copies every role.";
+          };
+          user = lib.mkOption {
+            type = lib.types.nonEmptyStr;
+            example = "postgres";
+            description = "Role the import connects as. It must be able to read every object in the databases, and with `monolith`, the roles.";
+          };
+          sourceDatabase = lib.mkOption {
+            type = lib.types.nonEmptyStr;
+            default = "postgres";
+            description = "Database the import first connects to on the source (`connectionParameters.dbname`).";
+          };
+          sslMode = lib.mkOption {
+            type = lib.types.enum [
+              "disable"
+              "allow"
+              "prefer"
+              "require"
+              "verify-ca"
+              "verify-full"
+            ];
+            default = "verify-full";
+            description = ''
+              libpq `sslmode` for the connection to the source. `verify-ca`
+              and `verify-full` check the source's certificate against the
+              `importCa` dependency, so they need one. `require` encrypts
+              the connection without checking whose certificate it is.
+            '';
+          };
+          passwordKey = lib.mkOption {
+            type = lib.types.nonEmptyStr;
+            default = "password";
+            description = "Key of the `importPassword` Secret that holds the password of `user`.";
+          };
+          extraSpec = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+            example = {
+              pgDumpExtraOptions = [ "--jobs=2" ];
+              postImportApplicationSQL = [ "ANALYZE" ];
+            };
+            description = "Merged over `bootstrap.initdb.import`. Refused: `type`, `databases`, `roles`, and `source`.";
+          };
+        };
+      }
+    );
+    default = null;
+    description = ''
+      Copy databases from another PostgreSQL server when the Cluster is
+      created (`bootstrap.initdb.import`). CloudNativePG runs `pg_dump`
+      against the source and `pg_restore` into the new primary, once,
+      before the instance starts. Writes to the source after that are not
+      copied, so stop them before the first deploy. The source can run an
+      older major version. Requires the `importSource` and `importPassword`
+      dependencies when non-null.
+    '';
+  };
+
   extraSpec = lib.mkOption {
     type = lib.types.attrsOf lib.types.anything;
     default = { };
@@ -159,8 +242,11 @@
     description = ''
       Merged over the `Cluster` spec. Refused: `instances`, `imageName`,
       `imageCatalogRef`, `resources`, `storage.size`, `storage.storageClass`,
-      `affinity.enablePodAntiAffinity`, `monitoring.enablePodMonitor`, and,
-      when `backup` is set, `plugins` and `backup.barmanObjectStore`.
+      `affinity.enablePodAntiAffinity`, `monitoring.enablePodMonitor`,
+      when `backup` is set, `plugins` and `backup.barmanObjectStore`, and,
+      when `import` is set, `externalClusters`,
+      `bootstrap.initdb.import`, `bootstrap.recovery`, and
+      `bootstrap.pg_basebackup`.
       `topologySpreadConstraints` replaces the spread derived from the
       availability level, and `enablePDB` replaces the package default.
     '';
