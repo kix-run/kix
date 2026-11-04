@@ -38,11 +38,13 @@
 # created. A Cluster that exists already copies nothing, so a later change
 # to `import` changes nothing in its data. The operator makes the copy in a
 # Job before the primary starts. The instance and Job pods get egress to
-# the source's pods on its port, and the source's pods admit them. That
-# path stays open until `import` is set back to null, which is safe once
-# the Cluster exists. A large database can take longer to copy than the
-# deploy waits for the Cluster to be ready. Run the deploy again once the
-# Cluster is ready.
+# the source's pods on its port, and the source's pods admit them. Once the
+# Cluster exists, set `import` back to null and remove the import
+# dependencies. CloudNativePG accepts the change and keeps the data. The
+# deploy then keeps the two import policies as orphans, so close the path
+# with `kix deploy --prune` or `kix gc`. A large database can take longer
+# to copy than the deploy waits for the Cluster to be ready. Run the deploy
+# again once the Cluster is ready.
 #
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
