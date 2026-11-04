@@ -1685,6 +1685,13 @@ in
         user = "postgres";
         sslMode = "require";
       };
+      plainSource = eval.mkImport {
+        out = {
+          fqdn = "plain-db.data.svc.cluster.local";
+          port = "5432";
+          tls = false;
+        };
+      };
     in
     (
       !(evalFails (imported { }))
@@ -1729,6 +1736,41 @@ in
           extraSpec.schemaOnly = true;
         };
       }))
+      # A source that serves no TLS, with a mode that needs it, and with one that does not.
+      && evalFails (imported {
+        deps = ref: wired ref // { importSource = ref.data.plain-db; };
+        extra.plain-db.package = plainSource;
+      })
+      && !(evalFails (imported {
+        importConfig = require // {
+          sslMode = "disable";
+        };
+        deps = ref: wired ref // { importSource = ref.data.plain-db; };
+        extra.plain-db.package = plainSource;
+      }))
+      # Import dependencies wired while import is null.
+      && evalFails (imported {
+        importConfig = null;
+      })
+      && evalFails (imported {
+        importConfig = null;
+        extraSpec = { };
+        deps = ref: { importPassword = ref.data.old-db-password; };
+      })
+      && !(evalFails (imported {
+        importConfig = null;
+        extraSpec = { };
+        deps = _: { };
+      }))
+      # bootstrap.initdb.import through extraSpec, with import null.
+      && evalFails (cnpg {
+        database = null;
+        clusterConfig.extraSpec.bootstrap.initdb.import = {
+          type = "microservice";
+          databases = [ "app" ];
+          source.externalCluster = "other";
+        };
+      })
       && !(evalFails (cnpg {
         database = null;
         clusterConfig.extraSpec.externalClusters = [ { name = "other"; } ];
@@ -1768,6 +1810,41 @@ in
           databases = [ "*" ];
         };
       })
+      && says "exactly one named database" (messages {
+        import = base // {
+          databases = [ "app*" ];
+        };
+      })
+      && says "beside names" (messages {
+        import = base // {
+          type = "monolith";
+          databases = [
+            "*"
+            "a"
+          ];
+        };
+      })
+      && says "beside names" (messages {
+        import = base // {
+          type = "monolith";
+          roles = [
+            "*"
+            "r"
+          ];
+        };
+      })
+      && says "microservice import only" (messages {
+        import = base // {
+          type = "monolith";
+          extraSpec.postImportApplicationSQL = [ "ANALYZE" ];
+        };
+      })
+      &&
+        messages {
+          import = base // {
+            extraSpec.postImportApplicationSQL = [ "ANALYZE" ];
+          };
+        } == [ ]
       &&
         messages {
           import = base // {

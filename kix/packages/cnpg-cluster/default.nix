@@ -20,25 +20,29 @@
 #                              access keys; required when `backup` is set.
 #   endpointService (optional) In-cluster S3 Service when `backup` is set.
 #   importSource               The server to copy from, as an instance with
-#                              out.fqdn and out.port, such as a cnpg-cluster,
-#                              a stackgres-cluster, or a service-ref; required
-#                              when `import` is set.
+#                              out.fqdn and out.port, such as a cnpg-cluster
+#                              or a service-ref; required when `import` is
+#                              set. A source whose out.tls is false needs an
+#                              `import.sslMode` that does not require TLS.
 #   importPassword             Secret or secret-ref in this namespace holding
 #                              the password of `import.user` under
 #                              `import.passwordKey`; required when `import` is
 #                              set.
-#   importCa (optional)        Secret or secret-ref with `ca.crt`, the CA that
-#                              signed the source's certificate. Required when
-#                              `import.sslMode` is verify-ca or verify-full.
+#   importCa (optional)        Secret or secret-ref in this namespace with
+#                              `ca.crt`, the CA that signed the source's
+#                              certificate. Required when `import.sslMode` is
+#                              verify-ca or verify-full.
 #
 # Import: with `import` set, the Cluster names the source in
 # `externalClusters` and copies `import.databases` from it when it is
 # created. A Cluster that exists already copies nothing, so a later change
 # to `import` changes nothing in its data. The operator makes the copy in a
 # Job before the primary starts. The instance and Job pods get egress to
-# the source's pods on its port, and the source's pods admit them. A large
-# database can take longer to copy than the deploy waits for the Cluster to
-# be ready; run the deploy again once the Cluster is ready.
+# the source's pods on its port, and the source's pods admit them. That
+# path stays open until `import` is set back to null, which is safe once
+# the Cluster exists. A large database can take longer to copy than the
+# deploy waits for the Cluster to be ready. Run the deploy again once the
+# Cluster is ready.
 #
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
@@ -165,8 +169,28 @@ in
         assertion =
           config.import == null
           || config.import.type == "monolith"
-          || (builtins.length config.import.databases == 1 && config.import.databases != [ "*" ]);
+          || (
+            builtins.length config.import.databases == 1
+            && !(lib.hasInfix "*" (builtins.head config.import.databases))
+          );
         message = "import.databases is ${builtins.toJSON config.import.databases}. A microservice import copies exactly one named database into the application database. List one, or set import.type = \"monolith\" to copy several.";
+      }
+      {
+        assertion =
+          config.import == null
+          || config.import.type == "microservice"
+          || (
+            (config.import.databases == [ "*" ] || !(builtins.elem "*" config.import.databases))
+            && (config.import.roles == [ "*" ] || !(builtins.elem "*" config.import.roles))
+          );
+        message = "import.databases or import.roles lists `*` beside names. `*` copies every database or every role, so give it alone or list names.";
+      }
+      {
+        assertion =
+          config.import == null
+          || config.import.type == "microservice"
+          || !(config.import.extraSpec ? postImportApplicationSQL);
+        message = "import.extraSpec sets postImportApplicationSQL on a monolith import, and CloudNativePG runs it after a microservice import only. Remove it, or run the statements another way.";
       }
       {
         assertion = config.import == null || config.import.type == "monolith" || config.import.roles == [ ];
@@ -355,8 +379,15 @@ in
             throw "${who}: import is set and no importSource dependency resolved. Wire the server to copy from with deps.importSource = ref.<namespace>.<instance>. For a server Kix does not manage, add a service-ref instance for its Service."
           else if !(importSource.out ? fqdn && importSource.out ? port) then
             throw "${who}: the importSource dependency has no out.fqdn and out.port, so the package cannot tell where the source listens. Wire a cnpg-cluster, a stackgres-cluster, or a service-ref instance."
+          else if (importSource.out.tls or null) == false && builtins.elem im.sslMode tlsModes then
+            throw "${who}: import.sslMode is ${im.sslMode}, which needs TLS, and the importSource dependency serves none (out.tls is false). Turn on TLS at the source, or set import.sslMode = \"disable\"."
           else
             importSource.out;
+        tlsModes = [
+          "require"
+          "verify-ca"
+          "verify-full"
+        ];
         importCredentials = kix.checkSecretKeys {
           inherit who;
           arg = "importPassword";
@@ -374,7 +405,7 @@ in
         importCaRef =
           if importCa == null then
             if verifiesSource then
-              throw "${who}: import.sslMode is ${im.sslMode}, which checks the source's certificate, and no importCa dependency resolved. Wire a secret with ca.crt, the CA that signed it, with deps.importCa = ref.${ns}.<instance>, or set import.sslMode = \"require\" to encrypt without checking."
+              throw "${who}: import.sslMode is ${im.sslMode}, which checks the source's certificate, and no importCa dependency resolved. Wire a secret with ca.crt, the CA that signed the source's certificate, with deps.importCa = ref.${ns}.<instance>, or set import.sslMode = \"require\" to encrypt without checking."
             else
               null
           else if !verifiesSource then
@@ -465,6 +496,8 @@ in
             throw "${who}: extraSpec sets imageCatalogRef, and the package sets imageName from the image option. Set image instead."
           else if (config.extraSpec.affinity or { }) ? enablePodAntiAffinity then
             throw "${who}: extraSpec sets affinity.enablePodAntiAffinity, which the package sets to false: the pods spread by the topologySpreadConstraints derived from the availability level. Remove it, or set topologySpreadConstraints in extraSpec."
+          else if !importOn && (importSource != null || importPassword != null || importCa != null) then
+            throw "${who}: an importSource, importPassword, or importCa dependency is wired and import is null, so nothing reads it. Set import, or remove the import dependencies."
           else if backupOn && (config.extraSpec.backup or { }) ? barmanObjectStore then
             throw "${who}: extraSpec sets backup.barmanObjectStore while the backup option enables the Barman Cloud plugin as WAL archiver, and CloudNativePG refuses both on one Cluster. Remove backup.barmanObjectStore and configure the store through the backup option."
           else
@@ -476,14 +509,14 @@ in
             locked =
               locked
               ++ lib.optional backupOn [ "plugins" ]
-              ++ lib.optionals importOn [
-                [ "externalClusters" ]
+              ++ [
                 [
                   "bootstrap"
                   "initdb"
                   "import"
                 ]
-              ];
+              ]
+              ++ lib.optional importOn [ "externalClusters" ];
           } baseSpec config.extraSpec
         );
 

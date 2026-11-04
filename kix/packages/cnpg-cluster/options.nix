@@ -216,7 +216,7 @@
               pgDumpExtraOptions = [ "--jobs=2" ];
               postImportApplicationSQL = [ "ANALYZE" ];
             };
-            description = "Merged over `bootstrap.initdb.import`. Refused: `type`, `databases`, `roles`, and `source`.";
+            description = "Merged over `bootstrap.initdb.import`. Refused: `type`, `databases`, `roles`, and `source`. CloudNativePG runs `postImportApplicationSQL` after a microservice import only, so it is refused on a monolith import.";
           };
         };
       }
@@ -243,9 +243,9 @@
       Merged over the `Cluster` spec. Refused: `instances`, `imageName`,
       `imageCatalogRef`, `resources`, `storage.size`, `storage.storageClass`,
       `affinity.enablePodAntiAffinity`, `monitoring.enablePodMonitor`,
-      when `backup` is set, `plugins` and `backup.barmanObjectStore`, and,
-      when `import` is set, `externalClusters`,
-      `bootstrap.initdb.import`, `bootstrap.recovery`, and
+      `bootstrap.initdb.import` (set `import` instead), when `backup` is
+      set, `plugins` and `backup.barmanObjectStore`, and, when `import` is
+      set, `externalClusters`, `bootstrap.recovery`, and
       `bootstrap.pg_basebackup`.
       `topologySpreadConstraints` replaces the spread derived from the
       availability level, and `enablePDB` replaces the package default.
