@@ -248,6 +248,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 .and_then(|r| serde_json::to_value(r).ok())
                 .and_then(|r| DeployedBuild::of_record(&r));
             doc.drift = Checked::found(drift);
+            doc.drift_unchecked = live.drift_unchecked;
             doc
         }
     };
@@ -322,6 +323,9 @@ struct LiveSide {
     /// Each compared object [`drift::check_object`] finds drifted, with its
     /// report.
     drifted: Vec<(DriftReport, DynamicObject)>,
+    /// How many compared objects the drift check cannot judge
+    /// ([`DriftVerdict::Unstamped`] or [`DriftVerdict::NoFieldset`]).
+    drift_unchecked: usize,
 }
 
 /// Fetch the live cluster's Kix-owned view for `new_graph`'s cluster.
@@ -407,11 +411,7 @@ async fn fetch_live_manifests(
                 .is_some_and(|c| c.metadata.name == obj.metadata.name)
     });
 
-    let drifted: Vec<(DriftReport, DynamicObject)> = compared
-        .iter()
-        .map(|obj| (drift::check_object(obj), obj.clone()))
-        .filter(|(report, _)| matches!(report.verdict, DriftVerdict::Drifted { .. }))
-        .collect();
+    let (drifted, drift_unchecked) = check_drift(&compared);
     let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
@@ -438,7 +438,25 @@ async fn fetch_live_manifests(
         current,
         managed,
         drifted,
+        drift_unchecked,
     })
+}
+
+/// Run [`drift::check_object`] on each of `objects`. Return the drifted ones
+/// with their reports, and how many the check cannot judge because they carry
+/// no applied-hash stamp or no Kix `managedFields` entry.
+fn check_drift(objects: &[DynamicObject]) -> (Vec<(DriftReport, DynamicObject)>, usize) {
+    let mut drifted = Vec::new();
+    let mut unchecked = 0;
+    for obj in objects {
+        let report = drift::check_object(obj);
+        match report.verdict {
+            DriftVerdict::Drifted { .. } => drifted.push((report, obj.clone())),
+            DriftVerdict::Unstamped | DriftVerdict::NoFieldset => unchecked += 1,
+            DriftVerdict::InSync => {}
+        }
+    }
+    (drifted, unchecked)
 }
 
 /// Return build manifests that declare their own deletion (such as a Job with
@@ -739,24 +757,49 @@ mod tests {
         let manifests =
             owned_view::kix_owned_manifests_against([live.clone()], &new.manifests_by_hash());
         let old = StoreGraph::synthesize(&manifests, &new);
+        let unstamped = {
+            let mut o = live.clone();
+            o.metadata.annotations = None;
+            o
+        };
+        let no_fieldset = {
+            let mut o = live.clone();
+            o.metadata.managed_fields = None;
+            o
+        };
+        let (drifted, drift_unchecked) = check_drift(&[live, unstamped, no_fieldset]);
+        assert_eq!((drifted.len(), drift_unchecked), (1, 2));
         let side = OldSide::Live(Box::new(LiveSide {
             manifests,
             namespaceless: Vec::new(),
             current: None,
             managed: HashMap::new(),
-            drifted: vec![(drift::check_object(&live), live)],
+            drifted,
+            drift_unchecked,
         }));
         let result = diff_graphs(&old, &new, &side, Detail::Plain);
 
         assert!(!result.has_diff(), "{}", result.doc.to_json());
         let drift = result.doc.drift.items();
         assert_eq!(drift.len(), 1);
-        assert_eq!(
-            drift[0].path,
-            "$.spec.template.spec.containers[name=web].image"
-        );
+        assert_eq!(drift[0].path, "$.spec.template.spec.containers[web].image");
         let text = render::render_drift_text(&result.doc);
         assert!(text.contains("Deployment/web@app"), "{text}");
+        assert!(
+            text.contains(
+                "2 objects not checked for drift: they have no Kix stamp or no field records."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("ownership conflict with kubectl-edit"),
+            "{text}"
+        );
+        let markdown = render::render_drift_markdown(&result.doc);
+        assert!(
+            markdown.contains("2 objects not checked for drift"),
+            "{markdown}"
+        );
         assert!(
             text.contains("\"web:2\" live, \"web:1\" deployed, set by kubectl-edit"),
             "{text}"

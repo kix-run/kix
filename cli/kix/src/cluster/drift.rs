@@ -344,21 +344,45 @@ impl ForeignField {
     /// Return the value of this field in `manifest`, matching list elements
     /// the way the API server does.
     pub fn value_in<'v>(&self, manifest: &'v Value) -> Option<&'v Value> {
+        self.walk(manifest).map(|(value, _)| value)
+    }
+
+    /// Return this field's path in `manifest` as the diff engine spells it
+    /// (`$.spec.containers[web].image`), so it reads like the field changes
+    /// beside it. A list element is named by its diff-engine key, then its
+    /// `name`, then its position.
+    pub fn diff_path(&self, manifest: &Value) -> Option<String> {
+        self.walk(manifest).map(|(_, path)| path)
+    }
+
+    fn walk<'v>(&self, manifest: &'v Value) -> Option<(&'v Value, String)> {
         let mut node = manifest;
+        let mut path = "$".to_string();
+        let mut field = "";
         for key in &self.keys {
-            node = match key.strip_prefix("f:") {
-                Some(name) => node.get(name)?,
+            match key.strip_prefix("f:") {
+                Some(name) => {
+                    node = node.get(name)?;
+                    path.push('.');
+                    path.push_str(name);
+                    field = name;
+                }
                 None => {
                     let single = serde_json::Map::from_iter([(key.clone(), Value::Null)]);
-                    node.as_array()?
+                    let (i, elem) = node
+                        .as_array()?
                         .iter()
                         .enumerate()
-                        .find(|(i, e)| fieldsv1::match_element(e, *i, &single).is_some())
-                        .map(|(_, e)| e)?
+                        .find(|(i, e)| fieldsv1::match_element(e, *i, &single).is_some())?;
+                    let name = crate::manifest::diff::keyed_lists::extract_key(field, elem)
+                        .or_else(|| elem.get("name").and_then(Value::as_str).map(str::to_string))
+                        .unwrap_or_else(|| i.to_string());
+                    path.push_str(&format!("[{name}]"));
+                    node = elem;
                 }
-            };
+            }
         }
-        Some(node)
+        Some((node, path))
     }
 }
 

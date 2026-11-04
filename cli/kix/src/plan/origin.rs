@@ -270,7 +270,10 @@ pub fn live_drift(
         for (path, mut managers, field) in fields {
             managers.sort();
             managers.dedup();
-            let path = format!("$.{path}");
+            let path = field
+                .diff_path(&served)
+                .or_else(|| field.diff_path(new))
+                .unwrap_or_else(|| format!("$.{path}"));
             let before = applied.and_then(|a| field.value_in(a));
             out.push(super::document::DriftChange {
                 deployed: shown(&path, before, None),
@@ -648,7 +651,7 @@ mod tests {
             found,
             vec![super::super::document::DriftChange {
                 resource: "Deployment/web@app".into(),
-                path: "$.spec.template.spec.containers[name=web].image".into(),
+                path: "$.spec.template.spec.containers[web].image".into(),
                 deployed: Some(json!("web:1")),
                 live: Some(json!("web:2")),
                 managers: vec!["kubectl-edit".into()],

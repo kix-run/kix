@@ -1145,6 +1145,12 @@
       "$ref": "#/$defs/Checked4",
       "description": "Fields where the live cluster differs from the deployed build. From\n`kix plan`, the fields this change touches. From `kix diff` against\nthe cluster, every field of a drifted object that the new build sets."
     },
+    "drift_unchecked": {
+      "description": "How many live objects `kix diff` could not check for drift, because\nthey have no applied-hash stamp or no Kix field records in\n`managedFields`. Left out when there are none.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
     "flags": {
       "anyOf": [
         {

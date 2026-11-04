@@ -75,6 +75,11 @@ pub struct Plan {
     /// `kix plan`, the fields this change touches. From `kix diff` against
     /// the cluster, every field of a drifted object that the new build sets.
     pub drift: Checked<DriftChange>,
+    /// How many live objects `kix diff` could not check for drift, because
+    /// they have no applied-hash stamp or no Kix field records in
+    /// `managedFields`. Left out when there are none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub drift_unchecked: usize,
     /// Resources that leave the build, and what the deploy does with each.
     pub prune: Checked<PruneEntry>,
     /// Objects the dry run could not check, and why. Their entries in
@@ -84,6 +89,10 @@ pub struct Plan {
     /// Whether Pods start, pull their images, and pass their probes. No
     /// preview can tell, so this is always `not_checked`.
     pub readiness: Checked<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// A Kix binary, so a plan can be checked against the Kix that deploys it.
@@ -614,6 +623,7 @@ impl Plan {
             conflicts: Checked::not_checked(reason),
             admission: Checked::not_checked(reason),
             drift: Checked::not_checked(reason),
+            drift_unchecked: 0,
             prune: Checked::not_checked(reason),
             not_checked: Vec::new(),
             readiness: Checked::not_checked(NotCheckedReason::NotPreviewable),
