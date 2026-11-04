@@ -1139,6 +1139,7 @@ mod tests {
                     (keys::IDENTITY_HASH): format!("h-{name}"),
                     (keys::ACTIVATIONS): activations,
                 },
+                "managedFields": [{ "manager": "kix", "operation": "Apply" }],
             },
         })
     }
@@ -1190,6 +1191,58 @@ mod tests {
         assert_eq!(names_of(&closures.closure_of("ak")), vec!["kept-left"]);
         assert!(closures.closure_of("a2").is_empty());
         assert!(closures.closure_of("b1").is_empty());
+    }
+
+    /// Mark `manifest` as an object of the stateful package `keeper`.
+    fn of_keeper(mut manifest: Value) -> Value {
+        let anns = manifest["metadata"]["annotations"].as_object_mut().unwrap();
+        anns.insert(keys::PACKAGE.into(), json!("keeper"));
+        anns.insert(keys::PACKAGE_NAMESPACE.into(), json!("app"));
+        anns.insert(keys::LIFECYCLE.into(), json!("stateful"));
+        manifest
+    }
+
+    /// An operator copies its custom resource's labels and annotations onto
+    /// the data volume it makes, and leaves it unowned. Read from the cluster,
+    /// the volume is not part of the previous state. So it is never an orphan
+    /// to prune, and never one side of a migration.
+    #[tokio::test]
+    async fn an_operator_copy_is_not_part_of_the_previous_state() {
+        let mut volume = of_keeper(cm("data-keeper-0", "a2"));
+        volume["metadata"]["managedFields"] = json!([
+            { "manager": "kube-controller-manager", "operation": "Update" },
+            { "manager": "clickhouse-operator", "operation": "Update" },
+        ]);
+        volume["metadata"]["annotations"][keys::IDENTITY_HASH] = json!("h-keeper");
+        let api = FakeApi::new([
+            record("a", "a2", PHASE_ACTIVE),
+            of_keeper(cm("keeper", "a2")),
+            volume,
+        ]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let opened = Records::open(&client, &discovery).unwrap();
+        let active = Record {
+            name: "rec-a2".into(),
+            identity_hash: Some("a2".into()),
+            ..Default::default()
+        };
+        let (old, _) = of_live(&client, &opened, &discovery, "a", &active, &|_| {})
+            .await
+            .unwrap();
+        assert_eq!(names_of(&old), vec!["keeper"]);
+
+        // The next build adds a monitoring object to the same package.
+        let new = vec![
+            of_keeper(cm("keeper", "")),
+            of_keeper(cm("keeper-monitor", "")),
+        ];
+        assert!(crate::cluster::migrate::detect_migration_pairs(&new, &old).is_empty());
+        assert!(
+            !apply::detect_changes(&new, &old)
+                .iter()
+                .any(|a| matches!(a, ChangeAction::Orphan(_)))
+        );
     }
 
     fn names_of(manifests: &[Value]) -> Vec<&str> {

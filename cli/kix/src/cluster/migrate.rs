@@ -92,7 +92,7 @@ fn derive_reason(source: &Value, target: &Value) -> String {
         .unwrap_or("?");
 
     if src_kind != tgt_kind {
-        return format!("kind changed: {src_kind} -> {tgt_kind}");
+        return format!("{src_kind} removed, {tgt_kind} added");
     }
 
     // PVC-shaped diff hints (works for PersistentVolumeClaim and for CRs
@@ -343,7 +343,7 @@ mod tests {
         )];
         let pairs = detect_migration_pairs(&new, &old);
         assert_eq!(pairs.len(), 1);
-        assert!(pairs[0].reason.contains("kind changed"));
+        assert_eq!(pairs[0].reason, "SGCluster removed, Cluster added");
     }
 
     #[test]

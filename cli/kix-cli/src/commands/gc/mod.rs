@@ -12,7 +12,7 @@
 //!   is absent from the new build are garbage (or, for resources stamped before
 //!   the domain move, resources whose Kubernetes identity is absent). Unstamped
 //!   label carriers, unattributed resources on multi-cluster targets, and
-//!   controller-created copies are reported and only deleted when
+//!   copies other programs made of Kix objects are reported and only deleted when
 //!   `--include-unstamped`, `--include-unattributed`, or `--include-copies` is
 //!   passed.
 //! - **Operator (`--operator`):** Delete retired Superseded Activation records

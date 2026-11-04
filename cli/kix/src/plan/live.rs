@@ -292,7 +292,9 @@ mod tests {
     }
 
     fn live(kind: &str, name: &str, hash: &str, activations: &str) -> DynamicObject {
-        serde_json::from_value(annotated(kind, name, hash, activations)).unwrap()
+        let mut obj = annotated(kind, name, hash, activations);
+        obj["metadata"]["managedFields"] = json!([{ "manager": "kix", "operation": "Apply" }]);
+        serde_json::from_value(obj).unwrap()
     }
 
     fn record(cluster: &str, hash: &str) -> DynamicObject {

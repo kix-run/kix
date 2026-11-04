@@ -1,3 +1,0 @@
-# 2026-10-01 · `cli/kix/src/cluster/fetch.rs` · `kix gc` treats any object carrying `kix.run/identity-hash` as Kix-managed, and some controllers copy their custom resource's annotations onto objects they create.
-
-`partition_sweep` sorts live objects by `is_stamped`, which only checks for the identity annotation. When a controller copies a Kix-applied custom resource's annotations onto the object it creates, that object looks Kix-managed, matches no current build, and `kix gc` deletes it. The Infisical operator does this for InfisicalDynamicSecret lease Secrets with no setting to stop it, so `kix/packages/infisical-operator` refuses to build that kind (`out.mkInfisicalDynamicSecret` throws), and its other builders set explicit target metadata to stop the copy.

@@ -226,6 +226,7 @@ mod tests {
                         (keys::IDENTITY_HASH): "h-creds",
                         (keys::ACTIVATIONS): "a1",
                     },
+                    "managedFields": [{ "manager": "kix", "operation": "Update" }],
                 },
                 // "hunter2"
                 "data": { "password": "aHVudGVyMg==" },

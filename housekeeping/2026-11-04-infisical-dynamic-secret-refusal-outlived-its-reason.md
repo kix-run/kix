@@ -1,0 +1,3 @@
+# 2026-11-04 · `kix/packages/infisical-operator` · `out.mkInfisicalDynamicSecret` still throws, though the reason for the refusal no longer holds.
+
+The package refuses the kind because the operator copies an InfisicalDynamicSecret's annotations, Kix's identity annotation included, onto the lease Secret it makes, and `kix gc` used to delete such Secrets as Kix's own. Kix now treats an object as its own only when a `managedFields` entry names the `kix` field manager, so a lease Secret is a copy: listed by `kix gc --hard`, never deleted unless `--include-copies` is passed. The builder could build the kind, after a check on a cluster that the lease Secret is left alone.
