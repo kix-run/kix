@@ -18,8 +18,10 @@
 # `targetPort` the port those pods listen on, because a policy matches the
 # pod and its port, not the Service. A consumer that dials `out.fqdn` gets
 # egress to those pods. Kix also writes an ingress policy on those pods that
-# admits the consumer. Cilium then refuses any other ingress to them that no
-# policy admits, so check what else reaches them before the first deploy.
+# admits the consumer, and with network policy on, its default-deny policy
+# in the instance's namespace, as for any instance. Cilium then refuses
+# traffic to and from the pods there that no policy admits, so check what
+# else reaches them, and what they reach, before the first deploy.
 #
 # Exposes (`root.out`, `root` = the Service marker):
 #   out.name, out.fqdn  The Service's name and DNS name.

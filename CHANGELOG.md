@@ -11,6 +11,11 @@ Every pull request that changes something a Kix user sees adds a line under
 
 ## Unreleased
 
+### Added
+
+- `cnpg-cluster` can copy databases from another PostgreSQL server when the Cluster is created, through the new `import` option and the `importSource`, `importPassword`, and `importCa` dependencies. Kix derives the network policy between the Cluster's pods and the source.
+- The `service-ref` package names a Service Kix does not render, with the pod labels and ports network policy needs, so a server another tool installed can be a dependency.
+
 ## 0.5.0 - 2026-11-04
 
 The first numbered release. Binaries published before it report the version
