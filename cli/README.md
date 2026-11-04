@@ -66,8 +66,9 @@ Linux with `cargo zigbuild`. They report the plain version (`0.5.0`), and
 are published to the public
 [kix-run/kix-releases](https://github.com/kix-run/kix-releases) as
 `v0.5.0`, with that version's `CHANGELOG.md` section as the notes, and
-become `latest`. The job then tags the commit `v0.5.0` here. Other pushes
-to main build no binaries.
+become `latest`. The job then tags the commit `v0.5.0` here, and starts
+the site deploy, which builds kix.run/docs from the new tag
+(`.github/workflows/pages.yml`). Other pushes to main build no binaries.
 
 A workspace version lower than the latest `v*` tag, or a release with no
 `CHANGELOG.md` section, fails the `version` job, before anything is built.
