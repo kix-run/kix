@@ -45,8 +45,10 @@ reads plan files through `kix::plan::file`.
   with `./seed.py <bundle>... seeds` (`kix bundle` of the test clusters), and
   run with `cargo fuzz run -s none -O <target> seeds/raw` (or `seeds/frames`)
   `-- -fork=4 -max_total_time=300 -max_len=2500000 -rss_limit_mb=4096`.
-- `.github/workflows/bundle-checks.yml` runs each fuzz target for two
-  minutes and `every_test_cluster_bundles`, on changes to `cli/` and weekly.
+- `.github/workflows/bundle-checks.yml` runs each fuzz target and
+  `every_test_cluster_bundles` on pull requests that change the bundle code
+  (20 seconds per target), and weekly (two minutes per target). Every
+  release pull request runs them.
 
 ### Releases
 
@@ -55,25 +57,25 @@ changed, and the `release` skill (`.claude/skills/release/SKILL.md`) cuts
 one. `CLAUDE.md` § Versioning and breaking changes says what counts as
 breaking.
 
-The `release` job in `.github/workflows/cli-tests.yml` runs after the tests
-pass on each push to main. It builds static musl binaries for x86_64 and
-aarch64 Linux with `cargo zigbuild` and publishes them to the public
-[kix-run/kix-releases](https://github.com/kix-run/kix-releases). The
-workspace version in `cli/Cargo.toml` decides what kind of build it is:
-
-- **A release**, when this repository has no `v<version>` tag for the
-  workspace version yet. Merging a version change is what makes one. The
-  binaries report the plain version (`0.5.0`). They are published as
-  `v0.5.0`, with that version's `CHANGELOG.md` section as the notes, and
-  become `latest`. The job then tags the commit `v0.5.0` here.
-- **A main build**, otherwise. The binaries report the version with the
-  workflow run number as semver build metadata (`0.5.0+311`), and replace
-  the `main-build` pre-release.
+The workspace version in `cli/Cargo.toml` decides when Kix is released. On
+each push to main, the `version` job in `.github/workflows/cli-tests.yml`
+looks for a `v<version>` tag in this repository. With none yet, the push is
+a release, and merging a version change is what makes one. After the tests
+pass, the `release` job builds static musl binaries for x86_64 and aarch64
+Linux with `cargo zigbuild`. They report the plain version (`0.5.0`), and
+are published to the public
+[kix-run/kix-releases](https://github.com/kix-run/kix-releases) as
+`v0.5.0`, with that version's `CHANGELOG.md` section as the notes, and
+become `latest`. The job then tags the commit `v0.5.0` here. Other pushes
+to main build no binaries.
 
 A workspace version lower than the latest `v*` tag, or a release with no
-`CHANGELOG.md` section, fails the job. Running a failed release again is
-safe: the job skips a release that already exists in kix-releases and
-creates the tag last.
+`CHANGELOG.md` section, fails the `version` job, before anything is built.
+Running a failed release again is safe: the job skips a release that
+already exists in kix-releases and creates the tag last. A manual run
+(`gh workflow run cli-tests.yml --ref <branch>`) builds the binaries as a
+workflow artifact, reporting `<version>+<run number>`, and publishes
+nothing.
 
 The version reaches the build as `KIX_VERSION`. `kix::VERSION` reads it at
 compile time and falls back to the crate version, and everything that
