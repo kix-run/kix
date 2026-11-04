@@ -5,8 +5,6 @@ name: Deploy site to Cloudflare Pages
 # directory uploaded to the Cloudflare Pages project `kix-run`:
 #
 #   kix.run/             ← web/ (Astro build)
-#   kix.run/alt1/        ← web/ at ALT1_REF (pre-refactor variant)
-#   kix.run/alt2/        ← web/ at ALT2_REF (get-shit-done hero)
 #   kix.run/docs/        ← docs at the latest release tag
 #   kix.run/docs/main/   ← docs at main
 #   kix.run/docs/vX.Y/   ← docs at each older minor release's newest tag
@@ -22,12 +20,6 @@ name: Deploy site to Cloudflare Pages
 # as the site Worker (it is not published as an asset); it serves the
 # `.md` twin of a docs page to clients sending `Accept: text/markdown`.
 # See docs/README.md § Agent-facing surface.
-#
-# /alt1/ and /alt2/ serve alternate landing pages built from pinned
-# refs, for A/B comparison. Both refs predate the move to Astro and
-# are still React/Vite apps; Vite's --base flag rewrites all asset
-# paths, so each build works untouched under its subdirectory. Update
-# or remove the ALT*_REF envs on the build step to change/retire them.
 #
 # kix-examples is a separate private repo (kix-ops/kix-examples) used
 # by the snippet pipeline. CI checks it out with a PAT and overrides
@@ -68,9 +60,9 @@ jobs:
     # running our NixOS CI image. On GitHub the label IS the machine shape:
     # `spindle-auto` is rejected, because GitHub has no per-job claim API
     # and a runner takes whatever queued job matches its labels. 8 vCPU for
-    # the three npm builds and the Astro build; 100 GB because the Nix store
-    # and three node_modules trees share the disk. See spindle-smoke.yml for
-    # the full grammar.
+    # the landing page and the docs builds; 100 GB because the Nix store
+    # holds a docs build per Kix version beside the node_modules trees. See
+    # spindle-smoke.yml for the full grammar.
     runs-on: [self-hosted, spindle-8c-16g-100d]
     env:
       # The image ships Nix, so there is no installer step to carry this
@@ -129,26 +121,6 @@ jobs:
         run: |
           npm ci
           npm run build
-
-      - name: Build alternate landing pages (served at /alt1/, /alt2/)
-        working-directory: kixpkgs
-        env:
-          # alt1: pre-refactor landing page ("Kubernetes any developer
-          # can run." hero), branch variant/pre-refactor.
-          ALT1_REF: 474e728d7e292092f22e68a9a519218ebb657ee8
-          # alt2: the previous root site ("Getting shit done with
-          # Kubernetes." hero). The compiler-H1 hero that used to live
-          # here was promoted to the root `web/`; this pins the old
-          # root for comparison.
-          ALT2_REF: 0c128cd0a15a7d3a494326570b3ad0e82c25f871
-        run: |
-          build_alt() {
-            local name="$1" ref="$2"
-            git worktree add "../web-$name" "$ref"
-            (cd "../web-$name/web" && npm ci && npx vite build --base="/$name/")
-          }
-          build_alt alt1 "$ALT1_REF"
-          build_alt alt2 "$ALT2_REF"
 
       # Which docs to build: main, the newest release tag, and the newest
       # tag of each older minor release. The release builds are cached by
@@ -233,12 +205,6 @@ jobs:
         run: |
           mkdir -p _site
           cp -r kixpkgs/web/dist/. _site/
-          mkdir -p _site/alt1 _site/alt2
-          cp -r web-alt1/web/dist/. _site/alt1/
-          cp -r web-alt2/web/dist/. _site/alt2/
-          # /alt/ briefly served the pre-refactor variant; redirect it.
-          mkdir -p _site/alt
-          printf '<!doctype html><meta http-equiv="refresh" content="0; url=/alt1/">' > _site/alt/index.html
           mkdir -p _site/docs
           if [ -z "$LATEST" ]; then
             cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
