@@ -163,6 +163,15 @@ impl StoreGraph {
         }
     }
 
+    /// Return each resource manifest keyed by its identity hash, the hash part
+    /// of its store path.
+    pub fn manifests_by_hash(&self) -> HashMap<String, &serde_json::Value> {
+        self.resources
+            .iter()
+            .map(|(path, node)| (store_hash(path), &node.manifest))
+            .collect()
+    }
+
     /// Build a StoreGraph from a result directory. Commands load one through
     /// [`crate::build_source::Build::local`], which stamps it.
     ///
@@ -480,10 +489,10 @@ impl StoreGraph {
     /// Cluster-level resources without a package annotation stay in
     /// `resources` outside any `PackageNode`.
     ///
-    /// Resources whose identity hash and content match `reference` reuse the
-    /// reference store path and manifest so unchanged packages compare
-    /// path-equal. Resources that do not match keep their own manifest under a
-    /// content-addressed synthetic store path.
+    /// A resource whose identity hash names a `reference` manifest for the same
+    /// kind, namespace, and name reuses the reference store path and manifest,
+    /// so unchanged packages compare path-equal. Other resources keep their own
+    /// manifest under a content-addressed synthetic store path.
     pub fn synthesize(manifests: &[serde_json::Value], reference: &StoreGraph) -> StoreGraph {
         use crate::manifest::keys;
         use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
@@ -523,19 +532,15 @@ impl StoreGraph {
             HashMap::new();
 
         for (i, m) in manifests.iter().enumerate() {
-            // Reuse the reference path only when both the identity hash and the
-            // manifest content match, so out-of-band edits to a live object under
-            // Kix remain visible in the diff.
+            // An object whose identity hash names a reference manifest for the
+            // same resource came from that manifest file, so it takes the
+            // reference path. This is the rule `kix deploy` uses to skip an
+            // object. Edits made since apply are drift, which a value diff
+            // against the live object cannot tell from server normalisation.
             let hash = ann(m, keys::IDENTITY_HASH).unwrap_or_default();
             let matched = reference_path_by_hash.get(&hash).filter(|&&p| {
-                let diff_config = crate::manifest::diff::DiffConfig::default().in_order();
-                crate::manifest::diff::engine::structural_diff(
-                    m,
-                    &reference.resources[p].manifest,
-                    "$",
-                    &diff_config,
-                )
-                .is_empty()
+                ResourceId::from_value(&reference.resources[p].manifest)
+                    == ResourceId::from_value(m)
             });
             // A synthetic path is named by content, so the invariant a real
             // graph gives for free holds here too: equal path ⇔ equal
@@ -1220,36 +1225,38 @@ mod tests {
             );
         }
 
+        /// A live object carrying a build manifest's identity hash came from
+        /// that manifest file, so it reads as that manifest whatever the API
+        /// server or another manager did to its fields. A live object of
+        /// another resource that carries the hash does not match.
         #[test]
-        fn same_hash_different_content_keeps_its_own_manifest() {
-            // A live object modified out-of-band under Kix keeps its identity
-            // hash stamp while its content differs from the reference build.
-            let built = stamped(
-                "Deployment",
-                "app",
-                "web",
-                ("app", "web"),
-                &h("dep"),
-                json!({"replicas": 2}),
-            );
-            let live = stamped(
-                "Deployment",
-                "app",
-                "web",
-                ("app", "web"),
-                &h("dep"),
-                json!({"replicas": 3}),
-            );
-            let reference = StoreGraph::synthesize(&[built], &StoreGraph::empty("c"));
-            let old = StoreGraph::synthesize(&[live], &reference);
+        fn an_identity_hash_match_alone_picks_the_reference_manifest() {
+            let build = built(&[(
+                "pi",
+                rendered_pi("app", "web", None),
+                vec![("dep", rendered("Deployment", "app", "web"))],
+            )]);
+            let built_dep = build
+                .resources
+                .values()
+                .find(|n| n.manifest["kind"] == "Deployment")
+                .unwrap();
+            let mut live = built_dep.manifest.clone();
+            live["spec"] = json!({"replicas": 3});
+            let mut other = live.clone();
+            other["metadata"]["name"] = json!("api");
 
-            let old_pkg = pkg(&old, "app", "web");
-            assert_ne!(
-                old_pkg.resource_paths,
-                pkg(&reference, "app", "web").resource_paths
-            );
-            let node = &old.resources[&old_pkg.resource_paths[0]];
-            assert_eq!(node.manifest["spec"]["replicas"], json!(3));
+            let old = StoreGraph::synthesize(&[live, other], &build);
+            let node = &old.resources[&built_dep.store_path];
+            assert_eq!(node.manifest, built_dep.manifest);
+            let other_paths: Vec<&PathBuf> = old
+                .resources
+                .iter()
+                .filter(|(_, n)| n.manifest["metadata"]["name"] == "api")
+                .map(|(p, _)| p)
+                .collect();
+            assert_eq!(other_paths.len(), 1);
+            assert_ne!(other_paths[0], &built_dep.store_path);
         }
     }
 }

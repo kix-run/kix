@@ -150,8 +150,8 @@ impl ThreeWay<'_> {
     }
 }
 
-/// The four objects a read-only comparison labels each modified resource
-/// from, by resource id.
+/// The objects a read-only comparison labels each modified resource from, by
+/// resource id.
 pub struct Sides<'a> {
     /// The deployed build's manifests.
     pub deployed: &'a HashMap<ResourceId, &'a Value>,
@@ -160,18 +160,22 @@ pub struct Sides<'a> {
     pub new: HashMap<ResourceId, &'a Value>,
     /// The live objects with their `managedFields`.
     pub managed: &'a HashMap<ResourceId, Value>,
+    /// The live objects [`drift::check_object`] finds drifted. Only their
+    /// changes can carry a drift label.
+    pub drifted: &'a BTreeSet<ResourceId>,
 }
 
 /// Label every field change of a comparison whose old side is the live
-/// cluster, and return the drifted fields those changes touch. A resource
-/// counts as applied when the deployed build lacks it or its identity hash
-/// differs from the new build's, which is how `kix deploy` decides.
-pub fn label_live(
-    diff: &mut super::PackageDiff,
-    sides: &Sides,
-) -> Vec<super::document::DriftChange> {
+/// cluster. A resource counts as applied when the deployed build lacks it or
+/// its identity hash differs from the new build's, which is how `kix deploy`
+/// decides.
+///
+/// A drift label goes only on an object that [`drift::check_object`] finds
+/// drifted. Its verdict compares the server's own representations, so the
+/// value diff against the deployed build, which also sees server
+/// normalisation, cannot label an object in sync.
+pub fn label_live(diff: &mut super::PackageDiff, sides: &Sides) {
     let mut labels = HashMap::new();
-    let mut drift = Vec::new();
     for c in diff.changed_with_cluster_level() {
         for (rid, changes) in &c.resource_diffs {
             let (Some(live), Some(new)) = (sides.live.get(rid), sides.new.get(rid)) else {
@@ -189,21 +193,116 @@ pub fn label_live(
                 applies,
                 secret: types::is_secret(live) || types::is_secret(new),
             };
-            let (l, drifted) = three.label(changes);
+            let (mut l, _) = three.label(changes);
+            if !sides.drifted.contains(rid) {
+                for change in &mut l {
+                    change.retain(|label| *label == ChangeLabel::Intended);
+                }
+            }
             labels.insert(rid.clone(), l);
-            drift.extend(drifted.into_iter().map(|d| super::document::DriftChange {
-                resource: rid.display_id(),
-                path: d.path,
-                deployed: d.deployed,
-                live: d.live,
-                managers: d.managers,
-                reverted: applies,
-            }));
         }
     }
     diff.labelled = true;
     diff.labels = labels;
-    drift
+}
+
+/// Return the drift entries for live objects of a comparison against the
+/// cluster, from [`drift::check_object`] and the live object alone.
+///
+/// `drifted` holds each live object the check found drifted. An object the
+/// new build does not contain is left out, because the deploy does not apply
+/// it. Each field another manager changed or took over, and that the new
+/// build sets, is one entry, named with every manager that owns it. A replicas
+/// change Kubernetes recorded no owner for is an entry with no manager. An
+/// object with neither gets one entry at path `$`.
+///
+/// The deployed value comes from the manifest whose identity hash the live
+/// object carries: the new build's when the build does not change the object,
+/// or `deployed`'s. It is `None` when neither has that manifest.
+pub fn live_drift(
+    drifted: &[(drift::DriftReport, kube::api::DynamicObject)],
+    new: &HashMap<ResourceId, &Value>,
+    deployed: Option<&HashMap<ResourceId, &Value>>,
+) -> Vec<super::document::DriftChange> {
+    let mut out = Vec::new();
+    for (report, obj) in drifted {
+        let drift::DriftVerdict::Drifted {
+            unrecorded_scale, ..
+        } = &report.verdict
+        else {
+            continue;
+        };
+        let Some(&new) = new.get(&report.rid) else {
+            continue;
+        };
+        let live_hash = obj
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH));
+        let applies = live_hash.is_none() || live_hash != keys::get(new, keys::IDENTITY_HASH);
+        let applied = if applies {
+            deployed
+                .and_then(|d| d.get(&report.rid).copied())
+                .filter(|d| live_hash.is_some() && keys::get(d, keys::IDENTITY_HASH) == live_hash)
+        } else {
+            Some(new)
+        };
+        let served = crate::cluster::fieldsv1::merge_typed_metadata(obj);
+        let secret = types::is_secret(new);
+        let max = super::MAX_SHOWN_VALUE_BYTES;
+        let shown = |path: &str, v: Option<&Value>, before: Option<&Value>| {
+            v.map(|v| super::shown_value(secret, path, v, before, max))
+        };
+        let resource = report.rid.display_id();
+        let first = out.len();
+
+        let mut fields: Vec<(String, Vec<String>, drift::ForeignField)> = Vec::new();
+        for field in drift::foreign_fields(obj) {
+            if field.value_in(new).is_none() {
+                continue;
+            }
+            match fields.iter_mut().find(|(path, _, _)| *path == field.path) {
+                Some((_, managers, _)) => managers.push(field.manager.clone()),
+                None => fields.push((field.path.clone(), vec![field.manager.clone()], field)),
+            }
+        }
+        for (path, mut managers, field) in fields {
+            managers.sort();
+            managers.dedup();
+            let path = format!("$.{path}");
+            let before = applied.and_then(|a| field.value_in(a));
+            out.push(super::document::DriftChange {
+                deployed: shown(&path, before, None),
+                live: shown(&path, field.value_in(&served), before),
+                resource: resource.clone(),
+                path,
+                managers,
+                reverted: applies,
+            });
+        }
+        if let Some(scale) = unrecorded_scale {
+            out.push(super::document::DriftChange {
+                resource: resource.clone(),
+                path: format!("$.{}", scale.path),
+                deployed: Some(Value::from(scale.deployed)),
+                live: Some(Value::from(scale.live)),
+                managers: Vec::new(),
+                reverted: applies,
+            });
+        }
+        if out.len() == first {
+            out.push(super::document::DriftChange {
+                resource,
+                path: "$".to_string(),
+                deployed: None,
+                live: None,
+                managers: Vec::new(),
+                reverted: applies,
+            });
+        }
+    }
+    out
 }
 
 /// Label every field change `intended`: the old side is a build, so every
@@ -442,6 +541,155 @@ mod tests {
         let (labels, drifted) = three.label(&changes(&live, &new));
         assert_eq!(labels, vec![vec![ChangeLabel::Intended]]);
         assert!(drifted.is_empty());
+    }
+
+    /// A value diff against the deployed build also sees what the API server
+    /// rewrote, so a change on an object the drift check finds in sync gets
+    /// no drift label.
+    #[test]
+    fn a_drift_label_needs_a_drifted_verdict() {
+        use crate::plan::fixtures::{diff_of, package_instance, stamped};
+        let side = |replicas: i64| {
+            vec![
+                package_instance("app", "web", "1", "h-pi"),
+                stamped(
+                    "Deployment",
+                    "app",
+                    "web",
+                    ("app", "web"),
+                    "h-dep",
+                    json!({"replicas": replicas}),
+                ),
+            ]
+        };
+        let (deployed, live) = (side(1), side(3));
+        let rid = ResourceId::from_value(&deployed[1]);
+        let labels_with = |drifted: BTreeSet<ResourceId>| {
+            let mut diff = diff_of(&live, &deployed);
+            let sides = Sides {
+                deployed: &[(rid.clone(), &deployed[1])].into(),
+                live: [(rid.clone(), &live[1])].into(),
+                new: [(rid.clone(), &deployed[1])].into(),
+                managed: &HashMap::new(),
+                drifted: &drifted,
+            };
+            label_live(&mut diff, &sides);
+            diff.labels[&rid].clone()
+        };
+        assert_eq!(
+            labels_with(BTreeSet::new()),
+            vec![Vec::<ChangeLabel>::new()]
+        );
+        assert_eq!(
+            labels_with([rid.clone()].into()),
+            vec![vec![ChangeLabel::DriftKept]]
+        );
+    }
+
+    /// Build a live Deployment Kix applied with image `web:1` and replicas 1,
+    /// whose stamp no longer matches, with the given `managedFields`
+    /// entries. Kix's `Apply` entry owns `kix_fields` under `spec`.
+    fn drifted_deployment(
+        image: &str,
+        kix_fields: Value,
+        others: Value,
+    ) -> (drift::DriftReport, kube::api::DynamicObject) {
+        let mut entries = vec![json!({
+            "manager": "kix", "operation": "Apply",
+            "fieldsV1": {"f:spec": kix_fields},
+        })];
+        entries.extend(others.as_array().cloned().unwrap_or_default());
+        let mut obj = deployment(1, image);
+        obj["metadata"]["annotations"] = json!({
+            keys::IDENTITY_HASH: "h-dep",
+            keys::APPLIED_HASH: "stamp-at-apply",
+            "deployment.kubernetes.io/revision": "2",
+        });
+        obj["metadata"]["managedFields"] = Value::Array(entries);
+        let obj: kube::api::DynamicObject = serde_json::from_value(obj).unwrap();
+        (drift::check_object(&obj), obj)
+    }
+
+    fn new_build(image: &str) -> Value {
+        let mut new = deployment(1, image);
+        new["metadata"]["annotations"] = json!({keys::IDENTITY_HASH: "h-dep"});
+        new
+    }
+
+    /// An image someone set with `kubectl edit` shows as drift from the live
+    /// object alone, with no deployed build. A controller's annotation the
+    /// build does not set is not listed.
+    #[test]
+    fn an_out_of_band_edit_shows_as_drift_without_the_deployed_build() {
+        let live = drifted_deployment(
+            "web:2",
+            json!({"f:replicas": {}, "f:template": {"f:spec": {"f:containers": {
+                "k:{\"name\":\"web\"}": {".": {}, "f:name": {}}
+            }}}}),
+            json!([
+                {"manager": "kubectl-edit", "operation": "Update",
+                 "fieldsV1": {"f:spec": {"f:template": {"f:spec": {"f:containers": {
+                     "k:{\"name\":\"web\"}": {"f:image": {}}
+                 }}}}}},
+                {"manager": "kube-controller-manager", "operation": "Update",
+                 "fieldsV1": {"f:metadata": {"f:annotations": {
+                     "f:deployment.kubernetes.io/revision": {}
+                 }}}},
+            ]),
+        );
+        assert!(matches!(
+            live.0.verdict,
+            drift::DriftVerdict::Drifted { .. }
+        ));
+        let new = new_build("web:1");
+        let rid = ResourceId::from_value(&new);
+        let found = live_drift(&[live], &[(rid, &new)].into(), None);
+        assert_eq!(
+            found,
+            vec![super::super::document::DriftChange {
+                resource: "Deployment/web@app".into(),
+                path: "$.spec.template.spec.containers[name=web].image".into(),
+                deployed: Some(json!("web:1")),
+                live: Some(json!("web:2")),
+                managers: vec!["kubectl-edit".into()],
+                reverted: false,
+            }]
+        );
+    }
+
+    /// A field another manager took over at the build's own value is drift in
+    /// who owns it, so it is listed there and not as a change.
+    #[test]
+    fn a_field_another_manager_took_shows_as_drift_at_its_value() {
+        let live = drifted_deployment(
+            "web:1",
+            json!({"f:template": {}}),
+            json!([{"manager": "kubectl-patch", "operation": "Update",
+                    "fieldsV1": {"f:spec": {"f:replicas": {}}}}]),
+        );
+        let new = new_build("web:1");
+        let rid = ResourceId::from_value(&new);
+        let found = live_drift(&[live], &[(rid, &new)].into(), None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "$.spec.replicas");
+        assert_eq!(found[0].live, found[0].deployed);
+        assert_eq!(found[0].managers, vec!["kubectl-patch".to_string()]);
+    }
+
+    /// A drifted object the new build changes is applied, so its drift is
+    /// reverted. Without the deployed build its deployed value is not known.
+    /// An object no other manager touched gets one entry for the whole object.
+    #[test]
+    fn drift_with_no_named_field_is_one_entry_for_the_object() {
+        let live = drifted_deployment("web:1", json!({"f:replicas": {}}), json!([]));
+        let mut new = new_build("web:3");
+        new["metadata"]["annotations"][keys::IDENTITY_HASH] = json!("h-dep-2");
+        let rid = ResourceId::from_value(&new);
+        let found = live_drift(&[live], &[(rid, &new)].into(), None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "$");
+        assert!(found[0].reverted);
+        assert_eq!(found[0].deployed, None);
     }
 
     #[test]

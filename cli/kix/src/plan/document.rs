@@ -71,8 +71,9 @@ pub struct Plan {
     /// Writes the apiserver, an admission webhook, or the deploy itself would
     /// refuse, other than ownership conflicts.
     pub admission: Checked<AdmissionRefusal>,
-    /// Fields where the live cluster differs from the deployed build and
-    /// that this change touches.
+    /// Fields where the live cluster differs from the deployed build. From
+    /// `kix plan`, the fields this change touches. From `kix diff` against
+    /// the cluster, every field of a drifted object that the new build sets.
     pub drift: Checked<DriftChange>,
     /// Resources that leave the build, and what the deploy does with each.
     pub prune: Checked<PruneEntry>,
@@ -502,7 +503,11 @@ pub enum RefusalReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DriftChange {
     pub resource: String,
+    /// The field, or `$` for an object whose fields Kix applied changed
+    /// although Kubernetes recorded no other owner for any of them.
     pub path: String,
+    /// The deployed value. Absent when the deployed manifest does not set
+    /// the field or is not on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployed: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

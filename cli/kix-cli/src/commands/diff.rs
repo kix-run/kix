@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use miette::{IntoDiagnostic, Result, miette};
@@ -8,6 +8,7 @@ use crate::client;
 use kix::build_source;
 use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
+use kix::cluster::drift::{self, DriftReport, DriftVerdict};
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
 use kix::cluster::{discovery, inventory};
@@ -23,6 +24,7 @@ use crate::plan::{self, render};
 use kix::plan::document::{Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan};
 use kix::plan::origin::{self, Sides};
 use kix::plan::{ManifestIndex, PackageDiff};
+use kube::api::DynamicObject;
 
 use super::CommandContext;
 
@@ -215,16 +217,21 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
         }
         OldSide::Live(live) => {
             let deployed = deployed_build(new, live.current.as_ref());
-            let drift = deployed.as_ref().map(|deployed| {
-                let deployed_by_rid = deployed.by_rid(new);
+            let deployed_by_rid = deployed.as_ref().map(|d| d.by_rid(new));
+            let new_by_rid = manifests_by_rid(new);
+            if let Some(deployed_by_rid) = &deployed_by_rid {
+                let drifted: BTreeSet<ResourceId> =
+                    live.drifted.iter().map(|(r, _)| r.rid.clone()).collect();
                 let sides = Sides {
-                    deployed: &deployed_by_rid,
+                    deployed: deployed_by_rid,
                     live: manifests_by_rid(old),
-                    new: manifests_by_rid(new),
+                    new: new_by_rid.clone(),
                     managed: &live.managed,
+                    drifted: &drifted,
                 };
-                origin::label_live(&mut packages, &sides)
-            });
+                origin::label_live(&mut packages, &sides);
+            }
+            let drift = origin::live_drift(&live.drifted, &new_by_rid, deployed_by_rid.as_ref());
             let mut doc = Plan::new(
                 plan::kix_build(),
                 MadeBy::LiveRead,
@@ -240,10 +247,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 .as_ref()
                 .and_then(|r| serde_json::to_value(r).ok())
                 .and_then(|r| DeployedBuild::of_record(&r));
-            doc.drift = match drift {
-                Some(items) => Checked::found(items),
-                None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
-            };
+            doc.drift = Checked::found(drift);
             doc
         }
     };
@@ -315,6 +319,9 @@ struct LiveSide {
     /// Full live objects including `managedFields`, used to attribute drift to
     /// field managers.
     managed: HashMap<ResourceId, Value>,
+    /// Each compared object [`drift::check_object`] finds drifted, with its
+    /// report.
+    drifted: Vec<(DriftReport, DynamicObject)>,
 }
 
 /// Fetch the live cluster's Kix-owned view for `new_graph`'s cluster.
@@ -400,13 +407,12 @@ async fn fetch_live_manifests(
                 .is_some_and(|c| c.metadata.name == obj.metadata.name)
     });
 
-    // Compare only the fields that Kix's server-side apply owns, ignoring server
-    // defaults and Kix bookkeeping annotations.
-    let built: HashMap<String, &Value> = new_graph
-        .resources
+    let drifted: Vec<(DriftReport, DynamicObject)> = compared
         .iter()
-        .map(|(path, node)| (store_hash(path), &node.manifest))
+        .map(|obj| (drift::check_object(obj), obj.clone()))
+        .filter(|(report, _)| matches!(report.verdict, DriftVerdict::Drifted { .. }))
         .collect();
+    let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
         .filter_map(|obj| {
@@ -431,6 +437,7 @@ async fn fetch_live_manifests(
         namespaceless,
         current,
         managed,
+        drifted,
     })
 }
 
@@ -543,6 +550,7 @@ fn print_text_output(result: &DiffResult) {
         print!("{}", render::render_text(&result.doc));
     } else {
         println!("{}", output::green("No differences found."));
+        print!("{}", render::render_drift_text(&result.doc));
     }
 }
 
@@ -608,6 +616,11 @@ fn print_markdown_output(result: &DiffResult) {
         print!("{}", render::render_markdown(&result.doc));
     } else {
         println!("No differences found.");
+        let drift = render::render_drift_markdown(&result.doc);
+        if !drift.is_empty() {
+            println!();
+            print!("{drift}");
+        }
     }
 }
 
@@ -663,6 +676,91 @@ mod tests {
             types: None,
             data: json!({"status": {"phase": "Active"}}),
         }
+    }
+
+    /// Against the live cluster, an object the build does not change shows no
+    /// change although the API server dropped its `value: ""`. An edit made
+    /// with `kubectl edit` shows under drift, in the text output too, with
+    /// no deployed build on this machine.
+    #[test]
+    fn a_live_diff_shows_an_unchanged_object_only_as_drift() {
+        let hash = "d".repeat(32);
+        let path = format!("/nix/store/{hash}-k8s-Deployment-web");
+        let container = |image: &str, value: bool| {
+            let mut env = json!({"name": "EXAMPLE_PULL_SECRET"});
+            if value {
+                env["value"] = json!("");
+            }
+            json!({"name": "web", "image": image, "env": [env]})
+        };
+        let mut new = StoreGraph::empty("c");
+        new.resources.insert(
+            path.clone().into(),
+            ResourceNode {
+                store_path: path.into(),
+                manifest: json!({
+                    "apiVersion": "apps/v1", "kind": "Deployment",
+                    "metadata": {"name": "web", "namespace": "app",
+                                 "annotations": {keys::IDENTITY_HASH: hash}},
+                    "spec": {"template": {"spec": {"containers": [container("web:1", true)]}}},
+                }),
+            },
+        );
+        let mut live: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {
+                "name": "web", "namespace": "app",
+                "annotations": {keys::IDENTITY_HASH: hash, keys::APPLIED_HASH: "stamp"},
+                "managedFields": [
+                    {"manager": "kix", "operation": "Apply", "fieldsV1": {
+                        "f:metadata": {"f:annotations": {format!("f:{}", keys::IDENTITY_HASH): {}}},
+                        "f:spec": {"f:template": {"f:spec": {"f:containers": {
+                            "k:{\"name\":\"web\"}": {".": {}, "f:name": {}, "f:env": {
+                                "k:{\"name\":\"EXAMPLE_PULL_SECRET\"}": {
+                                    ".": {}, "f:name": {}, "f:value": {}
+                                }
+                            }}
+                        }}}}
+                    }},
+                    {"manager": "kubectl-edit", "operation": "Update", "fieldsV1": {
+                        "f:spec": {"f:template": {"f:spec": {"f:containers": {
+                            "k:{\"name\":\"web\"}": {"f:image": {}}
+                        }}}}
+                    }},
+                ],
+            },
+            "spec": {"template": {"spec": {"containers": [container("web:2", false)]}}},
+        }))
+        .unwrap();
+        // The sweep puts `kind` and `apiVersion` back into the data, as here.
+        live.data["kind"] = json!("Deployment");
+        live.data["apiVersion"] = json!("apps/v1");
+
+        let manifests =
+            owned_view::kix_owned_manifests_against([live.clone()], &new.manifests_by_hash());
+        let old = StoreGraph::synthesize(&manifests, &new);
+        let side = OldSide::Live(Box::new(LiveSide {
+            manifests,
+            namespaceless: Vec::new(),
+            current: None,
+            managed: HashMap::new(),
+            drifted: vec![(drift::check_object(&live), live)],
+        }));
+        let result = diff_graphs(&old, &new, &side, Detail::Plain);
+
+        assert!(!result.has_diff(), "{}", result.doc.to_json());
+        let drift = result.doc.drift.items();
+        assert_eq!(drift.len(), 1);
+        assert_eq!(
+            drift[0].path,
+            "$.spec.template.spec.containers[name=web].image"
+        );
+        let text = render::render_drift_text(&result.doc);
+        assert!(text.contains("Deployment/web@app"), "{text}");
+        assert!(
+            text.contains("\"web:2\" live, \"web:1\" deployed, set by kubectl-edit"),
+            "{text}"
+        );
     }
 
     #[test]

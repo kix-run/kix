@@ -157,6 +157,22 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
     }
 }
 
+/// Render the drift section of `plan` as text, for a comparison that found no
+/// other difference.
+pub fn render_drift_text(plan: &Plan) -> String {
+    let mut out = String::new();
+    write_drift(&mut out, plan);
+    out
+}
+
+/// Render the drift section of `plan` as Markdown, for a comparison that found
+/// no other difference.
+pub fn render_drift_markdown(plan: &Plan) -> String {
+    let mut out = String::new();
+    write_drift_markdown(&mut out, plan);
+    out
+}
+
 fn write_drift(out: &mut String, plan: &Plan) {
     match &plan.drift {
         Checked::Checked { items } if !items.is_empty() => {
@@ -172,25 +188,18 @@ fn write_drift(out: &mut String, plan: &Plan) {
                 ))
             );
             for d in items {
-                let by = if d.managers.is_empty() {
-                    String::new()
-                } else {
-                    format!(", set by {}", d.managers.join(", "))
-                };
+                let _ = writeln!(
+                    out,
+                    "  {} {} {}",
+                    output::yellow("↺"),
+                    d.resource,
+                    drift_detail(d),
+                );
                 let fate = if d.reverted {
                     output::yellow("the deploy puts the deployed value back")
                 } else {
                     output::dim("the deploy leaves this object alone; --reconcile reverts it")
                 };
-                let _ = writeln!(
-                    out,
-                    "  {} {} {}: {} live, {} deployed{by}",
-                    output::yellow("↺"),
-                    d.resource,
-                    d.path.trim_start_matches("$."),
-                    compact(d.live.as_ref()),
-                    compact(d.deployed.as_ref()),
-                );
                 let _ = writeln!(out, "      {fate}");
             }
         }
@@ -208,6 +217,79 @@ fn write_drift(out: &mut String, plan: &Plan) {
         }
         _ => {}
     }
+}
+
+/// Describe one drift entry after its resource: the field, its live and
+/// deployed values, and who set it. The deployed value is left out when it is
+/// not known.
+fn drift_detail(d: &kix::plan::document::DriftChange) -> String {
+    if d.path == "$" {
+        return "fields Kix applied have changed; Kubernetes recorded no other tool as their owner"
+            .into();
+    }
+    let by = if d.managers.is_empty() {
+        String::new()
+    } else {
+        format!(", set by {}", d.managers.join(", "))
+    };
+    let deployed = match &d.deployed {
+        Some(v) => format!(", {} deployed", compact(Some(v))),
+        None => String::new(),
+    };
+    format!(
+        "{}: {} live{deployed}{by}",
+        d.path.trim_start_matches("$."),
+        compact(d.live.as_ref()),
+    )
+}
+
+fn write_drift_markdown(out: &mut String, plan: &Plan) {
+    if let Checked::Checked { items } = &plan.drift
+        && !items.is_empty()
+    {
+        let _ = writeln!(out, "#### Drift");
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "Fields where the live cluster differs from the deployed build:"
+        );
+        let _ = writeln!(out);
+        for d in items {
+            let fate = if d.reverted {
+                "the deploy puts the deployed value back"
+            } else {
+                "the deploy leaves this object alone"
+            };
+            let _ = writeln!(
+                out,
+                "- `{}` {}; {fate}",
+                d.resource,
+                drift_detail_markdown(d),
+            );
+        }
+        let _ = writeln!(out);
+    }
+}
+
+fn drift_detail_markdown(d: &kix::plan::document::DriftChange) -> String {
+    if d.path == "$" {
+        return "fields Kix applied have changed; Kubernetes recorded no other tool as their owner"
+            .into();
+    }
+    let by = if d.managers.is_empty() {
+        String::new()
+    } else {
+        format!(", set by `{}`", d.managers.join("`, `"))
+    };
+    let deployed = match &d.deployed {
+        Some(v) => format!(", `{}` deployed", compact(Some(v))),
+        None => String::new(),
+    };
+    format!(
+        "`{}`: `{}` live{deployed}{by}",
+        d.path.trim_start_matches("$."),
+        compact(d.live.as_ref()),
+    )
 }
 
 /// Format a JSON value on a single line (truncated to 60 characters with byte
@@ -390,38 +472,7 @@ pub fn render_markdown(plan: &Plan) -> String {
         }
         let _ = writeln!(out);
     }
-    if let Checked::Checked { items } = &plan.drift
-        && !items.is_empty()
-    {
-        let _ = writeln!(out, "#### Drift");
-        let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            "Fields where the live cluster differs from the deployed build:"
-        );
-        let _ = writeln!(out);
-        for d in items {
-            let by = if d.managers.is_empty() {
-                String::new()
-            } else {
-                format!(", set by `{}`", d.managers.join("`, `"))
-            };
-            let fate = if d.reverted {
-                "the deploy puts the deployed value back"
-            } else {
-                "the deploy leaves this object alone"
-            };
-            let _ = writeln!(
-                out,
-                "- `{}` `{}`: `{}` live, `{}` deployed{by}; {fate}",
-                d.resource,
-                d.path.trim_start_matches("$."),
-                compact(d.live.as_ref()),
-                compact(d.deployed.as_ref()),
-            );
-        }
-        let _ = writeln!(out);
-    }
+    write_drift_markdown(&mut out, plan);
     if !plan.not_checked.is_empty() {
         let _ = writeln!(
             out,
