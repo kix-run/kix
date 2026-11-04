@@ -35,6 +35,18 @@ pub(crate) fn kix_apply_entry(entries: &[ManagedFieldsEntry]) -> Option<&Managed
     })
 }
 
+/// Return whether any `managedFields` entry names the `kix` field manager.
+///
+/// Kix writes every object it applies under this manager, through its
+/// server-side apply and the bookkeeping update after it. The API server
+/// records the manager of each write, so an object a controller made from a
+/// Kix object's labels and annotations has no such entry.
+pub(crate) fn written_by_kix(entries: &[ManagedFieldsEntry]) -> bool {
+    entries
+        .iter()
+        .any(|e| e.manager.as_deref() == Some(KIX_FIELD_MANAGER))
+}
+
 /// Project a live value onto a fieldsV1 tree, keeping the fields the fieldset
 /// lists at the granularity the server tracked them.
 ///

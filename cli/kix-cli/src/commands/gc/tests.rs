@@ -332,7 +332,12 @@ mod hard_scope_tests {
         serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": kind,
-            "metadata": { "name": name, "namespace": "d", "annotations": annotations },
+            "metadata": {
+                "name": name,
+                "namespace": "d",
+                "annotations": annotations,
+                "managedFields": [{ "manager": "kix", "operation": "Apply" }],
+            },
         }))
         .unwrap()
     }
@@ -400,6 +405,13 @@ mod hard_scope_tests {
                 kind: "Service".into(),
                 name: "syncer".into(),
                 uid: "u".into(),
+                ..Default::default()
+            },
+        ]);
+        copy.metadata.managed_fields = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                manager: Some("syncer".into()),
+                operation: Some("Update".into()),
                 ..Default::default()
             },
         ]);

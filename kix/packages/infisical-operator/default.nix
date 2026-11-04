@@ -748,7 +748,7 @@ in
 
             mkInfisicalDynamicSecret =
               _: _:
-              throw "${who}: there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it, so kix gc would delete that Secret. Create InfisicalDynamicSecrets outside Kix.";
+              throw "${who}: there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it. Create InfisicalDynamicSecrets outside Kix.";
           };
         };
       }

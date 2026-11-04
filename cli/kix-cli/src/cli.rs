@@ -904,9 +904,10 @@ pub struct GcArgs {
     #[arg(long, requires = "hard")]
     pub include_unattributed: bool,
 
-    /// With `--hard`, also evaluate controller-created copies of Kix resources
-    /// (objects with Kix annotations and an `ownerReferences` entry, but no
-    /// Kix apply stamp). By default `--hard` only reports them.
+    /// With `--hard`, also check copies against the build. A copy carries
+    /// Kix's labels and annotations, but Kix never wrote it: another program,
+    /// usually an operator, copied them from an object Kix made. By default
+    /// `--hard` only lists copies.
     #[arg(long, requires = "hard")]
     pub include_copies: bool,
 
