@@ -1,0 +1,3 @@
+# 2026-11-04 · `docs/src/lib/sidebar-topics/` · The vendored sidebar-topics plugin keeps changes made for starlight-versions, which the docs no longer use.
+
+The plugin was vendored so it could work beside starlight-versions (`README-VENDOR.md`). Since each Kix version's docs became a separate build, that plugin is gone, but the vendor changes remain: the `post` middleware order, VENDOR MOD 3's `v<major>.<minor>` prefix detection in `middleware.ts`, and the `/*/tutorials` topic patterns in `docs/astro.config.mjs`. They do nothing now, and they keep the copy from going back to upstream `starlight-sidebar-topics`.

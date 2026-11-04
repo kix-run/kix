@@ -86,8 +86,6 @@ boundaries are the biggest places to slow down and teach deliberately.
   capture pipelines cannot produce, such as the deterministic response from
   `curl` against an example echo server. Add a docs comment explaining why it
   is maintained separately so future maintainers know it can drift.
-- `CommandCwd.astro` is retained only so the frozen `v0.1/` snapshot keeps
-  building. Do not import it in new pages.
 - Fenced code blocks (```` ```nix ````, ```` ```text ````, ```` ```yaml ````)
   remain the right tool for *file contents* (the snippet the reader edits or
   pastes into a file). `Command` is for *executions* (what the reader runs in

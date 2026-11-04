@@ -15,9 +15,7 @@ function walk(directory) {
 
 const missing = [];
 
-for (const page of walk(contentRoot).filter(
-  (path) => path.endsWith('.mdx') && !path.includes(`${join('docs', 'v0.1')}/`),
-)) {
+for (const page of walk(contentRoot).filter((path) => path.endsWith('.mdx'))) {
   const source = readFileSync(page, 'utf8');
   for (const match of source.matchAll(importPattern)) {
     const imported = match[1];

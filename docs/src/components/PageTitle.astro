@@ -1,15 +1,13 @@
 ---
 // Eyebrow, title and lead above every page's content.
 //
-// Overriding PageTitle displaces two plugins:
-// - starlight-versions, whose VersionNotice ("this is an outdated version")
-//   is rendered below the lead here;
-// - starlight-page-actions, whose Copy as Markdown button moves to
-//   PageSidebar.astro.
+// Below the lead, VersionNotice says when these are not the latest
+// release's docs. Overriding PageTitle displaces starlight-page-actions,
+// whose Copy as Markdown button moves to PageSidebar.astro.
 //
 // The id `_top` is Starlight's PAGE_TITLE_ID; its "Overview" table of
 // contents entry links to it.
-import VersionNotice from 'starlight-versions/components/VersionNotice.astro';
+import VersionNotice from './VersionNotice.astro';
 import { pageSection } from '../lib/page-section';
 import { backticksToHtml, stripBackticks } from '../lib/title-code';
 

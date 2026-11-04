@@ -10,7 +10,3 @@ src/snippets/
 src/content/docs/reference/package-catalog/echo-server.mdx
 src/content/docs/reference/package-catalog/cert-manager.mdx
 src/content/docs/reference/package-catalog/cilium.mdx
-
-# starlight-versions archives the docs tree into v0.1/ on dev-server
-# startup. Reproducible from src/content/docs/, so no need to commit.
-src/content/docs/v0.1/

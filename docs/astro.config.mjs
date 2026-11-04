@@ -1,36 +1,26 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
-// Vendored locally so we can modify it for coexistence with
-// starlight-versions. See src/lib/sidebar-topics/README-VENDOR.md.
+// Vendored locally. See src/lib/sidebar-topics/README-VENDOR.md.
 import starlightSidebarTopics from './src/lib/sidebar-topics/index.ts';
 import starlightLinksValidator from 'starlight-links-validator';
 import starlightGitHubAlerts from 'starlight-github-alerts';
 import starlightPageActions from 'starlight-page-actions';
-import starlightVersions from 'starlight-versions';
 import rehypeTableWrap from './src/lib/rehype-table-wrap.mjs';
+import remarkDocsBase from './src/lib/remark-docs-base.mjs';
 
-// Plugin ordering matters for the topics×versions coexistence:
-//   - At `config:setup` time, we want topics FIRST so it sets the
-//     topic-grouped sidebar, then versions wraps that into per-version
-//     groups.
-//   - At route middleware time, we want versions FIRST so it unwraps
-//     the per-version shell, leaving topics to find topic groups in a
-//     flat sidebar.
-//
-// We get both because:
-//   1. plugins[] order = config:setup order (topics, versions).
-//   2. Vendored topics middleware uses `order: 'post'`; versions uses
-//      the default bucket. Starlight runs pre → default → post. See
-//      src/lib/sidebar-topics/index.ts for the vendor mod notes.
+const base = process.env.KIX_DOCS_BASE ?? '/docs';
 
 // https://astro.build/config
 export default defineConfig({
-  // Deployed at kix.run/docs/ as a subdirectory of the homepage
-  // GH Pages artifact.
+  // Deployed under kix.run/docs/. CI builds the docs once per Kix version
+  // and serves each build under its own path (docs/flake.nix,
+  // .github/workflows/pages.yml): the latest release at /docs, main at
+  // /docs/main, older minor releases at /docs/v<major>.<minor>.
   site: 'https://kix.run',
-  base: '/docs',
+  base,
   markdown: {
+    remarkPlugins: [[remarkDocsBase, { base }]],
     rehypePlugins: [rehypeTableWrap],
   },
   integrations: [
@@ -52,15 +42,14 @@ export default defineConfig({
         // Two-row header: logo, search, version, GitHub, theme, and the
         // install link, then the Diátaxis topic tabs.
         Header: './src/components/Header.astro',
-        // Used by Starlight's mobile menu footer. Renders VersionSelect
-        // because overriding ThemeSelect displaces starlight-versions'
-        // own override.
+        // Used by Starlight's mobile menu footer: the version picker and
+        // the theme toggle.
         ThemeSelect: './src/components/ThemeSelect.astro',
         // Logo mark, "kix", and "/docs".
         SiteTitle: './src/components/SiteTitle.astro',
-        // Eyebrow, title, and lead. Displaces both starlight-page-actions
-        // (its copy button moves to PageSidebar) and starlight-versions
-        // (its VersionNotice is rendered here).
+        // Eyebrow, title, lead, and the notice on docs that are not the
+        // latest release. Displaces starlight-page-actions (its copy
+        // button moves to PageSidebar).
         PageTitle: './src/components/PageTitle.astro',
         // "On this page" plus the Copy as Markdown action.
         PageSidebar: './src/components/PageSidebar.astro',
@@ -158,13 +147,6 @@ export default defineConfig({
             },
           },
         ),
-        // Per-version snapshots under /docs/v0.1/, /docs/v0.2/, etc.
-        // MUST come AFTER starlight-sidebar-topics so it wraps the
-        // topic-grouped sidebar into per-version groups. See the
-        // ordering comment at the top of this file.
-        starlightVersions({
-          versions: [{ slug: 'v0.1' }],
-        }),
         starlightLlmsTxt(),
         // Fails the build on broken internal links, catching rot in the
         // dense Diátaxis cross-link graph.

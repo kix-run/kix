@@ -638,7 +638,7 @@ mobile-starlight-toc details[open] .toggle {
   border-color: var(--kix-brand);
 }
 
-/* starlight-versions: the "outdated version" notice and banner. */
+/* Starlight's page banner (the `banner` frontmatter field). */
 .sl-banner {
   background-color: var(--kix-paper-2);
   color: var(--kix-ink);
