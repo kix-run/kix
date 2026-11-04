@@ -24,7 +24,8 @@
 //! That covers moving a database from a StatefulSet to an operator's custom
 //! resource, or from one operator to another. A pair Kix cannot judge is
 //! reported, because a false alarm costs a flag and a missed migration costs
-//! the data.
+//! the data. The storage shapes and the API-group rule are a fallback until
+//! packages declare which of their objects hold data.
 //!
 //! Detection does not select a migration strategy, schedule migration steps,
 //! or remove resources from the Apply and Orphan action sets.
@@ -95,7 +96,8 @@ fn is_stateful(manifest: &Value) -> bool {
 
 /// Return whether the manifest declares storage of its own. That is a
 /// non-empty `spec.volumeClaimTemplates` (StatefulSet), a
-/// `spec.resources.requests.storage` (PersistentVolumeClaim), or a
+/// `spec.resources.requests.storage` (PersistentVolumeClaim), a
+/// `spec.capacity.storage` (PersistentVolume), or a
 /// `spec.storage` (the shape many database operators use for their cluster
 /// resource).
 fn holds_data(manifest: &Value) -> bool {
@@ -111,6 +113,7 @@ fn holds_data(manifest: &Value) -> bool {
     };
     declared(spec.get("volumeClaimTemplates"))
         || declared(spec.pointer("/resources/requests/storage"))
+        || declared(spec.pointer("/capacity/storage"))
         || declared(spec.get("storage"))
 }
 
@@ -273,6 +276,7 @@ pub fn detect_migration_pairs(
         let chosen = candidates
             .iter()
             .filter(unclaimed)
+            // Same kind always pairs, since a renamed Secret may hold the only copy of a key.
             .find(|(target_rid, _)| target_rid.kind == rid.kind)
             .or_else(|| {
                 candidates
@@ -463,6 +467,23 @@ mod tests {
             "postgresql.cnpg.io/v1",
         )];
         assert!(detect_migration_pairs(&new, &old).is_empty());
+    }
+
+    #[test]
+    fn detects_persistent_volume_to_custom_resource() {
+        // A PersistentVolume declares its size in `spec.capacity.storage`.
+        let old = vec![with_spec(
+            in_postgres("PersistentVolume", "postgres-data", "aaaa"),
+            "capacity",
+            json!({ "storage": "10Gi" }),
+        )];
+        let new = vec![with_api(
+            in_postgres("Cluster", "postgres", "bbbb"),
+            "postgresql.cnpg.io/v1",
+        )];
+        let pairs = detect_migration_pairs(&new, &old);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].reason, "PersistentVolume removed, Cluster added");
     }
 
     #[test]
