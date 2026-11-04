@@ -48,16 +48,13 @@ person names a version, use it only if it is higher than the current one.
 2. The lockfiles: run `cargo update --workspace` in `cli/` and
    `cargo update -p kix-lib -p kix-bundle -p kix-container` in `cli/fuzz/`.
    Check that the diff changes only the `version` lines of Kix's own crates.
-3. `CHANGELOG.md`: rename `## Unreleased` to `## <version> - <YYYY-MM-DD>`
+3. The docs capture the output of `kix --version`. Replace the old version
+   in each sidecar that shows it: `git grep -l 'kix <old version>'
+   docs/src/command-output`. Without this, the Documentation captures check
+   fails on the release pull request.
+4. `CHANGELOG.md`: rename `## Unreleased` to `## <version> - <YYYY-MM-DD>`
    with today's date, and put a new, empty `## Unreleased` above it. Remove
    empty sections. Leave the wording of the entries alone.
-4. Minor releases only, the docs snapshot: in `docs/astro.config.mjs`, add
-   `{ slug: 'v<major>.<minor>' }` as the first entry of `versions` in
-   `starlightVersions(...)`. Then run `npm ci && npm run build` in `docs/`.
-   When the build starts, it copies the current docs to
-   `docs/src/content/docs/v<major>.<minor>/` and writes
-   `docs/src/content/versions/v<major>.<minor>.json`. Commit both. If the
-   build fails or creates neither, fix the docs before you release.
 
 ## 3. Open and merge the pull request
 

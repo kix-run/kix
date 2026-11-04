@@ -1,0 +1,3 @@
+# 2026-11-04 · `docs/` versions · The versioned docs are copies of the latest docs, so no release has docs of its own.
+
+`docs/.gitignore` ignores `src/content/docs/v0.1/`, and starlight-versions copies the current docs into it on every build, so kix.run/docs/v0.1 always shows the latest pages. The pages also read command output from `docs/src/command-output/`, which has no versions, so a committed copy would still show current output. The `release` skill therefore takes no docs snapshot, and a reader on an older Kix release has no docs that match it. Adding a second version to `starlightVersions` fails the build with "Only one new version can be configured at a time" while `v0.1/` is uncommitted.
