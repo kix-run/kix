@@ -620,6 +620,19 @@ secret in the cluster's namespace. For PgBouncer, add a `cnpg-pooler` with
 `deps.postgres` on the cluster and wire the `cnpg-database`'s
 `deps.postgres` to the pooler.
 
+To move an existing database onto a new `cnpg-cluster`, set its `import`
+and wire `deps.importSource` to the old server and `deps.importPassword`
+to a secret with the password of `import.user`. CloudNativePG copies the
+databases once, with `pg_dump` and `pg_restore`, when the Cluster is
+created, so stop writes to the old server first. A server Kix does not
+manage becomes a dependency through a `service-ref` instance in its
+namespace. Give `selector` the labels of its pods and `targetPort` the port
+they listen on, because network policy matches those. A StackGres primary
+Service sends 5432 to PgBouncer and 5433 to PostgreSQL itself, so a dump
+goes to 5433, with `targetPort = 5432`. A `service-ref` makes Kix write an
+ingress policy on those pods, and Kix's default-deny on its namespace, so
+check what else reaches them first.
+
 ### Instance-level options
 
 - **`aliases`**: DI resolution matches arg names to instance names, `meta.defaultAliases`, *or* instance aliases. A provider's default aliases usually suffice; to choose between two candidates, wire `deps.<arg> = ref.<ns>.<inst>` rather than adding an alias. Packages that fill an infrastructure role (`meta.roles = [ "storageClasses" ]`, validated against the registry in `kix/lib/eval/roles.nix`) get the role name as an alias automatically. An instance alias is right for a secret dep (`aliases = [ "harborSecrets" ]` on a `secret` instance) and for making a non-role package instance the role provider (`aliases = [ "storageClasses" "zfsLocalPv" ]` on a CSI driver).

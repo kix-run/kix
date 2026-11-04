@@ -1,0 +1,3 @@
+# 2026-11-04 · `kix/packages/service-ref` · Nothing checks a service-ref's `selector` and `targetPort` against the live Service and its pods.
+
+A service-ref describes a Service Kix does not render, and network policy is derived from the declared labels and port alone. A wrong label or port shows up only as connection timeouts at runtime, after Kix has written policies that select the wrong pods. The derived caller-ingress policy and the namespace's default-deny also change what reaches the referenced pods, which another tool's clients may depend on, and the deploy does not warn about it. `kix deploy` waits for ready endpoints on the marker and could compare the endpoints' pods with `selector` there.

@@ -19,6 +19,32 @@
 #   storageCredentials         Secret or secret-ref in this namespace with S3
 #                              access keys; required when `backup` is set.
 #   endpointService (optional) In-cluster S3 Service when `backup` is set.
+#   importSource               The server to copy from, as an instance with
+#                              out.fqdn and out.port, such as a cnpg-cluster
+#                              or a service-ref; required when `import` is
+#                              set. A source whose out.tls is false needs an
+#                              `import.sslMode` that does not require TLS.
+#   importPassword             Secret or secret-ref in this namespace holding
+#                              the password of `import.user` under
+#                              `import.passwordKey`; required when `import` is
+#                              set.
+#   importCa (optional)        Secret or secret-ref in this namespace with
+#                              `ca.crt`, the CA that signed the source's
+#                              certificate. Required when `import.sslMode` is
+#                              verify-ca or verify-full.
+#
+# Import: with `import` set, the Cluster names the source in
+# `externalClusters` and copies `import.databases` from it when it is
+# created. A Cluster that exists already copies nothing, so a later change
+# to `import` changes nothing in its data. The operator makes the copy in a
+# Job before the primary starts. The instance and Job pods get egress to
+# the source's pods on its port, and the source's pods admit them. Once the
+# Cluster exists, set `import` back to null and remove the import
+# dependencies. CloudNativePG accepts the change and keeps the data. The
+# deploy then keeps the two import policies as orphans, so close the path
+# with `kix deploy --prune` or `kix gc`. A large database can take longer
+# to copy than the deploy waits for the Cluster to be ready. Run the deploy
+# again once the Cluster is ready.
 #
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
@@ -142,6 +168,46 @@ in
         message = "backup.schedule \"${config.backup.schedule}\" has ${toString (scheduleFields config.backup.schedule)} fields. CloudNativePG reads six cron fields with seconds first and reads a five-field crontab as one without a day-of-week field, so it would run at other times than a crontab does. Add the seconds field (\"0 0 2 * * *\" for 02:00 every day), or use a descriptor such as \"@daily\".";
       }
       {
+        assertion =
+          config.import == null
+          || config.import.type == "monolith"
+          || (
+            builtins.length config.import.databases == 1
+            && !(lib.hasInfix "*" (builtins.head config.import.databases))
+          );
+        message = "import.databases is ${builtins.toJSON config.import.databases}. A microservice import copies exactly one named database into the application database. List one, or set import.type = \"monolith\" to copy several.";
+      }
+      {
+        assertion =
+          config.import == null
+          || config.import.type == "microservice"
+          || (
+            (config.import.databases == [ "*" ] || !(builtins.elem "*" config.import.databases))
+            && (config.import.roles == [ "*" ] || !(builtins.elem "*" config.import.roles))
+          );
+        message = "import.databases or import.roles lists `*` beside names. `*` copies every database or every role, so give it alone or list names.";
+      }
+      {
+        assertion =
+          config.import == null
+          || config.import.type == "microservice"
+          || !(config.import.extraSpec ? postImportApplicationSQL);
+        message = "import.extraSpec sets postImportApplicationSQL on a monolith import, and CloudNativePG runs it after a microservice import only. Remove it, or run the statements another way.";
+      }
+      {
+        assertion = config.import == null || config.import.type == "monolith" || config.import.roles == [ ];
+        message = "import.roles is set, and a microservice import copies no roles. Remove import.roles, or set import.type = \"monolith\".";
+      }
+      {
+        assertion =
+          config.import == null
+          || !(
+            (config.extraSpec.bootstrap or { }) ? recovery
+            || (config.extraSpec.bootstrap or { }) ? pg_basebackup
+          );
+        message = "extraSpec sets bootstrap.recovery or bootstrap.pg_basebackup while import is set, and a Cluster bootstraps one way. Remove one of them.";
+      }
+      {
         assertion = !((config.extraSpec.monitoring or { }) ? enablePodMonitor);
         message = "extraSpec sets monitoring.enablePodMonitor, which has the operator create a PodMonitor that Kix does not track. Set metrics.enabled and wire a prometheus dependency instead.";
       }
@@ -175,6 +241,9 @@ in
         barmanCloud ? null,
         storageCredentials ? null,
         endpointService ? null,
+        importSource ? null,
+        importPassword ? null,
+        importCa ? null,
         ...
       }:
       let
@@ -304,6 +373,83 @@ in
           else
             443;
 
+        importOn = config.import != null;
+        im = config.import;
+        importSourceName = "import-source";
+        source =
+          if importSource == null then
+            throw "${who}: import is set and no importSource dependency resolved. Wire the server to copy from with deps.importSource = ref.<namespace>.<instance>. For a server Kix does not manage, add a service-ref instance for its Service."
+          else if !(importSource.out ? fqdn && importSource.out ? port) then
+            throw "${who}: the importSource dependency has no out.fqdn and out.port, so the package cannot tell where the source listens. Wire a cnpg-cluster, a stackgres-cluster, or a service-ref instance."
+          else if (importSource.out.tls or null) == false && builtins.elem im.sslMode tlsModes then
+            throw "${who}: import.sslMode is ${im.sslMode}, which needs TLS, and the importSource dependency serves none (out.tls is false). Turn on TLS at the source, or set import.sslMode = \"disable\"."
+          else
+            importSource.out;
+        tlsModes = [
+          "require"
+          "verify-ca"
+          "verify-full"
+        ];
+        importCredentials = kix.checkSecretKeys {
+          inherit who;
+          arg = "importPassword";
+          dep =
+            if importPassword == null then
+              throw "${who}: import is set and no importPassword dependency resolved in namespace ${ns}. Add a secret or secret-ref instance there with the key ${im.passwordKey} and wire it with deps.importPassword = ref.${ns}.<instance>."
+            else
+              importPassword;
+          keys = [ im.passwordKey ];
+        };
+        verifiesSource = builtins.elem im.sslMode [
+          "verify-ca"
+          "verify-full"
+        ];
+        importCaRef =
+          if importCa == null then
+            if verifiesSource then
+              throw "${who}: import.sslMode is ${im.sslMode}, which checks the source's certificate, and no importCa dependency resolved. Wire a secret with ca.crt, the CA that signed the source's certificate, with deps.importCa = ref.${ns}.<instance>, or set import.sslMode = \"require\" to encrypt without checking."
+            else
+              null
+          else if !verifiesSource then
+            throw "${who}: the importCa dependency is wired and import.sslMode is ${im.sslMode}, which does not check the source's certificate. Set import.sslMode = \"verify-full\", or remove deps.importCa."
+          else
+            (
+              (kix.checkSecretKeys {
+                inherit who;
+                arg = "importCa";
+                dep = importCa;
+                keys = [ "ca.crt" ];
+              }).out.keyRef
+              "ca.crt"
+            ).valueFrom.secretKeyRef;
+        importSpec = kix.mergeGuarded {
+          inherit who;
+          what = "import.extraSpec";
+          locked = [
+            [ "type" ]
+            [ "databases" ]
+            [ "roles" ]
+            [ "source" ]
+          ];
+        } importBase im.extraSpec;
+        importBase = {
+          inherit (im) type databases;
+          source.externalCluster = importSourceName;
+        }
+        // lib.optionalAttrs (im.roles != [ ]) { inherit (im) roles; };
+        importSourceCluster = {
+          name = importSourceName;
+          connectionParameters = {
+            host = source.fqdn;
+            port = toString source.port;
+            inherit (im) user;
+            dbname = im.sourceDatabase;
+            sslmode = im.sslMode;
+          };
+          password = (importCredentials.out.keyRef im.passwordKey).valueFrom.secretKeyRef;
+        }
+        // lib.optionalAttrs (importCaRef != null) { sslRootCert = importCaRef; };
+
         baseSpec = {
           inherit (config) instances resources;
           imageName = kix.image.ref config.image;
@@ -341,6 +487,10 @@ in
               };
             }
           ];
+        }
+        // lib.optionalAttrs importOn {
+          bootstrap.initdb.import = importSpec;
+          externalClusters = [ importSourceCluster ];
         };
 
         _unownedPaths =
@@ -348,6 +498,8 @@ in
             throw "${who}: extraSpec sets imageCatalogRef, and the package sets imageName from the image option. Set image instead."
           else if (config.extraSpec.affinity or { }) ? enablePodAntiAffinity then
             throw "${who}: extraSpec sets affinity.enablePodAntiAffinity, which the package sets to false: the pods spread by the topologySpreadConstraints derived from the availability level. Remove it, or set topologySpreadConstraints in extraSpec."
+          else if !importOn && (importSource != null || importPassword != null || importCa != null) then
+            throw "${who}: an importSource, importPassword, or importCa dependency is wired and import is null, so nothing reads it. Set import, or remove the import dependencies."
           else if backupOn && (config.extraSpec.backup or { }) ? barmanObjectStore then
             throw "${who}: extraSpec sets backup.barmanObjectStore while the backup option enables the Barman Cloud plugin as WAL archiver, and CloudNativePG refuses both on one Cluster. Remove backup.barmanObjectStore and configure the store through the backup option."
           else
@@ -356,7 +508,17 @@ in
         spec = builtins.seq _unownedPaths (
           kix.mergeGuarded {
             inherit who;
-            locked = locked ++ lib.optional backupOn [ "plugins" ];
+            locked =
+              locked
+              ++ lib.optional backupOn [ "plugins" ]
+              ++ [
+                [
+                  "bootstrap"
+                  "initdb"
+                  "import"
+                ]
+              ]
+              ++ lib.optional importOn [ "externalClusters" ];
           } baseSpec config.extraSpec
         );
 
