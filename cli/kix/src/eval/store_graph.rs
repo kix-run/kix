@@ -505,7 +505,14 @@ impl StoreGraph {
     /// stamped with a declaring package. Platform imports from `kix.mkImport`
     /// are stamped `_cluster` and remain standalone packages. Cluster-level
     /// resources without a package annotation stay in `resources` outside any
-    /// `PackageNode`.
+    /// `PackageNode`. When two `reference` objects share a kind, namespace,
+    /// and name (two API groups), neither is placed by identity.
+    ///
+    /// Because `reference` decides where an old object goes, an object that
+    /// moved to another package and also changed shows only as a changed
+    /// resource of its new package. Its old package shows no removal. A
+    /// comparison with the deployed build's own graph shows it removed from
+    /// one package and added to the other.
     ///
     /// Whether it changed depends on its identity hash. A resource whose
     /// identity hash names a `reference` manifest for the same kind,
@@ -548,6 +555,22 @@ impl StoreGraph {
                 };
                 (ResourceId::from_value(&node.manifest), place)
             })
+            .fold(HashMap::new(), |mut places, (id, place)| {
+                // A `ResourceId` has no API group, so two kinds of one name in
+                // different groups share it. Neither can then be placed by
+                // identity, and both fall back to their stamps.
+                match places.entry(id) {
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(Some(place));
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        e.insert(None);
+                    }
+                }
+                places
+            })
+            .into_iter()
+            .filter_map(|(id, place)| place.map(|p| (id, p)))
             .collect();
 
         let ann = |m: &Value, key: &str| -> Option<String> {
@@ -1373,6 +1396,71 @@ mod tests {
                     );
                 }
             }
+        }
+
+        /// An object that moved from package `old` to package `web` and also
+        /// changed shows only as a change inside `web`, because the build
+        /// decides where it goes. `old` shows no removal. This pins the
+        /// limit, so a change to it is deliberate.
+        #[test]
+        fn a_moved_and_changed_object_shows_only_under_its_new_package() {
+            let build = built(&[(
+                "pi",
+                rendered_pi("app", "web", None),
+                vec![("cm", rendered("ConfigMap", "app", "settings"))],
+            )]);
+            let mut live: Vec<Value> = build
+                .resources
+                .values()
+                .filter(|n| n.manifest["kind"] != "ConfigMap")
+                .map(|n| n.manifest.clone())
+                .collect();
+            live.push(stamped(
+                "ConfigMap",
+                "app",
+                "settings",
+                ("app", "old"),
+                &h("before-move"),
+                json!({"k": "v"}),
+            ));
+
+            let old = StoreGraph::synthesize(&live, &build);
+            assert_eq!(names_in(&old, "app", "web"), vec!["settings"]);
+            let d = crate::plan::diff_graphs(&old, &build);
+            assert!(d.removed.is_empty() && d.added.is_empty());
+            assert_eq!(d.changed.len(), 1);
+            assert_eq!(d.changed[0].key, "app/web");
+        }
+
+        /// Two build objects of one kind, namespace, and name (two API groups)
+        /// share a `ResourceId`, so neither is placed by identity. A live one
+        /// groups by its stamp.
+        #[test]
+        fn objects_sharing_a_resource_id_group_by_their_stamps() {
+            let mut other_group = rendered("Certificate", "app", "tls");
+            other_group["apiVersion"] = json!("other.example/v1");
+            let build = built(&[
+                (
+                    "pi",
+                    rendered_pi("app", "web", None),
+                    vec![("cert", rendered("Certificate", "app", "tls"))],
+                ),
+                (
+                    "pi2",
+                    rendered_pi("app", "api", None),
+                    vec![("cert2", other_group)],
+                ),
+            ]);
+            let live = vec![stamped(
+                "Certificate",
+                "app",
+                "tls",
+                ("app", "stamped"),
+                &h("moved"),
+                json!({}),
+            )];
+            let old = StoreGraph::synthesize(&live, &build);
+            assert_eq!(names_in(&old, "app", "stamped"), vec!["tls"]);
         }
 
         /// An object the build does not have still groups by its stamp: a
