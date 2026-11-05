@@ -12,6 +12,7 @@ use crate::manifest::types::ResourceId;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
 use super::super::graph::ResourceGraph;
+use super::super::kept::NotKeptField;
 use super::super::ops::{ResourceIo, SecretHydrator};
 use super::super::readiness::{self, ImportTarget, ReadinessResult};
 use super::super::secrets;
@@ -216,11 +217,13 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
 
     ctx.progress.set_phase(&node, Phase::Apply);
     let applied_action: ApplyAction;
+    let not_kept: Vec<NotKeptField>;
     let mut recreated_reason: Option<String> = None;
     if let Some(reason) = rerun_reason {
         match recreate(ctx, &manifest, &rid).await {
             Ok(apply_result) => {
                 applied_action = apply_result.action;
+                not_kept = apply_result.not_kept;
             }
             Err(e) => {
                 let message = format!("rerun ({reason}) failed: {e}");
@@ -234,12 +237,14 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
         match ctx.resources.apply(&manifest).await {
             Ok(result) => {
                 applied_action = result.action;
+                not_kept = result.not_kept;
             }
             Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(&rid) => {
                 let reason = source.to_string();
                 match recreate(ctx, &manifest, &rid).await {
                     Ok(apply_result) => {
                         applied_action = apply_result.action;
+                        not_kept = apply_result.not_kept;
                         recreated_reason = Some(reason);
                     }
                     Err(e) => {
@@ -265,6 +270,13 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
         verdict: Verdict::Running,
         detail: Some(NodeDetail::Applied(applied_action.clone())),
     });
+    // A dry run reports these in the plan document instead.
+    if !ctx.dry_run && !not_kept.is_empty() {
+        ctx.emit(DeployEvent::FieldsNotKept {
+            resource: rid.clone(),
+            fields: not_kept,
+        });
+    }
 
     let done = |recreated_reason: Option<String>| match (rerun_reason, recreated_reason) {
         (Some(reason), _) => NodeOutcome::Rerun {

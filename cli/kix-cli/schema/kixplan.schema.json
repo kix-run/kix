@@ -546,6 +546,33 @@
       ],
       "type": "object"
     },
+    "FieldNotKept": {
+      "description": "A field the build sets that Kubernetes would not store as sent. A Secret\nvalue reads [`super::SECRET_NOT_SHOWN`].",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/NotKept"
+        },
+        "path": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "sent": {
+          "description": "The value the build sets."
+        },
+        "stored": {
+          "description": "The value Kubernetes would store. Absent when it drops the field."
+        }
+      },
+      "required": [
+        "resource",
+        "path",
+        "change",
+        "sent"
+      ],
+      "type": "object"
+    },
     "FileEntry": {
       "description": "One file of the [`Header`], written `[sha256, size]`.",
       "maxItems": 2,
@@ -764,6 +791,21 @@
         {
           "const": "not_previewable",
           "description": "No preview can tell.",
+          "type": "string"
+        }
+      ]
+    },
+    "NotKept": {
+      "description": "What the server did with a field Kix sent.",
+      "oneOf": [
+        {
+          "const": "dropped",
+          "description": "The stored object does not have the field, for example because the\nCRD's schema does not declare it.",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "description": "The stored object has another value, for example because a mutating\nadmission webhook set it.",
           "type": "string"
         }
       ]
@@ -1015,6 +1057,13 @@
           "description": "Objects the dry run could not check, and why. Their entries in\n`packages` come from comparing builds. Empty unless `made_by` is\n`dry_run`.",
           "items": {
             "$ref": "#/$defs/UncheckedObject"
+          },
+          "type": "array"
+        },
+        "not_kept": {
+          "description": "Fields the build sets that Kubernetes would not store as sent, from\nthe dry run of `kix plan`: a field a CRD's schema prunes, or a value\na mutating admission webhook changes. Left out when there are none.",
+          "items": {
+            "$ref": "#/$defs/FieldNotKept"
           },
           "type": "array"
         },

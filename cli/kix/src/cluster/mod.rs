@@ -13,6 +13,7 @@ pub mod fake_api;
 pub mod fieldsv1;
 pub mod graph;
 pub mod inventory;
+pub mod kept;
 pub mod migrate;
 pub(crate) mod ops;
 pub mod owned_view;

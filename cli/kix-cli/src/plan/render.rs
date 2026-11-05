@@ -12,8 +12,8 @@ use std::fmt::Write;
 use crate::output;
 
 use kix::plan::document::{
-    AdmissionRefusal, Checked, MadeBy, NotCheckedReason, Plan, PruneFate, RefusalReason,
-    UncheckedReason, WriteChange,
+    AdmissionRefusal, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan, PruneFate,
+    RefusalReason, UncheckedReason, WriteChange,
 };
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
@@ -34,6 +34,7 @@ pub fn label_tag(labels: &[ChangeLabel]) -> String {
 pub fn render_text(plan: &Plan) -> String {
     let mut out = String::new();
     write_stops(&mut out, plan);
+    write_not_kept(&mut out, plan);
     write_drift(&mut out, plan);
     write_prune(&mut out, plan);
     write_not_checked(&mut out, plan);
@@ -132,6 +133,56 @@ fn write_stops(out: &mut String, plan: &Plan) {
         if let Some(detail) = &p.detail {
             let _ = writeln!(out, "      {}", output::dim(detail));
         }
+    }
+}
+
+/// Write the fields Kubernetes would not keep as the build sets them. The
+/// deploy goes on, so this is a warning, not a stop.
+fn write_not_kept(out: &mut String, plan: &Plan) {
+    if plan.not_kept.is_empty() {
+        return;
+    }
+    let n = plan.not_kept.len();
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{}",
+        output::yellow(&format!(
+            "Kubernetes would not keep {n} field{} as the build sets {}:",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "it" } else { "them" },
+        ))
+    );
+    for f in &plan.not_kept {
+        let _ = writeln!(
+            out,
+            "  {} {} {}",
+            output::yellow("!"),
+            f.resource,
+            not_kept_detail(f, false),
+        );
+    }
+    let _ = writeln!(
+        out,
+        "      {}",
+        output::dim(
+            "a CRD's schema drops a field it does not declare, and a mutating admission webhook can change a value; the deploy still applies the object"
+        )
+    );
+}
+
+/// Describe one field Kubernetes would not keep, after its resource. In
+/// Markdown, paths and values are code.
+fn not_kept_detail(f: &FieldNotKept, markdown: bool) -> String {
+    let code = |s: String| if markdown { format!("`{s}`") } else { s };
+    let path = code(f.path.trim_start_matches("$.").to_string());
+    let sent = code(compact(Some(&f.sent)));
+    match (f.change, &f.stored) {
+        (NotKept::Changed, Some(stored)) => format!(
+            "{path} changed (sent {sent}, stored {})",
+            code(compact(Some(stored)))
+        ),
+        _ => format!("{path} dropped (sent {sent})"),
     }
 }
 
@@ -519,6 +570,19 @@ pub fn render_markdown(plan: &Plan) -> String {
         }
         let _ = writeln!(out);
     }
+    if !plan.not_kept.is_empty() {
+        let _ = writeln!(out, "#### :warning: Kubernetes would not keep these fields");
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "The deploy still applies these objects, but the fields would not hold the build's values:"
+        );
+        let _ = writeln!(out);
+        for f in &plan.not_kept {
+            let _ = writeln!(out, "- `{}` {}", f.resource, not_kept_detail(f, true));
+        }
+        let _ = writeln!(out);
+    }
     write_drift_markdown(&mut out, plan);
     if !plan.not_checked.is_empty() {
         let _ = writeln!(
@@ -691,6 +755,53 @@ mod tests {
             unowned.contains("the deploy puts the deployed value back"),
             "{unowned}"
         );
+    }
+
+    #[test]
+    fn fields_kubernetes_would_not_keep_are_a_warning() {
+        let mut plan = plan_with(Vec::new());
+        assert!(!render_text(&plan).contains("would not keep"));
+        assert!(!render_markdown(&plan).contains("would not keep"));
+        plan.not_kept = vec![
+            FieldNotKept {
+                resource: "Widget/w@app".into(),
+                path: "$.spec.colour".into(),
+                change: NotKept::Dropped,
+                sent: serde_json::json!("red"),
+                stored: None,
+            },
+            FieldNotKept {
+                resource: "Deployment/web@app".into(),
+                path: "$.spec.replicas".into(),
+                change: NotKept::Changed,
+                sent: serde_json::json!(2),
+                stored: Some(serde_json::json!(5)),
+            },
+        ];
+        let text = render_text(&plan);
+        assert!(
+            text.contains("Kubernetes would not keep 2 fields as the build sets them:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Widget/w@app spec.colour dropped (sent \"red\")"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Deployment/web@app spec.replicas changed (sent 2, stored 5)"),
+            "{text}"
+        );
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.contains("#### :warning: Kubernetes would not keep these fields"),
+            "{markdown}"
+        );
+        assert!(
+            markdown
+                .contains("- `Deployment/web@app` `spec.replicas` changed (sent `2`, stored `5`)"),
+            "{markdown}"
+        );
+        assert!(!plan.stops() && !plan.has_changes());
     }
 
     #[test]

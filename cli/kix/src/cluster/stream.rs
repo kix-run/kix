@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::manifest::types::ResourceId;
 
 use super::apply::ApplyAction;
+use super::kept::NotKeptField;
 use super::readiness::ImportTarget;
 
 /// What kind of operation a node represents.
@@ -279,6 +280,13 @@ pub enum DeployEvent {
     /// applied state and that the next deploy redoes (checkpoint, stamping
     /// unchanged resources, and finalizing the Activation).
     BestEffortFailed { what: String, message: String },
+    /// The apply of `resource` succeeded, but the server did not store these
+    /// fields as sent ([`super::kept::not_kept`]). A warning: the deploy
+    /// goes on.
+    FieldsNotKept {
+        resource: ResourceId,
+        fields: Vec<NotKeptField>,
+    },
 }
 
 /// What a node in flight is doing. Reported by the watchdog.

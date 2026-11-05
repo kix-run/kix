@@ -449,6 +449,12 @@ impl ViewState {
             DeployEvent::BestEffortFailed { what, message } => {
                 self.warnings.push(format!("{what} failed: {message}"));
             }
+            DeployEvent::FieldsNotKept { resource, fields } => {
+                self.warnings.push(kix::cluster::kept::describe(
+                    &resource.display_id(),
+                    &fields,
+                ));
+            }
         }
     }
 }

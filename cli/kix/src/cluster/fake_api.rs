@@ -3,12 +3,16 @@
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality label
-//! selector), and DELETE (honoring `preconditions`) on the objects it holds.
+//! selector), DELETE (honoring `preconditions`), and server-side apply on the
+//! objects it holds. An apply stores the manifest sent as it is, and a dry-run
+//! apply (`dryRun=All`) answers without storing.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. Anything else answers 404.
 //!
 //! [`FakeApi::after_get`] changes an object right after the next GET of it
 //! is answered, which models a concurrent writer between a read and a delete.
+//! [`FakeApi::on_apply`] changes what the next apply of an object stores,
+//! which models a CRD's pruning or a mutating admission webhook.
 //! [`FakeApi::fail_next`] answers the next requests for one path with a
 //! plain-text error, as the apiserver does for a path it has not registered.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
@@ -68,6 +72,7 @@ struct State {
     /// `METHOD path` of every request, in order, with `?query` when it has one.
     requests: Vec<String>,
     after_get: Vec<(String, Hook)>,
+    on_apply: Vec<(String, Hook)>,
     /// `(path, remaining, status)`: answer that many requests for `path`
     /// with `status` and a plain-text body.
     failures: Vec<(String, u32, u16)>,
@@ -114,6 +119,16 @@ impl FakeApi {
             .lock()
             .unwrap()
             .after_get
+            .push((name.to_string(), Box::new(f)));
+    }
+
+    /// Run `f` on what the next apply of the object named `name` stores and
+    /// answers.
+    pub fn on_apply(&self, name: &str, f: impl FnOnce(&mut Value) + Send + 'static) {
+        self.state
+            .lock()
+            .unwrap()
+            .on_apply
             .push((name.to_string(), Box::new(f)));
     }
 
@@ -267,6 +282,30 @@ impl FakeApi {
                 }
                 let gone = st.objects.remove(i);
                 (200, gone)
+            }
+            ("PATCH", Some(name)) => {
+                let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
+                    return status(400, "BadRequest", "the fake serves JSON bodies only");
+                };
+                let existing = st.objects.iter().position(&matches);
+                let rv = st.bump();
+                let uid = match existing {
+                    Some(i) => st.objects[i]["metadata"]["uid"].clone(),
+                    None => json!(format!("uid-{rv}")),
+                };
+                obj["metadata"]["uid"] = uid;
+                obj["metadata"]["resourceVersion"] = json!(rv);
+                if let Some(h) = st.on_apply.iter().position(|(n, _)| n == name) {
+                    let (_, hook) = st.on_apply.remove(h);
+                    hook(&mut obj);
+                }
+                if !query.split('&').any(|q| q == "dryRun=All") {
+                    match existing {
+                        Some(i) => st.objects[i] = obj.clone(),
+                        None => st.objects.push(obj.clone()),
+                    }
+                }
+                (if existing.is_some() { 200 } else { 201 }, obj)
             }
             _ => status(405, "MethodNotAllowed", "not served by the fake"),
         }

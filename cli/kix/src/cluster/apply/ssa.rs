@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use super::super::errors::FailureClass;
 use super::super::fieldsv1;
+use super::super::kept::{self, NotKeptField};
 use crate::manifest::keys;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
@@ -133,6 +134,9 @@ pub(crate) struct ApplyResult {
     /// Server-side dry-run preview, or `None` for a live apply or a dry run
     /// that did not reach the API server.
     pub preview: Option<Box<ApplyPreview>>,
+    /// Fields of the applied manifest the server did not store as sent
+    /// ([`kept::not_kept`]).
+    pub not_kept: Vec<NotKeptField>,
 }
 
 /// Live and dry-run result objects compared by a dry-run apply.
@@ -145,6 +149,8 @@ pub struct ApplyPreview {
     /// Live object before the apply, or `None` if the apply would create it.
     pub live: Option<Value>,
     pub result: Value,
+    /// Fields of the manifest sent that `result` does not keep as sent.
+    pub not_kept: Vec<NotKeptField>,
 }
 
 /// Action taken during apply, serialized in `snake_case` in the deploy log.
@@ -237,8 +243,8 @@ pub(crate) async fn apply_resource(
     // client transport (cluster::client), not here. 409 conflicts are
     // permanent and surface immediately as ApplyError::Conflict so the user
     // sees an actionable error pointing at --force-conflicts.
-    let echo = match apply_patch(&api, &name, &pp, manifest, &rid).await {
-        Ok(echo) => echo,
+    let (echo, stripped) = match apply_patch(&api, &name, &pp, manifest, &rid).await {
+        Ok(echo) => (echo, None),
         Err(ApplyError::Conflict { resource, source }) => {
             // A conflict confined to fields the resource ceded is not a
             // failure: the other manager has taken what it was meant to
@@ -254,13 +260,17 @@ pub(crate) async fn apply_resource(
                         fields = %conflict_paths(&message).join(", "),
                         "another manager owns ceded fields; applying without them"
                     );
-                    apply_patch(&api, &name, &pp, &stripped, &rid).await?
+                    let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
+                    (echo, Some(stripped))
                 }
                 None => return Err(ApplyError::Conflict { resource, source }),
             }
         }
         Err(e) => return Err(e),
     };
+
+    let result = serde_json::to_value(&echo).unwrap_or(Value::Null);
+    let not_kept = kept::not_kept(stripped.as_ref().unwrap_or(manifest), &result);
 
     // Compute the applied-content hash from the SSA response. Because the
     // response is the canonicalized server representation, the hash of its
@@ -310,10 +320,15 @@ pub(crate) async fn apply_resource(
     let preview = dry_run.then(|| {
         Box::new(ApplyPreview {
             live: live.and_then(|o| serde_json::to_value(o).ok()),
-            result: serde_json::to_value(&echo).unwrap_or(Value::Null),
+            result,
+            not_kept: not_kept.clone(),
         })
     });
-    Ok(ApplyResult { action, preview })
+    Ok(ApplyResult {
+        action,
+        preview,
+        not_kept,
+    })
 }
 
 /// Send the SSA patch and classify a failure: 409 conflicts become

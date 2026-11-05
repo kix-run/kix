@@ -264,6 +264,29 @@
       ],
       "type": "object"
     },
+    "FieldNotKept": {
+      "description": "A field Kix applied that Kubernetes did not store as sent.",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/NotKept"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sent": {
+          "description": "The value Kix sent. A Secret value reads `(secret, not shown)`."
+        },
+        "stored": {
+          "description": "The value Kubernetes stored. Absent when it dropped the field."
+        }
+      },
+      "required": [
+        "path",
+        "change",
+        "sent"
+      ],
+      "type": "object"
+    },
     "Import": {
       "description": "The resource an import marker waits for.",
       "properties": {
@@ -308,6 +331,21 @@
         }
       ],
       "description": "A node: a resource, or a step that is not one (`synthetic`)."
+    },
+    "NotKept": {
+      "description": "What Kubernetes did with a field Kix applied.",
+      "oneOf": [
+        {
+          "const": "dropped",
+          "description": "The stored object does not have the field.",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "description": "The stored object has another value.",
+          "type": "string"
+        }
+      ]
     },
     "Phase": {
       "description": "What a node in flight is doing. Reported by the watchdog.",
@@ -817,6 +855,30 @@
         "type",
         "what",
         "message"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The apply of `resource` succeeded, but Kubernetes did not store\n`fields` as Kix sent them. A warning: the deploy goes on.",
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/FieldNotKept"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "type": {
+          "const": "fields_not_kept",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "resource",
+        "fields"
       ],
       "type": "object"
     },

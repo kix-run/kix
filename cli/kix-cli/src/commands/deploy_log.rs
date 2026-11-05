@@ -167,6 +167,12 @@ impl DeployObserver for LineObserver {
             DeployEvent::BestEffortFailed { what, message } => {
                 eprintln!("warn> {what} failed: {message}");
             }
+            DeployEvent::FieldsNotKept { resource, fields } => {
+                eprintln!(
+                    "warn> {}",
+                    kix::cluster::kept::describe(&resource.display_id(), fields)
+                );
+            }
         }
     }
 }
@@ -254,6 +260,7 @@ fn apply_label(action: &ApplyAction) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kix::cluster::kept::{NotKept, NotKeptField};
     use kix::cluster::stream::{NodeId, TransitionKind};
 
     fn rid(kind: &str, name: &str) -> ResourceId {
@@ -539,6 +546,23 @@ mod tests {
             DeployEvent::BestEffortFailed {
                 what: "checkpoint".into(),
                 message: "conflict".into(),
+            },
+            DeployEvent::FieldsNotKept {
+                resource: rid("Widget", "w"),
+                fields: vec![
+                    NotKeptField {
+                        path: "$.spec.colour".into(),
+                        change: NotKept::Dropped,
+                        sent: serde_json::json!("red"),
+                        stored: None,
+                    },
+                    NotKeptField {
+                        path: "$.spec.size".into(),
+                        change: NotKept::Changed,
+                        sent: serde_json::json!(2),
+                        stored: Some(serde_json::json!(5)),
+                    },
+                ],
             },
         ]
     }

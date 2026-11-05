@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+pub use crate::cluster::kept::NotKept;
 use crate::cluster::migrate::MigrationPair;
 use crate::cluster::scheduler::PrunePolicy;
 use crate::eval::store_graph::StoreGraph;
@@ -80,6 +81,11 @@ pub struct Plan {
     /// `managedFields`. Left out when there are none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub drift_unchecked: usize,
+    /// Fields the build sets that Kubernetes would not store as sent, from
+    /// the dry run of `kix plan`: a field a CRD's schema prunes, or a value
+    /// a mutating admission webhook changes. Left out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_kept: Vec<FieldNotKept>,
     /// Resources that leave the build, and what the deploy does with each.
     pub prune: Checked<PruneEntry>,
     /// Objects the dry run could not check, and why. Their entries in
@@ -530,6 +536,20 @@ pub struct DriftChange {
     pub reverted: bool,
 }
 
+/// A field the build sets that Kubernetes would not store as sent. A Secret
+/// value reads [`super::SECRET_NOT_SHOWN`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FieldNotKept {
+    pub resource: String,
+    pub path: String,
+    pub change: NotKept,
+    /// The value the build sets.
+    pub sent: Value,
+    /// The value Kubernetes would store. Absent when it drops the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PruneEntry {
     pub resource: String,
@@ -624,6 +644,7 @@ impl Plan {
             admission: Checked::not_checked(reason),
             drift: Checked::not_checked(reason),
             drift_unchecked: 0,
+            not_kept: Vec::new(),
             prune: Checked::not_checked(reason),
             not_checked: Vec::new(),
             readiness: Checked::not_checked(NotCheckedReason::NotPreviewable),

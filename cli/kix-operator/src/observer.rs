@@ -227,6 +227,14 @@ impl DeployObserver for OperatorObserver {
                     "Best-effort write failed"
                 );
             }
+            DeployEvent::FieldsNotKept { resource, fields } => {
+                tracing::warn!(
+                    activation,
+                    resource = %resource,
+                    "{}",
+                    kix::cluster::kept::describe(&resource.display_id(), fields)
+                );
+            }
         }
     }
 }

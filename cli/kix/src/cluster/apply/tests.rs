@@ -904,3 +904,57 @@ async fn a_namespaced_kind_without_a_namespace_is_refused() {
         vec![rid("ConfigMap", CLUSTER_SCOPED)]
     );
 }
+
+/// An apply, real or dry run, reports a field the server did not store: a
+/// custom resource's field its CRD pruned, against the manifest sent.
+#[tokio::test]
+async fn an_apply_reports_the_fields_the_server_did_not_keep() {
+    use crate::cluster::kept::{NotKept, NotKeptField};
+    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::TWO_VERSION_GROUP};
+
+    let api = FakeApi::default();
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let (ar, scope) = discovery.iter().find(|(ar, _)| ar.kind == "Gizmo").unwrap();
+    let gizmo = serde_json::json!({
+        "apiVersion": format!("{TWO_VERSION_GROUP}/v1"),
+        "kind": "Gizmo",
+        "metadata": { "name": "g", "namespace": "app" },
+        "spec": { "size": 3, "colour": "red" },
+    });
+    let pruned = vec![NotKeptField {
+        path: "$.spec.colour".into(),
+        change: NotKept::Dropped,
+        sent: json!("red"),
+        stored: None,
+    }];
+    for dry_run in [true, false] {
+        let prune = |o: &mut serde_json::Value| {
+            o["spec"].as_object_mut().unwrap().remove("colour");
+        };
+        api.on_apply("g", prune);
+        let result = super::apply_resource(
+            &client,
+            ar,
+            scope.clone(),
+            &gizmo,
+            dry_run,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.not_kept, pruned, "dry run {dry_run}");
+        if let Some(preview) = &result.preview {
+            assert_eq!(preview.not_kept, pruned);
+        }
+    }
+
+    // The same object stored as sent has nothing to report.
+    let result =
+        super::apply_resource(&client, ar, scope.clone(), &gizmo, false, None, None, false)
+            .await
+            .unwrap();
+    assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
+}

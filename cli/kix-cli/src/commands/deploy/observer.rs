@@ -91,6 +91,15 @@ impl DeployObserver for StreamCliObserver {
             DeployEvent::BestEffortFailed { what, message } => {
                 eprintln!("{} {what} failed: {message}", output::yellow("warn:"),);
             }
+            DeployEvent::FieldsNotKept { resource, fields } => {
+                eprintln!(
+                    "{} Kubernetes did not keep fields Kix applied to {resource}:",
+                    output::yellow("warn:"),
+                );
+                for f in fields {
+                    eprintln!("    {}", kix::cluster::kept::describe_field(f));
+                }
+            }
         }
     }
 }

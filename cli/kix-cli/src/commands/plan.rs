@@ -204,6 +204,7 @@ fn manifest_index<'a>(
             DryRunOutcome::Recreated {
                 live,
                 result: Some(result),
+                ..
             } => (live.as_ref(), Some(result)),
             _ => continue,
         };
@@ -608,6 +609,14 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
     };
     doc.prune = Checked::found(prune_entries(p, &prune_answers));
+    // A custom resource whose CRD this deploy changes was checked against the
+    // CRD on the cluster now, which prunes the fields the new CRD adds.
+    doc.not_kept = kix::plan::server::not_kept(answers, |rid| {
+        manifests
+            .get(rid)
+            .and_then(|m| crd_key(m))
+            .is_some_and(|k| changed_crds.contains(&k))
+    });
     doc
 }
 
@@ -881,6 +890,7 @@ mod tests {
             outcome: DryRunOutcome::Applied(Box::new(ApplyPreview {
                 live,
                 result: manifest.clone(),
+                not_kept: Vec::new(),
             })),
         }
     }

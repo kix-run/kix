@@ -15,6 +15,7 @@ Every pull request that changes something a Kix user sees adds a line under
 
 - `cnpg-cluster` can copy databases from another PostgreSQL server when the Cluster is created, through the new `import` option and the `importSource`, `importPassword`, and `importCa` dependencies. Kix derives the network policy between the Cluster's pods and the source.
 - The `service-ref` package names a Service Kix does not render, with the pod labels and ports network policy needs, so a server another tool installed can be a dependency.
+- `kix plan` and `kix deploy` warn when Kubernetes would not keep, or did not keep, a field as the build sets it: a field a CRD's schema drops, or a value a mutating admission webhook changes. `kix plan` lists these fields in a new `not_kept` section, and `kix deploy` prints a warning after the apply (a `fields_not_kept` line in `--log-format json`). Neither stops the deploy.
 
 ### Changed
 
