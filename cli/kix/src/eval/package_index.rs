@@ -21,15 +21,20 @@ use super::store_graph::{StoreGraph, store_hash};
 /// The format this release writes and reads.
 pub const FORMAT: u64 = 1;
 
-/// Largest index, in bytes of JSON, that a deploy writes. A record is kept
-/// 10 to 50 times, and a larger index would make each of them heavy for
-/// etcd. At about 35 bytes an object, this allows some 14,000 objects.
-pub const MAX_BYTES: usize = 512 * 1024;
+/// Largest index, in bytes of JSON, that a deploy writes.
+///
+/// A cluster keeps 10 to 50 records, and every command that lists records
+/// reads all of their indexes. A typical index of about 13 KB makes that
+/// list about 650 KB. At this cap the worst case is about 7.5 MB, where a
+/// 512 KiB cap would allow 25 MB. An index costs about 42 bytes an object
+/// (9.4 KB for the 223 objects of `test-cnpg`, measured on kind), so 150 KiB
+/// still fits some 3,600 objects, more than any build Kix has measured.
+pub const MAX_BYTES: usize = 150 * 1024;
 
 /// Which package each resource of a build belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PackageIndex {
+pub struct RecordPackageIndex {
     /// Always [`FORMAT`] once read. Readers check it before the rest.
     pub format: u64,
     /// Packages keyed `namespace/instance`, as plans key them.
@@ -38,7 +43,7 @@ pub struct PackageIndex {
     pub cluster_level: Vec<String>,
 }
 
-/// One package of a [`PackageIndex`].
+/// One package of a [`RecordPackageIndex`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexedPackage {
     /// Identity hash of the package's own `PackageInstance`.
@@ -47,9 +52,9 @@ pub struct IndexedPackage {
     pub resources: Vec<String>,
 }
 
-impl PackageIndex {
+impl RecordPackageIndex {
     /// Return the index of `graph`.
-    pub fn of(graph: &StoreGraph) -> PackageIndex {
+    pub fn of(graph: &StoreGraph) -> RecordPackageIndex {
         let mut in_package = HashSet::new();
         let mut packages = BTreeMap::new();
         for p in graph.packages.values() {
@@ -70,7 +75,7 @@ impl PackageIndex {
             .map(|p| store_hash(p))
             .collect();
         cluster_level.sort();
-        PackageIndex {
+        RecordPackageIndex {
             format: FORMAT,
             packages,
             cluster_level,
@@ -79,7 +84,7 @@ impl PackageIndex {
 
     /// Read an index from `status.packageIndex`. Return `None`, with a debug
     /// log, when it is in another format or does not parse.
-    pub fn from_value(value: &Value) -> Option<PackageIndex> {
+    pub fn from_value(value: &Value) -> Option<RecordPackageIndex> {
         let format = value.get("format").and_then(Value::as_u64);
         if format != Some(FORMAT) {
             tracing::debug!(
@@ -167,7 +172,7 @@ mod tests {
     /// hash in the build's order, and the rest as cluster-level.
     #[test]
     fn the_index_lists_packages_and_cluster_level_resources_by_hash() {
-        let index = PackageIndex::of(&graph());
+        let index = RecordPackageIndex::of(&graph());
         let a = |c: &str| format!("{c:a>32}");
         assert_eq!(
             index.to_value(),
@@ -179,20 +184,23 @@ mod tests {
                 "clusterLevel": [a("4")],
             })
         );
-        assert_eq!(PackageIndex::from_value(&index.to_value()), Some(index));
+        assert_eq!(
+            RecordPackageIndex::from_value(&index.to_value()),
+            Some(index)
+        );
     }
 
     /// An index in a format this release does not know, or with no format,
     /// is not read.
     #[test]
     fn an_index_in_an_unknown_format_is_ignored() {
-        let mut value = PackageIndex::of(&graph()).to_value();
+        let mut value = RecordPackageIndex::of(&graph()).to_value();
         value["format"] = json!(FORMAT + 1);
-        assert_eq!(PackageIndex::from_value(&value), None);
+        assert_eq!(RecordPackageIndex::from_value(&value), None);
         value.as_object_mut().unwrap().remove("format");
-        assert_eq!(PackageIndex::from_value(&value), None);
+        assert_eq!(RecordPackageIndex::from_value(&value), None);
         assert_eq!(
-            PackageIndex::from_value(&json!({ "format": FORMAT, "packages": [] })),
+            RecordPackageIndex::from_value(&json!({ "format": FORMAT, "packages": [] })),
             None
         );
     }
@@ -202,7 +210,7 @@ mod tests {
     #[test]
     fn placing_from_the_index_matches_placing_from_the_build() {
         let build = graph();
-        let index = PackageIndex::of(&build);
+        let index = RecordPackageIndex::of(&build);
         let manifests: Vec<Value> = build
             .resources
             .values()

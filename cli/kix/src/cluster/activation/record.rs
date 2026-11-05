@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::eval::package_index::PackageIndex;
+use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED};
 use kube::api::DynamicObject;
@@ -41,7 +41,7 @@ pub struct Record {
     /// build belongs to. `None` when the record has none, as records written
     /// before Kix wrote it do, or when it is in a format this release does
     /// not read.
-    pub package_index: Option<PackageIndex>,
+    pub package_index: Option<RecordPackageIndex>,
     /// `status.waves`, recording per-wave progress for commands waiting on the operator.
     pub waves: Vec<WaveRecord>,
     pub total_waves: usize,
@@ -100,7 +100,7 @@ impl Record {
             package_index: obj
                 .data
                 .pointer(&format!("/status/{}", keys::PACKAGE_INDEX_FIELD))
-                .and_then(PackageIndex::from_value),
+                .and_then(RecordPackageIndex::from_value),
             waves: obj
                 .data
                 .pointer("/status/waves")

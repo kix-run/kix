@@ -56,7 +56,7 @@ use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
-use crate::eval::package_index::PackageIndex;
+use crate::eval::package_index::RecordPackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -148,7 +148,7 @@ pub struct CheckedPlan {
     /// prune.
     old_manifests: Vec<Value>,
     /// The new build's package index, for the record's `status.packageIndex`.
-    package_index: PackageIndex,
+    package_index: RecordPackageIndex,
 }
 
 impl CheckedPlan {
@@ -185,6 +185,12 @@ impl CheckedPlan {
     /// Return the name of the new build's Activation record.
     pub fn activation_name(&self) -> Option<&str> {
         self.activation_name.as_deref()
+    }
+
+    /// Return the new build's package index, for the record's
+    /// `status.packageIndex`.
+    pub fn package_index(&self) -> &RecordPackageIndex {
+        &self.package_index
     }
 
     /// Return the identity hash of the new build's Activation record.
@@ -544,7 +550,7 @@ impl<'a> Planner<'a> {
             consumed_failed: baseline.failed().consumed.clone(),
             cluster: cluster.to_string(),
             old_manifests: baseline.manifests(),
-            package_index: PackageIndex::of(new_graph),
+            package_index: RecordPackageIndex::of(new_graph),
         })
     }
 }

@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::error::KixEvalError;
-use super::package_index::PackageIndex;
+use super::package_index::RecordPackageIndex;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
@@ -164,7 +164,7 @@ enum Place {
 /// index that lists a hash decides it. Within one index a package's own
 /// `PackageInstance` comes before a resource listed by packages, and that
 /// before a cluster-level resource, as in [`StoreGraph::synthesize`].
-fn places_by_hash<'a>(indexes: &[&'a PackageIndex]) -> HashMap<&'a str, Place> {
+fn places_by_hash<'a>(indexes: &[&'a RecordPackageIndex]) -> HashMap<&'a str, Place> {
     let mut places: HashMap<&str, Place> = HashMap::new();
     for index in indexes {
         let mut own: HashMap<&str, Place> = HashMap::new();
@@ -576,7 +576,7 @@ impl StoreGraph {
     pub fn synthesize_placed(
         manifests: &[serde_json::Value],
         reference: &StoreGraph,
-        deployed: &[&PackageIndex],
+        deployed: &[&RecordPackageIndex],
     ) -> StoreGraph {
         use crate::manifest::keys;
         use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
@@ -1523,7 +1523,7 @@ mod tests {
                 &h("before-move"),
                 json!({"k": "v"}),
             ));
-            let deployed: PackageIndex = serde_json::from_value(json!({
+            let deployed: RecordPackageIndex = serde_json::from_value(json!({
                 "format": crate::eval::package_index::FORMAT,
                 "packages": {
                     "app/old": { "instance": h("pi-old"), "resources": [h("before-move")] },
@@ -1544,9 +1544,10 @@ mod tests {
 
             let mut unknown = deployed.to_value();
             unknown["format"] = json!(crate::eval::package_index::FORMAT + 1);
-            let unread: Vec<PackageIndex> =
-                PackageIndex::from_value(&unknown).into_iter().collect();
-            let unread: Vec<&PackageIndex> = unread.iter().collect();
+            let unread: Vec<RecordPackageIndex> = RecordPackageIndex::from_value(&unknown)
+                .into_iter()
+                .collect();
+            let unread: Vec<&RecordPackageIndex> = unread.iter().collect();
             let old = StoreGraph::synthesize_placed(&live, &build, &unread);
             assert_eq!(names_in(&old, "app", "web"), vec!["settings"]);
         }

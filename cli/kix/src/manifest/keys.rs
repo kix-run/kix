@@ -83,7 +83,7 @@ pub(crate) const RECEIPT_FIELD: &str = "receipt";
 pub(crate) const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
 
 /// Field under an Activation's `status` that holds the build's package index.
-/// See `eval::package_index::PackageIndex`.
+/// See `eval::package_index::RecordPackageIndex`.
 pub(crate) const PACKAGE_INDEX_FIELD: &str = "packageIndex";
 
 /// `activations.<domain>`, the CRD name.

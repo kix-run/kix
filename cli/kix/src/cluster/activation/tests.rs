@@ -823,9 +823,9 @@ mod package_index_tests {
     use crate::eval::package_index::{FORMAT, IndexedPackage};
     use std::collections::BTreeMap;
 
-    fn index(resources: usize) -> PackageIndex {
+    fn index(resources: usize) -> RecordPackageIndex {
         let hash = |i: usize| format!("{i:0>32}");
-        PackageIndex {
+        RecordPackageIndex {
             format: FORMAT,
             packages: BTreeMap::from([(
                 "app/web".to_string(),

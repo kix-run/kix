@@ -40,7 +40,7 @@ use crate::build_source::Build;
 use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
 use crate::cluster::{discovery, inventory, owned_view, tenancy};
-use crate::eval::package_index::PackageIndex;
+use crate::eval::package_index::RecordPackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -173,7 +173,7 @@ impl Baseline {
     /// record to read an index from, so their objects are placed by `new`
     /// or by their stamps.
     fn synthesized(&self, manifests: &[Value], new: &StoreGraph) -> StoreGraph {
-        let indexes: Vec<&PackageIndex> = self
+        let indexes: Vec<&RecordPackageIndex> = self
             .active
             .iter()
             .filter_map(|a| a.package_index.as_ref())
@@ -463,7 +463,7 @@ impl Baseline {
 /// the note only helps explain a diff made on another machine.
 fn note_index_disagreement(active: &Record, graph: &StoreGraph) {
     if let Some(stored) = &active.package_index
-        && *stored != PackageIndex::of(graph)
+        && *stored != RecordPackageIndex::of(graph)
     {
         tracing::debug!(
             activation = %active.name,
@@ -488,7 +488,7 @@ pub struct FailedBaseline {
     pub unresolved: Vec<Record>,
     /// The package index of each folded-in record that has one, oldest
     /// first.
-    pub indexes: Vec<PackageIndex>,
+    pub indexes: Vec<RecordPackageIndex>,
 }
 
 impl FailedBaseline {
@@ -1590,7 +1590,7 @@ mod tests {
     /// next. An object neither lists is placed as before.
     #[test]
     fn the_diff_side_places_live_objects_by_the_records_indexes() {
-        let index = |packages: serde_json::Value| -> PackageIndex {
+        let index = |packages: serde_json::Value| -> RecordPackageIndex {
             serde_json::from_value(json!({
                 "format": crate::eval::package_index::FORMAT,
                 "packages": packages,

@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::eval::package_index::PackageIndex;
+use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::types::ResourceId;
 
 use super::super::activation::{
@@ -49,8 +49,8 @@ pub(crate) struct RecordConfig {
     pub(crate) kept_orphans: KeptOrphans,
     /// The build's package index, which [`DeployRecord::begin`] writes to
     /// `status.packageIndex`. `None` for the operator, which holds no build
-    /// graph. The CLI that created the record wrote the index already.
-    pub(crate) package_index: Option<PackageIndex>,
+    /// graph. The CLI wrote the index when it submitted the record.
+    pub(crate) package_index: Option<RecordPackageIndex>,
     /// Whether [`DeployRecord::abort`] should mark the record Failed.
     ///
     /// True for the CLI, which owns the run end to end. False for the

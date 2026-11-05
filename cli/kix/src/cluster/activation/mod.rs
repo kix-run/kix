@@ -26,7 +26,7 @@ mod tests;
 
 use std::collections::HashSet;
 
-use crate::eval::package_index::{self, PackageIndex};
+use crate::eval::package_index::{self, RecordPackageIndex};
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -691,7 +691,7 @@ impl Records {
         &self,
         activation_name: &str,
         total_waves: usize,
-        package_index: Option<&PackageIndex>,
+        package_index: Option<&RecordPackageIndex>,
     ) -> Result<(), RecordsError> {
         let current = self.phase_of(activation_name).await?;
 
@@ -714,8 +714,9 @@ impl Records {
     }
 
     /// Write `index` to the record's `status.packageIndex`, warning instead
-    /// of failing. See [`Records::begin_deploy`].
-    async fn write_package_index(&self, activation_name: &str, index: &PackageIndex) {
+    /// of failing. The index only helps a later diff group objects, so a
+    /// failure must not stop a deploy. See [`Records::begin_deploy`].
+    pub async fn write_package_index(&self, activation_name: &str, index: &RecordPackageIndex) {
         let value = index.to_value();
         let bytes = value.to_string().len();
         if bytes > package_index::MAX_BYTES {

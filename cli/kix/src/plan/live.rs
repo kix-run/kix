@@ -224,7 +224,8 @@ impl LivePlan {
                 // Its orphans are live objects the next reconcile finds
                 // again, so there are no builds to record.
                 kept_orphans: Default::default(),
-                // The CLI that created the record wrote the index.
+                // `kix deploy --operator` and `kix rollback --operator` write
+                // the index when they submit the record.
                 package_index: None,
                 mark_failed_on_abort: false,
             },
