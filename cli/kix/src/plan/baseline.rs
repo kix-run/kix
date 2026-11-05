@@ -40,6 +40,7 @@ use crate::build_source::Build;
 use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
 use crate::cluster::{discovery, inventory, owned_view, tenancy};
+use crate::eval::package_index::PackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -153,10 +154,32 @@ impl Baseline {
                 if manifests.is_empty() {
                     empty()
                 } else {
-                    Cow::Owned(StoreGraph::synthesize(&manifests, new))
+                    Cow::Owned(self.synthesized(&manifests, new))
                 }
             }
         }
+    }
+
+    /// Synthesize the old side of the package diff from the baseline's
+    /// manifests, for when the Active build is not on this machine.
+    pub fn synthesized_side(&self, new: &StoreGraph) -> StoreGraph {
+        self.synthesized(&self.manifests(), new)
+    }
+
+    /// Synthesize a graph of `manifests` against `new`, placing each object
+    /// first by the package index of the Active record, then by those of the
+    /// folded-in Failed records, newest first. A Failed record's index places
+    /// what that deploy applied before it stopped. Kept builds name no
+    /// record to read an index from, so their objects are placed by `new`
+    /// or by their stamps.
+    fn synthesized(&self, manifests: &[Value], new: &StoreGraph) -> StoreGraph {
+        let indexes: Vec<&PackageIndex> = self
+            .active
+            .iter()
+            .filter_map(|a| a.package_index.as_ref())
+            .chain(self.failed.indexes.iter().rev())
+            .collect();
+        StoreGraph::synthesize_placed(manifests, new, &indexes)
     }
 
     /// Compute the change action for each object of `new_manifests` and each
@@ -320,12 +343,15 @@ impl Baseline {
                     identity_hash: hash,
                 });
                 match record_graph(Some(build), cluster, hash, active.built_via.as_deref()) {
-                    Ok(Some(graph)) => Baseline {
-                        active_manifests: manifests_of(&graph),
-                        source: ActiveSource::Build(Box::new(graph)),
-                        active: Some(active),
-                        ..Baseline::empty()
-                    },
+                    Ok(Some(graph)) => {
+                        note_index_disagreement(&active, &graph);
+                        Baseline {
+                            active_manifests: manifests_of(&graph),
+                            source: ActiveSource::Build(Box::new(graph)),
+                            active: Some(active),
+                            ..Baseline::empty()
+                        }
+                    }
                     // A build that will not load, or is not the record's, is
                     // not a first deploy. Fall back to the cluster rather
                     // than planning against nothing.
@@ -432,6 +458,20 @@ impl Baseline {
     }
 }
 
+/// Log at debug level when `active`'s stored package index differs from the
+/// index of its build. The build is the source, so a plan uses the build and
+/// the note only helps explain a diff made on another machine.
+fn note_index_disagreement(active: &Record, graph: &StoreGraph) {
+    if let Some(stored) = &active.package_index
+        && *stored != PackageIndex::of(graph)
+    {
+        tracing::debug!(
+            activation = %active.name,
+            "the record's package index differs from its build; using the build",
+        );
+    }
+}
+
 /// Closures left behind by deploys that stopped before finalizing.
 #[derive(Debug, Default)]
 pub struct FailedBaseline {
@@ -446,6 +486,9 @@ pub struct FailedBaseline {
     pub sources: Vec<KeptOrphanSource>,
     /// Records whose closure is not in this machine's store.
     pub unresolved: Vec<Record>,
+    /// The package index of each folded-in record that has one, oldest
+    /// first.
+    pub indexes: Vec<PackageIndex>,
 }
 
 impl FailedBaseline {
@@ -531,6 +574,7 @@ async fn load_failed(
         };
         report(PlanEvent::FailedFolded(&record));
         out.closures.push(closure);
+        out.indexes.extend(record.package_index.clone());
         out.consumed.push(record.name.clone());
         out.sources.push(KeptOrphanSource {
             activation: record.name.clone(),
@@ -1036,6 +1080,7 @@ mod tests {
             consumed: vec!["f1".into()],
             sources: vec![source("f1")],
             unresolved: vec![],
+            indexes: vec![],
         };
         let got = baseline(
             active("v1", vec![]),
@@ -1518,6 +1563,7 @@ mod tests {
             consumed: vec!["f1".into()],
             sources: vec![source("f1")],
             unresolved: vec![],
+            indexes: vec![],
         };
         let new = StoreGraph::synthesize(&[m("ConfigMap", "web", "h1")], &StoreGraph::empty("c"));
         let live = baseline(
@@ -1537,5 +1583,63 @@ mod tests {
             )
         };
         assert!(unavailable.diff_side(&new).resources.is_empty());
+    }
+
+    /// Read from the cluster, the old side places objects by the Active
+    /// record's package index first and a folded-in Failed record's index
+    /// next. An object neither lists is placed as before.
+    #[test]
+    fn the_diff_side_places_live_objects_by_the_records_indexes() {
+        let index = |packages: serde_json::Value| -> PackageIndex {
+            serde_json::from_value(json!({
+                "format": crate::eval::package_index::FORMAT,
+                "packages": packages,
+                "clusterLevel": [],
+            }))
+            .unwrap()
+        };
+        let mut deployed = active("v1", vec![]);
+        deployed.package_index = Some(index(json!({
+            "app/one": { "instance": "pi-one", "resources": ["ha", "hb"] },
+        })));
+        let failed = FailedBaseline {
+            closures: vec![vec![m("ConfigMap", "b", "hb"), m("ConfigMap", "c", "hc")]],
+            consumed: vec!["f1".into()],
+            sources: vec![source("f1")],
+            unresolved: vec![],
+            indexes: vec![index(json!({
+                "app/two": { "instance": "pi-two", "resources": ["hb", "hc"] },
+            }))],
+        };
+        let new = StoreGraph::synthesize(&[m("ConfigMap", "z", "hz")], &StoreGraph::empty("c"));
+        let live = baseline(
+            deployed,
+            vec![m("ConfigMap", "a", "ha"), m("ConfigMap", "d", "hd")],
+            failed,
+            KeptBaseline::default(),
+        );
+        let side = live.diff_side(&new);
+        let names_in = |key: &str| -> Vec<String> {
+            let p = side
+                .packages
+                .values()
+                .find(|p| format!("{}/{}", p.namespace, p.instance_name) == key)
+                .unwrap_or_else(|| panic!("no package {key}"));
+            let mut names: Vec<String> = p
+                .resource_paths
+                .iter()
+                .map(|r| {
+                    side.resources[r].manifest["metadata"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .into()
+                })
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names_in("app/one"), vec!["a", "b"]);
+        assert_eq!(names_in("app/two"), vec!["c"]);
+        assert_eq!(side.packages.len(), 2, "d is cluster-level");
     }
 }

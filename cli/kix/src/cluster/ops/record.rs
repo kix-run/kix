@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::eval::package_index::PackageIndex;
 use crate::manifest::types::ResourceId;
 
 use super::super::activation::{
@@ -46,6 +47,10 @@ pub(crate) struct RecordConfig {
     pub(crate) consumed_failed: Vec<String>,
     /// What finalize writes to the record's `status.orphansKeptFrom`.
     pub(crate) kept_orphans: KeptOrphans,
+    /// The build's package index, which [`DeployRecord::begin`] writes to
+    /// `status.packageIndex`. `None` for the operator, which holds no build
+    /// graph. The CLI that created the record wrote the index already.
+    pub(crate) package_index: Option<PackageIndex>,
     /// Whether [`DeployRecord::abort`] should mark the record Failed.
     ///
     /// True for the CLI, which owns the run end to end. False for the
@@ -150,7 +155,10 @@ impl ActivationRecord {
             }
         }
 
-        if let Err(e) = records.begin_deploy(name, 1).await {
+        if let Err(e) = records
+            .begin_deploy(name, 1, self.config.package_index.as_ref())
+            .await
+        {
             // 404 when the CRD is served but the record does not exist yet
             // (either the up-front create failed or the operator's record was
             // deleted).
@@ -353,6 +361,7 @@ mod tests {
                 receipt: None,
                 consumed_failed: Vec::new(),
                 kept_orphans: KeptOrphans::default(),
+                package_index: None,
                 mark_failed_on_abort: true,
             },
         )

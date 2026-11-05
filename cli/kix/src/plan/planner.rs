@@ -56,6 +56,7 @@ use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
+use crate::eval::package_index::PackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -146,6 +147,8 @@ pub struct CheckedPlan {
     /// The baseline's manifests ([`Baseline::manifests`]), which order the
     /// prune.
     old_manifests: Vec<Value>,
+    /// The new build's package index, for the record's `status.packageIndex`.
+    package_index: PackageIndex,
 }
 
 impl CheckedPlan {
@@ -264,6 +267,7 @@ impl CheckedPlan {
                 receipt,
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
+                package_index: Some(self.package_index),
                 mark_failed_on_abort: true,
             },
             target.sops,
@@ -540,6 +544,7 @@ impl<'a> Planner<'a> {
             consumed_failed: baseline.failed().consumed.clone(),
             cluster: cluster.to_string(),
             old_manifests: baseline.manifests(),
+            package_index: PackageIndex::of(new_graph),
         })
     }
 }

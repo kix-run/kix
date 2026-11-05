@@ -816,3 +816,78 @@ mod listing_tests {
         ));
     }
 }
+
+mod package_index_tests {
+    use super::super::*;
+    use crate::cluster::fake_api::FakeApi;
+    use crate::eval::package_index::{FORMAT, IndexedPackage};
+    use std::collections::BTreeMap;
+
+    fn index(resources: usize) -> PackageIndex {
+        let hash = |i: usize| format!("{i:0>32}");
+        PackageIndex {
+            format: FORMAT,
+            packages: BTreeMap::from([(
+                "app/web".to_string(),
+                IndexedPackage {
+                    instance: hash(0),
+                    resources: (1..=resources).map(hash).collect(),
+                },
+            )]),
+            cluster_level: vec![hash(resources + 1)],
+        }
+    }
+
+    async fn records_with(api: &FakeApi) -> Records {
+        let client = api.client();
+        let discovery = crate::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        Records::open_installed(&client, &discovery).unwrap()
+    }
+
+    fn record(name: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": { "name": name },
+        })
+    }
+
+    /// `begin_deploy` writes the build's package index, with its format
+    /// number, beside the wave counters, and the record reads it back.
+    #[tokio::test]
+    async fn begin_deploy_writes_the_package_index() {
+        let api = FakeApi::new([record("c-new")]);
+        let records = records_with(&api).await;
+        records
+            .begin_deploy("c-new", 1, Some(&index(2)))
+            .await
+            .unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.phase, PHASE_DEPLOYING);
+        assert_eq!(read.package_index, Some(index(2)));
+
+        let obj = records.api().get("c-new").await.unwrap();
+        let stored = &obj.data["status"][keys::PACKAGE_INDEX_FIELD];
+        assert_eq!(stored["format"], json!(FORMAT));
+        assert_eq!(
+            stored["packages"]["app/web"]["resources"],
+            json!([format!("{:0>32}", 1), format!("{:0>32}", 2)])
+        );
+        assert_eq!(stored["clusterLevel"], json!([format!("{:0>32}", 3)]));
+    }
+
+    /// An index over the size limit is not written, and the deploy still
+    /// begins. A record without an index reads as having none.
+    #[tokio::test]
+    async fn an_oversized_index_is_skipped_and_the_deploy_begins() {
+        let api = FakeApi::new([record("c-big")]);
+        let records = records_with(&api).await;
+        let big = index(crate::eval::package_index::MAX_BYTES / 32);
+        records.begin_deploy("c-big", 1, Some(&big)).await.unwrap();
+        let read = records.get("c-big").await.unwrap().unwrap();
+        assert_eq!(read.phase, PHASE_DEPLOYING);
+        assert_eq!(read.package_index, None);
+    }
+}

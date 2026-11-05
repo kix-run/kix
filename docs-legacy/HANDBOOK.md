@@ -2333,6 +2333,17 @@ current state and `kix deploy` never diffs against it. The next deploy reads a
 `Failed` record only as an extra baseline, to re-apply what that run may have
 changed and prune what it left behind, then supersedes it.
 
+When a deploy begins, it also writes its build's package index to the record's
+`status.packageIndex`: for each package, the identity hashes of its
+PackageInstance and resources, plus the identity hashes of the cluster-level
+resources, under a `format` number. When `kix diff` or `kix plan` rebuilds the
+old side from live objects because the deployed build is not on the machine, it
+places each object in the package that index names, so an object that moved
+between packages shows under both. A record without the index, or with a
+`format` this release does not know, places live objects where the new build
+puts them. An index over 512 KiB is not written, and a failed write only logs a
+warning.
+
 A deploy or rollback that keeps orphans (no `--prune`, `--prune-mode=no`, or a
 failed delete) lists the builds they came from under the new record's
 `status.orphansKeptFrom`, so a later `kix deploy --prune` or soft `kix gc` can

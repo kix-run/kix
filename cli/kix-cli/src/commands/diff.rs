@@ -113,8 +113,14 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
             .runtime
             .block_on(fetch_live_manifests(&global, &new_graph))?;
         clear_spinner(&spinner);
+        // The current record's package index places each live object where
+        // the deployed build put it. Without one, the new build does.
+        let deployed = live
+            .current
+            .as_ref()
+            .and_then(|record| activation::Record::of(record).package_index);
         (
-            StoreGraph::synthesize(&live.manifests, &new_graph),
+            StoreGraph::synthesize_placed(&live.manifests, &new_graph, &Vec::from_iter(&deployed)),
             OldSide::Live(Box::new(live)),
         )
     };

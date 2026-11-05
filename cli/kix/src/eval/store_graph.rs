@@ -14,6 +14,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::error::KixEvalError;
+use super::package_index::PackageIndex;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
@@ -157,6 +158,45 @@ enum Place {
     Members(Vec<String>),
     /// A resource outside every package.
     ClusterLevel,
+}
+
+/// Map each identity hash that `indexes` list to its [`Place`]. The first
+/// index that lists a hash decides it. Within one index a package's own
+/// `PackageInstance` comes before a resource listed by packages, and that
+/// before a cluster-level resource, as in [`StoreGraph::synthesize`].
+fn places_by_hash<'a>(indexes: &[&'a PackageIndex]) -> HashMap<&'a str, Place> {
+    let mut places: HashMap<&str, Place> = HashMap::new();
+    for index in indexes {
+        let mut own: HashMap<&str, Place> = HashMap::new();
+        for (key, p) in &index.packages {
+            own.insert(&p.instance, Place::PackageInstance(key.clone()));
+        }
+        for (key, p) in &index.packages {
+            for hash in &p.resources {
+                match own.entry(hash) {
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(Place::Members(vec![key.clone()]));
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        if let Place::Members(members) = e.get_mut()
+                            && !members.contains(key)
+                        {
+                            members.push(key.clone());
+                        }
+                    }
+                }
+            }
+        }
+        for hash in &index.cluster_level {
+            own.entry(hash).or_insert(Place::ClusterLevel);
+        }
+        for (hash, place) in own {
+            if !hash.is_empty() {
+                places.entry(hash).or_insert(place);
+            }
+        }
+    }
+    places
 }
 
 impl StoreGraph {
@@ -510,9 +550,10 @@ impl StoreGraph {
     ///
     /// Because `reference` decides where an old object goes, an object that
     /// moved to another package and also changed shows only as a changed
-    /// resource of its new package. Its old package shows no removal. A
-    /// comparison with the deployed build's own graph shows it removed from
-    /// one package and added to the other.
+    /// resource of its new package. Its old package shows no removal.
+    /// [`StoreGraph::synthesize_placed`] with the deployed build's package
+    /// index shows it removed from one package and added to the other, as a
+    /// comparison with the deployed build's own graph does.
     ///
     /// Whether it changed depends on its identity hash. A resource whose
     /// identity hash names a `reference` manifest for the same kind,
@@ -520,6 +561,23 @@ impl StoreGraph {
     /// unchanged packages compare path-equal. Other resources keep their own
     /// manifest under a content-addressed synthetic store path.
     pub fn synthesize(manifests: &[serde_json::Value], reference: &StoreGraph) -> StoreGraph {
+        Self::synthesize_placed(manifests, reference, &[])
+    }
+
+    /// Run [`StoreGraph::synthesize`], placing first by the package indexes in
+    /// `deployed`, which the deployed records carry.
+    ///
+    /// A resource whose `kix.run/identity-hash` one of the indexes lists goes
+    /// where that index puts it, the first index that lists it winning. The
+    /// hash names the build file the object was applied from, so the index
+    /// places it as the deployed build did, wherever `reference` puts an
+    /// object of that identity. Other resources are placed as `synthesize`
+    /// places them.
+    pub fn synthesize_placed(
+        manifests: &[serde_json::Value],
+        reference: &StoreGraph,
+        deployed: &[&PackageIndex],
+    ) -> StoreGraph {
         use crate::manifest::keys;
         use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
         use serde_json::Value;
@@ -572,6 +630,8 @@ impl StoreGraph {
             .into_iter()
             .filter_map(|(id, place)| place.map(|p| (id, p)))
             .collect();
+
+        let place_by_hash = places_by_hash(deployed);
 
         let ann = |m: &Value, key: &str| -> Option<String> {
             m.pointer("/metadata/annotations")
@@ -635,7 +695,10 @@ impl StoreGraph {
                 (key, (path.clone(), version, lifecycle))
             };
 
-            match place_by_id.get(&ResourceId::from_value(m)) {
+            let place = place_by_hash
+                .get(hash.as_str())
+                .or_else(|| place_by_id.get(&ResourceId::from_value(m)));
+            match place {
                 Some(Place::PackageInstance(key)) => {
                     let (key, entry) = package_instance(key.clone());
                     pi_by_pkg.insert(key, entry);
@@ -1430,6 +1493,62 @@ mod tests {
             assert!(d.removed.is_empty() && d.added.is_empty());
             assert_eq!(d.changed.len(), 1);
             assert_eq!(d.changed[0].key, "app/web");
+        }
+
+        /// With the deployed record's package index, the same move shows
+        /// `settings` removed from `old` and added to `web`, as a comparison
+        /// with the deployed build does. An index in another format is not
+        /// read, and the move shows only under `web` again.
+        #[test]
+        fn a_moved_and_changed_object_shows_under_both_packages_with_an_index() {
+            let build = built(&[
+                (
+                    "pi",
+                    rendered_pi("app", "web", None),
+                    vec![("cm", rendered("ConfigMap", "app", "settings"))],
+                ),
+                ("pi-old", rendered_pi("app", "old", None), vec![]),
+            ]);
+            let mut live: Vec<Value> = build
+                .resources
+                .values()
+                .filter(|n| n.manifest["kind"] != "ConfigMap")
+                .map(|n| n.manifest.clone())
+                .collect();
+            live.push(stamped(
+                "ConfigMap",
+                "app",
+                "settings",
+                ("app", "old"),
+                &h("before-move"),
+                json!({"k": "v"}),
+            ));
+            let deployed: PackageIndex = serde_json::from_value(json!({
+                "format": crate::eval::package_index::FORMAT,
+                "packages": {
+                    "app/old": { "instance": h("pi-old"), "resources": [h("before-move")] },
+                    "app/web": { "instance": h("pi"), "resources": [] },
+                },
+                "clusterLevel": [],
+            }))
+            .unwrap();
+
+            let old = StoreGraph::synthesize_placed(&live, &build, &[&deployed]);
+            assert_eq!(names_in(&old, "app", "old"), vec!["settings"]);
+            assert!(names_in(&old, "app", "web").is_empty());
+            let d = crate::plan::diff_graphs(&old, &build);
+            let change = |key: &str| d.changed.iter().find(|c| c.key == key).unwrap();
+            let settings = ResourceId::from_value(&live[live.len() - 1]);
+            assert_eq!(change("app/old").removed_resources, vec![settings.clone()]);
+            assert_eq!(change("app/web").added_resources, vec![settings]);
+
+            let mut unknown = deployed.to_value();
+            unknown["format"] = json!(crate::eval::package_index::FORMAT + 1);
+            let unread: Vec<PackageIndex> =
+                PackageIndex::from_value(&unknown).into_iter().collect();
+            let unread: Vec<&PackageIndex> = unread.iter().collect();
+            let old = StoreGraph::synthesize_placed(&live, &build, &unread);
+            assert_eq!(names_in(&old, "app", "web"), vec!["settings"]);
         }
 
         /// Two build objects of one kind, namespace, and name (two API groups)

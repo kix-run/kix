@@ -11,6 +11,10 @@ Every pull request that changes something a Kix user sees adds a line under
 
 ## Unreleased
 
+### Breaking
+
+- Each deploy now writes its build's package index to the Activation record, under `status.packageIndex`. Nothing changes when you upgrade: older Kix ignores the field, and records written without it work as before.
+
 ### Added
 
 - `cnpg-cluster` can copy databases from another PostgreSQL server when the Cluster is created, through the new `import` option and the `importSource`, `importPassword`, and `importCa` dependencies. Kix derives the network policy between the Cluster's pods and the source.
@@ -26,6 +30,7 @@ Every pull request that changes something a Kix user sees adds a line under
 - `kix diff` shows one changed value inside a list item as one change to that value, not as the item removed and a new one added. Lists of objects with a `metadata.name`, such as a VirtualMachine's `dataVolumeTemplates`, match items by that name, and `creationTimestamp: null` on one side no longer counts as a difference. In `-o json` output, the `path` of an added or removed list item now gives its real index in the list.
 - `kix diff` and `kix plan` against the cluster no longer show changes to objects the build does not change, such as an empty `value` the API server dropped. `kix diff` now lists drift (fields someone changed on the cluster, and who changed them) on any machine, also when it finds no other difference, and says how many objects it could not check for drift (the new `drift_unchecked` field in `-o json`).
 - `kix diff` and `kix plan` against the cluster no longer list an import marker (such as `secret-ref-*`) as a removed package after a failed deploy. The marker shows under the package that declares it. An object that moved to another package and changed now shows only under its new package, with no removal under the old one.
+- `kix diff` and `kix plan` against the cluster now show an object that moved to another package and changed as removed from its old package and added to its new one, on any machine, when the deployed record was written by this release. Records from Kix 0.5 still show it only under its new package.
 
 ## 0.5.0 - 2026-11-04
 
