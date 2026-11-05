@@ -23,6 +23,7 @@ Every pull request that changes something a Kix user sees adds a line under
 ### Fixed
 
 - `kix diff` and `kix deploy` no longer report a data migration when a stateful package removes one object and adds another of a different kind that holds no data, such as an import marker replaced by a PodDisruptionBudget. Objects of different kinds now count as a migration only when both may hold data: a custom resource, or a built-in kind that declares storage. A renamed object of the same kind still counts as a migration.
+- `kix diff` shows one changed value inside a list item as one change to that value, not as the item removed and a new one added. Lists of objects with a `metadata.name`, such as a VirtualMachine's `dataVolumeTemplates`, match items by that name, and `creationTimestamp: null` on one side no longer counts as a difference. In `-o json` output, the `path` of an added or removed list item now gives its real index in the list.
 
 ## 0.5.0 - 2026-11-04
 
