@@ -280,12 +280,23 @@ pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
 /// values as `[v=<json>]`, and positions as `[2]`. Only leaves are emitted, and
 /// a node owning only `.` (element existence) is also treated as a leaf.
 pub fn flatten_paths(fields: &Value) -> Vec<String> {
+    leaves(fields).into_iter().map(|(path, _)| path).collect()
+}
+
+/// Return each leaf of a fieldsV1 tree as its [`flatten_paths`] path and its
+/// chain of fieldsV1 keys from the root.
+fn leaves(fields: &Value) -> Vec<(String, Vec<String>)> {
     let mut out = Vec::new();
-    walk_paths(fields, String::new(), &mut out);
+    walk_paths(fields, String::new(), &mut Vec::new(), &mut out);
     out
 }
 
-fn walk_paths(fields: &Value, prefix: String, out: &mut Vec<String>) {
+fn walk_paths(
+    fields: &Value,
+    prefix: String,
+    chain: &mut Vec<String>,
+    out: &mut Vec<(String, Vec<String>)>,
+) {
     let Some(map) = fields.as_object() else {
         return;
     };
@@ -309,12 +320,104 @@ fn walk_paths(fields: &Value, prefix: String, out: &mut Vec<String>) {
             continue;
         };
         has_children = true;
-        walk_paths(subtree, format!("{prefix}{segment}"), out);
+        chain.push(key.clone());
+        walk_paths(subtree, format!("{prefix}{segment}"), chain, out);
+        chain.pop();
     }
 
     if !has_children && !prefix.is_empty() {
-        out.push(prefix);
+        out.push((prefix, chain.clone()));
     }
+}
+
+/// A field that a manager other than Kix owns on a live object and Kix's
+/// `Apply` entry no longer owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignField {
+    pub manager: String,
+    /// The field path in [`flatten_paths`] form.
+    pub path: String,
+    keys: Vec<String>,
+}
+
+impl ForeignField {
+    /// Return the value of this field in `manifest`, matching list elements
+    /// the way the API server does.
+    pub fn value_in<'v>(&self, manifest: &'v Value) -> Option<&'v Value> {
+        self.walk(manifest).map(|(value, _)| value)
+    }
+
+    /// Return this field's path in `manifest` as the diff engine spells it
+    /// (`$.spec.containers[web].image`), so it reads like the field changes
+    /// beside it. A list element is named by its diff-engine key, then its
+    /// `name`, then its position.
+    pub fn diff_path(&self, manifest: &Value) -> Option<String> {
+        self.walk(manifest).map(|(_, path)| path)
+    }
+
+    fn walk<'v>(&self, manifest: &'v Value) -> Option<(&'v Value, String)> {
+        let mut node = manifest;
+        let mut path = "$".to_string();
+        let mut field = "";
+        for key in &self.keys {
+            match key.strip_prefix("f:") {
+                Some(name) => {
+                    node = node.get(name)?;
+                    path.push('.');
+                    path.push_str(name);
+                    field = name;
+                }
+                None => {
+                    let single = serde_json::Map::from_iter([(key.clone(), Value::Null)]);
+                    let (i, elem) = node
+                        .as_array()?
+                        .iter()
+                        .enumerate()
+                        .find(|(i, e)| fieldsv1::match_element(e, *i, &single).is_some())?;
+                    let name = crate::manifest::diff::keyed_lists::extract_key(field, elem)
+                        .or_else(|| elem.get("name").and_then(Value::as_str).map(str::to_string))
+                        .unwrap_or_else(|| i.to_string());
+                    path.push_str(&format!("[{name}]"));
+                    node = elem;
+                }
+            }
+        }
+        Some((node, path))
+    }
+}
+
+/// Return the fields of `obj` that a manager other than Kix owns, leaving out
+/// status writes and fields Kix's `Apply` entry still owns.
+///
+/// A field Kix still owns holds the value Kix applied, because the API server
+/// moves ownership to whoever changes a value. So the fields returned are the
+/// ones another manager changed or took over since Kix applied the object.
+pub fn foreign_fields(obj: &DynamicObject) -> Vec<ForeignField> {
+    let kix_owned: std::collections::HashSet<Vec<String>> = fieldsv1::kix_fieldset(obj)
+        .map(|f| leaves(&f).into_iter().map(|(_, keys)| keys).collect())
+        .unwrap_or_default();
+    let Some(entries) = obj.metadata.managed_fields.as_deref() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|e| e.manager.as_deref() != Some(KIX_FIELD_MANAGER))
+        .filter(|e| e.subresource.as_deref() != Some("status"))
+        .flat_map(|e| {
+            let manager = e.manager.clone().unwrap_or_else(|| "unknown".to_string());
+            e.fields_v1
+                .as_ref()
+                .map(|f| leaves(&f.0))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, keys)| !kix_owned.contains(keys))
+                .map(move |(path, keys)| ForeignField {
+                    manager: manager.clone(),
+                    path,
+                    keys,
+                })
+        })
+        .collect()
 }
 
 /// Render a `k:{...}` associative-list key as `name=web` (comma-joined for

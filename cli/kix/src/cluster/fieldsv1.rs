@@ -108,7 +108,7 @@ fn project_array(live: &[Value], fields: &Map<String, Value>) -> Value {
 }
 
 /// Find the fieldset entry matching a live array element, if any.
-fn match_element<'a>(
+pub(crate) fn match_element<'a>(
     elem: &Value,
     idx: usize,
     fields: &'a Map<String, Value>,

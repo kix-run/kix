@@ -333,8 +333,16 @@ impl Baseline {
                         report(PlanEvent::ReadingLive {
                             error: found.err().as_deref(),
                         });
-                        let (active_manifests, closures) =
-                            of_live(client, &opened, &discovery, cluster, &active, report).await?;
+                        let (active_manifests, closures) = of_live(
+                            client,
+                            build.graph(),
+                            &opened,
+                            &discovery,
+                            cluster,
+                            &active,
+                            report,
+                        )
+                        .await?;
                         live = Some(closures);
                         Baseline {
                             active_manifests,
@@ -843,7 +851,10 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
 /// annotations that change detection and prune ordering read, so live objects
 /// projected back to manifests can stand in for the old store graph.
 /// Activation CRs are excluded because their lifecycle is managed by
-/// superseding rather than pruning.
+/// superseding rather than pruning. An object whose identity hash names a
+/// manifest of `new` reads as that manifest (see
+/// [`owned_view::kix_owned_manifests_against`]), so the plan does not show
+/// server normalisation as a change.
 ///
 /// Includes only objects naming the Active record, a Failed record of this
 /// cluster, or a build listed under `status.orphansKeptFrom`. Objects of other
@@ -855,6 +866,7 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
 /// empty baseline when the apiserver is unhealthy.
 async fn of_live(
     client: &Client,
+    new: &StoreGraph,
     opened: &OpenedRecords,
     discovery: &[(ApiResource, kube::discovery::Scope)],
     cluster: &str,
@@ -890,7 +902,8 @@ async fn of_live(
         .into_iter()
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .collect();
-    let manifests = owned_view::kix_owned_manifests(objects.iter().cloned());
+    let manifests =
+        owned_view::kix_owned_manifests_against(objects.iter().cloned(), &new.manifests_by_hash());
     let closures = LiveClosures::of(&objects, &manifests, active.identity_hash.as_deref());
     Ok((manifests, closures))
 }
@@ -1175,9 +1188,17 @@ mod tests {
             }],
             ..Default::default()
         };
-        let (old, closures) = of_live(&client, &opened, &discovery, "a", &active, &|_| {})
-            .await
-            .unwrap();
+        let (old, closures) = of_live(
+            &client,
+            &StoreGraph::empty("c"),
+            &opened,
+            &discovery,
+            "a",
+            &active,
+            &|_| {},
+        )
+        .await
+        .unwrap();
         let mut names: Vec<&str> = old
             .iter()
             .filter_map(|m| m.pointer("/metadata/name")?.as_str())
@@ -1227,9 +1248,17 @@ mod tests {
             identity_hash: Some("a2".into()),
             ..Default::default()
         };
-        let (old, _) = of_live(&client, &opened, &discovery, "a", &active, &|_| {})
-            .await
-            .unwrap();
+        let (old, _) = of_live(
+            &client,
+            &StoreGraph::empty("c"),
+            &opened,
+            &discovery,
+            "a",
+            &active,
+            &|_| {},
+        )
+        .await
+        .unwrap();
         assert_eq!(names_of(&old), vec!["keeper"]);
 
         // The next build adds a monitoring object to the same package.

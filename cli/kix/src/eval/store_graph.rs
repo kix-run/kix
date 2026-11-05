@@ -149,6 +149,16 @@ fn resource_label(manifest: &serde_json::Value) -> String {
     format!("{kind}/{name}")
 }
 
+/// Where [`StoreGraph::synthesize`] puts an object its reference build holds.
+enum Place {
+    /// The `PackageInstance` of the reference package keyed `ns/instance`.
+    PackageInstance(String),
+    /// A resource of each reference package listed, keyed `ns/instance`.
+    Members(Vec<String>),
+    /// A resource outside every package.
+    ClusterLevel,
+}
+
 impl StoreGraph {
     /// Create an empty StoreGraph (for first-deploy comparisons).
     pub fn empty(cluster_name: &str) -> Self {
@@ -161,6 +171,15 @@ impl StoreGraph {
             resource_owner: HashMap::new(),
             ref_cache: HashMap::new(),
         }
+    }
+
+    /// Return each resource manifest keyed by its identity hash, the hash part
+    /// of its store path.
+    pub fn manifests_by_hash(&self) -> HashMap<String, &serde_json::Value> {
+        self.resources
+            .iter()
+            .map(|(path, node)| (store_hash(path), &node.manifest))
+            .collect()
     }
 
     /// Build a StoreGraph from a result directory. Commands load one through
@@ -470,20 +489,36 @@ impl StoreGraph {
     /// as live Kix-owned cluster objects or a snapshot directory) so it can
     /// stand in for a missing store graph during planning or `kix diff`.
     ///
-    /// Groups resources by their `kix.run/package` and
-    /// `kix.run/package-namespace` annotations, except that a manifest
-    /// matching a path in `reference` joins every reference package that lists
-    /// that path (preserving shared `secret-ref-*` and `service-ref-*` import
-    /// markers). A `PackageInstance` forms its own package unless it is an
-    /// import marker stamped with a declaring package; platform imports from
-    /// `kix.mkImport` are stamped `_cluster` and remain standalone packages.
-    /// Cluster-level resources without a package annotation stay in
-    /// `resources` outside any `PackageNode`.
+    /// Where a resource goes and whether it changed are two separate
+    /// decisions.
     ///
-    /// Resources whose identity hash and content match `reference` reuse the
-    /// reference store path and manifest so unchanged packages compare
-    /// path-equal. Resources that do not match keep their own manifest under a
-    /// content-addressed synthetic store path.
+    /// Where it goes depends on its kind, namespace, and name. When `reference`
+    /// has an object of that identity, the resource sits where the reference
+    /// puts it: under every reference package that lists it (one `secret-ref-*`
+    /// marker can be listed by several), as the `PackageInstance` of its
+    /// reference package, or at cluster level. The `kix.run/package` stamp
+    /// cannot be trusted here, because a build stamps every `PackageInstance`,
+    /// import markers included, `_cluster`, and a marker several packages list
+    /// with only one of them. A resource `reference` does not know groups by
+    /// its `kix.run/package` and `kix.run/package-namespace` annotations, and a
+    /// `PackageInstance` forms its own package unless it is an import marker
+    /// stamped with a declaring package. Platform imports from `kix.mkImport`
+    /// are stamped `_cluster` and remain standalone packages. Cluster-level
+    /// resources without a package annotation stay in `resources` outside any
+    /// `PackageNode`. When two `reference` objects share a kind, namespace,
+    /// and name (two API groups), neither is placed by identity.
+    ///
+    /// Because `reference` decides where an old object goes, an object that
+    /// moved to another package and also changed shows only as a changed
+    /// resource of its new package. Its old package shows no removal. A
+    /// comparison with the deployed build's own graph shows it removed from
+    /// one package and added to the other.
+    ///
+    /// Whether it changed depends on its identity hash. A resource whose
+    /// identity hash names a `reference` manifest for the same kind,
+    /// namespace, and name reuses the reference store path and manifest, so
+    /// unchanged packages compare path-equal. Other resources keep their own
+    /// manifest under a content-addressed synthetic store path.
     pub fn synthesize(manifests: &[serde_json::Value], reference: &StoreGraph) -> StoreGraph {
         use crate::manifest::keys;
         use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
@@ -496,15 +531,47 @@ impl StoreGraph {
             .map(|p| (store_hash(p), p))
             .collect();
 
-        let mut reference_members: HashMap<&PathBuf, Vec<(&str, &str)>> = HashMap::new();
+        let mut reference_members: HashMap<&PathBuf, Vec<String>> = HashMap::new();
         for p in reference.packages.values() {
             for res in &p.resource_paths {
                 reference_members
                     .entry(res)
                     .or_default()
-                    .push((p.namespace.as_str(), p.instance_name.as_str()));
+                    .push(format!("{}/{}", p.namespace, p.instance_name));
             }
         }
+        let place_by_id: HashMap<ResourceId, Place> = reference
+            .resources
+            .iter()
+            .map(|(path, node)| {
+                let place = match reference.packages.get(path) {
+                    Some(p) => {
+                        Place::PackageInstance(format!("{}/{}", p.namespace, p.instance_name))
+                    }
+                    None => match reference_members.get(path) {
+                        Some(members) => Place::Members(members.clone()),
+                        None => Place::ClusterLevel,
+                    },
+                };
+                (ResourceId::from_value(&node.manifest), place)
+            })
+            .fold(HashMap::new(), |mut places, (id, place)| {
+                // A `ResourceId` has no API group, so two kinds of one name in
+                // different groups share it. Neither can then be placed by
+                // identity, and both fall back to their stamps.
+                match places.entry(id) {
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(Some(place));
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        e.insert(None);
+                    }
+                }
+                places
+            })
+            .into_iter()
+            .filter_map(|(id, place)| place.map(|p| (id, p)))
+            .collect();
 
         let ann = |m: &Value, key: &str| -> Option<String> {
             m.pointer("/metadata/annotations")
@@ -523,19 +590,15 @@ impl StoreGraph {
             HashMap::new();
 
         for (i, m) in manifests.iter().enumerate() {
-            // Reuse the reference path only when both the identity hash and the
-            // manifest content match, so out-of-band edits to a live object under
-            // Kix remain visible in the diff.
+            // An object whose identity hash names a reference manifest for the
+            // same resource came from that manifest file, so it takes the
+            // reference path. This is the rule `kix deploy` uses to skip an
+            // object. Edits made since apply are drift, which a value diff
+            // against the live object cannot tell from server normalisation.
             let hash = ann(m, keys::IDENTITY_HASH).unwrap_or_default();
             let matched = reference_path_by_hash.get(&hash).filter(|&&p| {
-                let diff_config = crate::manifest::diff::DiffConfig::default().in_order();
-                crate::manifest::diff::engine::structural_diff(
-                    m,
-                    &reference.resources[p].manifest,
-                    "$",
-                    &diff_config,
-                )
-                .is_empty()
+                ResourceId::from_value(&reference.resources[p].manifest)
+                    == ResourceId::from_value(m)
             });
             // A synthetic path is named by content, so the invariant a real
             // graph gives for free holds here too: equal path ⇔ equal
@@ -558,23 +621,8 @@ impl StoreGraph {
                 },
             );
 
-            let stamped_pkg = ann(m, keys::PACKAGE).filter(|p| p != "_cluster");
-
-            // An import marker declared by a package (`crd-ref-*`,
-            // `secret-ref-*`, ...) is a resource of that package, grouped
-            // below. Any other PackageInstance is a package.
-            if m.get("kind").and_then(Value::as_str) == Some(PACKAGE_INSTANCE_KIND)
-                && !(crate::manifest::lifecycle::is_marker(m) && stamped_pkg.is_some())
-            {
-                let ns = m
-                    .pointer("/metadata/namespace")
-                    .and_then(Value::as_str)
-                    .unwrap_or("_cluster");
-                let name = m
-                    .pointer("/spec/instanceName")
-                    .and_then(Value::as_str)
-                    .or_else(|| m.pointer("/metadata/name").and_then(Value::as_str))
-                    .unwrap_or("unknown");
+            let is_pi = m.get("kind").and_then(Value::as_str) == Some(PACKAGE_INSTANCE_KIND);
+            let package_instance = |key: String| {
                 let version = m
                     .pointer("/spec/version")
                     .and_then(Value::as_str)
@@ -584,23 +632,50 @@ impl StoreGraph {
                     .pointer("/spec/lifecycle")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                pi_by_pkg.insert(format!("{ns}/{name}"), (path, version, lifecycle));
-                continue;
-            }
+                (key, (path.clone(), version, lifecycle))
+            };
 
-            if let Some(members) = matched.and_then(|&p| reference_members.get(p)) {
-                for (pkg_ns, pkg) in members {
-                    paths_by_pkg
-                        .entry(format!("{pkg_ns}/{pkg}"))
-                        .or_default()
-                        .push(path.clone());
+            match place_by_id.get(&ResourceId::from_value(m)) {
+                Some(Place::PackageInstance(key)) => {
+                    let (key, entry) = package_instance(key.clone());
+                    pi_by_pkg.insert(key, entry);
                 }
-            } else if let Some(pkg) = stamped_pkg {
-                let pkg_ns = ann(m, keys::PACKAGE_NAMESPACE).unwrap_or_else(|| "_cluster".into());
-                paths_by_pkg
-                    .entry(format!("{pkg_ns}/{pkg}"))
-                    .or_default()
-                    .push(path);
+                Some(Place::Members(members)) => {
+                    for key in members {
+                        paths_by_pkg
+                            .entry(key.clone())
+                            .or_default()
+                            .push(path.clone());
+                    }
+                }
+                Some(Place::ClusterLevel) => {}
+                None => {
+                    let stamped_pkg = ann(m, keys::PACKAGE).filter(|p| p != "_cluster");
+                    // An import marker declared by a package (`crd-ref-*`,
+                    // `secret-ref-*`, ...) is a resource of that package. Any
+                    // other PackageInstance is a package.
+                    if is_pi && !(crate::manifest::lifecycle::is_marker(m) && stamped_pkg.is_some())
+                    {
+                        let ns = m
+                            .pointer("/metadata/namespace")
+                            .and_then(Value::as_str)
+                            .unwrap_or("_cluster");
+                        let name = m
+                            .pointer("/spec/instanceName")
+                            .and_then(Value::as_str)
+                            .or_else(|| m.pointer("/metadata/name").and_then(Value::as_str))
+                            .unwrap_or("unknown");
+                        let (key, entry) = package_instance(format!("{ns}/{name}"));
+                        pi_by_pkg.insert(key, entry);
+                    } else if let Some(pkg) = stamped_pkg {
+                        let pkg_ns =
+                            ann(m, keys::PACKAGE_NAMESPACE).unwrap_or_else(|| "_cluster".into());
+                        paths_by_pkg
+                            .entry(format!("{pkg_ns}/{pkg}"))
+                            .or_default()
+                            .push(path);
+                    }
+                }
             }
         }
 
@@ -1220,36 +1295,274 @@ mod tests {
             );
         }
 
-        #[test]
-        fn same_hash_different_content_keeps_its_own_manifest() {
-            // A live object modified out-of-band under Kix keeps its identity
-            // hash stamp while its content differs from the reference build.
-            let built = stamped(
-                "Deployment",
-                "app",
-                "web",
-                ("app", "web"),
-                &h("dep"),
-                json!({"replicas": 2}),
-            );
-            let live = stamped(
-                "Deployment",
-                "app",
-                "web",
-                ("app", "web"),
-                &h("dep"),
-                json!({"replicas": 3}),
-            );
-            let reference = StoreGraph::synthesize(&[built], &StoreGraph::empty("c"));
-            let old = StoreGraph::synthesize(&[live], &reference);
+        /// Return the live side as a failed deploy leaves it: every manifest of
+        /// `build`, with each import marker's identity hash moved and its
+        /// `kix.run/package` stamp replaced by `stamp`.
+        fn after_failed_deploy(build: &StoreGraph, stamp: &str) -> Vec<Value> {
+            build
+                .resources
+                .values()
+                .map(|n| {
+                    let mut m = n.manifest.clone();
+                    if crate::manifest::lifecycle::is_marker(&m) {
+                        let anns = &mut m["metadata"]["annotations"];
+                        anns[keys::IDENTITY_HASH] = json!(h("moved"));
+                        anns[keys::PACKAGE] = json!(stamp);
+                    }
+                    m
+                })
+                .collect()
+        }
 
-            let old_pkg = pkg(&old, "app", "web");
-            assert_ne!(
-                old_pkg.resource_paths,
-                pkg(&reference, "app", "web").resource_paths
+        /// Return the names of the resources `g` lists under package `ns/name`.
+        fn names_in(g: &StoreGraph, ns: &str, name: &str) -> Vec<String> {
+            let mut names: Vec<String> = pkg(g, ns, name)
+                .resource_paths
+                .iter()
+                .map(|p| {
+                    g.resources[p].manifest["metadata"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .into()
+                })
+                .collect();
+            names.sort();
+            names
+        }
+
+        /// After a failed deploy, a live import marker carries another
+        /// identity hash than the new build's, and its stamp says `_cluster`
+        /// or names another package. It stays under the package that declares
+        /// it in the build, as a changed resource, and is not a removed
+        /// package.
+        #[test]
+        fn a_marker_whose_hash_moved_stays_under_its_declaring_package() {
+            let build = built(&[(
+                "pi",
+                rendered_pi("other-ns", "other", None),
+                vec![
+                    ("cm", rendered("ConfigMap", "other-ns", "other")),
+                    (
+                        "mk",
+                        rendered_pi(
+                            "other-ns",
+                            "secret-ref-other-mcp-token",
+                            Some(("Secret", "mcp-token")),
+                        ),
+                    ),
+                ],
+            )]);
+            for stamp in ["_cluster", "elsewhere"] {
+                let old = StoreGraph::synthesize(&after_failed_deploy(&build, stamp), &build);
+                assert_eq!(old.packages.len(), 1, "stamp {stamp}");
+                assert_eq!(
+                    names_in(&old, "other-ns", "other"),
+                    vec!["other", "secret-ref-other-mcp-token"],
+                );
+                let d = crate::plan::diff_graphs(&old, &build);
+                assert!(d.removed.is_empty() && d.added.is_empty(), "stamp {stamp}");
+                assert_eq!(d.changed.len(), 1);
+            }
+        }
+
+        /// A marker two packages list stays under both after its hash moved,
+        /// although its stamp names one package or `_cluster`.
+        #[test]
+        fn a_moved_marker_two_packages_list_stays_under_both() {
+            let secret_ref = rendered_pi(
+                "data",
+                "secret-ref-postgres-postgres",
+                Some(("Secret", "postgres")),
             );
-            let node = &old.resources[&old_pkg.resource_paths[0]];
-            assert_eq!(node.manifest["spec"]["replicas"], json!(3));
+            let build = built(&[
+                (
+                    "pg",
+                    rendered_pi("data", "postgres", None),
+                    vec![("secref", secret_ref.clone())],
+                ),
+                (
+                    "appdb",
+                    rendered_pi("app", "app-db", None),
+                    vec![("secref", secret_ref)],
+                ),
+            ]);
+            for stamp in ["_cluster", "postgres"] {
+                let old = StoreGraph::synthesize(&after_failed_deploy(&build, stamp), &build);
+                assert_eq!(old.packages.len(), 2, "stamp {stamp}");
+                for (ns, name) in [("data", "postgres"), ("app", "app-db")] {
+                    assert_eq!(
+                        names_in(&old, ns, name),
+                        vec!["secret-ref-postgres-postgres"],
+                    );
+                }
+            }
+        }
+
+        /// An object that moved from package `old` to package `web` and also
+        /// changed shows only as a change inside `web`, because the build
+        /// decides where it goes. `old` shows no removal. This pins the
+        /// limit, so a change to it is deliberate.
+        #[test]
+        fn a_moved_and_changed_object_shows_only_under_its_new_package() {
+            let build = built(&[(
+                "pi",
+                rendered_pi("app", "web", None),
+                vec![("cm", rendered("ConfigMap", "app", "settings"))],
+            )]);
+            let mut live: Vec<Value> = build
+                .resources
+                .values()
+                .filter(|n| n.manifest["kind"] != "ConfigMap")
+                .map(|n| n.manifest.clone())
+                .collect();
+            live.push(stamped(
+                "ConfigMap",
+                "app",
+                "settings",
+                ("app", "old"),
+                &h("before-move"),
+                json!({"k": "v"}),
+            ));
+
+            let old = StoreGraph::synthesize(&live, &build);
+            assert_eq!(names_in(&old, "app", "web"), vec!["settings"]);
+            let d = crate::plan::diff_graphs(&old, &build);
+            assert!(d.removed.is_empty() && d.added.is_empty());
+            assert_eq!(d.changed.len(), 1);
+            assert_eq!(d.changed[0].key, "app/web");
+        }
+
+        /// Two build objects of one kind, namespace, and name (two API groups)
+        /// share a `ResourceId`, so neither is placed by identity. A live one
+        /// groups by its stamp.
+        #[test]
+        fn objects_sharing_a_resource_id_group_by_their_stamps() {
+            let mut other_group = rendered("Certificate", "app", "tls");
+            other_group["apiVersion"] = json!("other.example/v1");
+            let build = built(&[
+                (
+                    "pi",
+                    rendered_pi("app", "web", None),
+                    vec![("cert", rendered("Certificate", "app", "tls"))],
+                ),
+                (
+                    "pi2",
+                    rendered_pi("app", "api", None),
+                    vec![("cert2", other_group)],
+                ),
+            ]);
+            let live = vec![stamped(
+                "Certificate",
+                "app",
+                "tls",
+                ("app", "stamped"),
+                &h("moved"),
+                json!({}),
+            )];
+            let old = StoreGraph::synthesize(&live, &build);
+            assert_eq!(names_in(&old, "app", "stamped"), vec!["tls"]);
+        }
+
+        /// An object the build does not have still groups by its stamp: a
+        /// stamped resource joins the package it names, and an unknown import
+        /// marker stamped `_cluster` is a package of its own, as a removal.
+        /// An object the build holds outside every package stays cluster-level
+        /// whatever its stamp says.
+        #[test]
+        fn an_object_the_build_lacks_groups_by_its_stamp() {
+            let build = built(&[(
+                "pi",
+                rendered_pi("app", "web", None),
+                vec![("dep", rendered("Deployment", "app", "web"))],
+            )]);
+            let mut live: Vec<Value> = build
+                .resources
+                .values()
+                .map(|n| n.manifest.clone())
+                .collect();
+            live.push(stamped(
+                "ConfigMap",
+                "app",
+                "leftover",
+                ("app", "web"),
+                &h("left"),
+                json!({}),
+            ));
+            let mut gone = rendered_pi("app", "secret-ref-gone", Some(("Secret", "gone")));
+            gone["metadata"]["annotations"][keys::PACKAGE] = json!("_cluster");
+            live.push(gone);
+
+            let mut with_ns = build.clone();
+            let ns_path = PathBuf::from(format!("/nix/store/{}-k8s", h("ns")));
+            with_ns.resources.insert(
+                ns_path.clone(),
+                ResourceNode {
+                    store_path: ns_path,
+                    manifest: json!({"apiVersion": "v1", "kind": "Namespace",
+                                     "metadata": {"name": "app"}}),
+                },
+            );
+            live.push(stamped(
+                "Namespace",
+                "_cluster",
+                "app",
+                ("app", "web"),
+                &h("old-ns"),
+                json!({}),
+            ));
+            live.last_mut().unwrap()["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .remove("namespace");
+
+            let old = StoreGraph::synthesize(&live, &with_ns);
+            assert_eq!(names_in(&old, "app", "web"), vec!["leftover", "web"]);
+            assert!(
+                pkg(&old, "app", "secret-ref-gone")
+                    .resource_paths
+                    .is_empty()
+            );
+            let ns = old
+                .resources
+                .iter()
+                .find(|(_, n)| n.manifest["kind"] == "Namespace")
+                .unwrap()
+                .0;
+            assert!(!old.resource_owner.contains_key(ns));
+        }
+
+        /// A live object carrying a build manifest's identity hash came from
+        /// that manifest file, so it reads as that manifest whatever the API
+        /// server or another manager did to its fields. A live object of
+        /// another resource that carries the hash does not match.
+        #[test]
+        fn an_identity_hash_match_alone_picks_the_reference_manifest() {
+            let build = built(&[(
+                "pi",
+                rendered_pi("app", "web", None),
+                vec![("dep", rendered("Deployment", "app", "web"))],
+            )]);
+            let built_dep = build
+                .resources
+                .values()
+                .find(|n| n.manifest["kind"] == "Deployment")
+                .unwrap();
+            let mut live = built_dep.manifest.clone();
+            live["spec"] = json!({"replicas": 3});
+            let mut other = live.clone();
+            other["metadata"]["name"] = json!("api");
+
+            let old = StoreGraph::synthesize(&[live, other], &build);
+            let node = &old.resources[&built_dep.store_path];
+            assert_eq!(node.manifest, built_dep.manifest);
+            let other_paths: Vec<&PathBuf> = old
+                .resources
+                .iter()
+                .filter(|(_, n)| n.manifest["metadata"]["name"] == "api")
+                .map(|(p, _)| p)
+                .collect();
+            assert_eq!(other_paths.len(), 1);
+            assert_ne!(other_paths[0], &built_dep.store_path);
         }
     }
 }

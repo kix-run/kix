@@ -1,0 +1,3 @@
+# 2026-11-04 · `cli/kix-cli/src/commands/diff.rs` · `kix diff` against the cluster groups old objects by the new build, even when the deployed build is on the machine.
+
+`kix plan` uses the deployed build's own package graph as the old side when it is present (`Baseline::diff_side`). `kix diff` always rebuilds the old side from live objects with `StoreGraph::synthesize`, which places each object where the new build puts it. So an object that moved to another package and also changed shows only under its new package in `kix diff`, while `kix plan` shows it removed from one package and added to the other. Using the deployed graph in `kix diff` is not a small change, because its field diff compares the build with the live view, not with the deployed build.

@@ -2408,6 +2408,14 @@ A field another manager changed is usually also owned by that manager, so a
 plan reports it as an ownership conflict naming the manager; with
 `--force-conflicts` the plan shows it as `reverts_drift` instead.
 
+`kix diff` against the cluster compares an object the build does not change
+(its `kix.run/identity-hash` names a manifest in the build) as that manifest,
+the same rule `kix deploy` uses to skip it. So values the API server rewrote
+never show as changes. Its `drift` section needs no deployed build. For each
+object whose fields Kix applied have changed since, it lists the fields the
+build sets that another field manager changed or took over, with the
+manager's name.
+
 The dry run cannot check an object whose kind comes from a CRD the deploy
 installs, or whose namespace the deploy creates, because a dry run persists
 neither. Those objects are listed under `not_checked` with their changes
