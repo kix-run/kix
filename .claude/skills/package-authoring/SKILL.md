@@ -504,9 +504,12 @@ deploy is the slowest and most informative step.
    `--force-conflicts`, or any other the fresh install did not need) and
    reaches ready. An object its plan deletes or keeps as an orphan is one
    existing installs lose. This catches a new required input that existing
-   installs lack (a Secret the new version reads), a change of kinds in a
-   stateful package that Kix treats as a data migration, renamed or removed
-   objects, and an immutable field that needs the object recreated. A
+   installs lack (a Secret the new version reads), a data migration in a
+   stateful package (an object renamed, or replaced by one of another kind
+   when both may hold data: a custom resource, or a built-in kind that declares
+   storage), renamed or removed objects, and an immutable
+   field that needs the object recreated. The storage and API-group rule is a
+   fallback until packages declare which objects hold data (issue #178). A
    deliberate breaking change that cannot pass says in the header's
    `Upgrades:` paragraph what an operator does. A new package has nothing
    on main; skip this deploy.
