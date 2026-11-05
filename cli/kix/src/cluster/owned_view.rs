@@ -787,7 +787,8 @@ mod tests {
 
     /// An operator added `creationTimestamp: null` inside each item of an
     /// atomic list Kix owns, so the live list differs from the build's. The
-    /// build does not change the object.
+    /// diff engine already reads a null as unset, so this checks only that
+    /// the comparison against the build shows nothing.
     #[test]
     fn a_null_creation_timestamp_in_an_atomic_list_does_not_show() {
         let template = |name: &str, live: bool| {
@@ -813,7 +814,9 @@ mod tests {
                 json!({"f:spec": {"f:runStrategy": {}, "f:dataVolumeTemplates": {}}}),
             )],
         );
-        assert_unchanged_by_build(&built, live);
+        let by_hash: HashMap<String, &Value> = [("h-live".to_string(), &built)].into();
+        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        assert_eq!(diff_paths(&built, &out), Vec::<String>::new());
     }
 
     /// Compare `live` against a build holding only `built`, keyed by its
