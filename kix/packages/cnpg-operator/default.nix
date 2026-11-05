@@ -416,14 +416,29 @@ in
 
         # The operator watches every kind, so every definition is applied,
         # with or without a handle.
+        #
+        # A Cluster keeps its databases on its volumes, and a Database is one
+        # of them. The operator keeps a Database's contents when the custom
+        # resource is deleted unless `databaseReclaimPolicy` is `delete`, so
+        # it is marked as holding data. Backups live in the object store and
+        # outlive their Backup objects. The other kinds are configuration.
         crds = {
-          backups = scope.mkCRD { spec = vendored "backups.${group}.json"; };
+          backups = scope.mkCRD {
+            spec = vendored "backups.${group}.json";
+            holdsData = false;
+          };
           # A ScheduledBackup and a Pooler report no conditions; a Pooler's
           # consumers wait on its Service's endpoints instead.
-          scheduledBackups = gate (scope.mkCRD { spec = vendored "scheduledbackups.${group}.json"; });
+          scheduledBackups = gate (
+            scope.mkCRD {
+              spec = vendored "scheduledbackups.${group}.json";
+              holdsData = false;
+            }
+          );
           poolers = gate (
             scope.mkCRD {
               spec = vendored "poolers.${group}.json";
+              holdsData = false;
               # Count `spec.instances` PgBouncer pods (default 1), each with
               # every container in `spec.template`, and the one Service the
               # operator makes for the Pooler.
@@ -437,11 +452,15 @@ in
                 ];
             }
           );
-          failoverQuorums = scope.mkCRD { spec = vendored "failoverquorums.${group}.json"; };
+          failoverQuorums = scope.mkCRD {
+            spec = vendored "failoverquorums.${group}.json";
+            holdsData = false;
+          };
           clusters = gate (
             scope.mkCRD {
               spec = vendored "clusters.${group}.json";
               readiness = ready;
+              holdsData = true;
               # The instances dial the hosts a Cluster names (externalClusters).
               factBehavior = {
                 endpoint = "terminate";
@@ -499,28 +518,42 @@ in
             scope.mkCRD {
               spec = vendored "databases.${group}.json";
               readiness = applied;
+              holdsData = true;
             }
           );
           databaseRoles = gate (
             scope.mkCRD {
               spec = vendored "databaseroles.${group}.json";
               readiness = applied;
+              holdsData = false;
             }
           );
           publications = gate (
             scope.mkCRD {
               spec = vendored "publications.${group}.json";
               readiness = applied;
+              holdsData = false;
             }
           );
           subscriptions = gate (
             scope.mkCRD {
               spec = vendored "subscriptions.${group}.json";
               readiness = applied;
+              holdsData = false;
             }
           );
-          imageCatalogs = gate (scope.mkCRD { spec = vendored "imagecatalogs.${group}.json"; });
-          clusterImageCatalogs = gate (scope.mkCRD { spec = vendored "clusterimagecatalogs.${group}.json"; });
+          imageCatalogs = gate (
+            scope.mkCRD {
+              spec = vendored "imagecatalogs.${group}.json";
+              holdsData = false;
+            }
+          );
+          clusterImageCatalogs = gate (
+            scope.mkCRD {
+              spec = vendored "clusterimagecatalogs.${group}.json";
+              holdsData = false;
+            }
+          );
         };
 
         defaultMonitoring = scope.mkResource {

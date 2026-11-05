@@ -393,6 +393,7 @@ rec {
         "factBehavior"
         "readiness"
         "usesAtLeast"
+        "holdsData"
       ];
       who = "Import instance '${namespaceName}/${instanceName}'";
       checkCrdEntry =

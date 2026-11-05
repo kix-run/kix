@@ -10,6 +10,7 @@
 //! - `kix.run/activations`: activation identity hashes, set during apply
 //!
 //! Note: `kix.run/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
+//! So is `kix.run/holds-data`, because it comes from the kind's declaration.
 
 use std::path::PathBuf;
 

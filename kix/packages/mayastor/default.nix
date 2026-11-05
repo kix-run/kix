@@ -327,6 +327,8 @@ in
           plural = "diskpools";
           version = "v1beta3";
           installedBy = self.operatorDiskpool;
+          # A pool is the disk the replicas of every volume on it live on.
+          holdsData = true;
           readiness.condition = {
             type = "PoolReady";
             status = "True";

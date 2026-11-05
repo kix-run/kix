@@ -769,6 +769,7 @@ let
           kind = "CiliumNetworkPolicy";
           plural = "ciliumnetworkpolicies";
           version = "v2";
+          holdsData = false;
         };
 
         rule = kind: extra: { stubRule = kind; } // extra;
@@ -782,6 +783,7 @@ let
               // {
                 apiVersion = "cilium.io/v2";
                 kind = "CiliumNetworkPolicy";
+                holdsData = false;
                 requires = (extraArgs.requires or [ ]) ++ [ crdRef ];
               }
             );
@@ -891,6 +893,7 @@ let
             group = "monitoring.coreos.com";
             inherit kind plural;
             version = "v1";
+            holdsData = false;
           };
         as =
           crd: consumerScope: args:

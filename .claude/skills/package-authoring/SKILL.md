@@ -85,7 +85,10 @@ rewrites the later ones.
   (`v2_discussions/148_clickhouse_packages_plan.md:39`).
 - CRDs: vendor or `mkCRDRef` markers (crd-vendoring skill §1). An operator
   with admission webhooks gets a gate Job on every handle on either route
-  (C21).
+  (C21). Every declaration sets `holdsData`: `true` when deleting a custom
+  resource of the kind loses data (a database, a storage pool, a backup),
+  `false` otherwise (C24). A stateful package that renders a custom resource
+  of a kind without it fails to build.
 
 ### 2. Upstream research
 
@@ -104,7 +107,7 @@ named decision; record the fact and its upstream path in the pull request.
 | Metrics | port, whether on the public port, auth, the flag that enables them | `kix.monitor` wiring (Mo11, Mo12) |
 | Clustering and HA, in source | in-memory state, sessions, caches, job queues, leader election, peer discovery, cron singletons | the `pick` table and any ceiling (step 3) |
 | Monitoring material and failure reports | shipped rules or mixins, outage threads | alerts (step 9) |
-| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types | `crds/sources.txt`, readiness (C5) |
+| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types, what the operator deletes with each custom resource (its volumes, its backup files) | `crds/sources.txt`, readiness (C5), `holdsData` (C24) |
 | Kubernetes client calls, for a program that calls the API with RBAC not vendored from upstream (crd-vendoring covers vendored roles) | every call (list, get, watch, create, update, patch, delete, deletecollection) on every resource and subresource (`pods/log`, `<kind>/status`), at startup and in every code path | the Role: one rule per call, nothing extra (C10, C23) |
 
 "Does it run replicated, and what does it need for that?" is a mandatory
@@ -239,7 +242,8 @@ the defaults fails there.
   from `self.<part>.out.*` so it carries string context (D24).
 - `meta.defaultAliases` when others consume it (M8); `meta.scope = "namespace"`
   when it hands consumers a Secret (S9); `meta.lifecycle = "stateful"` when it
-  provides state others depend on (M6); `meta.conflictsWith` only for a
+  provides state others depend on (M6), and then every custom resource it
+  renders is built with `scope.mkCR` from a declaration with `holdsData`; `meta.conflictsWith` only for a
   genuine one-per-cluster package (M9).
 - Publish every `out` field at every toggle, null when off (D25).
 
@@ -506,10 +510,8 @@ deploy is the slowest and most informative step.
    existing installs lose. This catches a new required input that existing
    installs lack (a Secret the new version reads), a data migration in a
    stateful package (an object renamed, or replaced by one of another kind
-   when both may hold data: a custom resource, or a built-in kind that declares
-   storage), renamed or removed objects, and an immutable
-   field that needs the object recreated. The storage and API-group rule is a
-   fallback until packages declare which objects hold data (issue #178). A
+   when both hold data by their `kix.run/holds-data` annotation), renamed or
+   removed objects, and an immutable field that needs the object recreated. A
    deliberate breaking change that cannot pass says in the header's
    `Upgrades:` paragraph what an operator does. A new package has nothing
    on main; skip this deploy.

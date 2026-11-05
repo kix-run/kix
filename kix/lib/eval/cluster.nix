@@ -923,6 +923,46 @@
           message = "kix: ${message}";
         }) (builtins.concatMap ofNamespace realNsNames);
 
+      # Fail the build when a stateful package renders a custom resource
+      # whose kind does not declare `holdsData`. Deploy reads the resulting
+      # `kix.run/holds-data` mark to decide which removals are data
+      # migrations, and a stateful package is where a wrong guess costs data.
+      # Only the package's own parts count: policies that hooks derive and
+      # the PackageInstance record hold no data.
+      holdsDataAssertions =
+        let
+          plain = v: builtins.unsafeDiscardStringContext (toString v);
+          isStateful = inst: ((inst._meta.packageMeta or { }).lifecycle or null) == "stateful";
+          ofInstance =
+            inst:
+            let
+              owner = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+              undeclared = builtins.filter (
+                r:
+                r ? rawManifest
+                && (r.declaredHoldsData or null) == null
+                && k8s.facts.isForeignGroup (plain r.apiVersion)
+              ) (helpers.instancePartResources inst);
+              byKind = builtins.groupBy (
+                r: "${builtins.head (lib.splitString "/" (plain r.apiVersion))}/${plain r.kind}"
+              ) undeclared;
+            in
+            lib.mapAttrsToList (groupKind: rs: {
+              assertion = false;
+              message =
+                let
+                  kind = plain (builtins.head rs).kind;
+                in
+                "kix: instance ${owner} has lifecycle = \"stateful\" and renders ${kind} "
+                + builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) rs)
+                + ", but ${groupKind} does not declare whether it holds data. "
+                + "Set holdsData on the scope.mkCRD or scope.mkCRDRef that declares ${groupKind}: true when deleting a ${kind} loses data (a database, a storage pool), "
+                + "false when it does not (monitoring, certificates, policy, configuration). "
+                + "Build the ${kind} with scope.mkCR from that declaration so it carries the answer.";
+            }) byKind;
+        in
+        builtins.concatMap ofInstance (builtins.filter isStateful allInstancesList);
+
       # Reject cluster-scoped objects rendered with the same API group, kind,
       # and name by multiple active instances. Identical copies would otherwise
       # be collapsed by `dedupeByOutPath`, and differing copies would fail
@@ -1096,6 +1136,7 @@
           ++ sharedClusterObjectAssertions
           ++ podSecurityAssertions
           ++ quotaAssertions
+          ++ holdsDataAssertions
           ++ crossResourceAssertions
           ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };

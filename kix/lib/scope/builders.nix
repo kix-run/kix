@@ -783,6 +783,7 @@ in
               readiness
               ;
             usesAtLeast = attrs.usesAtLeast or null;
+            holdsData = attrs.holdsData or null;
           };
         in
         crdResource

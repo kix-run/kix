@@ -65,6 +65,42 @@ rec {
   extractStoreHash =
     path: builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString path));
 
+  # Return whether a manifest holds data, as `kix.run/holds-data` records it:
+  # `declared` (the kind's `holdsData`) when it is set, true for a
+  # PersistentVolumeClaim, a PersistentVolume, or a StatefulSet with volume
+  # claim templates, and null otherwise. Other built-in kinds stay unmarked
+  # because the CLI's storage-shape fallback already reads them as holding
+  # no data, and a "false" mark would change every object's identity hash.
+  holdsDataOf =
+    declared: manifest:
+    let
+      apiVersion = manifest.apiVersion or "";
+      kind = manifest.kind or "";
+    in
+    if declared != null then
+      declared
+    else if
+      apiVersion == "v1"
+      && builtins.elem kind [
+        "PersistentVolumeClaim"
+        "PersistentVolume"
+      ]
+    then
+      true
+    else if
+      apiVersion == "apps/v1"
+      && kind == "StatefulSet"
+      && (manifest.spec.volumeClaimTemplates or [ ]) != [ ]
+    then
+      true
+    else
+      null;
+
+  # Return whether `apiVersion` names a group with no dot: the core group
+  # and `apps`, `batch`, `policy`, and `autoscaling`. Their kinds hold data
+  # only by shape, so `holdsData` cannot be set on them.
+  isCoreGroup = apiVersion: !(lib.hasInfix "." (builtins.head (lib.splitString "/" apiVersion)));
+
   mkImportResource =
     {
       name,
@@ -171,6 +207,9 @@ rec {
       # declaration, or null. `buildCluster` calls it on the rendered manifest
       # to check namespace ResourceQuotas.
       usesAtLeast ? null,
+      # Boolean from the CRD declaration, or null. Written as
+      # `kix.run/holds-data` (see `holdsDataOf`).
+      holdsData ? null,
       # Field paths (`ownership.cede = [ "spec.versions" "webhooks[*].rules" ]`)
       # that another controller takes over after creation. When a subsequent
       # apply hits a field-ownership conflict limited to these paths, deploy
@@ -184,6 +223,8 @@ rec {
           throw "k8s-resource '${kind}/${name}': ownership takes only `cede`, got ${builtins.toJSON (builtins.attrNames ownership)}"
         else if !(builtins.isList cede) || !(builtins.all builtins.isString cede) then
           throw "k8s-resource '${kind}/${name}': ownership.cede must be a list of field paths, e.g. [ \"spec.versions\" ]"
+        else if holdsData != null && isCoreGroup apiVersion then
+          throw "k8s-resource '${kind}/${name}': holdsData is not accepted for the built-in kind ${kind}. Kix decides whether a built-in object holds data from its shape. Declare holdsData on the scope.mkCRD or scope.mkCRDRef of a custom resource kind"
         else
           null;
       cedeAnnotations = lib.optionalAttrs (cede != [ ]) {
@@ -374,8 +415,13 @@ rec {
       );
       expectEntries = lib.unique (map (e: "${e.apiVersion}|${e.kind}|${e.name}") expectations);
 
+      holdsDataMark = holdsDataOf holdsData rawManifest;
+
       stampedAnnotations =
-        lib.optionalAttrs (depEntries != [ ]) {
+        lib.optionalAttrs (holdsDataMark != null) {
+          ${kixKeys.holdsData} = lib.boolToString holdsDataMark;
+        }
+        // lib.optionalAttrs (depEntries != [ ]) {
           ${kixKeys.dependsOn} = builtins.concatStringsSep "," depEntries;
         }
         // lib.optionalAttrs (expectEntries != [ ]) {
@@ -569,6 +615,10 @@ rec {
         # The netpol instance processor uses podSelector and absorbed endpoint
         # facts to derive policies for pods created by custom controllers.
         inherit factBehavior usesAtLeast;
+        # The `holdsData` this object was built with: the kind's declaration,
+        # or null. `buildCluster` refuses a stateful package's custom
+        # resources that have none.
+        declaredHoldsData = holdsData;
         absorbedEndpointFacts = _absorbedEndpointFacts;
 
         rawManifest = rawManifestStamped;
@@ -792,6 +842,11 @@ rec {
       # `spec.hard` (`pods`, `requests.cpu`, `requests.storage`, `services`).
       # Passed to each CR so `buildCluster` can check namespace ResourceQuotas.
       usesAtLeast ? null,
+      # Whether each CR of the kind holds data that removing it can lose:
+      # true for a database or storage pool, false for monitoring, policy,
+      # or configuration. Written on each CR as `kix.run/holds-data`. A
+      # stateful package's custom resources must have it.
+      holdsData ? null,
       # Readiness check stamped as `kix.run/readiness` on each CR (`{ path; equals; }`,
       # `{ path; notEquals; }`, or `{ condition = { type; status; }; }`) for
       # operators that do not use standard `Ready` or `Available` conditions.
@@ -801,6 +856,12 @@ rec {
       crKind = kind;
 
       _validatedReadiness = validateReadiness "mkCRDBuilders" "${group}/${kind}" readiness;
+
+      _validatedHoldsData =
+        if holdsData == null || builtins.isBool holdsData then
+          holdsData
+        else
+          throw "${declaredBy}: holdsData for ${group}/${kind} is ${builtins.toJSON holdsData}; set it to true when a ${kind} keeps data that deleting it loses, such as a database or a storage pool, and false otherwise.";
 
       # A CR can override the default version, normally the CRD's storage
       # version, with another served one. `consumer` is "ns/instance" when
@@ -829,6 +890,7 @@ rec {
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (usesAtLeast != null) { inherit usesAtLeast; }
+        // lib.optionalAttrs (_validatedHoldsData != null) { holdsData = _validatedHoldsData; }
         // lib.optionalAttrs (_validatedReadiness != null) {
           annotations = (args.annotations or { }) // {
             ${kixKeys.readiness} = builtins.toJSON _validatedReadiness;
@@ -915,6 +977,8 @@ rec {
       readiness ? null,
       # The least the operator always uses for each CR; see mkCRDBuilders.
       usesAtLeast ? null,
+      # Whether each CR of the kind holds data; see mkCRDBuilders.
+      holdsData ? null,
     }:
     let
       declaration = "${site} in ${namespaceName}/${instanceName}";
@@ -987,7 +1051,7 @@ rec {
         crdOrRef = marker;
         factBehavior = _validatedBehavior;
         readiness = _validatedReadiness;
-        inherit usesAtLeast;
+        inherit usesAtLeast holdsData;
         version = _validatedVersion;
         servedVersions = _validatedServed;
         crdScope = _validatedScope;

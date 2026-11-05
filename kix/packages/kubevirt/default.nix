@@ -596,6 +596,7 @@ in
         # operator installs the rest with full schemas.
         kubeVirts = scope.mkCRD {
           spec = (readJSON ./crds/kubevirts.kubevirt.io.json).spec;
+          holdsData = false;
           readiness = {
             path = "/status/phase";
             equals = "Deployed";
@@ -611,6 +612,9 @@ in
           plural = "virtualmachines";
           version = "v1";
           installedBy = self.kubevirtCR;
+          # Deleting a VirtualMachine deletes the disks its
+          # `spec.dataVolumeTemplates` made.
+          holdsData = true;
           # Count one `virt-launcher` pod when the VM is configured to run
           # (`spec.runStrategy` is `Always` or `RerunOnFailure`, or
           # `spec.running` is `true`). Only the pod count is reported because
