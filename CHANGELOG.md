@@ -20,6 +20,10 @@ Every pull request that changes something a Kix user sees adds a line under
 
 - `cnpg-cluster` refuses `extraSpec.bootstrap.initdb.import`. Set the `import` option instead, which wires the source as a dependency and derives its network policy.
 
+### Fixed
+
+- `kix diff` shows one changed value inside a list item as one change to that value, not as the item removed and a new one added. Lists of objects with a `metadata.name`, such as a VirtualMachine's `dataVolumeTemplates`, match items by that name, and `creationTimestamp: null` on one side no longer counts as a difference. In `-o json` output, the `path` of an added or removed list item now gives its real index in the list.
+
 ## 0.5.0 - 2026-11-04
 
 The first numbered release. Binaries published before it report the version
