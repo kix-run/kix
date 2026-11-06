@@ -265,7 +265,7 @@
       "offlineCaptures": [
         "how-to/application-custom-resource-readiness/widget"
       ],
-      "unverifiedNixBlocks": 1
+      "unverifiedNixBlocks": 3
     },
     {
       "page": "author-packages-and-clusters/keep-intentionally-empty-values",
@@ -367,6 +367,12 @@
         "how-to/dependency-cross-namespace/check"
       ],
       "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster",
+      "scenario": "operations",
+      "status": "implemented",
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "operate-a-cluster/check-cluster-health",
