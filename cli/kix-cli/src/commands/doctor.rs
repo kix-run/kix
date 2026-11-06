@@ -94,7 +94,7 @@ fn verify(rt: &Runtime) -> usize {
         );
     }
     println!(
-        "      A file you replaced on purpose, such as your own build of an LGPL program, shows here too."
+        "      Reinstall Kix from its release archive if this was not intentional. A file you replaced on purpose, such as your own build of an LGPL program, shows here too."
     );
     1
 }

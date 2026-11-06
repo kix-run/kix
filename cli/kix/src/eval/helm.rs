@@ -52,7 +52,7 @@ pub enum HelmError {
     LibraryMismatch(Box<crate::library::HelmMismatch>),
 
     #[error(
-        "this cluster's Kix library writes Helm specs of version {found}, and this kix binary reads version {SPEC_VERSION}. Use the kix binary of the same version as the library"
+        "this cluster's Kix library writes Helm specs of version {found}, and this kix binary reads version {SPEC_VERSION}. Run `kix lib update` to move flake.lock to this kix release, or use the kix binary of the same version as the library"
     )]
     SpecVersion { found: u64 },
 
@@ -104,9 +104,9 @@ pub enum HelmError {
     },
 
     #[error(
-        "evaluation still needs {} after Kix wrote it. Run `nix store verify --no-trust {}` against Kix's store",
+        "evaluation still needs {} after Kix wrote it to the local store ({}). Remove Kix's local store directory and run the command again",
         path.display(),
-        path.display()
+        super::store::store_root().display()
     )]
     Stuck { path: PathBuf },
 }
@@ -257,7 +257,7 @@ fn derivers(outputs: &[PathBuf]) -> Vec<PathBuf> {
             .map(PathBuf::from)
             .collect(),
         Err(error) => {
-            tracing::warn!(%error, "could not look up the derivers of paths in an evaluation error");
+            tracing::warn!(%error, "could not look up the Helm charts behind paths in an evaluation error; Kix will report the evaluation error as-is");
             Vec::new()
         }
     }

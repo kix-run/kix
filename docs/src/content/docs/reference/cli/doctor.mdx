@@ -41,7 +41,7 @@ Each `kix` binary is compiled against the exact tool versions in `cli/runtime/pr
 ### Version update policy
 
 - **Patch and minor updates:** A patch update of a bundled program (for example, `2.35.3` to `2.35.4`) can ship in a Kix patch release. A minor update of a bundled program ships in a Kix minor release.
-- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the `kixpkgs` library and the `kix` binary both name the exact Helm versions. When a Kix patch or minor release updates a bundled Helm version, projects that use Helm charts stop before rendering until you run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with the new `kix` release. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
+- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the `kixpkgs` library and the `kix` binary both name the exact Helm versions. When a Kix patch or minor release updates a bundled Helm version, projects that use Helm charts stop before rendering until you run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with the new Kix release. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
 
 ## Third-party licenses and LGPL components
 
@@ -71,4 +71,4 @@ ok    all 10 files match the SHA-256 in manifest.json
 ## Exit status
 
 - `0` when the runtime directory exists and either all program versions and file SHA-256 hashes match `manifest.json`, or `KIX_RUNTIME_DIR` points to a custom runtime directory that has no `manifest.json` (in which case `kix doctor` prints a `warn` line and exits `0`).
-- `1` when the runtime directory cannot be found, `manifest.json` is unreadable or disagrees with the programs this `kix` expects, or any file listed in `manifest.json` is missing, unexpected, or fails its SHA-256 check.
+- `1` when the runtime directory cannot be found, `manifest.json` is unreadable or disagrees with the programs this `kix` expects, or any file listed in `manifest.json` is missing or fails its SHA-256 or symlink check.

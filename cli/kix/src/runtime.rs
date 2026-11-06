@@ -117,7 +117,7 @@ pub enum Want<'a> {
 /// Why Kix could not find or prepare a program.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
-    #[error("the Kix runtime in {} has no {program}", dir.display())]
+    #[error("the Kix runtime in {} has no {program}. Install bin/kix and libexec/kix from the Kix release archive, or point {RUNTIME_DIR_VAR} at a complete Kix runtime directory", dir.display())]
     Missing { program: String, dir: PathBuf },
 
     #[error(
@@ -172,7 +172,7 @@ pub enum RuntimeError {
         source: std::io::Error,
     },
 
-    #[error("could not prepare the Nix store at {}: {message}", root.display())]
+    #[error("could not prepare Kix's local store at {}: {message}", root.display())]
     Store { root: PathBuf, message: String },
 }
 
@@ -523,7 +523,7 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, RuntimeError> {
         && v != MANIFEST_VERSION
     {
         return Err(invalid(format!(
-            "it has format version {v}, and this kix reads version {MANIFEST_VERSION}"
+            "it has format version {v}, and this kix reads version {MANIFEST_VERSION}. Install bin/kix and libexec/kix from the same Kix release"
         )));
     }
     for program in &manifest.programs {
@@ -700,7 +700,9 @@ fn use_store(cmd: &mut Command, root: &Path) -> Result<(), RuntimeError> {
     let root_str = root
         .to_str()
         .filter(|r| !r.chars().any(char::is_whitespace))
-        .ok_or_else(|| fail("the path must be UTF-8 with no spaces".to_string()))?;
+        .ok_or_else(|| {
+            fail("the path must be UTF-8 with no spaces; set KIX_STORE_ROOT to a path without spaces".to_string())
+        })?;
     let conf_dir = root.join("etc/nix");
     let conf = format!(
         "# Kix writes this file each time it runs Nix with this store.\n\

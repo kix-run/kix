@@ -1,6 +1,6 @@
 ---
 title: "`lib`"
-description: "Reference for kix lib update, which aligns a project's kixpkgs flake.lock entry with the installed kix CLI version."
+description: "Reference for kix lib update, which aligns a project's kixpkgs flake.lock entry with the installed Kix CLI version."
 ---
 
 import Command from "../../../../components/Command.astro";
@@ -17,7 +17,7 @@ This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/com
 
 ## Why the CLI and `kixpkgs` versions stay aligned
 
-When a cluster uses Helm charts (`kix.helmChart`, `scope.helm.importChart`, or `scope.helm.importChartCrds`), both `kixpkgs` and the `kix` CLI record the exact Helm 3 and Helm 4 versions used to render templates (`kix/lib/helm-versions.json` in `kixpkgs`, and `cli/runtime/programs.json` in the CLI). Keeping those versions identical guarantees that `helm template` produces the same resource hashes on every machine.
+When a cluster uses Helm charts (`kix.helmChart`, `scope.helm.importChart`, or `scope.helm.importChartCrds`), both `kixpkgs` and the Kix CLI record the exact Helm 3 and Helm 4 versions used to render templates (`kix/lib/helm-versions.json` in `kixpkgs`, and `cli/runtime/programs.json` in the CLI). Keeping those versions identical guarantees that `helm template` produces the same resource hashes on every machine.
 
 If you upgrade the `kix` binary (or update `flake.lock`) and the two sides disagree on a Helm version, Kix stops before rendering the chart and prints a mismatch error telling you how to align them:
 
@@ -35,11 +35,7 @@ Global flags `-v` / `--verbose`, `-q` / `--quiet`, and `--no-color` also apply. 
 
 ## How `kix lib update` updates `flake.lock`
 
-`kix lib update` reads and parses `flake.lock` directly, walks the `nodes` graph from the root node (skipping `follows` aliases so it updates the declaring input), locates the input locked to `github:kix-run/kixpkgs` (or named `kixpkgs` / `kix`), and runs:
-
-```text
-nix flake lock --override-input <input-path> github:kix-run/kixpkgs/v<version>
-```
+`kix lib update` reads `flake.lock` and finds the input locked to `github:kix-run/kixpkgs` (or named `kixpkgs` or `kix`). If an input uses `follows`, Kix updates the declaring input. It then locks that input to `github:kix-run/kixpkgs/v<version>`.
 
 It modifies **only `flake.lock`** and never edits `flake.nix`.
 
@@ -57,7 +53,7 @@ For this lockfile update to work cleanly, your `flake.nix` should declare `kixpk
 
 - **Pinned tag, branch, or commit in `flake.nix`** (for example, `github:kix-run/kixpkgs/v0.6.0`): `kix lib update` will not silently override a ref written in `flake.nix`. Change the input URL in `flake.nix` to `github:kix-run/kixpkgs/v<version>` (or remove the `/v...` ref from `flake.nix` so `kix lib update` can manage the version in `flake.lock`) and run `kix lib update` again.
 - **Custom fork or Git URL**: Point the input in `flake.nix` at `github:kix-run/kixpkgs/v<version>`, or move that copy of Kix to the `v<version>` release.
-- **Local `path:` input**: Check out the `v<version>` release in that local directory.
+- **Local `path:` input**: Point the input in `flake.nix` at `github:kix-run/kixpkgs/v<version>`, or check out the `v<version>` release in that local directory.
 
 ## Examples
 
@@ -86,4 +82,4 @@ Kix library is already 0.7.0.
 ## Exit status
 
 - `0` when `flake.lock` is updated (or already at the target revision, or `--dry-run` succeeds).
-- `1` when the flake has no `kixpkgs` input, when `flake.nix` pins a ref/fork/path that must be edited by hand, or when `nix flake lock` cannot fetch the target tag.
+- `1` when the flake has no `kixpkgs` input, when `flake.nix` pins a ref, fork, or `path:` input that `kix lib update` cannot update on its own, or when Kix cannot fetch the target release tag.

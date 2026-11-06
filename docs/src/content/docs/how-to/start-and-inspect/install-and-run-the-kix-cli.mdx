@@ -1,12 +1,12 @@
 ---
 title: "Install and run the Kix CLI"
-description: "Install the kix CLI from a release archive and verify that it can discover and evaluate your clusters."
+description: "Install the Kix CLI from a release archive and verify that it can discover and evaluate your clusters."
 ---
 
 import Command from '/src/components/Command.astro';
 import version from '/src/command-output/how-to/application-install/version.json';
 
-Install the `kix` CLI from a pre-built release archive and verify that it can
+Install the Kix CLI from a pre-built release archive and verify that it can
 discover and evaluate your clusters.
 
 ## Install from a release archive
@@ -60,7 +60,7 @@ If the project is in another directory, pass `--flake`:
 <Command commands={["kix --flake /path/to/project list clusters"]} />
 
 On the first evaluation, Kix downloads the project's locked inputs into its
-local store (`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Subsequent
+local store (`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Later
 commands reuse the cached inputs. Set `KIX_STORE_ROOT` if you want Kix to keep
 its local store in a different directory.
 

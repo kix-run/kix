@@ -32,8 +32,9 @@ re-evaluates the cluster.
 
 Commands that evaluate the cluster's activation index directly, such as
 `deploy`, `plan`, `diff`, `bundle`, `export`, `logs`, and `pf`, do not read
-`eval-cache.db`. Nix's own evaluation cache and Kix's store (`<cache dir>/kix/store`)
-apply to them.
+`eval-cache.db`. They evaluate the cluster each time. Kix's local store
+(`<cache dir>/kix/store`) keeps the project's inputs and rendered Helm charts,
+so these are not fetched or rendered again.
 
 ## Cache key
 
