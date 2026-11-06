@@ -1,5 +1,6 @@
 //! Consolidated CLI smoke tests: one test per command to verify basic functionality.
-//! These invoke the real binary with `assert_cmd`, so they require `nix`.
+//! These invoke the real binary with `assert_cmd`, so they need a Kix runtime.
+//! The development shell names one in `KIX_RUNTIME_DIR`.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
