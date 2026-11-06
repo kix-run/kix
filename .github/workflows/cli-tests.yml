@@ -102,18 +102,23 @@ jobs:
             nix eval --raw ".#packages.$system.kix-runtime-spec.drvPath" >/dev/null
           done
 
-  # Decides whether this push is a release, from the workspace version in
+  # Decides whether this run is a release, from the workspace version in
   # cli/Cargo.toml: it is when this repository has no `v<version>` tag yet.
   # A version lower than the latest tag, or one with no CHANGELOG.md
   # section, fails here, before anything is built. cli/README.md § Releases
   # has the whole process.
+  #
+  # It also decides whether the archive jobs run (`build`). They run for a
+  # release push, for workflow_dispatch, and for a pull request that changes
+  # how kix runs Nix or Helm without a Nix install. Only `publish` makes a
+  # release public, and only for a push to main.
   version:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
       notes: ${{ steps.version.outputs.notes }}
+      build: ${{ steps.build.outputs.build }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -157,6 +162,29 @@ jobs:
             echo 'KIX_RELEASE_NOTES_END'
           } >> "$GITHUB_OUTPUT"
 
+      # The paths are what the without-nix jobs test: the bundled runtime,
+      # the code that evaluates a cluster and renders its Helm charts, and
+      # the Nix side of those renders.
+      - name: Build the archives?
+        id: build
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          build=false
+          case $EVENT in
+            workflow_dispatch) build=true ;;
+            push) build=$RELEASE ;;
+            pull_request)
+              if git diff --name-only "$BASE_SHA...HEAD" | grep -Eq \
+                '^(cli/runtime/|cli/kix/src/eval/|kix/lib/helm\.nix$|kix/lib/helm-versions\.json$|\.github/workflows/cli-tests\.yml$)'; then
+                build=true
+              fi
+              ;;
+          esac
+          echo "build=$build" | tee -a "$GITHUB_OUTPUT"
+
   # Builds the runtime a release ships beside the binary, in libexec/kix/
   # (cli/runtime/), on a runner of each target platform: Nix fetches the
   # programs for its own platform, and the macOS bundle step needs macOS to
@@ -166,7 +194,7 @@ jobs:
   # links.
   runtime:
     needs: [test, version]
-    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.version.outputs.build == 'true'
     strategy:
       matrix:
         include:
@@ -247,7 +275,7 @@ jobs:
   # jobs from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
   release:
     needs: [test, version, runtime]
-    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.version.outputs.build == 'true'
     # GitHub-hosted rather than Spindle. The binaries are static musl, and
     # nixpkgs has no musl standard library for its rustc in the binary
     # cache, while rustup's toolchains do not run on the NixOS image.
@@ -342,7 +370,7 @@ jobs:
   # (cli/runtime/without-nix.sh).
   without-nix:
     needs: [version, release]
-    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.version.outputs.build == 'true'
     strategy:
       matrix:
         include:
