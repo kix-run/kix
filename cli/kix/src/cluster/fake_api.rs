@@ -3,9 +3,10 @@
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality label
-//! selector), DELETE (honoring `preconditions`), and server-side apply on the
-//! objects it holds. An apply stores the manifest sent as it is, and a dry-run
-//! apply (`dryRun=All`) answers without storing.
+//! selector), PATCH (as a JSON merge patch, on the object or its `status`),
+//! DELETE (honoring `preconditions`), and server-side apply on the objects it
+//! holds. An apply stores the manifest sent as it is, and a dry-run apply
+//! (`dryRun=All`) answers without storing.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. Anything else answers 404.
 //!
@@ -177,8 +178,15 @@ impl FakeApi {
                 let method = req.method().clone();
                 let path = req.uri().path().to_string();
                 let query = req.uri().query().unwrap_or("").to_string();
+                // Kubernetes tells a server-side apply from a merge patch by
+                // the request's content type, so the fake does too.
+                let apply = req
+                    .headers()
+                    .get(http::header::CONTENT_TYPE)
+                    .is_some_and(|v| v.as_bytes().starts_with(b"application/apply-patch"));
                 let body = req.into_body().collect().await.unwrap().to_bytes();
-                let (status, content_type, body) = api.respond(&method, &path, &query, &body);
+                let (status, content_type, body) =
+                    api.respond(&method, &path, &query, &body, apply);
                 let resp = http::Response::builder()
                     .status(status)
                     .header("content-type", content_type)
@@ -196,6 +204,7 @@ impl FakeApi {
         path: &str,
         query: &str,
         body: &[u8],
+        apply: bool,
     ) -> (u16, &'static str, String) {
         {
             let mut st = self.state.lock().unwrap();
@@ -217,11 +226,18 @@ impl FakeApi {
                 return (code, "text/plain", format!("{code} page not found\n"));
             }
         }
-        let (status, value) = self.handle(method, path, query, body);
+        let (status, value) = self.handle(method, path, query, body, apply);
         (status, "application/json", value.to_string())
     }
 
-    fn handle(&self, method: &http::Method, path: &str, query: &str, body: &[u8]) -> (u16, Value) {
+    fn handle(
+        &self,
+        method: &http::Method,
+        path: &str,
+        query: &str,
+        body: &[u8],
+        apply: bool,
+    ) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
         let mut kinds = KINDS.to_vec();
         if st.retired_records {
@@ -283,7 +299,7 @@ impl FakeApi {
                 let gone = st.objects.remove(i);
                 (200, gone)
             }
-            ("PATCH", Some(name)) => {
+            ("PATCH", Some(name)) if apply => {
                 let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
                     return status(400, "BadRequest", "the fake serves JSON bodies only");
                 };
@@ -306,6 +322,16 @@ impl FakeApi {
                     }
                 }
                 (if existing.is_some() { 200 } else { 201 }, obj)
+            }
+            ("PATCH", Some(_)) => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let patch: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                merge_patch(&mut st.objects[i], &patch);
+                let rv = st.bump();
+                st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
+                (200, st.objects[i].clone())
             }
             _ => status(405, "MethodNotAllowed", "not served by the fake"),
         }
@@ -359,6 +385,25 @@ impl Target {
                     .as_deref()
                     .is_none_or(|ns| meta["namespace"] == ns))
             && self.name.as_deref().is_none_or(|n| meta["name"] == n)
+    }
+}
+
+/// Apply `patch` to `target` as a JSON merge patch (RFC 7386).
+fn merge_patch(target: &mut Value, patch: &Value) {
+    let Value::Object(fields) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = json!({});
+    }
+    let object = target.as_object_mut().expect("an object");
+    for (key, value) in fields {
+        if value.is_null() {
+            object.remove(key);
+        } else {
+            merge_patch(object.entry(key.clone()).or_insert(Value::Null), value);
+        }
     }
 }
 

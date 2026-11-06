@@ -711,6 +711,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     let cluster = p.build.graph().cluster_name.clone();
     let activation_identity_hash = p.checked.activation_identity_hash().map(str::to_string);
+    let package_index = p.checked.package_index().clone();
     let build = p.build;
     let result_path = build.graph().result_dir.clone();
 
@@ -759,6 +760,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             &source_path,
             activation_identity_hash.as_deref(),
             Some(&receipt),
+            &package_index,
         )
         .await?;
 

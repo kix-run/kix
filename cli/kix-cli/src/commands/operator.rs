@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use kix::cluster::activation::{Record, Records, WaveStatus};
+use kix::eval::package_index::RecordPackageIndex;
 use kix::manifest::lifecycle::{
     PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
 };
@@ -61,6 +62,7 @@ pub async fn apply_activation(
     source_path: &str,
     identity_hash: Option<&str>,
     receipt: Option<&Value>,
+    package_index: &RecordPackageIndex,
 ) -> Result<()> {
     records
         .submit(activation_name, cluster_name, source_path, identity_hash)
@@ -75,6 +77,12 @@ pub async fn apply_activation(
             .await
             .map_err(|e| miette!("failed to record the deploy receipt: {e}"))?;
     }
+
+    // The operator holds no build graph, so the CLI writes the index of the
+    // build the record now names. A failure only warns.
+    records
+        .write_package_index(activation_name, package_index)
+        .await;
 
     Ok(())
 }

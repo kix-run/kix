@@ -412,7 +412,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         let old = match p.baseline.active_graph() {
             Some(old) => old,
             None => {
-                rebuilt = StoreGraph::synthesize(&p.baseline.manifests(), p.build.graph());
+                rebuilt = p.baseline.synthesized_side(p.build.graph());
                 &rebuilt
             }
         };
