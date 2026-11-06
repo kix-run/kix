@@ -12,6 +12,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     crane.url = "github:ipetkov/crane";
+    # The Nix release the Kix runtime ships (cli/runtime/runtime.nix). It
+    # keeps its own nixpkgs, whose builds of it Hydra caches, including the
+    # static Linux build.
+    nix-runtime.url = "github:NixOS/nix/2.35.4";
   };
 
   outputs =
@@ -87,7 +91,10 @@
         let
           pkgs = inputs.nixpkgs.legacyPackages.${system};
           hasRuntime = builtins.elem system runtimeSystems;
-          runtime = import ./cli/runtime/in-store.nix { inherit pkgs; };
+          runtime = import ./cli/runtime/in-store.nix {
+            inherit pkgs;
+            nixRelease = inputs.nix-runtime;
+          };
         in
         {
           # Kix with its runtime in libexec/kix, where it looks first.
@@ -101,7 +108,10 @@
         // lib.optionalAttrs hasRuntime {
           # The programs a Kix release ships beside the binary
           # (cli/runtime/default.nix).
-          kix-runtime-spec = import ./cli/runtime { inherit pkgs; };
+          kix-runtime-spec = import ./cli/runtime {
+            inherit pkgs;
+            nixRelease = inputs.nix-runtime;
+          };
           # The same programs, run from /nix/store.
           kix-runtime = runtime;
         }

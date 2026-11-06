@@ -24,10 +24,10 @@
 //! ```json
 //! { "manifestVersion": 1, "system": "x86_64-linux",
 //!   "programs": [
-//!     { "name": "nix", "version": "2.31.3",
-//!       "bin": { "nix": "nix-2.31.3/bin/nix", "nix-store": "nix-2.31.3/bin/nix-store" },
-//!       "files": { "nix-2.31.3/bin/nix": { "sha256": "<hex>" },
-//!                  "nix-2.31.3/bin/nix-store": { "symlink": "nix" } } }
+//!     { "name": "nix", "version": "2.35.4",
+//!       "bin": { "nix": "nix-2.35.4/bin/nix", "nix-store": "nix-2.35.4/bin/nix-store" },
+//!       "files": { "nix-2.35.4/bin/nix": { "sha256": "<hex>" },
+//!                  "nix-2.35.4/bin/nix-store": { "symlink": "nix" } } }
 //! ] }
 //! ```
 //!
@@ -786,7 +786,7 @@ mod tests {
     #[test]
     fn a_runtime_directory_is_read_by_its_layout() {
         let dir = runtime(&[
-            ("nix-2.31.3", &["nix", "nix-store"]),
+            ("nix-2.35.4", &["nix", "nix-store"]),
             ("helm-3.19.1", &["helm"]),
             ("helm-4.3.1", &["helm"]),
             ("sops-3.12.1", &[]),
@@ -794,11 +794,11 @@ mod tests {
         let d = dir.path();
         assert_eq!(
             locate(d, Tool::Nix, Want::Shipped).unwrap(),
-            dir.path().join("nix-2.31.3/bin/nix")
+            dir.path().join("nix-2.35.4/bin/nix")
         );
         assert_eq!(
             locate(d, Tool::NixStore, Want::Shipped).unwrap(),
-            dir.path().join("nix-2.31.3/bin/nix-store")
+            dir.path().join("nix-2.35.4/bin/nix-store")
         );
         assert_eq!(
             locate(d, Tool::Helm, Want::Exact("4.3.1")).unwrap(),
@@ -823,11 +823,11 @@ mod tests {
     /// With a manifest, the paths it lists win over the directory names.
     #[test]
     fn a_manifest_is_the_index() {
-        let dir = runtime(&[("nix-2.31.3", &["nix"]), ("elsewhere", &["nix"])]);
+        let dir = runtime(&[("nix-2.35.4", &["nix"]), ("elsewhere", &["nix"])]);
         std::fs::write(
             dir.path().join(MANIFEST),
             r#"{"programs": [
-                {"name": "nix", "version": "2.31.3", "bin": {"nix": "elsewhere/bin/nix"}, "files": {}},
+                {"name": "nix", "version": "2.35.4", "bin": {"nix": "elsewhere/bin/nix"}, "files": {}},
                 {"name": "kubectl", "version": "1.35.0", "bin": {"kubectl": "k/bin/kubectl"}}
             ]}"#,
         )

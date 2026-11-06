@@ -12,12 +12,12 @@ manifest.json, the index Kix reads:
     "system": "aarch64-darwin",
     "programs": [
       {
-        "name": "nix", "version": "2.31.3",
-        "bin": { "nix": "nix-2.31.3/bin/nix", "nix-store": "nix-2.31.3/bin/nix-store" },
+        "name": "nix", "version": "2.35.4",
+        "bin": { "nix": "nix-2.35.4/bin/nix", "nix-store": "nix-2.35.4/bin/nix-store" },
         "files": {
-          "nix-2.31.3/bin/nix": { "sha256": "<hex>" },
-          "nix-2.31.3/bin/nix-store": { "symlink": "nix" },
-          "nix-2.31.3/lib/libnixutil.dylib": { "sha256": "<hex>" }
+          "nix-2.35.4/bin/nix": { "sha256": "<hex>" },
+          "nix-2.35.4/bin/nix-store": { "symlink": "nix" },
+          "nix-2.35.4/lib/libnixutil.dylib": { "sha256": "<hex>" }
         }
       }
     ]

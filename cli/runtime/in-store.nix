@@ -3,11 +3,11 @@
 # development shell. The release archive relocates the macOS nix instead
 # (assemble.py), which needs the command line tools that a Nix build on macOS
 # does not have.
-{ pkgs }:
+{ pkgs, nixRelease }:
 pkgs.runCommand "kix-runtime-${pkgs.stdenv.hostPlatform.system}"
   {
     nativeBuildInputs = [ pkgs.python3 ];
   }
   ''
-    python3 ${./assemble.py} --in-store ${import ./. { inherit pkgs; }} $out
+    python3 ${./assemble.py} --in-store ${import ./. { inherit pkgs nixRelease; }} $out
   ''
