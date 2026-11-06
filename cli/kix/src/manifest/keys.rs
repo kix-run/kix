@@ -192,7 +192,7 @@ pub(crate) const EXPECTS: &str = key!("expects");
 
 /// A Job carrying `rerun: on-change` is deleted and created again rather than
 /// patched. See [`RERUN_ON_CHANGE`].
-pub(crate) const RERUN: &str = key!("rerun");
+pub const RERUN: &str = key!("rerun");
 
 /// The only value [`RERUN`] honours.
 pub(crate) const RERUN_ON_CHANGE: &str = "on-change";

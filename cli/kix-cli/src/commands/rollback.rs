@@ -314,22 +314,24 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     }
 
     if total_apply == 0 && checked.orphans().is_empty() {
-        // Same rule as deploy: an unchanged probe under `kix.run/rerun`
-        // whose last run failed still runs, and only the engine does that.
-        let failed_reruns = if checked.plan().nodes().iter().any(|n| n.rerun.is_some()) {
-            scheduler::failed_rerun_nodes(&client, target.discovery(), checked.plan()).await
+        // Same rule as deploy: an unchanged Job whose last run failed is
+        // reported, and run again under `kix.run/rerun`; only the engine
+        // does that.
+        let failed_jobs = if checked.plan().has_skipped_jobs() {
+            scheduler::failed_skipped_jobs(&client, target.discovery(), checked.plan()).await
         } else {
             Vec::new()
         };
-        if failed_reruns.is_empty() {
+        if failed_jobs.is_empty() {
             crate::say!("Nothing to change. Cluster already matches target activation.");
             return Ok(());
         }
-        let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+        let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
         crate::say!(
-            "{} nothing changed, but {} failed on the last run and will run again: {}",
+            "{} nothing changed, but {} failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
             output::yellow("↻"),
-            failed_reruns.len(),
+            failed_jobs.len(),
+            kix::manifest::keys::RERUN,
             names.join(", "),
         );
     }

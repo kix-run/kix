@@ -162,26 +162,27 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let active_hash = p.baseline.active_hash().map(str::to_string);
 
     if total_apply == 0 && p.checked.orphans().is_empty() {
-        // Even when no resources changed, a probe Job with `kix.run/rerun`
-        // whose previous run failed must run again. Because the failed deploy
-        // did not advance the active activation, the next deploy sees identical
-        // hashes and relies on the scheduler's `Skip` path to recreate the Job.
-        let has_reruns = p.checked.plan().nodes().iter().any(|n| n.rerun.is_some());
-        let failed_reruns = match &p.client {
-            Some(client) if has_reruns => ctx.runtime.block_on(async {
+        // Even when no resources changed, an unchanged Job whose previous run
+        // failed must be reported, and run again under `kix.run/rerun`.
+        // Because the failed deploy did not advance the active activation,
+        // the next deploy sees identical hashes and relies on the scheduler's
+        // `Skip` path to read the live Job.
+        let has_skipped_jobs = p.checked.plan().has_skipped_jobs();
+        let failed_jobs = match &p.client {
+            Some(client) if has_skipped_jobs => ctx.runtime.block_on(async {
                 let discovery = discovery::discover_resources(client)
                     .await
                     .map_err(|e| miette!("{e}"))?;
                 Ok::<_, miette::Report>(
-                    scheduler::failed_rerun_nodes(client, &discovery, p.checked.plan()).await,
+                    scheduler::failed_skipped_jobs(client, &discovery, p.checked.plan()).await,
                 )
             })?,
             _ => Vec::new(),
         };
         // Under `--current-activation` there is no pre-confirm client, so let
-        // the scheduler inspect live probe Jobs during execution.
-        let engine_decides = p.client.is_none() && has_reruns;
-        if failed_reruns.is_empty() && !engine_decides {
+        // the scheduler inspect the live Jobs during execution.
+        let engine_decides = p.client.is_none() && has_skipped_jobs;
+        if failed_jobs.is_empty() && !engine_decides {
             // Supersede folded-in failed records even when their resources
             // need no changes or pruning, because the scheduler will not run
             // `finalize_deploy` on this early-return path.
@@ -200,16 +201,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
         if engine_decides {
             crate::say!(
-                "{} nothing changed; the engine reads the live probe Jobs to see whether one must run again",
+                "{} nothing changed; Kix checks the live Jobs on the cluster to see whether one failed",
                 output::yellow("↻"),
             );
         }
-        if !failed_reruns.is_empty() {
-            let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+        if !failed_jobs.is_empty() {
+            let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
             crate::say!(
-                "{} nothing changed, but {} failed on the last run and will run again: {}",
+                "{} nothing changed, but {} failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
                 output::yellow("↻"),
-                failed_reruns.len(),
+                failed_jobs.len(),
+                kix::manifest::keys::RERUN,
                 names.join(", "),
             );
         }

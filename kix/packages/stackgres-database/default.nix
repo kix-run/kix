@@ -386,7 +386,6 @@ in
         labels = labels;
         spec = {
           backoffLimit = 20;
-          ttlSecondsAfterFinished = 86400;
           template = {
             metadata.labels = labels;
             spec = {

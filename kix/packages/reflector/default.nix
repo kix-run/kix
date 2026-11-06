@@ -89,13 +89,16 @@ let
           ];
         };
       };
+      # The Job keeps its name across changes and a Job's pod template is
+      # immutable, so the deploy engine replaces it when its content or
+      # anything upstream changes. Annotating a Secret again is harmless.
       jobRes = consumerScope.mkJob {
         name = jobName;
         inherit labels;
         inherit requires;
+        annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
         spec = {
           backoffLimit = 20;
-          ttlSecondsAfterFinished = 600;
           template = {
             metadata.labels = labels;
             spec = {

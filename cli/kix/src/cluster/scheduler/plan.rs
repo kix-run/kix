@@ -144,6 +144,13 @@ impl DeployPlan {
     }
 
     /// Return the nodes of the plan in graph order.
+    /// Return whether any `Skip` node reads its live object before it counts
+    /// as unchanged (see [`skip_reads_live`]). A caller that would exit on
+    /// "nothing to apply" asks [`failed_skipped_jobs`] first when this holds.
+    pub fn has_skipped_jobs(&self) -> bool {
+        self.nodes.iter().any(skip_reads_live)
+    }
+
     pub fn nodes(&self) -> &[PlanNodeEntry] {
         &self.nodes
     }
@@ -314,20 +321,36 @@ impl SchedulerState {
     }
 }
 
-/// Return rerun-annotated `Skip` nodes whose live object is in a terminal
-/// failed state.
+/// Return whether a `Skip` node still reads its live object before it counts
+/// as unchanged. Every Job does: an unchanged Job is never applied again, so
+/// a run that failed would otherwise read as healthy on every later deploy
+/// and reconcile. A Job carrying `kix.run/rerun` can then be recreated; any
+/// other Job is reported.
+pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
+    match (&entry.action, &entry.rerun) {
+        (ChangeAction::Skip(_), Some(_)) => true,
+        (ChangeAction::Skip(rid), None) => rid.kind == "Job",
+        _ => false,
+    }
+}
+
+/// Return the `Skip` Jobs whose live object is in a terminal failed state.
 ///
 /// `kix deploy` and `kix rollback` short-circuit before invoking the scheduler
 /// when a plan has no changes to apply. They call this function first so an
-/// unchanged probe whose previous run failed still triggers a scheduler run.
-pub async fn failed_rerun_nodes(
+/// unchanged Job whose previous run failed is still reported, or recreated
+/// when it carries `kix.run/rerun`, by a scheduler run.
+pub async fn failed_skipped_jobs(
     client: &kube::Client,
     discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
     plan: &DeployPlan,
 ) -> Vec<ResourceId> {
     let mut failed = Vec::new();
     for entry in &plan.nodes {
-        let (ChangeAction::Skip(rid), Some(_)) = (&entry.action, &entry.rerun) else {
+        if !skip_reads_live(entry) {
+            continue;
+        }
+        let ChangeAction::Skip(rid) = &entry.action else {
             continue;
         };
         let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
@@ -342,7 +365,7 @@ pub async fn failed_rerun_nodes(
             }
             Ok(_) => {}
             Err(e) => {
-                tracing::debug!(resource = %rid, error = %e, "could not read a rerun node's live object");
+                tracing::debug!(resource = %rid, error = %e, "could not read a skipped Job's live object");
             }
         }
     }

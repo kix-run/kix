@@ -51,10 +51,14 @@ fn rerun_m(kind: &str, name: &str, deps: &[&str]) -> Value {
 
 /// Build a live Job object in a failed or succeeded state.
 fn live_job(failed: bool) -> Value {
+    live_job_named("probe", failed)
+}
+
+fn live_job_named(name: &str, failed: bool) -> Value {
     json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": { "name": "probe", "namespace": "default" },
+        "metadata": { "name": name, "namespace": "default" },
         "spec": { "backoffLimit": 0 },
         "status": if failed { json!({ "failed": 1 }) } else { json!({ "succeeded": 1 }) },
     })
@@ -1095,8 +1099,8 @@ async fn rerun_job_with_live_object_is_recreated() {
     assert_eq!(rerun_details(&rec), vec!["changed since the last run"]);
 }
 
-/// Nothing live (first deploy, TTL-reaped, or deleted externally): a plain
-/// apply, no delete.
+/// Nothing live (first deploy, or deleted by hand): a plain apply, no
+/// delete.
 #[tokio::test(start_paused = true)]
 async fn rerun_job_without_live_object_is_applied() {
     let manifests = vec![rerun_m("Job", "probe", &[])];
@@ -1219,6 +1223,120 @@ async fn skipped_rerun_job_is_reported_not_retried_without_rerun_failed() {
         .collect();
     assert_eq!(failed.len(), 1);
     assert!(failed[0].contains("which failed"), "{}", failed[0]);
+}
+
+fn failed_messages(rec: &Recorder) -> Vec<String> {
+    rec.0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::NodeStateChanged {
+                verdict: Verdict::Failed { message },
+                ..
+            } => Some(message.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An unchanged Job without `kix.run/rerun` whose live object failed is
+/// reported as failed and never deleted or recreated, with or without
+/// `rerun_failed`: a bootstrap Job that exhausted its backoff must not read
+/// as healthy on the next deploy or reconcile.
+#[tokio::test(start_paused = true)]
+async fn skipped_plain_job_that_failed_is_reported_never_deleted() {
+    for rerun_failed in [true, false] {
+        let manifests = vec![m("Job", "bootstrap", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Job", "bootstrap"),
+            NodeScript::default().live(Behaviour::Now(Ok(Some(live_job_named("bootstrap", true))))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.rerun_failed = rerun_failed;
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_with_skips(&manifests, &["bootstrap"]),
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.failed, 1, "rerun_failed={rerun_failed}");
+        assert_eq!(result.unchanged, 0);
+        let calls = ops.calls();
+        assert!(calls.contains(&Call::GetLive(rid("Job", "bootstrap"))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::Delete(_))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::ApplyStart(_))));
+        let failed = failed_messages(&rec);
+        assert_eq!(failed.len(), 1);
+        assert!(
+            failed[0].contains("which failed. Change an input, or delete the Job with kubectl"),
+            "{}",
+            failed[0]
+        );
+    }
+}
+
+/// An unchanged Job without `kix.run/rerun` whose live object succeeded, or
+/// is gone, counts as unchanged. A skipped non-Job is never read.
+#[tokio::test(start_paused = true)]
+async fn skipped_plain_job_that_succeeded_is_unchanged() {
+    let manifests = vec![
+        m("Job", "bootstrap", &[]),
+        m("Job", "gone", &[]),
+        m("ConfigMap", "cm", &[]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Job", "bootstrap"),
+        NodeScript::default().live(Behaviour::Now(Ok(Some(live_job_named("bootstrap", false))))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["bootstrap", "gone", "cm"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 0);
+    assert_eq!(result.unchanged, 3);
+    let calls = ops.calls();
+    assert!(calls.contains(&Call::GetLive(rid("Job", "bootstrap"))));
+    assert!(calls.contains(&Call::GetLive(rid("Job", "gone"))));
+    assert!(!calls.contains(&Call::GetLive(rid("ConfigMap", "cm"))));
+    assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+}
+
+/// The pre-check `kix deploy` runs before taking the "nothing to apply" exit
+/// names every unchanged Job whose live object failed, with or without
+/// `kix.run/rerun`, and not one that succeeded.
+#[tokio::test]
+async fn failed_skipped_jobs_names_any_failed_unchanged_job() {
+    let api = crate::cluster::fake_api::FakeApi::new([
+        live_job_named("bootstrap", true),
+        live_job_named("probe", true),
+        live_job_named("done", false),
+    ]);
+    let client = api.client();
+    let discovery = crate::cluster::discovery::discover_resources(&client)
+        .await
+        .unwrap();
+    let manifests = vec![
+        m("Job", "bootstrap", &[]),
+        rerun_m("Job", "probe", &[]),
+        m("Job", "done", &[]),
+        m("ConfigMap", "cm", &[]),
+    ];
+    let plan = plan_with_skips(&manifests, &["bootstrap", "probe", "done", "cm"]);
+    let mut failed = failed_skipped_jobs(&client, &discovery, &plan).await;
+    failed.sort();
+    assert_eq!(failed, vec![rid("Job", "bootstrap"), rid("Job", "probe")]);
 }
 
 /// Under dry run a changed rerun Job with a live object still takes the

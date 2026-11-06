@@ -18,7 +18,6 @@ use crate::output;
 
 use super::CommandContext;
 use kix::manifest::keys;
-use kix::manifest::lifecycle::declares_own_deletion;
 
 const IDENTITY_HASH: &str = keys::IDENTITY_HASH;
 const DEPENDS_ON: &str = keys::DEPENDS_ON;
@@ -46,10 +45,6 @@ enum ResourceHealth {
     External,
     /// Referenced in `depends-on` but absent from live resources.
     Missing { expected_by: String },
-    /// Run-to-completion resource that declared its own deletion (such as a
-    /// hook Job with a `hook-succeeded` delete policy or
-    /// `ttlSecondsAfterFinished`) and has already been removed.
-    Reaped { expected_by: String },
     /// Resource is present on the cluster, but depends on an unhealthy resource.
     AtRisk { reason: String },
 }
@@ -74,15 +69,8 @@ impl PackageHealth {
             .resources
             .iter()
             .any(|(_, h)| matches!(h, ResourceHealth::AtRisk { .. }));
-        let all_reaped = self
-            .resources
-            .iter()
-            .all(|(_, h)| matches!(h, ResourceHealth::Reaped { .. }));
-
         if all_external {
             "external"
-        } else if all_reaped {
-            "completed"
         } else if has_missing {
             "DEGRADED"
         } else if has_at_risk {
@@ -95,31 +83,14 @@ impl PackageHealth {
     fn healthy_count(&self) -> usize {
         self.resources
             .iter()
-            .filter(|(_, h)| {
-                matches!(
-                    h,
-                    ResourceHealth::Healthy
-                        | ResourceHealth::External
-                        | ResourceHealth::Reaped { .. }
-                )
-            })
+            .filter(|(_, h)| matches!(h, ResourceHealth::Healthy | ResourceHealth::External))
             .count()
     }
 
     fn is_healthy(&self) -> bool {
-        self.resources.iter().all(|(_, h)| {
-            matches!(
-                h,
-                ResourceHealth::Healthy | ResourceHealth::External | ResourceHealth::Reaped { .. }
-            )
-        })
-    }
-
-    fn reaped_count(&self) -> usize {
         self.resources
             .iter()
-            .filter(|(_, h)| matches!(h, ResourceHealth::Reaped { .. }))
-            .count()
+            .all(|(_, h)| matches!(h, ResourceHealth::Healthy | ResourceHealth::External))
     }
 }
 
@@ -251,21 +222,6 @@ fn walk_graph(
 ) -> BTreeMap<String, ResourceHealth> {
     let mut health: BTreeMap<String, ResourceHealth> = BTreeMap::new();
     let mut missing_hashes: BTreeMap<String, String> = BTreeMap::new();
-    let mut reaped_hashes: BTreeMap<String, String> = BTreeMap::new();
-
-    // Identify absent dependencies whose sealed manifest in `/nix/store`
-    // declares self-deletion (such as a hook Job with a delete policy or TTL)
-    // so they are reported as `Reaped` rather than `Missing`.
-    let reaped: std::collections::HashSet<String> = live_by_hash
-        .values()
-        .filter(|r| !r.is_import)
-        .flat_map(|r| r.depends_on.iter())
-        .filter(|dep| !live_by_hash.contains_key(*dep))
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .filter(|dep| read_seal(dep).is_some_and(|m| declares_own_deletion(&m)))
-        .cloned()
-        .collect();
 
     for (hash, resource) in live_by_hash {
         if resource.is_import {
@@ -290,21 +246,6 @@ fn walk_graph(
                 continue;
             }
             let dep_label = &dep_hash[..8.min(dep_hash.len())];
-
-            if reaped.contains(dep_hash) {
-                reaped_hashes
-                    .entry(dep_hash.clone())
-                    .or_insert_with(|| format!("{}", resource.rid));
-
-                if verbose > 1 {
-                    println!(
-                        "    {} dependency {}... completed and reaped",
-                        output::green("✓"),
-                        dep_label,
-                    );
-                }
-                continue;
-            }
 
             all_deps_ok = false;
             missing_hashes
@@ -363,12 +304,6 @@ fn walk_graph(
             .or_insert(ResourceHealth::Missing { expected_by });
     }
 
-    for (hash, expected_by) in reaped_hashes {
-        health
-            .entry(hash)
-            .or_insert(ResourceHealth::Reaped { expected_by });
-    }
-
     health
 }
 
@@ -417,20 +352,15 @@ fn group_by_package(
             .push((resource.rid.clone(), health));
     }
 
-    // Bucket missing and reaped dependencies, which exist only in `health_map`
-    // and not in `live_by_hash`.
+    // Bucket missing dependencies, which exist only in `health_map` and not
+    // in `live_by_hash`.
     for (hash, health) in health_map {
-        if live_by_hash.contains_key(hash) {
+        if live_by_hash.contains_key(hash) || !matches!(health, ResourceHealth::Missing { .. }) {
             continue;
         }
-        let bucket = match health {
-            ResourceHealth::Missing { .. } => "_missing",
-            ResourceHealth::Reaped { .. } => "_reaped",
-            _ => continue,
-        };
         let rid = resolve_hash_to_rid(hash);
         pkg_map
-            .entry(("_cluster".to_string(), bucket.to_string()))
+            .entry(("_cluster".to_string(), "_missing".to_string()))
             .or_default()
             .push((rid, health.clone()));
     }
@@ -442,8 +372,6 @@ fn group_by_package(
             let display_name = if namespace == "_cluster" {
                 if instance_name == "_missing" {
                     "(missing resources)".to_string()
-                } else if instance_name == "_reaped" {
-                    "(completed hooks)".to_string()
                 } else if instance_name == "_cluster" {
                     "(cluster-level)".to_string()
                 } else {
@@ -472,7 +400,6 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
         let status_colored = match status {
             "healthy" => output::green("✓"),
             "external" => output::dim("→"),
-            "completed" => output::dim("✓"),
             "DEGRADED" => output::red("✗"),
             "AT RISK" => output::yellow("!"),
             _ => output::dim("?"),
@@ -483,10 +410,7 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
             .iter()
             .filter(|(_, h)| matches!(h, ResourceHealth::External))
             .count();
-        let reaped_count = pkg.reaped_count();
-        let counts = if reaped_count == total {
-            format!("{} completed, then removed", total)
-        } else if external_count == total {
+        let counts = if external_count == total {
             format!("{} imported", total)
         } else if external_count > 0 {
             format!(
@@ -498,9 +422,7 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
         } else {
             format!("{}/{} resources healthy", healthy, total)
         };
-        let counts_colored = if status == "completed" {
-            output::dim(&counts)
-        } else if healthy == total {
+        let counts_colored = if healthy == total {
             output::green(&counts)
         } else if healthy == 0 {
             output::red(&counts)
@@ -529,12 +451,9 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
         }
     }
 
-    // Print per-resource detail for unhealthy packages and packages with
-    // completed self-deleting hooks.
-    let detailed_packages: Vec<&PackageHealth> = packages
-        .iter()
-        .filter(|p| !p.is_healthy() || p.reaped_count() > 0)
-        .collect();
+    // Print per-resource detail for unhealthy packages.
+    let detailed_packages: Vec<&PackageHealth> =
+        packages.iter().filter(|p| !p.is_healthy()).collect();
 
     if !detailed_packages.is_empty() {
         println!();
@@ -542,11 +461,6 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
         for pkg in &detailed_packages {
             println!("{}", output::bold(&format!("{}:", pkg.display_name)));
 
-            let reaped: Vec<_> = pkg
-                .resources
-                .iter()
-                .filter(|(_, h)| matches!(h, ResourceHealth::Reaped { .. }))
-                .collect();
             let missing: Vec<_> = pkg
                 .resources
                 .iter()
@@ -557,23 +471,6 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
                 .iter()
                 .filter(|(_, h)| matches!(h, ResourceHealth::AtRisk { .. }))
                 .collect();
-
-            if !reaped.is_empty() {
-                for (rid, health) in &reaped {
-                    if let ResourceHealth::Reaped { expected_by } = health {
-                        println!(
-                            "  {} {} {} {}",
-                            output::dim("✓"),
-                            output::dim("COMPLETED"),
-                            rid,
-                            output::dim(&format!(
-                                "(ran, then removed itself; required by {})",
-                                expected_by
-                            )),
-                        );
-                    }
-                }
-            }
 
             if !missing.is_empty() {
                 for (rid, health) in &missing {
@@ -639,21 +536,16 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
         .flat_map(|p| &p.resources)
         .filter(|(_, h)| matches!(h, ResourceHealth::AtRisk { .. }))
         .count();
-    let total_reaped: usize = packages.iter().map(|p| p.reaped_count()).sum();
 
     let healthy_str = total_healthy.to_string();
     let external_str = total_external.to_string();
     let missing_str = total_missing.to_string();
     let at_risk_str = total_at_risk.to_string();
-    let reaped_str = total_reaped.to_string();
 
     println!();
     print!("Health: {} in-sync", output::green(&healthy_str));
     if total_external > 0 {
         print!(", {} imported", output::dim(&external_str));
-    }
-    if total_reaped > 0 {
-        print!(", {} completed", output::dim(&reaped_str));
     }
     if total_missing > 0 {
         print!(", {} missing", output::red(&missing_str));
@@ -676,19 +568,6 @@ fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
         .filter_map(Result::ok)
         .find(|e| e.file_name().to_string_lossy().starts_with(&prefix))
         .map(|e| e.path())
-}
-
-/// Read the sealed manifest JSON for `hash` from `/nix/store` and upgrade
-/// legacy annotation keys to the current domain.
-fn read_seal(hash: &str) -> Option<serde_json::Value> {
-    let path = store_path_for_hash(hash)?;
-    let contents = std::fs::read_to_string(path).ok()?;
-    let mut value: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    // Upgrade pre-migration annotation keys in the sealed manifest so
-    // `declares_own_deletion` recognizes hook delete policies on clusters that
-    // have been migrated but not yet redeployed.
-    kix::legacy_domain::upgrade_manifest(&mut value);
-    Some(value)
 }
 
 /// Parse a `ResourceId` from the `/nix/store/{hash}-k8s-{Kind}-{namespace}-{name}`
@@ -744,29 +623,4 @@ fn summarize_issues(resources: &[(ResourceId, ResourceHealth)]) -> String {
         parts.push(format!("{} at risk", at_risk));
     }
     parts.join(", ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reaped_counts_as_healthy() {
-        let pkg = PackageHealth {
-            display_name: "(completed hooks)".to_string(),
-            resources: vec![(
-                ResourceId {
-                    kind: "Job".to_string(),
-                    namespace: "data".to_string(),
-                    name: "postgres-reflect".to_string(),
-                },
-                ResourceHealth::Reaped {
-                    expected_by: "PackageInstance/postgres@data".to_string(),
-                },
-            )],
-        };
-        assert!(pkg.is_healthy());
-        assert_eq!(pkg.status_label(), "completed");
-        assert_eq!(pkg.reaped_count(), 1);
-    }
 }

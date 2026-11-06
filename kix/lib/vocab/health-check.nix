@@ -67,7 +67,6 @@ in
       # Override `activeDeadlineSeconds`. Must be at least
       # `retryFor + roundBudget`.
       activeDeadlineSeconds ? null,
-      ttlSecondsAfterFinished ? 3600,
     }:
     {
       self,
@@ -117,7 +116,6 @@ in
             spec = {
               backoffLimit = 0;
               activeDeadlineSeconds = deadline;
-              inherit ttlSecondsAfterFinished;
               template = {
                 metadata.labels = {
                   "app.kubernetes.io/name" = "${name}-health";

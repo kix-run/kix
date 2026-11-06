@@ -6230,6 +6230,7 @@ let
     inherit
       lib
       k8s
+      eval
       mkCluster
       baseInstances
       manifests

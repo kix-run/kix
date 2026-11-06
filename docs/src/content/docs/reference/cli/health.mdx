@@ -42,18 +42,19 @@ superseded activations, are not reported.
 | --- | --- |
 | in-sync | Present, and every dependency is present |
 | imported | An import marker for a resource Kix does not manage |
-| completed | A dependency that is absent because it deletes itself after success: a Job with `spec.ttlSecondsAfterFinished`, or a manifest whose `helm.sh/hook-delete-policy` includes `hook-succeeded` |
 | missing | A dependency named by a present resource and not found on the cluster |
 | at risk | Present, but depends on a missing or at-risk resource |
 
-Each package line reads `healthy`, `external`, `completed`, `DEGRADED` (a
-missing resource), or `AT RISK`. Packages with problems are expanded below the
+Each package line reads `healthy`, `external`, `DEGRADED` (a missing
+resource), or `AT RISK`. Packages with problems are expanded below the
 summary.
 
 Kix reads the sealed manifest for a dependency's hash from the local Nix
-store, both to name a missing resource and to recognise a self-deleting one.
-On a machine that never built this activation, missing resources are shown
-by hash, and a self-deleting Job that is gone reads as missing.
+store to name a missing resource. On a machine that never built this
+activation, missing resources are shown by hash.
+
+A finished Job counts as present. Jobs that Kix builds do not delete
+themselves, so a Job that is gone is missing, whether it finished or not.
 
 ## Examples
 
