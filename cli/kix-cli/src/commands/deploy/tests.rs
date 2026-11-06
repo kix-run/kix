@@ -239,6 +239,8 @@ mod run_end_tests {
                 concurrency: scheduler::CONCURRENCY,
                 stall: StallPolicy::off(),
                 rerun_failed: true,
+                check_unchanged: true,
+                names_flags: true,
             },
             prune,
         }

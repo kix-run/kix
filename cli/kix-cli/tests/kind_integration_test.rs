@@ -552,6 +552,111 @@ fn deploy_and_gc() {
         "orphan-test should be deleted from cluster"
     );
 
+    // Phase 6: An unchanged object that something in the deploy depends on
+    // is checked before the dependent runs. The `kind-port` build changes
+    // the Service, which depends on the Deployment, and leaves the
+    // Deployment unchanged. Broken with kubectl first, the Deployment fails
+    // the deploy on itself; repaired, the same deploy goes through. The
+    // deploy starts before the new pod reports ImagePullBackOff. The check
+    // waits for it, because the old pod that still runs does not make the
+    // Deployment ready.
+    eprintln!("\n=== Phase 6: Unchanged dependency checked before its dependent ===");
+
+    let broken = kubectl(
+        KUBE_CTX,
+        &[
+            "set",
+            "image",
+            "deployment/echo-server",
+            "-n",
+            "echo",
+            "nginx=docker.io/nginxinc/nginx-unprivileged:no-such-tag",
+        ],
+    );
+    assert!(broken.status.success(), "should set a bad image");
+
+    let over_broken = kix(KIND_CLUSTER)
+        .args(["deploy", "kind-port", "--yes", "--timeout", "60s"])
+        .output()
+        .expect("deploy should run");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&over_broken.stdout),
+        String::from_utf8_lossy(&over_broken.stderr)
+    );
+    eprintln!("{text}");
+    assert!(
+        !over_broken.status.success(),
+        "a deploy over a broken unchanged Deployment fails"
+    );
+    assert!(
+        text.contains("Deployment/echo-server@echo")
+            && text.contains("ImagePullBackOff")
+            && text.contains("This deploy did not change it"),
+        "the failure names the unchanged Deployment with its own status, got:\n{text}"
+    );
+    assert!(
+        text.contains("objects that depend on it") || text.contains("object that depends on it"),
+        "the failure says what was not deployed, got:\n{text}"
+    );
+    let port = kubectl_stdout(
+        KUBE_CTX,
+        &[
+            "get",
+            "service/echo-server",
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.spec.ports[0].port}",
+        ],
+    );
+    assert_eq!(
+        port.trim(),
+        "80",
+        "the Service that depends on it is not applied"
+    );
+
+    let undone = kubectl(
+        KUBE_CTX,
+        &["rollout", "undo", "deployment/echo-server", "-n", "echo"],
+    );
+    assert!(undone.status.success(), "should undo the bad image");
+    let rolled = kubectl(
+        KUBE_CTX,
+        &[
+            "rollout",
+            "status",
+            "deployment/echo-server",
+            "-n",
+            "echo",
+            "--timeout=120s",
+        ],
+    );
+    assert!(rolled.status.success(), "the Deployment should recover");
+
+    let over_repaired = kix(KIND_CLUSTER)
+        .args(["deploy", "kind-port", "--yes"])
+        .output()
+        .expect("deploy should run");
+    assert!(
+        over_repaired.status.success(),
+        "the same deploy succeeds once the Deployment is healthy: {}{}",
+        String::from_utf8_lossy(&over_repaired.stdout),
+        String::from_utf8_lossy(&over_repaired.stderr)
+    );
+    let port = kubectl_stdout(
+        KUBE_CTX,
+        &[
+            "get",
+            "service/echo-server",
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.spec.ports[0].port}",
+        ],
+    );
+    assert_eq!(port.trim(), "8081", "the Service is applied");
+
     eprintln!("\n=== All phases passed ===");
 }
 

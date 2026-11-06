@@ -47,6 +47,7 @@
           gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
           kind = ./clusters/test-kind.nix;
           kind-v2 = ./clusters/test-kind-v2.nix;
+          kind-port = ./clusters/test-kind-port.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
           spegel = ./clusters/test-spegel.nix;
           volsync = ./clusters/test-volsync.nix;

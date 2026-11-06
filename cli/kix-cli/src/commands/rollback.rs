@@ -376,6 +376,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         rerun_failed: true,
+        check_unchanged: true,
+        // Rollback has no --on-error flag, so messages must not suggest it.
+        names_flags: false,
     };
 
     let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {

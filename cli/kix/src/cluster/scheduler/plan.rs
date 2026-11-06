@@ -188,10 +188,18 @@ pub(super) struct SchedulerState {
     enqueued: HashSet<NodeId>,
     /// Terminal nodes.
     terminal: HashSet<NodeId>,
+    /// Unchanged nodes that a node with work to do depends on, directly or
+    /// through other unchanged nodes. The scheduler reads their live object
+    /// before their dependents run; every other unchanged node is ready
+    /// without a task.
+    checked: HashSet<NodeId>,
 }
 
 impl SchedulerState {
-    pub(super) fn new(plan: &DeployPlan) -> Self {
+    /// `check_unchanged` says whether unchanged nodes that a node with work
+    /// depends on are read before their dependents run (`is_checked`). With
+    /// it off every unchanged node is ready without a task.
+    pub(super) fn new(plan: &DeployPlan, check_unchanged: bool) -> Self {
         let mut entries = HashMap::with_capacity(plan.nodes.len());
         for e in &plan.nodes {
             entries.insert(e.id.clone(), e.clone());
@@ -199,6 +207,7 @@ impl SchedulerState {
         let mut pending_preds: HashMap<NodeId, usize> =
             entries.keys().map(|id| (id.clone(), 0)).collect();
         let mut dependents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        let mut predecessors: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         for (dep, pred) in &plan.edges {
             if !entries.contains_key(dep) || !entries.contains_key(pred) {
                 continue;
@@ -208,7 +217,16 @@ impl SchedulerState {
                 .entry(pred.clone())
                 .or_default()
                 .push(dep.clone());
+            predecessors
+                .entry(dep.clone())
+                .or_default()
+                .push(pred.clone());
         }
+        let checked = if check_unchanged {
+            checked_unchanged(&entries, &predecessors)
+        } else {
+            HashSet::new()
+        };
         Self {
             entries,
             pending_preds,
@@ -216,7 +234,14 @@ impl SchedulerState {
             ready: VecDeque::new(),
             enqueued: HashSet::new(),
             terminal: HashSet::new(),
+            checked,
         }
+    }
+
+    /// Return whether the plan leaves `id` unchanged and a node with a task
+    /// depends on it, so the scheduler checks its live object first.
+    pub(super) fn is_checked(&self, id: &NodeId) -> bool {
+        self.checked.contains(id)
     }
 
     pub(super) fn seed_ready(&mut self) {
@@ -332,6 +357,45 @@ pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
         (ChangeAction::Skip(rid), None) => rid.kind == "Job",
         _ => false,
     }
+}
+
+/// Return whether the scheduler runs a task for `entry` because of the plan
+/// alone: it applies, recreates, or waits for the object, or it is an
+/// unchanged probe Job the rerun rule may create again.
+pub(super) fn runs_task(entry: &PlanNodeEntry) -> bool {
+    entry.kind != TransitionKind::Skip || entry.rerun.is_some()
+}
+
+/// Return the unchanged nodes that a node with a task depends on, directly
+/// or through other unchanged nodes. An unchanged object that nothing in the
+/// deploy depends on cannot mislead anything, so it is not read. An
+/// unchanged Job under `kix.run/rerun` runs a task of its own, so the walk
+/// does not go past it, but it is in the set so that what depends on it
+/// waits for a run still in progress.
+fn checked_unchanged(
+    entries: &HashMap<NodeId, PlanNodeEntry>,
+    predecessors: &HashMap<NodeId, Vec<NodeId>>,
+) -> HashSet<NodeId> {
+    let mut checked = HashSet::new();
+    let mut queue: VecDeque<&NodeId> = entries
+        .values()
+        .filter(|e| runs_task(e))
+        .map(|e| &e.id)
+        .collect();
+    while let Some(id) = queue.pop_front() {
+        for pred in predecessors.get(id).into_iter().flatten() {
+            let Some(entry) = entries.get(pred) else {
+                continue;
+            };
+            if entry.kind == TransitionKind::Skip
+                && checked.insert(pred.clone())
+                && !runs_task(entry)
+            {
+                queue.push_back(pred);
+            }
+        }
+    }
+    checked
 }
 
 /// Return the `Skip` Jobs whose live object is in a terminal failed state.

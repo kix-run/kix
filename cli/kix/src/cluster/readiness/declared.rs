@@ -441,7 +441,9 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
     }
 
     match kind {
-        "Deployment" | "StatefulSet" => check_deployment_ready(obj.metadata.generation, &obj.data),
+        "Deployment" | "StatefulSet" => {
+            check_deployment_ready(obj.metadata.generation, &obj.data, kind == "Deployment")
+        }
         "DaemonSet" => check_daemonset_ready(obj.metadata.generation, &obj.data),
         "Job" => check_job_ready(&obj.data),
         "PersistentVolumeClaim" => check_pvc_ready(&obj.data),
@@ -451,9 +453,17 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
 }
 
 /// Return `true` if a Deployment or StatefulSet has `observedGeneration >=
-/// generation` and both `readyReplicas` and `updatedReplicas` have reached
-/// `spec.replicas`.
-fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
+/// generation`, both `readyReplicas` and `updatedReplicas` have reached
+/// `spec.replicas`, and, for a Deployment (`no_old_pods`), no pod of an
+/// older revision is left.
+///
+/// `readyReplicas` counts pods of every revision. While a rollout is stuck,
+/// a pod of the old revision can still be ready next to an updated pod that
+/// never starts, and the first two counts are then both met. A Deployment's
+/// `status.replicas` leaves out terminating pods, so the extra rule cannot
+/// hold it back during a scale-down. A StatefulSet counts terminating pods
+/// there, so the rule does not apply to it.
+fn check_deployment_ready(generation: Option<i64>, data: &Value, no_old_pods: bool) -> bool {
     // kube-rs stores generation in DynamicObject.metadata outside `data`.
     // Compare observedGeneration with this typed metadata field to reject
     // status left over from a previous generation.
@@ -480,7 +490,12 @@ fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
         .and_then(Value::as_i64)
         .unwrap_or(0);
 
-    ready >= desired && updated >= desired
+    let total = data
+        .pointer("/status/replicas")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    ready >= desired && updated >= desired && (!no_old_pods || total <= updated)
 }
 
 /// Return `true` if a DaemonSet has `observedGeneration >= generation` and its
@@ -552,7 +567,7 @@ pub(crate) fn daemonset_pending_restart(data: &Value) -> Option<i64> {
 }
 
 /// Return `true` if a Job has `status.succeeded >= 1`.
-pub(super) fn check_job_ready(data: &Value) -> bool {
+pub(crate) fn check_job_ready(data: &Value) -> bool {
     let succeeded = data
         .pointer("/status/succeeded")
         .and_then(Value::as_i64)
@@ -762,7 +777,19 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 .pointer("/status/updatedReplicas")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            format!("{kind}/{name}: {ready}/{desired} ready, {updated}/{desired} updated")
+            let old = obj
+                .data
+                .pointer("/status/replicas")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                - updated;
+            let old = match old {
+                _ if kind != "Deployment" => String::new(),
+                n if n <= 0 => String::new(),
+                1 => ", 1 old pod left".to_string(),
+                n => format!(", {n} old pods left"),
+            };
+            format!("{kind}/{name}: {ready}/{desired} ready, {updated}/{desired} updated{old}")
         }
         "DaemonSet" => {
             let desired = obj

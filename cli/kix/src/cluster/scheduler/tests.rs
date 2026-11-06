@@ -169,7 +169,7 @@ fn scheduler_state_seeds_zero_pred_nodes() {
         .collect();
     let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
 
-    let mut state = SchedulerState::new(&plan);
+    let mut state = SchedulerState::new(&plan, true);
     state.seed_ready();
 
     // Only the Namespace has zero predecessors.
@@ -210,7 +210,7 @@ fn scheduler_state_cascade_cancels_transitive_dependents() {
         .map(|m| ChangeAction::Apply(m.clone()))
         .collect();
     let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
-    let mut state = SchedulerState::new(&plan);
+    let mut state = SchedulerState::new(&plan, true);
     state.seed_ready();
     let _ns = state.pop_ready().unwrap();
 
