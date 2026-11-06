@@ -502,7 +502,7 @@ manifests, and each object goes to the package that the Active record's
 record's, and only then to where the new build puts that identity. The build
 on disk wins over its record's index; when both are present and differ, the
 plan logs a debug note and uses the build. A record without a readable index
-(Kix 0.5 wrote none) gives the new-build placement, so an object that moved
+(Kix 0.5 wrote none, and neither does the operator for an Activation applied by hand or from git) gives the new-build placement, so an object that moved
 between packages and changed shows only under its new package.
 
 `kix/src/plan/baseline.rs` does the resolution and owns two refusals: a

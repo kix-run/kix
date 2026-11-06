@@ -2342,7 +2342,9 @@ old side from live objects because the deployed build is not on the machine, it
 places each object in the package that index names, so an object that moved
 between packages shows under both. A record without the index, or with a
 `format` this release does not know, places live objects where the new build
-puts them. An index over 150 KiB (some 3,600 objects) is not written, and a failed write only logs a
+puts them. Records from Kix 0.5 have no index. Neither do records the
+in-cluster operator deploys from an Activation applied by hand or from git,
+because only `kix deploy` and `kix rollback` write one. An index over 150 KiB (some 3,600 objects) is not written, and a failed write only logs a
 warning.
 
 A deploy or rollback that keeps orphans (no `--prune`, `--prune-mode=no`, or a
