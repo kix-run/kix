@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::error::KixEvalError;
 use super::package_index::RecordPackageIndex;
-use super::store::real_path;
+use super::store::disk_path;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
@@ -53,8 +53,9 @@ pub struct KubernetesBinding {
 /// Read `kix-packages.json` from `result_dir`.
 pub fn read_index(result_dir: &Path) -> Result<KixPackageIndex, KixEvalError> {
     let index_path = result_dir.join("kix-packages.json");
-    let bytes =
-        std::fs::read(real_path(&index_path)).map_err(|e| KixEvalError::StoreGraphError {
+    let bytes = disk_path(&index_path)
+        .and_then(std::fs::read)
+        .map_err(|e| KixEvalError::StoreGraphError {
             message: format!(
                 "failed to read kix-packages.json at {}: {e}",
                 index_path.display()
@@ -153,9 +154,11 @@ fn is_k8s_path(path: &Path) -> bool {
 
 /// Read a file from a store path.
 fn read_store_file(path: &Path) -> Result<Vec<u8>, KixEvalError> {
-    std::fs::read(real_path(path)).map_err(|e| KixEvalError::StoreGraphError {
-        message: format!("failed to read store path {}: {e}", path.display()),
-    })
+    disk_path(path)
+        .and_then(std::fs::read)
+        .map_err(|e| KixEvalError::StoreGraphError {
+            message: format!("failed to read store path {}: {e}", path.display()),
+        })
 }
 
 /// Format `path` for error messages with hidden characters escaped.

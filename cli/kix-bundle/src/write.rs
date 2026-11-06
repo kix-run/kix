@@ -109,7 +109,8 @@ pub fn from_result_dir(
     })?;
     let mut files = BTreeMap::new();
     for (path, references) in kix::eval::nix::path_info(&activation)? {
-        let bytes = std::fs::read(store::real_path(Path::new(&path)))
+        let bytes = store::disk_path(Path::new(&path))
+            .and_then(std::fs::read)
             .map_err(|e| err(format!("failed to read {path}: {e}")))?;
         files.insert(path, BundleFile { bytes, references });
     }

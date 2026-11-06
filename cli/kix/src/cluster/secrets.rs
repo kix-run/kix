@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::build_source::{CarriedSources, SopsSources};
-use crate::eval::store::real_path;
+use crate::eval::store::disk_path;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 use crate::runtime::{self, RuntimeError, Tool, Want};
@@ -473,10 +473,12 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
 /// - An absolute path (Nix store path or repo path)
 /// - A relative path (relative to CWD / repo root)
 fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
-    let path = real_path(Path::new(source));
+    let path = PathBuf::from(source);
 
-    if path.exists() {
-        return Ok(path);
+    if let Ok(on_disk) = disk_path(&path)
+        && on_disk.exists()
+    {
+        return Ok(on_disk);
     }
 
     if let Ok(cwd) = std::env::current_dir() {

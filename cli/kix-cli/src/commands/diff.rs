@@ -86,12 +86,12 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         (StoreGraph::empty(&args.cluster), OldSide::Build)
     } else if let Some(from) = &args.from {
         let path = store::follow_into_store(Path::new(from));
-        let on_disk = store::real_path(&path);
+        let on_disk = store::disk_path(&path).unwrap_or_else(|_| path.clone());
         if !on_disk.is_dir() {
             return Err(miette!("from directory does not exist: {from}"));
         }
         let spinner = output::spinner("Loading old side...");
-        let loaded = if on_disk.join("kix-packages.json").is_file() {
+        let loaded = if is_build(&path) {
             let status = |msg: &str| set_spinner(&spinner, msg);
             let old = build_source::Build::local(&path, &status).into_diagnostic()?;
             (old.into_graph(), OldSide::Build)
@@ -310,7 +310,7 @@ fn deployed_build(
         return Some(Deployed::New);
     }
     let dir = Path::new(keys::get_meta(annotations, keys::BUILT_VIA)?);
-    if !store::real_path(dir).join("kix-packages.json").is_file() {
+    if !is_build(dir) {
         return None;
     }
     let graph = build_source::Build::local(dir, &|_| {}).ok()?.into_graph();
@@ -573,6 +573,11 @@ fn print_markdown_output(result: &DiffResult) {
             print!("{drift}");
         }
     }
+}
+
+/// Return whether `dir` is a build's result directory.
+fn is_build(dir: &Path) -> bool {
+    store::disk_path(&dir.join("kix-packages.json")).is_ok_and(|p| p.is_file())
 }
 
 #[cfg(test)]

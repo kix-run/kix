@@ -3,7 +3,7 @@
 //! Store paths keep their logical form, `/nix/store/<hash>-<name>`,
 //! everywhere Kix records them. When `KIX_STORE_ROOT` names a relocated
 //! store, the files behind those paths live under that root instead, so code
-//! that opens a store path on disk maps it with [`real_path`] first.
+//! that opens a store path on disk maps it with [`disk_path`] first.
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -40,6 +40,24 @@ fn real_path_in(root: Option<&Path>, logical: &Path) -> PathBuf {
         (Some(root), Ok(relative)) if logical.starts_with(STORE_DIR) => root.join(relative),
         _ => logical.to_path_buf(),
     }
+}
+
+/// Return the file on disk behind `path`, following links into the store.
+///
+/// With no store root, return `path` unchanged and let the system follow its
+/// links. With a store root, resolve every link first, because a link to
+/// `/nix/store/...`, such as each entry of a build's result directory,
+/// points outside the root.
+pub fn disk_path(path: &Path) -> std::io::Result<PathBuf> {
+    match store_root() {
+        None => Ok(path.to_path_buf()),
+        Some(root) => canonicalize_in(&root, path).map(|p| real_path_in(Some(&root), &p)),
+    }
+}
+
+/// Return whether the file behind `path` exists, as [`disk_path`] finds it.
+pub fn exists(path: &Path) -> bool {
+    disk_path(path).is_ok_and(|p| p.exists())
 }
 
 /// Resolve every link in `path` and return the result in logical form.
@@ -234,7 +252,7 @@ pub fn load_activation_path(cluster: &str) -> Option<PathBuf> {
     std::fs::read_to_string(&file)
         .ok()
         .map(|s| PathBuf::from(s.trim()))
-        .filter(|p| real_path(p).exists())
+        .filter(|p| exists(p))
 }
 
 /// Resolve an identity-hash to the activation result directory.
@@ -262,8 +280,9 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
                 && name_str.contains("activation")
             {
                 // Check if this looks like a result dir (has kix-packages.json)
-                if entry.path().join("kix-packages.json").exists() {
-                    return Some(Path::new(STORE_DIR).join(&name));
+                let path = Path::new(STORE_DIR).join(&name);
+                if exists(&path.join("kix-packages.json")) {
+                    return Some(path);
                 }
             }
         }
@@ -382,6 +401,13 @@ mod tests {
             Path::new("/nix/store/bbb-activation")
         );
         assert!(canonicalize_in(&root, Path::new("/nix/store/missing")).is_err());
+        assert_eq!(
+            real_path_in(
+                Some(&root),
+                &canonicalize_in(&root, &dir.path().join("result/activation")).unwrap()
+            ),
+            store.join("bbb-activation")
+        );
 
         std::os::unix::fs::symlink("loop", dir.path().join("loop")).unwrap();
         assert!(canonicalize_in(&root, &dir.path().join("loop")).is_err());

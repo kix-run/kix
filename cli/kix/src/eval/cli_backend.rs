@@ -92,7 +92,8 @@ impl NixBackend for CliNixBackend {
         // print the same order every time.
         raw_manifests.sort_by_cached_key(manifest_sort_key);
 
-        let scorecard_path = super::store::real_path(&result_dir).join("kix-scorecard.json");
+        let scorecard_path =
+            super::store::disk_path(&result_dir.join("kix-scorecard.json")).unwrap_or_default();
         let scorecard_report = if scorecard_path.exists() {
             match std::fs::read_to_string(&scorecard_path) {
                 Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -114,7 +115,8 @@ impl NixBackend for CliNixBackend {
             None
         };
 
-        let extra_images_path = super::store::real_path(&result_dir).join("kix-extra-images.json");
+        let extra_images_path =
+            super::store::disk_path(&result_dir.join("kix-extra-images.json")).unwrap_or_default();
         let extra_images = if extra_images_path.exists() {
             match std::fs::read_to_string(&extra_images_path) {
                 Ok(json_str) => {
