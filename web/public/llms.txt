@@ -37,13 +37,13 @@
 ## Architecture & Explanation
 
 - [Explanation Index](https://kix.run/docs/explanation/): Conceptual guides to Kix's compiler model
-- [The Dependency Graph as the Model](https://kix.run/docs/explanation/the-dependency-graph-as-the-model/): Store-path context edges, the dependency resolution ladder, and the DAG-driven deployment scheduler
-- [Personas, Packages, and Clusters](https://kix.run/docs/explanation/personas-packages-and-clusters/): App maintainer vs platform vs operator boundaries, package vs instance, and Kix as a strict Kubernetes superset
-- [Network Policy Derivation from the Graph](https://kix.run/docs/explanation/network-policy-derivation-from-the-graph/): How endpoint facts and service dependencies compile into default-deny policies
-- [Helm Integration and Resource Adoption](https://kix.run/docs/explanation/helm-integration-and-resource-adoption/): Build-time chart evaluation, intra-chart DAG reconstruction, and `kix.mkImport` adoption
-- [Availability Levels and Derived Pod Spread](https://kix.run/docs/explanation/availability-levels-and-derived-pod-spread/): How `cluster.availability` drives replica counts, topology spread, and PodDisruptionBudgets
-- [Scorecard Levels and Validation](https://kix.run/docs/explanation/scorecard-levels-manifest-package-namespace-cluster/): Manifest, package, namespace, and cluster scorecard scopes vs compiler validation checks
-- [Server-Side Apply, Field Ownership, and Drift](https://kix.run/docs/explanation/server-side-apply-field-ownership-and-drift/): Field ownership, ceding controller fields, `kix.run/applied-hash` drift detection, and why deploy inputs are committed
+- [The Dependency Graph as the Model](https://kix.run/docs/explanation/the-dependency-graph/): Store-path context edges, the dependency resolution ladder, and the DAG-driven deployment scheduler
+- [Personas, Packages, and Clusters](https://kix.run/docs/explanation/packages-and-clusters/): App maintainer vs platform vs operator boundaries, package vs instance, and Kix as a strict Kubernetes superset
+- [Network Policy Derivation from the Graph](https://kix.run/docs/explanation/network-policy/): How endpoint facts and service dependencies compile into default-deny policies
+- [Helm Integration and Resource Adoption](https://kix.run/docs/explanation/helm-integration/): Build-time chart evaluation, intra-chart DAG reconstruction, and `kix.mkImport` adoption
+- [Availability Levels and Derived Pod Spread](https://kix.run/docs/explanation/availability-levels/): How `cluster.availability` drives replica counts, topology spread, and PodDisruptionBudgets
+- [Scorecard Levels and Validation](https://kix.run/docs/explanation/scorecard-levels/): Manifest, package, namespace, and cluster scorecard scopes vs compiler validation checks
+- [Server-Side Apply, Field Ownership, and Drift](https://kix.run/docs/explanation/server-side-apply-and-drift/): Field ownership, ceding controller fields, `kix.run/applied-hash` drift detection, and why deploy inputs are committed
 
 ## How-To Guides & Full Corpus Indexes
 

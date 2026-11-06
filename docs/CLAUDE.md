@@ -194,7 +194,7 @@ See [`deps`](/docs/reference/instances-and-composition/#deps) for the exact inst
 :::
 
 :::note[Explanation]
-See [Dependency resolution and why explicit deps matter](/docs/explanation/the-dependency-graph-as-the-model/#dependency-resolution-and-explicit-deps)
+See [Dependency resolution and why explicit deps matter](/docs/explanation/the-dependency-graph/#dependency-resolution-and-explicit-deps)
 for the design reasoning behind this rule.
 :::
 ```

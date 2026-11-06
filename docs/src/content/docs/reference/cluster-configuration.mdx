@@ -7,8 +7,8 @@ A cluster module is where you describe your Kubernetes environment as a whole: w
 
 :::note[Helpful background]
 - [04. First cluster from scratch](/docs/tutorials/04-first-cluster-from-scratch/): walk through creating a minimal cluster file and deploying it locally.
-- [Personas, packages, and clusters](/docs/explanation/personas-packages-and-clusters/): see how Kix separates cluster-wide operator settings from individual package definitions.
-- [Availability levels and derived pod spread](/docs/explanation/availability-levels-and-derived-pod-spread/): learn how `cluster.availability` drives replica counts, pod spread constraints, and disruption budgets.
+- [Personas, packages, and clusters](/docs/explanation/packages-and-clusters/): see how Kix separates cluster-wide operator settings from individual package definitions.
+- [Availability levels and derived pod spread](/docs/explanation/availability-levels/): learn how `cluster.availability` drives replica counts, pod spread constraints, and disruption budgets.
 - [Module system (nix.dev)](https://nix.dev/tutorials/module-system/): understand the NixOS module syntax and merging rules that Kix cluster modules use.
 :::
 
@@ -103,7 +103,7 @@ See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-
 :::
 
 :::note[Explanation]
-See [Availability levels and derived pod spread](/docs/explanation/availability-levels-and-derived-pod-spread/) for how availability ceilings, replica counts, and spread constraints interact.
+See [Availability levels and derived pod spread](/docs/explanation/availability-levels/) for how availability ceilings, replica counts, and spread constraints interact.
 :::
 
 ## Cluster topology
@@ -377,7 +377,7 @@ Each `networkPolicy.platformIntents.<name>` entry supports:
 | `egress` | `listOf attrs` | Egress rules (`{ to = "world" \| "all-pods" \| "apiserver" \| "dns"; ports?; entities?; }`). |
 
 :::note[Explanation]
-See [Network policy derivation from the graph](/docs/explanation/network-policy-derivation-from-the-graph/) for how Kix discovers traffic paths and synthesizes policies.
+See [Network policy derivation from the graph](/docs/explanation/network-policy/) for how Kix discovers traffic paths and synthesizes policies.
 :::
 
 ## Scorecard

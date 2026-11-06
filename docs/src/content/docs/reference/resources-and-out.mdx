@@ -7,8 +7,8 @@ Inside a package's `build` block, you use `scope` functions (`scope.mkDeployment
 
 :::note[Helpful background]
 - [07. Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/): see how `scope` builders and `.out` references wire a Deployment, ConfigMap, and Service together.
-- [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/): learn how Nix string context turns `.out` references into a cluster-wide dependency graph.
-- [Availability levels and derived pod spread](/docs/explanation/availability-levels-and-derived-pod-spread/): see how workload builders automatically configure pod anti-affinity and topology spread from your cluster's availability target.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): learn how Nix string context turns `.out` references into a cluster-wide dependency graph.
+- [Availability levels and derived pod spread](/docs/explanation/availability-levels/): see how workload builders automatically configure pod anti-affinity and topology spread from your cluster's availability target.
 - [Objects In Kubernetes (Kubernetes docs)](https://kubernetes.io/docs/concepts/overview/working-with-objects/): review the standard `apiVersion`, `kind`, `metadata`, and `spec` fields of Kubernetes manifests.
 :::
 
@@ -61,7 +61,7 @@ configMap = scope.mkResource {
 
 ### `ownership.cede`, `factBehavior`, and custom resource `readiness`
 
-- **`ownership.cede`**: Lists manifest field paths (such as `[ "spec.replicas" ]` or `[ "webhooks.*.clientConfig.caBundle" ]`) that an in-cluster controller mutates at runtime. Kix records these paths in `metadata.annotations."kix.run/cede-fields"` so drift detection and Server-Side Apply do not fight the controller. See [Server-Side Apply, field ownership, and drift](/docs/explanation/server-side-apply-field-ownership-and-drift/).
+- **`ownership.cede`**: Lists manifest field paths (such as `[ "spec.replicas" ]` or `[ "webhooks.*.clientConfig.caBundle" ]`) that an in-cluster controller mutates at runtime. Kix records these paths in `metadata.annotations."kix.run/cede-fields"` so drift detection and Server-Side Apply do not fight the controller. See [Server-Side Apply, field ownership, and drift](/docs/explanation/server-side-apply-and-drift/).
 - **`factBehavior`**: Controls how Kix's network-policy engine propagates endpoint facts across custom resources. Set `factBehavior.endpoint = "conduct"` when a resource acts like a `Service` or proxy in front of backing pods, or `"terminate"` when the resource is the final destination.
 - **`readiness` (on CRDs and CRs)**: Custom resource readiness predicates are declared once on [`scope.mkCRD` or `scope.mkCRDRef`](/docs/reference/secrets-crds-and-rbac/#crds-and-crd-refs) and automatically stamped onto custom resources built with `scope.mkCR` or `crd.out.mkCR` as `metadata.annotations."kix.run/readiness"`:
   - Condition check: `{ condition = { type = "Ready"; status = "True"; }; }`
@@ -117,7 +117,7 @@ When you call a workload builder, Kix performs the following steps before sealin
 1. **Selector propagation**: On `Deployment`, `StatefulSet`, and `DaemonSet`, `spec.selector.matchLabels` is required and is automatically merged into `spec.template.metadata.labels`. On `Job` and `CronJob`, Kix ensures pod template labels are populated from `scope.selectorLabels` if omitted.
 2. **`serviceAccount` shorthand**: Setting `spec.template.spec.serviceAccount = self.serviceAccount` (passing the `ServiceAccount` resource directly) sets `serviceAccountName = self.serviceAccount.out.name` (creating a deployment dependency) and clears the shorthand key.
 3. **StatefulSet `headlessService` shorthand**: On `scope.mkStatefulSet`, passing `spec.headlessService = self.headlessSvc` sets `spec.serviceName = self.headlessSvc.name` (without a string-context dependency, avoiding a cycle with the headless Service's selector) and validates that the Service matches the StatefulSet's selector and has `clusterIP = "None"`.
-4. **Availability spread and PDB derivation**: For `Deployment` and `StatefulSet` workloads with `replicas > 1`, Kix injects `topologySpreadConstraints` matching the effective availability level (`"node"` or `"zone"`) unless `spec.template.spec.topologySpreadConstraints` is already set, and generates a companion `PodDisruptionBudget` in the package's built resources when the effective availability level is `"pod"` or higher. See [Availability levels and derived pod spread](/docs/explanation/availability-levels-and-derived-pod-spread/).
+4. **Availability spread and PDB derivation**: For `Deployment` and `StatefulSet` workloads with `replicas > 1`, Kix injects `topologySpreadConstraints` matching the effective availability level (`"node"` or `"zone"`) unless `spec.template.spec.topologySpreadConstraints` is already set, and generates a companion `PodDisruptionBudget` in the package's built resources when the effective availability level is `"pod"` or higher. See [Availability levels and derived pod spread](/docs/explanation/availability-levels/).
 5. **Network policy and DNS wiring**: When the cluster has a `"dns"` role provider, workloads that use default cluster DNS (`ClusterFirst`) automatically depend on the DNS service and receive egress permission to UDP/TCP port 53. If `cluster.networkPolicy.enable = true`, Kix also synthesizes a `CiliumNetworkPolicy` from the workload's resource references and `meta.network.intents`.
 
 ### Build-time pod validators

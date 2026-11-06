@@ -37,14 +37,14 @@ The Reference section documents the options, functions, schemas, and policy rule
 
 | Goal | Where to look |
 | --- | --- |
-| Understand how dependencies control deploy order and network policies | [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/) |
+| Understand how dependencies control deploy order and network policies | [The dependency graph as the model](/docs/explanation/the-dependency-graph/) |
 | Write a package with a Deployment and Service | [Package anatomy](/docs/reference/package-anatomy/), [Resources and `out`](/docs/reference/resources-and-out/), and [Composition helpers](/docs/reference/composition-helpers/) |
 | Add typed configuration options to a package | [Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/) and [Package anatomy](/docs/reference/package-anatomy/) |
 | Expose a Service with an Ingress or Gateway API HTTPRoute | [Expose a service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/), [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/), and [Composition helpers](/docs/reference/composition-helpers/) |
 | Wire a package to a specific database, cache, or storage instance | [Instances and composition](/docs/reference/instances-and-composition/#deps) and [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) |
 | Manage Secrets, CRDs, or RBAC permissions in a package | [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/) |
-| Wrap an upstream Helm chart as a Kix package | [Helm and imports](/docs/reference/helm-and-imports/) and [Helm integration and resource adoption](/docs/explanation/helm-integration-and-resource-adoption/) |
-| Set cluster availability levels and derive pod spread and PDBs | [Cluster configuration](/docs/reference/cluster-configuration/#cluster-availability) and [Availability levels and derived pod spread](/docs/explanation/availability-levels-and-derived-pod-spread/) |
+| Wrap an upstream Helm chart as a Kix package | [Helm and imports](/docs/reference/helm-and-imports/) and [Helm integration and resource adoption](/docs/explanation/helm-integration/) |
+| Set cluster availability levels and derive pod spread and PDBs | [Cluster configuration](/docs/reference/cluster-configuration/#cluster-availability) and [Availability levels and derived pod spread](/docs/explanation/availability-levels/) |
 | Configure or override scorecard rules | [Scorecard and rules](/docs/reference/scorecard-and-rules/) and [Cluster configuration](/docs/reference/cluster-configuration/#scorecard) |
 | Customize an instance's resources from the cluster without editing the package | [Instances and composition](/docs/reference/instances-and-composition/#partsoverlays) and [Patch package output with overlays](/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/) |
 | Stamp the same application stack across multiple environments | [Instances and composition](/docs/reference/instances-and-composition/#multi-environment-stamping-and-fragments) |

@@ -7,8 +7,8 @@ Whenever you compile or deploy a cluster, Kix runs 23 cross-resource validation 
 
 :::note[Helpful background]
 - [05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): see how `kix check` validates a cluster before deployment.
-- [Scorecard levels: manifest, package, namespace, cluster](/docs/explanation/scorecard-levels-manifest-package-namespace-cluster/): learn how always-on validation checks fit alongside constructor checks and configurable scorecard rules.
-- [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/): understand how Kix tracks resource dependencies so custom resources are applied after their CRDs.
+- [Scorecard levels: manifest, package, namespace, cluster](/docs/explanation/scorecard-levels/): learn how always-on validation checks fit alongside constructor checks and configurable scorecard rules.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): understand how Kix tracks resource dependencies so custom resources are applied after their CRDs.
 - [Labels and Selectors (Kubernetes docs)](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/): review how Kubernetes connects Services, NetworkPolicies, and PodDisruptionBudgets to pods using label selectors.
 :::
 
@@ -92,5 +92,5 @@ error: Cluster 'ludo-kind' has 1 failed assertion(s):
 ```
 
 :::note[Explanation]
-See [Cross-resource validation at cluster evaluation time](/docs/explanation/scorecard-levels-manifest-package-namespace-cluster/#cross-resource-validation-at-cluster-evaluation-time) for how these checks complement constructor validation and scorecard rules.
+See [Cross-resource validation at cluster evaluation time](/docs/explanation/scorecard-levels/#cross-resource-validation-at-cluster-evaluation-time) for how these checks complement constructor validation and scorecard rules.
 :::

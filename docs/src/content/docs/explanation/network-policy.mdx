@@ -6,7 +6,7 @@ description: "Because Kix knows which workloads talk to which Services, it can g
 Writing default-deny Kubernetes network policies by hand is tedious and fragile. To let one web service talk to one database, you normally have to write an egress rule in the caller's namespace, a matching ingress rule in the database's namespace, and a DNS rule so the caller can resolve the hostname. In Kix, when you turn on `networkPolicy.enable = true`, the compiler generates both ends of those firewall rules automatically from the service connections your packages already declare.
 
 :::note[Helpful background]
-- [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/): How Kix tracks connections between resources through `.out` attributes.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): How Kix tracks connections between resources through `.out` attributes.
 - [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/): A practical guide to turning on network policy generation in a cluster.
 - [Cluster configuration: `networkPolicy`](/docs/reference/cluster-configuration/#network-policy): Reference for cluster-wide network policy settings.
 - [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/): How pod-level ingress and egress filtering works in Kubernetes.

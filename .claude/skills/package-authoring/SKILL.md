@@ -15,7 +15,7 @@ makes keeping this file current part of changing the package conventions.
 
 | Need | Read |
 |---|---|
-| The values a package is judged against | `PRINCIPLES.md`; `docs/src/content/docs/explanation/personas-packages-and-clusters.mdx`; `docs/src/content/docs/explanation/availability-levels-and-derived-pod-spread.mdx` |
+| The values a package is judged against | `PRINCIPLES.md`; `docs/src/content/docs/explanation/packages-and-clusters.mdx`; `docs/src/content/docs/explanation/availability-levels.mdx` |
 | The package file contract and option contract | `docs/src/content/docs/reference/package-anatomy.mdx`; `docs/src/content/docs/reference/resources-and-out.mdx`; `.claude/skills/kix-migration/SKILL.md` "Package Anatomy" (line 78) and "Package Meta" (line 704) |
 | Second implementation of an alias, facades, operator stacks | kix-migration "Two Implementations, One Alias" (line 794) and "Operator-Managed Stacks" (line 742); `.claude/skills/kix-migration/MULTI_COMPONENT.md`, `STORAGE.md`, and `SECRETS.md` |
 | CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md`; `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |

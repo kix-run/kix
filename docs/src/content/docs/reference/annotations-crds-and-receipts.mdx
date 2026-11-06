@@ -7,8 +7,8 @@ When Kix compiles and deploys a cluster, it attaches `kix.run/*` labels and anno
 
 :::note[Helpful background]
 - [05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): see how `kix plan` and `kix deploy` use dependency metadata to apply resources in waves.
-- [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/): understand how `kix.run/depends-on` annotations are derived from Nix string context.
-- [Server-side apply, field ownership, and drift](/docs/explanation/server-side-apply-field-ownership-and-drift/): learn how Kix tracks field ownership, cedes controller-managed fields, and detects drift.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): understand how `kix.run/depends-on` annotations are derived from Nix string context.
+- [Server-side apply, field ownership, and drift](/docs/explanation/server-side-apply-and-drift/): learn how Kix tracks field ownership, cedes controller-managed fields, and detects drift.
 - [Server-Side Apply (Kubernetes docs)](https://kubernetes.io/docs/reference/using-api/server-side-apply/): review how Kubernetes manages field ownership across multiple controllers and tools.
 :::
 
@@ -69,7 +69,7 @@ See [Declare readiness for custom resources](/docs/how-to/author-packages-and-cl
 Generated from `ownership.cede = [ "spec.versions" "webhooks[*].rules" ];` on `scope.mkResource` or `scope.mkCRD`. Paths use server-side apply field notation without a leading dot, where `[*]` matches any list element. When an apply receives `409 Conflict` from the API server and every conflicting path falls under a declared `kix.run/cede-fields` prefix, `kix deploy` retries the apply once with the ceded fields omitted so the external controller retains ownership of those fields.
 
 :::tip[Use it in a task]
-See [Cede fields to a controller](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/) and [Server-side apply, field ownership, and drift](/docs/explanation/server-side-apply-field-ownership-and-drift/).
+See [Cede fields to a controller](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/) and [Server-side apply, field ownership, and drift](/docs/explanation/server-side-apply-and-drift/).
 :::
 
 #### `kix.run/expects`

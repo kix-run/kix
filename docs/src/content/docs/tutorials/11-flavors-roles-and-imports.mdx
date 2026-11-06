@@ -95,7 +95,7 @@ Look at what `kix.mkImport` produces:
 Later, if you migrate `legacy-api` into a native Kix package, you only replace `package = kix.mkImport { ... }` in `cluster.nix` with the real package. The consumer package (`client-package.nix`) does not change at all.
 
 :::note[Explanation]
-See [Helm integration and resource adoption](/docs/explanation/helm-integration-and-resource-adoption/) for how `kix.mkImport` and `kix.helm.mkPackage` let you adopt existing cluster workloads incrementally.
+See [Helm integration and resource adoption](/docs/explanation/helm-integration/) for how `kix.mkImport` and `kix.helm.mkPackage` let you adopt existing cluster workloads incrementally.
 :::
 
 ## What You Learned

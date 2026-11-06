@@ -36,7 +36,7 @@ Kix resolves `backend` inside the consumer's namespace using a strict resolution
 Notice that steps 2, 3, and 4 are all scoped to the consumer's own namespace. If two namespaces both define an instance named `backend`, or if `backend` lives in another namespace entirely, Kix will not guess which one you meant. Crossing a namespace boundary is an architectural decision, so Kix makes it visible in `cluster.nix`.
 
 :::note[Explanation]
-See [Dependency resolution and explicit deps](/docs/explanation/the-dependency-graph-as-the-model/#dependency-resolution-and-explicit-deps) for the design rationale behind the resolution order.
+See [Dependency resolution and explicit deps](/docs/explanation/the-dependency-graph/#dependency-resolution-and-explicit-deps) for the design rationale behind the resolution order.
 :::
 
 ## Inspect `08-namespace-deps`

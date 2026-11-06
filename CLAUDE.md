@@ -33,7 +33,7 @@ The user-facing documentation lives in `docs/src/content/docs/` (deployed to `ht
 | Scorecard schemas and built-in rules | `docs/src/content/docs/reference/scorecard-and-rules.mdx` |
 | Always-on cross-resource validation checks | `docs/src/content/docs/reference/validation-checks.mdx` |
 | `kix.run/*` annotations/labels, `Activation`, `PackageInstance`, deploy receipts | `docs/src/content/docs/reference/annotations-crds-and-receipts.mdx` |
-| Core architecture & mental model explanations | `docs/src/content/docs/explanation/the-dependency-graph-as-the-model.mdx`, `docs/src/content/docs/explanation/personas-packages-and-clusters.mdx`, `docs/src/content/docs/explanation/network-policy-derivation-from-the-graph.mdx`, `docs/src/content/docs/explanation/helm-integration-and-resource-adoption.mdx` |
+| Core architecture & mental model explanations | `docs/src/content/docs/explanation/the-dependency-graph.mdx`, `docs/src/content/docs/explanation/packages-and-clusters.mdx`, `docs/src/content/docs/explanation/network-policy.mdx`, `docs/src/content/docs/explanation/helm-integration.mdx` |
 
 ## Housekeeping: log what you notice
 
