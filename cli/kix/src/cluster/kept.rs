@@ -7,13 +7,21 @@
 //!
 //! Only the fields Kix sent count. A field the server adds (a default,
 //! `status`, metadata) is not a finding, and neither is a value the server
-//! stores in another spelling that means the same thing.
+//! stores in another spelling that means the same thing. A field the object
+//! cedes (`ownership.cede`, the `kix.run/cede-fields` annotation) is left
+//! to another controller, so a value it stores there is not a finding either.
+//!
+//! This is the check at apply time. It catches what a build cannot know:
+//! mutating admission webhooks, and CRDs the environment installs rather than
+//! the build. A field a vendored CRD's schema prunes could be caught before
+//! the deploy, by checking the manifest against that schema at build time.
 
 use base64::Engine as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::cluster::apply::{Seg, ceded_fields};
 use crate::manifest::diff::engine::structural_diff;
 use crate::manifest::diff::equivalence::same_quantity;
 use crate::manifest::diff::{DiffConfig, DiffKind, Difference};
@@ -62,6 +70,7 @@ pub enum NotKept {
 /// - a Secret's `stringData` value is stored base64-encoded under `data`.
 /// - a list item Kix sent sits elsewhere in the stored list, perhaps with
 ///   fields the server added.
+/// - the field is at or under a path `sent` cedes in `kix.run/cede-fields`.
 ///
 /// Values of a Secret's `data` and `stringData` are never returned.
 pub fn not_kept(sent: &Value, stored: &Value) -> Vec<NotKeptField> {
@@ -76,12 +85,14 @@ pub fn not_kept(sent: &Value, stored: &Value) -> Vec<NotKeptField> {
     let (sent_view, from_string_data) = sent_view(sent, stored, secret);
     let stored_view = stored_view(stored, secret);
     let rule = Rule { builtin };
+    let ceded = ceded_fields(sent);
     let mut found = rule.judge(structural_diff(
         &sent_view,
         &stored_view,
         "$",
         &DiffConfig::default(),
     ));
+    found.retain(|f| !ceded.iter().any(|c| cedes(c, &f.path)));
     for f in &mut found {
         if let Some(key) = f.path.strip_prefix("$.data.")
             && from_string_data.iter().any(|k| k == key)
@@ -201,6 +212,49 @@ impl Rule {
         });
         keeper.map(|i| spare.remove(i)).is_some()
     }
+}
+
+/// Check whether the ceded path `ceded` is `path`, a diff path such as
+/// `$.webhooks[a.example.io].rules`, or a prefix of it. A ceded `[*]`
+/// matches any list item, `[name="x"]` the item whose diff key is `x`, and
+/// `[2]` the item at that index.
+fn cedes(ceded: &[Seg], path: &str) -> bool {
+    let Some(segs) = diff_segments(path) else {
+        return false;
+    };
+    ceded.len() <= segs.len()
+        && ceded.iter().zip(&segs).all(|(c, p)| match (c, p) {
+            (Seg::Field(f), DiffSeg::Field(g)) => f == g,
+            (Seg::Any, DiffSeg::Item(_)) => true,
+            (Seg::Index(i), DiffSeg::Item(k)) => i.to_string() == *k,
+            (Seg::Key(_, v), DiffSeg::Item(k)) => v == k,
+            _ => false,
+        })
+}
+
+enum DiffSeg<'a> {
+    Field(&'a str),
+    Item(&'a str),
+}
+
+/// Split a diff path (`$.a.b[key].c`) into its segments, or return `None`
+/// when it is malformed.
+fn diff_segments(path: &str) -> Option<Vec<DiffSeg<'_>>> {
+    let mut rest = path.strip_prefix('$')?;
+    let mut out = Vec::new();
+    while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix('[') {
+            let end = after.find(']')?;
+            out.push(DiffSeg::Item(&after[..end]));
+            rest = &after[end + 1..];
+        } else {
+            let after = rest.strip_prefix('.')?;
+            let end = after.find(['.', '[']).unwrap_or(after.len());
+            out.push(DiffSeg::Field(&after[..end]));
+            rest = &after[end..];
+        }
+    }
+    Some(out)
 }
 
 /// Return the path of the list that the item at `path` belongs to, or `None`
@@ -513,6 +567,51 @@ mod tests {
         ));
         let stored = served(&deployment(pod(json!({"name": "v", "mountPath": "/v"}))));
         assert_eq!(not_kept(&sent, &stored), vec![]);
+    }
+
+    /// A field the object cedes is another controller's to set, so a value
+    /// the server stores there is kept. A field the cede does not cover is
+    /// still reported.
+    #[test]
+    fn a_ceded_field_the_server_changed_is_kept() {
+        let cluster = |version: &str, cede: &str| {
+            json!({"apiVersion": "stackgres.io/v1", "kind": "SGCluster",
+                "metadata": {"name": "db", "namespace": "app",
+                    "annotations": {crate::manifest::keys::CEDE_FIELDS: cede}},
+                "spec": {"instances": 1, "postgres": {"version": version}}})
+        };
+        let sent = cluster("17", "spec.postgres.version");
+        let stored = served(&cluster("17.4", "spec.postgres.version"));
+        assert_eq!(not_kept(&sent, &stored), vec![]);
+
+        let other = cluster("17", "spec.instances");
+        let found = not_kept(&other, &served(&cluster("17.4", "spec.instances")));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "$.spec.postgres.version");
+
+        // `[*]` covers every item of a list, and a ceded parent covers
+        // the fields under it.
+        let hook = |rules: &str, cede: &str| {
+            json!({"apiVersion": "admissionregistration.k8s.io/v1",
+                "kind": "ValidatingWebhookConfiguration",
+                "metadata": {"name": "op",
+                    "annotations": {crate::manifest::keys::CEDE_FIELDS: cede}},
+                "webhooks": [{"name": "a.example.io", "sideEffects": "None",
+                    "rules": [{"apiGroups": [rules]}]}]})
+        };
+        for cede in [
+            "webhooks[*].rules",
+            "webhooks[name=\"a.example.io\"]",
+            "webhooks",
+        ] {
+            let found = not_kept(&hook("x", cede), &served(&hook("y", cede)));
+            assert_eq!(found, vec![], "cede {cede}");
+        }
+        let found = not_kept(
+            &hook("x", "webhooks[*].sideEffects"),
+            &served(&hook("y", "webhooks[*].sideEffects")),
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
     }
 
     #[test]

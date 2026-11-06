@@ -2428,7 +2428,8 @@ spelling (`0.5` and `500m`), a documented default, a reordered list, a
 Secret's `stringData` stored as `data`, and a zero value (`""`, `0`,
 `false`, or an empty map or list) on a built-in kind, which Kubernetes
 drops or defaults. A custom resource keeps a zero value, so losing one is
-reported. A custom resource whose CRD the deploy changes is not checked,
+reported. A field the object cedes (`ownership.cede`) is another
+controller's to set, so its stored value is not reported. A custom resource whose CRD the deploy changes is not checked,
 because the dry run checks it against the CRD on the cluster now. Secret
 values read `(secret, not shown)`. `kix deploy` runs the same check on
 each real apply and prints a warning (`warn:`), which the JSON log

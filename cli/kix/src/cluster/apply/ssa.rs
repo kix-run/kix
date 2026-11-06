@@ -369,7 +369,7 @@ async fn update_bookkeeping_annotations_checked(
 /// One segment of an API server field path: `.spec`, `[name="x"]`, `[0]`, or
 /// `[*]` (matching any list element in a `kix.run/cede-fields` declaration).
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum Seg {
+pub(crate) enum Seg {
     Field(String),
     Key(String, String),
     Index(usize),
@@ -411,7 +411,7 @@ pub(super) fn parse_path(path: &str) -> Option<Vec<Seg>> {
 
 /// Parse the field paths declared in `manifest`'s `kix.run/cede-fields`
 /// annotation.
-fn ceded_fields(manifest: &Value) -> Vec<Vec<Seg>> {
+pub(crate) fn ceded_fields(manifest: &Value) -> Vec<Vec<Seg>> {
     manifest
         .pointer("/metadata/annotations")
         .and_then(|a| a.get(keys::CEDE_FIELDS))

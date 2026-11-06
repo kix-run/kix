@@ -11,6 +11,10 @@ Every pull request that changes something a Kix user sees adds a line under
 
 ## Unreleased
 
+### Breaking
+
+- The `kix deploy --log-format json` log has a new event, `fields_not_kept`. A reader that validates each line against the deploy log schema of 0.5 rejects it: validate against the new `cli/kix-cli/schema/deploy-log.schema.json`.
+
 ### Added
 
 - `cnpg-cluster` can copy databases from another PostgreSQL server when the Cluster is created, through the new `import` option and the `importSource`, `importPassword`, and `importCa` dependencies. Kix derives the network policy between the Cluster's pods and the source.

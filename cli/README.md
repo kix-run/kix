@@ -198,7 +198,7 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   types drop or default it; the same quantity or number in another
   spelling; a Secret's `stringData` stored as base64 `data` (and `data`
   compared by decoded bytes); a list item another stored item of the list
-  keeps; `status`; and a namespace on a cluster-scoped object. Secret
+  keeps; a field at or under a path the object cedes (`kix.run/cede-fields`, `[*]` matching any item); `status`; and a namespace on a cluster-scoped object. Secret
   values read `(secret, not shown)`. The findings ride on `ApplyPreview` and
   `DryRunOutcome::Recreated`, and `plan::server::not_kept` collects them
   into the plan's `not_kept` for every create, update, and recreate the dry

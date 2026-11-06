@@ -1,0 +1,3 @@
+# 2026-11-05 · `cli/kix/src/cluster/readiness/terminal.rs` · One failed image pull stops the whole deploy, although the kubelet retries it.
+
+The readiness check counts `ErrImagePull` and `ImagePullBackOff` as terminal at once. On a kind deploy of `test-cnpg`, the first pull of `ghcr.io/cloudnative-pg/plugin-barman-cloud` failed, the deploy stopped and cancelled every dependant (the Cluster, the Database, metabase), and the kubelet pulled the image 15 seconds later. A registry hiccup turns into a failed deploy that has to be run again. `InvalidImageName` is terminal; a pull error that the kubelet is still retrying is not yet.

@@ -1,0 +1,3 @@
+# 2026-11-05 · `cli/kix/src/cluster/scheduler/` · An import marker keeps waiting for its target after the object that makes it was cancelled.
+
+On a kind deploy of `test-cnpg`, a failed Deployment cancelled the CloudNativePG `Cluster/pg`. The `secret-ref-pg-app-*`, `secret-ref-pg-ca-*`, and `service-ref-pg-*` markers wait for objects that only that Cluster creates, and they went on printing `waiting: not found yet` until the 25-minute deploy timeout. The deploy had already failed, so the wait only delays the report. Nothing ties a marker to the object that produces its target, so the scheduler cannot cancel it with that object.
