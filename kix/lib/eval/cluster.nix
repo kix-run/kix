@@ -40,6 +40,11 @@
       # `mkFlake` supplies the cluster's `clusters` key when the definition
       # sets none.
       name ? throw "kix.buildCluster needs a name. Kix stores it in the cluster's deploy records, so it must stay the same for the life of the cluster. Set name = \"...\"; or list the cluster in kix.lib.mkFlake, which names it after its key.",
+      # Set by `mkFlake` when it supplies `name` from the cluster's
+      # `clusters` key. The index records it so that `kix deploy` and
+      # `kix plan` can refuse to deploy a cluster that Kix 0.6 named
+      # `cluster` under its new name.
+      _nameFromFlakeKey ? false,
       modules,
       specialArgs ? { },
       # The cluster's pin file from `kix.pins`. `buildCluster` applies its
@@ -876,7 +881,12 @@
             value = map (r: toString r.outPath) (dedupeByOutPath (ownedResources inst));
           }) allInstancesList
         );
-      };
+      }
+      # `nameFromFlakeKey = true` says that `mkFlake` named the cluster after
+      # its `clusters` key because the definition set no `name`. The CLI
+      # reads a missing field as `false`. Other builds leave the field out,
+      # so their index and Activation record stay as they were.
+      // lib.optionalAttrs _nameFromFlakeKey { nameFromFlakeKey = true; };
 
       # Surface namespace and cluster scorecard findings here because no
       # instance owns them. Warnings trace during evaluation; error findings

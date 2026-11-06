@@ -151,13 +151,67 @@ pub struct CheckedPlan {
     old_manifests: Vec<Value>,
     /// The new build's package index, for the record's `status.packageIndex`.
     package_index: RecordPackageIndex,
-    /// The new build's `cluster.kubernetes.uid`, for the binding check a
-    /// run makes when it connects after the plan (`--current-activation`).
+    /// What the checks a run makes when it connects after the plan
+    /// (`--current-activation`) read from the new build.
+    target_checks: TargetChecks,
+}
+
+/// What the checks a command makes when it connects read from the new
+/// build: the binding check ([`binding::check`]), the name check
+/// ([`binding::check_name`]), and the Kubernetes version check
+/// ([`kubernetes_version::check`]).
+#[derive(Debug, Clone)]
+pub struct TargetChecks {
+    cluster: String,
+    name_from_flake_key: bool,
     kubernetes_uid: Option<String>,
-    /// The new build's `k8sVersion`, for the version check made at the same
-    /// point, and the platform whose interface file supplied it.
     kubernetes_version: Option<String>,
     kubernetes_version_from: Option<String>,
+}
+
+impl TargetChecks {
+    /// Return the checks for the build `graph`.
+    pub fn of(graph: &StoreGraph) -> Self {
+        TargetChecks {
+            cluster: graph.cluster_name.clone(),
+            name_from_flake_key: graph.name_from_flake_key,
+            kubernetes_uid: graph.kubernetes_uid.clone(),
+            kubernetes_version: graph.kubernetes_version.clone(),
+            kubernetes_version_from: graph.kubernetes_version_from.clone(),
+        }
+    }
+
+    /// Refuse to deploy the build to the Kubernetes cluster behind `client`
+    /// when it belongs to another one, when it would deploy a cluster that
+    /// Kix 0.6 named `cluster` under a new name, or when it was checked
+    /// against a Kubernetes version that cluster does not run.
+    pub async fn run(
+        &self,
+        client: &Client,
+        connection: &binding::Connection,
+    ) -> Result<(), PlanError> {
+        binding::check(
+            client,
+            connection,
+            binding::Action::Deploy,
+            &self.cluster,
+            self.kubernetes_uid.as_deref(),
+        )
+        .await
+        .map_err(|e| PlanError::Binding(Box::new(e)))?;
+        binding::check_name(client, connection, &self.cluster, self.name_from_flake_key)
+            .await
+            .map_err(|e| PlanError::Binding(Box::new(e)))?;
+        kubernetes_version::check(
+            client,
+            connection,
+            &self.cluster,
+            self.kubernetes_version.as_deref(),
+            self.kubernetes_version_from.as_deref(),
+        )
+        .await
+        .map_err(|e| PlanError::KubernetesVersion(Box::new(e)))
+    }
 }
 
 impl CheckedPlan {
@@ -210,19 +264,13 @@ impl CheckedPlan {
     /// Return the new build's `cluster.kubernetes.uid`, or `None` when its
     /// definition is not bound to one Kubernetes cluster.
     pub fn kubernetes_uid(&self) -> Option<&str> {
-        self.kubernetes_uid.as_deref()
+        self.target_checks.kubernetes_uid.as_deref()
     }
 
-    /// Return the new build's `k8sVersion` as the definition writes it, or
-    /// `None` when unset.
-    pub fn kubernetes_version(&self) -> Option<&str> {
-        self.kubernetes_version.as_deref()
-    }
-
-    /// Return the platform whose interface file supplied the new build's
-    /// `k8sVersion`, or `None` when the definition writes it.
-    pub fn kubernetes_version_from(&self) -> Option<&str> {
-        self.kubernetes_version_from.as_deref()
+    /// Return the checks a command makes when it connects to the cluster
+    /// after the plan was made without connecting.
+    pub fn target_checks(&self) -> &TargetChecks {
+        &self.target_checks
     }
 
     /// Remove orphans that another Kix cluster still deploys ([`keep_shared`])
@@ -437,10 +485,8 @@ impl<'a> Planner<'a> {
     }
 
     /// Plan a deploy of `build` against `old`: connect, unless the old side
-    /// is the local cache, check that the build belongs to the Kubernetes
-    /// cluster it connected to ([`binding::check`]) and was checked against
-    /// the Kubernetes version it runs ([`kubernetes_version::check`]), then
-    /// the three steps.
+    /// is the local cache, run [`TargetChecks::run`] against the Kubernetes
+    /// cluster it connected to, then the three steps.
     pub async fn run(&self, build: InstallableBuild, old: &OldSide) -> Result<Planned, PlanError> {
         let new_graph = build.graph();
         let client = match old {
@@ -451,23 +497,9 @@ impl<'a> Planner<'a> {
                     .await
                     .map_err(|e| PlanError::Connect(Box::new(e)))?;
                 let connection = binding::Connection::of_context(context.as_deref());
-                binding::check(
-                    &client,
-                    &connection,
-                    &new_graph.cluster_name,
-                    new_graph.kubernetes_uid.as_deref(),
-                )
-                .await
-                .map_err(|e| PlanError::Binding(Box::new(e)))?;
-                kubernetes_version::check(
-                    &client,
-                    &connection,
-                    &new_graph.cluster_name,
-                    new_graph.kubernetes_version.as_deref(),
-                    new_graph.kubernetes_version_from.as_deref(),
-                )
-                .await
-                .map_err(|e| PlanError::KubernetesVersion(Box::new(e)))?;
+                TargetChecks::of(new_graph)
+                    .run(&client, &connection)
+                    .await?;
                 Some(client)
             }
         };
@@ -599,9 +631,7 @@ impl<'a> Planner<'a> {
             cluster: cluster.to_string(),
             old_manifests: baseline.manifests(),
             package_index: RecordPackageIndex::of(new_graph),
-            kubernetes_uid: new_graph.kubernetes_uid.clone(),
-            kubernetes_version: new_graph.kubernetes_version.clone(),
-            kubernetes_version_from: new_graph.kubernetes_version_from.clone(),
+            target_checks: TargetChecks::of(new_graph),
         })
     }
 }

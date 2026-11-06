@@ -163,6 +163,7 @@ async fn check_binding(client: &Client, index: &KixPackageIndex) -> Result<Bindi
     match binding::check(
         client,
         &Connection::InCluster,
+        binding::Action::Deploy,
         &index.cluster,
         index.kubernetes.uid.as_deref(),
     )

@@ -60,6 +60,8 @@ let
       # prepends `clusterModules` and names the cluster after its `clusters`
       # key unless the definition sets `name`. A definition keeps its own
       # `name` because renaming a deployed cluster orphans its deploy records.
+      # A key-derived name is marked in the build, so the CLI can stop a
+      # cluster that Kix 0.6 deployed as `cluster` from changing its name.
       kixFor =
         key:
         kix
@@ -67,7 +69,14 @@ let
           buildCluster =
             args:
             kix.buildCluster (
-              { name = key; } // args // { modules = clusterModules ++ (args.modules or [ ]); }
+              {
+                name = key;
+                _nameFromFlakeKey = !(args ? name);
+              }
+              // args
+              // {
+                modules = clusterModules ++ (args.modules or [ ]);
+              }
             );
         };
       kixChecks = import ../checks.nix {

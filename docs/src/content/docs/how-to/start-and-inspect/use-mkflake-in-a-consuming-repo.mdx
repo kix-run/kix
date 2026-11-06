@@ -54,6 +54,24 @@ records. When the two differ, commands that read cluster state first evaluate
 the flake to learn the recorded name.
 :::
 
+### Keep the name of a cluster that Kix 0.6 deployed
+
+Kix 0.6 named a cluster `cluster` when its file passed no `name` to
+`kix.buildCluster`. Kix 0.7 names it after its key, so its deploy records no
+longer match. `kix deploy` and `kix plan` refuse such a cluster before they
+apply anything: its file passes no `name`, the Kubernetes cluster has no
+Activation records for the key, and it has records for a Kix cluster named
+`cluster`. Fix it in the cluster file in one of two ways:
+
+- Add `name = "cluster";` to the `kix.buildCluster` call to keep the old name
+  and its deploy history.
+- Add `name = "<key>";` to confirm the new name. The cluster then starts a
+  new deploy history. The old `cluster` records stay on the Kubernetes
+  cluster, and Kix never deletes the objects that only the old build has, so
+  remove them yourself.
+
+Either value turns the check off.
+
 For a single project, a compact registration is enough:
 
 ```nix title="flake.nix"

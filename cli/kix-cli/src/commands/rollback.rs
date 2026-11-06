@@ -709,6 +709,7 @@ async fn plan_rollback(
         binding::check_declared(
             client,
             &binding::Connection::of_context(context),
+            binding::Action::Deploy,
             cluster,
             declared,
         )

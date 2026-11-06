@@ -56,6 +56,9 @@ pub const GROUP: &str = domain!();
 /// `group/version` of Kix's own records.
 pub const API_VERSION: &str = concat!(domain!(), "/v1alpha1");
 
+/// The address of Kix's documentation site, which messages link to.
+pub const DOCS_URL: &str = concat!("https://", domain!(), "/docs/");
+
 /// The prefix every Kix key starts with, including the slash.
 pub(crate) const PREFIX: &str = concat!(domain!(), "/");
 

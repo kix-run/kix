@@ -143,15 +143,19 @@ fn record_resource() -> ApiResource {
     )
 }
 
-/// List up to `limit` Activation records under the current API group that
-/// match `selector`, or none when the Activation CRD is not installed.
+/// List the Activation records under the current API group that match
+/// `selector`, up to `limit` when given, or none when the Activation CRD is
+/// not installed.
 async fn list_undiscovered(
     client: &Client,
     selector: &str,
-    limit: u32,
+    limit: Option<u32>,
 ) -> Result<Vec<DynamicObject>, RecordsError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), &record_resource());
-    let lp = ListParams::default().labels(selector).limit(limit);
+    let mut lp = ListParams::default().labels(selector);
+    if let Some(limit) = limit {
+        lp = lp.limit(limit);
+    }
     match api.list(&lp).await {
         Ok(list) => Ok(list.items),
         Err(kube::Error::Api(e)) if e.code == 404 => Ok(Vec::new()),
@@ -165,9 +169,11 @@ async fn list_undiscovered(
 ///
 /// Used for CLI argument disambiguation before full discovery runs.
 pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, RecordsError> {
-    Ok(!list_undiscovered(client, &cluster_selector(cluster), 1)
-        .await?
-        .is_empty())
+    Ok(
+        !list_undiscovered(client, &cluster_selector(cluster), Some(1))
+            .await?
+            .is_empty(),
+    )
 }
 
 /// An Activation record that carries the `kix.run/kubernetes-uid` label: the
@@ -179,12 +185,14 @@ pub struct BoundRecord {
 }
 
 /// Return one Activation record on the Kubernetes cluster, of any Kix
-/// cluster and phase, whose build named a `cluster.kubernetes.uid`, or
-/// `None` when no record carries the label or the Activation CRD is not
-/// installed. Runs before discovery.
+/// cluster, whose build named a `cluster.kubernetes.uid` and finished a
+/// deploy ([`has_deployed`]), or `None` when no such record exists or the
+/// Activation CRD is not installed. A record that never finished a deploy,
+/// such as one the operator failed because its build named another
+/// Kubernetes cluster, does not lock the cluster. Runs before discovery.
 pub async fn bound_record(client: &Client) -> Result<Option<BoundRecord>, RecordsError> {
-    let found = list_undiscovered(client, keys::KUBERNETES_UID, 1).await?;
-    Ok(found.first().map(|item| {
+    let found = list_undiscovered(client, keys::KUBERNETES_UID, None).await?;
+    Ok(found.iter().find(|item| has_deployed(item)).map(|item| {
         let label = |key: &str| {
             item.metadata
                 .labels
@@ -198,6 +206,13 @@ pub async fn bound_record(client: &Client) -> Result<Option<BoundRecord>, Record
             uid: label(keys::KUBERNETES_UID),
         }
     }))
+}
+
+/// Return whether the deploy of `item` finished: it is current (`Active` or
+/// `Degraded`), or it carries `kix.run/deployed-at`, which finalizing a
+/// deploy writes and later phases keep.
+fn has_deployed(item: &DynamicObject) -> bool {
+    is_current_phase(read_phase(item)) || Record::of(item).was_ever_current()
 }
 
 /// Build the label selector matching all Activation records for `cluster`.
