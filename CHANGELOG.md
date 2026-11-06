@@ -15,10 +15,13 @@ Every pull request that changes something a Kix user sees adds a line under
 
 - `cnpg-cluster` can copy databases from another PostgreSQL server when the Cluster is created, through the new `import` option and the `importSource`, `importPassword`, and `importCa` dependencies. Kix derives the network policy between the Cluster's pods and the source.
 - The `service-ref` package names a Service Kix does not render, with the pod labels and ports network policy needs, so a server another tool installed can be a dependency.
+- `filebrowser` creates or updates the users listed in the new `users` option on every start, with passwords from a `filebrowserUsers` secret, each scoped to a folder and with command execution off. The new `tokenExpirationTime` option sets how long a login lasts.
 
 ### Changed
 
 - `cnpg-cluster` refuses `extraSpec.bootstrap.initdb.import`. Set the `import` option instead, which wires the source as a dependency and derives its network policy.
+- Security patch upgrades: `immich` 3.3.5, `cilium` 1.19.10, `grafana` 13.1.8, and `prometheus` 3.13.5.
+- `filebrowser` keeps its database on the storage claim at `/data/database` and serves `/data/files`, so users survive a restart. The Deployment uses the `Recreate` strategy, because only one process can hold the database file.
 
 ### Fixed
 

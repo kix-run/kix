@@ -72,7 +72,7 @@
   kix,
 }:
 let
-  release = "13.1.1";
+  release = "13.1.8";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "grafana ${ns}/${name}";

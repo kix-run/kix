@@ -78,13 +78,13 @@
 let
   rules = import ./netpol-rules.nix { inherit lib; };
 
-  release = "1.19.6";
+  release = "1.19.10";
 
   chart = scope.helm.fetchHelmChart {
     repo = "https://helm.cilium.io/";
     name = "cilium";
     version = release;
-    hash = "sha256-IcQ89ThB+asDdQR9lapMZAUepSu9LGeUFuZAj18ckXk=";
+    hash = "sha256-tyUq/KNBOjPiuYfJVOUkQelpeeQR4UlezGrv6M0liGM=";
   };
 in
 {

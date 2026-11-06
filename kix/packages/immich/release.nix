@@ -3,7 +3,7 @@
 # and the server calls machine-learning endpoints of its own release, so a
 # bump changes `version` and both digests together.
 let
-  version = "3.0.3";
+  version = "3.3.5";
 in
 {
   inherit version;
@@ -11,8 +11,8 @@ in
 
   # Multi-arch index digests of `tag` (`crane digest <repository>:<tag>`).
   digests = {
-    server = "sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db";
-    machineLearning = "sha256:d76fe88b69282c09a97eac4f82dafa82cfd77bce274bc742591cde974f87dacb";
+    server = "sha256:485d546a2e31d6a8b4db8423fcba5c109de8c218d93410af115fd1ccfc4352a6";
+    machineLearning = "sha256:5b28c9352c8374b8a1ed96fbdd8d6755fea6e43510ec43fdf6538aa02ea40f56";
   };
 
   # The release an image tag names: "3.0.3" for `v3.0.3`, for the hardware
