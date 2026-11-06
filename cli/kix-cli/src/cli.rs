@@ -348,6 +348,14 @@ pub enum Command {
     /// Generate shell completions
     Completions(CompletionsArgs),
 
+    /// Check the Kix installation
+    ///
+    /// Reports which runtime directory Kix runs its programs (nix, helm,
+    /// kubectl, sops) from, checks that its manifest.json lists the programs
+    /// this kix expects, and checks every file against its SHA-256 in the
+    /// manifest. Exits 1 when a check fails.
+    Doctor,
+
     /// Compliance exports: SBOM, SLSA attestations, audit bundles
     Compliance(ComplianceArgs),
 
@@ -393,9 +401,11 @@ impl Command {
             Command::Snapshot(a) => match &a.command {
                 SnapshotCommand::Save(s) => Some(&s.cluster),
             },
-            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
-                None
-            }
+            Command::Completions(_)
+            | Command::Doctor
+            | Command::Drift(_)
+            | Command::Pin(_)
+            | Command::Plugin(_) => None,
         }
     }
 }

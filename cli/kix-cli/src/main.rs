@@ -146,6 +146,11 @@ fn main() -> miette::Result<()> {
         return commands::completions::run(args, &cli.global);
     }
 
+    // Doctor reports a broken runtime instead of stopping on it.
+    if let Command::Doctor = &cli.command {
+        return commands::doctor::run();
+    }
+
     // `kix pin` operates directly on the pin file without evaluating the
     // flake, so it works even when evaluation fails.
     if let Command::Pin(command) = &cli.command {
@@ -162,6 +167,10 @@ fn main() -> miette::Result<()> {
     if let Some(name) = cli.command.cluster_name() {
         validate_cluster_name(name)?;
     }
+
+    // Stop before any work when the runtime beside this binary comes from
+    // another release.
+    kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
 
     let mut ctx = commands::CommandContext::new(
         &cli.global,
@@ -191,9 +200,11 @@ fn main() -> miette::Result<()> {
         Command::Images(args) => commands::images::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
-        Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
-            unreachable!()
-        }
+        Command::Completions(_)
+        | Command::Doctor
+        | Command::Drift(_)
+        | Command::Pin(_)
+        | Command::Plugin(_) => unreachable!(),
     }
 }
 
