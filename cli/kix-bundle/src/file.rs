@@ -13,10 +13,10 @@ use kix::eval::stamp::stamp_annotations;
 use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::text::printable;
 
-use crate::{Bundle, BundleError, MAX_STORED_BYTES, OpenBundle, from_result_dir};
+use crate::{Bundle, BundleError, MAX_STORED_BYTES, OpenBundle, from_local};
 
 /// Load the bundle at `path` (along with any `--deployed-bundle` paths in
-/// `deployed`) as a [`Build`] for `cluster`, setting its result directory to
+/// `deployed`) as a [`Build`] for `cluster`, setting its `built_via` to
 /// `bundle:sha256:<sha256>`.
 pub fn read_build(path: &Path, deployed: &[PathBuf], cluster: &str) -> Result<Build, String> {
     let bytes = read_file(path)?;
@@ -36,7 +36,7 @@ pub struct Written {
     pub sha256: String,
 }
 
-/// Write `graph` from its result directory in the local Nix store to `file` as
+/// Write `graph` from its build in the local Nix store to `file` as
 /// a bundle, verifying that the written bundle reads back as an identical
 /// build before persisting it.
 pub fn write_build(
@@ -45,8 +45,7 @@ pub fn write_build(
     receipt: Option<Provenance>,
     file: &Path,
 ) -> Result<Written, String> {
-    let contents =
-        from_result_dir(&graph.result_dir, kix_rev, receipt).map_err(|e| e.to_string())?;
+    let contents = from_local(&graph.built_via, kix_rev, receipt).map_err(|e| e.to_string())?;
     let dir = match file.parent() {
         Some(d) if !d.as_os_str().is_empty() => d,
         _ => Path::new("."),
@@ -60,12 +59,12 @@ pub fn write_build(
     // StoreGraph before atomically renaming it into place.
     let (written, mut read_back) =
         load(temp.path()).map_err(|e| format!("the build did not make a valid bundle: {e}"))?;
-    read_back.result_dir = graph.result_dir.clone();
+    read_back.built_via = graph.built_via.clone();
     stamp_annotations(&mut read_back);
     if read_back != *graph || !read_back.packages.keys().eq(graph.packages.keys()) {
         return Err(format!(
             "the bundle reads back as another build than {}",
-            graph.result_dir.display()
+            graph.built_via.display()
         ));
     }
     temp.persist(file)

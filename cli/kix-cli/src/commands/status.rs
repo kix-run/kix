@@ -267,8 +267,8 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     let store_graph = built_via
         .as_ref()
         .map(std::path::PathBuf::from)
-        .filter(|p| kix::eval::store::exists(&p.join("kix-packages.json")))
-        .and_then(|result_dir| Build::local(&result_dir, &|_| {}).ok())
+        .filter(|p| kix::eval::build_files::BuildFiles::is_build(p))
+        .and_then(|built_via| Build::local(&built_via, &|_| {}).ok())
         .map(Build::into_graph);
 
     let sweep = inventory::sweep_managed(

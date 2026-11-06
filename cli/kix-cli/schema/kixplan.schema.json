@@ -54,7 +54,7 @@
           ]
         },
         "store_path": {
-          "description": "The build's result directory, the path a deploy records in the\nActivation record's `built-via` annotation. It locates the build. It does not identify the\ncontent: two machines can build the same manifests at different\npaths.",
+          "description": "The build's store path, the path a deploy records in the\nActivation record's `built-via` annotation. It locates the build. It does not identify the\ncontent: two machines can build the same manifests at different\npaths.",
           "type": "string"
         }
       },

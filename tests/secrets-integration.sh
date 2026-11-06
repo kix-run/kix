@@ -70,10 +70,10 @@ git add "$SOPS_FILE" 2>/dev/null || true
 
 echo ""
 echo "=== Step 3: Build the test-secrets cluster ==="
-cd "$REPO_ROOT/clusters"
-nix build .#cluster-test-secrets-activation --extra-experimental-features pipe-operators
-echo "Build complete. Manifests:"
-ls -la result/
+cd "$REPO_ROOT"
+cargo run --manifest-path cli/Cargo.toml --bin kix -- \
+    build test-secrets --flake ./clusters -o yaml > /dev/null
+echo "Build complete."
 
 echo ""
 echo "=== Step 4: Create kind cluster ==="

@@ -142,7 +142,7 @@ fn store_path_of(path: &str) -> Option<String> {
 /// A cluster build.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Build {
-    /// The build's result directory, the path a deploy records in the
+    /// The build's store path, the path a deploy records in the
     /// Activation record's `built-via` annotation. It locates the build. It does not identify the
     /// content: two machines can build the same manifests at different
     /// paths.
@@ -162,7 +162,7 @@ impl Build {
             .map(|node| &node.manifest)
             .find(|m| lifecycle::is_record(m));
         Build {
-            store_path: graph.result_dir.to_string_lossy().into_owned(),
+            store_path: graph.built_via.to_string_lossy().into_owned(),
             identity_hash: record
                 .and_then(|r| keys::get(r, keys::IDENTITY_HASH))
                 .map(str::to_string),
@@ -904,7 +904,7 @@ mod tests {
     }
 
     /// The build and the deployed record are named by their Activation
-    /// record's identity hash and result directory.
+    /// record's identity hash and store path.
     #[test]
     fn a_plan_names_its_build_and_the_deployed_record() {
         let record = serde_json::json!({
