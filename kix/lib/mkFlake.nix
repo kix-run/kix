@@ -170,6 +170,11 @@ let
       checks = clusterChecks // packageChecks;
       legacyPackages = {
         kixClusters = resolvedClusters;
+        # The kix program reads this to name the library release in its
+        # messages and to compare it with its own version.
+        kixLibrary = {
+          inherit (kix) version;
+        };
         kixPackages = lib.mapAttrs (
           _name: pkg:
           let

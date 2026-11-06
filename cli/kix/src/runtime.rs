@@ -394,13 +394,26 @@ pub fn program_path(tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
     locate(&runtime()?.dir, tool, want)
 }
 
+/// Return the versions of `tool` the Kix runtime ships, sorted.
+pub fn shipped_versions(tool: Tool) -> Result<Vec<String>, RuntimeError> {
+    let mut versions: Vec<String> = shipped_in(&runtime()?.dir, tool)?
+        .into_iter()
+        .map(|s| s.version)
+        .collect();
+    versions.sort();
+    Ok(versions)
+}
+
 fn locate(dir: &Path, tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
-    let shipped = if dir.join(MANIFEST).exists() {
-        from_manifest(dir, tool)?
+    select(dir, tool, want, shipped_in(dir, tool)?)
+}
+
+fn shipped_in(dir: &Path, tool: Tool) -> Result<Vec<Shipped>, RuntimeError> {
+    if dir.join(MANIFEST).exists() {
+        from_manifest(dir, tool)
     } else {
-        from_layout(dir, tool)?
-    };
-    select(dir, tool, want, shipped)
+        from_layout(dir, tool)
+    }
 }
 
 /// One version of a program in a runtime directory.

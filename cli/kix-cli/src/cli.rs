@@ -144,6 +144,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "images",
             "compliance",
             "pin",
+            "lib",
         ],
     ),
     // Only commands that evaluate through the SQLite eval cache.
@@ -363,6 +364,10 @@ pub enum Command {
     #[command(subcommand)]
     Pin(PinCommand),
 
+    /// Manage the Kix library this project pins in flake.lock
+    #[command(subcommand)]
+    Lib(LibCommand),
+
     /// Run an external `kix-<NAME>` plugin from `PATH`
     #[command(external_subcommand)]
     Plugin(Vec<OsString>),
@@ -405,9 +410,29 @@ impl Command {
             | Command::Doctor
             | Command::Drift(_)
             | Command::Pin(_)
+            | Command::Lib(_)
             | Command::Plugin(_) => None,
         }
     }
+}
+
+/// Manage the Kix library this project pins in flake.lock.
+#[derive(Subcommand)]
+pub enum LibCommand {
+    /// Move this project's Kix library to the release of this kix program
+    ///
+    /// Locks the project's Kix library input (github:kix-run/kixpkgs) to the
+    /// tag `v<version>` of this program's release and writes flake.lock. It
+    /// does not change flake.nix. When flake.nix pins another release, or the
+    /// input is a local path or a fork, it says what to change by hand.
+    Update(LibUpdateArgs),
+}
+
+#[derive(clap::Args)]
+pub struct LibUpdateArgs {
+    /// Show what would change without writing flake.lock
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// Resolve container image tags to digests and record them in a committed pin file.

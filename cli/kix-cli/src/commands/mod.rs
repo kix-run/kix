@@ -15,6 +15,7 @@ pub mod graph_stream;
 pub mod health;
 pub mod images;
 pub mod inspect;
+pub mod library;
 pub mod list;
 pub mod logs;
 pub mod migrate;

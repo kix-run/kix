@@ -48,6 +48,9 @@ pub enum HelmError {
         shipped: Vec<String>,
     },
 
+    #[error(transparent)]
+    LibraryMismatch(Box<crate::library::HelmMismatch>),
+
     #[error(
         "this cluster's Kix library writes Helm specs of version {found}, and this kix binary reads version {SPEC_VERSION}. Use the kix binary of the same version as the library"
     )]
@@ -321,6 +324,32 @@ fn invalid_paths<'a>(
         .lines()
         .map(|l| PathBuf::from(l.trim()))
         .collect())
+}
+
+/// Return a Helm version that `pending` asks for and the Kix runtime does
+/// not ship, with the versions it does ship. Return `None` when it ships
+/// every one.
+pub fn unshipped(pending: &[Placeholder]) -> Result<Option<(String, Vec<String>)>, HelmError> {
+    let mut wanted: Vec<&str> = pending
+        .iter()
+        .map(|p| match &p.job {
+            Job::Render(spec) => spec.helm.as_str(),
+            Job::Fetch { spec, .. } => spec.helm.as_str(),
+        })
+        .collect();
+    let Some(first) = wanted.first().map(|v| v.to_string()) else {
+        return Ok(None);
+    };
+    wanted.sort();
+    wanted.dedup();
+    let shipped = runtime::shipped_versions(Tool::Helm).map_err(|source| HelmError::Runtime {
+        version: first,
+        source,
+    })?;
+    Ok(wanted
+        .into_iter()
+        .find(|w| !shipped.iter().any(|s| s == w))
+        .map(|w| (w.to_string(), shipped)))
 }
 
 /// Fetch or render `placeholder` and put its output into the store.
