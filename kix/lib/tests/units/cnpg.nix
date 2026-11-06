@@ -559,6 +559,27 @@ in
     }";
 
   # extraSpec cannot set a path the package sets; another path passes.
+  # The record carries the PostgreSQL major from the image tag. A tag
+  # without one fails the build through the assertion on the tag, which
+  # tryEval catches; a type error from reading the major out of such a tag
+  # would abort the whole test run instead.
+  cnpg-cluster-reports-postgres-major =
+    let
+      record = byName "postgres" (
+        ofKind "PackageInstance" (
+          ms (cnpg {
+            database = null;
+          })
+        )
+      );
+      latest = cnpg {
+        database = null;
+        clusterConfig.image.tag = "latest";
+      };
+    in
+    ((record.spec.version or null) == "18" && evalFails latest)
+    || throw "record version: ${builtins.toJSON (record.spec.version or null)}";
+
   cnpg-cluster-extra-spec-locks =
     (
       evalFails (cnpg {

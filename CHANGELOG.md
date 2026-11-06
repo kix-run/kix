@@ -23,14 +23,12 @@ counts as breaking.
 ### Breaking (shows an error)
 
 - `kix.buildCluster` no longer names a cluster `cluster` when it is called without `name`. Pass `name`, or list the cluster in `kix.lib.mkFlake`, which names it after its key. A cluster listed in `mkFlake` that already sets `name` keeps it.
+- `victoria-metrics-agent` no longer accepts `remoteWrite.url` or `promscrape.config` in `extraArgs`, and `victoria-metrics-operator` no longer accepts `--zap-log-level`, `--leader-elect`, or `--health-probe-bind-address` (in either the one-dash or two-dash spelling). The build stops with an error that names the option to use instead: the `vmCluster` dependency sets the remote-write target, the operator writes the scrape configuration, and `logLevel` sets the log level. Remove the other flags.
+- `victoria-metrics-cluster` no longer accepts `retentionPeriod` or `replicationFactor` in `vmstorage.extraArgs`, `vmselect.extraArgs`, or `vminsert.extraArgs`, nor `httpListenAddr` in `vmselect.extraArgs` or `vminsert.extraArgs`. Set the `retentionPeriod` and `replicationFactor` options instead, and remove `httpListenAddr`: the cluster's `out.serviceUrl` and `out.remoteWriteUrl` name ports 8481 and 8480. Release 0.6 already refused `dedup.minScrapeInterval` in `vmstorage.extraArgs` and `vmselect.extraArgs`.
 
 ### Upgrade notes
 
 - The first deploy after the upgrade applies again each import marker (a `PackageInstance` named `secret-ref-*` or `service-ref-*`) that two packages share, to update its `kix.run/package` annotation. Only annotations change. The first `kix diff` or `kix plan` after the upgrade still reads the index the previous release recorded, which lists such a marker under both packages, so it shows the marker as removed from the package that no longer lists it. Nothing is deleted.
-### Breaking (shows an error)
-
-- `victoria-metrics-agent` no longer accepts `remoteWrite.url` or `promscrape.config` in `extraArgs`, and `victoria-metrics-operator` no longer accepts `--zap-log-level`, `--leader-elect`, or `--health-probe-bind-address` (in either the one-dash or two-dash spelling). The build stops with an error that names the option to use instead: the `vmCluster` dependency sets the remote-write target, the operator writes the scrape configuration, and `logLevel` sets the log level. Remove the other flags.
-- `victoria-metrics-cluster` no longer accepts `retentionPeriod` or `replicationFactor` in `vmstorage.extraArgs`, `vmselect.extraArgs`, or `vminsert.extraArgs`, nor `httpListenAddr` in `vmselect.extraArgs` or `vminsert.extraArgs`. Set the `retentionPeriod` and `replicationFactor` options instead, and remove `httpListenAddr`: the cluster's `out.serviceUrl` and `out.remoteWriteUrl` name ports 8481 and 8480. Release 0.6 already refused `dedup.minScrapeInterval` in `vmstorage.extraArgs` and `vmselect.extraArgs`.
 
 ### Added
 
@@ -40,6 +38,8 @@ counts as breaking.
 
 - When a namespace is over its ResourceQuota, the error now lists every object Kix could not count, grouped by kind, so you can see that the real usage may be higher. Before, it left out custom resources whose kind declares no `usesAtLeast`. A kind whose `usesAtLeast` returns `{ }` runs nothing and is left out of the list; the packages in this repository now declare that for their kinds that only hold configuration, such as PrometheusRule, ServiceMonitor, Certificate, and CiliumNetworkPolicy. Each limit that is over now gets its own error.
 - `kix.guardArgs` also checks flags given as an attrset, the form a VictoriaMetrics CR's `extraArgs` takes (a key matches with or without leading dashes), and its error now reads `which this package does not accept:` followed by the reason and the option to set instead. `victoria-metrics-cluster` and `reloader` use it for the flags they refused before, so only the wording of those errors changes.
+- The first deploy after the upgrade applies the PackageInstance record again for each package that has no version, such as `persistent-volume-claim` and `storage-classes`, and for `stackgres-cluster` and `cnpg-cluster`, whose records gain a version. The record now leaves `spec.version` out instead of writing `<undefined>`, and building no longer prints `warning: package <name> has no version set`.
+- `stackgres-cluster` and `cnpg-cluster` report the PostgreSQL version they run as their version, and the PackageInstance record shows it. A `meta.compatibleWith` bound on one of these packages now checks that version; before, it checked nothing.
 - The JSON schemas of the `kix diff -o json` document and the `kix deploy --log-format json` log now say that later versions of Kix may add fields and new types of line. A program that reads them should skip the ones it does not know.
 - When a deploy waits more than 10 seconds on one object, the `waiting` line now also says how many objects wait on it and names up to three of the objects that depend on it directly. The `--log-format json` `waiting` line gains `holds` and `holds_total`.
 - `kix list` and commands that take a cluster name now say when the flake has no outputs for your system, and how to add it, instead of reporting the cluster as missing.

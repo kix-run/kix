@@ -12938,9 +12938,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/psdgs46ss60x58l0ryna5gazdjp9vniy-k8s-activation-example",
-        "kix.run/depends-on": "0x9r939vb7jd9ywk36x8vx16x66j5g00,4l42y305cgxwy3wbr0mrasihca5zczix,590al7hbiz804ha7f7q5ivm49ds9fxcg,5mv940cjcfv2zf1cm9zjfi61b117n128,ay1pmnmmdigljjpp9znkz94bjh28ng6b,cwqn9k5f52rwg6w2fzks9i3w773196cy,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,jn0j2hzd8cfs7vj6zsbsf3kf63c85mbs,ra3n7z9zv8ygnwsi9xvqppj9681msxci,sf8swshyx9g2qbc33s9fj9lwlv1ca86w,w4jfxii3b0w1bl78pjanhkxinzl0kiys,x7z247nmidb7aj79phwhyqj34xq8k0fj,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "mmzxj1chbw2jvh002fszq4db04nsv2mv",
+        "kix.run/built-via": "/nix/store/fap8xjyixqps8jbhsa50j0qcckiknv5f-k8s-activation-example",
+        "kix.run/depends-on": "0x9r939vb7jd9ywk36x8vx16x66j5g00,4l42y305cgxwy3wbr0mrasihca5zczix,590al7hbiz804ha7f7q5ivm49ds9fxcg,7dxmwwc29q92wd6g2yb88ydzq2w5ykkd,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,sf8swshyx9g2qbc33s9fj9lwlv1ca86w,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "2i5w2s5iiry6zq4cbj4yixwqxyfl957i",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -12948,7 +12948,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-mmzxj1chbw2j"
+      "name": "example-2i5w2s5iiry6"
     },
     "spec": {
       "instances": {
@@ -13036,7 +13036,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,b6xys0c63b5vh88ja4mqkndin3ghhgbk,h6xwcfkgqzqcdwffc7qdnxr8cplsb317,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "x7z247nmidb7aj79phwhyqj34xq8k0fj",
+        "kix.run/identity-hash": "7dxmwwc29q92wd6g2yb88ydzq2w5ykkd",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/post-hooks": "Job/immich-db-immich-bootstrap-f2457d27ce",
@@ -13054,8 +13054,7 @@ expression: stable
     "spec": {
       "instanceName": "immich-db",
       "lifecycle": "stateful",
-      "namespaceName": "immich",
-      "version": "<undefined>"
+      "namespaceName": "immich"
     }
   },
   {
@@ -13090,7 +13089,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,p373dax0536w87269ia6827mrx0sics1,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "ay1pmnmmdigljjpp9znkz94bjh28ng6b",
+        "kix.run/identity-hash": "kxp256xpy6sfk61m1c61g58a82niijxk",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/root": "ml-cache"
@@ -13107,8 +13106,7 @@ expression: stable
     "spec": {
       "instanceName": "ml-cache",
       "lifecycle": "stateful",
-      "namespaceName": "immich",
-      "version": "<undefined>"
+      "namespaceName": "immich"
     }
   },
   {
@@ -13117,7 +13115,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "514wqwqxzddrv440fpkwp8486fs3bdfc,7vbv1m75c3v9v12560ap82vikz33f80s,awzwpm53w1kb4ysngrwmj47whaddgkih,lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw,w8a823n086xidlsr1ydcdfp9230hd5jm,x0i1407l4qpzq5k6gx4d5iicd8vb81np,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "jn0j2hzd8cfs7vj6zsbsf3kf63c85mbs",
+        "kix.run/identity-hash": "9nvkd56qfxsb4b2ir0jylv49n9aga7ql",
         "kix.run/inverse-deps": "PackageInstance/postgres",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -13137,7 +13135,7 @@ expression: stable
       "instanceName": "postgres",
       "lifecycle": "stateful",
       "namespaceName": "immich",
-      "version": "<undefined>"
+      "version": "17"
     }
   },
   {
@@ -13210,7 +13208,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,l0i4jhq0fafvzzgsak5lsmkvzppzw5ny,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "ra3n7z9zv8ygnwsi9xvqppj9681msxci",
+        "kix.run/identity-hash": "a57sgndwibybw8ff9v6q7s08qh1dbm6m",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/root": "storage"
@@ -13227,8 +13225,7 @@ expression: stable
     "spec": {
       "instanceName": "storage",
       "lifecycle": "stateful",
-      "namespaceName": "immich",
-      "version": "<undefined>"
+      "namespaceName": "immich"
     }
   },
   {
@@ -13320,7 +13317,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "pnp59yfhnv6byw601crmpvk6sippsnyr,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "5mv940cjcfv2zf1cm9zjfi61b117n128",
+        "kix.run/identity-hash": "ha8v9xi9sl460c1vi0i85g2f6wp86xdq",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/package-requires": "StorageClass/local-path",
@@ -13337,8 +13334,7 @@ expression: stable
     },
     "spec": {
       "instanceName": "storage-classes",
-      "namespaceName": "kube-system",
-      "version": "<undefined>"
+      "namespaceName": "kube-system"
     }
   },
   {

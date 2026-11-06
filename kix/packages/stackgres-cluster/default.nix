@@ -25,6 +25,7 @@
 #
 # Exposes (`root.out`, `root` = the `SGCluster`):
 #   out.name, out.fqdn, out.port  Primary Service (port 5432).
+#   out.version                   PostgreSQL version, as `postgres.version` gives it.
 #   out.selector                  PostgreSQL pod labels.
 #   out.superuserSecret           Superuser credentials Secret reference.
 #   out.extensions                Installed extension names.
@@ -576,6 +577,7 @@ in
             ];
             out = {
               inherit (postgresService.out) name fqdn port;
+              inherit (config.postgres) version;
               selector = operandSelector;
               inherit superuserSecret;
               extensions = extensionNames;
