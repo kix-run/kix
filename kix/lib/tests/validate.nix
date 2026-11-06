@@ -346,6 +346,23 @@ let
       };
   };
 
+  # Two packages that hold the same resource built outside any scope, so it
+  # carries no `_builtBy`.
+  holderPackage = shared: name: {
+    build =
+      { self, scope, ... }:
+      {
+        held = shared;
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          inherit name;
+          data.k = "v";
+        };
+        root = self.cm;
+      };
+  };
+
   # A workload naming a ServiceAccount kix does not own, the sanctioned way.
   externalSaPackage = {
     build =
@@ -1311,6 +1328,35 @@ in
       throw "the consumer lost its own ConfigMap"
     else
       true;
+
+  # A resource with no `_builtBy` that two instances hold is listed under
+  # the first holder by `<namespace>/<instance>`, so its owner does not
+  # depend on store-path order either.
+  v20-package-index-lists-an-unbuilt-shared-resource-once =
+    let
+      shared = k8s.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "shared";
+        namespace = "infra";
+        labels."app.kubernetes.io/managed-by" = "kix";
+        data.k = "v";
+      };
+      cluster = mkCluster [
+        baseInstances
+        {
+          instances.infra.zeta.package = holderPackage shared "zeta";
+          instances.infra.alpha.package = holderPackage shared "alpha";
+        }
+      ];
+      plain = v: builtins.unsafeDiscardStringContext (toString v);
+      packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
+      listedUnder =
+        path: builtins.attrNames (lib.filterAttrs (_: paths: builtins.elem path paths) packages);
+      alphaPi = plain cluster.clusterInstances.infra.alpha._packageInstance.outPath;
+    in
+    listedUnder (plain shared.outPath) == [ alphaPi ]
+    || throw "shared ConfigMap is listed under ${toString (listedUnder (plain shared.outPath))}, expected infra/alpha only";
 
   # A dangling Service selector fails the cluster eval, not just a flake check.
   v21-cross-resource-failure-fails-the-build = evalFails (mkCluster [

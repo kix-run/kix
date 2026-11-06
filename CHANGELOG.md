@@ -22,7 +22,7 @@ counts as breaking.
 
 ### Upgrade notes
 
-- An import marker (a `PackageInstance` named `secret-ref-*` or `service-ref-*`) that two packages share may carry the other package's name in its live `kix.run/package` annotation. Kix does not re-apply an object whose content is unchanged, so the annotation is corrected the next time the marker itself changes. Kix does not read the annotation for an object the build knows, so nothing else is affected.
+- The first deploy after the upgrade applies again each import marker (a `PackageInstance` named `secret-ref-*` or `service-ref-*`) that two packages share, to update its `kix.run/package` annotation. Only annotations change. The first `kix diff` or `kix plan` after the upgrade still reads the index the previous release recorded, which lists such a marker under both packages, so it shows the marker as removed from the package that no longer lists it. Nothing is deleted.
 
 ### Changed
 

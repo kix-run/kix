@@ -11,7 +11,7 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use crate::manifest::keys;
-use crate::manifest::lifecycle::{lifecycle_of, lifecycle_of_live};
+use crate::manifest::lifecycle::{is_record, lifecycle_of, lifecycle_of_live};
 #[cfg(test)]
 use crate::manifest::types::CLUSTER_SCOPED;
 use crate::manifest::types::ResourceId;
@@ -62,14 +62,34 @@ fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+/// Annotations the CLI stamps from the build's package index. They are not
+/// part of the identity hash, so an object whose content is unchanged is
+/// still applied when one of them differs, and the live object keeps the
+/// owner the current build names. Activation records are exempt: the deploy
+/// writes them itself, and an unchanged build must skip everything.
+const OWNER_STAMPS: [&str; 3] = [keys::PACKAGE, keys::PACKAGE_NAMESPACE, keys::LIFECYCLE];
+
+/// Return the owner stamps of a manifest, in `OWNER_STAMPS` order.
+fn owner_stamps(manifest: &Value) -> [Option<&str>; 3] {
+    let annotations = manifest.pointer("/metadata/annotations");
+    OWNER_STAMPS.map(|key| annotations.and_then(|a| a.get(key)).and_then(Value::as_str))
+}
+
+/// Return the owner stamps of a live object, in `OWNER_STAMPS` order.
+fn live_owner_stamps(obj: &DynamicObject) -> [Option<&str>; 3] {
+    let annotations = obj.metadata.annotations.as_ref();
+    OWNER_STAMPS.map(|key| annotations.and_then(|a| keys::get_meta(a, key)))
+}
+
 /// Detect changes by diffing two sets of stamped manifests locally.
 ///
 /// Matches resources by Kubernetes identity (`kind/namespace/name`) and
 /// compares `kix.run/identity-hash` annotations to determine whether content
-/// changed. Returns [`ChangeAction::Apply`] or [`ChangeAction::Skip`] for each
-/// manifest in `new_manifests`, followed by [`ChangeAction::Orphan`] for
-/// prunable stamped resources present in `old_manifests` but absent from
-/// `new_manifests`.
+/// changed, and the owner stamps (`OWNER_STAMPS`) to determine whether the
+/// annotations need rewriting. Returns [`ChangeAction::Apply`] or
+/// [`ChangeAction::Skip`] for each manifest in `new_manifests`, followed by
+/// [`ChangeAction::Orphan`] for prunable stamped resources present in
+/// `old_manifests` but absent from `new_manifests`.
 pub(crate) fn detect_changes(
     new_manifests: &[Value],
     old_manifests: &[Value],
@@ -77,16 +97,13 @@ pub(crate) fn detect_changes(
     // Keep the previous deploy's Activation record in this index so an
     // unchanged build (same record name and hash) produces Skip and can
     // short-circuit; records are excluded from the orphan set below.
-    let old_by_k8s_id: HashMap<String, &str> = old_manifests
+    let old_by_k8s_id: HashMap<String, &Value> = old_manifests
         .iter()
         .filter_map(|m| {
             let rid = ResourceId::from_value(m);
             let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
-            let hash = m
-                .pointer("/metadata/annotations")
-                .and_then(|a| a.get(keys::IDENTITY_HASH))
-                .and_then(Value::as_str)?;
-            Some((k8s_id, hash))
+            manifest_identity_hash(m)?;
+            Some((k8s_id, m))
         })
         .collect();
 
@@ -103,7 +120,10 @@ pub(crate) fn detect_changes(
             .and_then(Value::as_str);
 
         match (old_by_k8s_id.get(&k8s_id), new_hash) {
-            (Some(&old_hash), Some(new_h)) if old_hash == new_h => {
+            (Some(old), Some(new_h))
+                if manifest_identity_hash(old) == Some(new_h)
+                    && (is_record(manifest) || owner_stamps(old) == owner_stamps(manifest)) =>
+            {
                 matched_old_ids.insert(k8s_id);
                 actions.push(ChangeAction::Skip(rid));
             }
@@ -324,6 +344,7 @@ pub(crate) fn detect_changes_live(
     // Keep live Activation records in the index so an unchanged record produces
     // Skip; records are excluded from the orphan set via `live_prunable` below.
     let mut live_by_k8s_id: HashMap<String, Option<&str>> = HashMap::new();
+    let mut live_stamps: HashMap<String, [Option<&str>; 3]> = HashMap::new();
     let mut live_rids: HashMap<String, ResourceId> = HashMap::new();
     let mut live_prunable: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -349,6 +370,7 @@ pub(crate) fn detect_changes_live(
             .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH));
 
         live_by_k8s_id.insert(k8s_id.clone(), hash);
+        live_stamps.insert(k8s_id.clone(), live_owner_stamps(obj));
         if lifecycle_of_live(obj).prunable() {
             live_prunable.insert(k8s_id.clone());
         }
@@ -375,7 +397,11 @@ pub(crate) fn detect_changes_live(
             .and_then(Value::as_str);
 
         match (live_by_k8s_id.get(&k8s_id), desired_hash) {
-            (Some(Some(live_hash)), Some(desired_h)) if *live_hash == desired_h => {
+            (Some(Some(live_hash)), Some(desired_h))
+                if *live_hash == desired_h
+                    && (is_record(manifest)
+                        || live_stamps.get(&k8s_id) == Some(&owner_stamps(manifest))) =>
+            {
                 matched_live_ids.insert(k8s_id);
                 actions.push(ChangeAction::Skip(rid));
             }

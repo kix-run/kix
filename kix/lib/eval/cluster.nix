@@ -534,34 +534,38 @@
       # resource's `_builtBy` uses.
       instanceKey = inst: "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
 
-      # Store paths each active instance holds, keyed by instanceKey.
-      heldPaths = builtins.listToAttrs (
-        map (inst: {
-          name = instanceKey inst;
-          value = builtins.listToAttrs (
-            map (r: {
-              name = outPathKey r;
-              value = true;
-            }) (collectResources inst)
-          );
-        }) allInstancesList
+      # Instance keys that hold each store path, sorted, keyed by path.
+      holdersOf = builtins.mapAttrs (_: keys: builtins.sort builtins.lessThan (lib.unique keys)) (
+        builtins.zipAttrsWith (_: keys: keys) (
+          map (
+            inst:
+            builtins.listToAttrs (
+              map (r: {
+                name = outPathKey r;
+                value = instanceKey inst;
+              }) (collectResources inst)
+            )
+          ) allInstancesList
+        )
       );
 
       # Return the resources the package index and the owner map list under
-      # an instance. A resource that several instances hold, such as an import
+      # an instance, so that every store path is listed under exactly one
+      # instance. A resource that several instances hold, such as an import
       # marker a provider exposes through `out`, belongs to the instance whose
-      # scope built it when that instance is active and holds it. Listing it
-      # once keeps its `kix.run/package` stable across unrelated hash changes.
-      # A resource with no `_builtBy`, or one its builder does not hold, stays
-      # with every holder.
+      # scope built it when that instance is active and holds it. Otherwise it
+      # belongs to the first holder by instance key, which keeps its
+      # `kix.run/package` stable across unrelated hash changes.
       ownedResources =
         inst:
         builtins.filter (
           r:
           let
+            holders = holdersOf.${outPathKey r} or [ ];
             builder = r._builtBy or null;
+            owner = if builder != null && builtins.elem builder holders then builder else builtins.head holders;
           in
-          builder == null || builder == instanceKey inst || !((heldPaths.${builder} or { }) ? ${outPathKey r})
+          holders == [ ] || owner == instanceKey inst
         ) (collectResources inst);
 
       # `resources` holds the sealed resources of every active instance,
