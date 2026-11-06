@@ -1,0 +1,3 @@
+# 2026-11-06 · `cli/kix/src/cluster/scheduler/node.rs` · The apply time that gates a declared failure comes from the CLI host's clock.
+
+`node.rs` takes `Utc::now()` before applying an object and `declared_failure` compares it with the condition's `lastTransitionTime`, which the controller writes from its node's clock. A CLI host whose clock runs ahead can read a fresh rejection as older than the apply and wait until the timeout; one that runs behind can take a stale rejection for a new one and fail the deploy that fixes the object. The API server's own time for the apply is in the response: `metadata.managedFields[]` has a `time` for the `kix` field manager. Reading that instead would put both sides on the cluster's clock.

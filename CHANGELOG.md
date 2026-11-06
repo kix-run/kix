@@ -23,18 +23,18 @@ counts as breaking.
 ### Breaking (shows an error)
 
 - `kix.buildCluster` no longer names a cluster `cluster` when it is called without `name`. Pass `name`, or list the cluster in `kix.lib.mkFlake`, which names it after its key. A cluster listed in `mkFlake` that already sets `name` keeps it.
+- `victoria-metrics-agent` no longer accepts `remoteWrite.url` or `promscrape.config` in `extraArgs`, and `victoria-metrics-operator` no longer accepts `--zap-log-level`, `--leader-elect`, or `--health-probe-bind-address` (in either the one-dash or two-dash spelling). The build stops with an error that names the option to use instead: the `vmCluster` dependency sets the remote-write target, the operator writes the scrape configuration, and `logLevel` sets the log level. Remove the other flags.
+- `victoria-metrics-cluster` no longer accepts `retentionPeriod` or `replicationFactor` in `vmstorage.extraArgs`, `vmselect.extraArgs`, or `vminsert.extraArgs`, nor `httpListenAddr` in `vmselect.extraArgs` or `vminsert.extraArgs`. Set the `retentionPeriod` and `replicationFactor` options instead, and remove `httpListenAddr`: the cluster's `out.serviceUrl` and `out.remoteWriteUrl` name ports 8481 and 8480. Release 0.6 already refused `dedup.minScrapeInterval` in `vmstorage.extraArgs` and `vmselect.extraArgs`.
 
 ### Upgrade notes
 
 - The first deploy after the upgrade applies again each import marker (a `PackageInstance` named `secret-ref-*` or `service-ref-*`) that two packages share, to update its `kix.run/package` annotation. Only annotations change. The first `kix diff` or `kix plan` after the upgrade still reads the index the previous release recorded, which lists such a marker under both packages, so it shows the marker as removed from the package that no longer lists it. Nothing is deleted.
-### Breaking (shows an error)
-
-- `victoria-metrics-agent` no longer accepts `remoteWrite.url` or `promscrape.config` in `extraArgs`, and `victoria-metrics-operator` no longer accepts `--zap-log-level`, `--leader-elect`, or `--health-probe-bind-address` (in either the one-dash or two-dash spelling). The build stops with an error that names the option to use instead: the `vmCluster` dependency sets the remote-write target, the operator writes the scrape configuration, and `logLevel` sets the log level. Remove the other flags.
-- `victoria-metrics-cluster` no longer accepts `retentionPeriod` or `replicationFactor` in `vmstorage.extraArgs`, `vmselect.extraArgs`, or `vminsert.extraArgs`, nor `httpListenAddr` in `vmselect.extraArgs` or `vminsert.extraArgs`. Set the `retentionPeriod` and `replicationFactor` options instead, and remove `httpListenAddr`: the cluster's `out.serviceUrl` and `out.remoteWriteUrl` name ports 8481 and 8480. Release 0.6 already refused `dedup.minScrapeInterval` in `vmstorage.extraArgs` and `vmselect.extraArgs`.
 
 ### Added
 
 - A cluster listed in `kix.lib.mkFlake`'s `clusters` is named after its key unless it sets `name`, so the name no longer has to be written in both `flake.nix` and the cluster file.
+- The first deploy after the upgrade applies the Cilium network policies again, and every object that depends on one. You do not need to change your cluster definitions. The `kix.run/readiness` annotation on each `CiliumNetworkPolicy` and `CiliumClusterwideNetworkPolicy` now also lists the state that means Cilium rejected the policy, which changes the policy's hash. The same applies to Velero Backups, Restores, and Schedules and CDI DataVolumes, and to the objects that depend on them. Every workload that uses network policy depends on its policies, so Kix applies it again to record the new hash. Only annotations change, so most pods do not restart. Pods whose template carries a checksum of a ConfigMap or Secret that itself depends on a network policy restart once: on the `ludo-kind` test cluster these are `grafana`, `loki-logs`, and `immich-server`.
+- A CRD declaration can list the states that mean a custom resource will not become ready until its spec changes: `readiness.failed`, a list of `{ condition = { type; status; reason ? }; }` or `{ path; equals; }` entries beside the ready rule. When the controller reports one of them for the current spec, `kix deploy` stops waiting at once and shows the controller's condition, reason, and message, instead of failing at the readiness timeout. Packages declare it where the controller's verdict is known to stand until the spec changes: `cilium` for `Valid=False` on its network policies, `velero` for a Backup or Restore in `FailedValidation`, `Failed`, or `PartiallyFailed` and a Schedule in `FailedValidation`, and `cdi` for a DataVolume whose phase is `Failed` (its claim is lost). The message says what the controller reported and, for a runtime outcome such as a failed backup, what the package says to do next.
 
 ### Changed
 
@@ -47,6 +47,7 @@ counts as breaking.
 ### Fixed
 
 - An object that two package instances list, such as a provider's Secret reference that a consumer holds as a part, now belongs to the instance that built it. Before, its owner could switch between the two on any unrelated change to either package.
+- A network policy that Cilium rejects (`Valid=False`, for example a rule with no `ingress` or `egress` section) now fails the deploy as soon as Cilium reports it, with Cilium's reason, instead of after the readiness timeout with a timeout message.
 
 ## 0.6.0 - 2026-11-06
 

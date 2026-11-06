@@ -46,6 +46,13 @@ accepts minutes, seconds, or a bare number of seconds:
 The default is three minutes. Increase it for resources whose normal startup
 takes longer, such as a database restore or a large image pull.
 
+Some failures do not wait for the timeout. A pod in `ImagePullBackOff` or
+`CrashLoopBackOff`, a Job that has used up its retries, or a custom resource
+whose controller rejects it (a Cilium policy with `Valid=False`) fails the
+resource as soon as Kix sees the state, with the controller's message. The
+owning package declares which states mean that; see
+[Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/#declare-the-states-that-mean-failure).
+
 Kix also stops a deploy after ten minutes with no progress. To change that
 stall limit for one run, set `KIX_STALL_TIMEOUT` in seconds:
 

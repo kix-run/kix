@@ -47,8 +47,8 @@ const VM_RULE: &str = r#"{"path":"/status/updateStatus","equals":"operational"}"
 #[test]
 fn declared_readiness_parses_valid_annotation() {
     let obj = make_annotated_obj(VM_RULE, json!({}));
-    match declared_readiness(&obj).expect("should parse") {
-        DeclaredReadiness::Path { path, equals } => {
+    match declared_readiness(&obj).expect("should parse").ready {
+        ReadyRule::Path { path, equals } => {
             assert_eq!(path, "/status/updateStatus");
             assert_eq!(equals, "operational");
         }
@@ -62,8 +62,11 @@ const VM_CHILD_RULE: &str = r#"{"path":"/status/updateStatus","notEquals":"faile
 // it: absent with no consumer, `failed` when the consumer rejects it.
 #[test]
 fn declared_not_equals_readiness_accepts_absent_and_refuses_the_value() {
-    match declared_readiness(&make_annotated_obj(VM_CHILD_RULE, json!({}))).expect("should parse") {
-        DeclaredReadiness::PathNot { path, not_equals } => {
+    match declared_readiness(&make_annotated_obj(VM_CHILD_RULE, json!({})))
+        .expect("should parse")
+        .ready
+    {
+        ReadyRule::PathNot { path, not_equals } => {
             assert_eq!(path, "/status/updateStatus");
             assert_eq!(not_equals, "failed");
         }
@@ -135,8 +138,8 @@ const CONDITION_RULE: &str = r#"{"condition":{"type":"Bootstrapped","status":"Tr
 #[test]
 fn declared_condition_parses() {
     let obj = make_annotated_obj(CONDITION_RULE, json!({}));
-    match declared_readiness(&obj).expect("should parse") {
-        DeclaredReadiness::Condition {
+    match declared_readiness(&obj).expect("should parse").ready {
+        ReadyRule::Condition {
             condition_type,
             status,
         } => {
@@ -1370,4 +1373,373 @@ fn fingerprint_changes_on_restart_count_bump() {
     let fp1 = progress_fingerprint(&obj, "Deployment", &pods_low);
     let fp2 = progress_fingerprint(&obj, "Deployment", &pods_high);
     assert_ne!(fp1, fp2, "restart count bump should register as progress");
+}
+
+// ---- Declared failure states ----
+
+const CILIUM_RULE: &str = r#"{"condition":{"status":"True","type":"Valid"},"failed":[{"condition":{"status":"False","type":"Valid"}}]}"#;
+
+fn valid_false(extra: Value) -> Value {
+    let mut c = json!({
+        "type": "Valid",
+        "status": "False",
+        "message": "rule must have at least one of Ingress, IngressDeny, Egress, EgressDeny"
+    });
+    if let (Some(c), Some(extra)) = (c.as_object_mut(), extra.as_object()) {
+        c.extend(extra.clone());
+    }
+    json!({"status": {"conditions": [c]}})
+}
+
+const CILIUM_MESSAGE: &str = "its controller rejected it with Valid=False: rule must have at least one of Ingress, IngressDeny, Egress, EgressDeny. This will not fix itself, so Kix stopped waiting. Change this CiliumNetworkPolicy in the package or cluster definition that creates it, then deploy again.";
+
+#[test]
+fn declared_failed_rules_parse_beside_the_ready_rule() {
+    let parsed = declared_readiness(&make_annotated_obj(CILIUM_RULE, json!({}))).expect("parses");
+    assert!(matches!(parsed.ready, ReadyRule::Condition { .. }));
+    assert_eq!(
+        parsed.failed,
+        vec![FailedRule::Condition {
+            condition_type: "Valid".into(),
+            status: "False".into(),
+            reason: None,
+        }]
+    );
+
+    let mixed = r#"{"equals":"Completed","failed":[{"equals":"Failed","path":"/status/phase"},{"condition":{"reason":"Invalid","status":"False","type":"Accepted"}}],"path":"/status/phase"}"#;
+    let parsed = declared_readiness(&make_annotated_obj(mixed, json!({}))).expect("parses");
+    assert!(matches!(parsed.ready, ReadyRule::Path { .. }));
+    assert_eq!(
+        parsed.failed,
+        vec![
+            FailedRule::Path {
+                path: "/status/phase".into(),
+                equals: "Failed".into(),
+                rejected: false,
+                hint: None,
+                message: Vec::new(),
+            },
+            FailedRule::Condition {
+                condition_type: "Accepted".into(),
+                status: "False".into(),
+                reason: Some("Invalid".into()),
+            },
+        ]
+    );
+}
+
+// An annotation written before `failed` existed parses as before and
+// declares no failure state, so the deploy waits as it did.
+#[test]
+fn declared_readiness_without_failed_key_parses_as_before() {
+    let parsed =
+        declared_readiness(&make_annotated_obj(CONDITION_RULE, json!({}))).expect("parses");
+    assert!(parsed.failed.is_empty());
+    let rejected = make_annotated_obj(
+        CONDITION_RULE,
+        json!({"status": {"conditions": [{"type": "Bootstrapped", "status": "False"}]}}),
+    );
+    assert!(declared_failure(&rejected, "SGCluster", None).is_none());
+    assert!(!check_readiness(&rejected, "SGCluster"));
+
+    let parsed = declared_readiness(&make_annotated_obj(VM_RULE, json!({}))).expect("parses");
+    assert!(parsed.failed.is_empty());
+}
+
+// A `failed` entry this CLI cannot read is dropped on its own; the ready
+// rule and the other entries still apply.
+#[test]
+fn declared_failed_rules_drop_malformed_entries() {
+    let rule = r#"{"condition":{"status":"True","type":"Valid"},"failed":[{"condition":{"type":"Valid"}},"nope",{"path":"/status/x"},{"condition":{"status":"False","type":"Valid"}}]}"#;
+    let parsed = declared_readiness(&make_annotated_obj(rule, json!({}))).expect("parses");
+    assert_eq!(parsed.failed.len(), 1);
+
+    let not_a_list = r#"{"condition":{"status":"True","type":"Valid"},"failed":{"condition":{"status":"False","type":"Valid"}}}"#;
+    let parsed = declared_readiness(&make_annotated_obj(not_a_list, json!({}))).expect("parses");
+    assert!(parsed.failed.is_empty());
+    let ready = make_annotated_obj(
+        not_a_list,
+        json!({"status": {"conditions": [{"type": "Valid", "status": "True"}]}}),
+    );
+    assert!(check_readiness(&ready, "CiliumNetworkPolicy"));
+}
+
+// A matching condition whose observedGeneration has reached the object's
+// generation is final at once, with the controller's reason and message.
+#[test]
+fn declared_failure_with_current_generation_fails_at_once() {
+    let obj = with_generation(
+        make_annotated_obj(CILIUM_RULE, valid_false(json!({"observedGeneration": 2}))),
+        2,
+    );
+    let failure = declared_failure(&obj, "CiliumNetworkPolicy", None).expect("matches");
+    assert!(failure.confirmed);
+    assert_eq!(failure.message, CILIUM_MESSAGE);
+    assert!(!check_readiness(&obj, "CiliumNetworkPolicy"));
+
+    let mut watch = FailureWatch::default();
+    assert_eq!(
+        watch.observe(Some(failure), Instant::now()),
+        Some(CILIUM_MESSAGE.to_string())
+    );
+
+    // status.observedGeneration stands in for a condition without its own.
+    let via_status = with_generation(
+        make_annotated_obj(
+            CILIUM_RULE,
+            json!({"status": {"observedGeneration": 2, "conditions": [{"type": "Valid", "status": "False"}]}}),
+        ),
+        2,
+    );
+    let failure = declared_failure(&via_status, "CiliumNetworkPolicy", None).expect("matches");
+    assert!(failure.confirmed);
+    assert_eq!(
+        failure.message,
+        "its controller rejected it with Valid=False. This will not fix itself, so Kix stopped waiting. Change this CiliumNetworkPolicy in the package or cluster definition that creates it, then deploy again."
+    );
+
+    // The ready state and an absent condition match no failure.
+    let accepted = make_annotated_obj(
+        CILIUM_RULE,
+        json!({"status": {"conditions": [{"type": "Valid", "status": "True"}]}}),
+    );
+    assert!(declared_failure(&accepted, "CiliumNetworkPolicy", None).is_none());
+    assert!(
+        declared_failure(
+            &make_annotated_obj(CILIUM_RULE, json!({})),
+            "CiliumNetworkPolicy",
+            None
+        )
+        .is_none()
+    );
+}
+
+// A failure the controller reported for an older generation is its verdict
+// on the previous spec, so the wait continues.
+#[test]
+fn declared_failure_with_stale_generation_keeps_polling() {
+    let stale = with_generation(
+        make_annotated_obj(CILIUM_RULE, valid_false(json!({"observedGeneration": 1}))),
+        2,
+    );
+    assert!(declared_failure(&stale, "CiliumNetworkPolicy", None).is_none());
+
+    let stale_status = with_generation(
+        make_annotated_obj(
+            CILIUM_RULE,
+            json!({"status": {"observedGeneration": 1, "conditions": [{"type": "Valid", "status": "False"}]}}),
+        ),
+        2,
+    );
+    assert!(declared_failure(&stale_status, "CiliumNetworkPolicy", None).is_none());
+
+    let mut watch = FailureWatch::default();
+    assert_eq!(watch.observe(None, Instant::now()), None);
+}
+
+// Without any observedGeneration the match is reported unconfirmed, and the
+// watch ends the wait only after the same failure has held for the grace
+// period; a poll that no longer reports it starts the grace over.
+#[test]
+fn declared_failure_without_generation_fails_after_the_grace() {
+    let obj = make_annotated_obj(CILIUM_RULE, valid_false(json!({})));
+    let failure = declared_failure(&obj, "CiliumNetworkPolicy", None).expect("matches");
+    assert!(!failure.confirmed);
+    assert_eq!(failure.message, CILIUM_MESSAGE);
+
+    let t0 = Instant::now();
+    let step = Duration::from_secs(1);
+    let mut watch = FailureWatch::default();
+    assert_eq!(watch.observe(Some(failure.clone()), t0), None);
+    assert_eq!(
+        watch.observe(Some(failure.clone()), t0 + DECLARED_FAILURE_GRACE - step),
+        None
+    );
+    assert_eq!(
+        watch.observe(Some(failure.clone()), t0 + DECLARED_FAILURE_GRACE),
+        Some(CILIUM_MESSAGE.to_string())
+    );
+
+    let mut watch = FailureWatch::default();
+    assert_eq!(watch.observe(Some(failure.clone()), t0), None);
+    assert_eq!(watch.observe(None, t0 + step), None);
+    assert_eq!(
+        watch.observe(Some(failure.clone()), t0 + DECLARED_FAILURE_GRACE),
+        None
+    );
+    assert_eq!(
+        watch.observe(Some(failure), t0 + 2 * DECLARED_FAILURE_GRACE),
+        Some(CILIUM_MESSAGE.to_string())
+    );
+}
+
+// A declared reason narrows the match; without one any reason matches.
+#[test]
+fn declared_failure_reason_must_match_when_declared() {
+    let rule = r#"{"condition":{"status":"True","type":"Accepted"},"failed":[{"condition":{"reason":"Invalid","status":"False","type":"Accepted"}}]}"#;
+    let route = |reason: &str| {
+        with_generation(
+            make_annotated_obj(
+                rule,
+                json!({"status": {"conditions": [
+                    {"type": "Accepted", "status": "False", "reason": reason, "message": "waiting", "observedGeneration": 1}
+                ]}}),
+            ),
+            1,
+        )
+    };
+    assert!(declared_failure(&route("Pending"), "HTTPRoute", None).is_none());
+    let failure = declared_failure(&route("Invalid"), "HTTPRoute", None).expect("matches");
+    assert_eq!(
+        failure.message,
+        "its controller rejected it with Accepted=False (Invalid): waiting. This will not fix itself, so Kix stopped waiting. Change this HTTPRoute in the package or cluster definition that creates it, then deploy again."
+    );
+}
+
+// The path form compares the scalar at the path by its text. A plain entry
+// is a runtime outcome: the message names the field, quotes the declared
+// `message` pointers, and ends with the package's hint or a generic step. An
+// entry with `rejected` uses the spec-rejection wording.
+#[test]
+fn declared_failure_path_form() {
+    let rule = r#"{"equals":"Completed","failed":[
+        {"equals":"FailedValidation","message":["/status/validationErrors"],"path":"/status/phase","rejected":true},
+        {"equals":"Failed","hint":"Velero does not run a failed backup again. Create it again under a new name.","message":["/status/failureReason"],"path":"/status/phase"},
+        {"equals":"PartiallyFailed","path":"/status/phase"}
+    ],"path":"/status/phase"}"#;
+    let backup = |status: Value| make_annotated_obj(rule, json!({"status": status}));
+    assert!(declared_failure(&backup(json!({"phase": "InProgress"})), "Backup", None).is_none());
+    assert!(declared_failure(&backup(json!({"phase": "Completed"})), "Backup", None).is_none());
+
+    let parsed = declared_readiness(&backup(json!({}))).expect("parses");
+    assert_eq!(
+        parsed.failed[0],
+        FailedRule::Path {
+            path: "/status/phase".into(),
+            equals: "FailedValidation".into(),
+            rejected: true,
+            hint: None,
+            message: vec!["/status/validationErrors".into()],
+        }
+    );
+
+    let no_hint = declared_failure(&backup(json!({"phase": "PartiallyFailed"})), "Backup", None)
+        .expect("matches");
+    assert!(!no_hint.confirmed);
+    assert_eq!(
+        no_hint.message,
+        "its controller set status.phase=PartiallyFailed, a state it does not leave on its own, so Kix stopped waiting. Find the cause in the object's status, fix it, then deploy again."
+    );
+
+    let with_hint = with_generation(
+        backup(
+            json!({"phase": "Failed", "failureReason": "bucket not found.", "observedGeneration": 3}),
+        ),
+        3,
+    );
+    let failure = declared_failure(&with_hint, "Backup", None).expect("matches");
+    assert!(failure.confirmed);
+    assert_eq!(
+        failure.message,
+        "its controller set status.phase=Failed (bucket not found), a state it does not leave on its own, so Kix stopped waiting. Velero does not run a failed backup again. Create it again under a new name."
+    );
+
+    // A list value is joined; an absent pointer quotes nothing.
+    let rejected = declared_failure(
+        &backup(
+            json!({"phase": "FailedValidation", "validationErrors": ["no location", "bad ttl"]}),
+        ),
+        "Backup",
+        None,
+    )
+    .expect("matches");
+    assert_eq!(
+        rejected.message,
+        "its controller rejected it with status.phase=FailedValidation: no location; bad ttl. This will not fix itself, so Kix stopped waiting. Change this Backup in the package or cluster definition that creates it, then deploy again."
+    );
+    let rejected = declared_failure(
+        &backup(json!({"phase": "FailedValidation"})),
+        "Backup",
+        None,
+    )
+    .expect("matches");
+    assert!(rejected.message.starts_with(
+        "its controller rejected it with status.phase=FailedValidation. This will not fix itself"
+    ));
+
+    let stale = with_generation(
+        backup(json!({"phase": "Failed", "observedGeneration": 2})),
+        3,
+    );
+    assert!(declared_failure(&stale, "Backup", None).is_none());
+
+    // A `message` that is not a pointer or a list of them drops the entry.
+    let bad = r#"{"equals":"Completed","failed":[{"equals":"Failed","message":3,"path":"/status/phase"}],"path":"/status/phase"}"#;
+    assert!(
+        declared_readiness(&make_annotated_obj(bad, json!({})))
+            .expect("parses")
+            .failed
+            .is_empty()
+    );
+
+    // A boolean compares by its JSON text, as the ready rule does.
+    let flag = r#"{"equals":"true","failed":[{"equals":"true","path":"/status/rejected"}],"path":"/status/applied"}"#;
+    let rejected = make_annotated_obj(flag, json!({"status": {"rejected": true}}));
+    assert!(declared_failure(&rejected, "Database", None).is_some());
+    let failure = DeclaredFailure {
+        message: "x".into(),
+        confirmed: true,
+    };
+    assert_eq!(
+        FailureWatch::default().observe(Some(failure), Instant::now()),
+        Some("x".into())
+    );
+}
+
+// A condition that carries no observedGeneration but a lastTransitionTime
+// is final when it changed after this deploy applied the object, or when
+// the deploy left the object unchanged; one that changed before the apply
+// is the verdict on the previous spec and is not reported.
+#[test]
+fn declared_failure_trusts_a_transition_after_the_apply() {
+    use chrono::TimeZone;
+    let at =
+        |t: &str| make_annotated_obj(CILIUM_RULE, valid_false(json!({"lastTransitionTime": t})));
+    let applied =
+        Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap() + chrono::Duration::milliseconds(700);
+    let kind = "CiliumNetworkPolicy";
+
+    assert!(declared_failure(&at("2026-11-06T11:58:00Z"), kind, Some(applied)).is_none());
+
+    // The field has second precision, so the apply's own second counts.
+    let same_second =
+        declared_failure(&at("2026-11-06T12:00:00Z"), kind, Some(applied)).expect("matches");
+    assert!(same_second.confirmed);
+    let later =
+        declared_failure(&at("2026-11-06T12:00:03Z"), kind, Some(applied)).expect("matches");
+    assert!(later.confirmed);
+    assert_eq!(later.message, CILIUM_MESSAGE);
+
+    let unchanged = declared_failure(&at("2026-11-06T11:58:00Z"), kind, None).expect("matches");
+    assert!(unchanged.confirmed);
+
+    // A time Kix cannot read is treated as absent: the grace applies.
+    let unreadable = declared_failure(&at("yesterday"), kind, Some(applied)).expect("matches");
+    assert!(!unreadable.confirmed);
+
+    // A current observedGeneration settles it regardless of the time.
+    let by_generation = with_generation(
+        make_annotated_obj(
+            CILIUM_RULE,
+            valid_false(
+                json!({"lastTransitionTime": "2026-11-06T11:58:00Z", "observedGeneration": 2}),
+            ),
+        ),
+        2,
+    );
+    assert!(
+        declared_failure(&by_generation, kind, Some(applied))
+            .expect("matches")
+            .confirmed
+    );
 }

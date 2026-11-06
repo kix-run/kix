@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use async_trait::async_trait;
 use kube::Client;
 use kube::discovery::{ApiResource, Scope};
@@ -141,12 +143,13 @@ impl ResourceIo for DryRun {
         &self,
         rid: &ResourceId,
         import_target: Option<&ImportTarget>,
+        applied_at: Option<DateTime<Utc>>,
         timeout: Duration,
         cancel: &CancelToken,
         on_status: OnStatus<'_>,
     ) -> Result<ReadinessResult, ReadinessError> {
         self.resources
-            .wait_ready(rid, import_target, timeout, cancel, on_status)
+            .wait_ready(rid, import_target, applied_at, timeout, cancel, on_status)
             .await
     }
 

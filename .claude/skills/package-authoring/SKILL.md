@@ -105,7 +105,7 @@ named decision; record the fact and its upstream path in the pull request.
 | Metrics | port, whether on the public port, auth, the flag that enables them | `kix.monitor` wiring (Mo11, Mo12) |
 | Clustering and HA, in source | in-memory state, sessions, caches, job queues, leader election, peer discovery, cron singletons | the `pick` table and any ceiling (step 3) |
 | Monitoring material and failure reports | shipped rules or mixins, outage threads | alerts (step 9) |
-| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types, what the operator deletes with each custom resource (its volumes, its backup files) | `crds/sources.txt`, readiness (C5), `holdsData` (C24) |
+| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types and which of them the controller sets for a spec it rejects and does not revisit, what the operator deletes with each custom resource (its volumes, its backup files) | `crds/sources.txt`, readiness (C5) and its `failed` list (C6a), `holdsData` (C24) |
 | Kubernetes client calls, for a program that calls the API with RBAC not vendored from upstream (crd-vendoring covers vendored roles) | every call (list, get, watch, create, update, patch, delete, deletecollection) on every resource and subresource (`pods/log`, `<kind>/status`), at startup and in every code path | the Role: one rule per call, nothing extra (C10, C23) |
 
 "Does it run replicated, and what does it need for that?" is a mandatory

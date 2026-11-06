@@ -9,6 +9,8 @@ use serde_json::Value;
 use crate::manifest::lifecycle::never_pruned;
 use crate::manifest::types::ResourceId;
 
+use chrono::Utc;
+
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
 use super::super::graph::ResourceGraph;
@@ -216,6 +218,9 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
     }
 
     ctx.progress.set_phase(&node, Phase::Apply);
+    // Taken before the apply so a controller's verdict written while the
+    // apply is in flight still counts as later than it.
+    let apply_started = Utc::now();
     let applied_action: ApplyAction;
     let not_kept: Vec<NotKeptField>;
     let mut recreated_reason: Option<String> = None;
@@ -314,11 +319,17 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
             detail: Some(NodeDetail::ReadinessProgress(msg.to_string())),
         });
     };
+    let applied_at = matches!(
+        applied_action,
+        ApplyAction::Created | ApplyAction::Configured
+    )
+    .then_some(apply_started);
     let outcome = ctx
         .resources
         .wait_ready(
             &rid,
             import_target.as_ref(),
+            applied_at,
             ctx.timeout,
             &ctx.cancel,
             &on_status,
@@ -408,6 +419,7 @@ async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome 
         .wait_ready(
             rid,
             entry.meta.import_target.as_ref(),
+            None,
             ctx.timeout,
             &ctx.cancel,
             &on_status,

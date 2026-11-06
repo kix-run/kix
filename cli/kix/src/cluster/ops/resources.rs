@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use async_trait::async_trait;
 use kube::{
     api::{Api, DeleteParams, DynamicObject},
@@ -422,6 +424,7 @@ impl ResourceIo for KubeResources {
         &self,
         rid: &ResourceId,
         import_target: Option<&ImportTarget>,
+        applied_at: Option<DateTime<Utc>>,
         timeout: Duration,
         cancel: &CancelToken,
         on_status: OnStatus<'_>,
@@ -447,7 +450,17 @@ impl ResourceIo for KubeResources {
                 });
             }
         };
-        readiness::wait_for_ready(&self.client, &ar, &scope, rid, timeout, cancel, on_status).await
+        readiness::wait_for_ready(
+            &self.client,
+            &ar,
+            &scope,
+            rid,
+            applied_at,
+            timeout,
+            cancel,
+            on_status,
+        )
+        .await
     }
 
     async fn rediscover(&self) -> Result<(), FetchError> {

@@ -18,11 +18,24 @@ let
     ];
 
     # The cilium operator reports Valid=True once it has accepted a policy;
-    # it sets no Ready or Available condition. Declared on the CRD refs so
-    # every policy carries it as the `kix.run/readiness` annotation.
-    policyReadiness.condition = {
-      type = "Valid";
-      status = "True";
+    # it sets no Ready or Available condition. Valid=False is its verdict on
+    # the policy's rules, which it reaches again only when the policy
+    # changes, so the deploy stops waiting as soon as it sees one. Declared
+    # on the CRD refs so every policy carries it as the `kix.run/readiness`
+    # annotation.
+    policyReadiness = {
+      condition = {
+        type = "Valid";
+        status = "True";
+      };
+      failed = [
+        {
+          condition = {
+            type = "Valid";
+            status = "False";
+          };
+        }
+      ];
     };
 
     # Build a network-policy resource routed through the CNP CRD ref.

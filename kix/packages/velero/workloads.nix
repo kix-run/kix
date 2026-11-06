@@ -208,9 +208,45 @@ let
     ++ lib.optional (self.externalStoreEgress != null) self.externalStoreEgress;
 
   crdFile = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
-  phaseReadiness = phase: {
+  phase = equals: {
     path = "/status/phase";
-    equals = phase;
+    inherit equals;
+  };
+  # A Backup or Restore runs once. Its controller processes only the
+  # ReadyToStart phase (pkg/controller/backup_controller.go and
+  # restore_controller.go, the switch on status.phase in Reconcile), so an
+  # object that ends in FailedValidation, Failed, or PartiallyFailed stays
+  # there, and editing it does not run it again. A Schedule's
+  # FailedValidation comes from parsing spec.schedule, which only a spec
+  # change alters.
+  failedValidation = phase "FailedValidation" // {
+    rejected = true;
+    message = "/status/validationErrors";
+  };
+  oneShotReadiness =
+    what:
+    phase "Completed"
+    // {
+      failed = [
+        failedValidation
+      ]
+      ++
+        map
+          (
+            value:
+            phase value
+            // {
+              message = "/status/failureReason";
+              hint = "Velero does not run a failed ${what} again. Fix the cause shown in its status, then create the ${what} again under a new name.";
+            }
+          )
+          [
+            "Failed"
+            "PartiallyFailed"
+          ];
+    };
+  scheduleReadiness = phase "Enabled" // {
+    failed = [ failedValidation ];
   };
 in
 {
@@ -224,13 +260,13 @@ in
     };
     backups = scope.mkCRD {
       spec = crdFile "backups.velero.io.json";
-      readiness = phaseReadiness "Completed";
+      readiness = oneShotReadiness "backup";
     };
     # Velero's pods dial the store named in the location's config
     # (`s3Url`), not whoever creates the location.
     backupStorageLocations = scope.mkCRD {
       spec = crdFile "backupstoragelocations.velero.io.json";
-      readiness = phaseReadiness "Available";
+      readiness = phase "Available";
       usesAtLeast = _: { };
       factBehavior = {
         endpoint = "terminate";
@@ -251,11 +287,11 @@ in
     podVolumeRestores = scope.mkCRD { spec = crdFile "podvolumerestores.velero.io.json"; };
     restores = scope.mkCRD {
       spec = crdFile "restores.velero.io.json";
-      readiness = phaseReadiness "Completed";
+      readiness = oneShotReadiness "restore";
     };
     schedules = scope.mkCRD {
       spec = crdFile "schedules.velero.io.json";
-      readiness = phaseReadiness "Enabled";
+      readiness = scheduleReadiness;
       usesAtLeast = _: { };
     };
     serverStatusRequests = scope.mkCRD {

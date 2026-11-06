@@ -762,43 +762,109 @@ rec {
 
   resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
 
-  # Validate { path; equals; }, allowing null to omit a readiness declaration.
-  # mkCRD/mkCRDRef force this at declaration time so malformed declarations
-  # fail even when the package builds no custom resources of that kind.
+  # Validate a readiness declaration, allowing null to omit it. The ready
+  # rule is { path; equals; }, { path; notEquals; }, or { condition; }. An
+  # optional `failed` list beside it names the states that mean the custom
+  # resource will not become ready until its spec changes, so `kix deploy`
+  # stops waiting as soon as one matches. mkCRD/mkCRDRef force this at
+  # declaration time so malformed declarations fail even when the package
+  # builds no custom resources of that kind.
   validateReadiness =
     context: groupKind: readiness:
     let
+      ready = if builtins.isAttrs readiness then removeAttrs readiness [ "failed" ] else readiness;
+      failed = if builtins.isAttrs readiness then readiness.failed or null else null;
+      isPointer = p: builtins.isString p && lib.hasPrefix "/" p;
       isPathForm =
-        builtins.isAttrs readiness
+        builtins.isAttrs ready
         &&
-          builtins.attrNames readiness == [
+          builtins.attrNames ready == [
             "equals"
             "path"
           ]
-        && builtins.isString readiness.path
-        && lib.hasPrefix "/" readiness.path
-        && builtins.isString readiness.equals;
+        && isPointer ready.path
+        && builtins.isString ready.equals;
       isPathNotForm =
-        builtins.isAttrs readiness
+        builtins.isAttrs ready
         &&
-          builtins.attrNames readiness == [
+          builtins.attrNames ready == [
             "notEquals"
             "path"
           ]
-        && builtins.isString readiness.path
-        && lib.hasPrefix "/" readiness.path
-        && builtins.isString readiness.notEquals;
+        && isPointer ready.path
+        && builtins.isString ready.notEquals;
       isConditionForm =
-        builtins.isAttrs readiness
-        && builtins.attrNames readiness == [ "condition" ]
-        && builtins.isAttrs readiness.condition
+        builtins.isAttrs ready
+        && builtins.attrNames ready == [ "condition" ]
+        && builtins.isAttrs ready.condition
         &&
-          builtins.attrNames readiness.condition == [
+          builtins.attrNames ready.condition == [
             "status"
             "type"
           ]
-        && builtins.isString readiness.condition.type
-        && builtins.isString readiness.condition.status;
+        && builtins.isString ready.condition.type
+        && builtins.isString ready.condition.status;
+
+      # A failed entry is a condition with an optional reason, or a path
+      # value. The condition's status is required: a controller reports a
+      # rejection as `Valid=False` or `Accepted=False`, and the status says
+      # which side of the condition the rejection is. A path entry may add
+      # `rejected = true` when the state is the controller's verdict on the
+      # spec, `hint` with what to do next, and `message`, one JSON pointer
+      # or a list of them, whose values the failure message quotes.
+      isFailedCondition =
+        e:
+        builtins.isAttrs e
+        && builtins.attrNames e == [ "condition" ]
+        && builtins.isAttrs e.condition
+        && builtins.elem (builtins.attrNames e.condition) [
+          [
+            "status"
+            "type"
+          ]
+          [
+            "reason"
+            "status"
+            "type"
+          ]
+        ]
+        && builtins.isString e.condition.type
+        && builtins.isString e.condition.status
+        && (e.condition.reason or null == null || builtins.isString e.condition.reason);
+      pathEntryKeys = [
+        "equals"
+        "hint"
+        "message"
+        "path"
+        "rejected"
+      ];
+      isPointerList = v: builtins.isList v && v != [ ] && builtins.all isPointer v;
+      isFailedPath =
+        e:
+        builtins.isAttrs e
+        && e ? path
+        && e ? equals
+        && builtins.all (k: builtins.elem k pathEntryKeys) (builtins.attrNames e)
+        && isPointer e.path
+        && builtins.isString e.equals
+        && (e.rejected or null == null || builtins.isBool e.rejected)
+        && (e.hint or null == null || builtins.isString e.hint)
+        && (e.message or null == null || isPointer e.message || isPointerList e.message);
+      failedOk =
+        failed == null
+        || (builtins.isList failed && builtins.all (e: isFailedCondition e || isFailedPath e) failed);
+      # Drop a null reason, hint, or message, a false `rejected`, and wrap a
+      # single message pointer in a list, so the annotation carries only the
+      # keys the deploy reads.
+      normalizeFailed =
+        e:
+        if e ? condition then
+          { condition = lib.filterAttrs (_: v: v != null) e.condition; }
+        else
+          lib.filterAttrs (k: v: v != null && (k != "rejected" || v)) (
+            e // lib.optionalAttrs (builtins.isString (e.message or null)) { message = [ e.message ]; }
+          );
+      normalizedFailed = map normalizeFailed failed;
     in
     if readiness == null then
       null
@@ -811,10 +877,23 @@ rec {
         (path: a JSON pointer string starting with "/"; every value a string,
         and equals = "true" or "3" also matches a JSON true or 3 at the path;
         notEquals is ready while the path is absent or holds another value;
-        no other keys)
+        no other keys except an optional `failed` list)
+      ''
+    else if !failedOk then
+      throw ''
+        ${context}: readiness.failed for ${groupKind} must be a list whose entries are
+          { condition = { type = "<Type>"; status = "False"; reason = "<Reason>"; }; }
+          { path = "/status/..."; equals = "<value>"; rejected = <bool>; hint = "<text>"; message = "/status/..."; }
+        (reason is optional and matches any reason when omitted; rejected, hint,
+        and message are optional: rejected = true says the state is the
+        controller's verdict on the spec, hint is what to do next, and message is
+        a JSON pointer, or a list of them, whose values the failure quotes; no
+        other keys). Each entry names a state the controller does not leave on
+        its own.
+        Got: ${builtins.toJSON failed}
       ''
     else
-      readiness;
+      ready // lib.optionalAttrs (failed != null && failed != [ ]) { failed = normalizedFailed; };
 
   mkCRDBuilders =
     {
@@ -850,7 +929,8 @@ rec {
       holdsData ? null,
       # Readiness check stamped as `kix.run/readiness` on each CR (`{ path; equals; }`,
       # `{ path; notEquals; }`, or `{ condition = { type; status; }; }`) for
-      # operators that do not use standard `Ready` or `Available` conditions.
+      # operators that do not use standard `Ready` or `Available` conditions,
+      # with an optional `failed` list of the states that end the wait early.
       readiness ? null,
     }:
     let

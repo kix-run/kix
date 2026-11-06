@@ -17,6 +17,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::time::Instant;
@@ -457,6 +459,7 @@ impl ResourceIo for ScriptedOps {
         &self,
         rid: &ResourceId,
         _import_target: Option<&ImportTarget>,
+        _applied_at: Option<DateTime<Utc>>,
         _timeout: Duration,
         cancel: &CancelToken,
         on_status: OnStatus<'_>,
