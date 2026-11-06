@@ -115,13 +115,20 @@ pub enum Event {
     },
     /// `node` has been in `phase` for `since_ms` without a verdict. Repeated
     /// on a schedule while the wait lasts. `status` is the node's last
-    /// readiness message and `budget_ms` the readiness timeout.
+    /// readiness message and `budget_ms` the readiness timeout. `holds`
+    /// names the resources that wait on `node` directly, as the text log
+    /// names them, and `holds_total` counts every resource that waits on it
+    /// directly or through other nodes.
     Waiting {
         node: String,
         phase: Phase,
         since_ms: u64,
         status: Option<String>,
         budget_ms: Option<u64>,
+        #[serde(default)]
+        holds: Vec<String>,
+        #[serde(default)]
+        holds_total: usize,
     },
     /// A write that the next deploy redoes failed.
     BestEffortFailed { what: String, message: String },
@@ -363,12 +370,16 @@ impl Event {
                 since,
                 status,
                 budget,
+                holds,
+                holds_total,
             } => Event::Waiting {
                 node: node.to_string(),
                 phase: *phase,
                 since_ms: since.as_millis() as u64,
                 status: status.clone(),
                 budget_ms: budget.map(|b| b.as_millis() as u64),
+                holds: holds.iter().map(ToString::to_string).collect(),
+                holds_total: *holds_total,
             },
             DeployEvent::BestEffortFailed { what, message } => Event::BestEffortFailed {
                 what: what.clone(),

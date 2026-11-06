@@ -78,6 +78,8 @@ impl DeployObserver for StreamCliObserver {
                 since,
                 status,
                 budget,
+                holds,
+                holds_total,
             } => {
                 let line = kix::cluster::watchdog::describe_wait(
                     node,
@@ -85,6 +87,8 @@ impl DeployObserver for StreamCliObserver {
                     *since,
                     status.as_deref(),
                     *budget,
+                    holds,
+                    *holds_total,
                 );
                 crate::say!("  {} {}", output::dim("…"), output::dim(&line));
             }

@@ -222,7 +222,7 @@ impl SchedulerState {
         // Sort resource nodes by `(kind, namespace, name)` for deterministic
         // execution in tests.
         let mut zero_pred = zero_pred;
-        zero_pred.sort_by_key(node_sort_key);
+        zero_pred.sort_by_key(NodeId::sort_key);
         for id in zero_pred {
             if self.enqueued.insert(id.clone()) {
                 self.ready.push_back(id);
@@ -247,7 +247,7 @@ impl SchedulerState {
             .filter(|id| !self.terminal.contains(*id))
             .cloned()
             .collect();
-        out.sort_by_key(node_sort_key);
+        out.sort_by_key(NodeId::sort_key);
         out
     }
 
@@ -311,13 +311,6 @@ impl SchedulerState {
             }
         }
         cancelled
-    }
-}
-
-fn node_sort_key(id: &NodeId) -> (String, String, String) {
-    match id {
-        NodeId::Resource(rid) => (rid.kind.clone(), rid.namespace.clone(), rid.name.clone()),
-        NodeId::Synthetic(s) => (String::new(), String::new(), s.clone()),
     }
 }
 

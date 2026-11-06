@@ -9,8 +9,10 @@
 //! single object is not treated as a stall. Instead, `run` emits a `Waiting`
 //! event per node once it has remained in its phase for [`WAIT_REPORT_AFTER`],
 //! and repeats the event on [`wait_due`]'s schedule while the wait continues.
+//! The event also names the objects the wait holds up, read from the plan's
+//! edges that the engine hands `Progress` once at the start of the run.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -110,6 +112,40 @@ pub(crate) struct Progress {
     /// The readiness timeout in millis, for `Waiting` events to name the
     /// budget a wait runs against. Zero until the engine sets it.
     readiness_budget_ms: AtomicU64,
+    /// What the plan says each node holds up, for `Waiting` events.
+    held: Mutex<Held>,
+}
+
+/// The plan as `holds` reads it.
+#[derive(Debug, Default)]
+struct Held {
+    /// The direct dependents of each node, from the plan's edges.
+    dependents: HashMap<NodeId, Vec<NodeId>>,
+    /// The nodes that run a task. An unchanged node finishes the moment its
+    /// predecessors do, so it is never held up, but the nodes behind it are.
+    working: HashSet<NodeId>,
+    /// The nodes with a terminal verdict, which nothing holds up any more.
+    finished: HashSet<NodeId>,
+    /// Nodes that hold up what other nodes hold up: the API discovery
+    /// refresh stands for the CRDs it covers.
+    stands_for: HashMap<NodeId, Vec<NodeId>>,
+}
+
+impl Held {
+    /// Return whether `node` is an object a wait holds up: a resource that
+    /// still has work to do.
+    fn counts(&self, node: &NodeId) -> bool {
+        node.is_resource() && self.working.contains(node) && !self.finished.contains(node)
+    }
+}
+
+/// The objects a node holds up: its direct dependents that count, sorted by
+/// kind, namespace, and name, and the number of objects that wait on it
+/// directly or through other nodes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Holds {
+    pub(crate) direct: Vec<NodeId>,
+    pub(crate) total: usize,
 }
 
 impl Default for Progress {
@@ -125,6 +161,7 @@ impl Progress {
             last_activity_ms: AtomicU64::new(0),
             in_flight: Mutex::new(HashMap::new()),
             readiness_budget_ms: AtomicU64::new(0),
+            held: Mutex::new(Held::default()),
         }
     }
 
@@ -132,6 +169,80 @@ impl Progress {
     pub(crate) fn set_readiness_budget(&self, budget: Duration) {
         self.readiness_budget_ms
             .store(budget.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// Record the plan's `(dependent, predecessor)` edges and the nodes that
+    /// run a task, so `Waiting` events can name what each node holds up.
+    pub(crate) fn set_plan(
+        &self,
+        edges: &[(NodeId, NodeId)],
+        working: impl IntoIterator<Item = NodeId>,
+    ) {
+        if let Ok(mut held) = self.held.lock() {
+            *held = Held {
+                working: working.into_iter().collect(),
+                ..Held::default()
+            };
+            for (dependent, predecessor) in edges {
+                held.dependents
+                    .entry(predecessor.clone())
+                    .or_default()
+                    .push(dependent.clone());
+            }
+        }
+    }
+
+    /// Record that `node` holds up whatever `nodes` hold up, as the API
+    /// discovery refresh does for the CRDs it covers.
+    pub(crate) fn set_stands_for(&self, node: &NodeId, nodes: &[NodeId]) {
+        if let Ok(mut held) = self.held.lock() {
+            held.stands_for.insert(node.clone(), nodes.to_vec());
+        }
+    }
+
+    /// Record that `node` has a terminal verdict, so no wait holds it up.
+    pub(crate) fn finished(&self, node: &NodeId) {
+        if let Ok(mut held) = self.held.lock() {
+            held.finished.insert(node.clone());
+        }
+    }
+
+    /// Return what `node` holds up. The walk goes through every dependent,
+    /// unchanged and synthetic ones included, and counts the resources that
+    /// still have work to do.
+    pub(crate) fn holds(&self, node: &NodeId) -> Holds {
+        let Ok(held) = self.held.lock() else {
+            return Holds::default();
+        };
+        let roots: Vec<&NodeId> = match held.stands_for.get(node) {
+            Some(nodes) => nodes.iter().collect(),
+            None => vec![node],
+        };
+        let mut seen: HashSet<&NodeId> = HashSet::new();
+        let mut queue: VecDeque<&NodeId> = VecDeque::new();
+        let mut direct: Vec<&NodeId> = Vec::new();
+        for root in roots {
+            for dependent in held.dependents.get(root).into_iter().flatten() {
+                if seen.insert(dependent) {
+                    queue.push_back(dependent);
+                    if held.counts(dependent) {
+                        direct.push(dependent);
+                    }
+                }
+            }
+        }
+        while let Some(next) = queue.pop_front() {
+            for dependent in held.dependents.get(next).into_iter().flatten() {
+                if seen.insert(dependent) {
+                    queue.push_back(dependent);
+                }
+            }
+        }
+        direct.sort_by_key(|n| n.sort_key());
+        Holds {
+            direct: direct.into_iter().cloned().collect(),
+            total: seen.iter().filter(|n| held.counts(n)).count(),
+        }
     }
 
     fn readiness_budget(&self) -> Option<Duration> {
@@ -178,7 +289,7 @@ impl Progress {
     pub(crate) fn due_waits(&self) -> Vec<DeployEvent> {
         let now = Instant::now();
         let budget = self.readiness_budget();
-        let mut out: Vec<DeployEvent> = Vec::new();
+        let mut due: Vec<(NodeId, Phase, Duration, Option<String>)> = Vec::new();
         if let Ok(mut m) = self.in_flight.lock() {
             for (node, flight) in m.iter_mut() {
                 let since = now.saturating_duration_since(flight.since);
@@ -186,23 +297,25 @@ impl Progress {
                     continue;
                 }
                 flight.reported = Some(since);
-                out.push(DeployEvent::Waiting {
-                    node: node.clone(),
-                    phase: flight.phase,
-                    since,
-                    status: flight.status.clone(),
-                    budget: (flight.phase == Phase::Readiness)
-                        .then_some(budget)
-                        .flatten(),
-                });
+                due.push((node.clone(), flight.phase, since, flight.status.clone()));
             }
         }
         // Longest wait first, so the output order is stable.
-        out.sort_by_key(|event| match event {
-            DeployEvent::Waiting { since, .. } => std::cmp::Reverse(*since),
-            _ => std::cmp::Reverse(Duration::ZERO),
-        });
-        out
+        due.sort_by_key(|(_, _, since, _)| std::cmp::Reverse(*since));
+        due.into_iter()
+            .map(|(node, phase, since, status)| {
+                let holds = self.holds(&node);
+                DeployEvent::Waiting {
+                    node,
+                    phase,
+                    since,
+                    status,
+                    budget: (phase == Phase::Readiness).then_some(budget).flatten(),
+                    holds: holds.direct,
+                    holds_total: holds.total,
+                }
+            })
+            .collect()
     }
 
     /// Remove `node` from the in-flight set when it reaches a terminal verdict.
@@ -308,13 +421,18 @@ pub fn describe(idle: Duration, in_flight: &[InFlight]) -> String {
 }
 
 /// Format a one-line summary for a `Waiting` event naming the node, its wait
-/// duration and readiness budget, and the latest readiness message or phase.
+/// duration and readiness budget, the latest readiness message or phase,
+/// and the objects the wait holds up. `holds` is the direct dependents and
+/// `holds_total` every object that waits on the node directly or through
+/// others; the line names up to three and counts the rest.
 pub fn describe_wait(
     node: &NodeId,
     phase: Phase,
     since: Duration,
     status: Option<&str>,
     budget: Option<Duration>,
+    holds: &[NodeId],
+    holds_total: usize,
 ) -> String {
     let doing = match (status, phase) {
         (Some(status), _) => status.to_string(),
@@ -329,7 +447,38 @@ pub fn describe_wait(
         }
         _ => format!("{}s", since.as_secs()),
     };
-    format!("{} waiting: {doing} ({age})", node_label(node))
+    format!(
+        "{} waiting: {doing} ({age}){}",
+        node_label(node),
+        describe_holds(holds, holds_total)
+    )
+}
+
+/// Format the `; N objects wait for it: ...` suffix of a `Waiting` line, or
+/// nothing when `holds_total` is zero.
+fn describe_holds(holds: &[NodeId], holds_total: usize) -> String {
+    const NAMED: usize = 3;
+    if holds_total == 0 {
+        return String::new();
+    }
+    let what = if holds_total == 1 {
+        "1 object waits for it".to_string()
+    } else {
+        format!("{holds_total} objects wait for it")
+    };
+    let names: Vec<String> = holds.iter().take(NAMED).map(node_label).collect();
+    let more = holds_total.saturating_sub(names.len());
+    let list = match (names.len(), more) {
+        (0, _) => String::new(),
+        (_, 0) => names.join(", "),
+        (1, _) => format!("{} and {more} more", names[0]),
+        _ => format!("{}, and {more} more", names.join(", ")),
+    };
+    if list.is_empty() {
+        format!("; {what}")
+    } else {
+        format!("; {what}: {list}")
+    }
 }
 
 fn node_label(id: &NodeId) -> String {
@@ -457,12 +606,16 @@ mod tests {
                 since,
                 status,
                 budget,
+                holds,
+                holds_total,
                 ..
             } => {
                 assert_eq!(*phase, Phase::Readiness);
                 assert_eq!(since.as_secs(), 10);
                 assert_eq!(status.as_deref(), Some("not found yet"));
                 assert_eq!(*budget, Some(secs(180)));
+                assert!(holds.is_empty());
+                assert_eq!(*holds_total, 0);
             }
             other => panic!("{other:?}"),
         }
@@ -474,13 +627,155 @@ mod tests {
         assert!(progress.due_waits().is_empty());
     }
 
+    fn res(kind: &str, namespace: &str, name: &str) -> NodeId {
+        NodeId::Resource(ResourceId {
+            kind: kind.into(),
+            namespace: namespace.into(),
+            name: name.into(),
+        })
+    }
+
+    /// `holds` names the direct dependents that are resources, sorted by
+    /// kind, namespace, and name, and counts every resource downstream.
+    #[test]
+    fn holds_sorts_direct_dependents_and_counts_through_two_levels() {
+        let crd = res("CustomResourceDefinition", "_cluster", "foos.example.com");
+        let operator = res("Deployment", "foo", "foo-operator");
+        let b = res("Foo", "apps", "b");
+        let a = res("Foo", "apps", "a");
+        let svc = res("Service", "foo", "foo-operator");
+        let gate = NodeId::Synthetic("pause-1".into());
+        let after = res("Deployment", "apps", "after");
+        let progress = Progress::new();
+        let edges = [
+            (b.clone(), crd.clone()),
+            (operator.clone(), crd.clone()),
+            (a.clone(), crd.clone()),
+            (gate.clone(), crd.clone()),
+            (svc.clone(), operator.clone()),
+            (after.clone(), gate.clone()),
+            (after.clone(), svc.clone()),
+        ];
+        progress.set_plan(&edges, edges.iter().map(|(d, _)| d.clone()));
+        assert_eq!(
+            progress.holds(&crd),
+            Holds {
+                direct: vec![operator.clone(), a.clone(), b.clone()],
+                total: 5,
+            }
+        );
+        assert_eq!(
+            progress.holds(&operator),
+            Holds {
+                direct: vec![svc.clone()],
+                total: 2,
+            }
+        );
+        assert_eq!(progress.holds(&after), Holds::default());
+        assert_eq!(
+            progress.holds(&NodeId::Synthetic("api-discovery".into())),
+            Holds::default()
+        );
+    }
+
+    /// An unchanged node is neither named nor counted, but the working nodes
+    /// behind it are. A node with a terminal verdict drops out of the count.
+    #[test]
+    fn holds_skips_unchanged_and_finished_nodes_but_walks_through_them() {
+        let crd = res("CustomResourceDefinition", "_cluster", "foos.example.com");
+        let unchanged = res("ConfigMap", "apps", "unchanged");
+        let behind = res("Deployment", "apps", "behind");
+        let changed = res("Deployment", "apps", "changed");
+        let sibling = res("Service", "apps", "sibling");
+        let progress = Progress::new();
+        progress.set_plan(
+            &[
+                (unchanged.clone(), crd.clone()),
+                (behind.clone(), unchanged.clone()),
+                (changed.clone(), crd.clone()),
+                (sibling.clone(), changed.clone()),
+            ],
+            [behind.clone(), changed.clone(), sibling.clone()],
+        );
+        assert_eq!(
+            progress.holds(&crd),
+            Holds {
+                direct: vec![changed.clone()],
+                total: 3,
+            }
+        );
+        progress.finished(&changed);
+        progress.finished(&sibling);
+        assert_eq!(
+            progress.holds(&crd),
+            Holds {
+                direct: vec![],
+                total: 1,
+            }
+        );
+    }
+
+    /// A node that stands for others, as the discovery refresh does for the
+    /// CRDs it covers, holds up their dependents.
+    #[test]
+    fn holds_of_a_node_standing_for_others_are_their_dependents() {
+        let foos = res("CustomResourceDefinition", "_cluster", "foos.example.com");
+        let bars = res("CustomResourceDefinition", "_cluster", "bars.example.com");
+        let foo = res("Foo", "apps", "x");
+        let bar = res("Bar", "apps", "y");
+        let after = res("Deployment", "apps", "after");
+        let discovery = NodeId::Synthetic("api-discovery".into());
+        let progress = Progress::new();
+        progress.set_plan(
+            &[
+                (foo.clone(), foos.clone()),
+                (bar.clone(), bars.clone()),
+                (after.clone(), foo.clone()),
+                (after.clone(), bar.clone()),
+            ],
+            [foo.clone(), bar.clone(), after.clone()],
+        );
+        assert_eq!(progress.holds(&discovery), Holds::default());
+        progress.set_stands_for(&discovery, &[foos.clone(), bars.clone()]);
+        assert_eq!(
+            progress.holds(&discovery),
+            Holds {
+                direct: vec![bar.clone(), foo.clone()],
+                total: 3,
+            }
+        );
+    }
+
+    /// `due_waits` carries what the slow node holds up.
+    #[tokio::test(start_paused = true)]
+    async fn due_waits_carry_the_held_objects() {
+        let crd = res("CustomResourceDefinition", "_cluster", "foos.example.com");
+        let a = res("Foo", "apps", "a");
+        let b = res("Deployment", "apps", "b");
+        let progress = Progress::new();
+        progress.set_plan(
+            &[(a.clone(), crd.clone()), (b.clone(), a.clone())],
+            [a.clone(), b.clone()],
+        );
+        progress.set_phase(&crd, Phase::Readiness);
+        tokio::time::advance(secs(10)).await;
+        let events = progress.due_waits();
+        match &events[..] {
+            [
+                DeployEvent::Waiting {
+                    holds, holds_total, ..
+                },
+            ] => {
+                assert_eq!(holds, std::slice::from_ref(&a));
+                assert_eq!(*holds_total, 2);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn describe_wait_names_the_status_and_the_budget() {
-        let node = NodeId::Resource(ResourceId {
-            kind: "Service".into(),
-            namespace: "app".into(),
-            name: "web".into(),
-        });
+        let node = res("Service", "app", "web");
         assert_eq!(
             describe_wait(
                 &node,
@@ -488,13 +783,69 @@ mod tests {
                 secs(30),
                 Some("import target Service/web not found yet"),
                 Some(secs(180)),
+                &[],
+                0,
             ),
             "Service/web@app waiting: import target Service/web not found yet (30s of 180s)"
         );
         assert_eq!(
-            describe_wait(&node, Phase::Apply, secs(12), None, Some(secs(180))),
+            describe_wait(&node, Phase::Apply, secs(12), None, Some(secs(180)), &[], 0),
             "Service/web@app waiting: apply request outstanding (12s)"
         );
+    }
+
+    /// The suffix names up to three direct dependents, counts the rest, uses
+    /// the singular for one, and is absent when nothing waits.
+    #[test]
+    fn describe_wait_names_what_the_wait_holds_up() {
+        let crd = res("CustomResourceDefinition", "_cluster", "foos.example.com");
+        let wait = |holds: &[NodeId], total: usize| {
+            describe_wait(
+                &crd,
+                Phase::Readiness,
+                secs(30),
+                Some("CRD present, waiting for Established=True"),
+                Some(secs(180)),
+                holds,
+                total,
+            )
+        };
+        let head = "CustomResourceDefinition/foos.example.com waiting: \
+                    CRD present, waiting for Established=True (30s of 180s)";
+        let operator = res("Deployment", "foo", "foo-operator");
+        let a = res("Foo", "apps", "a");
+        let b = res("Foo", "apps", "b");
+        let c = res("Foo", "apps", "c");
+        assert_eq!(
+            wait(&[operator.clone(), a.clone(), b.clone(), c.clone()], 6),
+            format!(
+                "{head}; 6 objects wait for it: Deployment/foo-operator@foo, Foo/a@apps, \
+                 Foo/b@apps, and 3 more"
+            )
+        );
+        assert_eq!(
+            wait(&[operator.clone(), a.clone()], 2),
+            format!("{head}; 2 objects wait for it: Deployment/foo-operator@foo, Foo/a@apps")
+        );
+        // Three or fewer direct dependents, but more behind them.
+        assert_eq!(
+            wait(std::slice::from_ref(&operator), 4),
+            format!("{head}; 4 objects wait for it: Deployment/foo-operator@foo and 3 more")
+        );
+        assert_eq!(
+            wait(&[operator.clone(), a.clone()], 3),
+            format!(
+                "{head}; 3 objects wait for it: Deployment/foo-operator@foo, Foo/a@apps, \
+                 and 1 more"
+            )
+        );
+        assert_eq!(
+            wait(std::slice::from_ref(&operator), 1),
+            format!("{head}; 1 object waits for it: Deployment/foo-operator@foo")
+        );
+        // Only a synthetic node waits directly, with resources behind it.
+        assert_eq!(wait(&[], 2), format!("{head}; 2 objects wait for it"));
+        assert_eq!(wait(&[], 0), head);
     }
 
     #[test]

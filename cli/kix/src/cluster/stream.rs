@@ -139,6 +139,23 @@ impl std::fmt::Display for NodeId {
     }
 }
 
+impl NodeId {
+    /// Return whether the node is a Kubernetes object rather than a
+    /// synthetic step.
+    pub fn is_resource(&self) -> bool {
+        matches!(self, NodeId::Resource(_))
+    }
+
+    /// Return the key that orders nodes by kind, namespace, and name.
+    /// Synthetic nodes sort first, by their id.
+    pub(crate) fn sort_key(&self) -> (String, String, String) {
+        match self {
+            NodeId::Resource(rid) => (rid.kind.clone(), rid.namespace.clone(), rid.name.clone()),
+            NodeId::Synthetic(s) => (String::new(), String::new(), s.clone()),
+        }
+    }
+}
+
 impl From<ResourceId> for NodeId {
     fn from(rid: ResourceId) -> Self {
         NodeId::Resource(rid)
@@ -269,12 +286,18 @@ pub enum DeployEvent {
     /// so a plain log says what a long wait is for while it lasts and not
     /// only when it ends. `status` is the last readiness message the node
     /// reported, and `budget` is the readiness timeout the wait runs against.
+    /// `holds` names the resources that wait on this node directly, sorted
+    /// by kind, namespace, and name, and `holds_total` counts every resource
+    /// that waits on it directly or through other nodes. Both come from the
+    /// plan's edges, so a dependent cancelled since still counts.
     Waiting {
         node: NodeId,
         phase: Phase,
         since: Duration,
         status: Option<String>,
         budget: Option<Duration>,
+        holds: Vec<NodeId>,
+        holds_total: usize,
     },
     /// A best-effort write failed. These are writes that cannot corrupt
     /// applied state and that the next deploy redoes (checkpoint, stamping

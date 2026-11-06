@@ -160,6 +160,24 @@ impl Recorder {
         })
     }
 
+    /// Return every `Waiting` event as `(node, holds, holds_total)`.
+    fn waits(&self) -> Vec<(NodeId, Vec<NodeId>, usize)> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                DeployEvent::Waiting {
+                    node,
+                    holds,
+                    holds_total,
+                    ..
+                } => Some((node.clone(), holds.clone(), *holds_total)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Return terminal verdicts per node in emission order.
     fn terminals(&self) -> Vec<(NodeId, Verdict)> {
         self.0
@@ -374,6 +392,51 @@ async fn hung_apply_is_reported_then_aborted() {
     let stuck = NodeId::Resource(rid("Deployment", "stuck"));
     assert_eq!(rec.terminal_count(&stuck), 1);
     assert_eq!(partial.cancelled, 1);
+}
+
+/// A hung node's `Waiting` events name the direct dependents that have work
+/// to do and count every such node behind it. An unchanged dependent is
+/// neither named nor counted, but the nodes behind it are.
+#[tokio::test(start_paused = true)]
+async fn a_hung_node_reports_what_it_holds_up() {
+    let manifests = vec![
+        m("CustomResourceDefinition", "foos", &[]),
+        m("Deployment", "operator", &["foos"]),
+        m("Service", "operator-api", &["operator"]),
+        m("ConfigMap", "unchanged", &["foos"]),
+        m("Secret", "behind", &["unchanged"]),
+        m("ConfigMap", "cm", &[]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("CustomResourceDefinition", "foos"),
+        NodeScript::default().apply(Behaviour::Hang),
+    );
+    let rec = Arc::new(Recorder::default());
+    let cfg = config(StallPolicy {
+        warn_after: secs(30),
+        abort_after: Some(secs(60)),
+    });
+
+    let plan = plan_with_skips(&manifests, &["unchanged"]);
+    let err = run(&ops, plan, &cfg, rec.clone()).await.unwrap_err();
+    assert!(matches!(err, DeployError::Cancelled { .. }), "{err}");
+
+    let waits = rec.waits();
+    let crd = NodeId::Resource(rid("CustomResourceDefinition", "foos"));
+    assert!(
+        waits.iter().all(|(node, _, _)| *node == crd),
+        "only the hung node waits: {waits:?}"
+    );
+    assert_eq!(
+        waits.first(),
+        Some(&(
+            crd,
+            vec![NodeId::Resource(rid("Deployment", "operator"))],
+            3
+        )),
+        "{waits:?}"
+    );
 }
 
 /// A slow but healthy rollout reports progress often enough to keep the
