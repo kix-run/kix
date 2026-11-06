@@ -289,25 +289,22 @@ in
       {
         root = {
           resource = self.controllerDeployment;
-          requires = lib.filter (r: r != null) (
-            builtins.attrValues self.crds
-            ++ [
-              self.controllerServiceAccount
-              self.controllerService
-              # Aggregated by label; nothing else depends on them.
-              self.clusterViewRole
-              self.viewRole
-              self.editRole
-              self.webhookServiceAccount
-              self.webhookService
-              self.webhookDeployment
-              self.mutatingWebhookConfiguration
-              self.validatingWebhookConfiguration
-              self.cainjectorServiceAccount
-              self.cainjectorService
-              self.cainjectorDeployment
-            ]
-          );
+          requires = lib.filter (r: r != null) ([
+            self.controllerServiceAccount
+            self.controllerService
+            # Aggregated by label; nothing else depends on them.
+            self.clusterViewRole
+            self.viewRole
+            self.editRole
+            self.webhookServiceAccount
+            self.webhookService
+            self.webhookDeployment
+            self.mutatingWebhookConfiguration
+            self.validatingWebhookConfiguration
+            self.cainjectorServiceAccount
+            self.cainjectorService
+            self.cainjectorDeployment
+          ]);
           postHooks = [ self.apiCheck ];
           out = {
             crds = {

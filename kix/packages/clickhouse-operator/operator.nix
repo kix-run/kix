@@ -510,6 +510,9 @@ else
     operatorDeployment =
       {
         inherit name labels;
+        # The operator watches every kind it ships and crashes until the API
+        # server serves them. Derived, so a new kinds.nix entry is included.
+        requires = builtins.attrValues self.crds;
         spec = {
           replicas = 1;
           # The old pod is gone before the new one starts: there is no

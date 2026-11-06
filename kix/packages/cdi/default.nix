@@ -487,7 +487,14 @@ in
 
       deployment = scope.mkDeployment {
         name = "${name}-operator";
-        requires = builtins.attrValues self.clusterRbac ++ builtins.attrValues self.operatorRbac;
+        # cdi-operator watches CDI objects from the start, so it waits for
+        # the one definition the package ships. The definitions the operator
+        # installs itself cannot be waited on here.
+        requires = [
+          self.crds.cdis
+        ]
+        ++ builtins.attrValues self.clusterRbac
+        ++ builtins.attrValues self.operatorRbac;
         spec = {
           # cdi-operator holds a leader election lease, so a replacement pod
           # covers "pod" and a standby on another node covers "node".

@@ -214,8 +214,7 @@ in
       {
         root = {
           resource = self.operatorDeployment;
-          # Every shipped CRD, derived, so a new kinds.nix entry is included.
-          requires = builtins.attrValues self.crds ++ [ self.operatorService ];
+          requires = [ self.operatorService ];
 
           out = {
             mkClickHouseInstallation = mkOperand "clickHouseInstallations";

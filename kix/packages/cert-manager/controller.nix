@@ -357,6 +357,9 @@ in
   controllerDeployment =
     {
       inherit name labels;
+      # The controller watches every cert-manager kind and crashes until the
+      # API server serves them.
+      requires = builtins.attrValues self.crds;
       spec = {
         # Leader-elected: one replica serves; from `node` up a standby takes
         # over when a node is lost.

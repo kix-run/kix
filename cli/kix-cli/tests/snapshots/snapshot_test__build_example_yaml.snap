@@ -12965,8 +12965,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: nxmwb9c04vrqlc9ry6is95js51yjybi9,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: h4nb6cj3nli3jadx14g5pibk58xp12yq
+    kix.run/depends-on: nxmwb9c04vrqlc9ry6is95js51yjybi9,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:c5n1pr980d3w6gnpshlh4l9clhm47fhk,requires:p9y9n504yzmp5nf9jjxdkmh7vcpl1y9m,requires:jrpnr27i0kaglvx8cl5gl2af9p3rish6,requires:2nz855nqhwfaj3b2361l339wgxxf7ypz,requires:wrchlkih5739rkw3z2pavqs4nyll9fp4
+    kix.run/identity-hash: ymp48ax32997b9l8w3bbr6c277hyzsg6
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -13062,8 +13062,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: '5qjn03cp7kvgl59d3glbk72m5lp1vrp9'
+    kix.run/depends-on: nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:c5n1pr980d3w6gnpshlh4l9clhm47fhk,requires:p9y9n504yzmp5nf9jjxdkmh7vcpl1y9m,requires:jrpnr27i0kaglvx8cl5gl2af9p3rish6,requires:2nz855nqhwfaj3b2361l339wgxxf7ypz,requires:wrchlkih5739rkw3z2pavqs4nyll9fp4
+    kix.run/identity-hash: la13yl63d4bm8nrmyrnygiq88bh53zdg
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -13972,8 +13972,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
-    kix.run/depends-on: i2fj9hh0swwix01w08lqxb5j1q0c5ik7,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,requires:5qjn03cp7kvgl59d3glbk72m5lp1vrp9,requires:vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,requires:j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:b6r7c6rhqc44nyyhfsqg8ahqvdps777q,requires:xvc91687xzi8lvlgm9l9mpk8s74z5zwm
-    kix.run/identity-hash: '5xsy1i6lnjs655x1xvbw4hfsiss64sy7'
+    kix.run/depends-on: i2fj9hh0swwix01w08lqxb5j1q0c5ik7,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,requires:la13yl63d4bm8nrmyrnygiq88bh53zdg,requires:vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,requires:j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:b6r7c6rhqc44nyyhfsqg8ahqvdps777q,requires:xvc91687xzi8lvlgm9l9mpk8s74z5zwm
+    kix.run/identity-hash: '2whrwyc5wyvg221blz0iq713snf7mj2q'
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
     kix.run/rerun: on-change
@@ -14258,15 +14258,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/fap8xjyixqps8jbhsa50j0qcckiknv5f-k8s-activation-example
-    kix.run/depends-on: '0x9r939vb7jd9ywk36x8vx16x66j5g00,4l42y305cgxwy3wbr0mrasihca5zczix,590al7hbiz804ha7f7q5ivm49ds9fxcg,7dxmwwc29q92wd6g2yb88ydzq2w5ykkd,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,sf8swshyx9g2qbc33s9fj9lwlv1ca86w,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: '2i5w2s5iiry6zq4cbj4yixwqxyfl957i'
+    kix.run/built-via: /nix/store/6mhkx4zr2hxfnz2jp7zw3475xg5yyxc9-k8s-activation-example
+    kix.run/depends-on: '0x9r939vb7jd9ywk36x8vx16x66j5g00,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,7dxmwwc29q92wd6g2yb88ydzq2w5ykkd,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,sf8swshyx9g2qbc33s9fj9lwlv1ca86w,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
+    kix.run/identity-hash: kk1rx6md362n4cxhhw8ilm99gh69fzrx
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-2i5w2s5iiry6
+  name: example-kk1rx6md362n
 spec:
   instances:
     cert-manager:
@@ -14290,12 +14290,12 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '1v1rljz257vz44ssjhmi09p6zclyy4yh,1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b,2nz855nqhwfaj3b2361l339wgxxf7ypz,58c399fcph1y90b7jjb7igrmamqid6s5,5g06mjghl1f5bnzcbhphd3g47p1img5a,5qjn03cp7kvgl59d3glbk72m5lp1vrp9,5xsy1i6lnjs655x1xvbw4hfsiss64sy7,7dxbym3zymk6rjcygmvycz5bf7psqdvn,80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,93c70jfy3wb5mhw2cb3c843gpkkjds33,994cw2jrj49k7yd1bcscq82p0crzffyc,apirskai5ryrgsxxa9y71c1856qryflh,c5n1pr980d3w6gnpshlh4l9clhm47fhk,cszy78ybis945fhdi5040gs1lzj6gbxl,d2c2s43n4cs1qyz08rnnnviwjfd67sdp,h4nb6cj3nli3jadx14g5pibk58xp12yq,iarlrbcqhf08j8k9qdq70n7c1v9ndfr0,j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,jpf4wd0821xzk1gsccm3ycq98gsacn3w,jrpnr27i0kaglvx8cl5gl2af9p3rish6,n9c8fsq1l3x86ak3nwalrs594k5rgw6p,njmlyc3iqyqj4984qklxxjp7xqjbrm0q,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,nxmwb9c04vrqlc9ry6is95js51yjybi9,p9y9n504yzmp5nf9jjxdkmh7vcpl1y9m,pd95bcz6nk42rh5z8mp4rdqvcwx3aix6,ph7p720s1s7jlmghh944dn23brpkv09a,pkxjy11rizcf97w0m6gjqvhmvb00117z,rn40hbw8756809l5h5bwh65g8klv5bg3,v4fwdrj1684aii6rsjzb7qa2xhxql9kw,vhsclsf63hxyf8m5j6wgpb60gli2n6ya,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l,vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,wizcll2p6n5dnvlqc8q4p2683fp8rp6j,wrchlkih5739rkw3z2pavqs4nyll9fp4,zwrbxl73zgh1kqmsz4pl1gv9cyg1f27y,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '590al7hbiz804ha7f7q5ivm49ds9fxcg'
+    kix.run/depends-on: '1v1rljz257vz44ssjhmi09p6zclyy4yh,1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b,2whrwyc5wyvg221blz0iq713snf7mj2q,58c399fcph1y90b7jjb7igrmamqid6s5,5g06mjghl1f5bnzcbhphd3g47p1img5a,7dxbym3zymk6rjcygmvycz5bf7psqdvn,80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,93c70jfy3wb5mhw2cb3c843gpkkjds33,994cw2jrj49k7yd1bcscq82p0crzffyc,apirskai5ryrgsxxa9y71c1856qryflh,cszy78ybis945fhdi5040gs1lzj6gbxl,d2c2s43n4cs1qyz08rnnnviwjfd67sdp,iarlrbcqhf08j8k9qdq70n7c1v9ndfr0,j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,la13yl63d4bm8nrmyrnygiq88bh53zdg,n9c8fsq1l3x86ak3nwalrs594k5rgw6p,njmlyc3iqyqj4984qklxxjp7xqjbrm0q,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,nxmwb9c04vrqlc9ry6is95js51yjybi9,pd95bcz6nk42rh5z8mp4rdqvcwx3aix6,ph7p720s1s7jlmghh944dn23brpkv09a,pkxjy11rizcf97w0m6gjqvhmvb00117z,rn40hbw8756809l5h5bwh65g8klv5bg3,v4fwdrj1684aii6rsjzb7qa2xhxql9kw,vhsclsf63hxyf8m5j6wgpb60gli2n6ya,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l,vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,wizcll2p6n5dnvlqc8q4p2683fp8rp6j,ymp48ax32997b9l8w3bbr6c277hyzsg6,zwrbxl73zgh1kqmsz4pl1gv9cyg1f27y,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: '3b11q1i641ygddq559h5ww077bqqvj20'
     kix.run/inverse-deps: ClusterRoleBinding/cert-manager-cainjector,RoleBinding/cert-manager-cainjector:leaderelection,ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io,ClusterRoleBinding/cert-manager-controller-certificates,ClusterRoleBinding/cert-manager-controller-certificatesigningrequests,ClusterRoleBinding/cert-manager-controller-challenges,ClusterRoleBinding/cert-manager-controller-clusterissuers,ClusterRoleBinding/cert-manager-controller-ingress-shim,ClusterRoleBinding/cert-manager-controller-issuers,ClusterRoleBinding/cert-manager-controller-orders,RoleBinding/cert-manager-webhook:dynamic-serving,ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews,RoleBinding/cert-manager:leaderelection,PodDisruptionBudget/cert-manager-cainjector,PodDisruptionBudget/cert-manager,PodDisruptionBudget/cert-manager-webhook
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
-    kix.run/package-requires: CustomResourceDefinition/certificaterequests.cert-manager.io,CustomResourceDefinition/certificates.cert-manager.io,CustomResourceDefinition/challenges.acme.cert-manager.io,CustomResourceDefinition/clusterissuers.cert-manager.io,CustomResourceDefinition/issuers.cert-manager.io,CustomResourceDefinition/orders.acme.cert-manager.io,ServiceAccount/cert-manager,ClusterRole/cert-manager-cluster-view,ClusterRole/cert-manager-view,ClusterRole/cert-manager-edit,ServiceAccount/cert-manager-webhook,Service/cert-manager-webhook,Deployment/cert-manager-webhook,MutatingWebhookConfiguration/cert-manager-webhook,ValidatingWebhookConfiguration/cert-manager-webhook,ServiceAccount/cert-manager-cainjector,Deployment/cert-manager-cainjector
+    kix.run/package-requires: ServiceAccount/cert-manager,ClusterRole/cert-manager-cluster-view,ClusterRole/cert-manager-view,ClusterRole/cert-manager-edit,ServiceAccount/cert-manager-webhook,Service/cert-manager-webhook,Deployment/cert-manager-webhook,MutatingWebhookConfiguration/cert-manager-webhook,ValidatingWebhookConfiguration/cert-manager-webhook,ServiceAccount/cert-manager-cainjector,Deployment/cert-manager-cainjector
     kix.run/post-hooks: Job/cert-manager-startupapicheck
     kix.run/root: cert-manager
   labels:
