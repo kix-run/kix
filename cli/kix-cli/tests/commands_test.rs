@@ -1,5 +1,6 @@
 //! Consolidated CLI smoke tests: one test per command to verify basic functionality.
-//! These invoke the real binary with `assert_cmd`, so they require `nix`.
+//! These invoke the real binary with `assert_cmd`, so they need a Kix runtime.
+//! The development shell names one in `KIX_RUNTIME_DIR`.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -273,4 +274,42 @@ fn pin_rm_removes_package_and_instance_pins_and_errors_when_missing() {
         .stderr(
             predicate::str::contains("has no pin named").and(predicate::str::contains("'nginx'")),
         );
+}
+
+/// Without a runtime, a command that runs Nix stops with the error that says
+/// where Kix looked, and never runs `nix` from `PATH`. `kix doctor` reports
+/// the same problem, and `kix --version` still works.
+#[test]
+fn without_a_runtime_kix_refuses_to_run_programs() {
+    // A `nix` on PATH that would succeed if Kix ran it.
+    let bin = tempfile::tempdir().unwrap();
+    let fake = bin.path().join("nix");
+    std::fs::write(&fake, "#!/bin/sh\necho 'fake nix ran' >&2\nexit 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.path().display());
+
+    let without_runtime = || {
+        let mut cmd = kix();
+        cmd.env_remove("KIX_RUNTIME_DIR").env("PATH", &path);
+        cmd
+    };
+
+    without_runtime()
+        .args(["build", "minimal"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("Kix could not find its runtime")
+                .and(predicate::str::contains("KIX_RUNTIME_DIR (not set)"))
+                .and(predicate::str::contains("fake nix ran").not()),
+        );
+
+    without_runtime()
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Kix could not find its runtime"));
+
+    without_runtime().arg("--version").assert().success();
 }

@@ -86,18 +86,24 @@
         system:
         let
           pkgs = inputs.nixpkgs.legacyPackages.${system};
+          hasRuntime = builtins.elem system runtimeSystems;
+          runtime = import ./cli/runtime/in-store.nix { inherit pkgs; };
         in
         {
+          # Kix with its runtime in libexec/kix, where it looks first.
           kix = mkKixPackage {
             inherit pkgs;
             lib = pkgs.lib;
             crane = inputs.crane;
+            runtime = if hasRuntime then runtime else null;
           };
         }
-        # The programs a Kix release ships beside the binary
-        # (cli/runtime/default.nix).
-        // lib.optionalAttrs (builtins.elem system runtimeSystems) {
+        // lib.optionalAttrs hasRuntime {
+          # The programs a Kix release ships beside the binary
+          # (cli/runtime/default.nix).
           kix-runtime-spec = import ./cli/runtime { inherit pkgs; };
+          # The same programs, run from /nix/store.
+          kix-runtime = runtime;
         }
       );
       runtimeSystems = [
@@ -176,18 +182,11 @@
             ]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus ];
 
-            # Helm renders need a Kix runtime, which never falls back to the
-            # programs on PATH. This is the runtime a release ships, so
-            # `cargo test` renders charts with the releases the library names.
-            # On macOS assembling it needs the command line tools, which the
-            # build sandbox lacks, so set KIX_RUNTIME_DIR by hand there.
-            KIX_RUNTIME_DIR =
-              lib.optionalString (pkgs.stdenv.hostPlatform.isLinux && builtins.elem system runtimeSystems)
-                (
-                  pkgs.runCommand "kix-runtime" { nativeBuildInputs = [ pkgs.python3 ]; } ''
-                    python3 ${./cli/runtime/assemble.py} ${import ./cli/runtime { inherit pkgs; }} $out
-                  ''
-                );
+            # Kix runs its programs only from a Kix runtime, never from PATH.
+            # This one ships the programs a release ships, so `cargo test`
+            # and a `kix` built with cargo run the versions the library
+            # names.
+            KIX_RUNTIME_DIR = cliPackages.${system}.kix-runtime or "";
 
             # Keyed on the checkout path and kept OUT of the checkout, for
             # the reason devenv.nix spells out at length: a `path:` flakeref

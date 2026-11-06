@@ -11,8 +11,10 @@
 //!    for a package of Kix that keeps the runtime elsewhere, when it holds a
 //!    `manifest.json`.
 //!
-//! With a runtime directory, every program comes from there and nowhere else.
-//! Without one, Kix runs the program of that name on `PATH`.
+//! Every program comes from that directory and nowhere else. Kix never runs
+//! a program from `PATH`, because a different Helm or Nix there could change
+//! what Kix produces without anyone noticing. Without a runtime directory,
+//! [`tool`] fails with [`RuntimeError::NotFound`].
 //!
 //! A runtime directory keeps each program in a directory of its own, named
 //! after its exact version, such as `helm-4.3.1/bin/helm`, so two versions of
@@ -142,10 +144,10 @@ pub enum RuntimeError {
     },
 
     #[error(
-        "Kix needs {program} {version} exactly, and only a Kix runtime can provide an exact version. Kix found no runtime in {}. Set {RUNTIME_DIR_VAR} to a runtime that ships it",
-        searched_text()
+        "Kix could not find its runtime, the directory that holds the nix, helm, kubectl, and sops programs Kix runs. Kix never runs these programs from PATH. It looked in: {}. Install Kix from its release archive, which keeps bin/kix and libexec/kix together, or set {RUNTIME_DIR_VAR} to a Kix runtime directory",
+        searched.join(", ")
     )]
-    NoRuntime { program: String, version: String },
+    NotFound { searched: Vec<String> },
 
     #[error(
         "the Kix runtime in {} ({found_by}) does not belong to this kix binary. It ships {found}, but kix {} expects {expected}. Install bin/kix and libexec/kix from the same Kix release{}",
@@ -210,14 +212,14 @@ pub struct Runtime {
     pub found_by: FoundBy,
 }
 
-/// Return the runtime directory Kix uses, or `None` when it runs programs
-/// from `PATH`.
+/// Return the runtime directory Kix uses.
 ///
-/// The first call checks a runtime's manifest against the programs compiled
-/// into this binary and fails on a mismatch. Later calls return the same
-/// runtime without reading the manifest again.
-pub fn runtime() -> Result<Option<Runtime>, RuntimeError> {
-    static CHECKED: OnceLock<Option<Runtime>> = OnceLock::new();
+/// Fail with [`RuntimeError::NotFound`] when there is none. The first call
+/// that finds one checks its manifest against the programs compiled into
+/// this binary and fails on a mismatch. Later calls return the same runtime
+/// without reading the manifest again.
+pub fn runtime() -> Result<Runtime, RuntimeError> {
+    static CHECKED: OnceLock<Runtime> = OnceLock::new();
     if let Some(found) = CHECKED.get() {
         return Ok(found.clone());
     }
@@ -227,10 +229,11 @@ pub fn runtime() -> Result<Option<Runtime>, RuntimeError> {
             .map(PathBuf::from),
         beside_binary(),
         BUILTIN_RUNTIME_DIR.map(PathBuf::from),
-    );
-    if let Some(rt) = &found {
-        check_manifest(rt)?;
-    }
+    )
+    .ok_or_else(|| RuntimeError::NotFound {
+        searched: searched(),
+    })?;
+    check_manifest(&found)?;
     Ok(CHECKED.get_or_init(|| found).clone())
 }
 
@@ -276,10 +279,6 @@ pub fn searched() -> Vec<String> {
         places.push(dir.to_string());
     }
     places
-}
-
-fn searched_text() -> String {
-    searched().join(", ")
 }
 
 /// Return the programs and versions this binary expects, from
@@ -328,27 +327,74 @@ fn describe_versions(versions: &BTreeMap<String, Vec<String>>) -> String {
 pub fn tool(tool: Tool, want: Want) -> Result<Command, RuntimeError> {
     let mut cmd = Command::new(program_path(tool, want)?);
     if tool.program() == "nix" {
-        use_store(&mut cmd, &store_root())?;
+        let root = store_root();
+        use_store(&mut cmd, &root)?;
+        init_store(&root, || {
+            let mut init = Command::new(program_path(Tool::NixStore, Want::Shipped)?);
+            use_store(&mut init, &root)?;
+            init.arg("--init");
+            Ok(init)
+        })?;
     }
     Ok(cmd)
 }
 
-/// Return the path of `tool`'s executable, or its bare name when Kix looks
-/// it up on `PATH`.
-pub fn program_path(tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
-    locate(runtime()?.map(|rt| rt.dir).as_deref(), tool, want)
+/// Create the database of the store under `root` once, before any Nix
+/// program uses it.
+///
+/// Nix creates a missing database when it first opens the store. Several
+/// Nix processes that do this at once fail with "SQLite database ... is
+/// busy", which happens on the first run of a machine, when Kix or the tests
+/// start Nix in parallel. A lock file makes one process create it while the
+/// others wait. Nix writes `schema` after the database is complete, so its
+/// presence means there is nothing to do.
+fn init_store(
+    root: &Path,
+    init: impl FnOnce() -> Result<Command, RuntimeError>,
+) -> Result<(), RuntimeError> {
+    let db = root.join("nix/var/nix/db");
+    if db.join("schema").is_file() {
+        return Ok(());
+    }
+    let fail = |message: String| RuntimeError::Store {
+        root: root.to_path_buf(),
+        message,
+    };
+    std::fs::create_dir_all(root).map_err(|e| fail(e.to_string()))?;
+    let lock =
+        std::fs::File::create(root.join(".kix-init.lock")).map_err(|e| fail(e.to_string()))?;
+    lock.lock().map_err(|e| {
+        fail(format!(
+            "could not lock {}: {e}",
+            root.join(".kix-init.lock").display()
+        ))
+    })?;
+    if db.join("schema").is_file() {
+        return Ok(());
+    }
+    let mut cmd = init()?;
+    let out = cmd.output().map_err(|e| {
+        fail(format!(
+            "could not run {}: {e}",
+            cmd.get_program().display()
+        ))
+    })?;
+    if !out.status.success() {
+        return Err(fail(format!(
+            "`nix-store --init` failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
-fn locate(dir: Option<&Path>, tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
-    let Some(dir) = dir else {
-        return match want {
-            Want::Shipped => Ok(PathBuf::from(tool.binary())),
-            Want::Exact(version) => Err(RuntimeError::NoRuntime {
-                program: tool.program().to_string(),
-                version: version.to_string(),
-            }),
-        };
-    };
+/// Return the path of `tool`'s executable in the Kix runtime.
+pub fn program_path(tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
+    locate(&runtime()?.dir, tool, want)
+}
+
+fn locate(dir: &Path, tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
     let shipped = if dir.join(MANIFEST).exists() {
         from_manifest(dir, tool)?
     } else {
@@ -664,13 +710,23 @@ fn use_store(cmd: &mut Command, root: &Path) -> Result<(), RuntimeError> {
 
 /// Write `contents` to `path` through a temporary file, unless the file
 /// already holds them, so parallel Kix processes never read a partial file.
+///
+/// Each write gets its own temporary file. Threads of one process that
+/// shared a name would rename each other's file away.
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+
     if std::fs::read_to_string(path).is_ok_and(|old| old == contents) {
         return Ok(());
     }
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".nix.conf.{}", std::process::id()));
+    let tmp = dir.join(format!(
+        ".nix.conf.{}.{}",
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, contents)?;
     std::fs::rename(&tmp, path)
 }
@@ -709,27 +765,22 @@ mod tests {
     }
 
     #[test]
-    fn without_a_runtime_programs_come_from_path() {
-        for (tool, name) in [
-            (Tool::Nix, "nix"),
-            (Tool::NixStore, "nix-store"),
-            (Tool::Kubectl, "kubectl"),
-            (Tool::Sops, "sops"),
-            (Tool::Helm, "helm"),
+    fn no_runtime_names_where_kix_looked_and_the_fixes() {
+        let err = RuntimeError::NotFound {
+            searched: vec![
+                "KIX_RUNTIME_DIR (not set)".into(),
+                "/opt/kix/libexec/kix".into(),
+            ],
+        };
+        let text = err.to_string();
+        for part in [
+            "KIX_RUNTIME_DIR (not set), /opt/kix/libexec/kix",
+            "never runs these programs from PATH",
+            "release archive",
+            "set KIX_RUNTIME_DIR",
         ] {
-            assert_eq!(
-                locate(None, tool, Want::Shipped).unwrap(),
-                PathBuf::from(name)
-            );
+            assert!(text.contains(part), "{part}: {text}");
         }
-    }
-
-    /// `PATH` cannot promise a version, so an exact version needs a runtime.
-    #[test]
-    fn an_exact_version_needs_a_runtime() {
-        let err = locate(None, Tool::Helm, Want::Exact("4.3.1")).unwrap_err();
-        assert!(matches!(err, RuntimeError::NoRuntime { .. }), "{err}");
-        assert!(err.to_string().contains("KIX_RUNTIME_DIR"), "{err}");
     }
 
     #[test]
@@ -740,7 +791,7 @@ mod tests {
             ("helm-4.3.1", &["helm"]),
             ("sops-3.12.1", &[]),
         ]);
-        let d = Some(dir.path());
+        let d = dir.path();
         assert_eq!(
             locate(d, Tool::Nix, Want::Shipped).unwrap(),
             dir.path().join("nix-2.31.3/bin/nix")
@@ -762,7 +813,7 @@ mod tests {
         assert!(matches!(err, RuntimeError::NoSuchVersion { .. }), "{err}");
         assert!(err.to_string().contains("ships 3.19.1, 4.3.1"), "{err}");
 
-        // A runtime never falls back to `PATH`, even for a program it lacks.
+        // A program the runtime lacks is an error, never a lookup on `PATH`.
         for tool in [Tool::Kubectl, Tool::Sops] {
             let err = locate(d, tool, Want::Shipped).unwrap_err();
             assert!(matches!(err, RuntimeError::Missing { .. }), "{err}");
@@ -781,7 +832,7 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let d = Some(dir.path());
+        let d = dir.path();
         assert_eq!(
             locate(d, Tool::Nix, Want::Shipped).unwrap(),
             dir.path().join("elsewhere/bin/nix")
@@ -805,24 +856,19 @@ mod tests {
                 format!(r#"{{"programs": [{{"name": "nix", "version": "1", "bin": {{"nix": "{bad}"}}}}]}}"#),
             )
             .unwrap();
-            let err = locate(Some(dir.path()), Tool::Nix, Want::Shipped).unwrap_err();
+            let err = locate(dir.path(), Tool::Nix, Want::Shipped).unwrap_err();
             assert!(matches!(err, RuntimeError::Manifest { .. }), "{bad}: {err}");
         }
         std::fs::write(dir.path().join(MANIFEST), "not json").unwrap();
         assert!(matches!(
-            locate(Some(dir.path()), Tool::Nix, Want::Shipped).unwrap_err(),
+            locate(dir.path(), Tool::Nix, Want::Shipped).unwrap_err(),
             RuntimeError::Manifest { .. }
         ));
     }
 
     #[test]
     fn a_missing_runtime_directory_is_named() {
-        let err = locate(
-            Some(Path::new("/nonexistent/kix")),
-            Tool::Nix,
-            Want::Shipped,
-        )
-        .unwrap_err();
+        let err = locate(Path::new("/nonexistent/kix"), Tool::Nix, Want::Shipped).unwrap_err();
         assert!(err.to_string().contains("/nonexistent/kix"), "{err}");
     }
 
@@ -987,6 +1033,60 @@ mod tests {
             verify_files(dir.path()).unwrap_err(),
             RuntimeError::Manifest { .. }
         ));
+    }
+
+    /// A fresh machine has no cache directory yet, and tests run Nix from
+    /// several threads at once, so the first runs prepare the store
+    /// together.
+    #[test]
+    fn threads_prepare_a_store_under_missing_folders_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("no/cache/yet/kix/store");
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| s.spawn(|| use_store(&mut Command::new("nix"), &root)))
+                .collect();
+            for h in handles {
+                h.join().unwrap().unwrap();
+            }
+        });
+        assert!(root.join("etc/nix/nix.conf").is_file());
+    }
+
+    /// One process creates the store database while the others wait, and
+    /// nobody creates it again once Nix has written its schema.
+    #[test]
+    fn the_store_is_initialised_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("missing/store");
+        let runs = std::sync::atomic::AtomicUsize::new(0);
+        let schema = root.join("nix/var/nix/db/schema");
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    init_store(&root, || {
+                        runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let mut cmd = Command::new("sh");
+                        cmd.arg("-c").arg(format!(
+                            "mkdir -p {0} && sleep 0.1 && echo 10 > {0}/schema",
+                            schema.parent().unwrap().display()
+                        ));
+                        Ok(cmd)
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(runs.into_inner(), 1);
+        assert!(schema.is_file());
+
+        let err = init_store(&dir.path().join("other"), || {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "echo broken >&2; exit 1"]);
+            Ok(cmd)
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("broken"), "{err}");
     }
 
     #[test]

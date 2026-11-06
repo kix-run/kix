@@ -23,15 +23,7 @@ pub fn run() -> miette::Result<()> {
 /// the number of failed checks.
 fn check_runtime() -> usize {
     let rt = match runtime::runtime() {
-        Ok(Some(rt)) => rt,
-        Ok(None) => {
-            println!(
-                "{}  no Kix runtime. Kix runs nix, kubectl, and sops from PATH. Searched: {}",
-                yellow("warn"),
-                runtime::searched().join(", ")
-            );
-            return 0;
-        }
+        Ok(rt) => rt,
         Err(e) => {
             println!("{}  {e}", red("fail"));
             return 1;

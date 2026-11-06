@@ -1,3 +1,0 @@
-# 2026-11-06 · `docs/flake.nix`, `docs/nix/captures.nix` · The doc captures run `kix build` on a Helm example without a Kix runtime.
-
-Only `kix` renders Helm charts now, and it renders them only with the exact Helm release from a Kix runtime (`KIX_RUNTIME_DIR`). The `how-to/helm-bridge` capture builds `how-to-helm-bridge` from kix-examples, and `nix run ./docs#regen-captures-offline` sets no runtime, so the Documentation captures workflow will fail with "only a Kix runtime can provide an exact version" until the docs flake gives kix one. The development shell in `flake.nix` assembles such a directory from `cli/runtime/`.
