@@ -1,8 +1,8 @@
 # Multi-Component Packages
 
-Complex applications like Harbor have multiple sub-services (core, portal, registry, jobservice, exporter). These are all defined in **one package**, not split into separate packages, because they share config, secrets, and internal URLs. The exception is a sub-component that is independently reusable (Harbor's PostgreSQL database and Valkey cache): that is a DI dep (`database`, `valkey`), not a sub-component (BEST-PRACTICES §12.5).
+Complex applications like Harbor have multiple sub-services (core, portal, registry, jobservice, exporter). These are all defined in **one package**, not split into separate packages, because they share config, secrets, and internal URLs. The exception is a sub-component that is independently reusable (Harbor's PostgreSQL database and Valkey cache): that is a DI dep (`database`, `valkey`), not a sub-component (`docs/src/content/docs/explanation/packages-and-clusters.mdx` `#packages-versus-instances`).
 
-Reference implementation: `packages/harbor/`.
+Reference implementation: `kix/packages/harbor/`.
 
 ## Key patterns
 
@@ -31,7 +31,7 @@ Reference implementation: `packages/harbor/`.
    coreUrl = "http://${self.coreService.out.fqdn}:${self.coreService.out.port}";
    ```
 
-4. **Breaking a mutual-dial cycle:** when two components dial each other (Harbor's core and jobservice), one direction has to lose its workload edge or the store paths recurse. Build that one Service with a literal selector, shared with its Deployment so the two cannot drift, and put the Deployment in `root.requires` to restore the ordering edge. The `selectorCoherence` warning this raises is deliberate (BEST-PRACTICES §12.6). Choose the side by boot order, not by convenience: the Service that goes literal is the one whose pod must start *later*. Jobservice fetches its configuration from core's API on boot and panics until core answers, so the jobservice Service is the literal one and its Deployment carries an explicit `requires` on core (verified on a kind cluster: the other way round, jobservice crash-loops and the deploy fails). A component whose own config names its own Service (core's `CORE_URL`) has to be literal as well:
+4. **Breaking a mutual-dial cycle:** when two components dial each other (Harbor's core and jobservice), one direction has to lose its workload edge or the store paths recurse. Build that one Service with a literal selector, shared with its Deployment so the two cannot drift, and put the Deployment in `root.requires` to restore the ordering edge. The `selectorCoherence` warning this raises is deliberate (`docs/src/content/docs/reference/resources-and-out.mdx` `#breaking-selector-cycles-with-rawselector`). Choose the side by boot order, not by convenience: the Service that goes literal is the one whose pod must start *later*. Jobservice fetches its configuration from core's API on boot and panics until core answers, so the jobservice Service is the literal one and its Deployment carries an explicit `requires` on core (verified on a kind cluster: the other way round, jobservice crash-loops and the deploy fails). A component whose own config names its own Service (core's `CORE_URL`) has to be literal as well:
    ```nix
    coreSelector = componentSelector "core";           # core dials itself (CORE_URL)
    jobserviceSelector = componentSelector "jobservice";

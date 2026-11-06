@@ -12,10 +12,10 @@ one instance when the mapping belongs to a particular cluster.
 ## Declare a package default alias
 
 Add `meta.defaultAliases` when every instance of a package provides the same
-kind of dependency. A persistent-volume package can advertise itself as
+kind of dependency. A persistent-volume-claim package can advertise itself as
 `storage` even when cluster authors choose names such as `data` or `uploads`:
 
-```nix title="packages/persistent-volume/default.nix"
+```nix title="packages/persistent-volume-claim/default.nix"
 {
   meta = {
     version = "1.0.0";
@@ -41,7 +41,7 @@ The cluster can now give the provider a task-specific instance name:
 
 ```nix title="cluster.nix"
 instances.apps.data = {
-  package = packages.persistent-volume;
+  package = packages.persistent-volume-claim;
 };
 ```
 

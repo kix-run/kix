@@ -47,8 +47,10 @@ Run the cluster checks:
 <Command commands={["kix check production"]} cwd="infrastructure/" />
 
 With the cap raised, an error-severity finding ends the run with a failed
-assertion that names the rule and the resource. Fix the resource, disable the
-rule for that package, or lower the rule's severity with an override.
+assertion that names the rule and the resource. Fix the resource, lower the
+rule's `.severity` (to `"warning"` or `"info"`) with a `byOwner`,
+`byNamespace`, or `byRule` override, or disable the rule cluster-wide with
+`scorecard.ruleOverrides.byRule.<rule>.enabled = false`.
 
 :::note[Reference]
 See [`scorecard`](/docs/reference/cluster-configuration/#scorecard) for the cap and

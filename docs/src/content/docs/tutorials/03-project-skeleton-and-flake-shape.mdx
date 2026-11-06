@@ -104,7 +104,7 @@ The attr name, `02-hello-world`, is the cluster name you pass to the CLI:
 
 <Command expandable {...deployFirst} />
 
-<Command commands={["kix pf 02-hello-world hello-world 8080:80"]} cwd="kix-examples/" />
+<Command commands={["kix pf 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
 
 The value points at the file that builds that cluster.
 
@@ -122,8 +122,10 @@ The names are yours. The CLI discovers them by evaluating the flake.
 
 The flake points at `./tutorials/02-hello-world/cluster.nix`. That file is the
 recipe for one cluster: it chooses the local kind flavor and declares what
-should exist inside the cluster. The cluster takes its name from its key in the
-flake's `clusters`.
+should exist inside the cluster. Setting `name = "02-hello-world"` in
+`kix.buildCluster` sets the cluster's name explicitly; if you omit `name`,
+`mkFlake` falls back to the cluster's key in the flake's `clusters` attribute
+set.
 
 At the top level, the file has this structure:
 

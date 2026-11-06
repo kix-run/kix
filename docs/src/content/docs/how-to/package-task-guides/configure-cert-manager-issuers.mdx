@@ -97,10 +97,11 @@ the existing issuer with `kix.mkImport` and the `clusterIssuer` alias instead:
 <Snippet {...importedClusterIssuer} />
 
 Kix then checks nothing about the issuer beyond the name the import gives it.
-A `cluster-issuer` instance that answers `clusterIssuer` anywhere in the
-cluster takes precedence over the import, so use one or the other. The
-example cluster has both, which is why its consumer of the import sets
-`deps.clusterIssuer` explicitly.
+Because `cluster-issuer` sets `meta.scope = "cluster"` and dependency
+resolution prefers a managed instance over an import, a `cluster-issuer`
+instance that answers `clusterIssuer` anywhere in the cluster takes precedence
+over the import, so use one or the other. The example cluster has both, which
+is why its consumer of the import sets `deps.clusterIssuer` explicitly.
 
 ## HTTP-01 solvers
 

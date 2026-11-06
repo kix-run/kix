@@ -26,6 +26,9 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | `kix.run/cluster` | `Activation` resources | Names the Kix cluster that owns the `Activation` record so multiple Kix clusters can share a single Kubernetes cluster. |
 | `kix.run/kubernetes-uid` | `Activation` resources of a definition that sets `cluster.kubernetes.uid` | The UID of the Kubernetes cluster's `kube-system` Namespace the build was bound to. While any record carries it, the Kubernetes cluster refuses definitions that do not set the UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
 | `kix.run/consumer` | `Namespace` resources in consumer clusters | Names the consumer cluster (built with `kix.interface`) that owns the namespace, allowing platform network policies to select consumer pods. |
+| `kix.run/derived` | Derived network policies | `"true"` on network policy resources synthesized by Kix's network policy plugin. (Derived `PodDisruptionBudget` objects do not carry this label.) |
+| `kix.run/policy-type` | Derived network policies | Rule category that produced a derived network policy (`"default-deny"`, `"caller-ingress"`, `"scrape"`, `"cr-operand"`, `"apiserver-supplement"`, `"external-ingress-supplement"`, `"gateway"`, `"ingress-controller"`, or `"operator-managed-workload"`). Basic per-workload egress and ingress policies carry `kix.run/derived: "true"` without `kix.run/policy-type`. |
+| `kix.run/db-cluster` | `stackgres-database` and `cnpg-database` resources | Name of the target PostgreSQL cluster resource that the database belongs to. |
 | `pod-security.kubernetes.io/enforce` | `Namespace` resources | Pod Security Admission level (`privileged`, `baseline`, or `restricted`) set from `namespaces.<name>.podSecurity`, package `meta.podSecurity`, or a platform interface. |
 
 ### Build identity and live ownership annotations
@@ -35,9 +38,9 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | `kix.run/identity-hash` | CLI on load | 32-character store hash of the sealed manifest. Changes whenever the manifest content or any dependency in its store context changes. |
 | `kix.run/package` | CLI on load | Name of the owning package instance. |
 | `kix.run/package-namespace` | CLI on load | Namespace of the owning package instance. |
-| `kix.run/lifecycle` | CLI on load | Lifecycle classification from `meta.lifecycle` (such as `"stateful"`). |
+| `kix.run/lifecycle` | CLI on load | Lifecycle classification from `meta.lifecycle` (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes Kix behavior (requiring `holdsData` on custom resources in the instance and marking resources as stateful during migration checks); other values are informational. |
 | `kix.run/holds-data` | `scope.mkResource` / `scope.mkCR` | `"true"` or `"false"`. Indicates whether deleting the resource loses persistent data. Derived automatically for `PersistentVolumeClaim`, `PersistentVolume`, and `StatefulSet` resources with `volumeClaimTemplates`, and required via CRD `holdsData` for custom resources in stateful packages. |
-| `kix.run/built-via` | CLI on `Activation` | Store path of the cluster activation index (`kix-activation-<cluster>.json`). |
+| `kix.run/built-via` | CLI on `Activation` | Store path of the cluster activation output directory (`k8s-activation-<cluster>`), which holds `kix-packages.json`, `kix-image-sources.json`, and related build metadata. |
 | `kix.run/activations` | CLI after apply | Comma-separated `Activation` identity hashes that reference the live object. Used by `kix deploy --prune` and `kix gc`. |
 | `kix.run/applied-hash` | CLI after apply | Hash of the fields owned by the `kix` field manager after apply. Compared against live state by `kix drift` and `kix health`. |
 
@@ -92,44 +95,43 @@ Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs
 | `kix.run/classification` | `scope.mkSecret` (`meta.classification`) | Data classification (such as `"configuration"`). |
 | `kix.run/rotation-policy` | `scope.mkSecret` (`meta.rotationPolicy`) | Rotation policy metadata. |
 
-### Derived policy and package marker annotations
+### Package marker annotations
 
 | Annotation | Meaning |
 | --- | --- |
-| `kix.run/derived` | `"true"` on resources synthesized by Kix compiler plugins (such as derived network policies and `PodDisruptionBudget` objects). |
-| `kix.run/policy-type` | Rule category that produced a derived network policy (for example, `"default-deny"`, `"workload-egress"`, `"caller-ingress"`, `"scrape-egress"`, or `"operator-managed-workload"`). |
 | `kix.run/operand-of` | `"<group>/<Kind>/<name>"` of the operator custom resource whose runtime pods a `Service` or `PodDisruptionBudget` selects. |
 | `kix.run/monitors-external-service` | `"true"` on a `ServiceMonitor` or `VMServiceScrape` that intentionally targets a Service outside the Kix build. |
-| `kix.run/role` | Component role within a multi-resource package. |
-| `kix.run/db-cluster` | Database cluster identifier stamped by database packages. |
+| `kix.run/role` | Reserved key (`kix.keys.role`); not currently stamped by built-in builders or packages. |
 
 ## Activation
 
-`Activation` (`activations.kix.run`, API version `kix.run/v1alpha1`) is the cluster-scoped custom resource that serves as the root of a Kix cluster's deployment graph and records deployment state on the Kubernetes cluster.
+`Activation` (`activations.kix.run`, API version `kix.run/v1alpha1`) is the cluster-scoped custom resource that serves as the root of a Kix cluster's deployment graph and records deployment state on the Kubernetes cluster. When the CLI loads a build, it names the `Activation` `<cluster>-<12-char identity-hash prefix>` so each distinct build gets its own historical record on the cluster.
 
 ```yaml
 apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
-  name: production
+  name: production-jak8b4glx8fn
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: production
   annotations:
     kix.run/identity-hash: jak8b4glx8fnbq2c3hkb0khyyvigb96i
-    kix.run/built-via: /nix/store/...-k8s-Activation-_cluster_-production
+    kix.run/built-via: /nix/store/...-k8s-activation-production
     kix.run/depends-on: ...
 spec:
   instances:
-    - apps/web
-    - data/postgres
+    apps:
+      web: web
+    data:
+      postgres: postgres
 ```
 
 ### `Activation` spec and status fields
 
 | Path | Type | Meaning |
 | --- | --- | --- |
-| `spec.instances` | `array of string` | `<namespace>/<instance>` identifiers of all active `PackageInstance` records in the build. |
+| `spec.instances` | `object` (`{ <namespace>: { <instance>: string } }`) | Nested map from namespace and instance name to the `PackageInstance` resource name for every active instance in the build. |
 | `spec.consumers` | `object` (optional) | Hosted consumer clusters (`{ <consumer>: { interface, sha256 } }`) declared by a platform cluster. |
 | `spec.interfaces` | `object` (optional) | Platform interfaces (`{ <platform>: { consumer, path, sha256 } }`) that a consumer cluster was built against. |
 | `status.phase` | `string` | Lifecycle state: `Queued`, `Deploying`, `Active`, `Degraded`, `Failed`, or `Superseded`. |
@@ -171,7 +173,7 @@ spec:
 | `spec.instanceName` | Managed and import instances | Name of the instance within its namespace. |
 | `spec.namespaceName` | Managed and import instances | Namespace of the instance. |
 | `spec.version` | Managed and import instances | The instance's `version` override, else the package's `meta.version`, else the `out.version` the package builds. Left out when none is set. |
-| `spec.lifecycle` | When `meta.lifecycle` is set | Workload lifecycle (`"stateful"`, `"stateless"`, `"ephemeral"`). |
+| `spec.lifecycle` | When `meta.lifecycle` is set | Workload lifecycle (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes build validation and deploy behavior; other values are informational. |
 | `kix.run/root` | Managed instances | Name of the package's `root` resource. |
 | `kix.run/package-requires` | When non-empty | Comma-separated `<Kind>/<name>` entries that the package's `root` resource transitively depends on. |
 | `kix.run/post-hooks` | When non-empty | Comma-separated `<Kind>/<name>` entries declared in `root.postHooks`. |
@@ -230,13 +232,15 @@ Inspect the live receipt with `kubectl` or generate a SLSA provenance attestatio
 | `cluster` | `string` | Name of the Kix cluster. |
 | `activationHash` | `string` | 32-character store hash of the deployed `Activation`. |
 | `deployedAt` | `string` | RFC 3339 UTC timestamp when the deployment finalized. |
-| `source.flakeRef` | `string` | Flake reference passed to `kix deploy`. |
-| `source.gitCommit` | `string \| null` | Git commit SHA of the source repository. |
-| `source.dirty` | `boolean` | `true` when tracked files in the Git working tree had uncommitted changes at build time (untracked files are ignored by Nix flake evaluation). |
-| `source.revision` | `string \| null` | Commit SHA, suffixed with `-dirty` when `source.dirty` is `true`. |
-| `source.flakeLock` | `string \| null` | `blake3:<hex>` digest of `flake.lock`. |
-| `builder` | `object` | Versions and platform of the machine that ran the deploy (`kixVersion`, `nixVersion`, `arch`, `os`). |
-| `inputs` | `array of { name, rev, narHash }` | Locked flake inputs from `flake.lock`. |
+| `source.flakeRef` | `string` | Flake reference passed to `kix deploy` (or `kix bundle` when deployed from a bundle). |
+| `source.gitCommit` | `string` (optional) | Git commit SHA of the source repository. Omitted when the source directory is not a Git repository. |
+| `source.dirty` | `boolean` (optional) | `true` when tracked files in the Git working tree had uncommitted changes at build time (untracked files are ignored by Nix flake evaluation). Omitted when `source.gitCommit` is absent. |
+| `source.revision` | `string` (optional) | Commit SHA, suffixed with `-dirty` when `source.dirty` is `true`. Omitted when `source.gitCommit` is absent. |
+| `source.flakeLock` | `string` (optional) | `blake3:<hex>` digest of `flake.lock`. Omitted when no `flake.lock` is present. |
+| `source.bundle` | `{ sha256, kixRev? }` (optional) | Present only when deploying from a `.kixbundle` archive. Records the `sha256` hex digest of the bundle archive verified by `kix deploy` and the optional `kixRev` recorded in the bundle. |
+| `builder` | `{ kixVersion, nixVersion?, arch, os }` | Versions and platform of the machine that built the activation (for bundle deploys, the machine that ran `kix bundle`). `nixVersion` is omitted when Nix is unavailable. |
+| `deployer` | `{ kixVersion, arch, os }` (optional) | Present only when deploying from a `.kixbundle` archive. Records the `kix` version and platform of the machine that ran `kix deploy`. |
+| `inputs` | `array of object` | Flake inputs from `flake.lock`. Locked inputs record `{ name, rev, narHash }`; unlocked local `path:` inputs record `{ name, type, path?, url?, locked: false }`. |
 | `images` | `array of string` | Container image references collected across all workloads in the activation. |
 
 Rendered manifests are intentionally excluded from `status.receipt` so inline Secret values never appear in cluster-wide status objects.

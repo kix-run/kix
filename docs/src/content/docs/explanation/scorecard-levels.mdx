@@ -7,7 +7,7 @@ Catching a misconfigured resource before `kubectl apply` is much cheaper than de
 
 :::note[Helpful background]
 - [12. Scorecards and compile-time policy](/docs/tutorials/12-scorecards-and-compile-time-policy/): A hands-on walkthrough of running the scorecard, capping severities, and fixing findings.
-- [Scorecard and rules](/docs/reference/scorecard-and-rules/): Reference tables for all 73 built-in scorecard rules and the custom rule schema.
+- [Scorecard and rules](/docs/reference/scorecard-and-rules/): Reference tables for all 30 built-in scorecard rules and the custom rule schema.
 - [Validation checks](/docs/reference/validation-checks/): Reference tables for the always-on structural checks that run on every cluster build.
 :::
 
@@ -31,19 +31,19 @@ The level of a rule describes *what evidence it inspects*, not how important the
 Scorecard rules evaluate the final compiled cluster, not just the raw options a user typed into `cluster.nix`:
 
 - **Manifest and package rules** see every resource attached to an instance, including resources created by typed builders and derived resources like generated `PodDisruptionBudget` and `CiliumNetworkPolicy` objects.
-- **Namespace and cluster rules** run after dependency resolution has determined which instances are active. Optional instances (`enable = "auto"`) that were never pulled in by a consumer are excluded so dormant packages do not trigger false findings.
+- **Namespace and cluster rules** run after dependency resolution has determined which instances are active. Optional instances (`optional = true`) that were never pulled in by a consumer are excluded so dormant packages do not trigger false findings.
 
 Because rules inspect the finished manifests, a policy check tests what Kix will actually apply to Kubernetes after defaults, overlays, and automatic derivations have run.
 
 ## Findings and enforcement are separate decisions
 
-When adopting a policy tool on an existing cluster, turning on 70 rules at once usually produces a wall of errors that blocks every deployment until the whole backlog is cleaned up. Kix avoids that trap by separating a rule's **severity** from the cluster's **enforcement cap** (`scorecard.maxSeverity`):
+When adopting a policy tool on an existing cluster, turning on all 30 built-in rules at once can produce a wall of errors that blocks every deployment until the whole backlog is cleaned up. Kix avoids that trap by separating a rule's **severity** from the cluster's **enforcement cap** (`scorecard.maxSeverity`):
 
-1. Each rule declares its own severity (`error`, `warning`, or `info`), and `scorecard.overrides` can adjust that severity for specific rules, package owners, or namespaces.
+1. Each rule declares its own severity (`error`, `warning`, or `info`), and `scorecard.ruleOverrides` (`byRule`, `byOwner`, and `byNamespace`) can adjust that severity for specific rules, package owners, or namespaces.
 2. `scorecard.maxSeverity` then caps the effective severity across the cluster. Because `maxSeverity` defaults to `"warning"`, even rules that declare `severity = "error"` report as warnings on a new cluster rather than failing the build.
-3. When your team is ready to enforce policy in CI, setting `scorecard.maxSeverity = "error"` (or passing `--fail-on warning` to `kix scorecard`) turns those findings into hard build failures without changing a single rule definition.
+3. When your team is ready to enforce policy in CI, setting `scorecard.maxSeverity = "error"` turns those error-severity findings into hard build failures without changing a single rule definition.
 
-Capping a rule is different from disabling it (`severity = "off"`). A capped rule still runs and appears in `kix scorecard` reports so you can track cleanup progress; a disabled rule is skipped entirely.
+Capping a rule is different from disabling it (`scorecard.ruleOverrides.byRule."<rule>".enabled = false`). A capped rule still runs and appears in `kix check` (and `kix check --sarif`) output so you can track cleanup progress; a disabled rule is skipped entirely.
 
 ## Cross-resource validation at cluster evaluation time
 

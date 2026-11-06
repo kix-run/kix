@@ -83,7 +83,7 @@ The four availability levels form an ordered scale:
 | `none` | None (single pod or downtime during updates is acceptable). | `ScheduleAnyway` |
 | `pod` | Loss of a single pod or a rolling update. | `ScheduleAnyway` |
 | `node` | Loss of a single node. | `DoNotSchedule` on `hostKey` |
-| `zone` | Loss of a single availability zone. | `DoNotSchedule` on `zoneKey` and `hostKey` |
+| `zone` | Loss of a single availability zone. | `DoNotSchedule` on `zoneKey`, `ScheduleAnyway` on `hostKey` |
 
 Kix derives `cluster.availability.substrate` from `cluster.capabilities`:
 
@@ -297,7 +297,7 @@ namespaces.apps = {
 | --- | --- | --- | --- |
 | `labels` | `attrsOf str` | `{ }` | Additional labels merged into the `Namespace` metadata alongside `kubernetes.io/metadata.name` and `app.kubernetes.io/managed-by`. |
 | `annotations` | `attrsOf str` | `{ }` | Annotations placed on the `Namespace` resource. |
-| `resourceQuota` | `nullOr (attrsOf str)` | `null` | When non-null, emits `ResourceQuota/<namespace>-quota` with this set as `spec.hard` and checks namespace workload usage at build time. |
+| `resourceQuota` | `nullOr anything` | `null` | When non-null, emits `ResourceQuota/<namespace>-quota` with this set as `spec.hard` and checks namespace workload usage at build time. |
 | `networkPolicies` | `attrsOf anything` | `{ }` | Emits one standard `networking.k8s.io/v1` `NetworkPolicy` per key, named `<namespace>-<key>`, with the value as `spec`. |
 | `podSecurity` | `null \| "privileged" \| "baseline" \| "restricted"` | `null` | Sets `pod-security.kubernetes.io/enforce` on the Namespace and validates all pod templates in the namespace against that Pod Security Standard at build time. |
 
