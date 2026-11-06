@@ -19,7 +19,7 @@ unpack it into `~/.local`:
 <Command
   commands={[
     "mkdir -p ~/.local",
-    "curl -fsSL https://github.com/kix-run/kix-releases/releases/latest/download/kix-x86_64-linux.tar.gz | tar -xz -C ~/.local",
+    "curl -fsSL https://github.com/kix-run/kix-releases/releases/latest/download/kix-x86_64-linux.tar.gz | tar -xz --strip-components=1 -C ~/.local",
   ]}
 />
 

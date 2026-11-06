@@ -27,9 +27,10 @@
   #
   # { system, pkgs, lib, self', inputs', ... }:
 
-  # `runtime` is a Kix runtime directory (cli/runtime/runtime.nix). The
-  # package links it at libexec/kix beside bin/kix, where kix looks for it.
-  # Without one, kix finds no runtime unless KIX_RUNTIME_DIR names one.
+  # `runtime` is a Kix runtime directory (`cli/runtime/in-store.nix`,
+  # exposed as `packages.<system>.kix-runtime`). The package links it at
+  # libexec/kix beside bin/kix, where kix looks for it. Without one, kix
+  # finds no runtime unless KIX_RUNTIME_DIR names one.
   mkKixPackage =
     {
       pkgs,

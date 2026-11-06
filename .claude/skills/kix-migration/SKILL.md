@@ -77,7 +77,7 @@ Focus on the **Modified** section. Each entry shows exactly which fields differ 
 
 ## Package Anatomy
 
-A function `{ scope, lib, kix, availability }: ...` that returns `{ meta?, options?, config?, deps?, build }`. The lib passes only the arguments the function names, so leave out `availability` when nothing maps it. **Dependencies are declared as build function args**, not package function args.
+A function `{ scope, lib, kix, availability }: ...` that returns `{ meta?, options?, config?, deps?, build }`. The lib passes only the arguments the function names, so leave out `availability` when nothing maps it. **Dependencies are declared as build function args**, not package function args. Kix's store evaluates Nix expressions and writes files with `builtins.toFile` (and renders Helm charts via `scope.helm.*`), but cannot run Nix derivation builds (`pkgs.runCommand`, `pkgs.writeText`, `pkgs.stdenv.mkDerivation`).
 
 ```nix
 { scope, lib, kix, availability }:

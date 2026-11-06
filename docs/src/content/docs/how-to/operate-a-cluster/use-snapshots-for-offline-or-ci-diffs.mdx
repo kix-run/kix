@@ -73,8 +73,8 @@ and compare the two:
 
 <Command
   commands={[
-    "kix bundle how-to-application -o before.kixbundle",
-    "kix bundle how-to-application -o after.kixbundle",
+    "kix bundle how-to-application before.kixbundle",
+    "kix bundle how-to-application after.kixbundle",
     "kix diff how-to-application --bundle after.kixbundle --from-bundle before.kixbundle",
   ]}
   cwd="kix-examples/"

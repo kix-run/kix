@@ -35,7 +35,7 @@ Global flags `-v` / `--verbose`, `-q` / `--quiet`, and `--no-color` also apply. 
 
 ## How `kix lib update` updates `flake.lock`
 
-`kix lib update` inspects your flake's input graph via `nix flake metadata --json`, locates the `kixpkgs` input (including transitive inputs when `kixpkgs` is reached through a shared platform flake via `inputs.kixpkgs.follows`), and runs:
+`kix lib update` reads and parses `flake.lock` directly, walks the `nodes` graph from the root node (skipping `follows` aliases so it updates the declaring input), locates the input locked to `github:kix-run/kixpkgs` (or named `kixpkgs` / `kix`), and runs:
 
 ```text
 nix flake lock --override-input <input-path> github:kix-run/kixpkgs/v<version>
@@ -43,7 +43,7 @@ nix flake lock --override-input <input-path> github:kix-run/kixpkgs/v<version>
 
 It modifies **only `flake.lock`** and never edits `flake.nix`.
 
-For this automatic lockfile update to work cleanly on future `nix flake update` runs as well, your `flake.nix` should declare `kixpkgs` as an unpinned GitHub input:
+For this lockfile update to work cleanly, your `flake.nix` should declare `kixpkgs` as an unpinned GitHub input:
 
 ```nix
 {
@@ -53,11 +53,11 @@ For this automatic lockfile update to work cleanly on future `nix flake update` 
 
 ### When `kix lib update` asks you to edit `flake.nix` instead
 
-`kix lib update` refuses to overwrite inputs that are intentionally pinned or non-standard in `flake.nix`, and prints exact instructions instead:
+`kix lib update` refuses to overwrite inputs that are pinned or non-standard in `flake.nix`, and prints instructions instead:
 
-- **Pinned tag, branch, or commit in `flake.nix`** (for example, `github:kix-run/kixpkgs/v0.8.0`): `kix lib update` will not silently override a ref written in `flake.nix`. Update the URL in `flake.nix` to `github:kix-run/kixpkgs/v<version>` (or remove the `/v...` suffix so `kix lib update` can manage the version in `flake.lock` directly) and run `kix lib update` again.
-- **Custom fork or Git URL**: Update your fork or branch to include `v<version>` and refresh `flake.lock` with `nix flake update`.
-- **Local `path:` input**: Check out the matching revision in that local directory.
+- **Pinned tag, branch, or commit in `flake.nix`** (for example, `github:kix-run/kixpkgs/v0.6.0`): `kix lib update` will not silently override a ref written in `flake.nix`. Change the input URL in `flake.nix` to `github:kix-run/kixpkgs/v<version>` (or remove the `/v...` ref from `flake.nix` so `kix lib update` can manage the version in `flake.lock`) and run `kix lib update` again.
+- **Custom fork or Git URL**: Point the input in `flake.nix` at `github:kix-run/kixpkgs/v<version>`, or move that copy of Kix to the `v<version>` release.
+- **Local `path:` input**: Check out the `v<version>` release in that local directory.
 
 ## Examples
 
@@ -66,8 +66,7 @@ Preview the lockfile change without writing `flake.lock`:
 <Command commands={["kix lib update --dry-run"]} />
 
 ```text
-Would update flake.lock input 'kixpkgs':
-  0123456789ab -> 89abcdef0123 (github:kix-run/kixpkgs/v0.1.0)
+Kix library: 0.6.0 -> 0.7.0. This was a dry run, so flake.lock is unchanged.
 ```
 
 Update `flake.lock` in the current directory:
@@ -75,8 +74,13 @@ Update `flake.lock` in the current directory:
 <Command commands={["kix lib update"]} />
 
 ```text
-Updated flake.lock input 'kixpkgs':
-  0123456789ab -> 89abcdef0123 (github:kix-run/kixpkgs/v0.1.0)
+Kix library: 0.6.0 -> 0.7.0. Commit flake.lock to share this with your team.
+```
+
+When `flake.lock` already matches the installed `kix` binary:
+
+```text
+Kix library is already 0.7.0.
 ```
 
 ## Exit status
