@@ -177,6 +177,10 @@ jobs:
           - system: aarch64-darwin
             runner: macos-15
     runs-on: ${{ matrix.runner }}
+    # macOS tar would otherwise store extended attributes as ._ files, which
+    # the Linux release job would unpack into the archive.
+    env:
+      COPYFILE_DISABLE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
