@@ -32,13 +32,21 @@ pub struct KixPackageIndex {
 }
 
 /// The `kubernetes` entry of kix-packages.json: `cluster.kubernetes.uid`
-/// from the cluster definition.
+/// and `k8sVersion` from the cluster definition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KubernetesBinding {
     /// The UID of the target cluster's `kube-system` Namespace, or `None`
     /// when the definition is not bound to one Kubernetes cluster.
     #[serde(default)]
     pub uid: Option<String>,
+    /// The definition's `k8sVersion`, as written, or `None` when unset.
+    /// Absent from the index of a build made before the field existed.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// The platform whose interface file supplied `version` through
+    /// `kix.interface`, or `None` when the definition writes it.
+    #[serde(default, rename = "versionFrom")]
+    pub version_from: Option<String>,
 }
 
 /// Read `kix-packages.json` from `result_dir`.
@@ -64,6 +72,12 @@ pub struct StoreGraph {
     /// `cluster.kubernetes.uid` of the definition: the one Kubernetes
     /// cluster this build may deploy to, or `None` when unbound.
     pub kubernetes_uid: Option<String>,
+    /// `k8sVersion` of the definition, as written: the Kubernetes version
+    /// the package checks ran against, or `None` when unset.
+    pub kubernetes_version: Option<String>,
+    /// The platform whose interface file supplied `kubernetes_version`, or
+    /// `None` when the definition writes it.
+    pub kubernetes_version_from: Option<String>,
     pub activation_path: PathBuf,
     /// The result directory containing kix-packages.json + activation symlink.
     pub result_dir: PathBuf,
@@ -238,6 +252,8 @@ impl StoreGraph {
         Self {
             cluster_name: cluster_name.to_string(),
             kubernetes_uid: None,
+            kubernetes_version: None,
+            kubernetes_version_from: None,
             activation_path: PathBuf::new(),
             result_dir: PathBuf::new(),
             packages: IndexMap::new(),
@@ -434,6 +450,8 @@ impl StoreGraph {
         Ok(StoreGraph {
             cluster_name: index.cluster,
             kubernetes_uid: index.kubernetes.uid,
+            kubernetes_version: index.kubernetes.version,
+            kubernetes_version_from: index.kubernetes.version_from,
             activation_path,
             result_dir,
             packages,

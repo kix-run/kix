@@ -289,14 +289,18 @@ in
       type = lib.types.nullOr (
         lib.types.addCheck lib.types.str versions.isVersion
         // {
-          description = "Kubernetes version such as \"1.31\" or \"v1.31.2-gke.1209000\"";
+          description = "Kubernetes version such as \"1.31\"";
         }
       );
       default = null;
       description = ''
-        Target Kubernetes version (e.g. "1.30"). Used by package meta
+        Target Kubernetes version (e.g. "1.31"). Used by package meta
         compatibility checks (meta.k8s.minVersion / maxVersion). A version
         less precise than a package's constraint is reported as a warning.
+        Deploy, plan, and the operator stop when the cluster runs a different
+        version, compared as precisely as written: "1.31" matches any 1.31.x.
+        A value with a patch number, such as "1.31.4", stops the deploy after
+        every patch upgrade, which managed clusters apply on their own.
       '';
     };
 

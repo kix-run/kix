@@ -13,7 +13,9 @@
 //! connects and before it reads or writes anything else. A rollback applies
 //! a build this Kix cluster deployed here before, which cannot be a
 //! wrong-context mistake, so it runs only [`check_declared`]. Read-only
-//! commands such as `kix diff` do not run either.
+//! commands such as `kix diff` do not run either. The Kubernetes version
+//! check ([`super::kubernetes_version::check`]) runs right after this one in
+//! deploy, plan, and the operator.
 //!
 //! [`StoreGraph::kubernetes_uid`]: crate::eval::store_graph::StoreGraph::kubernetes_uid
 
@@ -68,7 +70,7 @@ impl Connection {
 
     /// Return `context <name>`, with the server URL when known, or what
     /// stands for it when the name is unknown.
-    fn describe(&self) -> String {
+    pub fn describe(&self) -> String {
         match self {
             Connection::Context { name, server } => {
                 let name = match name {

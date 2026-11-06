@@ -52,6 +52,7 @@ use crate::cluster::errors::FetchError;
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::inventory;
 use crate::cluster::inventory::SharedOrphan;
+use crate::cluster::kubernetes_version;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
@@ -153,6 +154,10 @@ pub struct CheckedPlan {
     /// The new build's `cluster.kubernetes.uid`, for the binding check a
     /// run makes when it connects after the plan (`--current-activation`).
     kubernetes_uid: Option<String>,
+    /// The new build's `k8sVersion`, for the version check made at the same
+    /// point, and the platform whose interface file supplied it.
+    kubernetes_version: Option<String>,
+    kubernetes_version_from: Option<String>,
 }
 
 impl CheckedPlan {
@@ -206,6 +211,18 @@ impl CheckedPlan {
     /// definition is not bound to one Kubernetes cluster.
     pub fn kubernetes_uid(&self) -> Option<&str> {
         self.kubernetes_uid.as_deref()
+    }
+
+    /// Return the new build's `k8sVersion` as the definition writes it, or
+    /// `None` when unset.
+    pub fn kubernetes_version(&self) -> Option<&str> {
+        self.kubernetes_version.as_deref()
+    }
+
+    /// Return the platform whose interface file supplied the new build's
+    /// `k8sVersion`, or `None` when the definition writes it.
+    pub fn kubernetes_version_from(&self) -> Option<&str> {
+        self.kubernetes_version_from.as_deref()
     }
 
     /// Remove orphans that another Kix cluster still deploys ([`keep_shared`])
@@ -421,7 +438,9 @@ impl<'a> Planner<'a> {
 
     /// Plan a deploy of `build` against `old`: connect, unless the old side
     /// is the local cache, check that the build belongs to the Kubernetes
-    /// cluster it connected to ([`binding::check`]), then the three steps.
+    /// cluster it connected to ([`binding::check`]) and was checked against
+    /// the Kubernetes version it runs ([`kubernetes_version::check`]), then
+    /// the three steps.
     pub async fn run(&self, build: InstallableBuild, old: &OldSide) -> Result<Planned, PlanError> {
         let new_graph = build.graph();
         let client = match old {
@@ -431,14 +450,24 @@ impl<'a> Planner<'a> {
                 let client = client::make_client(context.as_deref(), policy.clone())
                     .await
                     .map_err(|e| PlanError::Connect(Box::new(e)))?;
+                let connection = binding::Connection::of_context(context.as_deref());
                 binding::check(
                     &client,
-                    &binding::Connection::of_context(context.as_deref()),
+                    &connection,
                     &new_graph.cluster_name,
                     new_graph.kubernetes_uid.as_deref(),
                 )
                 .await
                 .map_err(|e| PlanError::Binding(Box::new(e)))?;
+                kubernetes_version::check(
+                    &client,
+                    &connection,
+                    &new_graph.cluster_name,
+                    new_graph.kubernetes_version.as_deref(),
+                    new_graph.kubernetes_version_from.as_deref(),
+                )
+                .await
+                .map_err(|e| PlanError::KubernetesVersion(Box::new(e)))?;
                 Some(client)
             }
         };
@@ -571,6 +600,8 @@ impl<'a> Planner<'a> {
             old_manifests: baseline.manifests(),
             package_index: RecordPackageIndex::of(new_graph),
             kubernetes_uid: new_graph.kubernetes_uid.clone(),
+            kubernetes_version: new_graph.kubernetes_version.clone(),
+            kubernetes_version_from: new_graph.kubernetes_version_from.clone(),
         })
     }
 }

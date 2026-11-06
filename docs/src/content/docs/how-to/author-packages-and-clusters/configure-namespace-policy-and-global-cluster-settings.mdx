@@ -19,7 +19,8 @@ The cluster-wide settings in this example have distinct jobs:
 - `clusterDomain` is used when Kix derives service FQDNs.
 - `clusterLabels` adds the given labels to every managed resource.
 - `k8sVersion` lets package compatibility checks evaluate against the intended
-  Kubernetes version.
+  Kubernetes version. `kix deploy` and `kix plan` then stop if the cluster
+  runs a different version, and tell you the value to set.
 
 The `namespaces.apps` block configures the generated `apps` Namespace. Its
 `labels` and `annotations` are added to that Namespace. `resourceQuota` is the

@@ -10,7 +10,7 @@
     {
       "command": "kix export how-to-stateful-migration --for audit --out stateful-before",
       "stdout": "",
-      "stderr": "Building cluster 'how-to-stateful-migration'...\n  Evaluating cluster 'how-to-stateful-migration'...\n  Building 'how-to-stateful-migration'...\n  building '/nix/store/y3pvpjkw232mw9rmvaxs6qf1y151zz0j-k8s-activation-how-to-stateful-migration.drv'...\n  Reading package index...\n  Loading store graph...\n  Reading 3 packages...\n  Computing cross-package dependencies...\n\n  Exported 9 resources to stateful-before (audit (kix provenance preserved))\n",
+      "stderr": "Building cluster 'how-to-stateful-migration'...\n  Evaluating cluster 'how-to-stateful-migration'...\n  Reading package index...\n  Loading store graph...\n  Reading 3 packages...\n  Computing cross-package dependencies...\n\n  Exported 9 resources to stateful-before (audit (kix provenance preserved))\n",
       "stdoutDrift": "",
       "stderrDrift": "\nBuilding cluster 'how-to-stateful-migration'...\nComputing cross-package dependencies...\nEvaluating cluster 'how-to-stateful-migration'...\nExported 9 resources to stateful-before (audit (kix provenance preserved))\nLoading store graph...\nReading 3 packages...\nReading package index...\n",
       "exitCode": 0

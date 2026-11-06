@@ -9,6 +9,7 @@ use kix::build_source::Build;
 use kix::cluster::activation::{PinnedInterface, Record, Records, RecordsError};
 use kix::cluster::binding;
 use kix::cluster::errors::{api_error, forbidden};
+use kix::cluster::kubernetes_version::{self, LiveVersion};
 use kix::cluster::readiness;
 use kix::cluster::{discovery, inventory};
 use kix::eval::store_graph::StoreGraph;
@@ -40,7 +41,7 @@ impl CommandResponse for StatusResponse {
         for s in &self.statuses {
             table.add_row([&s.name, &s.namespace, &s.kind, &s.ready, &s.status, &s.age]);
         }
-        format!("{}\n\n{table}", self.kubernetes.line())
+        format!("{}\n\n{table}", self.kubernetes.header())
     }
 
     // The JSON output is the bare array of resources; the Kubernetes ID
@@ -94,7 +95,7 @@ impl CommandResponse for OperatorStatusResponse {
         let mut out = String::new();
 
         out.push_str(&format!("Cluster: {}\n", output::bold(&self.cluster)));
-        out.push_str(&self.kubernetes.line());
+        out.push_str(&self.kubernetes.header());
         out.push('\n');
 
         match &self.activation {
@@ -596,48 +597,68 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
     output::result(&response)
 }
 
-/// The Kubernetes cluster's ID, the UID of its `kube-system` Namespace,
-/// which `cluster.kubernetes.uid` names: `uid` when it could be read (the
-/// `kubernetes_uid` field of the operator view's JSON output, `null`
+/// What the header says about the Kubernetes cluster: its ID, the UID of
+/// its `kube-system` Namespace, which `cluster.kubernetes.uid` names, and
+/// the Kubernetes version it runs, which `k8sVersion` names. Each is the
+/// value when it could be read (the `kubernetes_uid` and
+/// `kubernetes_version` fields of the operator view's JSON output, `null`
 /// otherwise), and why not when it could not (text output only).
 #[derive(serde::Serialize)]
 struct KubernetesId {
     #[serde(rename = "kubernetes_uid")]
     uid: Option<String>,
     #[serde(skip)]
-    unread: Option<String>,
+    uid_unread: Option<String>,
+    #[serde(rename = "kubernetes_version")]
+    version: Option<String>,
+    #[serde(skip)]
+    version_unread: Option<String>,
 }
 
 impl KubernetesId {
     async fn read(client: &kube::Client) -> KubernetesId {
-        KubernetesId::of(binding::live_uid(client).await)
+        KubernetesId::of(
+            binding::live_uid(client).await,
+            kubernetes_version::live_version(client).await,
+        )
     }
 
-    fn of(uid: Result<String, kube::Error>) -> KubernetesId {
-        match uid {
-            Ok(uid) => KubernetesId {
-                uid: Some(uid),
-                unread: None,
-            },
-            Err(e) if forbidden(&e) => KubernetesId {
-                uid: None,
-                unread: Some("not readable with this account (get on namespaces)".to_string()),
-            },
-            Err(e) => KubernetesId {
-                uid: None,
-                unread: Some(format!("not read: {}", api_error(&e))),
-            },
+    fn of(
+        uid: Result<String, kube::Error>,
+        version: Result<LiveVersion, kubernetes_version::ReadError>,
+    ) -> KubernetesId {
+        let (uid, uid_unread) = match uid {
+            Ok(uid) => (Some(uid), None),
+            Err(e) if forbidden(&e) => (
+                None,
+                Some("not readable with this account (get on namespaces)".to_string()),
+            ),
+            Err(e) => (None, Some(format!("not read: {}", api_error(&e)))),
+        };
+        let (version, version_unread) = match version {
+            Ok(live) => (Some(live.git_version), None),
+            Err(e) => (None, Some(format!("not read: {e}"))),
+        };
+        KubernetesId {
+            uid,
+            uid_unread,
+            version,
+            version_unread,
         }
     }
 
-    /// Return the header line of the text output.
-    fn line(&self) -> String {
-        let shown = match (&self.uid, &self.unread) {
-            (Some(uid), _) => uid.clone(),
+    /// Return the header lines of the text output.
+    fn header(&self) -> String {
+        let shown = |value: &Option<String>, unread: &Option<String>| match (value, unread) {
+            (Some(value), _) => value.clone(),
             (None, Some(why)) => output::dim(why).into_owned(),
             (None, None) => output::dim("unknown").into_owned(),
         };
-        format!("Kubernetes cluster ID: {shown}")
+        format!(
+            "Kubernetes cluster ID: {}\nKubernetes version: {}",
+            shown(&self.uid, &self.uid_unread),
+            shown(&self.version, &self.version_unread)
+        )
     }
 }
 
@@ -772,31 +793,52 @@ mod tests {
         }
     }
 
-    /// The header shows the UID, or why it could not be read; the JSON
-    /// field carries the bare UID or null.
+    fn live(git_version: &str) -> Result<LiveVersion, kubernetes_version::ReadError> {
+        Ok(LiveVersion {
+            git_version: git_version.to_string(),
+            version: kubernetes_version::Version::parse(git_version).unwrap(),
+        })
+    }
+
+    /// The header shows the UID and the version, or why each could not be
+    /// read; the JSON fields carry the bare values or null.
     #[test]
-    fn the_header_shows_the_kubernetes_id_or_why_not() {
-        let id = KubernetesId::of(Ok("4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c".into()));
+    fn the_header_shows_the_kubernetes_id_and_version_or_why_not() {
+        let id = KubernetesId::of(
+            Ok("4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c".into()),
+            live("v1.31.4+k3s1"),
+        );
         assert_eq!(
-            id.line(),
-            "Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c"
+            id.header(),
+            "Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c\n\
+             Kubernetes version: v1.31.4+k3s1"
         );
         assert_eq!(
             serde_json::to_value(&id).unwrap(),
-            serde_json::json!({ "kubernetes_uid": "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c" })
+            serde_json::json!({
+                "kubernetes_uid": "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c",
+                "kubernetes_version": "v1.31.4+k3s1",
+            })
         );
-        let id = KubernetesId::of(Err(refused(403).source));
-        let line = id.line();
+        let id = KubernetesId::of(
+            Err(refused(403).source),
+            Err(kubernetes_version::ReadError::Api(refused(503).source)),
+        );
+        let header = id.header();
         assert!(
-            line.starts_with("Kubernetes cluster ID: ") && line.contains("get on namespaces"),
-            "{line}"
+            header.starts_with("Kubernetes cluster ID: ") && header.contains("get on namespaces"),
+            "{header}"
+        );
+        assert!(
+            header.contains("Kubernetes version: ") && header.contains("not read: HTTP 503"),
+            "{header}"
         );
         assert_eq!(
             serde_json::to_value(&id).unwrap(),
-            serde_json::json!({ "kubernetes_uid": null })
+            serde_json::json!({ "kubernetes_uid": null, "kubernetes_version": null })
         );
-        let line = KubernetesId::of(Err(refused(503).source)).line();
-        assert!(line.contains("not read: HTTP 503"), "{line}");
+        let header = KubernetesId::of(Err(refused(503).source), live("v1.31.4")).header();
+        assert!(header.contains("not read: HTTP 503"), "{header}");
     }
 
     #[test]
