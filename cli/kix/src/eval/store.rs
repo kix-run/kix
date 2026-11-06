@@ -159,25 +159,25 @@ fn activations_dir() -> PathBuf {
     default_cache_dir().join("activations")
 }
 
-/// Save the activation result directory path after a successful deploy.
-/// Next deploy / GC can load this as the "old" activation.
+/// Save the store path of the deployed build (its `built-via`) after a
+/// successful deploy. Next deploy / GC can load this as the "old" activation.
 ///
-/// Also registers a Nix GC root for the result dir so `nix-collect-garbage`
-/// cannot delete the store path the active deploy resolves to (builds run
-/// with `--no-link`, so nothing else pins it). One root per cluster,
+/// Also registers a Nix GC root for the build so `nix-collect-garbage`
+/// cannot delete the store path the active deploy resolves to (evaluation
+/// leaves no root, so nothing else pins it). One root per cluster,
 /// re-pointed on each deploy/rollback; deleting the `.root` link releases it.
-pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result<()> {
+pub fn save_activation_path(cluster: &str, built_via: &Path) -> std::io::Result<()> {
     let dir = activations_dir();
     std::fs::create_dir_all(&dir)?;
     let file = dir.join(format!("{cluster}.path"));
-    std::fs::write(&file, result_dir.to_string_lossy().as_bytes())?;
+    std::fs::write(&file, built_via.to_string_lossy().as_bytes())?;
 
     // A missing nix-store binary or an absent store path must not fail deploy
     // bookkeeping.
     let root_link = dir.join(format!("{cluster}.root"));
     let _ = std::fs::remove_file(&root_link);
-    if let Err(e) = super::nix::add_gc_root(&root_link, result_dir) {
-        tracing::warn!(cluster, ?result_dir, error = %e, "could not protect this deployment build from Nix garbage collection; it may become unavailable for rollback");
+    if let Err(e) = super::nix::add_gc_root(&root_link, built_via) {
+        tracing::warn!(cluster, ?built_via, error = %e, "could not protect this deployment build from Nix garbage collection; it may become unavailable for rollback");
     }
     Ok(())
 }
@@ -186,7 +186,7 @@ pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result
 /// Activation lists under `status.orphansKeptFrom`, and remove the roots of
 /// builds it no longer lists.
 ///
-/// `listed` pairs each identity hash with the build's result dir on this
+/// `listed` pairs each identity hash with the build's `built-via` on this
 /// machine, `None` when it is not here. The `{cluster}.root` of the deployed
 /// build moves on the next deploy, so without these a listed build is
 /// collectable and every later plan reports it as unreadable. Best-effort:
@@ -241,7 +241,7 @@ fn sync_kept_roots_in(
     }
 }
 
-/// Load the previously saved activation result directory path.
+/// Load the previously saved store path of the deployed build.
 /// Returns None if no previous deploy is recorded.
 ///
 /// The file is keyed by cluster name only, so two kube contexts that deploy
@@ -255,48 +255,23 @@ pub fn load_activation_path(cluster: &str) -> Option<PathBuf> {
         .filter(|p| exists(p))
 }
 
-/// Resolve an identity-hash to the activation result directory.
-///
-/// Checks the local cache first (fast path). If that doesn't match,
-/// tries to find the store path by globbing `/nix/store/{hash}*`.
-/// Returns None if the store path is gone (e.g. nix-collect-garbage ran).
+/// Resolve an identity hash to the store path of the build whose
+/// Activation it names, from the local activation cache. Returns None when
+/// the cache holds another build or its store path is gone (e.g.
+/// nix-collect-garbage ran).
 pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<PathBuf> {
-    // Fast path: check if the cached result dir matches this hash
-    if let Some(cached_dir) = load_activation_path(cluster)
-        && build_hash_of(&cached_dir).as_deref() == Some(identity_hash)
-    {
-        return Some(cached_dir);
-    }
-
-    // Slow path: find a matching store path and check if it has a result dir structure
-    // The identity-hash is the first 32 chars of the store path basename
-    if let Ok(entries) = std::fs::read_dir(store_dir()) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if name_str.starts_with(identity_hash)
-                && name_str.len() > 32
-                && name_str.as_bytes()[32] == b'-'
-                && name_str.contains("activation")
-            {
-                // Check if this looks like a result dir (has kix-packages.json)
-                let path = Path::new(STORE_DIR).join(&name);
-                if exists(&path.join("kix-packages.json")) {
-                    return Some(path);
-                }
-            }
-        }
-    }
-
-    None
+    load_activation_path(cluster)
+        .filter(|cached| build_hash_of(cached).as_deref() == Some(identity_hash))
 }
 
-/// Return the identity hash of the Activation in `result_dir` (the first 32
-/// characters of the store path targeted by `result_dir/activation`), or
-/// `None` if the symlink cannot be read.
-pub(crate) fn build_hash_of(result_dir: &Path) -> Option<String> {
-    let target = std::fs::read_link(real_path(&result_dir.join("activation"))).ok()?;
-    let name = target.file_name()?.to_str()?;
+/// Return the identity hash of the Activation of the build at `built_via`
+/// (the first 32 characters of the Activation's store name), or `None` if
+/// the build cannot be read.
+pub(crate) fn build_hash_of(built_via: &Path) -> Option<String> {
+    let activation = super::build_files::BuildFiles::read(built_via)
+        .ok()?
+        .activation;
+    let name = activation.file_name()?.to_str()?;
     name.get(..32).map(str::to_string)
 }
 

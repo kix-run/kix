@@ -2,8 +2,8 @@
 //! - `list_clusters`, `list_packages`, and `list_cluster_packages` run
 //!   `nix eval --json` against the flake's `kixClusters` and `kixPackages`
 //!   attributes.
-//! - `eval_cluster` runs `nix build .#cluster-<name>-activation` and extracts
-//!   manifests through `StoreGraph`.
+//! - `eval_cluster` runs `nix eval` of the cluster's `activationIndex` and
+//!   extracts manifests through `StoreGraph`.
 //!
 //! Nix's built-in evaluation cache keeps repeated invocations fast, and
 //! [`super::evaluator::KixEvaluator`] layers a SQLite cache on top.
@@ -72,15 +72,16 @@ impl NixBackend for CliNixBackend {
         flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
-        let result_dir = super::nix::build_cluster_activation(
+        let index = super::nix::eval_activation_index(
             flake_path,
             cluster_name,
             &self.input_overrides,
             &|_| {},
         )?;
+        let files = super::build_files::BuildFiles::read(&index)?;
 
         // Stamped, because kix.run/depends-on edges name identity hashes.
-        let graph = crate::build_source::Build::local(&result_dir, &|_| {})?.into_graph();
+        let graph = crate::build_source::Build::local(&index, &|_| {})?.into_graph();
 
         let mut raw_manifests: Vec<serde_json::Value> = graph
             .resources
@@ -92,8 +93,10 @@ impl NixBackend for CliNixBackend {
         // print the same order every time.
         raw_manifests.sort_by_cached_key(manifest_sort_key);
 
-        let scorecard_path =
-            super::store::disk_path(&result_dir.join("kix-scorecard.json")).unwrap_or_default();
+        let scorecard_path = files
+            .scorecard
+            .and_then(|p| super::store::disk_path(&p).ok())
+            .unwrap_or_default();
         let scorecard_report = if scorecard_path.exists() {
             match std::fs::read_to_string(&scorecard_path) {
                 Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -115,8 +118,10 @@ impl NixBackend for CliNixBackend {
             None
         };
 
-        let extra_images_path =
-            super::store::disk_path(&result_dir.join("kix-extra-images.json")).unwrap_or_default();
+        let extra_images_path = files
+            .extra_images
+            .and_then(|p| super::store::disk_path(&p).ok())
+            .unwrap_or_default();
         let extra_images = if extra_images_path.exists() {
             match std::fs::read_to_string(&extra_images_path) {
                 Ok(json_str) => {
@@ -147,7 +152,7 @@ impl NixBackend for CliNixBackend {
         tracing::info!(
             cluster = cluster_name,
             manifests = raw_manifests.len(),
-            "cluster evaluated via nix build"
+            "cluster evaluated"
         );
 
         Ok(ClusterOutput {

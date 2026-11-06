@@ -150,7 +150,7 @@ use kix::eval::store_path;
 use kix::manifest::keys;
 use kix::text::printable;
 pub use read::{Bundle, OpenBundle, PathsChecked};
-pub use write::{BundleFile, Contents, from_result_dir};
+pub use write::{BundleFile, Contents, from_local};
 
 /// The `format` field of every bundle header.
 pub(crate) const FORMAT: &str = "kix-bundle";

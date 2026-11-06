@@ -152,35 +152,22 @@ fn deploy_plan_refuses_json_and_a_changed_plan_file() {
 /// and plans against it instead of reporting a first deploy.
 #[test]
 fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
-    let built = std::process::Command::new("nix")
-        .args([
-            "build",
-            ".#cluster-minimal-activation",
-            "--no-link",
-            "--print-out-paths",
-            "--extra-experimental-features",
-            "nix-command flakes pipe-operators",
-        ])
-        .current_dir(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap(),
-        )
-        .output()
-        .expect("nix build runs");
-    assert!(
-        built.status.success(),
-        "nix build failed: {}",
-        String::from_utf8_lossy(&built.stderr)
-    );
-    let result = String::from_utf8(built.stdout).unwrap();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let index = kix::eval::nix::eval_activation_index(repo, "minimal", &[], &|_| {})
+        .expect("the cluster evaluates");
 
     let cache = tempfile::tempdir().unwrap();
     let activations = cache.path().join("kix/activations");
     std::fs::create_dir_all(&activations).unwrap();
-    std::fs::write(activations.join("test-minimal.path"), result.trim()).unwrap();
+    std::fs::write(
+        activations.join("test-minimal.path"),
+        index.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
 
     kix()
         .env("XDG_CACHE_HOME", cache.path())

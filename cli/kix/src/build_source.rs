@@ -4,8 +4,8 @@
 //! loads one. Every constructor runs validation once so callers cannot hold an
 //! unchecked build:
 //!
-//! - [`Build::local`] loads and validates a result directory in the local Nix
-//!   store. [`Build::of_flake`] evaluates and builds the flake first.
+//! - [`Build::local`] loads and validates a build in the local Nix store.
+//!   [`Build::of_flake`] evaluates the flake first.
 //! - [`Build::carried`] reads a build produced on another machine through a
 //!   [`CarriedBuild`] implementation such as `kix-bundle`. It hashes the bytes
 //!   passed to the reader and rejects any build that fails validation or
@@ -42,7 +42,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::eval::KixEvalError;
-use crate::eval::nix::build_cluster_activation;
+use crate::eval::nix::eval_activation_index;
 use crate::eval::stamp::stamp_annotations;
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::eval::store_path;
@@ -113,9 +113,9 @@ impl DerefMut for InstallableBuild {
     }
 }
 
-/// Error from [`Build::of_flake`], distinguishing a `nix build` failure from a
-/// failure to load the resulting store path so CLI commands can report them
-/// differently.
+/// Error from [`Build::of_flake`], distinguishing a failure to evaluate the
+/// flake from a failure to load the resulting build so CLI commands can
+/// report them differently.
 #[derive(Debug, thiserror::Error)]
 pub enum FlakeBuildError {
     #[error("{0}")]
@@ -134,24 +134,25 @@ enum Origin {
 }
 
 impl Build {
-    /// Build `cluster` from the flake at `flake_path` into the local Nix store
-    /// and load it with [`Build::local`], forwarding progress lines from both
-    /// steps to `status`.
+    /// Evaluate `cluster` from the flake at `flake_path` into the local Nix
+    /// store and load it with [`Build::local`], forwarding progress lines
+    /// from both steps to `status`.
     pub fn of_flake(
         flake_path: &Path,
         cluster: &str,
         input_overrides: &[(String, String)],
         status: &dyn Fn(&str),
     ) -> Result<Build, FlakeBuildError> {
-        let result_dir = build_cluster_activation(flake_path, cluster, input_overrides, status)
+        let index = eval_activation_index(flake_path, cluster, input_overrides, status)
             .map_err(FlakeBuildError::Build)?;
-        Build::local(&result_dir, status).map_err(FlakeBuildError::Load)
+        Build::local(&index, status).map_err(FlakeBuildError::Load)
     }
 
-    /// Load and validate the build in `result_dir` from the local Nix store.
-    /// Its Secrets read SOPS files from the local filesystem.
-    pub fn local(result_dir: &Path, status: &dyn Fn(&str)) -> Result<Build, KixEvalError> {
-        let graph = StoreGraph::from_result_dir(result_dir, status)?;
+    /// Load and validate the build at `built_via`, an index file or a result
+    /// directory ([`crate::eval::build_files::BuildFiles`]), from the local
+    /// Nix store. Its Secrets read SOPS files from the local filesystem.
+    pub fn local(built_via: &Path, status: &dyn Fn(&str)) -> Result<Build, KixEvalError> {
+        let graph = StoreGraph::from_local(built_via, status)?;
         Ok(Build::stamped(graph, Origin::Local))
     }
 

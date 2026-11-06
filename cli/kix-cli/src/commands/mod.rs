@@ -175,7 +175,7 @@ fn resolve_identity(
 }
 
 /// Build `cluster` from `global.flake` into the local Nix store, reporting
-/// progress lines to `status` and prefixing `nix build` errors with `build_failed`.
+/// progress lines to `status` and prefixing evaluation errors with `build_failed`.
 pub(crate) fn build_flake(
     global: &GlobalArgs,
     cluster: &str,
@@ -189,9 +189,9 @@ pub(crate) fn build_flake(
     })
 }
 
-/// Error prefix for commands whose `nix build` step fails.
+/// Error prefix for commands whose evaluation step fails.
 pub(crate) const BUILD_FAILED: &str = "failed to build cluster";
-/// Error prefix for activation-oriented commands whose `nix build` step fails.
+/// Error prefix for activation-oriented commands whose evaluation step fails.
 pub(crate) const ACTIVATION_BUILD_FAILED: &str = "failed to build cluster activation";
 
 /// Resolve a local flake path to an absolute path, or pass a remote flake URI through unchanged.

@@ -875,9 +875,12 @@ mod tests {
     #[test]
     fn the_compiled_in_helm_versions_match_the_library() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../kix/lib/helm-versions.json");
-        let library: BTreeMap<String, String> =
+        let library: BTreeMap<String, serde_json::Value> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let mut library: Vec<String> = library.into_values().collect();
+        let mut library: Vec<String> = library
+            .into_values()
+            .map(|release| release["version"].as_str().unwrap().to_string())
+            .collect();
         library.sort();
         assert_eq!(compiled_in()["helm"], library);
     }

@@ -41,18 +41,9 @@ let
     .${system} or (throw "The Kix runtime has no build for ${system}.");
 
   # The SHA-256 of each upstream release file, from the checksum file each
-  # project publishes beside it.
+  # project publishes beside it. Helm's live in kix/lib/helm-versions.json,
+  # which the Kix library reads too.
   hashes = {
-    "helm-3.19.1" = {
-      x86_64-linux = "sha256-lmvtmx4N2hEmj1m9cmjDzT4wizewcFRuHXigJSb/Y/I=";
-      aarch64-linux = "sha256-zu0VAwWh0e9KN5I6f2aTGmgHw0o46kh/qDQOEC3Sx/c=";
-      aarch64-darwin = "sha256-CA8yDPxO44Fv1sj3OCD0s9lBsQ9wnmm/mv14+PjnySo=";
-    };
-    "helm-4.3.1" = {
-      x86_64-linux = "sha256-BAOoiuIJE9EbEKJGe1AIdyH+p1gXNtprnTmS9TV/5Us=";
-      aarch64-linux = "sha256-jPj2bsvCUqyPfwbMpoq6iFCN3946ajT+sWeK0WlLT4g=";
-      aarch64-darwin = "sha256-a05hyM0n2Z5agB5j/yXdXHCzaHXCzWWdPpzmt2/CMZg=";
-    };
     "kubectl-1.37.2" = {
       x86_64-linux = "sha256-wESHUj56p9FJP3gIF0yJnbk9epz1dTFCDNdrm9QV+PQ=";
       aarch64-linux = "sha256-/MFvYxhmWdlyIBS34C1f3S1OZpy4wKtmNl19O4ugNQk=";
@@ -78,11 +69,14 @@ let
       entry.${system} or (throw "cli/runtime/runtime.nix has no hash for ${key} on ${system}.");
 
   helm =
-    version:
+    release:
     let
+      inherit (release) version;
       tarball = pkgs.fetchurl {
         url = "https://get.helm.sh/helm-v${version}-${upstream.helm}.tar.gz";
-        hash = hashOf "helm-${version}";
+        sha256 =
+          release.sha256.${system}
+            or (throw "kix/lib/helm-versions.json has no hash for Helm ${version} on ${system}.");
       };
       unpacked = pkgs.runCommand "helm-${version}-${upstream.helm}" { } ''
         mkdir $out

@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use kix::build_source::Provenance;
+use kix::eval::build_files::BuildFiles;
 use kix::eval::error::KixEvalError;
 use kix::eval::{store, store_path};
 
@@ -93,20 +94,15 @@ impl Contents {
     }
 }
 
-/// Load bundle [`Contents`] from a Nix build result directory using
-/// `nix path-info`.
-pub fn from_result_dir(
-    result_dir: &Path,
+/// Load bundle [`Contents`] from the build at `built_via` in the local Nix
+/// store using `nix path-info`.
+pub fn from_local(
+    built_via: &Path,
     kix_rev: &str,
     receipt: Option<Provenance>,
 ) -> Result<Contents, KixEvalError> {
     let err = |message: String| KixEvalError::StoreGraphError { message };
-    let activation = store::canonicalize(&result_dir.join("activation")).map_err(|e| {
-        err(format!(
-            "failed to resolve activation in {}: {e}",
-            result_dir.display()
-        ))
-    })?;
+    let activation = BuildFiles::read(built_via)?.activation;
     let mut files = BTreeMap::new();
     for (path, references) in kix::eval::nix::path_info(&activation)? {
         let bytes = store::disk_path(Path::new(&path))

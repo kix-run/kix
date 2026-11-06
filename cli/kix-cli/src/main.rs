@@ -14,7 +14,7 @@ use cli::{Cli, Command, OutputFormat};
 /// Validate cluster name format.
 ///
 /// SECURITY: This is the primary defense against Nix expression injection.
-/// The cluster name is spliced into the flake reference `nix build` gets
+/// The cluster name is spliced into the flake attribute `nix eval` reads
 /// (`kix::eval::nix`) and into the `--apply` expression of `nix eval`
 /// (`cluster_name_command`).
 /// Only alphanumeric characters, hyphens, and underscores are safe.

@@ -17,7 +17,8 @@ pub struct Record {
     /// `kix.run/identity-hash` annotation value used to resolve the record to a
     /// closure.
     pub identity_hash: Option<String>,
-    /// Store path of the activation result directory containing `kix-packages.json`.
+    /// `kix.run/built-via`: the store path of the build, an index file or a
+    /// result directory ([`crate::eval::build_files::BuildFiles`]).
     pub built_via: Option<String>,
     /// `kix.run/deployed-at` annotation value, written only by
     /// [`super::Records::finalize_deploy`] when a deploy runs to completion.
