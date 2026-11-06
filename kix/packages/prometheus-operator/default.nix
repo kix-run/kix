@@ -187,12 +187,12 @@ in
       {
         root = {
           resource = self.operatorDeployment;
-          requires =
-            builtins.attrValues self.crds
-            ++ [ self.operatorServiceAccount ]
-            ++ builtins.filter (p: p != null) [
-              self.operatorService
-            ];
+          requires = [
+            self.operatorServiceAccount
+          ]
+          ++ builtins.filter (p: p != null) [
+            self.operatorService
+          ];
           out = {
             crds = {
               Alertmanager = self.crds.alertmanagers;

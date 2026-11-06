@@ -640,6 +640,7 @@ in
             scorecard.evaluatePackageRules {
               rules = scorecardConfig.rules;
               resources = map (r: r.rawManifest or { }) shippedResources;
+              resourceObjects = shippedResources;
               inherit
                 parts
                 instanceName

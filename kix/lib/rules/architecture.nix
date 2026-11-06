@@ -149,6 +149,76 @@ in
       builtins.concatLists (lib.mapAttrsToList findingFor domainCarriers);
   };
 
+  # A controller that watches kinds its own package defines crashes until the
+  # API server serves them, so a workload in the package must depend on the
+  # CustomResourceDefinitions. `root.requires` extends the PackageInstance's
+  # dependencies, which orders consumers after the definitions but not the
+  # controller. Reads the `kix.run/depends-on` stamp, so a dependency
+  # through `requires`, `extraDeps`, or string context all count.
+  controllerRequiresCrds = {
+    description = "A package that defines CRDs and runs a controller must make a workload depend on the CRDs";
+    level = "package";
+    severity = "warning";
+    tags = [
+      "architecture"
+      "ordering"
+      "crd"
+    ];
+    check =
+      {
+        resourceObjects ? [ ],
+        instanceName,
+        ...
+      }:
+      let
+        controllerKinds = [
+          "Deployment"
+          "StatefulSet"
+          "DaemonSet"
+        ];
+        crds = builtins.filter (
+          r: (r.kind or "") == "CustomResourceDefinition" && r ? outPath
+        ) resourceObjects;
+        workloads = builtins.filter (r: builtins.elem (r.kind or "") controllerKinds) resourceObjects;
+        # The depends-on stamp names resources by the 32-character hash of
+        # their identity path, after the "/nix/store/" prefix.
+        storeHash = p: builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString p));
+        crdHashes = map (r: storeHash r.outPath) crds;
+        # Entries are "<hash>", "requires:<hash>", or "extra:<hash>".
+        depHashes =
+          r:
+          map (e: lib.last (lib.splitString ":" e)) (
+            builtins.filter (e: e != "") (
+              lib.splitString "," ((r.rawManifest.metadata.annotations or { }).${kixKeys.dependsOn} or "")
+            )
+          );
+        dependsOnCrd = r: builtins.any (h: builtins.elem h crdHashes) (depHashes r);
+        describe =
+          items:
+          let
+            shown = lib.take 3 items;
+            more = builtins.length items - builtins.length shown;
+          in
+          builtins.concatStringsSep ", " shown + lib.optionalString (more > 0) " (+${toString more} more)";
+        crdNames = map (r: r.rawManifest.metadata.name or r.name or "?") crds;
+        workloadIds = map (r: "${r.kind}/${r.rawManifest.metadata.name or r.name or "?"}") workloads;
+      in
+      if crds == [ ] || workloads == [ ] || builtins.any dependsOnCrd workloads then
+        [ ]
+      else
+        [
+          {
+            message =
+              "'${instanceName}' defines the CustomResourceDefinitions ${describe crdNames} and runs "
+              + "${describe workloadIds}, but no workload depends on those definitions. On a first deploy "
+              + "the controller can start before the API server serves these kinds, and it crashes and "
+              + "restarts until it does. Add the definitions to the controller's requires, for example "
+              + "`requires = builtins.attrValues self.crds` on its mkDeployment call. Listing the definitions "
+              + "in root.requires does not order the controller after them.";
+          }
+        ];
+  };
+
   # Report `kix.untrackedRef` references that do not name a creator. References
   # that set `by` to a resource (or `by = "self"` on a single resource) are
   # ordered and checked during deployment, so they are excluded here.

@@ -251,16 +251,11 @@ in
       {
         root = {
           resource = self.operatorDeployment;
-          requires =
-            # Every shipped CRD (deployed in early waves before the operator
-            # starts), derived so a new kinds.nix entry is auto-included.
-            builtins.attrValues self.crds
-            # Operator resources
-            ++ [
-              self.operatorServiceAccount
-              self.operatorService
-            ]
-            ++ lib.optional config.metrics.enabled self.operatorServiceScrape;
+          requires = [
+            self.operatorServiceAccount
+            self.operatorService
+          ]
+          ++ lib.optional config.metrics.enabled self.operatorServiceScrape;
 
           # Expose CRD builders; packages depend on these via DI
           # Usage: prometheus.out.mkServiceMonitor scope { ... }

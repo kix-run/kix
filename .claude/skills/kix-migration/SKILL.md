@@ -262,6 +262,8 @@ service = scope.mkResource {
 };
 ```
 
+A resource's `requires` and `root.requires` order different things. A resource's `requires` becomes its `kix.run/depends-on` annotation, so deploy applies it after the listed resources. `root.requires` extends the PackageInstance's dependencies, so consumers of the package wait for the listed resources, but nothing inside the package does. An operator that defines CRDs and watches them puts the CRDs in the controller's own `requires` (`requires = builtins.attrValues self.crds;` on the `mkDeployment` call); the scorecard rule `architecture.controllerRequiresCrds` warns when no workload depends on them. CRDs that the operator installs itself are `mkCRDRef` markers and must not go in the controller's `requires`, since the controller would wait for an object only it creates.
+
 ### Warning system
 
 The build emits `builtins.trace` warnings for:

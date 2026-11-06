@@ -143,6 +143,8 @@ root = {
 
 Every resource defined in `build` must be reachable from `root.resource`, `root.requires`, or `root.postHooks` (either because `root` depends on it through `.out` string context or `requires`, or because it depends on a reachable resource such as an RBAC `RoleBinding` referencing a reachable `ServiceAccount`). Resources that are disconnected from `root` emit an orphaned-resource warning during evaluation.
 
+`root.requires` and a resource's own `requires` order different things. A resource's `requires` becomes a `kix.run/depends-on` annotation on that resource, so deploy applies it after the listed resources are ready. `root.requires` extends the dependencies of the package's `PackageInstance`, so consumers of the package wait for the listed resources, but nothing inside the package does. An operator that watches kinds its own package defines therefore puts the CRDs in the controller's `requires` (`requires = builtins.attrValues self.crds;` on the `mkDeployment` call). With the CRDs only in `root.requires`, a first deploy can start the controller before the API server serves its kinds, and the controller crashes and restarts until it does. The scorecard rule `architecture.controllerRequiresCrds` warns about this shape.
+
 ---
 
 ## meta

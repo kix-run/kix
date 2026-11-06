@@ -425,6 +425,9 @@ in
     {
       name = name;
       inherit labels;
+      # The operator watches every kind it ships and crashes until the API
+      # server serves them.
+      requires = builtins.attrValues self.crds;
       spec = lib.recursiveUpdate baseSpec config.extraSpec;
     }
     |> scope.mkDeployment;

@@ -81,6 +81,9 @@ in
 
   operatorDeployment = scope.mkDeployment {
     inherit name;
+    # The operator watches every monitoring.coreos.com kind and crashes until
+    # the API server serves them.
+    requires = builtins.attrValues self.crds;
     spec = {
       replicas = 1;
       selector.matchLabels = scope.selectorLabels;

@@ -171,6 +171,8 @@ in
     {
       name = "${name}-cainjector";
       inherit labels;
+      # cainjector watches Certificates, so it starts after the definitions.
+      requires = builtins.attrValues self.crds;
       spec = {
         # Leader-elected: one replica serves; from `node` up a standby keeps
         # injecting when a node is lost.
