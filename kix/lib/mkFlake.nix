@@ -111,6 +111,9 @@ let
           fn
       ) clusters;
 
+      # Plain Nix cannot render a Helm chart, so for a cluster that uses Helm
+      # these packages and the checks below stop at the first chart. Only
+      # `kix` builds such a cluster.
       clusterPackages = lib.concatMapAttrs (cname: cluster: {
         "cluster-${cname}" = kix.mkManifests cluster;
       }) resolvedClusters;

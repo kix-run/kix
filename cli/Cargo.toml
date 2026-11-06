@@ -16,6 +16,7 @@ repository = "https://github.com/kixpkgs/kixpkgs"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 serde_yml = "0.0.12"
+yaml-rust2 = { version = "0.13", default-features = false }
 # JSON Schema of the `kix plan` and `kix diff` document
 schemars = "1"
 

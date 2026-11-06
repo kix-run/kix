@@ -47,8 +47,8 @@ let
   # The rest of this matrix imports subtrees directly, which is how
   # `mergeFragments` managed to be implemented, documented and unreachable
   # all at once: no test ever looked at what `kix/lib/default.nix` exports.
-  # `pkgs` is forced only by the helm and manifest-writing attributes, so a
-  # stub keeps this eval-only like the rest of the file.
+  # `pkgs` is forced only by the manifest-writing attributes, so a stub
+  # keeps this eval-only like the rest of the file.
   publicKix = import ../default.nix {
     inherit lib;
     pkgs = { };

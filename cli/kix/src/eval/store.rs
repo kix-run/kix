@@ -1,9 +1,9 @@
 //! Store path management and cache directory resolution.
 //!
 //! Store paths keep their logical form, `/nix/store/<hash>-<name>`,
-//! everywhere Kix records them. When `KIX_STORE_ROOT` names a relocated
-//! store, the files behind those paths live under that root instead, so code
-//! that opens a store path on disk maps it with [`disk_path`] first.
+//! everywhere Kix records them. Kix runs Nix against a store of its own,
+//! whose files live under [`store_root`] instead, so code that opens a store
+//! path on disk maps it with [`disk_path`] first.
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -13,14 +13,41 @@ use super::store_path::STORE_DIR;
 /// The environment variable that selects a relocated Nix store.
 pub const STORE_ROOT_VAR: &str = "KIX_STORE_ROOT";
 
-/// Return the root of the relocated store named by `KIX_STORE_ROOT`, or
-/// `None` when Kix uses the machine's store at `/nix/store`.
+/// Return the root of the store Kix runs Nix against: the directory
+/// `KIX_STORE_ROOT` names, or `store` in Kix's cache directory.
 ///
-/// The store's files live in `<root>/nix/store`. A relative root is taken
-/// from the working directory.
-pub fn store_root() -> Option<PathBuf> {
-    let root = std::env::var_os(STORE_ROOT_VAR).filter(|r| !r.is_empty())?;
-    Some(std::path::absolute(&root).unwrap_or_else(|_| PathBuf::from(root)))
+/// Kix writes Helm renders into this store, which it cannot do in a store
+/// that a Nix daemon owns. The store's files live in `<root>/nix/store`. A
+/// relative root is taken from the working directory. Links in the root are
+/// resolved, because Nix refuses a store with a link in its path.
+pub fn store_root() -> PathBuf {
+    let root = match std::env::var_os(STORE_ROOT_VAR).filter(|r| !r.is_empty()) {
+        Some(root) => std::path::absolute(&root).unwrap_or_else(|_| PathBuf::from(root)),
+        None => default_cache_dir().join("store"),
+    };
+    resolve_existing_links(&root)
+}
+
+/// Return `path` with the links in the part of it that exists resolved.
+///
+/// macOS has links at `/var`, `/tmp` and `/etc`, so a store root under a
+/// temporary directory needs this. The part that does not exist yet is kept
+/// as written, since Nix creates it.
+fn resolve_existing_links(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return missing.iter().rev().fold(real, |p, name| p.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// Return the directory that holds the store's files on disk.
@@ -32,7 +59,7 @@ pub fn store_dir() -> PathBuf {
 /// `/nix/store` moves under the store root when one is set. Any other path
 /// is returned unchanged.
 pub fn real_path(logical: &Path) -> PathBuf {
-    real_path_in(store_root().as_deref(), logical)
+    real_path_in(Some(&store_root()), logical)
 }
 
 fn real_path_in(root: Option<&Path>, logical: &Path) -> PathBuf {
@@ -44,15 +71,11 @@ fn real_path_in(root: Option<&Path>, logical: &Path) -> PathBuf {
 
 /// Return the file on disk behind `path`, following links into the store.
 ///
-/// With no store root, return `path` unchanged and let the system follow its
-/// links. With a store root, resolve every link first, because a link to
-/// `/nix/store/...`, such as each entry of a build's result directory,
-/// points outside the root.
+/// Every link is resolved first, because a link to `/nix/store/...`, such
+/// as each entry of a build's result directory, points outside the root.
 pub fn disk_path(path: &Path) -> std::io::Result<PathBuf> {
-    match store_root() {
-        None => Ok(path.to_path_buf()),
-        Some(root) => canonicalize_in(&root, path).map(|p| real_path_in(Some(&root), &p)),
-    }
+    let root = store_root();
+    canonicalize_in(&root, path).map(|p| real_path_in(Some(&root), &p))
 }
 
 /// Return whether the file behind `path` exists, as [`disk_path`] finds it.
@@ -62,22 +85,19 @@ pub fn exists(path: &Path) -> bool {
 
 /// Resolve every link in `path` and return the result in logical form.
 ///
-/// With no store root this is [`std::fs::canonicalize`]. With a store root,
-/// a link whose target is under `/nix/store` is followed into the root, and
-/// the result keeps its `/nix/store` form, so the caller can record it.
+/// A link whose target is under `/nix/store` is followed into the store
+/// root, and the result keeps its `/nix/store` form, so the caller can
+/// record it.
 pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
-    match store_root() {
-        None => std::fs::canonicalize(path),
-        Some(root) => canonicalize_in(&root, path),
-    }
+    canonicalize_in(&store_root(), path)
 }
 
-/// Return `path` with its links resolved when a store root is set and the
-/// path leads into the store, such as a `result` link that `nix build`
-/// made. Otherwise return `path` unchanged.
+/// Return `path` with its links resolved when it leads into the store, such
+/// as a `result` link that `nix build` made. Otherwise return `path`
+/// unchanged.
 pub fn follow_into_store(path: &Path) -> PathBuf {
-    store_root()
-        .and_then(|root| canonicalize_in(&root, path).ok())
+    canonicalize_in(&store_root(), path)
+        .ok()
         .filter(|p| p.starts_with(STORE_DIR))
         .unwrap_or_else(|| path.to_path_buf())
 }
@@ -284,6 +304,21 @@ fn dirs_fallback_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_store_root_under_a_link_is_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(dir.path()).unwrap().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert_eq!(resolve_existing_links(&link), real);
+        assert_eq!(
+            resolve_existing_links(&link.join("not-yet/store")),
+            real.join("not-yet/store")
+        );
+    }
 
     /// A listed build gains a root, a root whose build is no longer listed
     /// is removed, and other clusters' roots and non-hash names are left

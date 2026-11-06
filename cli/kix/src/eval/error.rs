@@ -43,6 +43,9 @@ pub enum KixEvalError {
     #[error(transparent)]
     Nix(#[from] super::nix::NixCommandError),
 
+    #[error(transparent)]
+    Helm(#[from] super::helm::HelmError),
+
     /// A manifest or package index in the build could not be parsed as strict JSON.
     #[error("could not read the built resources and their dependencies: {0}")]
     NotJson(#[from] super::manifest_json::NotJson),

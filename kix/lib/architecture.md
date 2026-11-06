@@ -14,6 +14,8 @@ plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability)
 
 Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema + hook options + plugin imports), `mkFlake.nix`, `meta.nix`, `env.nix`, `scorecard.nix`, `unsafe.nix`, `rules/`, `flavors/`, `modules/`, `helm.nix` + `helm-dag.nix`.
 
+`helm.nix` does not run Helm. A chart fetch and a chart render are placeholder derivations of system `kix-helm`, whose spec (`kixHelmFetch`, `kixHelmSpec`) names the exact Helm release from `helm-versions.json`. Evaluation stops at a missing placeholder output. The CLI (`cli/kix/src/eval/helm.rs`) then pulls or renders the chart, writes the output into Kix's own store, and evaluates again. Bump `specVersion` in both places when a spec field or the render's JSON changes meaning.
+
 ## Pipeline
 
 ```
