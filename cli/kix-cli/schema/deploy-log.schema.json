@@ -797,7 +797,7 @@
       "type": "object"
     },
     {
-      "description": "`node` has been in `phase` for `since_ms` without a verdict. Repeated\non a schedule while the wait lasts. `status` is the node's last\nreadiness message and `budget_ms` the readiness timeout.",
+      "description": "`node` has been in `phase` for `since_ms` without a verdict. Repeated\non a schedule while the wait lasts. `status` is the node's last\nreadiness message and `budget_ms` the readiness timeout. `holds`\nnames the resources that wait on `node` directly, as the text log\nnames them, and `holds_total` counts every resource that waits on it\ndirectly or through other nodes.",
       "properties": {
         "budget_ms": {
           "format": "uint64",
@@ -806,6 +806,19 @@
             "integer",
             "null"
           ]
+        },
+        "holds": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "holds_total": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
         "node": {
           "type": "string"

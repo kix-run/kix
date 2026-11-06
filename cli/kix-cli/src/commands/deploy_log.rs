@@ -154,6 +154,8 @@ impl DeployObserver for LineObserver {
                 since,
                 status,
                 budget,
+                holds,
+                holds_total,
             } => {
                 let line = kix::cluster::watchdog::describe_wait(
                     node,
@@ -161,6 +163,8 @@ impl DeployObserver for LineObserver {
                     *since,
                     status.as_deref(),
                     *budget,
+                    holds,
+                    *holds_total,
                 );
                 println!("waiting> {line}");
             }
@@ -542,6 +546,8 @@ mod tests {
                 since: Duration::from_secs(30),
                 status: Some("import target Service/web not found yet".into()),
                 budget: Some(Duration::from_secs(180)),
+                holds: vec![node("Deployment", "api"), node("Job", "migrate")],
+                holds_total: 3,
             },
             DeployEvent::BestEffortFailed {
                 what: "checkpoint".into(),

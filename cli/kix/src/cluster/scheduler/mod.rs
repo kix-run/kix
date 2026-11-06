@@ -315,6 +315,13 @@ impl<'a> Run<'a> {
     ) -> Self {
         let progress = Arc::new(Progress::new());
         progress.set_readiness_budget(config.timeout);
+        progress.set_plan(
+            &plan.edges,
+            plan.nodes
+                .iter()
+                .filter(|e| e.kind != TransitionKind::Skip || e.rerun.is_some())
+                .map(|e| e.id.clone()),
+        );
         let dry_run = cluster.is_dry_run();
         let resources = cluster.resources().clone();
         let ctx = Arc::new(NodeCtx {
@@ -358,6 +365,11 @@ impl<'a> Run<'a> {
 
     fn emit(&self, event: DeployEvent) {
         self.progress.touch();
+        if let DeployEvent::NodeStateChanged { node, verdict, .. } = &event
+            && verdict.is_terminal()
+        {
+            self.progress.finished(node);
+        }
         self.observer.on_event(&event);
     }
 
@@ -750,6 +762,8 @@ impl<'a> Run<'a> {
         self.barrier.covered = std::mem::take(&mut self.barrier.awaiting);
         self.barrier.in_flight = true;
         self.emit(DeployEvent::CrdRediscovery);
+        self.progress
+            .set_stands_for(&DISCOVERY_NODE, &self.barrier.covered);
         self.progress.set_phase(&DISCOVERY_NODE, Phase::Discovery);
         let resources = self.resources.clone();
         let record = self.record.clone();

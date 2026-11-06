@@ -209,6 +209,8 @@ impl DeployObserver for OperatorObserver {
                 since,
                 status,
                 budget,
+                holds,
+                holds_total,
             } => {
                 let waiting = kix::cluster::watchdog::describe_wait(
                     node,
@@ -216,6 +218,8 @@ impl DeployObserver for OperatorObserver {
                     *since,
                     status.as_deref(),
                     *budget,
+                    holds,
+                    *holds_total,
                 );
                 tracing::info!(activation, %waiting, "Deploy waiting");
             }
