@@ -901,6 +901,21 @@ rec {
 
       # --- Collect all failures ---
 
+      # --- 24. Jobs do not delete themselves ---
+      # A Job that Kubernetes deletes after it finishes looks missing to every
+      # comparison with the live cluster, so the operator and a baseline read
+      # from the cluster would run it again. A finished Job stays until a
+      # later build drops it, and prune deletes it then. A CronJob's
+      # jobTemplate may keep the field: Kubernetes creates those Jobs.
+
+      jobTtlFailures = map (
+        job:
+        let
+          ns = job.metadata.namespace or "cluster-scoped";
+        in
+        "Job ${ns}/${job.metadata.name} sets ttlSecondsAfterFinished, so Kubernetes would delete it after it finishes and Kix would run it again on the next deploy. Remove ttlSecondsAfterFinished. Kix deletes the Job when a later build no longer contains it."
+      ) (builtins.filter (r: r.kind == "Job" && (r.spec or { }) ? ttlSecondsAfterFinished) resources);
+
       allFailures =
         saFailures
         ++ roleRefFailures
@@ -924,7 +939,8 @@ rec {
         ++ storageClassFailures
         ++ customResourceFailures
         ++ keyFailures
-        ++ defaultFailures;
+        ++ defaultFailures
+        ++ jobTtlFailures;
     in
     allFailures;
 }

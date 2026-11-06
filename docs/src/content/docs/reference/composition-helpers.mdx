@@ -308,7 +308,8 @@ build = [
 | `partName` | string | `"healthCheck"` | Part name for the `Job` in `self` (must be unique if a package defines multiple `kix.healthCheck` entries). |
 | `runtime` | `{ image, command }` | `kix.healthCheck.runtimes.python` | Probe execution runtime. Built-in runtimes: `kix.healthCheck.runtimes.python` (`python:3.13-alpine`, `["python3" "-u" "-c"]`) and `kix.healthCheck.runtimes.shell` (`busybox:1.37.0`, `["/bin/sh" "-e" "-c"]`). |
 | `activeDeadlineSeconds` | positive int | `retryFor + 30` | Kubernetes `Job` `spec.activeDeadlineSeconds` (`<= 120s`). |
-| `ttlSecondsAfterFinished` | positive int | `300` | Seconds before Kubernetes garbage-collects the finished `Job`. |
+
+Like every Job Kix builds, the finished Job stays on the cluster until a later build no longer contains it, and Kix deletes it then.
 
 ---
 

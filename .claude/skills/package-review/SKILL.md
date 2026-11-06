@@ -225,6 +225,7 @@ when a check fails or the path is not evaluated by default.
 - W19. Does the pod fetch dependencies at runtime with floating versions? Fix: a pinned image.
 - W20. Are memory caps left to the OOM killer where the program has its own cap? Fix: derive with `kix.parseQuantity` and a stated headroom.
 - W21. Are Job retry or rerun semantics wrong for the task? Does a health check judge the whole history (lifetime errors == 0) instead of what changed since it started, so one past error fails every later deploy? Fix: bounded retries, `kix.keys.rerun` values from `kix.keyValues`, a baseline delta.
+- W21a. Does a Job keep a fixed name while its content can change (a password, a script, an image) without `kix.run/rerun`? A Job's pod template is immutable, so the next deploy fails on the patch; the build refuses `spec.ttlSecondsAfterFinished`, which used to hide this by deleting the finished Job. Fix: hash the inputs into the name (stackgres-database) or `annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange` when a rerun is harmless (ingress-nginx, reflector).
 - W22. Are `helm.sh/hook` annotations left on native resources? Fix: Kix hook keys or delete.
 - W23. Is a pod-spec field set to its Kubernetes default (`dnsPolicy = "ClusterFirst"`, `automountServiceAccountToken = true`)? Fix: delete. `terminationGracePeriodSeconds` is the exception: `reliability.gracefulShutdown` asks for it, so a workload states it, at 30 with a comment when the program needs no longer drain.
 

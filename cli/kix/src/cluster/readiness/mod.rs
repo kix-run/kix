@@ -29,7 +29,6 @@ use thiserror::Error;
 
 use super::cancel::CancelToken;
 use super::discovery;
-use super::errors::{FailureClass, classify};
 use crate::manifest::types::ResourceId;
 
 pub use declared::{check_readiness, is_immediate_kind};
@@ -204,13 +203,6 @@ pub(crate) async fn wait_for_ready(
         }
         let obj = match api.get(name).await {
             Ok(obj) => obj,
-            // The TTL controller deletes only finished Jobs. If a Job applied
-            // by this deploy disappears while readiness is polling it, treat
-            // the deletion as successful completion.
-            Err(e) if kind == "Job" && classify(&e) == FailureClass::NotFound => {
-                on_status("Job finished and was removed by its ttlSecondsAfterFinished");
-                return Ok(ReadinessResult::Ready);
-            }
             Err(e) => return Err(ReadinessError::FetchError(e)),
         };
 

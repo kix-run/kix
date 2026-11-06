@@ -426,7 +426,6 @@ in
             inherit labels;
             spec = {
               backoffLimit = 10;
-              ttlSecondsAfterFinished = 86400;
               template = {
                 metadata.labels = labels;
                 spec = {

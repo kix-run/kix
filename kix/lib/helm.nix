@@ -86,6 +86,13 @@ let
     in
     specAfterUpdateStrategy;
 
+  # A Job that Kubernetes deletes after it finishes looks missing to every
+  # comparison with the live cluster, which would run it again. A chart's
+  # TTL serves Helm's hook lifecycle, which Kix does not run: a finished Job
+  # stays until a later build drops it.
+  stripJobTtl =
+    kind: spec: if kind == "Job" then builtins.removeAttrs spec [ "ttlSecondsAfterFinished" ] else spec;
+
   standardFields = [
     "apiVersion"
     "kind"
@@ -266,7 +273,7 @@ rec {
       }
       // lib.optionalAttrs (cleanedAnnotations != { }) { annotations = cleanedAnnotations; }
       // lib.optionalAttrs (cleanedLabels != { }) { labels = cleanedLabels; }
-      // lib.optionalAttrs (resource ? spec) { spec = cleanSpec resource.spec; }
+      // lib.optionalAttrs (resource ? spec) { spec = stripJobTtl kind (cleanSpec resource.spec); }
       // lib.optionalAttrs (resource ? data) { data = resource.data; }
       // lib.optionalAttrs (resource ? stringData) { stringData = resource.stringData; }
       // lib.optionalAttrs (extra != { }) { inherit extra; }
@@ -399,7 +406,9 @@ rec {
           // lib.optionalAttrs (requires != [ ]) { inherit requires; }
           // lib.optionalAttrs (cleanedAnnotations != { }) { annotations = cleanedAnnotations; }
           // lib.optionalAttrs (cleanedLabels != { }) { labels = cleanedLabels; }
-          // lib.optionalAttrs (resource ? spec) { spec = effectiveCleanSpec resource.spec; }
+          // lib.optionalAttrs (resource ? spec) {
+            spec = stripJobTtl kind (effectiveCleanSpec resource.spec);
+          }
           // lib.optionalAttrs (resource ? data) { data = resource.data; }
           // lib.optionalAttrs (resource ? stringData) { stringData = resource.stringData; }
           // lib.optionalAttrs (extra != { }) { inherit extra; };

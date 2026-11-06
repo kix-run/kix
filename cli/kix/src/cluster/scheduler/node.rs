@@ -117,9 +117,11 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
     let mut rerun_reason: Option<&'static str> = None;
     let manifest = match (&entry.action, &entry.rerun) {
         (ChangeAction::Apply(m), _) => m.clone(),
-        (ChangeAction::Skip(rid), Some(manifest)) => {
-            // Recreate an unchanged probe if its live object failed and
-            // `rerun_failed` is enabled; otherwise report the failure.
+        (ChangeAction::Skip(rid), rerun) if super::plan::skip_reads_live(entry) => {
+            // An unchanged Job is never applied again, so its last run is
+            // read back. A failed run is recreated under `kix.run/rerun` when
+            // `rerun_failed` is enabled, and reported otherwise. A Job
+            // without the annotation is never deleted here.
             let live = ctx.resources.get_live(rid).await;
             let terminal = match &live {
                 Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
@@ -127,10 +129,18 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
             };
             match (live, terminal) {
                 (Ok(Some(_)), Some((reason, detail))) => {
-                    if !ctx.rerun_failed {
+                    let manifest = match rerun {
+                        Some(manifest) if ctx.rerun_failed => Some(manifest),
+                        _ => None,
+                    };
+                    let Some(manifest) = manifest else {
+                        let next_step = if rerun.is_some() {
+                            "Deploy with the CLI to run it again, or change an input"
+                        } else {
+                            "Change an input, or delete the Job with kubectl and deploy again"
+                        };
                         let message = format!(
-                            "{}: {detail}; unchanged since its last run, which failed. \
-                             Deploy with the CLI to run it again, or change an input",
+                            "{}: {detail}; unchanged since its last run, which failed. {next_step}",
                             reason.as_str()
                         );
                         return NodeOutcome::Failed {
@@ -141,7 +151,7 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
                             },
                             message,
                         };
-                    }
+                    };
                     rerun_reason = Some("the last run failed");
                     manifest.clone()
                 }
@@ -159,7 +169,7 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
                 }
             }
         }
-        (ChangeAction::Skip(_), None) => {
+        (ChangeAction::Skip(_), _) => {
             return NodeOutcome::Ready {
                 apply_action: ApplyAction::Unchanged,
             };

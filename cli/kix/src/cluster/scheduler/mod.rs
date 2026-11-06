@@ -60,7 +60,7 @@ use node::recreate_refusal;
 use node::{NodeCtx, NodeOutcome, execute_node, prune_order};
 use plan::{SchedulerState, is_crd_like};
 
-pub use plan::{DeployPlan, PlanNodeEntry, failed_rerun_nodes};
+pub use plan::{DeployPlan, PlanNodeEntry, failed_skipped_jobs};
 
 /// Policy for handling a node that reaches `Verdict::Failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -467,9 +467,9 @@ impl<'a> Run<'a> {
             let entry = self.state.node_entry(&node_id).clone();
 
             // Complete ordinary Skip nodes immediately without spawning a task.
-            // Skip nodes with `kix.run/rerun` still spawn a task to inspect the
-            // live object and recreate it if it failed.
-            if matches!(entry.kind, TransitionKind::Skip) && entry.rerun.is_none() {
+            // A skipped Job still spawns a task to inspect the live object and
+            // report a failed run, or recreate it under `kix.run/rerun`.
+            if matches!(entry.kind, TransitionKind::Skip) && !plan::skip_reads_live(&entry) {
                 self.emit(DeployEvent::NodeStateChanged {
                     node: node_id.clone(),
                     kind: entry.kind,
@@ -619,8 +619,8 @@ impl<'a> Run<'a> {
         let entry = self.state.node_entry(&node_id).clone();
         match outcome {
             NodeOutcome::Ready { apply_action } => {
-                // A rerun-annotated Skip node whose live object succeeded is
-                // unchanged and still belongs to this activation.
+                // A skipped Job whose live object succeeded is unchanged and
+                // still belongs to this activation.
                 self.push_skipped(&node_id, &entry);
                 let detail = NodeDetail::Applied(apply_action.clone());
                 self.node_ready(&node_id, &entry, &apply_action, detail);

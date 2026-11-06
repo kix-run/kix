@@ -84,6 +84,8 @@ Kix provides five workload builders on `scope`:
 
 Use `scope.mkOptional cond resource` (or `if cond then ... else null`) when a workload or resource is enabled conditionally.
 
+A Job built with `scope.mkJob` may not set `spec.ttlSecondsAfterFinished`; the build refuses it. Kubernetes would delete the finished Job, every comparison with the live cluster would then see it as missing, and Kix would run it again. A finished Job stays until a later build no longer contains it, and Kix deletes it then. Give a Job whose content may change either a name that changes with it (a hash of its inputs) or the `kix.run/rerun: on-change` annotation, because a Job's pod template is immutable. A CronJob's `jobTemplate` may still set `ttlSecondsAfterFinished`, because Kubernetes creates those Jobs.
+
 ```nix
 deployment = scope.mkDeployment {
   name = "api";

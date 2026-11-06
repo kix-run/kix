@@ -10,6 +10,7 @@
 {
   lib,
   k8s,
+  eval,
   validate,
   mkCluster,
   baseInstances,
@@ -1363,5 +1364,68 @@ in
     baseInstances
     { instances.infra.dangling.package = brokenServicePackage; }
   ]);
+
+  # --- 24. Jobs do not delete themselves ---
+
+  v24-job-with-ttl-is-refused =
+    onlyFailure
+      "Job a/once sets ttlSecondsAfterFinished, so Kubernetes would delete it after it finishes and Kix would run it again on the next deploy. Remove ttlSecondsAfterFinished. Kix deletes the Job when a later build no longer contains it."
+      (
+        base "a"
+        ++ [
+          (lib.recursiveUpdate (job "a" "once" { app = "once"; }) {
+            spec.ttlSecondsAfterFinished = 600;
+          })
+        ]
+      );
+
+  # Kubernetes, not Kix, creates a CronJob's Jobs, so their TTL is allowed.
+  v24-cronjob-template-ttl-is-fine = clean (
+    base "a"
+    ++ [
+      (lib.recursiveUpdate (cronJob "a" "nightly") {
+        spec.jobTemplate.spec.ttlSecondsAfterFinished = 600;
+      })
+    ]
+  );
+
+  # An import stands in for a Job the environment runs. Its `mkJob` builds a
+  # reference, not a manifest, so the build renders no Job and the check
+  # never sees the TTL.
+  v24-imported-job-with-ttl-is-fine =
+    let
+      external =
+        { scope, ... }:
+        {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              job = scope.mkJob {
+                name = "once";
+                spec = {
+                  ttlSecondsAfterFinished = 600;
+                  template = {
+                    metadata.labels.app = "once";
+                    spec.containers = [
+                      {
+                        name = "run";
+                        image = "img:1";
+                      }
+                    ];
+                  };
+                };
+              };
+              root = self.job;
+            };
+        };
+      cluster = mkCluster [
+        baseInstances
+        { instances.infra.once.package = eval.mkImport { from = external; }; }
+      ];
+      rendered = manifests cluster;
+    in
+    builtins.deepSeq rendered (builtins.all (r: r.kind != "Job") rendered)
+    || throw "an imported Job was rendered: ${builtins.toJSON (map (r: r.kind) rendered)}";
 
 }
