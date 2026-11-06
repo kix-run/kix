@@ -18,11 +18,35 @@ pub const STORE_ROOT_VAR: &str = "KIX_STORE_ROOT";
 ///
 /// Kix writes Helm renders into this store, which it cannot do in a store
 /// that a Nix daemon owns. The store's files live in `<root>/nix/store`. A
-/// relative root is taken from the working directory.
+/// relative root is taken from the working directory. Links in the root are
+/// resolved, because Nix refuses a store with a link in its path.
 pub fn store_root() -> PathBuf {
-    match std::env::var_os(STORE_ROOT_VAR).filter(|r| !r.is_empty()) {
+    let root = match std::env::var_os(STORE_ROOT_VAR).filter(|r| !r.is_empty()) {
         Some(root) => std::path::absolute(&root).unwrap_or_else(|_| PathBuf::from(root)),
         None => default_cache_dir().join("store"),
+    };
+    resolve_existing_links(&root)
+}
+
+/// Return `path` with the links in the part of it that exists resolved.
+///
+/// macOS has links at `/var`, `/tmp` and `/etc`, so a store root under a
+/// temporary directory needs this. The part that does not exist yet is kept
+/// as written, since Nix creates it.
+fn resolve_existing_links(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return missing.iter().rev().fold(real, |p, name| p.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
     }
 }
 
@@ -280,6 +304,21 @@ fn dirs_fallback_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_store_root_under_a_link_is_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(dir.path()).unwrap().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert_eq!(resolve_existing_links(&link), real);
+        assert_eq!(
+            resolve_existing_links(&link.join("not-yet/store")),
+            real.join("not-yet/store")
+        );
+    }
 
     /// A listed build gains a root, a root whose build is no longer listed
     /// is removed, and other clusters' roots and non-hash names are left
