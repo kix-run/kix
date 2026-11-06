@@ -37,12 +37,14 @@ use thiserror::Error;
 
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
+use kix::cluster::binding::{self, BindingError, Connection};
 use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
+use kix::eval::store_graph::read_index;
 use kix::manifest::lifecycle::{
     PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
 };
@@ -131,6 +133,52 @@ fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
         .collect())
 }
 
+/// What the binding check decided for a Queued record.
+enum Binding {
+    /// The build may be applied here.
+    Accepted,
+    /// The build belongs to another Kubernetes cluster, or names none where
+    /// a bound one deployed: the record fails with this message.
+    Refused(String),
+    /// The operator may not read the `kube-system` Namespace: a grant of
+    /// permission resolves it, so the record waits with this message.
+    Forbidden(String),
+}
+
+/// Check that the build the Queued `activation` names belongs to the
+/// Kubernetes cluster the operator runs on ([`binding::check`]). An error
+/// means the check could not run, so the reconcile is retried.
+///
+/// Reads only `kix-packages.json` of the build: the whole graph is loaded
+/// once the record is past this check.
+async fn check_binding(
+    client: &Client,
+    activation: &DynamicObject,
+) -> Result<Binding, OperatorError> {
+    let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
+    let index = read_index(&path).map_err(|e| OperatorError::StoreGraphError {
+        path: path.display().to_string(),
+        reason: e.to_string(),
+    })?;
+    match binding::check(
+        client,
+        &Connection::InCluster,
+        &index.cluster,
+        index.kubernetes.uid.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => Ok(Binding::Accepted),
+        Err(e) if e.is_forbidden() => Ok(Binding::Forbidden(e.to_string())),
+        Err(
+            e @ (BindingError::Mismatch { .. }
+            | BindingError::Unbound { .. }
+            | BindingError::UnboundRestored { .. }),
+        ) => Ok(Binding::Refused(e.to_string())),
+        Err(e) => Err(OperatorError::DiscoveryError(e.to_string())),
+    }
+}
+
 /// Map a [`LivePlanError`] to the corresponding [`OperatorError`] variant.
 fn operator_error(e: LivePlanError) -> OperatorError {
     match e {
@@ -183,6 +231,37 @@ pub async fn reconcile_activation(
                 return Ok(Action::await_change());
             }
             tracing::info!(name, cluster = %cluster, "Processing Queued activation");
+
+            // A build bound to another Kubernetes cluster, or an unbound one
+            // where a bound build has deployed, fails here, before any other
+            // record is superseded and before anything is applied. A 403 on
+            // the Namespace leaves the record Queued and retries, since a
+            // grant of permission resolves it.
+            let events = || {
+                K8sEventObserver::new(
+                    ctx.client.clone(),
+                    &activation,
+                    keys::API_VERSION,
+                    Some(name.to_string()),
+                )
+            };
+            match check_binding(&ctx.client, &activation).await? {
+                Binding::Accepted => {}
+                Binding::Refused(reason) => {
+                    tracing::warn!(name, %reason, "Refusing the Queued activation");
+                    ctx.records
+                        .fail_queued(name, &reason)
+                        .await
+                        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+                    events().warn_now("BindingRefused", &reason).await;
+                    return Ok(Action::await_change());
+                }
+                Binding::Forbidden(reason) => {
+                    tracing::warn!(name, %reason, "Cannot check the Queued activation's binding yet");
+                    events().warn_now("BindingUnchecked", &reason).await;
+                    return Err(OperatorError::DiscoveryError(reason));
+                }
+            }
 
             let queued = ctx
                 .records
@@ -557,7 +636,144 @@ pub fn error_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kix::cluster::fake_api::{FakeApi, kube_system};
     use serde_json::json;
+
+    const HERE: &str = "9f8e7d6c-5b4a-4321-8765-0fedcba98765";
+    const ELSEWHERE: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+    /// A Queued record of cluster `a` whose build, in a temporary result
+    /// directory, names the Kubernetes cluster `kubernetes_uid`.
+    fn queued(dir: &Path, kubernetes_uid: Option<&str>) -> Value {
+        let index = json!({
+            "cluster": "a",
+            "kubernetes": { "uid": kubernetes_uid },
+            "packages": {},
+        });
+        std::fs::write(dir.join("kix-packages.json"), index.to_string()).unwrap();
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-new",
+                "labels": { (keys::CLUSTER_LABEL): "a" },
+            },
+            "spec": {
+                "cluster": "a",
+                "source": { "type": "storePath", "path": dir.display().to_string() },
+            },
+        })
+    }
+
+    /// Reconcile `queued` on a fake holding `objects`, and return the record
+    /// afterwards.
+    async fn reconcile_queued(objects: Vec<Value>, queued: Value) -> (FakeApi, DynamicObject) {
+        let api = FakeApi::new(objects);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let resource = records.watch_resource().clone();
+        let ctx = Arc::new(Context { client, records });
+        let activation: DynamicObject = serde_json::from_value(queued).unwrap();
+        reconcile_activation(Arc::new(activation), ctx.clone())
+            .await
+            .unwrap();
+        let after = kube::Api::<DynamicObject>::all_with(ctx.client.clone(), &resource)
+            .get("a-new")
+            .await
+            .unwrap();
+        (api, after)
+    }
+
+    /// A Queued build bound to another Kubernetes cluster is marked Failed
+    /// with the reason, and the Active record is left alone.
+    #[tokio::test]
+    async fn a_queued_build_bound_elsewhere_fails_before_anything_is_superseded() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "a-old", "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "status": { "phase": PHASE_ACTIVE },
+        });
+        let record = queued(dir.path(), Some(ELSEWHERE));
+        let (api, after) =
+            reconcile_queued(vec![kube_system(HERE), active, record.clone()], record).await;
+        assert_eq!(after.data["status"]["phase"], PHASE_FAILED);
+        let reason = after.data["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains(&format!(
+                "a's definition sets cluster.kubernetes.uid = \"{ELSEWHERE}\""
+            )) && reason.contains("Nothing was applied"),
+            "{reason}"
+        );
+        let supersedes: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.contains("a-old"))
+            .collect();
+        assert!(supersedes.is_empty(), "{supersedes:?}");
+    }
+
+    /// An unbound Queued build on a Kubernetes cluster where a bound build
+    /// deployed fails the same way, naming that build's cluster.
+    #[tokio::test]
+    async fn an_unbound_queued_build_fails_where_a_bound_build_deployed() {
+        let dir = tempfile::tempdir().unwrap();
+        let bound = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "lab1-1",
+                "labels": { (keys::CLUSTER_LABEL): "lab1", (keys::KUBERNETES_UID): HERE },
+            },
+            "status": { "phase": PHASE_ACTIVE },
+        });
+        let record = queued(dir.path(), None);
+        let (_, after) =
+            reconcile_queued(vec![kube_system(HERE), bound, record.clone()], record).await;
+        assert_eq!(after.data["status"]["phase"], PHASE_FAILED);
+        let reason = after.data["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains(&format!(
+                "lab1 was deployed here with cluster.kubernetes.uid = \"{HERE}\""
+            )),
+            "{reason}"
+        );
+    }
+
+    /// A 403 on the Namespace leaves the Queued record as it is and retries,
+    /// since a grant to the operator's service account resolves it.
+    #[tokio::test]
+    async fn a_forbidden_namespace_read_leaves_the_record_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = queued(dir.path(), Some(HERE));
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        api.fail_next("/api/v1/namespaces/kube-system", 1, 403);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let resource = records.watch_resource().clone();
+        let ctx = Arc::new(Context { client, records });
+        let activation: DynamicObject = serde_json::from_value(record).unwrap();
+        let err = reconcile_activation(Arc::new(activation), ctx.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Grant the operator's service account get permission on namespaces"),
+            "{err}"
+        );
+        let after = kube::Api::<DynamicObject>::all_with(ctx.client.clone(), &resource)
+            .get("a-new")
+            .await
+            .unwrap();
+        assert!(after.data.get("status").is_none(), "{:?}", after.data);
+    }
 
     /// Deleting `b`'s Active record tears down `b`'s closure but leaves the
     /// ClusterRole `a`'s current build also contains.

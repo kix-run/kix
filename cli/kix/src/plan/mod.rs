@@ -121,6 +121,10 @@ pub enum PlanEvent<'a> {
 pub enum PlanError {
     #[error("failed to connect to cluster: {0}")]
     Connect(Box<FetchError>),
+    /// The build is bound to another Kubernetes cluster, or names none
+    /// while this one accepts only builds that name it.
+    #[error("{0}")]
+    Binding(Box<crate::cluster::binding::BindingError>),
     #[error("{0}")]
     Discovery(Box<FetchError>),
     #[error("{0}")]

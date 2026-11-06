@@ -24,6 +24,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | --- | --- | --- |
 | `app.kubernetes.io/managed-by: kix` | Every Kix-rendered resource and CRD record | Identifies objects managed by Kix (required by [validation check 8](/docs/reference/validation-checks/)). Ownership for pruning and garbage collection is determined by `kix.run/identity-hash` and `kix.run/activations`. |
 | `kix.run/cluster` | `Activation` resources | Names the Kix cluster that owns the `Activation` record so multiple Kix clusters can share a single Kubernetes cluster. |
+| `kix.run/kubernetes-uid` | `Activation` resources of a definition that sets `cluster.kubernetes.uid` | The UID of the Kubernetes cluster's `kube-system` Namespace the build was bound to. While any record carries it, the Kubernetes cluster refuses definitions that do not set the UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
 | `kix.run/consumer` | `Namespace` resources in consumer clusters | Names the consumer cluster (built with `kix.interface`) that owns the namespace, allowing platform network policies to select consumer pods. |
 | `pod-security.kubernetes.io/enforce` | `Namespace` resources | Pod Security Admission level (`privileged`, `baseline`, or `restricted`) set from `namespaces.<name>.podSecurity`, package `meta.podSecurity`, or a platform interface. |
 

@@ -42,6 +42,10 @@ rec {
     deployedAt = key "deployed-at";
     # A label, not an annotation, so records list per cluster.
     clusterLabel = key "cluster";
+    # Label on the Activation record of a build whose definition sets
+    # `cluster.kubernetes.uid`: the UID of the target cluster's kube-system
+    # Namespace. A label so deploys can list the records that carry one.
+    kubernetesUidLabel = key "kubernetes-uid";
     # Label on each namespace rendered by a consumer cluster so platform
     # ingress rules can select the consumer's namespaces.
     consumerLabel = key "consumer";

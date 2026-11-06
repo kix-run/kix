@@ -45,6 +45,7 @@ use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
 use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, Records};
 use crate::cluster::apply::ChangeAction;
+use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
 use crate::cluster::discovery;
 use crate::cluster::errors::FetchError;
@@ -149,6 +150,9 @@ pub struct CheckedPlan {
     old_manifests: Vec<Value>,
     /// The new build's package index, for the record's `status.packageIndex`.
     package_index: RecordPackageIndex,
+    /// The new build's `cluster.kubernetes.uid`, for the binding check a
+    /// run makes when it connects after the plan (`--current-activation`).
+    kubernetes_uid: Option<String>,
 }
 
 impl CheckedPlan {
@@ -196,6 +200,12 @@ impl CheckedPlan {
     /// Return the identity hash of the new build's Activation record.
     pub fn activation_identity_hash(&self) -> Option<&str> {
         self.activation_identity_hash.as_deref()
+    }
+
+    /// Return the new build's `cluster.kubernetes.uid`, or `None` when its
+    /// definition is not bound to one Kubernetes cluster.
+    pub fn kubernetes_uid(&self) -> Option<&str> {
+        self.kubernetes_uid.as_deref()
     }
 
     /// Remove orphans that another Kix cluster still deploys ([`keep_shared`])
@@ -410,8 +420,10 @@ impl<'a> Planner<'a> {
     }
 
     /// Plan a deploy of `build` against `old`: connect, unless the old side
-    /// is the local cache, then the three steps.
+    /// is the local cache, check that the build belongs to the Kubernetes
+    /// cluster it connected to ([`binding::check`]), then the three steps.
     pub async fn run(&self, build: InstallableBuild, old: &OldSide) -> Result<Planned, PlanError> {
+        let new_graph = build.graph();
         let client = match old {
             OldSide::LocalCache => None,
             OldSide::Cluster { context, policy } => {
@@ -419,10 +431,17 @@ impl<'a> Planner<'a> {
                 let client = client::make_client(context.as_deref(), policy.clone())
                     .await
                     .map_err(|e| PlanError::Connect(Box::new(e)))?;
+                binding::check(
+                    &client,
+                    &binding::Connection::of_context(context.as_deref()),
+                    &new_graph.cluster_name,
+                    new_graph.kubernetes_uid.as_deref(),
+                )
+                .await
+                .map_err(|e| PlanError::Binding(Box::new(e)))?;
                 Some(client)
             }
         };
-        let new_graph = build.graph();
         let baseline = match &client {
             Some(client) => Baseline::of_cluster(client, &build, self.report).await?,
             None => Baseline::of_cache(&new_graph.cluster_name, self.report),
@@ -551,6 +570,7 @@ impl<'a> Planner<'a> {
             cluster: cluster.to_string(),
             old_manifests: baseline.manifests(),
             package_index: RecordPackageIndex::of(new_graph),
+            kubernetes_uid: new_graph.kubernetes_uid.clone(),
         })
     }
 }

@@ -77,6 +77,9 @@ in
       interfaceFiles ? [ ],
       # Platform interfaces this cluster builds against (`platform -> { consumer; path; sha256; }`).
       interfaces ? { },
+      # `cluster.kubernetes.uid`: the kube-system Namespace UID of the one
+      # Kubernetes cluster this build may deploy to, or null when unbound.
+      kubernetesUid ? null,
     }:
     mkResource {
       apiVersion = kixAnnotations.apiVersion;
@@ -85,6 +88,9 @@ in
       labels = {
         "app.kubernetes.io/managed-by" = "kix";
         ${kixKeys.clusterLabel} = name;
+      }
+      // lib.optionalAttrs (kubernetesUid != null) {
+        ${kixKeys.kubernetesUidLabel} = kubernetesUid;
       };
       requires = [ kixCRDs.activation ];
       extraDeps = extraDeps;

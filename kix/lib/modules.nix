@@ -311,6 +311,30 @@ in
       '';
     };
 
+    cluster.kubernetes.uid = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.addCheck lib.types.str (
+          s: builtins.match "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" s != null
+        )
+        // {
+          description = "lowercase UUID such as \"4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c\"";
+        }
+      );
+      default = null;
+      description = ''
+        The Kubernetes cluster this definition belongs to, named by the UID
+        of its `kube-system` Namespace (`kubectl get namespace kube-system
+        -o jsonpath='{.metadata.uid}'` or `kix status <cluster>`). That UID
+        is set when the cluster is created and never changes. When set, the
+        build carries it, and deploy, plan, rollback, hard gc, and the
+        operator refuse to run the build against any other Kubernetes
+        cluster. Once a bound build has deployed, that Kubernetes cluster
+        also refuses builds that do not name it. Several Kix clusters on one
+        Kubernetes cluster all set the same UID. null leaves the definition
+        unbound.
+      '';
+    };
+
     cluster.factBehavior = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };

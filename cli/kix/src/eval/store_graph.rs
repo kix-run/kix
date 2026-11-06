@@ -23,14 +23,47 @@ use crate::text::printable;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KixPackageIndex {
     pub cluster: String,
+    /// The Kubernetes cluster the build is bound to. Absent from the index
+    /// of a build made before the field existed, which reads as unbound.
+    #[serde(default)]
+    pub kubernetes: KubernetesBinding,
     /// PI store path to owned resource store paths.
     pub packages: IndexMap<PathBuf, Vec<PathBuf>>,
+}
+
+/// The `kubernetes` entry of kix-packages.json: `cluster.kubernetes.uid`
+/// from the cluster definition.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KubernetesBinding {
+    /// The UID of the target cluster's `kube-system` Namespace, or `None`
+    /// when the definition is not bound to one Kubernetes cluster.
+    #[serde(default)]
+    pub uid: Option<String>,
+}
+
+/// Read `kix-packages.json` from `result_dir`.
+pub fn read_index(result_dir: &Path) -> Result<KixPackageIndex, KixEvalError> {
+    let index_path = result_dir.join("kix-packages.json");
+    let bytes = std::fs::read(&index_path).map_err(|e| KixEvalError::StoreGraphError {
+        message: format!(
+            "failed to read kix-packages.json at {}: {e}",
+            index_path.display()
+        ),
+    })?;
+    super::manifest_json::parse_index(&index_path.to_string_lossy(), &bytes).map_err(|e| {
+        KixEvalError::StoreGraphError {
+            message: e.to_string(),
+        }
+    })
 }
 
 /// Full in-memory graph built from the result folder.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreGraph {
     pub cluster_name: String,
+    /// `cluster.kubernetes.uid` of the definition: the one Kubernetes
+    /// cluster this build may deploy to, or `None` when unbound.
+    pub kubernetes_uid: Option<String>,
     pub activation_path: PathBuf,
     /// The result directory containing kix-packages.json + activation symlink.
     pub result_dir: PathBuf,
@@ -204,6 +237,7 @@ impl StoreGraph {
     pub fn empty(cluster_name: &str) -> Self {
         Self {
             cluster_name: cluster_name.to_string(),
+            kubernetes_uid: None,
             activation_path: PathBuf::new(),
             result_dir: PathBuf::new(),
             packages: IndexMap::new(),
@@ -232,17 +266,7 @@ impl StoreGraph {
     ) -> Result<Self, KixEvalError> {
         // 1. Read kix-packages.json
         status_fn("Reading package index...");
-        let index_path = result_dir.join("kix-packages.json");
-        let bytes = std::fs::read(&index_path).map_err(|e| KixEvalError::StoreGraphError {
-            message: format!(
-                "failed to read kix-packages.json at {}: {e}",
-                index_path.display()
-            ),
-        })?;
-        let index = super::manifest_json::parse_index(&index_path.to_string_lossy(), &bytes)
-            .map_err(|e| KixEvalError::StoreGraphError {
-                message: e.to_string(),
-            })?;
+        let index = read_index(result_dir)?;
 
         // 2. Resolve activation symlink
         let activation_link = result_dir.join("activation");
@@ -409,6 +433,7 @@ impl StoreGraph {
 
         Ok(StoreGraph {
             cluster_name: index.cluster,
+            kubernetes_uid: index.kubernetes.uid,
             activation_path,
             result_dir,
             packages,

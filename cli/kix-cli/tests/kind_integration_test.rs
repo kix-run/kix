@@ -644,10 +644,26 @@ impl TwoClusters {
     }
 
     fn write_cluster(&self, id: &str, message: &str, shared: bool) {
+        self.write_cluster_bound(id, message, shared, None);
+    }
+
+    /// Write the definition of `sweep-<id>`, bound to the Kubernetes cluster
+    /// `kubernetes_uid` when given.
+    fn write_cluster_bound(
+        &self,
+        id: &str,
+        message: &str,
+        shared: bool,
+        kubernetes_uid: Option<&str>,
+    ) {
         let shared = if shared {
             "namespaces.shared = { };\n      instances.shared.shared-role.package = import ./shared-role.nix;"
         } else {
             ""
+        };
+        let bound = match kubernetes_uid {
+            Some(uid) => format!("cluster.kubernetes.uid = \"{uid}\";"),
+            None => String::new(),
         };
         let text = format!(
             r#"{{ kix, packages }}:
@@ -657,6 +673,7 @@ kix.buildCluster {{
     kix.flavors.kind
     {{
       namespaces.echo-{id} = {{ }};
+      {bound}
       {shared}
       instances.echo-{id}.echo-server = {{
         package = packages.echo-server;
@@ -840,4 +857,97 @@ fn two_kix_clusters_share_one_kind_cluster() {
     // `--include-unattributed` needs `--hard`.
     let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--include-unattributed"]);
     assert!(!ok && out.contains("--hard"), "{out}");
+
+    // 6. Binding. `kix status` shows the kind cluster's ID, and sweep-a
+    //    bound to it deploys and labels its record. From then on the
+    //    unbound sweep-b is refused, a sweep-b bound to another ID is
+    //    refused before the plan, and a sweep-b bound to this ID deploys.
+    //    `kix diff` stays read-only and is not checked.
+    let uid = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            "namespace",
+            "kube-system",
+            "-o",
+            "jsonpath={.metadata.uid}",
+        ],
+    );
+    let uid = uid.trim().to_string();
+    let (ok, out) = flake.kix(&ctx, &["status", "sweep-a"]);
+    assert!(
+        ok && out.contains(&format!("Kubernetes cluster ID: {uid}")),
+        "{out}"
+    );
+    flake.write_cluster_bound("a", "hello from bound sweep-a", false, Some(&uid));
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--yes"]);
+    assert!(ok, "{out}");
+    let labelled = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            &records,
+            "-l",
+            &format!("{}={uid}", keys::KUBERNETES_UID),
+            "-o",
+            "jsonpath={.items[*].metadata.labels.kix\\.run/cluster}",
+        ],
+    );
+    assert!(labelled.contains("sweep-a"), "{labelled}");
+
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]);
+    let out = unwrapped(&out);
+    assert!(
+        !ok && out.contains("sweep-b's definition does not set cluster.kubernetes.uid"),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "sweep-a was deployed here with cluster.kubernetes.uid = \"{uid}\""
+        )),
+        "{out}"
+    );
+    let (ok, out) = flake.kix(&ctx, &["diff", "sweep-b"]);
+    assert!(ok, "diff is read-only and not checked:\n{out}");
+    assert_b_intact(&ctx);
+
+    let elsewhere = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    flake.write_cluster_bound("b", "hello from sweep-b", true, Some(elsewhere));
+    let (ok, out) = flake.kix(&ctx, &["plan", "sweep-b"]);
+    let out = unwrapped(&out);
+    assert!(
+        !ok && out.contains(&format!(
+            "sweep-b's definition sets cluster.kubernetes.uid = \"{elsewhere}\""
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "This cluster's kube-system namespace has UID \"{uid}\"."
+        )),
+        "{out}"
+    );
+
+    flake.write_cluster_bound("b", "hello from bound sweep-b", true, Some(&uid));
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]);
+    assert!(ok, "{out}");
+    assert_b_intact(&ctx);
+}
+
+/// Return `out` with the line wrapping of the error printer undone: the
+/// `│` gutter is removed and wrapped lines are joined, without a space
+/// after a line that ends in a hyphen, so a message reads as one line.
+fn unwrapped(out: &str) -> String {
+    let mut text = String::new();
+    for line in out.lines() {
+        let line = line.trim_start().trim_start_matches(['│', '×']).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !text.is_empty() && !text.ends_with('-') {
+            text.push(' ');
+        }
+        text.push_str(line);
+    }
+    text
 }
