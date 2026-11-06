@@ -18,6 +18,41 @@
 let
   k8s = import ./core { inherit lib; };
   helmDag = import ./helm-dag.nix { inherit lib; };
+
+  # Pin the Helm release here rather than take `pkgs.kubernetes-helm`, so a
+  # chart renders the same whichever nixpkgs the cluster's flake locks.
+  # helm-versions.json names the release and the hash of each upstream build.
+  helmRelease = (lib.importJSON ./helm-versions.json)."4";
+
+  helmPlatforms = {
+    x86_64-linux = "linux-amd64";
+    aarch64-linux = "linux-arm64";
+    x86_64-darwin = "darwin-amd64";
+    aarch64-darwin = "darwin-arm64";
+  };
+
+  helmPackage =
+    let
+      system = pkgs.stdenv.hostPlatform.system;
+      platform =
+        helmPlatforms.${system}
+          or (throw "Kix renders Helm charts only on ${lib.concatStringsSep ", " (builtins.attrNames helmPlatforms)}. This system is ${system}.");
+    in
+    pkgs.stdenvNoCC.mkDerivation {
+      pname = "helm";
+      inherit (helmRelease) version;
+      src = pkgs.fetchurl {
+        url = "https://get.helm.sh/helm-v${helmRelease.version}-${platform}.tar.gz";
+        sha256 = helmRelease.sha256.${system};
+      };
+      dontConfigure = true;
+      dontBuild = true;
+      dontFixup = true;
+      installPhase = ''
+        install -Dm755 helm $out/bin/helm
+      '';
+    };
+
   helpers = import ./eval/helpers.nix { inherit lib; };
 
   # Return true when kind is cluster-scoped and rendered with no namespace.
@@ -124,7 +159,7 @@ rec {
       outputHash = hash;
       outputHashMode = "flat";
 
-      nativeBuildInputs = [ pkgs.kubernetes-helm ];
+      nativeBuildInputs = [ helmPackage ];
 
       buildCommand = ''
         export HOME=$(mktemp -d)
@@ -171,7 +206,7 @@ rec {
     pkgs.runCommand "helm-template-${releaseName}"
       {
         nativeBuildInputs = [
-          pkgs.kubernetes-helm
+          helmPackage
           pkgs.yq-go
         ];
       }
@@ -197,7 +232,7 @@ rec {
         pkgs.runCommand "helm-crds-${releaseName}"
           {
             nativeBuildInputs = [
-              pkgs.kubernetes-helm
+              helmPackage
               pkgs.yq-go
             ];
           }
