@@ -176,16 +176,25 @@
             ]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus ];
 
+            # Helm renders need a Kix runtime, which never falls back to the
+            # programs on PATH. This is the runtime a release ships, so
+            # `cargo test` renders charts with the releases the library names.
+            # On macOS assembling it needs the command line tools, which the
+            # build sandbox lacks, so set KIX_RUNTIME_DIR by hand there.
+            KIX_RUNTIME_DIR =
+              lib.optionalString (pkgs.stdenv.hostPlatform.isLinux && builtins.elem system runtimeSystems)
+                (
+                  pkgs.runCommand "kix-runtime" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+                    python3 ${./cli/runtime/assemble.py} ${import ./cli/runtime { inherit pkgs; }} $out
+                  ''
+                );
+
             # Keyed on the checkout path and kept OUT of the checkout, for
             # the reason devenv.nix spells out at length: a `path:` flakeref
             # copies a directory into the store with no filtering at all, so
             # an in-tree target dir is copied verbatim on every change. Same
             # scheme as devenv's, so the two share a directory rather than
             # building two cold copies of the same tree.
-            # Helm renders need a Kix runtime, which never falls back to
-            # the programs on PATH.
-            KIX_RUNTIME_DIR = import ./cli/dev-runtime.nix { inherit pkgs; };
-
             shellHook = ''
               export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)"
               mkdir -p "$CARGO_TARGET_DIR"
