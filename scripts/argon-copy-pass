@@ -62,7 +62,7 @@ fi
 mb="$(git merge-base "$base" HEAD)"
 
 # The files on this branch that change text a person reads:
-# - every changed doc page, reference doc, skill, and the changelog;
+# - every changed doc page, skill, and the changelog;
 # - every Rust file under cli/ and Nix file under kix/ whose added lines
 #   hold a string of four or more words. Those strings reach people as
 #   errors, warnings, refusals, and log lines. Comments, asserts, tests,
@@ -70,7 +70,6 @@ mb="$(git merge-base "$base" HEAD)"
 copy_files() {
   git diff --name-only --diff-filter=ACMR "$mb" -- \
     ':(glob)docs/src/content/docs/**' \
-    ':(glob)docs-legacy/*.md' \
     ':(glob).claude/skills/**/*.md' \
     'CHANGELOG.md'
   local literal='"([^"\\]|\\.)*("|\\$)|^\+[^"]*\\$'
