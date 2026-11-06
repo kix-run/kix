@@ -494,13 +494,18 @@ in
           // depHash "encryption-key" ek
           // lib.optionalAttrs valkeyAuth (depHash "valkey-password" valkey.out.authSecret);
 
+        # The broker accepts connections from 127.0.0.1 only, so a random
+        # token per pod authenticates the sidecar without a Secret. The init
+        # container writes it; the other containers read it.
         tokenMount =
           readOnly:
-          {
+          kix.mount.emptyDir {
             name = "runners-token";
             mountPath = tokenDir;
-          }
-          // lib.optionalAttrs readOnly { readOnly = true; };
+            medium = "Memory";
+            sizeLimit = "1Mi";
+            inherit readOnly;
+          };
 
         imagePull =
           image: lib.optionalAttrs (image.pullPolicy != null) { imagePullPolicy = image.pullPolicy; };
@@ -526,12 +531,9 @@ in
           }
           // lib.optionalAttrs (role == "worker") {
             args = [ "worker" ] ++ config.worker.extraArgs;
-            volumeMounts = [ (tokenMount true) ];
           }
           // imagePull config.image;
 
-        # The broker accepts connections from 127.0.0.1 only, so a random
-        # token per pod authenticates the sidecar without a Secret.
         tokenInit = {
           name = "runners-token";
           image = kix.image.ref config.image;
@@ -551,7 +553,6 @@ in
             };
           };
           securityContext = hardening;
-          volumeMounts = [ (tokenMount false) ];
         }
         // imagePull config.image;
 
@@ -566,7 +567,6 @@ in
           readinessProbe = httpProbe "health" "/healthz";
           resources = config.runners.resources;
           securityContext = hardening;
-          volumeMounts = [ (tokenMount true) ];
         }
         // imagePull config.runners.image;
 
@@ -670,22 +670,12 @@ in
                     (n8nContainer "worker")
                     runnersContainer
                   ];
-                  # kix.withMountsOn mounts a volume into one container, and
-                  # this one is shared by the init container and both
-                  # containers.
-                  volumes = [
-                    {
-                      name = "runners-token";
-                      emptyDir = {
-                        medium = "Memory";
-                        sizeLimit = "1Mi";
-                      };
-                    }
-                  ];
                 };
               };
             };
           }
+          |> kix.withMountsOn "runners-token" [ (tokenMount false) ]
+          |> kix.withMountsOn [ "n8n" "task-runners" ] [ (tokenMount true) ]
           |> n8nMounts
           |> runnerMounts
           |> scope.mkDeployment;

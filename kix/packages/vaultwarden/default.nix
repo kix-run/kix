@@ -198,7 +198,6 @@ in
                           drop = [ "ALL" ];
                         };
                       };
-                      volumeMounts = [ { inherit (dataMount) name mountPath; } ];
                     }
                 );
                 containers = [
@@ -273,7 +272,7 @@ in
               };
             };
           }
-          |> kix.withMounts [
+          |> kix.withMountsOn ([ "vaultwarden" ] ++ lib.optional config.initChownData "init-chown-data") [
             dataMount
           ]
           |> scope.mkDeployment;

@@ -300,21 +300,6 @@ let
     })
   ];
 
-  # Copy volumeMounts from container `from` to container `to`.
-  # kix.withMountsOn targets one container, and a second pass with the same
-  # mounts is refused for declaring each volume twice.
-  shareMounts =
-    from: to: workload:
-    let
-      podSpec = workload.spec.template.spec;
-      source = lib.findFirst (c: c.name == from) null podSpec.containers;
-    in
-    lib.recursiveUpdate workload {
-      spec.template.spec.containers = map (
-        c: if c.name == to then c // { inherit (source) volumeMounts; } else c
-      ) podSpec.containers;
-    };
-
   inherit (scope.rbac)
     group
     core
@@ -584,8 +569,7 @@ else
           };
         };
       }
-      |> kix.withMountsOn "operator" mounts
-      |> shareMounts "operator" "metrics-exporter"
+      |> kix.withMountsOn [ "operator" "metrics-exporter" ] mounts
       |> scope.mkDeployment;
 
     operatorService =

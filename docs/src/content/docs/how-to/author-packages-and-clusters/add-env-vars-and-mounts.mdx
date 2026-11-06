@@ -79,7 +79,9 @@ Pass the mount list through `kix.withMounts` before wrapping the Deployment:
 
 With one container, Kix adds the volumes and volume mounts automatically. For
 a Pod template with several containers, use `kix.withMountsOn "container-name"`
-to select the recipient.
+to select the recipient, or `kix.withMountsOn [ "app" "migrate" ]` to mount the
+same volumes into several containers at once. Init containers can be named too.
+A name that matches no container fails the build.
 
 Null entries in the mount list are ignored, which makes optional mounts easy
 to express with an `if` expression:

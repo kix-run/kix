@@ -60,7 +60,8 @@ deployment = scope.mkDeployment (
     (kix.mount.secret self.tlsSecret {
       mountPath = "/etc/tls";
     })
-    (kix.mount.emptyDir "cache" {
+    (kix.mount.emptyDir {
+      name = "cache";
       mountPath = "/var/cache/myapp";
       sizeLimit = "512Mi";
     })
@@ -87,20 +88,34 @@ All resource-backed mount constructors (`kix.mount.pvc`, `kix.mount.configMap`, 
 
 | Constructor | Signature | Options in final attrset |
 | --- | --- | --- |
-| `kix.mount.pvc` | `pvc -> { mountPath, name ? pvc.out.name, readOnly ? null, subPath ? null }` | Mounts a `PersistentVolumeClaim` (`persistentVolumeClaim.claimName = pvc.out.name`). |
-| `kix.mount.configMap` | `cm -> { mountPath, name ? cm.out.name, readOnly ? null, subPath ? null, defaultMode ? null, items ? null, optional ? null }` | Mounts a `ConfigMap` (`configMap.name = cm.out.name`). |
-| `kix.mount.secret` | `sec -> { mountPath, name ? sec.out.name, readOnly ? null, subPath ? null, defaultMode ? null, items ? null, optional ? null }` | Mounts a `Secret` (`secret.secretName = sec.out.name`). |
-| `kix.mount.emptyDir` | `volName -> { mountPath, readOnly ? null, subPath ? null, medium ? null, sizeLimit ? null }` | Mounts a scratch `emptyDir` volume named `volName` (wrapped with `kix.keep`). |
-| `kix.mount.hostPath` | `volName -> { mountPath, path, type ? null, readOnly ? null, subPath ? null }` | Mounts a node `hostPath` volume named `volName`. |
+| `kix.mount.pvc` | `pvc -> { mountPath, name ? pvc.out.name, readOnly ? false, subPath ? null }` | Mounts a `PersistentVolumeClaim` (`persistentVolumeClaim.claimName = pvc.out.name`). |
+| `kix.mount.configMap` | `cm -> { mountPath, name ? cm.out.name, readOnly ? false, subPath ? null, defaultMode ? null, items ? null }` | Mounts a `ConfigMap` (`configMap.name = cm.out.name`). |
+| `kix.mount.secret` | `sec -> { mountPath, name ? sec.out.name, readOnly ? false, subPath ? null, defaultMode ? null, items ? null }` | Mounts a `Secret` (`secret.secretName = sec.out.name`). |
+| `kix.mount.emptyDir` | `{ name, mountPath, medium ? null, sizeLimit ? null, readOnly ? false, subPath ? null }` | Mounts a scratch `emptyDir` volume named `name`. |
+| `kix.mount.hostPath` | `{ name, mountPath, hostPath, type ? "DirectoryOrCreate", readOnly ? false, subPath ? null }` | Mounts the node path `hostPath` as a volume named `name`. |
+
+`readOnly = true` sets `readOnly` on the container's `volumeMounts` entry. Set it on each mount record separately: a mount record carries one `readOnly` value, so a container that writes a volume and one that only reads it take two records of the same volume, which `kix.withMountsOn` declares once.
 
 ### `kix.withMounts` and `kix.withMountsOn`
 
 | Function | Signature | Behavior |
 | --- | --- | --- |
-| `kix.withMounts` | `mounts -> workloadAttrs -> workloadAttrs` | Attaches all non-null `mounts` to the sole container in `spec.template.spec.containers` (or `spec.jobTemplate.spec.template.spec.containers` for `CronJob`). Throws an error if the pod spec does not have exactly one container. |
-| `kix.withMountsOn` | `containerName -> mounts -> workloadAttrs -> workloadAttrs` | Attaches all non-null `mounts` to the container matching `containerName` in `containers` or `initContainers`. |
+| `kix.withMounts` | `mounts -> workloadAttrs -> workloadAttrs` | Attaches all non-null `mounts` to the one container in the pod template's `containers`. Init containers do not count. Fails the build when the pod template has more than one container. |
+| `kix.withMountsOn` | `containerName -> mounts -> workloadAttrs -> workloadAttrs`, or `[ containerName ... ] -> mounts -> workloadAttrs -> workloadAttrs` | Attaches all non-null `mounts` to each named container, searching `containers` and `initContainers`. Fails the build when a name matches no container. |
 
-Both functions append the volume definitions to `spec.template.spec.volumes` (deduplicating identical volume names when the same volume is mounted across multiple paths or containers) and throw an evaluation error if two mounts declare the same volume `name` with different backing volume specs.
+The pod template is `spec.jobTemplate.spec.template.spec` when the workload has a `jobTemplate` (a `CronJob`), and `spec.template.spec` otherwise.
+
+Both functions add each volume to the pod template's `volumes` once. A volume that is already there with the same name and the same source (the same claim, ConfigMap, Secret, or emptyDir settings) is not added again, so the same volume can be mounted into several containers, or at several paths, with separate calls or separate mount records. Two volumes with the same name and different sources fail the build. The error names both sources; give one of them another name with `name = "..."`.
+
+```nix
+# The init container writes the token; the main containers read it.
+{ name = "worker"; spec = { ... }; }
+|> kix.withMountsOn "write-token" [ (tokenMount false) ]
+|> kix.withMountsOn [ "app" "sidecar" ] [ (tokenMount true) ]
+|> scope.mkDeployment
+```
+
+Each call appends to the named containers' `volumeMounts`, so the order of the calls is the order of the mounts in each container.
 
 ---
 

@@ -32,7 +32,7 @@ Core language, evaluation model, wiring primitives.
 |---|----------|--------|-----------|---------|
 | 29 | [Compiler design](29_compiler-design.md) | Reference | **Reference** | Conceptual anchor: kix compiles K8s wiring, Nix store as IR. Implementation sketches are stale but the core framing is the single best starting point for any technical topic. |
 | 31 | [Port fanout DSL](31_port_fanout_dsl.md) | Design | Near-term | Port registry to eliminate repeated port declarations across K8s resources. |
-| 32 | [Volume mount DSL](32_volume_mount_dsl.md) | Partial | Active | Mount `.path` exposure, `.mountAt` on resources, volume dedup. Read alongside `63a` for the cluster-side story. |
+| 32 | [Volume mount DSL](32_volume_mount_dsl.md) | Partial | Active | Mount `.path` exposure and `.mountAt` on resources; volume dedup and multi-container `withMountsOn` shipped. Read alongside `63a` for the cluster-side story. |
 | 35 | [CRD-derived RBAC & webhooks](35_crd_derived_rbac_webhooks.md) | Proposal | Near-term | Auto-derive RBAC rules and webhooks from CRD definitions. |
 | 40 | [Composite packages](40_composite_packages.md) | RFC | Near-term | Decompose Helm bundles (kube-prometheus-stack etc.) into single-package abstractions. *Use case is still fuzzy — open question which real bundle validates this.* |
 | 65 | [Passthrough instances](65_passthrough_instances.md) | Draft | Near-term | Instances that participate in DI but produce zero K8s resources (S3, databases, DNS). *Use case is still fuzzy — waiting on a concrete driver.* |

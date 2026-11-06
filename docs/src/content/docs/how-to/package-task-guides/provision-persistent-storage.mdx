@@ -68,8 +68,8 @@ Apply the mount before sealing the workload:
 <Snippet {...persistentStorageDeployment} />
 
 `kix.withMounts` adds the PVC volume and the matching container mount. Use
-`kix.withMountsOn` when only one container in a multi-container pod should
-receive it.
+`kix.withMountsOn` to name the container, or the list of containers, that
+should receive it in a multi-container pod.
 
 ## Check the result
 
