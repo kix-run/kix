@@ -35,6 +35,8 @@ use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 pub const SCHEMA_VERSION: &str = "2026-10-07";
 
 /// What a deploy of a build would change, or how two things differ.
+///
+/// Later versions of Kix may add fields. Skip the ones you do not know.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Plan {
     /// The date, `YYYY-MM-DD`, of the document shape's last change that was

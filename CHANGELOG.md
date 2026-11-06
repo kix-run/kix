@@ -5,22 +5,42 @@ below 1.0: a minor release (0.5 to 0.6) may break things, and a patch release
 (0.5.0 to 0.5.1) does not. Each breaking entry says what to change when you
 upgrade.
 
+A release lists its changes under these headings:
+
+- **Breaking (shows an error):** Kix stops with an error that says what to
+  change.
+- **Breaking (no error):** nothing fails, but the result is different. Read
+  these first.
+- **Upgrade notes:** nothing to change, but worth knowing before you upgrade.
+- **Added**, **Changed**, and **Fixed**.
+
 Every pull request that changes something a Kix user sees adds a line under
-`## Unreleased`, in one of the sections Breaking, Added, Changed, or Fixed.
-`CLAUDE.md` § Versioning and breaking changes says what counts as breaking.
+`## Unreleased`. `CLAUDE.md` § Versioning and breaking changes says what
+counts as breaking.
 
 ## Unreleased
 
+### Changed
+
+- The JSON schemas of the `kix diff -o json` document and the `kix deploy --log-format json` log now say that later versions of Kix may add fields and new types of line. A program that reads them should skip the ones it does not know.
+
 ## 0.6.0 - 2026-11-06
 
-### Breaking
+### Breaking (shows an error)
 
-- The `kix deploy --log-format json` log has a new event, `fields_not_kept`. A reader that validates each line against the deploy log schema of 0.5 rejects it: validate against the updated `cli/kix-cli/schema/deploy-log.schema.json`.
-- Each deploy now writes its build's package index to the Activation record, under `status.packageIndex`. Nothing changes when you upgrade: older Kix ignores the field, and records written without it work as before.
-- A package with `lifecycle = "stateful"` fails to build when it renders a custom resource whose kind does not declare `holdsData`. When you upgrade, add `holdsData = true` to the `scope.mkCRD`, `scope.mkCRDRef`, or `kix.mkImport` `crds` entry of each kind that keeps data deleting it loses (a database, a storage pool), and `holdsData = false` to the others (monitoring, certificates, policy). Build those custom resources with `scope.mkCR` so they carry the answer. The packages in this repository declare it already.
-- Kix writes a `kix.run/holds-data` annotation (`"true"` or `"false"`) on custom resources whose kind declares `holdsData`, and `"true"` on PersistentVolumeClaims, PersistentVolumes, and StatefulSets with volume claim templates. Cluster operators change nothing in their cluster definitions. Each marked object is re-applied to add the annotation. So is every object that depends on a marked object, directly or through other objects, because its `kix.run/depends-on` annotation names the changed object's new hash. These changes are to object metadata only, and pod templates do not change, so pods do not restart. The exception is a pod template that carries an object's `out.identityHash` as a `checksum/*` annotation (grafana, valkey, and plausible do this for their ConfigMaps and Secrets): its pods roll when that object depends on a marked one. Objects deployed by an earlier release are read as before until then. Because these objects are applied again, the first deploy after the upgrade is also the first time the new warning about fields Kubernetes did not keep (see Added) checks them. It may list fields a CRD has been dropping for a long time.
-- `cnpg-cluster` refuses `extraSpec.bootstrap.initdb.import`. Set the `import` option instead, which wires the source as a dependency and derives its network policy.
-- `filebrowser` keeps its database on the storage claim at `/data/database` and serves `/data/files`, so users survive a restart. The Deployment uses the `Recreate` strategy, because only one process can hold the database file. Release 0.5 served the whole claim, so when you upgrade, move the files already on the claim into a `files` folder at its top. Otherwise File Browser does not show them.
+- A stateful package (`lifecycle = "stateful"`) now fails to build if it creates a custom resource whose type does not say whether it holds data. Kix uses this to tell a real data migration from a harmless swap of objects. To fix the build, add `holdsData = true` to each type whose objects hold data you would lose if they were deleted, such as a database or a storage pool. Add `holdsData = false` to the others, such as monitoring rules, certificates, or policies. Set it where the type is declared: the `scope.mkCRD`, `scope.mkCRDRef`, or `kix.mkImport` `crds` entry. Create those custom resources with `scope.mkCR`, so that they carry the setting. The packages in this repository already do this.
+- `cnpg-cluster` no longer accepts `extraSpec.bootstrap.initdb.import`, and the build stops with an error. Use the new `import` option instead. It also sets up the dependency on the source database and the network policy to reach it.
+
+### Breaking (no error)
+
+- `filebrowser` now shows only a `files` folder at the top of its storage claim. Release 0.5 showed the whole claim. When you upgrade, move the files already on the claim into a new `files` folder at its top. Otherwise File Browser does not show them. File Browser now keeps its own database on the same claim, at `/data/database`, so its users survive a restart. Its Deployment now uses the `Recreate` strategy, because only one copy of File Browser can use the database file at a time.
+
+### Upgrade notes
+
+- The first deploy after the upgrade applies some objects again. You do not need to change your cluster definitions. Kix now adds a `kix.run/holds-data` annotation to some objects: `"true"` or `"false"` on custom resources whose type declares `holdsData`, and `"true"` on PersistentVolumeClaims, PersistentVolumes, and StatefulSets that create storage. Kix applies each of these objects again to add the annotation. It also applies again every object that depends on one of them, because Kix records each dependency's new hash. Only annotations change, so most pods do not restart. Pods in `grafana`, `valkey`, and `plausible` may restart once. Their pod templates carry a checksum of a ConfigMap or Secret, and that checksum changes when the ConfigMap or Secret depends on an annotated object.
+- That first deploy is also the first time the new warning about fields Kubernetes did not keep (see Added) checks these objects. It may list fields that a CRD has been dropping for a long time.
+- The `kix deploy --log-format json` log has a new type of line, `fields_not_kept`. A program that checks each line against the 0.5 schema rejects it. Check against the updated `cli/kix-cli/schema/deploy-log.schema.json`, or skip lines whose `type` you do not know.
+- Each deploy now saves an index of the build's packages in the Activation record, under `status.packageIndex`. You do not need to do anything. Older Kix ignores the field, and records without it work as before.
 
 ### Added
 

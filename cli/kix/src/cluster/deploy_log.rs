@@ -24,6 +24,9 @@ use crate::manifest::types::ResourceId;
 pub const SCHEMA_VERSION: &str = "2026-10-09";
 
 /// One line of the log.
+///
+/// Later versions of Kix may add fields and new types of line. Skip the ones
+/// you do not know.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Line {
     /// Schema version (`YYYY-MM-DD`), included on every line so lines can be
