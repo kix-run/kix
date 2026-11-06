@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use super::error::KixEvalError;
 use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
 use super::nix;
+use crate::runtime::Tool;
 
 /// Nix CLI subprocess backend.
 pub struct CliNixBackend {
@@ -91,7 +92,7 @@ impl NixBackend for CliNixBackend {
         // print the same order every time.
         raw_manifests.sort_by_cached_key(manifest_sort_key);
 
-        let scorecard_path = result_dir.join("kix-scorecard.json");
+        let scorecard_path = super::store::real_path(&result_dir).join("kix-scorecard.json");
         let scorecard_report = if scorecard_path.exists() {
             match std::fs::read_to_string(&scorecard_path) {
                 Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -113,7 +114,7 @@ impl NixBackend for CliNixBackend {
             None
         };
 
-        let extra_images_path = result_dir.join("kix-extra-images.json");
+        let extra_images_path = super::store::real_path(&result_dir).join("kix-extra-images.json");
         let extra_images = if extra_images_path.exists() {
             match std::fs::read_to_string(&extra_images_path) {
                 Ok(json_str) => {
@@ -164,7 +165,7 @@ impl NixBackend for CliNixBackend {
         // `--override-input` introduces a path input.
         let attr = format!(".#legacyPackages.{}.kixClusters", nix::current_system());
 
-        let mut cmd = Command::new("nix");
+        let mut cmd = nix::command(Tool::Nix)?;
         cmd.args([
             "eval",
             &attr,
@@ -201,7 +202,7 @@ impl NixBackend for CliNixBackend {
 
         let attr = format!(".#legacyPackages.{}.kixPackages", nix::current_system());
 
-        let mut cmd = Command::new("nix");
+        let mut cmd = nix::command(Tool::Nix)?;
         cmd.args([
             "eval",
             &attr,
@@ -249,7 +250,7 @@ impl NixBackend for CliNixBackend {
             cluster_name
         );
 
-        let mut cmd = Command::new("nix");
+        let mut cmd = nix::command(Tool::Nix)?;
         cmd.args([
             "eval",
             &attr,
@@ -304,7 +305,7 @@ pub fn eval_cluster_name(
     attr: &str,
     input_overrides: &[(String, String)],
 ) -> Result<Option<String>, KixEvalError> {
-    let Some(mut cmd) = cluster_name_command(flake, attr, input_overrides) else {
+    let Some(mut cmd) = cluster_name_command(flake, attr, input_overrides)? else {
         return Ok(None);
     };
     let output = match nix::output(&mut cmd) {
@@ -329,13 +330,13 @@ pub fn cluster_name_command(
     flake: &str,
     attr: &str,
     input_overrides: &[(String, String)],
-) -> Option<Command> {
+) -> Result<Option<Command>, KixEvalError> {
     // `attr` is spliced into a Nix string literal below.
     if !attr
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
-        return None;
+        return Ok(None);
     }
     let flake_attr = format!(
         "{flake}#legacyPackages.{}.kixClusters",
@@ -344,7 +345,7 @@ pub fn cluster_name_command(
     let apply = format!(
         "cs: if builtins.hasAttr \"{attr}\" cs then (builtins.getAttr \"{attr}\" cs).name else null"
     );
-    let mut cmd = Command::new("nix");
+    let mut cmd = nix::command(Tool::Nix)?;
     cmd.args([
         "eval",
         &flake_attr,
@@ -357,7 +358,7 @@ pub fn cluster_name_command(
     for (name, url) in input_overrides {
         cmd.arg("--override-input").arg(name).arg(url);
     }
-    Some(cmd)
+    Ok(Some(cmd))
 }
 
 /// Return a deterministic sort key `(apiVersion, kind, namespace, name)` for `manifest`.

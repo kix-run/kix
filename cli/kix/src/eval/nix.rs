@@ -12,6 +12,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use super::error::KixEvalError;
 use super::store_graph::store_name;
+use crate::runtime::{self, RuntimeError, Tool, Want};
 
 /// A `nix` or `nix-store` command that did not run, or exited non-zero.
 #[derive(Debug)]
@@ -40,6 +41,16 @@ impl std::fmt::Display for NixCommandError {
 }
 
 impl std::error::Error for NixCommandError {}
+
+/// Return a command that runs `tool`, a Nix program, from the Kix runtime.
+pub(crate) fn command(tool: Tool) -> Result<Command, NixCommandError> {
+    runtime::tool(tool, Want::Shipped).map_err(|e: RuntimeError| NixCommandError {
+        command: tool.binary().to_string(),
+        dir: None,
+        status: None,
+        stderr: e.to_string(),
+    })
+}
 
 impl NixCommandError {
     fn new(cmd: &Command, status: Option<ExitStatus>, stderr: String) -> Self {
@@ -111,7 +122,7 @@ fn provided_systems(
     dir: Option<&Path>,
     input_overrides: &[(String, String)],
 ) -> Result<Vec<String>, NixCommandError> {
-    let mut cmd = Command::new("nix");
+    let mut cmd = command(Tool::Nix)?;
     cmd.args([
         "eval",
         &format!("{flake}#{flake_output}"),
@@ -205,7 +216,7 @@ pub(crate) fn build_cluster_activation(
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
 
-    let mut cmd = Command::new("nix");
+    let mut cmd = command(Tool::Nix)?;
     cmd.args([
         "build",
         &flake_ref,
@@ -284,70 +295,43 @@ pub(crate) fn build_cluster_activation(
     Ok(path)
 }
 
-/// Query the direct references of every path in the closure of `root_path`
-/// via `nix-store -q --graph`.
+/// Map every path in the closure of `root_path` that refers to other paths
+/// to those paths, leaving out a path's reference to itself.
 ///
 /// Propagates subprocess failures rather than returning an empty graph, which
 /// would cause a plan to treat all live resources as orphans.
 pub(crate) fn closure_graph(
     root_path: &Path,
-) -> Result<HashMap<PathBuf, Vec<PathBuf>>, NixCommandError> {
-    let out = output(
-        Command::new("nix-store")
-            .args(["-q", "--graph"])
-            .arg(root_path),
-    )?;
+) -> Result<HashMap<PathBuf, Vec<PathBuf>>, KixEvalError> {
+    Ok(references_graph(path_info(root_path)?))
+}
 
-    let stdout = String::from_utf8_lossy(&out);
-    let nix_store = "/nix/store/";
-    let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if !line.contains("->") {
+fn references_graph(info: Vec<(String, Vec<String>)>) -> HashMap<PathBuf, Vec<PathBuf>> {
+    let mut deps = HashMap::new();
+    for (path, references) in info {
+        let mut refs: Vec<PathBuf> = references
+            .into_iter()
+            .filter(|r| *r != path)
+            .map(PathBuf::from)
+            .collect();
+        if refs.is_empty() {
             continue;
         }
-        let Some((src_part, dst_part)) = line.split_once("->") else {
-            continue;
-        };
-        let src_base = src_part.trim().trim_matches('"').trim();
-        let dst_base = dst_part
-            .split('[')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .trim_matches('"')
-            .trim()
-            .trim_end_matches(';');
-
-        if src_base.is_empty() || dst_base.is_empty() {
-            continue;
-        }
-
-        let src = PathBuf::from(format!("{nix_store}{src_base}"));
-        let dst = PathBuf::from(format!("{nix_store}{dst_base}"));
-
-        // DOT edges point from dependency to dependent, so invert them to map
-        // each path to its dependencies.
-        deps.entry(dst).or_default().push(src);
-    }
-
-    for refs in deps.values_mut() {
         refs.sort_by(|a, b| {
             store_name(a)
                 .to_lowercase()
                 .cmp(&store_name(b).to_lowercase())
         });
+        deps.insert(PathBuf::from(path), refs);
     }
-
-    Ok(deps)
+    deps
 }
 
 /// Query every path in the closure of `path` and its references via
 /// `nix path-info --json --recursive`.
 pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError> {
     let out = output(
-        Command::new("nix")
+        command(Tool::Nix)?
             .args([
                 "path-info",
                 "--json",
@@ -390,7 +374,7 @@ fn path_info_references(info: &serde_json::Value) -> Vec<(String, Vec<String>)> 
 /// Register `link` as a Nix GC root for `target` with `nix-store --add-root`.
 pub(crate) fn add_gc_root(link: &Path, target: &Path) -> Result<(), NixCommandError> {
     output(
-        Command::new("nix-store")
+        command(Tool::NixStore)?
             .arg("--add-root")
             .arg(link)
             .arg("--realise")
@@ -399,9 +383,57 @@ pub(crate) fn add_gc_root(link: &Path, target: &Path) -> Result<(), NixCommandEr
     .map(drop)
 }
 
+/// The commit a flake's source comes from, as `nix flake metadata` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlakeRevision {
+    /// The commit `HEAD` points at.
+    pub rev: String,
+    /// Whether tracked files differ from `rev`. Nix leaves untracked files
+    /// out of a Git flake, so they do not count.
+    pub dirty: bool,
+}
+
+/// Return the commit of the Git checkout that holds the flake in
+/// `flake_dir`. Return `None` for a flake outside Git or in a repository
+/// with no commit.
+pub fn flake_revision(flake_dir: &Path) -> Result<Option<FlakeRevision>, KixEvalError> {
+    let out = output(
+        command(Tool::Nix)?
+            .args([
+                "flake",
+                "metadata",
+                "--json",
+                "--no-write-lock-file",
+                "--extra-experimental-features",
+                "nix-command flakes",
+            ])
+            .arg(flake_dir),
+    )?;
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&out).map_err(|e| KixEvalError::StoreGraphError {
+            message: format!("nix flake metadata printed something other than JSON: {e}"),
+        })?;
+    Ok(revision_of(&metadata))
+}
+
+fn revision_of(metadata: &serde_json::Value) -> Option<FlakeRevision> {
+    let text = |key: &str| metadata.get(key).and_then(serde_json::Value::as_str);
+    if let Some(rev) = text("revision") {
+        return Some(FlakeRevision {
+            rev: rev.to_string(),
+            dirty: false,
+        });
+    }
+    let rev = text("dirtyRevision")?.strip_suffix("-dirty")?;
+    Some(FlakeRevision {
+        rev: rev.to_string(),
+        dirty: true,
+    })
+}
+
 /// Return the output of `nix --version`, or `None` if `nix` cannot be run.
 pub fn version() -> Option<String> {
-    let out = output(Command::new("nix").arg("--version")).ok()?;
+    let out = output(command(Tool::Nix).ok()?.arg("--version")).ok()?;
     String::from_utf8(out).ok().map(|s| s.trim().to_string())
 }
 
@@ -414,7 +446,23 @@ mod tests {
     fn a_graph_query_that_fails_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let err = closure_graph(dir.path()).unwrap_err();
-        assert!(err.to_string().contains("nix-store -q --graph"), "{err}");
+        assert!(err.to_string().contains("nix path-info"), "{err}");
+    }
+
+    /// Only paths with references other than themselves get an entry, and
+    /// each list is in name order.
+    #[test]
+    fn the_graph_leaves_out_self_references() {
+        let p = |s: &str| format!("/nix/store/{:0>32}-{s}", s.len());
+        let graph = references_graph(vec![
+            (p("a"), vec![p("a"), p("zz"), p("bbb")]),
+            (p("bbb"), vec![p("bbb")]),
+            (p("zz"), vec![]),
+        ]);
+        assert_eq!(
+            graph,
+            HashMap::from([(PathBuf::from(p("a")), vec![p("bbb").into(), p("zz").into()])])
+        );
     }
 
     #[test]
@@ -520,6 +568,31 @@ mod tests {
             build_cluster_activation(dir.path(), "c", &[], &|_| {}).unwrap_err(),
             KixEvalError::ClusterNotFound { .. }
         ));
+    }
+
+    #[test]
+    fn a_flake_revision_is_clean_dirty_or_absent() {
+        let rev = "0b88f978a1ed669ea9f12b63605c8101d2f48fcd";
+        assert_eq!(
+            revision_of(&json!({"revision": rev, "dirtyRevision": null})),
+            Some(FlakeRevision {
+                rev: rev.into(),
+                dirty: false
+            })
+        );
+        assert_eq!(
+            revision_of(&json!({"revision": null, "dirtyRevision": format!("{rev}-dirty")})),
+            Some(FlakeRevision {
+                rev: rev.into(),
+                dirty: true
+            })
+        );
+        // A path flake, or a repository with no commit.
+        assert_eq!(revision_of(&json!({"url": "path:/x"})), None);
+        assert_eq!(
+            revision_of(&json!({"revision": null, "dirtyRevision": null})),
+            None
+        );
     }
 
     #[test]

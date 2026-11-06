@@ -761,9 +761,11 @@ pub fn record_graph(
     if let Some(graph) = build.map_or(Ok(None), |b| b.deployed_build(identity_hash))? {
         return Ok(Some(graph));
     }
-    let built_via = built_via
-        .map(PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists());
+    let built_via = built_via.map(PathBuf::from).filter(|p| {
+        crate::eval::store::real_path(p)
+            .join("kix-packages.json")
+            .exists()
+    });
     checked_build(
         identity_hash,
         built_via,

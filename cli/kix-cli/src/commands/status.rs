@@ -267,7 +267,11 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     let store_graph = built_via
         .as_ref()
         .map(std::path::PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists())
+        .filter(|p| {
+            kix::eval::store::real_path(p)
+                .join("kix-packages.json")
+                .exists()
+        })
         .and_then(|result_dir| Build::local(&result_dir, &|_| {}).ok())
         .map(Build::into_graph);
 

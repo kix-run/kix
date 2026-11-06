@@ -1,6 +1,119 @@
 //! Store path management and cache directory resolution.
+//!
+//! Store paths keep their logical form, `/nix/store/<hash>-<name>`,
+//! everywhere Kix records them. When `KIX_STORE_ROOT` names a relocated
+//! store, the files behind those paths live under that root instead, so code
+//! that opens a store path on disk maps it with [`real_path`] first.
 
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
+
+use super::store_path::STORE_DIR;
+
+/// The environment variable that selects a relocated Nix store.
+pub const STORE_ROOT_VAR: &str = "KIX_STORE_ROOT";
+
+/// Return the root of the relocated store named by `KIX_STORE_ROOT`, or
+/// `None` when Kix uses the machine's store at `/nix/store`.
+///
+/// The store's files live in `<root>/nix/store`. A relative root is taken
+/// from the working directory.
+pub fn store_root() -> Option<PathBuf> {
+    let root = std::env::var_os(STORE_ROOT_VAR).filter(|r| !r.is_empty())?;
+    Some(std::path::absolute(&root).unwrap_or_else(|_| PathBuf::from(root)))
+}
+
+/// Return the directory that holds the store's files on disk.
+pub fn store_dir() -> PathBuf {
+    real_path(Path::new(STORE_DIR))
+}
+
+/// Return where the file behind `logical` is on disk. A path under
+/// `/nix/store` moves under the store root when one is set. Any other path
+/// is returned unchanged.
+pub fn real_path(logical: &Path) -> PathBuf {
+    real_path_in(store_root().as_deref(), logical)
+}
+
+fn real_path_in(root: Option<&Path>, logical: &Path) -> PathBuf {
+    match (root, logical.strip_prefix("/")) {
+        (Some(root), Ok(relative)) if logical.starts_with(STORE_DIR) => root.join(relative),
+        _ => logical.to_path_buf(),
+    }
+}
+
+/// Resolve every link in `path` and return the result in logical form.
+///
+/// With no store root this is [`std::fs::canonicalize`]. With a store root,
+/// a link whose target is under `/nix/store` is followed into the root, and
+/// the result keeps its `/nix/store` form, so the caller can record it.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    match store_root() {
+        None => std::fs::canonicalize(path),
+        Some(root) => canonicalize_in(&root, path),
+    }
+}
+
+/// Return `path` with its links resolved when a store root is set and the
+/// path leads into the store, such as a `result` link that `nix build`
+/// made. Otherwise return `path` unchanged.
+pub fn follow_into_store(path: &Path) -> PathBuf {
+    store_root()
+        .and_then(|root| canonicalize_in(&root, path).ok())
+        .filter(|p| p.starts_with(STORE_DIR))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// Resolve links in `path` one component at a time, reading each from disk
+/// through [`real_path_in`], so a link into `/nix/store` works on a machine
+/// with no `/nix`.
+fn canonicalize_in(root: &Path, path: &Path) -> std::io::Result<PathBuf> {
+    const MAX_LINKS: usize = 40;
+    let mut pending: Vec<OsString> = Vec::new();
+    let push_all = |pending: &mut Vec<OsString>, p: &Path| {
+        let parts: Vec<OsString> = p
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(n) => Some(n.to_os_string()),
+                Component::ParentDir => Some(OsString::from("..")),
+                _ => None,
+            })
+            .collect();
+        pending.extend(parts.into_iter().rev());
+    };
+    push_all(&mut pending, &std::path::absolute(path)?);
+    let mut out = PathBuf::from("/");
+    let mut links = 0;
+    while let Some(part) = pending.pop() {
+        if part == ".." {
+            out.pop();
+            continue;
+        }
+        out.push(&part);
+        // `/nix` itself need not exist when the store is relocated.
+        if Path::new(STORE_DIR).starts_with(&out) {
+            continue;
+        }
+        let disk = real_path_in(Some(root), &out);
+        if !std::fs::symlink_metadata(&disk)?.file_type().is_symlink() {
+            continue;
+        }
+        links += 1;
+        if links > MAX_LINKS {
+            return Err(std::io::Error::other(format!(
+                "too many levels of links in {}",
+                path.display()
+            )));
+        }
+        let target = std::fs::read_link(&disk)?;
+        out.pop();
+        if target.is_absolute() {
+            out = PathBuf::from("/");
+        }
+        push_all(&mut pending, &target);
+    }
+    Ok(out)
+}
 
 /// Return the default cache directory (`~/.cache/kix/`).
 pub fn default_cache_dir() -> PathBuf {
@@ -121,7 +234,7 @@ pub fn load_activation_path(cluster: &str) -> Option<PathBuf> {
     std::fs::read_to_string(&file)
         .ok()
         .map(|s| PathBuf::from(s.trim()))
-        .filter(|p| p.exists())
+        .filter(|p| real_path(p).exists())
 }
 
 /// Resolve an identity-hash to the activation result directory.
@@ -139,8 +252,7 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
 
     // Slow path: find a matching store path and check if it has a result dir structure
     // The identity-hash is the first 32 chars of the store path basename
-    let store_dir = PathBuf::from("/nix/store");
-    if let Ok(entries) = std::fs::read_dir(&store_dir) {
+    if let Ok(entries) = std::fs::read_dir(store_dir()) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
@@ -149,10 +261,9 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
                 && name_str.as_bytes()[32] == b'-'
                 && name_str.contains("activation")
             {
-                let path = entry.path();
                 // Check if this looks like a result dir (has kix-packages.json)
-                if path.join("kix-packages.json").exists() {
-                    return Some(path);
+                if entry.path().join("kix-packages.json").exists() {
+                    return Some(Path::new(STORE_DIR).join(&name));
                 }
             }
         }
@@ -165,7 +276,7 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
 /// characters of the store path targeted by `result_dir/activation`), or
 /// `None` if the symlink cannot be read.
 pub(crate) fn build_hash_of(result_dir: &Path) -> Option<String> {
-    let target = std::fs::read_link(result_dir.join("activation")).ok()?;
+    let target = std::fs::read_link(real_path(&result_dir.join("activation"))).ok()?;
     let name = target.file_name()?.to_str()?;
     name.get(..32).map(str::to_string)
 }
@@ -223,6 +334,57 @@ mod tests {
 
         sync_kept_roots_in(dir.path(), "c", &[], fake_root);
         assert_eq!(roots(), vec!["other.kept-aaa"]);
+    }
+
+    #[test]
+    fn a_store_path_moves_under_the_root() {
+        let root = Path::new("/home/u/.cache/kix/store");
+        let logical = Path::new("/nix/store/abc-activation/kix-packages.json");
+        assert_eq!(real_path_in(None, logical), logical);
+        assert_eq!(
+            real_path_in(Some(root), logical),
+            Path::new("/home/u/.cache/kix/store/nix/store/abc-activation/kix-packages.json")
+        );
+        assert_eq!(
+            real_path_in(Some(root), Path::new("/nix/store")),
+            Path::new("/home/u/.cache/kix/store/nix/store")
+        );
+        for elsewhere in ["/nix/storefront/x", "/tmp/result", "relative/nix/store"] {
+            assert_eq!(
+                real_path_in(Some(root), Path::new(elsewhere)),
+                Path::new(elsewhere)
+            );
+        }
+    }
+
+    /// A `result` link and a link inside the store both point at logical
+    /// store paths that exist only under the root.
+    #[test]
+    fn links_into_a_relocated_store_resolve_to_logical_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let store = root.join("nix/store");
+        std::fs::create_dir_all(store.join("aaa-result")).unwrap();
+        std::fs::write(store.join("bbb-activation"), "{}").unwrap();
+        std::os::unix::fs::symlink(
+            "/nix/store/bbb-activation",
+            store.join("aaa-result/activation"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/nix/store/aaa-result", dir.path().join("result")).unwrap();
+
+        assert_eq!(
+            canonicalize_in(&root, Path::new("/nix/store/aaa-result/activation")).unwrap(),
+            Path::new("/nix/store/bbb-activation")
+        );
+        assert_eq!(
+            canonicalize_in(&root, &dir.path().join("result/activation")).unwrap(),
+            Path::new("/nix/store/bbb-activation")
+        );
+        assert!(canonicalize_in(&root, Path::new("/nix/store/missing")).is_err());
+
+        std::os::unix::fs::symlink("loop", dir.path().join("loop")).unwrap();
+        assert!(canonicalize_in(&root, &dir.path().join("loop")).is_err());
     }
 
     #[test]

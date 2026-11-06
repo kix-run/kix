@@ -6,7 +6,7 @@ use std::path::Path;
 
 use kix::build_source::Provenance;
 use kix::eval::error::KixEvalError;
-use kix::eval::store_path;
+use kix::eval::{store, store_path};
 
 use crate::{FORMAT, FileEntry, Header, MAX_FRAME_BYTES, VERSION, stream_order};
 
@@ -101,7 +101,7 @@ pub fn from_result_dir(
     receipt: Option<Provenance>,
 ) -> Result<Contents, KixEvalError> {
     let err = |message: String| KixEvalError::StoreGraphError { message };
-    let activation = std::fs::canonicalize(result_dir.join("activation")).map_err(|e| {
+    let activation = store::canonicalize(&result_dir.join("activation")).map_err(|e| {
         err(format!(
             "failed to resolve activation in {}: {e}",
             result_dir.display()
@@ -109,7 +109,8 @@ pub fn from_result_dir(
     })?;
     let mut files = BTreeMap::new();
     for (path, references) in kix::eval::nix::path_info(&activation)? {
-        let bytes = std::fs::read(&path).map_err(|e| err(format!("failed to read {path}: {e}")))?;
+        let bytes = std::fs::read(store::real_path(Path::new(&path)))
+            .map_err(|e| err(format!("failed to read {path}: {e}")))?;
         files.insert(path, BundleFile { bytes, references });
     }
     Ok(Contents {

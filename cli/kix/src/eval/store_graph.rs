@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::error::KixEvalError;
 use super::package_index::RecordPackageIndex;
+use super::store::real_path;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
@@ -52,12 +53,13 @@ pub struct KubernetesBinding {
 /// Read `kix-packages.json` from `result_dir`.
 pub fn read_index(result_dir: &Path) -> Result<KixPackageIndex, KixEvalError> {
     let index_path = result_dir.join("kix-packages.json");
-    let bytes = std::fs::read(&index_path).map_err(|e| KixEvalError::StoreGraphError {
-        message: format!(
-            "failed to read kix-packages.json at {}: {e}",
-            index_path.display()
-        ),
-    })?;
+    let bytes =
+        std::fs::read(real_path(&index_path)).map_err(|e| KixEvalError::StoreGraphError {
+            message: format!(
+                "failed to read kix-packages.json at {}: {e}",
+                index_path.display()
+            ),
+        })?;
     super::manifest_json::parse_index(&index_path.to_string_lossy(), &bytes).map_err(|e| {
         KixEvalError::StoreGraphError {
             message: e.to_string(),
@@ -151,7 +153,7 @@ fn is_k8s_path(path: &Path) -> bool {
 
 /// Read a file from a store path.
 fn read_store_file(path: &Path) -> Result<Vec<u8>, KixEvalError> {
-    std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
+    std::fs::read(real_path(path)).map_err(|e| KixEvalError::StoreGraphError {
         message: format!("failed to read store path {}: {e}", path.display()),
     })
 }
@@ -286,15 +288,16 @@ impl StoreGraph {
 
         // 2. Resolve activation symlink
         let activation_link = result_dir.join("activation");
-        let activation_path =
-            std::fs::canonicalize(&activation_link).map_err(|e| KixEvalError::StoreGraphError {
+        let activation_path = super::store::canonicalize(&activation_link).map_err(|e| {
+            KixEvalError::StoreGraphError {
                 message: format!(
                     "failed to resolve activation symlink at {}: {e}",
                     activation_link.display()
                 ),
-            })?;
+            }
+        })?;
 
-        // 3. Bulk-load the entire store graph in one nix-store call
+        // 3. Bulk-load the entire store graph in one `nix path-info` call
         status_fn("Loading store graph...");
         let ref_cache = super::nix::closure_graph(&activation_path)?;
 
