@@ -58,7 +58,7 @@ holds it.
 
 
 def is_lgpl(component):
-    return any(l.startswith("LGPL-") for l in component["licences"])
+    return any(licence.startswith("LGPL-") for licence in component["licences"])
 
 
 # Directories, relative to the top of a source, that may hold the licence
@@ -98,8 +98,13 @@ def licence_texts_in_archive(src, scratch):
         with zipfile.ZipFile(src) as z:
             members = z.namelist()
             wanted = top_level_licence_members(members)
-            return [(os.path.basename(m), z.read(m).decode("utf-8", errors="replace")) for m in wanted]
-    listing = subprocess.run(["tar", "-tf", src], check=True, capture_output=True, text=True)
+            return [
+                (os.path.basename(m), z.read(m).decode("utf-8", errors="replace"))
+                for m in wanted
+            ]
+    listing = subprocess.run(
+        ["tar", "-tf", src], check=True, capture_output=True, text=True
+    )
     members = listing.stdout.splitlines()
     wanted = top_level_licence_members(members)
     if not wanted:
@@ -120,6 +125,7 @@ def top_level_licence_members(members):
     They sit at the top of the source, which is the archive root or the one
     directory everything else is in, or in one of LICENCE_DIRS below it.
     """
+
     def clean(m):
         m = m[2:] if m.startswith("./") else m
         return m.rstrip("/")
@@ -127,13 +133,22 @@ def top_level_licence_members(members):
     names = {clean(m): m for m in members if clean(m)}
     tops = {n.split("/", 1)[0] for n in names}
     top = next(iter(tops)) if len(tops) == 1 else None
-    prefix = top + "/" if top is not None and any(n.startswith(top + "/") for n in names) else ""
+    prefix = (
+        top + "/"
+        if top is not None and any(n.startswith(top + "/") for n in names)
+        else ""
+    )
     for sub in LICENCE_DIRS:
         base = prefix + (sub + "/" if sub else "")
         wanted = []
         for name, member in names.items():
-            rest = name[len(base):] if name.startswith(base) else None
-            if rest and "/" not in rest and LICENCE_FILE.match(rest) and not member.endswith("/"):
+            rest = name[len(base) :] if name.startswith(base) else None
+            if (
+                rest
+                and "/" not in rest
+                and LICENCE_FILE.match(rest)
+                and not member.endswith("/")
+            ):
                 wanted.append(member)
         if wanted:
             return sorted(wanted)
@@ -183,7 +198,11 @@ def check_declared(component, texts):
 
 
 def source_dir_name(component):
-    return f"{component['name']}-{component['version']}" if component["version"] else component["name"]
+    return (
+        f"{component['name']}-{component['version']}"
+        if component["version"]
+        else component["name"]
+    )
 
 
 def copy_source(component, dest):
@@ -197,7 +216,9 @@ def copy_source(component, dest):
         patches = os.path.join(dest, "patches")
         os.makedirs(patches)
         for i, patch in enumerate(component["patches"], 1):
-            target = os.path.join(patches, f"{i:02d}-{strip_hash(os.path.basename(patch))}")
+            target = os.path.join(
+                patches, f"{i:02d}-{strip_hash(os.path.basename(patch))}"
+            )
             if os.path.isdir(patch):
                 shutil.copytree(patch, target, symlinks=True)
             else:
@@ -223,7 +244,9 @@ def entry(component, texts, source_in_archive):
     if component.get("source"):
         lines.append(f"Source: {component['source']}")
     if component.get("download"):
-        hash_note = f" ({component['downloadHash']})" if component.get("downloadHash") else ""
+        hash_note = (
+            f" ({component['downloadHash']})" if component.get("downloadHash") else ""
+        )
         lines.append(f"Downloaded from: {component['download']}{hash_note}")
     if source_in_archive:
         lines.append(f"Source in the sources archive: {source_in_archive}/")
@@ -258,7 +281,9 @@ def main():
         in_archive = None
         if is_lgpl(c):
             if not c.get("src"):
-                sys.exit(f"{c['name']} is under the LGPL, but runtime.nix gives no source for it")
+                sys.exit(
+                    f"{c['name']} is under the LGPL, but runtime.nix gives no source for it"
+                )
             in_archive = copied.get(c["src"])
             if in_archive is None:
                 in_archive = source_dir_name(c)
@@ -269,7 +294,9 @@ def main():
     with open(os.path.join(out, "THIRD_PARTY_LICENSES"), "w") as f:
         f.write("\n".join(parts))
     shutil.rmtree(scratch)
-    print(f"wrote licences for {len(components)} components and the sources of {len(copied)}")
+    print(
+        f"wrote licences for {len(components)} components and the sources of {len(copied)}"
+    )
     if without_texts:
         print("no licence file found in the source of: " + ", ".join(without_texts))
 

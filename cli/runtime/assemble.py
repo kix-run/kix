@@ -76,7 +76,9 @@ def copy_program(program, out):
 
 
 def otool(*args):
-    return subprocess.run(["otool", *args], check=True, capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["otool", *args], check=True, capture_output=True, text=True
+    ).stdout
 
 
 def install_name(path):
@@ -97,7 +99,19 @@ def load_commands(path):
 
 def rpaths(path):
     lines = otool("-l", path).splitlines()
-    return [lines[i + 2].split()[1] for i, l in enumerate(lines) if "cmd LC_RPATH" in l]
+    return [
+        lines[i + 2].split()[1]
+        for i, line in enumerate(lines)
+        if "cmd LC_RPATH" in line
+    ]
+
+
+# Libraries every Mac ships in /usr/lib, which the bundle loads from there
+# instead of shipping the copy from nixpkgs. runtime.nix lists the same
+# packages under systemLibraries.
+SYSTEM_LIBRARIES = {
+    "libresolv.9.dylib": "/usr/lib/libresolv.9.dylib",
+}
 
 
 def system_substitute(real):
@@ -106,13 +120,16 @@ def system_substitute(real):
     Nixpkgs' darwin libiconv is Apple's libiconv. It loads its converter
     modules from a lib/i18n path compiled into the library, which would point
     into /nix/store after relocation. Every Mac ships the same library as
-    /usr/lib/libiconv.2.dylib, so the bundle loads that instead. runtime.nix
-    lists it under systemLibraries for the same reason.
+    /usr/lib/libiconv.2.dylib, so the bundle loads that instead. GNU
+    libiconv, which has no lib/i18n, ships in the bundle.
     """
+    name = os.path.basename(real)
     package = store_package(real)
-    if os.path.basename(real) == "libiconv.2.dylib" and os.path.isdir(os.path.join(package, "lib", "i18n")):
+    if name == "libiconv.2.dylib" and os.path.isdir(
+        os.path.join(package, "lib", "i18n")
+    ):
         return "/usr/lib/libiconv.2.dylib"
-    return None
+    return SYSTEM_LIBRARIES.get(name)
 
 
 def store_package(real):
@@ -126,16 +143,16 @@ def resolve(dep, image):
     if dep.startswith("@rpath/"):
         for rp in rpaths(image):
             rp = rp.replace("@loader_path", here).replace("@executable_path", here)
-            candidate = os.path.join(rp, dep[len("@rpath/"):])
+            candidate = os.path.join(rp, dep[len("@rpath/") :])
             if os.path.exists(candidate):
                 return os.path.realpath(candidate)
         # An @rpath dependency of a store library normally sits beside it.
-        candidate = os.path.join(here, dep[len("@rpath/"):])
+        candidate = os.path.join(here, dep[len("@rpath/") :])
         if os.path.exists(candidate):
             return os.path.realpath(candidate)
         sys.exit(f"cannot resolve {dep} from {image}")
     if dep.startswith("@loader_path/"):
-        return os.path.realpath(os.path.join(here, dep[len("@loader_path/"):]))
+        return os.path.realpath(os.path.join(here, dep[len("@loader_path/") :]))
     if dep.startswith("@"):
         sys.exit(f"unhandled load command {dep} in {image}")
     if dep.startswith("/nix/"):
@@ -149,7 +166,9 @@ def relocate(root, origins, allowed_packages):
     `origins` maps each copied executable to the store file it came from.
     """
     if sys.platform != "darwin":
-        sys.exit("relocating a program needs macOS (otool, install_name_tool, codesign)")
+        sys.exit(
+            "relocating a program needs macOS (otool, install_name_tool, codesign)"
+        )
     allowed = set(allowed_packages)
 
     # Walk the load graph instead of copying the store closure, so packages
@@ -196,7 +215,11 @@ def relocate(root, origins, allowed_packages):
 
     for dst, src in sorted(copies.items()):
         is_lib = os.path.dirname(dst) == lib_dir
-        prefix = "@loader_path/" if is_lib else "@loader_path/" + os.path.relpath(lib_dir, os.path.dirname(dst)) + "/"
+        prefix = (
+            "@loader_path/"
+            if is_lib
+            else "@loader_path/" + os.path.relpath(lib_dir, os.path.dirname(dst)) + "/"
+        )
         args = []
         for dep in load_commands(src):
             real = resolve(dep, src)
@@ -210,8 +233,12 @@ def relocate(root, origins, allowed_packages):
             if rp.startswith("/nix/") or rp.startswith("@"):
                 args += ["-delete_rpath", rp]
         if args:
-            subprocess.run(["install_name_tool", *args, dst], check=True, capture_output=True)
-        subprocess.run(["codesign", "--force", "--sign", "-", dst], check=True, capture_output=True)
+            subprocess.run(
+                ["install_name_tool", *args, dst], check=True, capture_output=True
+            )
+        subprocess.run(
+            ["codesign", "--force", "--sign", "-", dst], check=True, capture_output=True
+        )
 
     bad = []
     for dst in copies:
@@ -220,7 +247,9 @@ def relocate(root, origins, allowed_packages):
                 bad.append(f"{dst}: {ref}")
     if bad:
         sys.exit("the bundle still refers to /nix or @rpath:\n" + "\n".join(bad))
-    print(f"relocated {len(origins)} executables and {len(names)} libraries into {root}")
+    print(
+        f"relocated {len(origins)} executables and {len(names)} libraries into {root}"
+    )
 
 
 # --- manifest ------------------------------------------------------------
@@ -239,7 +268,9 @@ def file_entries(out, dirname):
     root = os.path.join(out, dirname)
     for parent, dirs, files in os.walk(root):
         dirs.sort()
-        for name in sorted(files + [d for d in dirs if os.path.islink(os.path.join(parent, d))]):
+        for name in sorted(
+            files + [d for d in dirs if os.path.islink(os.path.join(parent, d))]
+        ):
             path = os.path.join(parent, name)
             rel = os.path.relpath(path, out)
             if os.path.islink(path):
@@ -263,16 +294,26 @@ def main():
         sys.exit(f"{out} is not empty")
     os.makedirs(out, exist_ok=True)
 
-    manifest = {"manifestVersion": MANIFEST_VERSION, "system": spec["system"], "programs": []}
+    manifest = {
+        "manifestVersion": MANIFEST_VERSION,
+        "system": spec["system"],
+        "programs": [],
+    }
     for program in sorted(spec["programs"], key=lambda p: (p["name"], p["version"])):
         dirname, origins = copy_program(program, out)
         if program.get("relocate"):
-            relocate(os.path.join(out, dirname), origins, spec["packages"].get(program["name"], []))
+            relocate(
+                os.path.join(out, dirname),
+                origins,
+                spec["packages"].get(program["name"], []),
+            )
         bin_paths = {}
         for b in program["bin"]:
             rel = f"{dirname}/bin/{b}"
             if not os.path.exists(os.path.join(out, rel)):
-                sys.exit(f"{program['name']} {program['version']} lists bin/{b}, which the spec does not ship")
+                sys.exit(
+                    f"{program['name']} {program['version']} lists bin/{b}, which the spec does not ship"
+                )
             bin_paths[b] = rel
         manifest["programs"].append(
             {

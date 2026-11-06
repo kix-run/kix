@@ -91,6 +91,17 @@ jobs:
       - name: Tests
         run: nix develop --command bash -c 'cd cli && cargo test --workspace'
 
+      # Evaluating the runtime spec runs the checks in cli/runtime/runtime.nix:
+      # that programs.json, which kix compiles in, matches what the runtime
+      # ships, and that every licence is on the approved list. Evaluation
+      # downloads nothing, so this covers every target from one machine. The
+      # release builds the runtime itself.
+      - name: Runtime checks
+        run: |
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            nix eval --raw ".#packages.$system.kix-runtime-spec.drvPath" >/dev/null
+          done
+
   # Decides whether this push is a release, from the workspace version in
   # cli/Cargo.toml: it is when this repository has no `v<version>` tag yet.
   # A version lower than the latest tag, or one with no CHANGELOG.md
@@ -146,6 +157,82 @@ jobs:
             echo 'KIX_RELEASE_NOTES_END'
           } >> "$GITHUB_OUTPUT"
 
+  # Builds the runtime a release ships beside the binary, in libexec/kix/
+  # (cli/runtime/), on a runner of each target platform: Nix fetches the
+  # programs for its own platform, and the macOS bundle step needs macOS to
+  # rewrite and sign the libraries. The macOS job also builds kix for
+  # aarch64-apple-darwin, which cargo zigbuild cannot link. Each job uploads
+  # tar files, because workflow artifacts drop file modes and symbolic
+  # links.
+  runtime:
+    needs: [test, version]
+    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes pipe-operators
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      # assemble.py prints each program it ships. On macOS it also relocates
+      # the nix build's libraries and fails on any library that runtime.nix
+      # does not list, so THIRD_PARTY_LICENSES covers everything shipped.
+      - name: Build the runtime
+        run: |
+          spec=$(nix build ".#packages.${{ matrix.system }}.kix-runtime-spec" --no-link --print-out-paths)
+          python3 cli/runtime/assemble.py "$spec" runtime/libexec/kix
+          tar -cf "runtime-${{ matrix.system }}.tar" -C runtime libexec
+          # Writable copies, so the release job can unpack the sources of
+          # every platform into one directory, over each other.
+          cp -R "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["sources"])' "$spec")" sources
+          chmod -R u+w sources
+          tar -cf "sources-${{ matrix.system }}.tar" -C sources .
+
+      - name: Check the bundled programs run
+        run: |
+          r=runtime/libexec/kix
+          for helm in "$r"/helm-*/bin/helm; do "$helm" version --short; done
+          for nix in "$r"/nix-*/bin/nix "$r"/nix-*/bin/nix-store; do "$nix" --version; done
+          for kubectl in "$r"/kubectl-*/bin/kubectl; do "$kubectl" version --client; done
+          for sops in "$r"/sops-*/bin/sops; do "$sops" --version --disable-version-check; done
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'macOS'
+
+      - name: Build kix for macOS
+        if: runner.os == 'macOS'
+        env:
+          KIX_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cargo build --manifest-path cli/Cargo.toml --locked --release -p kix-cli
+          bin=cli/target/release/kix
+          test "$("$bin" --version)" = "kix $KIX_VERSION" || { "$bin" --version; exit 1; }
+          tar -cf kix-aarch64-darwin.tar -C cli/target/release kix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.system }}
+          path: |
+            runtime-${{ matrix.system }}.tar
+            sources-${{ matrix.system }}.tar
+            kix-aarch64-darwin.tar
+          if-no-files-found: error
+
   # Builds the kix binary for a release, after the tests pass, and publishes
   # it. Pushes to main that are not releases build nothing. This repository
   # is private and so are its releases, so the binaries go to the public
@@ -156,7 +243,7 @@ jobs:
   # artifact but publishes nothing, which is how to try a change to this
   # job from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
   release:
-    needs: [test, version]
+    needs: [test, version, runtime]
     if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     # GitHub-hosted rather than Spindle. The binaries are static musl, and
     # nixpkgs has no musl standard library for its rustc in the binary
@@ -199,20 +286,50 @@ jobs:
               -p kix-cli --target "$target"
           done
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: runtime
+          merge-multiple: true
+
+      # Each archive holds kix-<version>-<system>/bin/kix beside
+      # libexec/kix/, where kix looks for its runtime. Asset names carry no
+      # version, so releases/latest/download/kix-<arch>-<os>.tar.gz always
+      # resolves.
       - name: Package
         run: |
           bin=cli/target/x86_64-unknown-linux-musl/release/kix
           file "$bin" | grep -Eq 'statically linked|static-pie linked' || { file "$bin"; exit 1; }
           test "$("$bin" --version)" = "kix $VERSION" || { "$bin" --version; exit 1; }
 
-          # Asset names carry no version, so
-          # releases/latest/download/kix-<arch>-linux.tar.gz always resolves.
-          mkdir dist
-          for target in $TARGETS; do
-            tar -czf "dist/kix-${target%%-*}-linux.tar.gz" \
-              -C "cli/target/$target/release" kix
+          mkdir dist darwin
+          tar -xf runtime/kix-aarch64-darwin.tar -C darwin
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            case $system in
+              *-linux) kix="cli/target/${system%%-*}-unknown-linux-musl/release/kix" ;;
+              *-darwin) kix=darwin/kix ;;
+            esac
+            dir="kix-$VERSION-$system"
+            mkdir -p "pkg/$dir/bin"
+            install -m 755 "$kix" "pkg/$dir/bin/kix"
+            tar -xf "runtime/runtime-$system.tar" -C "pkg/$dir"
+            tar -czf "dist/kix-$system.tar.gz" -C pkg "$dir"
           done
-          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+
+          # The x86_64 Linux archive runs here: kix must find the runtime
+          # beside it and every file must match the manifest.
+          "pkg/kix-$VERSION-x86_64-linux/bin/kix" doctor
+
+          # One archive with the LGPL sources of every platform. A source
+          # that two platforms share lands once.
+          sources="kix-$VERSION-third-party-sources"
+          mkdir "$sources"
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            tar -xf "runtime/sources-$system.tar" -C "$sources"
+          done
+          tar -I 'zstd -19 -T0' -cf "dist/$sources.tar.zst" "$sources"
+
+          (cd dist && sha256sum -- *.tar.gz *.tar.zst > SHA256SUMS)
           cat dist/SHA256SUMS
 
       - uses: actions/upload-artifact@v4

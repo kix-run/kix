@@ -252,7 +252,10 @@ let
 
   # Libraries every Mac provides, which the macOS bundle loads from /usr/lib
   # instead of shipping (see `system_substitute` in assemble.py).
-  systemLibraries = lib.optionals isDarwin [ pkgs.darwin.libiconv ];
+  systemLibraries = lib.optionals isDarwin [
+    pkgs.darwin.libiconv
+    pkgs.darwin.libresolv
+  ];
 
   # The C and C++ runtime the static Linux build links in. Nothing in the
   # build-input graph names them.
