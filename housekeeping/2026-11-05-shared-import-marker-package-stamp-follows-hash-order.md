@@ -1,3 +1,0 @@
-# 2026-11-05 · `cli/kix/src/eval/stamp.rs` · An import marker that two packages list gets the `kix.run/package` of whichever package the CLI stamps last.
-
-`stamp_annotations` walks `graph.packages` in index order and later entries overwrite earlier ones, so a marker shared by two packages names one of them by accident. Adding the `kix.run/holds-data` annotation changed store hashes in the example cluster, and the Secret and Service import markers for `postgres` in namespace `immich` moved from package `postgres` to `immich-db` in `cli/kix-cli/tests/snapshots/snapshot_test__build_example_json.snap`. Any reader that groups by package (migration slots, `kix diff` package sections) can see such an object move between packages with no change to the cluster definition.

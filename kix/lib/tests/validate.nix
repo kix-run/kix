@@ -304,6 +304,48 @@ let
       };
   };
 
+  # A provider that exposes an import marker through `out`, and a consumer
+  # that holds that marker as a part. Both instances list the marker.
+  markerProviderPackage = {
+    build =
+      { self, scope, ... }:
+      {
+        secret = scope.mkSecretRef {
+          name = "creds";
+          keys = [ "password" ];
+        };
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "provider";
+          data.k = "v";
+        };
+        root = {
+          resource = self.cm;
+          out.secret = self.secret;
+        };
+      };
+  };
+  markerConsumerPackage = {
+    build =
+      {
+        self,
+        scope,
+        provider,
+        ...
+      }:
+      {
+        held = provider.out.secret;
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "consumer";
+          data.secret = provider.out.secret.out.name;
+        };
+        root = self.cm;
+      };
+  };
+
   # A workload naming a ServiceAccount kix does not own, the sanctioned way.
   externalSaPackage = {
     build =
@@ -1233,6 +1275,42 @@ in
     in
     repeated == { }
     || throw "kix-packages.json repeats a path under ${toString (builtins.attrNames repeated)}";
+
+  # kix-packages.json lists an import marker that a consumer holds through
+  # the provider's `out` under the provider only, so the marker's owner does
+  # not depend on store-path order.
+  v20-package-index-lists-a-shared-marker-under-its-builder =
+    let
+      cluster = mkCluster [
+        baseInstances
+        {
+          instances.infra.provider.package = markerProviderPackage;
+          instances.infra.consumer.package = markerConsumerPackage;
+        }
+      ];
+      plain = v: builtins.unsafeDiscardStringContext (toString v);
+      packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
+      provider = cluster.clusterInstances.infra.provider;
+      consumer = cluster.clusterInstances.infra.consumer;
+      providerPi = plain provider._packageInstance.outPath;
+      consumerPi = plain consumer._packageInstance.outPath;
+      marker = plain provider.out.secret.outPath;
+      consumerCm = plain (consumer.raw or consumer).cm.outPath;
+      listedUnder =
+        path: builtins.attrNames (lib.filterAttrs (_: paths: builtins.elem path paths) packages);
+      allPaths = builtins.concatLists (builtins.attrValues packages);
+      repeated = builtins.filter (p: builtins.length (builtins.filter (q: q == p) allPaths) > 1) (
+        lib.unique allPaths
+      );
+    in
+    if repeated != [ ] then
+      throw "kix-packages.json lists ${toString repeated} under more than one package"
+    else if listedUnder marker != [ providerPi ] then
+      throw "marker is listed under ${toString (listedUnder marker)}, expected the provider"
+    else if !(builtins.elem consumerCm packages.${consumerPi}) then
+      throw "the consumer lost its own ConfigMap"
+    else
+      true;
 
   # A dangling Service selector fails the cluster eval, not just a flake check.
   v21-cross-resource-failure-fails-the-build = evalFails (mkCluster [

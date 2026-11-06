@@ -14258,15 +14258,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/x0q5ngd6nbd4v80yqv8b2xn0ri4zbaz8-k8s-activation-example
+    kix.run/built-via: /nix/store/psdgs46ss60x58l0ryna5gazdjp9vniy-k8s-activation-example
     kix.run/depends-on: '0x9r939vb7jd9ywk36x8vx16x66j5g00,4l42y305cgxwy3wbr0mrasihca5zczix,590al7hbiz804ha7f7q5ivm49ds9fxcg,5mv940cjcfv2zf1cm9zjfi61b117n128,ay1pmnmmdigljjpp9znkz94bjh28ng6b,cwqn9k5f52rwg6w2fzks9i3w773196cy,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,jn0j2hzd8cfs7vj6zsbsf3kf63c85mbs,ra3n7z9zv8ygnwsi9xvqppj9681msxci,sf8swshyx9g2qbc33s9fj9lwlv1ca86w,w4jfxii3b0w1bl78pjanhkxinzl0kiys,x7z247nmidb7aj79phwhyqj34xq8k0fj,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: ff9psgr9g37ldrwxawkn960qxhdrhfsy
+    kix.run/identity-hash: mmzxj1chbw2jvh002fszq4db04nsv2mv
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-ff9psgr9g37l
+  name: example-mmzxj1chbw2j
 spec:
   instances:
     cert-manager:
@@ -14433,7 +14433,7 @@ metadata:
     kix.run/import-secret-keys: superuser-username,superuser-password
     kix.run/lifecycle: stateful
     kix.run/mode: import
-    kix.run/package: immich-db
+    kix.run/package: postgres
     kix.run/package-namespace: immich
     kix.run/secret-type: Opaque
   labels:
@@ -14459,7 +14459,7 @@ metadata:
     kix.run/import-name: postgres
     kix.run/lifecycle: stateful
     kix.run/mode: import
-    kix.run/package: immich-db
+    kix.run/package: postgres
     kix.run/package-namespace: immich
     kix.run/service-ports: '[{"port":5432,"protocol":"TCP"}]'
     kix.run/service-selector: '{"app":"StackGresCluster","stackgres.io/cluster-name":"postgres"}'

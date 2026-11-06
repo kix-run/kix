@@ -27,6 +27,11 @@ in
       # scopeObj is the enclosing mkScope fixpoint. Access it only from lazy
       # interceptor and mkCR paths to avoid recursion while building the scope.
       scopeObj,
+      # `<namespace>/<instance>` of the instance this scope builds for. Every
+      # sealed resource carries it as `_builtBy`, outside the manifest, so the
+      # cluster can list a resource that several instances hold under the one
+      # that built it.
+      builtBy,
     }:
     rec {
       # Workload kinds must use their typed builders so pod validation, edge
@@ -106,6 +111,7 @@ in
                   )
                   // {
                     packageLabels = labels;
+                    _builtBy = builtBy;
                   }
                 )
               )
@@ -142,6 +148,7 @@ in
         )
         // {
           packageLabels = labels;
+          _builtBy = builtBy;
         };
 
       _expandServiceAccount =

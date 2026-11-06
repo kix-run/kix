@@ -20,9 +20,17 @@ counts as breaking.
 
 ## Unreleased
 
+### Upgrade notes
+
+- An import marker (a `PackageInstance` named `secret-ref-*` or `service-ref-*`) that two packages share may carry the other package's name in its live `kix.run/package` annotation. Kix does not re-apply an object whose content is unchanged, so the annotation is corrected the next time the marker itself changes. Kix does not read the annotation for an object the build knows, so nothing else is affected.
+
 ### Changed
 
 - The JSON schemas of the `kix diff -o json` document and the `kix deploy --log-format json` log now say that later versions of Kix may add fields and new types of line. A program that reads them should skip the ones it does not know.
+
+### Fixed
+
+- An object that two package instances list, such as a provider's Secret reference that a consumer holds as a part, now belongs to the instance that built it. Before, its owner could switch between the two on any unrelated change to either package.
 
 ## 0.6.0 - 2026-11-06
 
