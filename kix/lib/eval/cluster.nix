@@ -902,8 +902,8 @@
               quotaCheck.refusals {
                 namespace = nsName;
                 inherit quotas resources;
-                # Include custom resources that declare `usesAtLeast` or
-                # terminate endpoints in operator-managed pods (`factBehavior.endpoint == "terminate"`).
+                # Pass every custom resource, so the refusal can list the
+                # ones whose kind declares no `usesAtLeast`.
                 customResources =
                   map
                     (r: {
@@ -912,7 +912,7 @@
                     })
                     (
                       builtins.filter (
-                        r: (r.usesAtLeast or null) != null || ((r.factBehavior or null).endpoint or null) == "terminate"
+                        r: r ? rawManifest && k8s.facts.isForeignGroup (plain (r.rawManifest.apiVersion or ""))
                       ) sealed
                     );
               }
