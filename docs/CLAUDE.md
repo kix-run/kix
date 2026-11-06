@@ -15,9 +15,19 @@ through a system that is powerful but unfamiliar. Be direct, concrete, and
 friendly. A little informal tone is fine; cleverness is not worth it if it
 makes the idea harder to grasp.
 
-The reader is expected to know Kubernetes basics, but may have little or no
-Nix experience. Nix syntax, Kix dependency wiring, and package/instance
-boundaries are the biggest places to slow down and teach deliberately.
+The reader is expected to know Kubernetes basics, but 95% of readers will have
+little or no Nix experience:
+
+- Teach the small subset of Nix expression syntax that users write in `.nix`
+  files, and slow down at Kix dependency wiring and package/instance boundaries.
+- Treat `kix` as the only CLI the reader runs. Do not contrast `kix` commands
+  with `nix build`, `nix flake check`, or `nix eval` in normal guides, and do
+  not assume the reader has Nix installed separately.
+- Explain Kix behavior in Kix terms ("Kix's local store", "content-addressed
+  manifest", "resource") rather than Nix implementation terms ("the local Nix
+  store", `/nix/store`, "Nix store derivation", "the Nix sandbox"). Keep Nix
+  internal mechanics (such as string context) in the specific Explanation or
+  Reference sections that explain how Kix works under the hood.
 
 ## Source of Truth
 

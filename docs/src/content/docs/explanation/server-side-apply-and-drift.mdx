@@ -44,9 +44,9 @@ Kix scopes both `kix diff` and `kix drift` to the fields owned by the `kix` fiel
 
 ## Why deploy inputs are committed
 
-Just as Kix avoids hidden state in the cluster, it avoids hidden inputs at deploy time. Every input that affects a compiled manifest, including frequently updated values like container image digests, lives in a committed file in your repository and is read during Nix evaluation:
+Just as Kix avoids hidden state in the cluster, it avoids hidden inputs at deploy time. Every input that affects a compiled manifest, including frequently updated values like container image digests, lives in a committed file in your repository and is read during evaluation:
 
-- **Content-addressed identity hashes:** During evaluation, Kix computes each resource's `kix.run/identity-hash` from its serialized JSON in the Nix store, and `kix deploy` uses those hashes (recorded in the cluster's `Activation` resource) to determine which objects changed since the last deployment. Reading all inputs during evaluation guarantees that the hashes in your build match the manifests applied to the cluster.
+- **Content-addressed identity hashes:** During evaluation, Kix computes each resource's `kix.run/identity-hash` from its serialized JSON in Kix's local store, and `kix deploy` uses those hashes (recorded in the cluster's `Activation` resource) to determine which objects changed since the last deployment. Reading all inputs during evaluation guarantees that the hashes in your build match the manifests applied to the cluster.
 - **Committed JSON image pins (`pins.json`):** To make automated image updates easy without letting a CI bot rewrite Nix code, Kix stores image versions in a structured `pins.json` file managed by `kix pin`. Running `kix pin set <key> --tag <tag>` queries the container registry, records the immutable `sha256` digest alongside the tag, and writes the update to `pins.json`.
 - **Verifiable deploy receipts (`status.receipt`):** When `kix deploy` finishes applying an `Activation`, it records a deploy receipt on the `Activation` status subresource containing the activation hash, timestamp, Git commit, locked flake inputs, and container image digests. Because every input was committed before evaluation, `kix compliance attest --from-cluster` can generate a verifiable SLSA provenance statement directly from the live cluster receipt.
 

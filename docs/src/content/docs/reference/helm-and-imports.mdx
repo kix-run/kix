@@ -7,16 +7,18 @@ Not everything in your cluster starts as a native Kix package: you might want to
 
 :::note[Helpful background]
 - [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): see how `kix.mkImport` connects packages to pre-installed cluster services.
-- [Helm integration and resource adoption](/docs/explanation/helm-integration/): understand how Kix renders Helm charts inside the Nix sandbox and reconstructs their dependency graph.
+- [Helm integration and resource adoption](/docs/explanation/helm-integration/): understand how Kix renders Helm charts at build time and reconstructs their dependency graph.
 - [Adopt a Helm chart](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/): follow a practical guide to wrapping an upstream Helm chart.
 - [The dependency graph as the model](/docs/explanation/the-dependency-graph/): learn how imported resources participate in deployment ordering and network policy generation.
 :::
 
 ## Helm helpers
 
+Helm chart wrappers are a fallback bridge for third-party software that does not have a native Kix package yet. Compared to native Kix packages, Helm charts use untyped `values` maps (unless wrapped with custom `options`), rely on YAML heuristics rather than `.out` references for dependency and network-policy discovery, ignore `cluster.availability` scaling by default, and often require overrides to satisfy scorecard rules. See [Helm is a fallback, not the target model](/docs/explanation/helm-integration/#helm-is-a-fallback-not-the-target-model) for when to use each tier.
+
 Kix provides two entry points for Helm charts:
 1. **`kix.helmChart`**: A turn-key package constructor for quick chart adoption that exposes a `values` option (`options.values`) and wraps the rendered resources automatically.
-2. **`scope.helm.importChart`**: The full chart-adoption builder used inside custom packages that expose typed NixOS `options`, translate them into Helm `values`, and patch or extend the rendered resources.
+2. **`scope.helm.importChart`**: The full chart-adoption builder used inside custom packages that expose typed `options`, translate them into Helm `values`, and patch or extend the rendered resources.
 
 ### Quick adoption with `kix.helmChart`
 

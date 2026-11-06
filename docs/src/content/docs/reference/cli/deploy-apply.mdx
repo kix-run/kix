@@ -50,7 +50,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --prune-mode de
 
 1. Builds the cluster.
 2. Reads the running activation from the cluster (or the local cache with
-   `--current-activation`). If that build is no longer in the local Nix store,
+   `--current-activation`). If that build is no longer in Kix's local store,
    Kix rebuilds the previous state from the live resources whose
    `kix.run/activations` annotation names the running Activation record, a
    failed one of the same cluster, or a build listed under
@@ -186,7 +186,7 @@ checked, makes the comparison weaker without making the file inconsistent,
 so an approval system should check the SHA-256 the deploy prints against the
 file it approved.
 
-When the plan was made by a Kix binary at another Nix store path, or of
+When the plan was made by a Kix binary at another store path, or of
 another version, the deploy prints a note and does not refuse. Two binaries
 built outside the store with the same version print no note.
 

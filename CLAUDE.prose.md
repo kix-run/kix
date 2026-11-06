@@ -35,6 +35,18 @@ whenever Adam corrects writing style.
 
 ## Reader context
 
+- **Assume 95% of readers are unfamiliar with Nix.** Write about Kix in Kix
+  terms, not Nix internals:
+  - `kix` is the only CLI users run. Never contrast `kix` commands with raw
+    `nix` commands (do not write "evaluate with `kix check` rather than
+    `nix build` or `nix flake check`").
+  - Say "Kix's local store" or "local build cache" instead of "the local Nix
+    store" or `/nix/store`.
+  - Say "resource", "built manifest", or "content-addressed manifest" instead
+    of "Nix store derivation" or "derivation".
+  - Teach the small subset of Nix expression syntax users write in `.nix`
+    files, and keep Nix internal mechanisms (such as string context) confined
+    to deep-dive architecture sections where that mechanism is the topic.
 - **Do not introduce rejected, nonexistent, or internal alternatives merely to
   contrast them with the shipped design.** Describe the current model directly.
   For example, "Kix reads the committed value during evaluation" gives the

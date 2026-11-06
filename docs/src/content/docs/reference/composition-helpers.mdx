@@ -388,7 +388,7 @@ Every built cluster output includes `kix-image-sources.json`, which maps each co
 
 ### `kix.facts`
 
-When Kix inspects a resource manifest, it classifies every Nix store-path reference to determine how the reference affects network policy derivation and secret tracking:
+When Kix inspects a resource manifest, it classifies every `.out` reference to determine how the reference affects network policy derivation and secret tracking:
 
 - **Default (ambient reference)**: Counts as a deployment dependency, a network traffic path (when pointing to a `Service` or workload), and a secret reference.
 - **`kix.facts.refOnly value`**: Marks `value` (typically a `Service` or workload `.out.name`) as a **structural or configuration-only reference** that does **not** carry network traffic. The deployment dependency (`kix.run/depends-on`) is preserved, but no `CiliumNetworkPolicy` ingress/egress rule is generated for this reference.
