@@ -37,11 +37,9 @@ kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>]
 
 When `eval` fails, the `scorecard` step does not run.
 
-`kix check` does not validate the rendered manifests against Kubernetes
-schemas or check them for deprecated API versions. Schema validation runs in
-`nix flake check`: a flake built with `mkFlake` exports a
-`schema-cluster-<name>` check per cluster that runs `kubeconform -strict` over
-the rendered manifests and skips kinds with no published schema.
+`kix check` runs constructor validators, cross-resource checks, and scorecard
+rules. It does not validate rendered manifests against external Kubernetes
+OpenAPI schemas or check for deprecated API versions.
 
 ## SARIF output
 

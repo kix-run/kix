@@ -262,21 +262,21 @@ When wrapping charts or operators that expect Helm's legacy label keys (`app` an
 
 ## Common resource fields
 
-Every resource returned by a `scope` builder is a Nix derivation with the following top-level attributes and `.out` fields:
+Every resource returned by a `scope` builder is a resource object with the following top-level attributes and `.out` fields:
 
 ### Top-level resource attributes
 
 | Attribute | Description |
 | --- | --- |
 | `out` | Attribute set of string-context-carrying output fields for downstream consumers (detailed below). |
-| `manifest` | Final normalized attribute set serialized to YAML in the Nix store (including Kix annotations and labels). |
+| `manifest` | Final normalized attribute set serialized to YAML in Kix's local store (including Kix annotations and labels). |
 | `rawManifest` | Unsealed manifest attribute set prior to `kix.run/depends-on` computation. |
-| `outPath` | Path to the rendered `.yaml` file in `/nix/store`. |
-| `rawSelector` | (Workloads only) Plain attribute set of `spec.selector.matchLabels` **without** Nix string context. See [String-context dependency behavior](#string-context-dependency-behavior). |
+| `outPath` | Path to the rendered `.yaml` file in Kix's local store. |
+| `rawSelector` | (Workloads only) Plain attribute set of `spec.selector.matchLabels` **without** string context. See [String-context dependency behavior](#string-context-dependency-behavior). |
 
 ### Auto-derived `.out` fields by resource kind
 
-All string values inside `resource.out` carry the Nix store-path context of `resource`, so referencing any `resource.out.*` value inside another resource's manifest automatically records a deployment dependency (`kix.run/depends-on`).
+All string values inside `resource.out` carry the store-path context of `resource`, so referencing any `resource.out.*` value inside another resource's manifest automatically records a deployment dependency (`kix.run/depends-on`).
 
 | Resource kind | `.out` field | Type | Description |
 | --- | --- | --- | --- |
@@ -353,14 +353,14 @@ root = {
 
 ### How `.out` references become `kix.run/depends-on` annotations
 
-In Nix, strings derived from a store derivation carry hidden metadata called **string context** listing the `.drv` store paths needed to produce that string. Kix uses this built-in Nix mechanism to construct the deployment dependency graph:
+In Nix, strings derived from a built resource carry hidden metadata called **string context** listing the store paths needed to produce that string. Kix uses this mechanism to construct the deployment dependency graph:
 
-1. Each `scope.mk*` resource serializes its manifest to a Nix store derivation and attaches that store path's context to every string in `resource.out`.
-2. When resource `B` interpolates `resourceA.out.name`, `resourceA.out.fqdn`, or `resourceA.out.selector` anywhere inside `B`'s manifest, Nix propagates `resourceA`'s store-path context into `B`'s serialized manifest string.
+1. Each `scope.mk*` resource serializes its manifest to a content-addressed file in Kix's local store and attaches that path's context to every string in `resource.out`.
+2. When resource `B` interpolates `resourceA.out.name`, `resourceA.out.fqdn`, or `resourceA.out.selector` anywhere inside `B`'s manifest, `resourceA`'s store-path context propagates into `B`'s serialized manifest string.
 3. `scope.mkResource` calls `builtins.getContext` on `B`'s serialized manifest, maps every referenced store path back to its Kix resource identity (`<group>/<kind>/<namespace>/<name>`), and writes the resulting list to `metadata.annotations."kix.run/depends-on"`.
 
 :::caution[Use `self.x.out.name`, never `"${self.x}"`]
-Interpolating a resource derivation directly (`"${self.configMap}"`) evaluates to its `/nix/store/...-kix-...yaml` file path, not its Kubernetes resource name. Always reference `.out` fields such as `self.configMap.out.name` or `self.service.out.fqdn`.
+Interpolating a resource object directly (`"${self.configMap}"`) evaluates to its rendered `.yaml` file path in the local store, not its Kubernetes resource name. Always reference `.out` fields such as `self.configMap.out.name` or `self.service.out.fqdn`.
 :::
 
 ### The three ways to record a dependency

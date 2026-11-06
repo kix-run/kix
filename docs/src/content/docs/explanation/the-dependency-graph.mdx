@@ -12,11 +12,11 @@ In most Kubernetes setups, YAML files know nothing about each other. If a Deploy
 - [Nix string context](https://nix.dev/manual/nix/latest/language/string-context.html): How Nix tracks hidden store-path references inside ordinary strings.
 :::
 
-## Store paths as dependency edges
+## How output references become dependency edges
 
 Kix does not ask you to maintain a separate `dependsOn` list for ordinary resource references. Instead, it uses Nix string context to discover dependencies from the values you actually use.
 
-When a package builds a resource with `scope.mkResource` or `scope.mkDeployment`, Kix serializes the manifest to JSON and writes it to a content-addressed file in `/nix/store/`. The file path includes a hash of the manifest's contents. Kix then builds the resource's public `out` attributes (`out.name`, `out.fqdn`, `out.selector`, `out.url`, and any custom `outputs`) and attaches the resource's Nix store path to each string's hidden context.
+When a package builds a resource with `scope.mkResource` or `scope.mkDeployment`, Kix serializes the manifest to JSON and writes it to a content-addressed file in Kix's local store. The file path includes a hash of the manifest's contents. Kix then builds the resource's public `out` attributes (`out.name`, `out.fqdn`, `out.selector`, `out.url`, and any custom `outputs`) and attaches the resource's store path to each string's hidden context.
 
 When another resource reads one of those `out` values, the rendered string looks like an ordinary Kubernetes value, such as `"backend.app.svc.cluster.local"`, while carrying the hidden store-path reference alongside it:
 
@@ -29,7 +29,7 @@ When Kix seals the consuming resource, `scope.mkResource` inspects the string co
 
 String context carries two distinct kinds of tokens:
 
-- **Identity paths** point to the resource's derivation in the Nix store. Every `out` attribute carries an identity path, which tells Kix that the consumer was computed from the provider and must be deployed after it.
+- **Identity paths** identify the upstream resource in Kix's store. Every `out` attribute carries an identity path, which tells Kix that the consumer was computed from the provider and must be deployed after it.
 - **Endpoint facts** attach to address-shaped attributes such as `out.fqdn` and `out.url`. An endpoint fact records the target Service's namespace, pod selector, and ports. Non-workload resources such as ConfigMaps conduct endpoint facts onward when mounted, and workloads terminate them. This lets Kix distinguish between a workload that merely names a resource and a workload that dials a Service over the network.
 
 Sometimes one resource must be applied before another even though no string value flows between their manifests. A CustomResourceDefinition must be established before any custom resource of its kind is applied, and a network policy must be in place before the pod it governs starts. For those cases, builders accept `requires` (hard ordering dependencies that must be ready first) and `extraDeps` (additional ordering hints). Kix folds both into `kix.run/depends-on` before sealing the resource.

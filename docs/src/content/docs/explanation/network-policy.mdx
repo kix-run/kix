@@ -55,7 +55,7 @@ Running the workload phase *before* the workload resource is sealed is critical 
 
 A dependency graph only sees connections between resources in the build. Two kinds of traffic fall outside that graph:
 
-- **External traffic (`meta.network.intents`):** The internet, external APIs, or the Kubernetes API server dialing an admission webhook have no Nix store path. A package declares these connections once under `meta.network.intents` using targets like `"world"`, `"apiserver"`, `"dns"`, or `"all-pods"`.
+- **External traffic (`meta.network.intents`):** The internet, external APIs, or the Kubernetes API server dialing an admission webhook are not resources in the Kix build. A package declares these connections once under `meta.network.intents` using targets like `"world"`, `"apiserver"`, `"dns"`, or `"all-pods"`.
 - **Operator-created pods (`kix.operandPolicy` and `platformIntents`):** When an operator creates data-plane pods at runtime from a custom resource (such as database replicas or proxy pods), Kix does not build their Deployment directly. Packages that author those custom resources use `kix.operandPolicy` (or CRD `factBehavior`) to emit policies selecting the operator's pod labels, while cluster operators can use `networkPolicy.platformIntents` to open traffic for pods managed outside Kix.
 
 :::tip[Use it in a task]
