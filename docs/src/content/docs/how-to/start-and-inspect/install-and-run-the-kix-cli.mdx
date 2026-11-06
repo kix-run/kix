@@ -1,21 +1,20 @@
 ---
 title: "Install and run the Kix CLI"
-description: "Install Kix from a release archive or with Nix, and verify that the CLI and its bundled runtime are ready."
+description: "Install the kix CLI from a release archive and verify that it can discover and evaluate your clusters."
 ---
 
 import Command from '/src/components/Command.astro';
 import version from '/src/command-output/how-to/application-install/version.json';
 
-Kix ships as a self-contained archive that includes the `kix` binary alongside
-its own copies of Nix, Helm, `kubectl`, and `sops`. You do not need Nix or root
-access installed on your machine to build, check, or deploy clusters.
+Install the `kix` CLI from a pre-built release archive and verify that it can
+discover and evaluate your clusters.
 
 ## Install from a release archive
 
 Download the archive for your platform (`x86_64-linux`, `aarch64-linux`, or
 `aarch64-darwin`) from
 [`kix-run/kix-releases`](https://github.com/kix-run/kix-releases/releases) and
-unpack it into a directory such as `~/.local`:
+unpack it into `~/.local`:
 
 <Command
   commands={[
@@ -25,64 +24,56 @@ unpack it into a directory such as `~/.local`:
 />
 
 Replace `kix-x86_64-linux.tar.gz` with `kix-aarch64-linux.tar.gz` on ARM64
-Linux or `kix-aarch64-darwin.tar.gz` on Apple Silicon macOS.
+Linux or `kix-aarch64-darwin.tar.gz` on Apple Silicon macOS, and make sure
+`~/.local/bin` is on your `PATH`.
 
-The archive unpacks two directories that belong together:
-
-- `bin/kix`: the CLI executable.
-- `libexec/kix/`: the bundled runtime (`nix`, `helm`, `kubectl`, `sops`,
-  `manifest.json`, and `THIRD_PARTY_LICENSES`).
-
-Make sure `~/.local/bin` is on your `PATH`. Keep `bin/kix` and `libexec/kix/`
-in the same parent directory (or symlink `~/.local/bin/kix` to the unpacked
-`bin/kix`), because Kix locates its bundled tools at `../libexec/kix` relative
-to the resolved `kix` executable. If you place the runtime directory somewhere
-else, set `KIX_RUNTIME_DIR` to its path.
-
-### Or install with Nix
-
-If you already use Nix with flakes enabled, you can install `kix` from the
-`kixpkgs` flake instead:
-
-<Command commands={["nix profile install github:kix-run/kixpkgs#kix"]} />
-
-The Nix package includes the same bundled runtime under `libexec/kix`.
+:::note
+The archive unpacks `bin/kix` alongside its runtime tools in `libexec/kix/`.
+Keep both directories in the same parent directory (or symlink
+`~/.local/bin/kix` to the unpacked `bin/kix`). If you move `libexec/kix/`
+somewhere else, set `KIX_RUNTIME_DIR` to its path.
+:::
 
 ## Verify the installation
 
-Ask Kix for its version:
+Check the installed version:
 
 <Command {...version} />
 
-Check that Kix can find and verify every program in its bundled runtime:
+Verify that Kix and its runtime tools are healthy:
 
 <Command commands={["kix doctor"]} />
 
-Then confirm that the command list is available:
+Confirm that the command list is available:
 
 <Command commands={["kix --help"]} />
 
-## First evaluation and local store
+## Run your first command
 
-Kix keeps its own Nix store under `$XDG_CACHE_HOME/kix/store` (or
-`~/.cache/kix/store` when `XDG_CACHE_HOME` is unset) on both Linux and macOS,
-even on machines that also have `/nix/store`. Set `KIX_STORE_ROOT` to use a
-different directory. The first time you evaluate a project, Kix downloads the
-project's flake inputs (around 400 MB unpacked for `nixpkgs`) and any Helm
-charts into that store; later runs reuse them.
-
-Kix evaluates the flake in the current directory unless you pass `--flake`.
-From a Kix project, a useful first command is:
+Kix evaluates the project in the current directory unless you pass `--flake`.
+From a Kix project, list the clusters it defines:
 
 <Command commands={["kix list clusters"]} cwd="kix-examples/" />
 
-If the project is elsewhere, point Kix at it explicitly:
+If the project is in another directory, pass `--flake`:
 
 <Command commands={["kix --flake /path/to/project list clusters"]} />
 
+On the first evaluation, Kix downloads the project's locked inputs into its
+local store (`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Subsequent
+commands reuse the cached inputs. Set `KIX_STORE_ROOT` if you want Kix to keep
+its local store in a different directory.
+
+### Install with Nix
+
+If you already manage tools with Nix flakes, you can also install `kix` from
+the `kixpkgs` flake:
+
+<Command commands={["nix profile install github:kix-run/kixpkgs#kix"]} />
+
 :::note[Reference]
-See [`kix doctor`](/docs/reference/cli/doctor/) for how Kix locates and checks
-its bundled runtime, and [Global flags](/docs/reference/cli/global-flags/) for
+See [`kix doctor`](/docs/reference/cli/doctor/) for how Kix verifies its
+runtime directory, and [Global flags](/docs/reference/cli/global-flags/) for
 shared CLI flags and environment variables.
 :::
 

@@ -1,12 +1,12 @@
 ---
 title: "`rollback`"
-description: "Re-apply a previous activation of a cluster from the local Nix store, or list the activations available to roll back to."
+description: "Re-apply a previous activation of a cluster from Kix's local store, or list the activations available to roll back to."
 ---
 
 import Command from '/src/components/Command.astro';
 
 `kix rollback` switches a cluster back to one of its Superseded activations.
-It does not build: it finds the target activation's build in the local Nix
+It does not build: it finds the target activation's build in Kix's local
 store and applies it through the same engine as `kix deploy`. With `--list`
 it prints the activation history and changes nothing.
 
@@ -39,9 +39,9 @@ On a terminal without `--yes`, Kix lists the candidates, newest first, and
 asks for a number; Enter picks the newest. Without a terminal it picks the
 newest and then stops at the confirmation unless `--yes` is set.
 
-The target's build must be in the local Nix store, found through the record's
+The target's build must be in Kix's local store, found through the record's
 source path or the local activation cache. A build made on another machine or
-removed by `nix-collect-garbage` cannot be rolled back to from here. How many
+removed from the local store cannot be rolled back to from here. How many
 records exist depends on `kix gc` retention.
 
 A build from a Kix library before 2026-10-02 cannot be rolled back to if it

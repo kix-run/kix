@@ -3,7 +3,7 @@ title: "Eval cache behavior"
 description: "Where Kix caches cluster evaluations, what the cache key covers, what invalidates an entry, and when to pass `--no-cache`."
 ---
 
-Kix keeps the results of Nix evaluations in a local SQLite database so that
+Kix keeps the results of cluster evaluations in a local SQLite database so that
 repeated commands against an unchanged flake skip evaluation. A cached result
 is reused only when the flake's source files and `flake.lock` are unchanged.
 
@@ -15,12 +15,12 @@ This page is hand-maintained. Check `cli/kix/src/eval/cache.rs`,
 | Path | Content |
 | --- | --- |
 | `<cache dir>/kix/eval-cache.db` | Evaluation results and source fingerprints |
-| `<cache dir>/kix/store` | Kix's own Nix store (flake inputs, rendered Helm charts, and evaluated manifests), or `$KIX_STORE_ROOT` when set |
+| `<cache dir>/kix/store` | Kix's local store (flake inputs, rendered Helm charts, and evaluated manifests), or `$KIX_STORE_ROOT` when set |
 | `<cache dir>/kix/activations/<cluster>` | Symlinks and paths for each cluster's last local activation |
 
 `<cache dir>` is `$XDG_CACHE_HOME` when set, or `~/.cache` on both Linux and
 macOS. Deleting `eval-cache.db` is safe; the next command re-creates it and
-evaluates from Nix.
+re-evaluates the cluster.
 
 ## What is cached
 
@@ -54,7 +54,7 @@ reused without reading the files.
 
 - Adding, removing, or editing a `.nix`, `.yaml`, `.yml`, or `.json` file
   under the flake directory.
-- Any change to `flake.lock`, such as `nix flake update`.
+- Any change to `flake.lock`, such as `kix lib update`.
 - Running from a different flake directory.
 
 The key does not cover:
@@ -65,7 +65,7 @@ The key does not cover:
 - inputs whose content changes without a change to `flake.lock`, such as a
   `path:` input pointing outside the flake directory.
 
-Pass `--no-cache` after changing any of these. It evaluates from Nix and
+Pass `--no-cache` after changing any of these. It evaluates from source and
 neither reads nor writes the database.
 
 A cache entry that cannot be parsed is discarded and the evaluation runs

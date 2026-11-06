@@ -9,11 +9,24 @@ import inlineHelmChart from '/src/snippets/how-to/adoption/helm-bridge-cluster/i
 import check from '/src/command-output/how-to/helm-bridge/check.json';
 import deployment from '/src/command-output/how-to/helm-bridge/deployment.json';
 
-Use `kix.helmChart` when you want Kix to fetch, render, and deploy an upstream
-Helm chart as part of a cluster definition.
+Use `kix.helmChart` when you need to fetch, render, and deploy an upstream
+Helm chart that does not have a native Kix package yet.
+
+:::caution[Helm is a fallback bridge]
+Wrapping a Helm chart brings its rendered YAML into Kix's deploy graph, but you
+give up several guarantees that native Kix packages provide: `config.values` is
+an untyped attribute set rather than a validated option schema, intra-chart
+dependencies and network policies rely on YAML heuristics rather than `.out`
+references, `cluster.availability` does not scale or spread workloads
+automatically, and upstream chart defaults often require patching or exemptions
+to pass Kix scorecard rules. Prefer native Kix packages whenever one is
+available; see
+[Helm is a fallback, not the target model](/docs/explanation/helm-integration/#helm-is-a-fallback-not-the-target-model)
+for the full trade-offs.
+:::
 
 This guide uses the Reflector chart. You need the chart repository, chart name,
-version, and Nix SRI hash.
+version, and SRI hash.
 
 ## Add the chart instance
 

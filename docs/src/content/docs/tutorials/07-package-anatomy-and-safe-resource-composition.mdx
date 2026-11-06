@@ -83,10 +83,10 @@ Inside `build`, the package creates its nginx configuration ConfigMap using `sco
 Why call `scope.mkResource` instead of writing a plain Nix attribute set?
 
 - `scope.mkResource` stamps the resource with the instance's `metadata.namespace` and standard `app.kubernetes.io/*` labels automatically.
-- It validates the manifest shape and builds a derivation whose Nix store path tracks its content hash.
+- It validates the manifest shape and records a content hash for the resource.
 - It attaches a `.out` record (`self.configmap.out.name`, `self.configmap.out.data`, and so on) so other resources in the same package can reference it safely.
 
-Notice that `data."default.conf"` interpolates `${backend.out.fqdn}` and `${backend.out.port}`. Because those strings come from the `backend` Service derivation, Nix records that `self.configmap` depends on `backend`'s Service.
+Notice that `data."default.conf"` interpolates `${backend.out.fqdn}` and `${backend.out.port}`. Because those strings come from `backend.out`, Kix automatically records that `self.configmap` depends on `backend`'s Service.
 
 ## Mount The ConfigMap And Build The Deployment
 

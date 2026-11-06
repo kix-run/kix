@@ -186,7 +186,7 @@ backup = velero.out.mkBackup scope {
 `velero.out.mkSchedule` takes the same arguments. List at least one resource
 of the calling instance in `requires`, such as the workload it backs up. The
 location the builder waits for belongs to the velero instance, and
-`nix flake check` refuses a resource that references nothing in its own
+`kix check` refuses a resource that references nothing in its own
 instance. For another kind, such as
 a Restore or a second backup location, build the resource in Velero's
 namespace with `(scope.forService velero).mkCR velero.out.crds.Restore { ... }`.

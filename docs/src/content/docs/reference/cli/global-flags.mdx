@@ -25,9 +25,9 @@ for plugins.
 | `-q`, `--quiet` | `KIX_QUIET` | Off | Suppress progress and informational output, and log errors only. Results still print. |
 | `--no-color` | `NO_COLOR`, below | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
 | `--context <CONTEXT>` | `KIX_CONTEXT` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
-| `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed to Nix as a flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
-| `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and evaluate from Nix every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
-| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL for every `nix` command Kix runs, like `nix --override-input`. Repeatable, two values each time. |
+| `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed as a remote flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
+| `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and re-evaluate the cluster every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
+| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL during evaluation. Repeatable, two values each time. |
 | `-h`, `--help` | | | Print help. `-h` prints a summary, `--help` the long form. |
 | `-V`, `--version` | | | Print the version. |
 
@@ -66,7 +66,7 @@ only with `--list`, and on `deploy` only with `--dry-run`.
 | `KIX_LOG` | A tracing filter, such as `kix=debug` or `debug`, that replaces the level chosen by `-v` and `-q`. |
 | `KIX_NO_INTERACTIVE` | Any value makes Kix treat the terminal as non-interactive, so commands that ask for confirmation refuse to prompt and need `--yes`. Stdin that is not a terminal has the same effect. |
 | `KIX_RUNTIME_DIR` | Directory containing Kix's bundled runtime tools (`nix`, `helm`, `kubectl`, `sops`) and `manifest.json`. See [`kix doctor`](/docs/reference/cli/doctor/#how-kix-locates-its-runtime). |
-| `KIX_STORE_ROOT` | Root directory for Kix's local Nix store. Defaults to `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store` when `XDG_CACHE_HOME` is unset). |
+| `KIX_STORE_ROOT` | Root directory for Kix's local store. Defaults to `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store` when `XDG_CACHE_HOME` is unset). |
 
 The variables that tune how Kix talks to the Kubernetes API are listed in
 [API server retries and request limits](/docs/reference/cli/api-server-transport/).

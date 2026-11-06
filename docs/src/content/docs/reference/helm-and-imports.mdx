@@ -7,16 +7,18 @@ Not everything in your cluster starts as a native Kix package: you might want to
 
 :::note[Helpful background]
 - [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): see how `kix.mkImport` connects packages to pre-installed cluster services.
-- [Helm integration and resource adoption](/docs/explanation/helm-integration/): understand how Kix renders Helm charts with its bundled Helm and reconstructs their dependency graph.
+- [Helm integration and resource adoption](/docs/explanation/helm-integration/): understand how Kix renders Helm charts at build time and reconstructs their dependency graph.
 - [Adopt a Helm chart](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/): follow a practical guide to wrapping an upstream Helm chart.
 - [The dependency graph as the model](/docs/explanation/the-dependency-graph/): learn how imported resources participate in deployment ordering and network policy generation.
 :::
 
 ## Helm helpers
 
+Helm chart wrappers are a fallback bridge for third-party software that does not have a native Kix package yet. Compared to native Kix packages, Helm charts use untyped `values` maps (unless wrapped with custom `options`), rely on YAML heuristics rather than `.out` references for dependency and network-policy discovery, ignore `cluster.availability` scaling by default, and often require overrides to satisfy scorecard rules. See [Helm is a fallback, not the target model](/docs/explanation/helm-integration/#helm-is-a-fallback-not-the-target-model) for when to use each tier.
+
 Kix provides two entry points for Helm charts:
 1. **`kix.helmChart`**: A turn-key package constructor for quick chart adoption that exposes a `values` option (`options.values`) and wraps the rendered resources automatically.
-2. **`scope.helm.importChart`**: The full chart-adoption builder used inside custom packages that expose typed NixOS `options`, translate them into Helm `values`, and patch or extend the rendered resources.
+2. **`scope.helm.importChart`**: The full chart-adoption builder used inside custom packages that expose typed `options`, translate them into Helm `values`, and patch or extend the rendered resources.
 
 ### Quick adoption with `kix.helmChart`
 
@@ -173,9 +175,7 @@ It returns `{ <Kind> = crdResource; ... }` ready to assign directly to `crds` in
 
 `kix.helmChart`, `scope.helm.importChart`, and `scope.helm.importChartCrds` render charts with **Helm 4** (`4.3.1`) by default. If an upstream chart relies on template behavior that changed in Helm 4, set `helmVersion = "3";` to render that chart with **Helm 3** (`3.19.1`). Upstream Helm 3 receives security fixes until 10 February 2027. Passing any other major version fails evaluation and lists the shipped versions.
 
-The exact Helm release for each major version is pinned in `kix/lib/helm-versions.json` and shipped in Kix's bundled runtime. When you upgrade the `kix` CLI to a release that updates a bundled Helm version, projects whose `flake.lock` still points to an older `kixpkgs` library will stop before rendering and ask you to align the two with [`kix lib update`](/docs/reference/cli/lib/).
-
-Because Kix fetches and renders Helm charts itself during evaluation, clusters that use Helm must be evaluated through `kix` (`kix check`, `kix build`, `kix diff`, `kix plan`, or `kix deploy`) rather than a raw `nix build`.
+The exact Helm release for each major version is pinned in `kix/lib/helm-versions.json` and shipped with `kix`. When you upgrade the `kix` CLI to a release that updates a Helm version, projects whose `flake.lock` still points to an older `kixpkgs` library will stop before rendering and ask you to align the two with [`kix lib update`](/docs/reference/cli/lib/).
 
 ---
 

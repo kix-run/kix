@@ -101,9 +101,9 @@ availability level the package can run at.
 
 ## Lock the inputs
 
-Create or update `flake.lock` after adding the inputs:
+Pin `kixpkgs` and `nixpkgs` in `flake.lock` to match your installed `kix` CLI:
 
-<Command commands={["nix flake lock"]} cwd="infrastructure/" />
+<Command commands={["kix lib update"]} cwd="infrastructure/" />
 
 Commit `flake.nix` and `flake.lock` together. Other machines and CI will then
 evaluate the same Kix and nixpkgs revisions.

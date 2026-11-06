@@ -6,7 +6,7 @@ description: "Forward local ports to a package's primary workload by running `ku
 import Command from '/src/components/Command.astro';
 
 `kix pf` builds the cluster, finds the named package's primary workload, and
-replaces itself with Kix's bundled `kubectl port-forward` against that workload.
+replaces itself with `kubectl port-forward` against that workload.
 `kubectl` picks the pod and picks a new one when the pod is replaced.
 `port-forward` is an alias.
 

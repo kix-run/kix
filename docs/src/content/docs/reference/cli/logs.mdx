@@ -6,7 +6,7 @@ description: "Stream logs from a package's primary workload by running `kubectl 
 import Command from '/src/components/Command.astro';
 
 `kix logs` builds the cluster, finds the named package's primary workload, and
-replaces itself with Kix's bundled `kubectl logs` for every pod that workload
+replaces itself with `kubectl logs` for every pod that workload
 selects. It saves looking up the namespace and label selector by hand.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
