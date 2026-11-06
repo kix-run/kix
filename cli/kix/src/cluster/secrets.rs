@@ -15,8 +15,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::build_source::{CarriedSources, SopsSources};
+use crate::eval::store::disk_path;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
+use crate::runtime::{self, RuntimeError, Tool, Want};
 
 #[derive(Error, Debug)]
 pub(crate) enum SecretError {
@@ -473,8 +475,10 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
 fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
     let path = PathBuf::from(source);
 
-    if path.exists() {
-        return Ok(path);
+    if let Ok(on_disk) = disk_path(&path)
+        && on_disk.exists()
+    {
+        return Ok(on_disk);
     }
 
     if let Ok(cwd) = std::env::current_dir() {
@@ -491,13 +495,14 @@ fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
 
 /// Decrypt a SOPS file using the `sops` CLI.
 fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretError> {
-    let output =
-        decrypt_command(path, input_type)
-            .output()
-            .map_err(|e| SecretError::DecryptionFailed {
-                path: path.display().to_string(),
-                message: format!("failed to run sops: {e}"),
-            })?;
+    let failed = |message: String| SecretError::DecryptionFailed {
+        path: path.display().to_string(),
+        message,
+    };
+    let output = decrypt_command(path, input_type)
+        .map_err(|e| failed(e.to_string()))?
+        .output()
+        .map_err(|e| failed(format!("failed to run sops: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -515,14 +520,14 @@ fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretE
 
 /// Build the `sops` command that decrypts `path` to JSON, passing
 /// `--input-type` when `input_type` is `Some`.
-fn decrypt_command(path: &Path, input_type: Option<&str>) -> Command {
-    let mut command = Command::new("sops");
+fn decrypt_command(path: &Path, input_type: Option<&str>) -> Result<Command, RuntimeError> {
+    let mut command = runtime::tool(Tool::Sops, Want::Shipped)?;
     command.arg("--decrypt");
     if let Some(input_type) = input_type {
         command.args(["--input-type", input_type]);
     }
     command.args(["--output-type", "json"]).arg(path);
-    command
+    Ok(command)
 }
 
 /// Parse decrypted SOPS output into a flat key-value map.
@@ -833,7 +838,7 @@ mod tests {
             let path = dir.path().join(name);
             std::fs::write(&path, text).unwrap();
             let (_, input_type) = age_only_keys(&path).unwrap();
-            let command = decrypt_command(&path, Some(input_type));
+            let command = decrypt_command(&path, Some(input_type)).unwrap();
             let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
             assert!(
                 args.windows(2).any(|w| w == ["--input-type", format]),

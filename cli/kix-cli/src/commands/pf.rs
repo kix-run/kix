@@ -5,8 +5,8 @@
 //! `kubectl` handles pod selection and re-selection on pod churn.
 
 use std::os::unix::process::CommandExt;
-use std::process::Command;
 
+use kix::runtime::{self, Tool, Want};
 use miette::{Result, miette};
 
 use crate::cli::PortForwardArgs;
@@ -33,7 +33,7 @@ pub fn run(args: &PortForwardArgs, ctx: &mut CommandContext) -> Result<()> {
         output::bold(&args.ports.join(" ")),
     );
 
-    let mut cmd = Command::new("kubectl");
+    let mut cmd = runtime::tool(Tool::Kubectl, Want::Shipped).map_err(|e| miette!("{e}"))?;
     cmd.arg("port-forward");
     cmd.args(["-n", &target.namespace]);
     cmd.arg(target.kubectl_ref());

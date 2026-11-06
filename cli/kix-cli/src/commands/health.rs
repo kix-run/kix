@@ -559,11 +559,11 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
     println!();
 }
 
-/// Find the store path in `/nix/store` matching `{hash}-*`, or `None` if the
+/// Find the store path matching `/nix/store/{hash}-*`, or `None` if the
 /// local store does not have that derivation.
 fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
     let prefix = format!("{}-", hash);
-    std::fs::read_dir("/nix/store")
+    std::fs::read_dir(kix::eval::store::store_dir())
         .ok()?
         .filter_map(Result::ok)
         .find(|e| e.file_name().to_string_lossy().starts_with(&prefix))

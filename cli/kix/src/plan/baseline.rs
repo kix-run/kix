@@ -763,7 +763,7 @@ pub fn record_graph(
     }
     let built_via = built_via
         .map(PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists());
+        .filter(|p| crate::eval::store::exists(&p.join("kix-packages.json")));
     checked_build(
         identity_hash,
         built_via,

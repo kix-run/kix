@@ -46,7 +46,9 @@ fn a_flake_without_kix_clusters_has_no_name() {
 /// installable, not used as a working directory.
 #[test]
 fn a_remote_flake_reference_is_an_installable() {
-    let cmd = kix::eval::cluster_name_command("github:org/repo", "harbor", &[]).unwrap();
+    let cmd = kix::eval::cluster_name_command("github:org/repo", "harbor", &[])
+        .unwrap()
+        .unwrap();
     assert_eq!(cmd.get_current_dir(), None);
     let args: Vec<String> = cmd
         .get_args()

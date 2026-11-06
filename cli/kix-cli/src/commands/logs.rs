@@ -1,8 +1,8 @@
 //! Tail logs for a package's primary workload via `kubectl logs`.
 
 use std::os::unix::process::CommandExt;
-use std::process::Command;
 
+use kix::runtime::{self, Tool, Want};
 use miette::{Result, miette};
 
 use crate::cli::LogsArgs;
@@ -23,7 +23,7 @@ pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
         output::dim(&target.selector),
     );
 
-    let mut cmd = Command::new("kubectl");
+    let mut cmd = runtime::tool(Tool::Kubectl, Want::Shipped).map_err(|e| miette!("{e}"))?;
     cmd.arg("logs");
     cmd.args(["-n", &target.namespace]);
     cmd.args(["-l", &target.selector]);
