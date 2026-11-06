@@ -247,22 +247,19 @@ pub fn eval_with_helm(
     status_fn: &dyn Fn(&str),
 ) -> Result<String, KixEvalError> {
     let mut realised = std::collections::HashSet::new();
-    let mut show_trace = false;
     for _ in 0..MAX_EVALUATIONS {
-        let error = match eval_raw(flake_path, args, input_overrides, show_trace, status_fn)? {
+        let mut error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
             Ok(stdout) => return Ok(stdout),
             Err(error) => error,
         };
-        if error.missing_attribute() {
-            return Err(error.into());
-        }
-        let pending = super::helm::pending(&error.stderr)?;
+        let pending = if error.missing_attribute() {
+            Vec::new()
+        } else {
+            super::helm::pending(&error.stderr)?
+        };
         if pending.is_empty() {
-            // Outside Linux the error names no derivation, so evaluate
-            // again with the stack trace that names the chart's output.
-            if !show_trace && super::helm::store_cannot_build(&error.stderr) {
-                show_trace = true;
-                continue;
+            if !tracing::enabled!(tracing::Level::INFO) {
+                error.stderr = shorten_trace(&error.stderr);
             }
             return Err(error.into());
         }
@@ -287,21 +284,23 @@ pub fn eval_with_helm(
 
 /// Run `nix eval --raw <args>` in `flake_path`. Return its output, or the
 /// failed command, whose stderr may name Helm placeholders.
+///
+/// The full stack trace is always on. Outside Linux, Nix refuses to build in
+/// Kix's store before it checks a derivation's system, and only the trace
+/// names the output of the Helm placeholder it stopped at.
 fn eval_raw(
     flake_path: &Path,
     args: &[&str],
     input_overrides: &[(String, String)],
-    show_trace: bool,
     status_fn: &dyn Fn(&str),
 ) -> Result<Result<String, NixCommandError>, KixEvalError> {
     let mut cmd = command(Tool::Nix)?;
-    cmd.args(["eval", "--raw"]).args(args).args([
-        "--extra-experimental-features",
-        "nix-command flakes pipe-operators",
-    ]);
-    if show_trace {
-        cmd.arg("--show-trace");
-    }
+    cmd.args(["eval", "--raw", "--show-trace"])
+        .args(args)
+        .args([
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ]);
     for (name, url) in input_overrides {
         cmd.arg("--override-input").arg(name).arg(url);
     }
@@ -335,6 +334,43 @@ fn eval_raw(
         )));
     }
     Ok(Ok(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
+
+/// The trace frames [`shorten_trace`] keeps, as many as Nix shows without
+/// `--show-trace`.
+const SHORT_TRACE_FRAMES: usize = 3;
+
+/// Return `stderr` of a Nix evaluation with its stack trace cut to the
+/// first [`SHORT_TRACE_FRAMES`] frames, like Nix prints it without
+/// `--show-trace`. Text that is not such a trace comes back unchanged.
+fn shorten_trace(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let Some(first) = lines.iter().position(|l| l.starts_with("error:")) else {
+        return stderr.to_string();
+    };
+    // The innermost error message follows the frames, indented under the
+    // first `error:`.
+    let Some(last) = lines
+        .iter()
+        .rposition(|l| l.starts_with(' ') && l.trim_start().starts_with("error:"))
+        .filter(|&last| last > first)
+    else {
+        return stderr.to_string();
+    };
+    let frames: Vec<usize> = (first..last)
+        .filter(|&i| lines[i].trim_start().starts_with('…'))
+        .collect();
+    let Some(&cut) = frames.get(SHORT_TRACE_FRAMES) else {
+        return stderr.to_string();
+    };
+    let indent = &lines[last][..lines[last].len() - lines[last].trim_start().len()];
+    let mut short: Vec<String> = lines[..cut].iter().map(|l| l.to_string()).collect();
+    short.push(format!(
+        "{indent}(stack trace truncated; run kix with -v to show the full trace)"
+    ));
+    short.push(String::new());
+    short.extend(lines[last..].iter().map(|l| l.to_string()));
+    short.join("\n")
 }
 
 fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError> {
@@ -547,6 +583,37 @@ pub fn version() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_trace_is_cut_like_nix_cuts_it() {
+        let frame =
+            |what: &str| format!("       … {what}\n         at /f.nix:1:1:\n            1| x\n");
+        let full = format!(
+            "warning: Git tree is dirty\nerror:\n{}\n{}\n{}\n{}\n       error: boom",
+            frame("while evaluating the file"),
+            frame("while evaluating the attribute 'y'"),
+            frame("while evaluating the attribute 'a'"),
+            frame("while calling 'h'"),
+        );
+        let short = shorten_trace(&full);
+        assert!(
+            short.starts_with(
+                "warning: Git tree is dirty\nerror:\n       … while evaluating the file"
+            )
+        );
+        assert!(short.contains("attribute 'a'"));
+        assert!(!short.contains("while calling 'h'"));
+        assert!(short.ends_with(
+            "       (stack trace truncated; run kix with -v to show the full trace)\n\n       error: boom"
+        ));
+    }
+
+    #[test]
+    fn a_short_error_is_left_alone() {
+        let text = "error: attribute 'c' missing\n       at «string»:1:24:\n       Did you mean b?";
+        assert_eq!(shorten_trace(text), text);
+        assert_eq!(shorten_trace("not a nix error"), "not a nix error");
+    }
     use serde_json::json;
 
     #[test]
