@@ -297,6 +297,7 @@ in
         crdScope = "Namespaced";
         inherit installedBy;
         readiness = rules.policyReadiness;
+        holdsData = false;
       };
 
       ccnpCrd = scope.mkCRDRef {
@@ -307,6 +308,7 @@ in
         crdScope = "Cluster";
         inherit installedBy;
         readiness = rules.policyReadiness;
+        holdsData = false;
       };
 
       # Under "always", a `kubectl run` debug pod, an operator's own Job, or
@@ -398,6 +400,7 @@ in
         kind = "HelmChartConfig";
         plural = "helmchartconfigs";
         version = "v1";
+        holdsData = false;
       };
 
       helmChartConfig = scope.mkCR helmChartConfigCrd {

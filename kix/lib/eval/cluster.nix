@@ -923,6 +923,57 @@
           message = "kix: ${message}";
         }) (builtins.concatMap ofNamespace realNsNames);
 
+      # Fail the build when a stateful package renders a custom resource
+      # whose kind does not declare `holdsData`. Deploy reads the resulting
+      # `kix.run/holds-data` mark to decide which removals are data
+      # migrations, and a stateful package is where a wrong guess costs data.
+      # Only the package's own parts count: policies that hooks derive and
+      # the PackageInstance record hold no data.
+      holdsDataAssertions =
+        let
+          plain = v: builtins.unsafeDiscardStringContext (toString v);
+          isStateful = inst: ((inst._meta.packageMeta or { }).lifecycle or null) == "stateful";
+          ofInstance =
+            inst:
+            let
+              owner = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+              undeclared = builtins.filter (
+                r:
+                r ? rawManifest
+                && (r.declaredHoldsData or null) == null
+                && k8s.facts.isForeignGroup (plain r.apiVersion)
+              ) (helpers.instancePartResources inst);
+              byKind = builtins.groupBy (
+                r: "${builtins.head (lib.splitString "/" (plain r.apiVersion))}/${plain r.kind}"
+              ) undeclared;
+            in
+            lib.mapAttrsToList (
+              groupKind: rs:
+              let
+                kind = plain (builtins.head rs).kind;
+                names = builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) rs);
+                declarations = lib.unique (builtins.filter (d: d != null) (map (r: r.crdDeclaredBy or null) rs));
+                raw = builtins.filter (r: (r.crdDeclaredBy or null) == null) rs;
+                answer = "true when deleting a ${kind} loses data (a database, a storage pool), false when it does not (monitoring, certificates, policy, configuration)";
+              in
+              {
+                assertion = false;
+                message =
+                  "kix: instance ${owner} has lifecycle = \"stateful\" and renders ${kind} ${names}, "
+                  + "but Kix does not know whether ${groupKind} objects hold data. "
+                  + lib.optionalString (declarations != [ ]) (
+                    "Set holdsData on ${builtins.concatStringsSep " and " declarations}, which declares the kind: ${answer}. "
+                  )
+                  + lib.optionalString (raw != [ ]) (
+                    "${builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) raw)} "
+                    + "is built with scope.mkResource, which carries no declaration. "
+                    + "Build it with scope.mkCR from the scope.mkCRD or scope.mkCRDRef of ${groupKind}, and set holdsData there: ${answer}."
+                  );
+              }
+            ) byKind;
+        in
+        builtins.concatMap ofInstance (builtins.filter isStateful allInstancesList);
+
       # Reject cluster-scoped objects rendered with the same API group, kind,
       # and name by multiple active instances. Identical copies would otherwise
       # be collapsed by `dedupeByOutPath`, and differing copies would fail
@@ -1096,6 +1147,7 @@
           ++ sharedClusterObjectAssertions
           ++ podSecurityAssertions
           ++ quotaAssertions
+          ++ holdsDataAssertions
           ++ crossResourceAssertions
           ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };

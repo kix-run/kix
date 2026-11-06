@@ -11,6 +11,11 @@ Every pull request that changes something a Kix user sees adds a line under
 
 ## Unreleased
 
+### Breaking
+
+- A package with `lifecycle = "stateful"` fails to build when it renders a custom resource whose kind does not declare `holdsData`. When you upgrade, add `holdsData = true` to the `scope.mkCRD`, `scope.mkCRDRef`, or `kix.mkImport` `crds` entry of each kind that keeps data deleting it loses (a database, a storage pool), and `holdsData = false` to the others (monitoring, certificates, policy). Build those custom resources with `scope.mkCR` so they carry the answer. The packages in this repository declare it already.
+- Kix writes a `kix.run/holds-data` annotation (`"true"` or `"false"`) on custom resources whose kind declares `holdsData`, and `"true"` on PersistentVolumeClaims, PersistentVolumes, and StatefulSets with volume claim templates. Cluster operators change nothing in their cluster definitions. Each marked object is re-applied to add the annotation. So is every object that depends on a marked object, directly or through other objects, because its `kix.run/depends-on` annotation names the changed object's new hash. These changes are to object metadata only, and pod templates do not change, so pods do not restart. The exception is a pod template that carries an object's `out.identityHash` as a `checksum/*` annotation (grafana, valkey, and plausible do this for their ConfigMaps and Secrets): its pods roll when that object depends on a marked one. Objects deployed by an earlier release are read as before until then.
+
 ### Added
 
 - `cnpg-cluster` can copy databases from another PostgreSQL server when the Cluster is created, through the new `import` option and the `importSource`, `importPassword`, and `importCa` dependencies. Kix derives the network policy between the Cluster's pods and the source.
@@ -25,6 +30,7 @@ Every pull request that changes something a Kix user sees adds a line under
 
 ### Fixed
 
+- `kix diff` and `kix deploy` no longer stop on a false data migration when a stateful package removes a custom resource that holds no data and adds another, such as a PodMonitor replaced by a PrometheusRule. They read the object's `kix.run/holds-data` annotation, and judge an object without one by its storage fields and API group as before.
 - `kix diff` and `kix deploy` no longer report a data migration when a stateful package removes one object and adds another of a different kind that holds no data, such as an import marker replaced by a PodDisruptionBudget. Objects of different kinds now count as a migration only when both may hold data: a custom resource, or a built-in kind that declares storage. A renamed object of the same kind still counts as a migration.
 - `kix diff` shows one changed value inside a list item as one change to that value, not as the item removed and a new one added. Lists of objects with a `metadata.name`, such as a VirtualMachine's `dataVolumeTemplates`, match items by that name, and `creationTimestamp: null` on one side no longer counts as a difference. In `-o json` output, the `path` of an added or removed list item now gives its real index in the list.
 - `kix diff` and `kix plan` against the cluster no longer show changes to objects the build does not change, such as an empty `value` the API server dropped. `kix diff` now lists drift (fields someone changed on the cluster, and who changed them) on any machine, also when it finds no other difference, and says how many objects it could not check for drift (the new `drift_unchecked` field in `-o json`).
