@@ -1,0 +1,3 @@
+# 2026-11-06 · `cli/kix/src/cluster/kept.rs` · The not-kept warning misses a zero value that a CRD in a `*.k8s.io` group drops.
+
+Built-in kinds drop zero values (`0`, `""`, `false`) when they store an object, so `not_kept` treats a dropped zero as kept whenever `types::is_known_api` says the group is built-in. That check counts every `*.k8s.io` group as built-in, including groups that CRDs serve, such as the Gateway API (`gateway.networking.k8s.io`) and volume snapshots (`snapshot.storage.k8s.io`). If one of those CRDs prunes a zero-valued field, Kix does not warn. The same group boundary also stops VolumeSnapshots declaring `holdsData` (see the volume-snapshots entry from the same day).

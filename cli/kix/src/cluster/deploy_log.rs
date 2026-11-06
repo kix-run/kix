@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::apply::ApplyAction;
+use super::kept;
 use super::stream::{
     CancelReason, DeployEvent, DeployResult, NodeDetail, NodeId, Phase, TransitionKind, Verdict,
 };
@@ -121,6 +122,12 @@ pub enum Event {
     },
     /// A write that the next deploy redoes failed.
     BestEffortFailed { what: String, message: String },
+    /// The apply of `resource` succeeded, but Kubernetes did not store
+    /// `fields` as Kix sent them. A warning: the deploy goes on.
+    FieldsNotKept {
+        resource: String,
+        fields: Vec<FieldNotKept>,
+    },
     /// The counts the text summary line shows.
     Summary {
         dry_run: bool,
@@ -232,6 +239,28 @@ pub enum Detail {
     },
 }
 
+/// A field Kix applied that Kubernetes did not store as sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FieldNotKept {
+    pub path: String,
+    pub change: NotKept,
+    /// The value Kix sent. A Secret value reads `(secret, not shown)`.
+    pub sent: serde_json::Value,
+    /// The value Kubernetes stored. Absent when it dropped the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<serde_json::Value>,
+}
+
+/// What Kubernetes did with a field Kix applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotKept {
+    /// The stored object does not have the field.
+    Dropped,
+    /// The stored object has another value.
+    Changed,
+}
+
 /// A node in flight when the run stalled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Busy {
@@ -341,6 +370,21 @@ impl Event {
             DeployEvent::BestEffortFailed { what, message } => Event::BestEffortFailed {
                 what: what.clone(),
                 message: message.clone(),
+            },
+            DeployEvent::FieldsNotKept { resource, fields } => Event::FieldsNotKept {
+                resource: resource.display_id(),
+                fields: fields
+                    .iter()
+                    .map(|f| FieldNotKept {
+                        path: f.path.clone(),
+                        change: match f.change {
+                            kept::NotKept::Dropped => NotKept::Dropped,
+                            kept::NotKept::Changed => NotKept::Changed,
+                        },
+                        sent: f.sent.clone(),
+                        stored: f.stored.clone(),
+                    })
+                    .collect(),
             },
         })
     }

@@ -2022,3 +2022,45 @@ proptest::proptest! {
         check_case(case)?;
     }
 }
+
+/// A field the server did not keep is a warning event. The node is still
+/// ready and the run succeeds.
+#[tokio::test(start_paused = true)]
+async fn fields_the_server_did_not_keep_warn_and_the_run_goes_on() {
+    use crate::cluster::kept::{NotKept, NotKeptField};
+    let manifests = vec![m("Widget", "w", &[]), m("ConfigMap", "cm", &[])];
+    let pruned = vec![NotKeptField {
+        path: "$.spec.colour".into(),
+        change: NotKept::Dropped,
+        sent: json!("red"),
+        stored: None,
+    }];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Widget", "w"),
+        NodeScript::default().not_kept(pruned.clone()),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_of(&manifests),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((result.created, result.failed), (2, 0));
+    let warned: Vec<(ResourceId, Vec<NotKeptField>)> = rec
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::FieldsNotKept { resource, fields } => {
+                Some((resource.clone(), fields.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warned, vec![(rid("Widget", "w"), pruned)]);
+}

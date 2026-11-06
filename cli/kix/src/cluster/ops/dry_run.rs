@@ -116,10 +116,12 @@ impl ResourceIo for DryRun {
             Ok(result) => DryRunOutcome::Recreated {
                 live: existing,
                 result: result.preview.as_ref().map(|p| p.result.clone()),
+                not_kept: result.not_kept.clone(),
             },
             Err(ApplyError::ImmutableConflict { .. }) => DryRunOutcome::Recreated {
                 live: existing,
                 result: None,
+                not_kept: Vec::new(),
             },
             Err(e) => DryRunOutcome::Refused(Refusal::of_apply(e)),
         };
@@ -129,6 +131,7 @@ impl ResourceIo for DryRun {
             Err(ApplyError::ImmutableConflict { .. }) => Ok(ApplyResult {
                 action: ApplyAction::Created,
                 preview: None,
+                not_kept: Vec::new(),
             }),
             Err(e) => Err(RecreateError::DryRunReapply(e)),
         }

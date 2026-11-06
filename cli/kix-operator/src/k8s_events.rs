@@ -178,6 +178,13 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
             action: "Degraded".into(),
             secondary: None,
         }),
+        DeployEvent::FieldsNotKept { resource, fields } => Some(KEvent {
+            type_: EventType::Warning,
+            reason: "FieldsNotKept".into(),
+            note: Some(kix::cluster::kept::describe(&resource.display_id(), fields)),
+            action: "Applied".into(),
+            secondary: None,
+        }),
     }
 }
 

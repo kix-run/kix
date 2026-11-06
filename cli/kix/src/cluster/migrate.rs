@@ -45,7 +45,7 @@ use serde_json::Value;
 
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{Lifecycle, lifecycle_of};
-use crate::manifest::types::ResourceId;
+use crate::manifest::types::{self, ResourceId};
 
 /// The lifecycle value for resources whose data requires migration.
 const LIFECYCLE_STATEFUL: &str = "stateful";
@@ -126,31 +126,6 @@ fn holds_data(manifest: &Value) -> bool {
         || declared(spec.get("storage"))
 }
 
-/// API groups whose kinds Kix treats as built-in, besides the core group and
-/// Kix's own. The library reads the same lists from
-/// `kix/lib/core/api-groups.json` (`facts.isForeignGroup`), and a test below
-/// checks that the two agree.
-const BUILTIN_GROUPS: &[&str] = &["apps", "batch", "policy", "autoscaling"];
-
-/// Suffixes of API groups whose kinds Kix treats as built-in.
-const BUILTIN_GROUP_SUFFIXES: &[&str] = &[".k8s.io"];
-
-/// Return whether the manifest's API group is one whose kinds Kix knows: the
-/// core group, a [`BUILTIN_GROUPS`] entry, a group ending in one of
-/// [`BUILTIN_GROUP_SUFFIXES`], and Kix's own group.
-fn is_known_api(manifest: &Value) -> bool {
-    let api_version = manifest
-        .get("apiVersion")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let Some((group, _)) = api_version.split_once('/') else {
-        return true;
-    };
-    BUILTIN_GROUPS.contains(&group)
-        || BUILTIN_GROUP_SUFFIXES.iter().any(|s| group.ends_with(s))
-        || group == keys::GROUP
-}
-
 /// Return the object's `kix.run/holds-data` mark, or `None` when it has none
 /// or the value is neither `"true"` nor `"false"`.
 fn marked_holds_data(manifest: &Value) -> Option<bool> {
@@ -166,7 +141,8 @@ fn marked_holds_data(manifest: &Value) -> Option<bool> {
 /// declares storage. Kix cannot see where an unmarked custom resource keeps
 /// its data, so it assumes that one may.
 fn may_hold_data(manifest: &Value) -> bool {
-    marked_holds_data(manifest).unwrap_or_else(|| holds_data(manifest) || !is_known_api(manifest))
+    marked_holds_data(manifest)
+        .unwrap_or_else(|| holds_data(manifest) || !types::is_known_api(manifest))
 }
 
 /// Derive a short "why did this change" reason by comparing source and target
@@ -858,7 +834,10 @@ mod tests {
                 .map(|v| v.as_str().unwrap().to_string())
                 .collect()
         };
-        assert_eq!(strings("builtinGroups"), BUILTIN_GROUPS);
-        assert_eq!(strings("builtinGroupSuffixes"), BUILTIN_GROUP_SUFFIXES);
+        assert_eq!(strings("builtinGroups"), types::BUILTIN_GROUPS);
+        assert_eq!(
+            strings("builtinGroupSuffixes"),
+            types::BUILTIN_GROUP_SUFFIXES
+        );
     }
 }

@@ -4,12 +4,16 @@
 //! ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
-//! and DELETE (honoring `preconditions`) on the objects it holds.
+//! DELETE (honoring `preconditions`), and server-side apply on the objects it
+//! holds. An apply stores the manifest sent as it is, and a dry-run apply
+//! (`dryRun=All`) answers without storing.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. Anything else answers 404.
 //!
 //! [`FakeApi::after_get`] changes an object right after the next GET of it
 //! is answered, which models a concurrent writer between a read and a delete.
+//! [`FakeApi::on_apply`] changes what the next apply of an object stores,
+//! which models a CRD's pruning or a mutating admission webhook.
 //! [`FakeApi::fail_next`] answers the next requests for one path with a
 //! plain-text error, as the apiserver does for a path it has not registered.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
@@ -69,6 +73,7 @@ struct State {
     /// `METHOD path` of every request, in order, with `?query` when it has one.
     requests: Vec<String>,
     after_get: Vec<(String, Hook)>,
+    on_apply: Vec<(String, Hook)>,
     /// `(path, remaining, status)`: answer that many requests for `path`
     /// with `status` and a plain-text body.
     failures: Vec<(String, u32, u16)>,
@@ -118,6 +123,16 @@ impl FakeApi {
             .push((name.to_string(), Box::new(f)));
     }
 
+    /// Run `f` on what the next apply of the object named `name` stores and
+    /// answers.
+    pub fn on_apply(&self, name: &str, f: impl FnOnce(&mut Value) + Send + 'static) {
+        self.state
+            .lock()
+            .unwrap()
+            .on_apply
+            .push((name.to_string(), Box::new(f)));
+    }
+
     /// Answer the next `times` requests for `path` (no query string) with
     /// `status` and a plain-text body. With 404 this is the apiserver's
     /// `404 page not found` for a path nothing serves. `u32::MAX` keeps
@@ -163,8 +178,15 @@ impl FakeApi {
                 let method = req.method().clone();
                 let path = req.uri().path().to_string();
                 let query = req.uri().query().unwrap_or("").to_string();
+                // Kubernetes tells a server-side apply from a merge patch by
+                // the request's content type, so the fake does too.
+                let apply = req
+                    .headers()
+                    .get(http::header::CONTENT_TYPE)
+                    .is_some_and(|v| v.as_bytes().starts_with(b"application/apply-patch"));
                 let body = req.into_body().collect().await.unwrap().to_bytes();
-                let (status, content_type, body) = api.respond(&method, &path, &query, &body);
+                let (status, content_type, body) =
+                    api.respond(&method, &path, &query, &body, apply);
                 let resp = http::Response::builder()
                     .status(status)
                     .header("content-type", content_type)
@@ -182,6 +204,7 @@ impl FakeApi {
         path: &str,
         query: &str,
         body: &[u8],
+        apply: bool,
     ) -> (u16, &'static str, String) {
         {
             let mut st = self.state.lock().unwrap();
@@ -203,11 +226,18 @@ impl FakeApi {
                 return (code, "text/plain", format!("{code} page not found\n"));
             }
         }
-        let (status, value) = self.handle(method, path, query, body);
+        let (status, value) = self.handle(method, path, query, body, apply);
         (status, "application/json", value.to_string())
     }
 
-    fn handle(&self, method: &http::Method, path: &str, query: &str, body: &[u8]) -> (u16, Value) {
+    fn handle(
+        &self,
+        method: &http::Method,
+        path: &str,
+        query: &str,
+        body: &[u8],
+        apply: bool,
+    ) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
         let mut kinds = KINDS.to_vec();
         if st.retired_records {
@@ -268,6 +298,30 @@ impl FakeApi {
                 }
                 let gone = st.objects.remove(i);
                 (200, gone)
+            }
+            ("PATCH", Some(name)) if apply => {
+                let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
+                    return status(400, "BadRequest", "the fake serves JSON bodies only");
+                };
+                let existing = st.objects.iter().position(&matches);
+                let rv = st.bump();
+                let uid = match existing {
+                    Some(i) => st.objects[i]["metadata"]["uid"].clone(),
+                    None => json!(format!("uid-{rv}")),
+                };
+                obj["metadata"]["uid"] = uid;
+                obj["metadata"]["resourceVersion"] = json!(rv);
+                if let Some(h) = st.on_apply.iter().position(|(n, _)| n == name) {
+                    let (_, hook) = st.on_apply.remove(h);
+                    hook(&mut obj);
+                }
+                if !query.split('&').any(|q| q == "dryRun=All") {
+                    match existing {
+                        Some(i) => st.objects[i] = obj.clone(),
+                        None => st.objects.push(obj.clone()),
+                    }
+                }
+                (if existing.is_some() { 200 } else { 201 }, obj)
             }
             ("PATCH", Some(_)) => {
                 let Some(i) = st.objects.iter().position(&matches) else {

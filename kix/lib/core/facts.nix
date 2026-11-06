@@ -117,7 +117,7 @@ rec {
 
   # The API groups whose kinds Kix treats as built-in, besides the core group
   # and Kix's own. `api-groups.json` is shared with the CLI, whose
-  # `is_known_api` in `cli/kix/src/cluster/migrate.rs` must agree (a Rust test
+  # `is_known_api` in `cli/kix/src/manifest/types.rs` must agree (a Rust test
   # compares them).
   apiGroups = builtins.fromJSON (builtins.readFile ./api-groups.json);
 

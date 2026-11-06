@@ -2342,7 +2342,9 @@ old side from live objects because the deployed build is not on the machine, it
 places each object in the package that index names, so an object that moved
 between packages shows under both. A record without the index, or with a
 `format` this release does not know, places live objects where the new build
-puts them. An index over 150 KiB (some 3,600 objects) is not written, and a failed write only logs a
+puts them. Records from Kix 0.5 have no index. Neither do records the
+in-cluster operator deploys from an Activation applied by hand or from git,
+because only `kix deploy` and `kix rollback` write one. An index over 150 KiB (some 3,600 objects) is not written, and a failed write only logs a
 warning.
 
 A deploy or rollback that keeps orphans (no `--prune`, `--prune-mode=no`, or a
@@ -2427,6 +2429,25 @@ never show as changes. Its `drift` section needs no deployed build. For each
 object whose fields Kix applied have changed since, it lists the fields the
 build sets that another field manager changed or took over, with the
 manager's name.
+
+Sometimes Kubernetes accepts a write but does not store what Kix sent: a
+CRD's schema prunes a field it does not declare, or a mutating admission
+webhook changes a value. The setting then never takes effect. `kix plan`
+lists each such field under `not_kept`, `dropped` or `changed`, with the
+value the build sets (`sent`) and, for a change, the value Kubernetes
+would store (`stored`). The text and Markdown show it as a warning: the
+deploy still applies the object. Only fields the build sets count, and a
+value stored in an equal form is not reported: a quantity in another
+spelling (`0.5` and `500m`), a documented default, a reordered list, a
+Secret's `stringData` stored as `data`, and a zero value (`""`, `0`,
+`false`, or an empty map or list) on a built-in kind, which Kubernetes
+drops or defaults. A custom resource keeps a zero value, so losing one is
+reported. A field the object cedes (`ownership.cede`) is another
+controller's to set, so its stored value is not reported. A custom resource whose CRD the deploy changes is not checked,
+because the dry run checks it against the CRD on the cluster now. Secret
+values read `(secret, not shown)`. `kix deploy` runs the same check on
+each real apply and prints a warning (`warn:`), which the JSON log
+carries as a `fields_not_kept` line. The deploy does not fail on it.
 
 The dry run cannot check an object whose kind comes from a CRD the deploy
 installs, or whose namespace the deploy creates, because a dry run persists

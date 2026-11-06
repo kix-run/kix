@@ -18,7 +18,7 @@ use crate::manifest::lifecycle;
 use crate::manifest::types::{self, ResourceId};
 use serde_json::Value;
 
-use super::document::DriftChange;
+use super::document::{DriftChange, FieldNotKept};
 use super::origin::{ChangeLabel, ThreeWay};
 use super::{CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, partition_propagation};
 
@@ -74,6 +74,33 @@ pub(crate) fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
     diffs
 }
 
+/// Return the fields the server would not keep as the build sets them, for
+/// every object the dry run writes: each create, update, and recreate the
+/// server answered. Objects `skip` names are left out. The list is sorted by
+/// resource, then path.
+pub fn not_kept(answers: &[DryRunAnswer], skip: impl Fn(&ResourceId) -> bool) -> Vec<FieldNotKept> {
+    let mut out: Vec<FieldNotKept> = answers
+        .iter()
+        .filter(|a| !lifecycle::is_record_kind(&a.rid.kind) && !skip(&a.rid))
+        .flat_map(|a| {
+            let fields = match &a.outcome {
+                DryRunOutcome::Applied(p) => p.not_kept.as_slice(),
+                DryRunOutcome::Recreated { not_kept, .. } => not_kept.as_slice(),
+                DryRunOutcome::Refused(_) | DryRunOutcome::Pruned(_) => &[],
+            };
+            fields.iter().map(|f| FieldNotKept {
+                resource: a.rid.display_id(),
+                path: f.path.clone(),
+                change: f.change,
+                sent: f.sent.clone(),
+                stored: f.stored.clone(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.resource, &a.path).cmp(&(&b.resource, &b.path)));
+    out
+}
+
 /// What the server answers change about the package diff.
 pub(crate) struct Overlay<'a> {
     pub new_graph: &'a StoreGraph,
@@ -110,7 +137,7 @@ impl Overlay<'_> {
             let recreated = matches!(answer.outcome, DryRunOutcome::Recreated { .. });
             let (live, result) = match &answer.outcome {
                 DryRunOutcome::Applied(p) => (p.live.clone(), Some(p.result.clone())),
-                DryRunOutcome::Recreated { live, result } => (live.clone(), result.clone()),
+                DryRunOutcome::Recreated { live, result, .. } => (live.clone(), result.clone()),
                 // A 409 means the object exists, so the build comparison's
                 // "added" (the old side may not have known the object, made
                 // by hand or by another tool) is wrong. List it as changed;
@@ -352,8 +379,90 @@ mod tests {
     fn applied(name: &str, live: Option<Value>, result: Value) -> DryRunAnswer {
         DryRunAnswer {
             rid: rid(name),
-            outcome: DryRunOutcome::Applied(Box::new(ApplyPreview { live, result })),
+            outcome: DryRunOutcome::Applied(Box::new(ApplyPreview {
+                live,
+                result,
+                not_kept: Vec::new(),
+            })),
         }
+    }
+
+    /// Every write the dry run answered reports the fields the server would
+    /// not keep: a create and an update. The Activation record and the
+    /// objects `skip` names are left out.
+    #[test]
+    fn not_kept_covers_creates_and_updates() {
+        use super::super::document::NotKept;
+        use crate::cluster::kept;
+        let widget = |name: &str, spec: Value| {
+            json!({"apiVersion": "example.com/v1", "kind": "Widget",
+                "metadata": {"name": name, "namespace": "app"}, "spec": spec})
+        };
+        let answer = |live: Option<Value>, sent: Value, stored: Value| {
+            let not_kept = kept::not_kept(&sent, &stored);
+            DryRunAnswer {
+                rid: ResourceId::from_value(&sent),
+                outcome: DryRunOutcome::Applied(Box::new(ApplyPreview {
+                    live,
+                    result: served(&stored),
+                    not_kept,
+                })),
+            }
+        };
+        let created = answer(
+            None,
+            widget("new", json!({"colour": "red"})),
+            widget("new", json!({})),
+        );
+        let updated = answer(
+            Some(served(&widget("old", json!({"size": 1})))),
+            widget("old", json!({"size": 2})),
+            widget("old", json!({"size": 5})),
+        );
+        let skipped = answer(
+            None,
+            widget("skip", json!({"colour": "red"})),
+            widget("skip", json!({})),
+        );
+        let mut record = served(&json!({"apiVersion": "x/v1",
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": {"name": "r"}, "spec": {"a": 1}}));
+        let record_sent = record.clone();
+        record["spec"] = json!({});
+        let record = DryRunAnswer {
+            rid: ResourceId::from_value(&record_sent),
+            outcome: DryRunOutcome::Applied(Box::new(ApplyPreview {
+                live: None,
+                not_kept: kept::not_kept(&record_sent, &record),
+                result: record,
+            })),
+        };
+        let answers = [created, updated, skipped, record];
+        let found = not_kept(&answers, |rid| rid.name == "skip");
+        let summary: Vec<(&str, &str, NotKept, Option<&Value>)> = found
+            .iter()
+            .map(|f| {
+                (
+                    f.resource.as_str(),
+                    f.path.as_str(),
+                    f.change,
+                    f.stored.as_ref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("Widget/new@app", "$.spec.colour", NotKept::Dropped, None),
+                (
+                    "Widget/old@app",
+                    "$.spec.size",
+                    NotKept::Changed,
+                    Some(&json!(5))
+                ),
+            ]
+        );
+        assert_eq!(found[1].sent, json!(2));
     }
 
     #[test]
@@ -451,6 +560,7 @@ mod tests {
             outcome: DryRunOutcome::Recreated {
                 live: Some(served(live)),
                 result,
+                not_kept: Vec::new(),
             },
         };
         let answers = vec![

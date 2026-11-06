@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::manifest::types::ResourceId;
 
 use super::apply::{ApplyError, ApplyPreview};
+use super::kept::NotKeptField;
 use super::secrets::SecretError;
 
 /// One object's answer from a dry run.
@@ -31,6 +32,8 @@ pub enum DryRunOutcome {
     Recreated {
         live: Option<Value>,
         result: Option<Value>,
+        /// Fields of the manifest sent that `result` does not keep as sent.
+        not_kept: Vec<NotKeptField>,
     },
     /// The apiserver, or the engine before it, refused the write.
     Refused(Refusal),
