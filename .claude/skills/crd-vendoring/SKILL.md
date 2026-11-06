@@ -48,8 +48,8 @@ under `rbac/`, the named roles), sort, write. CI runs `--check` on every pull re
 4. Run the script for that package. Load the files in Nix with the pattern
    the velero package uses:
    ```nix
-   vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
-   crds.backups = scope.mkCRD { spec = vendored "backups.velero.io.json"; };
+   crdFile = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
+   crds.backups = scope.mkCRD { spec = crdFile "backups.velero.io.json"; holdsData = false; };
    ```
    Give the CRDs to the controller's `requires`. A CRD in a `*.k8s.io` group
    needs its `api-approved.kubernetes.io` annotation carried over (see
