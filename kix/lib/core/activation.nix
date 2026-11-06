@@ -22,13 +22,6 @@ in
       extraAnnotations ? { },
       lifecycle ? null,
     }:
-    let
-      resolvedVersion =
-        if version == null then
-          builtins.trace "warning: package ${instanceName} has no version set" "<undefined>"
-        else
-          version;
-    in
     mkResource {
       apiVersion = kixAnnotations.apiVersion;
       kind = "PackageInstance";
@@ -54,8 +47,8 @@ in
       // extraAnnotations;
       extra.spec = {
         inherit instanceName namespaceName;
-        version = resolvedVersion;
       }
+      // lib.optionalAttrs (version != null) { inherit version; }
       // lib.optionalAttrs (lifecycle != null) {
         inherit lifecycle;
       };

@@ -668,11 +668,19 @@ in
           inherit packageRequires postHooks;
           inverseDeps = inverseDeps ++ processorResources;
           lifecycle = packageMeta.lifecycle or null;
+          # Packages whose software version varies per instance, such as a
+          # database cluster, report it through `out.version`. A package
+          # that deploys no software has none, and the record then omits it.
           version =
             let
               v = instCfg.version or null;
             in
-            if v != null then v else packageMeta.version or null;
+            if v != null then
+              v
+            else if (packageMeta.version or null) != null then
+              packageMeta.version
+            else
+              packageOut.version or null;
           labels = clusterLabels // {
             "app.kubernetes.io/instance" = instanceName;
             "app.kubernetes.io/managed-by" = "kix";

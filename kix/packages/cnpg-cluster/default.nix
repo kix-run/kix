@@ -48,6 +48,7 @@
 #
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
+#   out.version                   PostgreSQL major version, read from the image tag.
 #   out.clusterName               The Cluster's name.
 #   out.selector                  Instance pod labels.
 #   out.tls                       true (PostgreSQL always serves TLS).
@@ -253,6 +254,15 @@ in
           else
             throw "${who}: the cnpgOperator dependency has no out.operandSelectors, as with an import. This package reads the operator's CRD handle and pod labels from it. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
         crds = operator.crds;
+
+        # Null when the tag carries no version, so the assertion on the tag
+        # reports it instead of a match error here. The context is dropped
+        # so the record does not depend on the image pin.
+        postgresMajor =
+          let
+            m = builtins.match "([0-9]+).*" (builtins.unsafeDiscardStringContext config.image.tag);
+          in
+          if m == null then null else builtins.head m;
 
         operandSelector = operator.operandSelectors.cluster name;
         instanceSelector = operandSelector // {
@@ -682,7 +692,8 @@ in
             selector = instanceSelector;
             tls = true;
             extraImages = [ (kix.image.ref config.image) ];
-          };
+          }
+          // lib.optionalAttrs (postgresMajor != null) { version = postgresMajor; };
         };
       }
     )

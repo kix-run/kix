@@ -166,7 +166,7 @@ spec:
 | --- | --- | --- |
 | `spec.instanceName` | Managed and import instances | Name of the instance within its namespace. |
 | `spec.namespaceName` | Managed and import instances | Namespace of the instance. |
-| `spec.version` | Managed and import instances | Package version from `meta.version` (or the instance's `version` override). |
+| `spec.version` | Managed and import instances | The instance's `version` override, else the package's `meta.version`, else the `out.version` the package builds. Left out when none is set. |
 | `spec.lifecycle` | When `meta.lifecycle` is set | Workload lifecycle (`"stateful"`, `"stateless"`, `"ephemeral"`). |
 | `kix.run/root` | Managed instances | Name of the package's `root` resource. |
 | `kix.run/package-requires` | When non-empty | Comma-separated `<Kind>/<name>` entries that the package's `root` resource transitively depends on. |
