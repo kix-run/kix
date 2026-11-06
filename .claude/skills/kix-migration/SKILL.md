@@ -60,7 +60,7 @@ This produces `cluster-dump/{namespace}/{name}-{kind}.yaml` with server-side fie
 ### 2. Build + Diff
 
 ```bash
-nix build .#cluster-<name> --extra-experimental-features pipe-operators
+./scripts/kix-manifests.sh . <name> ./result
 ./scripts/compare-cluster-dump.py ./result ./cluster-dump/
 ```
 

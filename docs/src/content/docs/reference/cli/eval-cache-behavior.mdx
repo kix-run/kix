@@ -15,10 +15,12 @@ This page is hand-maintained. Check `cli/kix/src/eval/cache.rs`,
 | Path | Content |
 | --- | --- |
 | `<cache dir>/kix/eval-cache.db` | Evaluation results and source fingerprints |
+| `<cache dir>/kix/store` | Kix's own Nix store (flake inputs, rendered Helm charts, and evaluated manifests), or `$KIX_STORE_ROOT` when set |
+| `<cache dir>/kix/activations/<cluster>` | Symlinks and paths for each cluster's last local activation |
 
-`<cache dir>` is the platform cache directory: `$XDG_CACHE_HOME` or
-`~/.cache` on Linux, `~/Library/Caches` on macOS. Deleting the file is safe;
-the next command re-creates it and evaluates from Nix.
+`<cache dir>` is `$XDG_CACHE_HOME` when set, or `~/.cache` on both Linux and
+macOS. Deleting `eval-cache.db` is safe; the next command re-creates it and
+evaluates from Nix.
 
 ## What is cached
 
@@ -28,9 +30,10 @@ the next command re-creates it and evaluates from Nix.
 | The flake's cluster names | `list clusters`, and the "did you mean" list when a cluster is not found |
 | Available packages, and a cluster's instances | `list packages` |
 
-Commands that build the cluster's activation with `nix build`, such as
-`deploy`, `diff`, `export`, `logs`, and `pf`, do not read this cache. Nix's
-own evaluation cache and store apply to them.
+Commands that evaluate the cluster's activation index directly, such as
+`deploy`, `plan`, `diff`, `bundle`, `export`, `logs`, and `pf`, do not read
+`eval-cache.db`. Nix's own evaluation cache and Kix's store (`<cache dir>/kix/store`)
+apply to them.
 
 ## Cache key
 

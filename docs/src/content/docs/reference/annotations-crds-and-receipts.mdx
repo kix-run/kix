@@ -37,7 +37,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | `kix.run/package-namespace` | CLI on load | Namespace of the owning package instance. |
 | `kix.run/lifecycle` | CLI on load | Lifecycle classification from `meta.lifecycle` (such as `"stateful"`). |
 | `kix.run/holds-data` | `scope.mkResource` / `scope.mkCR` | `"true"` or `"false"`. Indicates whether deleting the resource loses persistent data. Derived automatically for `PersistentVolumeClaim`, `PersistentVolume`, and `StatefulSet` resources with `volumeClaimTemplates`, and required via CRD `holdsData` for custom resources in stateful packages. |
-| `kix.run/built-via` | CLI on `Activation` | Nix store path of the cluster activation derivation. |
+| `kix.run/built-via` | CLI on `Activation` | Nix store path of the cluster activation index (`kix-activation-<cluster>.json`). |
 | `kix.run/activations` | CLI after apply | Comma-separated `Activation` identity hashes that reference the live object. Used by `kix deploy --prune` and `kix gc`. |
 | `kix.run/applied-hash` | CLI after apply | Hash of the fields owned by the `kix` field manager after apply. Compared against live state by `kix drift` and `kix health`. |
 
@@ -232,7 +232,7 @@ Inspect the live receipt with `kubectl` or generate a SLSA provenance attestatio
 | `deployedAt` | `string` | RFC 3339 UTC timestamp when the deployment finalized. |
 | `source.flakeRef` | `string` | Flake reference passed to `kix deploy`. |
 | `source.gitCommit` | `string \| null` | Git commit SHA of the source repository. |
-| `source.dirty` | `boolean` | `true` when the Git working tree had uncommitted changes at build time. |
+| `source.dirty` | `boolean` | `true` when tracked files in the Git working tree had uncommitted changes at build time (untracked files are ignored by Nix flake evaluation). |
 | `source.revision` | `string \| null` | Commit SHA, suffixed with `-dirty` when `source.dirty` is `true`. |
 | `source.flakeLock` | `string \| null` | `blake3:<hex>` digest of `flake.lock`. |
 | `builder` | `object` | Versions and platform of the machine that ran the deploy (`kixVersion`, `nixVersion`, `arch`, `os`). |

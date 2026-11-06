@@ -29,10 +29,10 @@ it, and make one config edit. The point is to feel the loop:
 ## Prerequisites
 
 - Read [Orientation: what Kix is and why it exists](/docs/tutorials/01-orientation/).
-- Install Nix with flakes enabled.
 - Have Docker, Colima, or OrbStack running.
-- Have `kind`, `kubectl`, and the `kix` CLI available. The next section shows
-  one way to get them.
+- Have `kind`, `kubectl`, and the `kix` CLI available. You do not need Nix
+  installed separately; `kix` bundles its own Nix runtime. The next section
+  shows how to install `kix`.
 
 ## Start From The Example Repo
 
@@ -64,8 +64,10 @@ You do not need to understand all of them yet. For now:
 ## Enter A Shell With The Tools
 
 If your machine already has `kix`, `kind`, and `kubectl` on `PATH`, you can use
-your normal shell. If you need the Kix CLI, install it from the public
-`kixpkgs` flake:
+your normal shell. If you need the Kix CLI, follow
+[Install and run the Kix CLI](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+to unpack a release archive into `~/.local`, or install it with Nix if you
+already use Nix:
 
 <Command commands={["nix profile install github:kix-run/kixpkgs#kix"]} />
 

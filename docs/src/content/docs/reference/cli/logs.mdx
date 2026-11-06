@@ -6,9 +6,8 @@ description: "Stream logs from a package's primary workload by running `kubectl 
 import Command from '/src/components/Command.astro';
 
 `kix logs` builds the cluster, finds the named package's primary workload, and
-replaces itself with `kubectl logs` for every pod that workload selects. It
-saves looking up the namespace and label selector by hand. `kubectl` must be on
-`PATH`.
+replaces itself with Kix's bundled `kubectl logs` for every pod that workload
+selects. It saves looking up the namespace and label selector by hand.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
 `cli/kix-cli/src/commands/logs.rs`, and `cli/kix-cli/src/commands/workload.rs`
@@ -55,8 +54,7 @@ container prefix.
 ## Exit status
 
 On success `kix logs` is replaced by `kubectl`, so the exit status is
-kubectl's. A build or package-resolution failure, or a missing `kubectl`, exits
-`1`.
+kubectl's. A build or package-resolution failure exits `1`.
 
 :::tip[Use it in a task]
 See [Use `kix logs`](/docs/how-to/operate-a-cluster/use-kix-logs/)

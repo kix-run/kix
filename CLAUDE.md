@@ -153,11 +153,14 @@ the full package set (stackgres, cilium, cert-manager, ingress, etc.) and
 catches most regressions:
 
 ```bash
-nix build ludo/#cluster-ludo-kind --extra-experimental-features pipe-operators
+nix run .#kix -- check ludo-kind --flake ./ludo
 ```
 
-Other clusters (e.g. `.#cluster-nw1`) may need capabilities the current
-env lacks (external cilium, etc.); prefer ludo-kind for default checks.
+Because `ludo-kind` uses Helm charts, evaluate it through `kix` (or
+`./scripts/kix-manifests.sh ./ludo ludo-kind ./result` when you need the
+manifest directory on disk) rather than plain `nix build`. Other clusters
+(e.g. `nw1`) may need capabilities the current env lacks (external cilium,
+etc.); prefer `ludo-kind` for default checks.
 
 ## Build caches and disk
 
