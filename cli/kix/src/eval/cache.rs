@@ -168,10 +168,8 @@ impl SqliteCache {
         hasher.update(source_fingerprint.as_bytes());
         hasher.update(attr.as_bytes());
         // A result from one store says nothing about what another holds.
-        if let Some(root) = super::store::store_root() {
-            hasher.update(b"\0store-root:");
-            hasher.update(root.as_os_str().as_encoded_bytes());
-        }
+        hasher.update(b"\0store-root:");
+        hasher.update(super::store::store_root().as_os_str().as_encoded_bytes());
         Ok(hasher.finalize().to_hex().to_string())
     }
 }

@@ -19,9 +19,9 @@
 //!
 //! Without a manifest, Kix finds the programs by their directory names.
 //!
-//! When `KIX_STORE_ROOT` names a relocated store, [`tool`] also gives the Nix
-//! programs an environment that selects that store and ignores the machine's
-//! and the user's Nix settings.
+//! [`tool`] also gives the Nix programs an environment that selects Kix's own
+//! store ([`store_root`]) and ignores the machine's and the user's Nix
+//! settings.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -140,14 +140,12 @@ fn versions(shipped: &[String]) -> String {
 
 /// Return a [`Command`] that runs `tool` in the version `want` asks for.
 ///
-/// For the Nix programs, the command also selects the store named by
-/// `KIX_STORE_ROOT` when it is set.
+/// For the Nix programs, the command also selects Kix's store
+/// ([`store_root`]).
 pub fn tool(tool: Tool, want: Want) -> Result<Command, RuntimeError> {
     let mut cmd = Command::new(program_path(tool, want)?);
-    if tool.program() == "nix"
-        && let Some(root) = store_root()
-    {
-        use_store(&mut cmd, &root)?;
+    if tool.program() == "nix" {
+        use_store(&mut cmd, &store_root())?;
     }
     Ok(cmd)
 }

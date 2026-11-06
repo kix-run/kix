@@ -1,4 +1,4 @@
-# Import Helm charts as Kix resources through IFD.
+# Import Helm charts as Kix resources.
 #
 # Inline use:
 #     package = kix.helmChart { repo = "..."; name = "loki"; version = "..."; hash = "..."; };
@@ -12,46 +12,40 @@
 #
 # `mkParts` exposes every resource through `out.byKind`. For a workload root
 # selected by exactly one Service, it also promotes that Service's outputs.
+#
+# Nix does not run Helm. A chart fetch and a chart render are placeholder
+# derivations of system `kix-helm`, which no Nix machine can build. The `kix`
+# command reads each one whose output evaluation needs, runs the Helm release
+# its spec names, writes the output into Kix's own store, and evaluates again.
+# So a cluster that uses Helm builds only through `kix`.
 
-{ pkgs, lib }:
+{
+  lib,
+  # Return the resource list a render derivation's output holds. Tests
+  # replace it to evaluate a chart import without running Helm.
+  readRender ? drv: builtins.fromJSON (builtins.readFile drv),
+}:
 
 let
   k8s = import ./core { inherit lib; };
   helmDag = import ./helm-dag.nix { inherit lib; };
 
-  # Pin the Helm release here rather than take `pkgs.kubernetes-helm`, so a
-  # chart renders the same whichever nixpkgs the cluster's flake locks.
-  # helm-versions.json names the release and the hash of each upstream build.
-  helmRelease = (lib.importJSON ./helm-versions.json)."4";
+  # The exact Helm release Kix runs for each major version it ships. The kix
+  # binary of the same release ships these, and refuses a spec that names a
+  # release it does not ship.
+  helmReleases = lib.mapAttrs (_: release: release.version or release) (
+    lib.importJSON ./helm-versions.json
+  );
 
-  helmPlatforms = {
-    x86_64-linux = "linux-amd64";
-    aarch64-linux = "linux-arm64";
-    x86_64-darwin = "darwin-amd64";
-    aarch64-darwin = "darwin-arm64";
-  };
+  helmMajors = lib.sort (a: b: lib.toInt a < lib.toInt b) (builtins.attrNames helmReleases);
 
-  helmPackage =
-    let
-      system = pkgs.stdenv.hostPlatform.system;
-      platform =
-        helmPlatforms.${system}
-          or (throw "Kix renders Helm charts only on ${lib.concatStringsSep ", " (builtins.attrNames helmPlatforms)}. This system is ${system}.");
-    in
-    pkgs.stdenvNoCC.mkDerivation {
-      pname = "helm";
-      inherit (helmRelease) version;
-      src = pkgs.fetchurl {
-        url = "https://get.helm.sh/helm-v${helmRelease.version}-${platform}.tar.gz";
-        sha256 = helmRelease.sha256.${system};
-      };
-      dontConfigure = true;
-      dontBuild = true;
-      dontFixup = true;
-      installPhase = ''
-        install -Dm755 helm $out/bin/helm
-      '';
-    };
+  newestHelmMajor = lib.last helmMajors;
+
+  # Return the exact Helm release Kix renders with for the major `helmVersion`.
+  helmRelease =
+    helmVersion:
+    helmReleases.${toString helmVersion}
+    or (throw "This chart asks for Helm ${toString helmVersion}, but Kix renders charts with Helm ${lib.concatStringsSep " or " helmMajors}. Set `helmVersion` to one of them.");
 
   helpers = import ./eval/helpers.nix { inherit lib; };
 
@@ -143,7 +137,10 @@ rec {
 
   inherit isClusterScopedKind;
 
-  # Fetch a Helm chart from an OCI or HTTP registry as a fixed-output derivation.
+  # Fetch a Helm chart from an OCI or HTTP registry. The result is a
+  # fixed-output placeholder: Nix computes its path from `hash` and the name,
+  # and `kix` pulls the chart with the newest Helm it ships, checks the hash,
+  # and adds the file at that path.
   fetchHelmChart =
     {
       repo,
@@ -151,29 +148,26 @@ rec {
       version,
       hash,
     }:
-    pkgs.stdenvNoCC.mkDerivation {
-      pname = "helm-chart-${name}";
-      inherit version;
-
+    derivation {
+      name = "helm-chart-${name}-${version}";
+      system = "kix-helm";
+      builder = "kix";
       outputHashAlgo = if lib.hasPrefix "sha256-" hash then "sha256" else "sha512";
       outputHash = hash;
       outputHashMode = "flat";
-
-      nativeBuildInputs = [ helmPackage ];
-
-      buildCommand = ''
-        export HOME=$(mktemp -d)
-        if [[ "${repo}" == oci://* ]]; then
-          helm pull "${repo}/${name}" --version "${version}" --destination .
-        else
-          helm repo add _fetchrepo "${repo}"
-          helm pull "_fetchrepo/${name}" --version "${version}" --destination .
-        fi
-        cp *.tgz $out
-      '';
+      allowSubstitutes = false;
+      kixHelmFetch = builtins.toJSON {
+        specVersion = 1;
+        helm = helmRelease newestHelmMajor;
+        inherit repo name version;
+      };
     };
 
-  # Render a Helm chart with `helm template` and output a JSON array of resources.
+  # Render a chart with `helm template`. The result is a placeholder whose
+  # output is a JSON array with one element per YAML document Helm prints.
+  #
+  # The spec names the exact Helm release and a `specVersion`, so a new Helm
+  # release or a change to how `kix` converts YAML gives a new output path.
   helmTemplateDerivation =
     {
       chart,
@@ -182,42 +176,37 @@ rec {
       values ? { },
       includeCrds ? true,
       includeHooks ? true,
+      # Passed to `--kube-version`. With null, Helm uses its own default.
+      kubeVersion ? null,
+      # Further `helm template` arguments, one list element per argument.
       extraFlags ? [ ],
+      # The Helm major version to render with, as a string such as "3".
+      helmVersion ? newestHelmMajor,
     }:
-    let
-      # Discard string context from dependency-derived values so manifest
-      # changes do not trigger chart re-renders. Context does not survive
-      # readFile after IFD, and `deps` or `networkDeps` re-attach cross-package
-      # dependencies.
-      valuesFile = pkgs.writeText "helm-values.json" (
-        builtins.unsafeDiscardStringContext (builtins.toJSON values)
-      );
-
-      flagList = [
-        "--namespace"
-        namespace
-      ]
-      ++ lib.optional includeCrds "--include-crds"
-      ++ lib.optional (!includeHooks) "--no-hooks"
-      ++ extraFlags;
-
-      flags = builtins.concatStringsSep " " flagList;
-    in
-    pkgs.runCommand "helm-template-${releaseName}"
-      {
-        nativeBuildInputs = [
-          helmPackage
-          pkgs.yq-go
-        ];
-      }
-      ''
-        export HOME=$(mktemp -d)
-        helm template "${releaseName}" "${chart}" \
-          --values "${valuesFile}" \
-          ${flags} \
-          | yq eval-all -o=json '[.]' \
-          > $out
-      '';
+    derivation {
+      name = "helm-render-${releaseName}.json";
+      system = "kix-helm";
+      builder = "kix";
+      allowSubstitutes = false;
+      preferLocalBuild = true;
+      kixHelmSpec = builtins.toJSON {
+        specVersion = 1;
+        helm = helmRelease helmVersion;
+        chart = "${chart}";
+        inherit
+          releaseName
+          namespace
+          includeCrds
+          includeHooks
+          kubeVersion
+          extraFlags
+          ;
+        # Without the string context of dependency outputs in `values`, a
+        # dependency's manifest change does not re-render the chart. `deps`
+        # and `networkDeps` record those dependencies instead.
+        values = builtins.unsafeDiscardStringContext (builtins.toJSON values);
+      };
+    };
 
   # Render a chart's CRDs and wrap them as cluster-scoped resources.
   importChartCrds =
@@ -226,33 +215,19 @@ rec {
       scope,
       releaseName ? "release",
       values ? { },
+      helmVersion ? newestHelmMajor,
     }:
     let
-      drv =
-        pkgs.runCommand "helm-crds-${releaseName}"
-          {
-            nativeBuildInputs = [
-              helmPackage
-              pkgs.yq-go
-            ];
-          }
-          ''
-            export HOME=$(mktemp -d)
-            # `helm template --include-crds` interleaves CRDs with regular
-            # resources. Filter to kind=CustomResourceDefinition only.
-            valuesFile=${
-              # Discard string context so the render is cached by values text.
-              pkgs.writeText "helm-values.json" (builtins.unsafeDiscardStringContext (builtins.toJSON values))
-            }
-            helm template "${releaseName}" "${chart}" \
-              --values "$valuesFile" \
-              --include-crds \
-              --no-hooks \
-              --kube-version "1.32.0" \
-              | yq eval-all -o=json '[. | select(.kind == "CustomResourceDefinition")]' \
-              > $out
-          '';
-      raw = builtins.fromJSON (builtins.readFile drv);
+      raw = readRender (helmTemplateDerivation {
+        inherit
+          chart
+          releaseName
+          values
+          helmVersion
+          ;
+        includeHooks = false;
+        kubeVersion = "1.32.0";
+      });
       crds = builtins.filter (
         r: r != null && builtins.isAttrs r && (r.kind or "") == "CustomResourceDefinition"
       ) raw;
@@ -314,7 +289,7 @@ rec {
       // lib.optionalAttrs (extra != { }) { inherit extra; }
     );
 
-  # Run `helm template` through IFD and return a resource collection for use
+  # Render a chart with `helm template` and return a resource collection for use
   # inside a package's `build` function.
   importChart =
     {
@@ -326,6 +301,9 @@ rec {
       includeCrds ? true,
       includeHooks ? true,
       extraFlags ? [ ],
+      kubeVersion ? null,
+      # The Helm major version to render with, as a string such as "3".
+      helmVersion ? newestHelmMajor,
 
       strip ? { },
       preserveAnnotationPrefixes ? [ ],
@@ -466,10 +444,12 @@ rec {
           includeCrds
           includeHooks
           extraFlags
+          kubeVersion
+          helmVersion
           ;
       };
 
-      rawResources = builtins.fromJSON (builtins.readFile templateDrv);
+      rawResources = readRender templateDrv;
 
       isTestHook =
         r:
@@ -810,6 +790,8 @@ rec {
       includeCrds ? true,
       strip ? { },
       patchResources ? lib.id,
+      # The Helm major version to render with, as a string such as "3".
+      helmVersion ? newestHelmMajor,
       # Extra meta merged over the defaults, e.g. `metaExtra.unsafe =
       # [ "raw-pvc" ]` for charts that render their own PVCs.
       metaExtra ? { },
@@ -851,6 +833,7 @@ rec {
               includeCrds
               strip
               patchResources
+              helmVersion
               ;
             values = config.values or { };
           };

@@ -183,14 +183,21 @@ pub(crate) fn other_system() -> &'static str {
     }
 }
 
+/// The most evaluations [`eval_activation_index`] runs. Each one after the
+/// first follows a Helm fetch or render, so this bounds the charts a cluster
+/// can render on its first build.
+const MAX_EVALUATIONS: usize = 200;
+
 /// Evaluate the `activationIndex` of `cluster_name` and return its store path.
 ///
 /// The index names the Activation record, `kix-packages.json`, and the
 /// cluster's other files ([`super::build_files::BuildFiles`]). Each is a
 /// `builtins.toFile` path, so evaluation writes them all to the store and
-/// nothing is built. A Helm chart that a package renders is built during
-/// evaluation, as Nix builds any derivation whose output evaluation reads.
-/// [`crate::build_source::Build::of_flake`] then loads and stamps the graph.
+/// nothing is built. [`crate::build_source::Build::of_flake`] then loads and
+/// stamps the graph.
+///
+/// When evaluation stops at a Helm chart that is not in Kix's store yet,
+/// Kix fetches or renders it ([`super::helm`]) and evaluates again.
 ///
 /// `status_fn` is called with progress lines from Nix as they arrive,
 /// allowing the caller to update a spinner or progress bar.
@@ -218,11 +225,54 @@ pub fn eval_activation_index(
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
 
+    let mut realised = std::collections::HashSet::new();
+    for _ in 0..MAX_EVALUATIONS {
+        let error = match eval_raw(flake_path, &flake_ref, input_overrides, status_fn)? {
+            Ok(index) => return index_path(cluster_name, &index),
+            Err(error) => error,
+        };
+        // Only Nix's wording for a missing flake output. A stack trace says
+        // "while evaluating the attribute", so matching looser words turned
+        // real evaluation errors into "cluster not found".
+        if error.missing_attribute() {
+            return Err(missing_index(flake_path, cluster_name, input_overrides));
+        }
+        let pending = super::helm::pending(&error.stderr)?;
+        if pending.is_empty() {
+            return Err(error.into());
+        }
+        for placeholder in pending {
+            if !realised.insert(placeholder.out.clone()) {
+                return Err(super::helm::HelmError::Stuck {
+                    path: placeholder.out,
+                }
+                .into());
+            }
+            status_fn(&placeholder.describe());
+            super::helm::realise(&placeholder)?;
+        }
+        status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
+    }
+    Err(KixEvalError::StoreGraphError {
+        message: format!(
+            "evaluation of cluster '{cluster_name}' still needed Helm charts after {MAX_EVALUATIONS} rounds"
+        ),
+    })
+}
+
+/// Run `nix eval --raw` of `flake_ref` in `flake_path`. Return its output,
+/// or the failed command, whose stderr may name Helm placeholders.
+fn eval_raw(
+    flake_path: &Path,
+    flake_ref: &str,
+    input_overrides: &[(String, String)],
+    status_fn: &dyn Fn(&str),
+) -> Result<Result<String, NixCommandError>, KixEvalError> {
     let mut cmd = command(Tool::Nix)?;
     cmd.args([
         "eval",
         "--raw",
-        &flake_ref,
+        flake_ref,
         "--extra-experimental-features",
         "nix-command flakes pipe-operators",
     ]);
@@ -252,17 +302,16 @@ pub fn eval_activation_index(
         .map_err(|e| NixCommandError::new(&cmd, None, e.to_string()))?;
 
     if !output.status.success() {
-        let error = NixCommandError::new(&cmd, Some(output.status), stderr_lines.join("\n"));
-        // Only Nix's wording for a missing flake output. A stack trace says
-        // "while evaluating the attribute", so matching looser words turned
-        // real evaluation errors into "cluster not found".
-        if error.missing_attribute() {
-            return Err(missing_index(flake_path, cluster_name, input_overrides));
-        }
-        return Err(error.into());
+        return Ok(Err(NixCommandError::new(
+            &cmd,
+            Some(output.status),
+            stderr_lines.join("\n"),
+        )));
     }
+    Ok(Ok(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError> {
     let index = stdout.trim();
     if !index.starts_with(super::store_path::STORE_DIR) {
         return Err(KixEvalError::StoreGraphError {

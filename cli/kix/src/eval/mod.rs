@@ -19,8 +19,11 @@
 pub mod build_files;
 pub(crate) mod cache;
 pub mod cli_backend;
+pub mod derivation;
 pub mod error;
 pub(crate) mod evaluator;
+pub mod helm;
+pub mod helm_yaml;
 pub mod manifest_json;
 #[cfg(test)]
 mod mock;

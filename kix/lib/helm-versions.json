@@ -1,4 +1,13 @@
 {
+  "3": {
+    "version": "3.19.1",
+    "sha256": {
+      "x86_64-linux": "966bed9b1e0dda11268f59bd7268c3cd3e308b37b070546e1d78a02526ff63f2",
+      "aarch64-linux": "ceed150305a1d1ef4a37923a7f66931a6807c34a38ea487fa8340e102dd2c7f7",
+      "x86_64-darwin": "567f50c5855c45e85ecfa50846bf30adad5d68e1d35ff216866b4897e91bcb80",
+      "aarch64-darwin": "080f320cfc4ee3816fd6c8f73820f4b3d941b10f709e69bf9afd78f8f8e7c92a"
+    }
+  },
   "4": {
     "version": "4.3.1",
     "sha256": {

@@ -18,7 +18,7 @@ let
   };
   env = import ./env.nix { inherit lib; };
   fragments = import ./vocab/fragments.nix { inherit lib; };
-  helm = import ./helm.nix { inherit pkgs lib; };
+  helm = import ./helm.nix { inherit lib; };
   rbac = import ./vocab/rbac.nix { inherit lib; };
   kixlib = import ./vocab { inherit lib; };
   meta = import ./meta.nix { inherit lib; };
