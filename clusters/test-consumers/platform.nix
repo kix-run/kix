@@ -1,10 +1,11 @@
 # clusters/test-consumers/platform.nix: a cluster that hosts a consumer.
 #
 # It grants consumer `acme` the namespaces acme-* and its own api service,
-# and writes acme's interface file beside its Activation record:
-# `nix build .#cluster-consumers-platform-activation`, then
-# result/kix-interface-acme.json. ./acme.nix builds the consumer against a
-# copy of that file, ./kix-interface/test-platform.json.
+# and writes acme's interface file beside its Activation record. The
+# cluster's activation index names it under `interfaces.acme`:
+# `nix eval --raw .#legacyPackages.<system>.kixClusters.consumers-platform.activationIndex`.
+# ./acme.nix builds the consumer against a copy of that file,
+# ./kix-interface/test-platform.json.
 
 { kix, packages }:
 

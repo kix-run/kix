@@ -24,6 +24,13 @@ pub enum KixEvalError {
     )]
     NoKixOutputs { attr: String },
 
+    /// The cluster exists, but its Kix library is older than this binary
+    /// and writes no `activationIndex`.
+    #[error(
+        "cluster '{cluster}' uses a Kix library older than this kix binary. The library does not write the activation index that this kix reads. Update the Kix input in the flake's flake.lock to this kix release, or use the kix binary of the library's release"
+    )]
+    NoActivationIndex { cluster: String },
+
     #[error("could not access the Nix evaluation cache: {source}")]
     CacheError {
         #[source]

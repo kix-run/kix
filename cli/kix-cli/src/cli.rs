@@ -619,10 +619,11 @@ pub struct DiffArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Compare against a local directory instead of the live cluster: either a
-    /// previous build result (containing `kix-packages.json`) or a manifest
+    /// Compare against a local build or directory instead of the live
+    /// cluster: a previous build (its `kix.run/built-via` store path, or a
+    /// result directory containing `kix-packages.json`) or a manifest
     /// directory from `kix snapshot save` or `kix export`
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "PATH")]
     pub from: Option<String>,
 
     /// Read the target build from a `.kixbundle` file instead of evaluating.

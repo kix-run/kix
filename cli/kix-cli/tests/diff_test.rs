@@ -64,30 +64,11 @@ fn diff_from_own_audit_export_is_identical() {
 
 #[test]
 fn diff_from_self_is_identical() {
-    let output = std::process::Command::new("nix")
-        .args([
-            "build",
-            ".#cluster-minimal-activation",
-            "--no-link",
-            "--print-out-paths",
-            "--extra-experimental-features",
-            "nix-command flakes pipe-operators",
-        ])
-        .current_dir(repo_root())
-        .output()
-        .expect("nix build should succeed");
-
-    if !output.status.success() {
-        panic!(
-            "nix build failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let result_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let index = kix::eval::nix::eval_activation_index(repo_root(), "minimal", &[], &|_| {})
+        .expect("the cluster evaluates");
 
     kix()
-        .args(["diff", "minimal", "--from", &result_path])
+        .args(["diff", "minimal", "--from", index.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("No differences"));

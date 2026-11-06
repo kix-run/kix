@@ -4,7 +4,7 @@
 #   1. A standalone SOPS-encrypted secret (credentials)
 #   2. A pod that reads credentials from the secret via env vars
 #
-# Build:  nix build .#cluster-test-secrets-activation --extra-experimental-features pipe-operators
+# Build:  kix build test-secrets
 # Deploy: kix deploy test-secrets --yes
 
 { kix, packages }:

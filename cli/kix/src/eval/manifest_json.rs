@@ -1,7 +1,7 @@
 //! The one parser for a build's manifests and its `kix-packages.json`.
 //!
-//! Every reader of a build parses with [`parse_manifest`]: a result
-//! directory (`StoreGraph::from_result_dir`) and a build read from a single
+//! Every reader of a build parses with [`parse_manifest`]: a build in the
+//! local store (`StoreGraph::from_local`) and a build read from a single
 //! file. They must read the same bytes as the same value, so a check made
 //! on one reader's value holds for the other's.
 //!

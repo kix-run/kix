@@ -842,6 +842,25 @@
       # PackageInstance marker.
       packageIndex = builtins.toFile "kix-packages.json" (builtins.toJSON packageIndexContent);
 
+      # List the store paths the CLI reads for this build. Each path keeps its
+      # string context, so the index references every file it names and its
+      # closure holds the whole build. Every listed file is a `builtins.toFile`
+      # path, so evaluating the index builds nothing. Kix records this file's
+      # store path as `kix.run/built-via`.
+      activationIndex =
+        let
+          jsonFile = fileName: value: builtins.toFile fileName (builtins.toJSON value);
+        in
+        jsonFile "kix-activation-${name}.json" {
+          version = 1;
+          activation = "${activation}";
+          packages = packageIndex;
+          scorecard = if scorecardReport == null then null else jsonFile "kix-scorecard.json" scorecardReport;
+          extraImages = if extraImages == null then null else jsonFile "kix-extra-images.json" extraImages;
+          imageSources = jsonFile "kix-image-sources.json" imageSources;
+          interfaces = if platformSide == null then { } else platformSide.interfaces;
+        };
+
       # The platform whose interface file supplied `k8sVersion`, or null when
       # the definition writes it or nothing sets it. `kix.interface` sets the
       # value with `mkDefault` (priority 1000), so a definition's own value
@@ -1324,6 +1343,7 @@
 
                       inherit
                         activation
+                        activationIndex
                         packageIndex
                         packageIndexContent
                         info

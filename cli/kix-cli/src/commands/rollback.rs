@@ -703,7 +703,7 @@ async fn plan_rollback(
         selected.built_via.as_deref(),
     )
     .map_err(|e| miette!("{e}"))?;
-    let target_result_dir = target_graph.result_dir.clone();
+    let target_result_dir = target_graph.built_via.clone();
     same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
     if let Some(declared) = target_graph.kubernetes_uid.as_deref() {
         binding::check_declared(

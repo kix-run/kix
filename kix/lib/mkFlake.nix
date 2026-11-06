@@ -50,10 +50,10 @@ let
   perSystem =
     { pkgs, system }:
     let
-      slib = pkgs.lib;
+      # `lib` comes from the nixpkgs input rather than `pkgs.lib`, so
+      # evaluating a cluster forces `pkgs` only when a package needs it.
       kix = import ./. {
-        inherit pkgs;
-        lib = slib;
+        inherit pkgs lib;
         self = inputs.self or null;
       };
       # Return the `kix` a cluster definition receives. Its `buildCluster`
@@ -71,10 +71,9 @@ let
             );
         };
       kixChecks = import ../checks.nix {
-        inherit pkgs;
-        lib = slib;
+        inherit pkgs lib;
       };
-      piChecks = import ../pi-checks.nix { lib = slib; };
+      piChecks = import ../pi-checks.nix { inherit lib; };
 
       resolvedClusters = lib.mapAttrs (
         name: clusterDef:
@@ -114,30 +113,6 @@ let
 
       clusterPackages = lib.concatMapAttrs (cname: cluster: {
         "cluster-${cname}" = kix.mkManifests cluster;
-        "cluster-${cname}-activation" = pkgs.runCommand "k8s-activation-${cluster.name}" { } (
-          ''
-            mkdir -p $out
-            ln -s ${cluster.activation} $out/activation
-            ln -s ${cluster.packageIndex} $out/kix-packages.json
-          ''
-          + slib.optionalString (cluster.scorecardReport != null) ''
-            ln -s ${builtins.toFile "kix-scorecard.json" (builtins.toJSON cluster.scorecardReport)} $out/kix-scorecard.json
-          ''
-          + slib.optionalString (cluster.extraImages != null) ''
-            ln -s ${builtins.toFile "kix-extra-images.json" (builtins.toJSON cluster.extraImages)} $out/kix-extra-images.json
-          ''
-          # Emit image provenance alongside the Activation so provenance changes
-          # do not alter the Activation hash.
-          + ''
-            ln -s ${builtins.toFile "kix-image-sources.json" (builtins.toJSON cluster.imageSources)} $out/kix-image-sources.json
-          ''
-          # Emit each consumer's interface file for loading via `kix.interface`.
-          + slib.concatStrings (
-            slib.mapAttrsToList (consumer: file: ''
-              ln -s ${file} $out/kix-interface-${consumer}.json
-            '') (cluster.interfaces or { })
-          )
-        );
       }) resolvedClusters;
 
       # Return the `<name>.rules-test.yaml` path beside a cluster file if it

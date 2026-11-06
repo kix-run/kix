@@ -183,16 +183,18 @@ pub(crate) fn other_system() -> &'static str {
     }
 }
 
-/// Build `cluster-<name>-activation` and return the result store path.
+/// Evaluate the `activationIndex` of `cluster_name` and return its store path.
 ///
-/// The result folder holds `activation`, a link to the Activation
-/// resource's store path, and `kix-packages.json`, the index of packages to
-/// resource store paths. [`crate::build_source::Build::of_flake`] then loads
-/// and stamps the graph.
+/// The index names the Activation record, `kix-packages.json`, and the
+/// cluster's other files ([`super::build_files::BuildFiles`]). Each is a
+/// `builtins.toFile` path, so evaluation writes them all to the store and
+/// nothing is built. A Helm chart that a package renders is built during
+/// evaluation, as Nix builds any derivation whose output evaluation reads.
+/// [`crate::build_source::Build::of_flake`] then loads and stamps the graph.
 ///
-/// `status_fn` is called with nix build progress lines as they arrive,
+/// `status_fn` is called with progress lines from Nix as they arrive,
 /// allowing the caller to update a spinner or progress bar.
-pub(crate) fn build_cluster_activation(
+pub fn eval_activation_index(
     flake_path: &Path,
     cluster_name: &str,
     input_overrides: &[(String, String)],
@@ -205,23 +207,22 @@ pub(crate) fn build_cluster_activation(
         return Err(KixEvalError::not_found(cluster_name));
     }
 
-    let flake_ref = format!(".#cluster-{}-activation", cluster_name);
+    let flake_ref = format!(".#{}", activation_index_attr(cluster_name));
 
     tracing::info!(
         cluster = cluster_name,
         flake_ref = %flake_ref,
         flake_path = %flake_path.display(),
-        "building cluster activation"
+        "evaluating cluster activation index"
     );
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
 
     let mut cmd = command(Tool::Nix)?;
     cmd.args([
-        "build",
+        "eval",
+        "--raw",
         &flake_ref,
-        "--no-link",
-        "--print-out-paths",
         "--extra-experimental-features",
         "nix-command flakes pipe-operators",
     ]);
@@ -235,27 +236,13 @@ pub(crate) fn build_cluster_activation(
         .spawn()
         .map_err(|e| NixCommandError::new(&cmd, None, e.to_string()))?;
 
-    // Stream stderr to update progress
     let stderr = child.stderr.take().unwrap();
-    let stderr_reader = BufReader::new(stderr);
     let mut stderr_lines = Vec::new();
-
-    for line in stderr_reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-        // Show the latest Nix build progress line from stderr.
+    for line in BufReader::new(stderr).lines() {
+        let Ok(line) = line else { continue };
         let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            // Extract meaningful progress from nix output
-            if trimmed.starts_with("building") || trimmed.starts_with("copying") {
-                status_fn(trimmed);
-            } else if trimmed.contains("evaluating") {
-                status_fn(&format!("Evaluating '{cluster_name}'..."));
-            } else if trimmed.starts_with("this derivation") {
-                status_fn(&format!("Building '{cluster_name}'..."));
-            }
+        if trimmed.starts_with("building") || trimmed.starts_with("copying") {
+            status_fn(trimmed);
         }
         stderr_lines.push(line);
     }
@@ -270,29 +257,74 @@ pub(crate) fn build_cluster_activation(
         // "while evaluating the attribute", so matching looser words turned
         // real evaluation errors into "cluster not found".
         if error.missing_attribute() {
-            return Err(
-                system_not_provided(".", "packages", Some(flake_path), input_overrides)
-                    .unwrap_or_else(|| KixEvalError::not_found(cluster_name)),
-            );
+            return Err(missing_index(flake_path, cluster_name, input_overrides));
         }
         return Err(error.into());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let result_path = stdout.trim();
-    if result_path.is_empty() {
+    let index = stdout.trim();
+    if !index.starts_with(super::store_path::STORE_DIR) {
         return Err(KixEvalError::StoreGraphError {
-            message: "nix build produced no output path".to_string(),
+            message: format!(
+                "nix eval printed {index:?} for the activation index, not a store path"
+            ),
         });
     }
 
-    let path = PathBuf::from(result_path);
+    let path = PathBuf::from(index);
     tracing::info!(
         cluster = cluster_name,
         path = %path.display(),
-        "activation built"
+        "activation index evaluated"
     );
     Ok(path)
+}
+
+/// Return the flake attribute that holds the activation index of
+/// `cluster_name` on this system.
+pub(crate) fn activation_index_attr(cluster_name: &str) -> String {
+    format!(
+        "legacyPackages.{}.kixClusters.{cluster_name}.activationIndex",
+        current_system()
+    )
+}
+
+/// Explain why the flake has no `activationIndex` for `cluster_name`: the
+/// flake has its outputs for other systems only, the cluster does not
+/// exist, or the cluster comes from a Kix library too old to write the
+/// index.
+fn missing_index(
+    flake_path: &Path,
+    cluster_name: &str,
+    input_overrides: &[(String, String)],
+) -> KixEvalError {
+    if let Some(e) = system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
+        return e;
+    }
+    let attr = format!(".#legacyPackages.{}.kixClusters", current_system());
+    let listed = command(Tool::Nix).ok().and_then(|mut cmd| {
+        cmd.args([
+            "eval",
+            &attr,
+            "--apply",
+            "builtins.attrNames",
+            "--json",
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ]);
+        for (name, url) in input_overrides {
+            cmd.arg("--override-input").arg(name).arg(url);
+        }
+        let out = output(cmd.current_dir(flake_path)).ok()?;
+        serde_json::from_slice::<Vec<String>>(&out).ok()
+    });
+    match listed {
+        Some(names) if names.iter().any(|n| n == cluster_name) => KixEvalError::NoActivationIndex {
+            cluster: cluster_name.to_string(),
+        },
+        _ => KixEvalError::not_found(cluster_name),
+    }
 }
 
 /// Map every path in the closure of `root_path` that refers to other paths
@@ -509,13 +541,13 @@ mod tests {
         std::fs::write(
             dir.path().join("flake.nix"),
             r#"{
-              outputs = _: let c.cluster-c-activation = throw "attribute 'root' missing"; in {
-                packages = { x86_64-linux = c; aarch64-linux = c; x86_64-darwin = c; aarch64-darwin = c; };
+              outputs = _: let c.kixClusters.c.activationIndex = throw "attribute 'root' missing"; in {
+                legacyPackages = { x86_64-linux = c; aarch64-linux = c; x86_64-darwin = c; aarch64-darwin = c; };
               };
             }"#,
         )
         .unwrap();
-        let build = |cluster| build_cluster_activation(dir.path(), cluster, &[], &|_| {});
+        let build = |cluster| eval_activation_index(dir.path(), cluster, &[], &|_| {});
         let err = build("c").unwrap_err();
         assert!(matches!(err, KixEvalError::Nix(_)), "{err}");
         assert!(
@@ -537,10 +569,12 @@ mod tests {
         let other = other_system();
         std::fs::write(
             dir.path().join("flake.nix"),
-            format!("{{ outputs = _: {{ packages.{other}.cluster-c-activation = null; }}; }}"),
+            format!(
+                "{{ outputs = _: {{ legacyPackages.{other}.kixClusters.c.activationIndex = null; }}; }}"
+            ),
         )
         .unwrap();
-        let err = build_cluster_activation(dir.path(), "c", &[], &|_| {}).unwrap_err();
+        let err = eval_activation_index(dir.path(), "c", &[], &|_| {}).unwrap_err();
         match &err {
             KixEvalError::SystemNotProvided { system, provided } => {
                 assert_eq!(system, current_system());
@@ -558,14 +592,36 @@ mod tests {
         );
     }
 
-    /// A flake that provides no `packages` at all says nothing about
+    /// A flake that provides no `legacyPackages` at all says nothing about
     /// systems, so a missing cluster is still a missing cluster.
     #[test]
     fn a_flake_with_no_packages_has_no_system_to_blame() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("flake.nix"), "{ outputs = _: { }; }").unwrap();
         assert!(matches!(
-            build_cluster_activation(dir.path(), "c", &[], &|_| {}).unwrap_err(),
+            eval_activation_index(dir.path(), "c", &[], &|_| {}).unwrap_err(),
+            KixEvalError::ClusterNotFound { .. }
+        ));
+    }
+
+    /// A cluster from a library that writes no activation index is not
+    /// reported as missing.
+    #[test]
+    fn a_cluster_without_an_index_names_the_old_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = current_system();
+        std::fs::write(
+            dir.path().join("flake.nix"),
+            format!("{{ outputs = _: {{ legacyPackages.{system}.kixClusters.c = {{ }}; }}; }}"),
+        )
+        .unwrap();
+        let err = eval_activation_index(dir.path(), "c", &[], &|_| {}).unwrap_err();
+        assert!(
+            matches!(err, KixEvalError::NoActivationIndex { .. }),
+            "{err}"
+        );
+        assert!(matches!(
+            eval_activation_index(dir.path(), "other", &[], &|_| {}).unwrap_err(),
             KixEvalError::ClusterNotFound { .. }
         ));
     }

@@ -170,8 +170,11 @@ impl KixEvaluator {
         tracing::debug!(cluster = cluster_name, "evaluating");
 
         let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
-        let cache_key =
-            SqliteCache::compute_key_with_source(&self.flake_path, cluster_name, &fingerprint)?;
+        let cache_key = SqliteCache::compute_key_with_source(
+            &self.flake_path,
+            &super::nix::activation_index_attr(cluster_name),
+            &fingerprint,
+        )?;
 
         if let Some(cached_json) = self.cache.get(&cache_key)? {
             if let Ok(output) = serde_json::from_str::<ClusterOutput>(&cached_json) {
