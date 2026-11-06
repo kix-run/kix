@@ -28,24 +28,157 @@ let
       };
     };
 
-  _injectMounts =
-    targetName: mounts: attrs:
+  # Describe a volume's source for an error message.
+  describeVolume =
+    v:
     let
+      src = removeAttrs v [
+        "name"
+        "_kix"
+      ];
+    in
+    if src ? persistentVolumeClaim then
+      "the PersistentVolumeClaim '${src.persistentVolumeClaim.claimName}'"
+    else if src ? configMap then
+      "the ConfigMap '${src.configMap.name}'"
+    else if src ? secret then
+      "the Secret '${src.secret.secretName}'"
+    else if src ? emptyDir then
+      "an emptyDir${lib.optionalString (src.emptyDir != { }) " with ${builtins.toJSON src.emptyDir}"}"
+    else if src ? hostPath then
+      "the hostPath '${src.hostPath.path}'"
+    else
+      builtins.toJSON src;
+
+  # Describe two sources declared under one volume name. When both read
+  # the same (two Secrets of one name), add the namespace and the
+  # settings that differ, such as `items` or `defaultMode`.
+  describeConflict =
+    a: b:
+    let
+      same = describeVolume a == describeVolume b;
+      nsOf = v: v._kix.namespace or null;
+      settingsOf =
+        v:
+        let
+          src = removeAttrs v [
+            "name"
+            "_kix"
+          ];
+          inner = builtins.attrValues src;
+        in
+        if builtins.length inner == 1 && builtins.isAttrs (builtins.head inner) then
+          builtins.head inner
+        else
+          { };
+      keys = lib.unique (builtins.attrNames (settingsOf a) ++ builtins.attrNames (settingsOf b));
+      differing = builtins.filter (
+        k: ((settingsOf a).${k} or null) != ((settingsOf b).${k} or null)
+      ) keys;
+      detail =
+        v:
+        let
+          set = lib.filterAttrs (_: val: val != null) (
+            lib.genAttrs differing (k: (settingsOf v).${k} or null)
+          );
+        in
+        lib.optionalString (same && nsOf a != nsOf b && nsOf v != null) " in namespace '${nsOf v}'"
+        + lib.optionalString (same && differing != [ ]) (
+          if set == { } then " without ${joinNames differing}" else " with ${builtins.toJSON set}"
+        );
+    in
+    "${describeVolume a}${detail a} and ${describeVolume b}${detail b}";
+
+  # "a", "a and b", or "a, b, and c".
+  joinNames =
+    names:
+    let
+      n = builtins.length names;
+    in
+    if n <= 1 then
+      builtins.concatStringsSep "" names
+    else if n == 2 then
+      "${builtins.head names} and ${lib.last names}"
+    else
+      "${builtins.concatStringsSep ", " (lib.init names)}, and ${lib.last names}";
+
+  # Add `mounts` to the pod template of `attrs`: each volume goes into the
+  # pod's `volumes` once, and a volumeMount into every container that
+  # `target` names. `target` is null (the pod's one main container), a
+  # container name, or a list of names; both `containers` and
+  # `initContainers` are searched. The pod template is
+  # `spec.jobTemplate.spec.template.spec` when the workload has a
+  # `jobTemplate` (a CronJob), else `spec.template.spec`.
+  _injectMounts =
+    target: mounts: attrs:
+    let
+      fn = if target == null then "kix.withMounts" else "kix.withMountsOn";
+      workload =
+        if attrs ? name then
+          "workload '${attrs.name}'"
+        else if attrs ? metadata.name then
+          "workload '${attrs.metadata.name}'"
+        else
+          "the workload";
+
       validMounts = builtins.filter (m: m != null) mounts;
       volumes = map (m: { inherit (m) name; } // m.source) validMounts;
 
-      existingVolumes = attrs.spec.template.spec.volumes or [ ];
-      existingNames = builtins.catAttrs "name" existingVolumes;
-      newNames = builtins.catAttrs "name" volumes;
-      allNames = existingNames ++ newNames;
-      seen = lib.foldl' (acc: n: acc // { ${n} = (acc.${n} or 0) + 1; }) { } allNames;
-      dupes = lib.filter (n: seen.${n} > 1) (lib.attrNames seen);
-      _dupeCheck =
-        if dupes != [ ] then
-          throw "kix.withMounts: duplicate volume name(s) [${builtins.concatStringsSep ", " dupes}]. "
-          + "Pass `name = \"...\";` to kix.mount.* to disambiguate, or drop the duplicate."
+      isCronJob = attrs.spec ? jobTemplate;
+      jobSpec = attrs.spec.jobTemplate.spec or { };
+      template = if isCronJob then jobSpec.template or { } else attrs.spec.template or { };
+      podSpec = template.spec or { };
+      # Rebuilt with `//` at each level so that no pod field is forced
+      # here: a workload that is never rendered, such as an import's, must
+      # not evaluate its containers.
+      withPodSpec =
+        ps:
+        attrs
+        // {
+          spec =
+            attrs.spec
+            // (
+              if isCronJob then
+                {
+                  jobTemplate = attrs.spec.jobTemplate // {
+                    spec = jobSpec // {
+                      template = template // {
+                        spec = ps;
+                      };
+                    };
+                  };
+                }
+              else
+                {
+                  template = template // {
+                    spec = ps;
+                  };
+                }
+            );
+        };
+
+      # Two declarations of one volume name agree when their sources are
+      # equal and, where both carry the `_kix` stamp, their namespaces
+      # too: `==` ignores string context, so two Secrets of one name in
+      # two namespaces differ only by the stamp. The first declaration is
+      # kept, because its source strings carry the dependency context.
+      sameVolume =
+        a: b:
+        removeAttrs a [ "_kix" ] == removeAttrs b [ "_kix" ]
+        && (!(a ? _kix) || !(b ? _kix) || a._kix == b._kix);
+      addVolume =
+        acc: v:
+        let
+          existing = lib.findFirst (e: e.name == v.name) null acc;
+        in
+        if existing == null then
+          acc ++ [ v ]
+        else if sameVolume existing v then
+          acc
         else
-          null;
+          throw ''${fn}: ${workload} declares the volume '${v.name}' twice with different contents: ${describeConflict existing v}. Give one of them another name with name = "..." in kix.mount.*. The same volume mounted into several containers is allowed and needs no rename.'';
+      mergedVolumes = lib.foldl' addVolume (podSpec.volumes or [ ]) volumes;
+
       volumeMounts = map (
         m:
         {
@@ -55,32 +188,53 @@ let
         // lib.optionalAttrs (m.readOnly or false) { readOnly = true; }
       ) validMounts;
 
-      templateSpec = attrs.spec.template.spec or { };
-      containers = templateSpec.containers or [ ];
+      containers = podSpec.containers or [ ];
+      initContainers = podSpec.initContainers or [ ];
+      containerNames = builtins.catAttrs "name" containers;
+      initContainerNames = builtins.catAttrs "name" initContainers;
 
       injectInto = c: c // { volumeMounts = (c.volumeMounts or [ ]) ++ volumeMounts; };
 
-      injectedContainers =
-        if targetName != null then
-          map (c: if c.name == targetName then injectInto c else c) containers
-        else if builtins.length containers == 1 then
-          [ (injectInto (builtins.head containers)) ]
-        else if containers == [ ] then
-          containers
+      names = lib.unique (if builtins.isList target then target else [ target ]);
+      unknown = builtins.filter (n: !(builtins.elem n (containerNames ++ initContainerNames))) names;
+      targets =
+        if target == null then
+          if builtins.length containers == 1 then
+            containerNames
+          else if containers == [ ] then
+            [ ]
+          else
+            throw ''kix.withMounts: ${workload} has ${toString (builtins.length containers)} containers (${builtins.concatStringsSep ", " containerNames}), so Kix cannot tell which one to mount into. Name the container: kix.withMountsOn "${builtins.head containerNames}" [ ... ], or several: kix.withMountsOn [ ${
+              builtins.concatStringsSep " " (map (n: ''"${n}"'') containerNames)
+            } ] [ ... ].''
+        else if names == [ ] then
+          throw "kix.withMountsOn: ${workload}: the list of container names is empty, so nothing would be mounted. Name at least one container."
+        else if unknown != [ ] then
+          throw "kix.withMountsOn: ${workload} has no container named ${
+            builtins.concatStringsSep " or " (map (n: "'${n}'") unknown)
+          }, so nothing would be mounted. Its ${
+            if builtins.length containerNames == 1 then "container is" else "containers are"
+          } ${joinNames containerNames}${
+            lib.optionalString (initContainerNames != [ ])
+              "; its ${
+                if builtins.length initContainerNames == 1 then "init container is" else "init containers are"
+              } ${joinNames initContainerNames}"
+          }. Fix the name in kix.withMountsOn."
         else
-          throw "withMounts: the workload has multiple containers. Use withMountsOn to select the container to mount into";
+          names;
+
+      injectAll = map (c: if builtins.elem c.name targets then injectInto c else c);
     in
-    builtins.seq _dupeCheck attrs
-    // {
-      spec = attrs.spec // {
-        template = attrs.spec.template // {
-          spec = templateSpec // {
-            volumes = (templateSpec.volumes or [ ]) ++ volumes;
-            containers = injectedContainers;
-          };
-        };
-      };
-    };
+    withPodSpec (
+      podSpec
+      // {
+        volumes = mergedVolumes;
+        # The target check runs when the containers are read, which
+        # rendering the workload always does.
+        containers = builtins.seq targets (injectAll containers);
+      }
+      // lib.optionalAttrs (podSpec ? initContainers) { initContainers = injectAll initContainers; }
+    );
 in
 {
   mount = {
@@ -139,6 +293,7 @@ in
       {
         mountPath,
         name ? null,
+        readOnly ? false,
         subPath ? null,
         items ? null,
         defaultMode ? null,
@@ -149,7 +304,7 @@ in
         {
           _type = "kix-mount";
           name = if name != null then name else builtins.unsafeDiscardStringContext resource.out.name;
-          inherit mountPath;
+          inherit mountPath readOnly;
           ${if subPath != null then "subPath" else null} = subPath;
           source = stampSourceNamespace "secret" resource {
             secret = {
@@ -166,11 +321,12 @@ in
         name,
         medium ? null,
         sizeLimit ? null,
+        readOnly ? false,
         subPath ? null,
       }:
       {
         _type = "kix-mount";
-        inherit name mountPath;
+        inherit name mountPath readOnly;
         ${if subPath != null then "subPath" else null} = subPath;
         source.emptyDir =
           { }

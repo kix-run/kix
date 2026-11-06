@@ -213,7 +213,7 @@ when a check fails or the path is not evaluated by default.
 - W7. Do level-derived replicas exceed what the program supports without leader election or HA config? Fix: singleton, or configure HA.
 - W8. Is a single-replica RWO workload on RollingUpdate, or a stateless workload on Recreate without a reason? Fix: Recreate for RWO singletons and for an app that migrates a shared schema on start (old pods fail against it), with a comment; RollingUpdate otherwise.
 - W9. Is workload storage a raw PVC or a `storageClass` string? Fix: `storage` dep plus `kix.mount.pvc`.
-- W10. Are volumes built without the helpers? Fix: `kix.mount.*` and `kix.withMounts`.
+- W10. Are volumes built without the helpers? Does a container copy `{ name; mountPath; }` from a mount record, or the pod spec list a volume directly so that a second container can share it? Detection: `volumeMounts =` or `volumes =` in a package. Fix: `kix.mount.*` and `kix.withMountsOn [ "app" "migrate" ]`, which mounts into every named container, init containers included, and declares a volume once however many containers take it.
 - W11. Do optional components lack securityContext, probes, or resources? Eval with every toggle on. Fix: add them.
 - W12. Do security defaults break the stock image (writes to `$HOME`, cwd)? Fix: emptyDir mounts; numeric `runAsUser`. An emptyDir with no stated need is dead surface.
 - W13. Does liveness depend on an external dependency? Fix: a dependency-free liveness endpoint.

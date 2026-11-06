@@ -349,7 +349,8 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-40; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:265 (`serverSideName`) |
 | Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:180-192, 210-245 |
-| Migrations in an init container sharing the server's env and mounts (`kix.withMounts` fills `containers` only) | plausible:598-614; vaultwarden:178-200 |
+| Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:619-625, 692; vaultwarden:178-200, 275 |
+| One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:497-511, 677-678 |
 | Literal credentials refused in `env` | plausible:334-354 |
 | Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:664-692; cnpg-cluster:727-745 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:503-544, 651-660; `plausible/replicate.py` |
