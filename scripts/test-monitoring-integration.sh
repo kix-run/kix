@@ -76,7 +76,8 @@ wait_for() {
 }
 
 echo -e "${BLUE}Building native monitoring manifests...${NC}"
-nix build ".#cluster-monitoring-native" --extra-experimental-features pipe-operators -o "$NATIVE_OUT" 2>/dev/null
+# The cluster renders a Helm chart, which only kix can do.
+"$(dirname "$0")/kix-manifests.sh" . monitoring-native "$NATIVE_OUT" 2>/dev/null
 echo
 
 echo -e "${BLUE}Creating kind cluster '$CLUSTER_NAME'...${NC}"

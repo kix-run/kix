@@ -172,6 +172,10 @@
             # an in-tree target dir is copied verbatim on every change. Same
             # scheme as devenv's, so the two share a directory rather than
             # building two cold copies of the same tree.
+            # Helm renders need a Kix runtime, which never falls back to
+            # the programs on PATH.
+            KIX_RUNTIME_DIR = import ./cli/dev-runtime.nix { inherit pkgs; };
+
             shellHook = ''
               export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)"
               mkdir -p "$CARGO_TARGET_DIR"

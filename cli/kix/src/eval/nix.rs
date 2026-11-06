@@ -99,7 +99,7 @@ pub(crate) fn output(cmd: &mut Command) -> Result<Vec<u8>, NixCommandError> {
 
 /// Return the Nix system this binary was built for, which is the system Kix
 /// looks a flake's outputs up under.
-pub(crate) fn current_system() -> &'static str {
+pub fn current_system() -> &'static str {
     if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
         "x86_64-linux"
     } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
@@ -183,9 +183,9 @@ pub(crate) fn other_system() -> &'static str {
     }
 }
 
-/// The most evaluations [`eval_activation_index`] runs. Each one after the
-/// first follows a Helm fetch or render, so this bounds the charts a cluster
-/// can render on its first build.
+/// The most evaluations [`eval_with_helm`] runs. Each one after the first
+/// follows a Helm fetch or render, so this bounds the charts a cluster can
+/// render on its first build.
 const MAX_EVALUATIONS: usize = 200;
 
 /// Evaluate the `activationIndex` of `cluster_name` and return its store path.
@@ -225,17 +225,35 @@ pub fn eval_activation_index(
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
 
-    let mut realised = std::collections::HashSet::new();
-    for _ in 0..MAX_EVALUATIONS {
-        let error = match eval_raw(flake_path, &flake_ref, input_overrides, status_fn)? {
-            Ok(index) => return index_path(cluster_name, &index),
-            Err(error) => error,
-        };
+    match eval_with_helm(flake_path, &[&flake_ref], input_overrides, status_fn) {
+        Ok(index) => index_path(cluster_name, &index),
         // Only Nix's wording for a missing flake output. A stack trace says
         // "while evaluating the attribute", so matching looser words turned
         // real evaluation errors into "cluster not found".
+        Err(KixEvalError::Nix(e)) if e.missing_attribute() => {
+            Err(missing_index(flake_path, cluster_name, input_overrides))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Run `nix eval --raw <args>` in `flake_path` and return what it prints.
+/// When evaluation stops at a Helm chart that is not in Kix's store yet,
+/// fetch or render it ([`super::helm`]) and evaluate again.
+pub fn eval_with_helm(
+    flake_path: &Path,
+    args: &[&str],
+    input_overrides: &[(String, String)],
+    status_fn: &dyn Fn(&str),
+) -> Result<String, KixEvalError> {
+    let mut realised = std::collections::HashSet::new();
+    for _ in 0..MAX_EVALUATIONS {
+        let error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
+            Ok(stdout) => return Ok(stdout),
+            Err(error) => error,
+        };
         if error.missing_attribute() {
-            return Err(missing_index(flake_path, cluster_name, input_overrides));
+            return Err(error.into());
         }
         let pending = super::helm::pending(&error.stderr)?;
         if pending.is_empty() {
@@ -251,28 +269,25 @@ pub fn eval_activation_index(
             status_fn(&placeholder.describe());
             super::helm::realise(&placeholder)?;
         }
-        status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
     }
     Err(KixEvalError::StoreGraphError {
         message: format!(
-            "evaluation of cluster '{cluster_name}' still needed Helm charts after {MAX_EVALUATIONS} rounds"
+            "`nix eval {}` still needed Helm charts after {MAX_EVALUATIONS} rounds",
+            args.join(" ")
         ),
     })
 }
 
-/// Run `nix eval --raw` of `flake_ref` in `flake_path`. Return its output,
-/// or the failed command, whose stderr may name Helm placeholders.
+/// Run `nix eval --raw <args>` in `flake_path`. Return its output, or the
+/// failed command, whose stderr may name Helm placeholders.
 fn eval_raw(
     flake_path: &Path,
-    flake_ref: &str,
+    args: &[&str],
     input_overrides: &[(String, String)],
     status_fn: &dyn Fn(&str),
 ) -> Result<Result<String, NixCommandError>, KixEvalError> {
     let mut cmd = command(Tool::Nix)?;
-    cmd.args([
-        "eval",
-        "--raw",
-        flake_ref,
+    cmd.args(["eval", "--raw"]).args(args).args([
         "--extra-experimental-features",
         "nix-command flakes pipe-operators",
     ]);

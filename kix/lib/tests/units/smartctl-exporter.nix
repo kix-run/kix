@@ -20,7 +20,7 @@ let
   serviceName = "smartctl-exporter-prometheus-smartctl-exporter";
   labels."app.kubernetes.io/name" = "prometheus-smartctl-exporter";
 
-  # Stands in for kix/lib/helm.nix, which needs nixpkgs to render a chart.
+  # Stands in for kix/lib/helm.nix, whose renders only `kix` can produce.
   stubHelm = {
     fetchHelmChart = _: "smartctl-exporter-chart";
     importChart =
