@@ -434,9 +434,12 @@ in
         leaderElectionRoleBinding = namespaceRbac."${name}-leader-election-binding";
 
         # The controller watches all four kinds at start and crash-loops with
-        # `no matches for kind` while one is missing.
+        # `no matches for kind` while one is missing. Runners keep no data.
         crds = {
-          autoscalingListeners = scope.mkCRD { spec = vendored "autoscalinglisteners"; };
+          autoscalingListeners = scope.mkCRD {
+            spec = vendored "autoscalinglisteners";
+            holdsData = false;
+          };
           # The controller writes `Pending` when it first sees the runner set
           # and again after every spec or label change, and `Running` once
           # the scale set is registered with GitHub, its EphemeralRunnerSet
@@ -447,6 +450,7 @@ in
           # accepts) fails until the runner spec changes.
           autoscalingRunnerSets = scope.mkCRD {
             spec = vendored "autoscalingrunnersets";
+            holdsData = false;
             readiness = {
               path = "/status/phase";
               equals = "Running";
@@ -468,8 +472,14 @@ in
                 cr.spec.maxRunners or (cr.spec.minRunners or 0)
               )) (kix.usage.ofPod (cr.spec.template.spec.containers or [ ]));
           };
-          ephemeralRunnerSets = scope.mkCRD { spec = vendored "ephemeralrunnersets"; };
-          ephemeralRunners = scope.mkCRD { spec = vendored "ephemeralrunners"; };
+          ephemeralRunnerSets = scope.mkCRD {
+            spec = vendored "ephemeralrunnersets";
+            holdsData = false;
+          };
+          ephemeralRunners = scope.mkCRD {
+            spec = vendored "ephemeralrunners";
+            holdsData = false;
+          };
         };
 
         deployment = scope.mkDeployment {

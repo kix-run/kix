@@ -349,6 +349,8 @@ in
           in
           scope.mkCRD {
             spec = crdSpec;
+            # Durable queues and messages live on the server pods' volumes.
+            holdsData = true;
             # The condition carries no observedGeneration, so the deploy
             # judges it by status.observedGeneration, which the operator
             # advances only after a reconcile succeeds

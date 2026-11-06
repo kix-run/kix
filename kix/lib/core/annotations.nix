@@ -64,6 +64,12 @@ rec {
     servicePorts = key "service-ports";
     serviceLabels = key "service-labels";
 
+    # "true" or "false": whether the object holds data that removing it can
+    # lose. `mkResource` writes it from the kind's `holdsData` declaration on
+    # `scope.mkCRD` or `scope.mkCRDRef`, or from the shape of a built-in kind
+    # (`holdsDataOf`). Migration pair detection reads it.
+    holdsData = key "holds-data";
+
     # Graph and deploy behaviour.
     dependsOn = key "depends-on";
     readiness = key "readiness";

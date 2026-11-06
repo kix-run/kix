@@ -921,6 +921,7 @@ in
                   inherit (k) plural version;
                   servedVersions = k.servedVersions or null;
                   readiness = k.readiness or null;
+                  inherit (k) holdsData;
                   installedBy = self.operatorDeployment;
                 }
                 // lib.optionalAttrs (kind == "SGCluster") {

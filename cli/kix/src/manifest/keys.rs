@@ -173,6 +173,13 @@ pub const DEPENDS_ON: &str = key!("depends-on");
 /// Readiness rule for a custom resource, as JSON.
 pub const READINESS: &str = key!("readiness");
 
+/// `"true"` or `"false"`: whether removing the object can lose data. The
+/// library writes it from the kind's `holdsData` declaration, or for a
+/// PersistentVolumeClaim, a PersistentVolume, or a StatefulSet with claim
+/// templates, from the object's shape. Other objects carry none. Migration
+/// pair detection reads it.
+pub const HOLDS_DATA: &str = key!("holds-data");
+
 /// Comma-separated field paths the resource cedes to another field manager
 /// after creation (`spec.versions`, `webhooks[*].rules`). On a 409 confined
 /// to these paths, apply retries without them.

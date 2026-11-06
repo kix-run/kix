@@ -62,7 +62,7 @@
   availability,
 }:
 let
-  release = "v3.13.1";
+  release = "v3.13.5";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "prometheus ${ns}/${name}";
@@ -92,7 +92,7 @@ in
     image = kix.options.image {
       repository = "quay.io/prometheus/prometheus";
       tag = release;
-      digest = "sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893";
+      digest = "sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9";
       pullPolicy = null;
     };
     resources = kix.options.resources {

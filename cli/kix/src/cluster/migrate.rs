@@ -22,10 +22,19 @@
 //! pair, as a renamed object usually takes its data with it. Two objects of
 //! different kinds pair only when both may hold data (see [`may_hold_data`]).
 //! That covers moving a database from a StatefulSet to an operator's custom
-//! resource, or from one operator to another. A pair Kix cannot judge is
-//! reported, because a false alarm costs a flag and a missed migration costs
-//! the data. The storage shapes and the API-group rule are a fallback until
-//! packages declare which of their objects hold data.
+//! resource, or from one operator to another.
+//!
+//! # Which objects hold data
+//!
+//! The library marks objects `kix.run/holds-data`. A custom resource carries
+//! its kind's `holdsData` declaration, which a stateful package's custom
+//! resources must have. A PersistentVolumeClaim, a PersistentVolume, and a
+//! StatefulSet with claim templates are marked `"true"`. Other built-in
+//! objects carry no mark. An object without one, such as chart output or an
+//! object built by an older Kix, falls back to its storage shape and API
+//! group, and a custom resource without a mark is assumed to hold data. A
+//! pair Kix cannot judge is reported, because a false alarm costs a flag and
+//! a missed migration costs the data.
 //!
 //! Detection does not select a migration strategy, schedule migration steps,
 //! or remove resources from the Apply and Orphan action sets.
@@ -117,9 +126,18 @@ fn holds_data(manifest: &Value) -> bool {
         || declared(spec.get("storage"))
 }
 
+/// API groups whose kinds Kix treats as built-in, besides the core group and
+/// Kix's own. The library reads the same lists from
+/// `kix/lib/core/api-groups.json` (`facts.isForeignGroup`), and a test below
+/// checks that the two agree.
+const BUILTIN_GROUPS: &[&str] = &["apps", "batch", "policy", "autoscaling"];
+
+/// Suffixes of API groups whose kinds Kix treats as built-in.
+const BUILTIN_GROUP_SUFFIXES: &[&str] = &[".k8s.io"];
+
 /// Return whether the manifest's API group is one whose kinds Kix knows: the
-/// core group, `apps`, `batch`, `policy`, `autoscaling`, any `*.k8s.io` group,
-/// and Kix's own group.
+/// core group, a [`BUILTIN_GROUPS`] entry, a group ending in one of
+/// [`BUILTIN_GROUP_SUFFIXES`], and Kix's own group.
 fn is_known_api(manifest: &Value) -> bool {
     let api_version = manifest
         .get("apiVersion")
@@ -128,16 +146,27 @@ fn is_known_api(manifest: &Value) -> bool {
     let Some((group, _)) = api_version.split_once('/') else {
         return true;
     };
-    matches!(group, "apps" | "batch" | "policy" | "autoscaling")
-        || group.ends_with(".k8s.io")
+    BUILTIN_GROUPS.contains(&group)
+        || BUILTIN_GROUP_SUFFIXES.iter().any(|s| group.ends_with(s))
         || group == keys::GROUP
 }
 
-/// Return whether the manifest may hold data. A known kind holds data only
-/// when it declares storage. Kix cannot see where a custom resource keeps its
-/// data, so it assumes that one may.
+/// Return the object's `kix.run/holds-data` mark, or `None` when it has none
+/// or the value is neither `"true"` nor `"false"`.
+fn marked_holds_data(manifest: &Value) -> Option<bool> {
+    match keys::get(manifest, keys::HOLDS_DATA)? {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Return whether the manifest may hold data. The `kix.run/holds-data` mark
+/// answers when present. Without it, a known kind holds data only when it
+/// declares storage. Kix cannot see where an unmarked custom resource keeps
+/// its data, so it assumes that one may.
 fn may_hold_data(manifest: &Value) -> bool {
-    holds_data(manifest) || !is_known_api(manifest)
+    marked_holds_data(manifest).unwrap_or_else(|| holds_data(manifest) || !is_known_api(manifest))
 }
 
 /// Derive a short "why did this change" reason by comparing source and target
@@ -709,5 +738,127 @@ mod tests {
         let slots: std::collections::HashSet<_> = pairs.iter().map(|p| p.slot.clone()).collect();
         assert!(slots.contains("immich/storage"));
         assert!(slots.contains("vaultwarden/storage"));
+    }
+
+    /// Return `manifest` with `kix.run/holds-data` set to `value`.
+    fn marked(mut manifest: Value, value: &str) -> Value {
+        manifest["metadata"]["annotations"][keys::HOLDS_DATA] = json!(value);
+        manifest
+    }
+
+    #[test]
+    fn ignores_custom_resources_marked_as_holding_no_data() {
+        // A PodMonitor swapped for a PrometheusRule in a stateful package
+        // moves no data. Unmarked, both are custom resources and pair.
+        let monitor = || {
+            with_api(
+                in_postgres("PodMonitor", "postgres", "aaaa"),
+                "monitoring.coreos.com/v1",
+            )
+        };
+        let rule = || {
+            with_api(
+                in_postgres("PrometheusRule", "postgres-alerts", "bbbb"),
+                "monitoring.coreos.com/v1",
+            )
+        };
+        assert!(
+            detect_migration_pairs(&[marked(rule(), "false")], &[marked(monitor(), "false")])
+                .is_empty()
+        );
+        assert_eq!(detect_migration_pairs(&[rule()], &[monitor()]).len(), 1);
+    }
+
+    #[test]
+    fn detects_cross_kind_marked_as_holding_data() {
+        let old = vec![marked(
+            with_api(
+                in_postgres("SGCluster", "postgres", "aaaa"),
+                "stackgres.io/v1",
+            ),
+            "true",
+        )];
+        let new = vec![marked(
+            with_api(
+                in_postgres("Cluster", "postgres", "bbbb"),
+                "postgresql.cnpg.io/v1",
+            ),
+            "true",
+        )];
+        let pairs = detect_migration_pairs(&new, &old);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].reason, "SGCluster removed, Cluster added");
+    }
+
+    #[test]
+    fn the_mark_overrides_the_storage_shape() {
+        // A custom resource marked "false" does not pair even when its spec
+        // has the `storage` shape the fallback reads.
+        let old = vec![marked(
+            with_spec(
+                with_api(
+                    in_postgres("Cluster", "postgres", "aaaa"),
+                    "postgresql.cnpg.io/v1",
+                ),
+                "storage",
+                json!({ "size": "10Gi" }),
+            ),
+            "false",
+        )];
+        let new = vec![marked(
+            with_api(
+                in_postgres("SGCluster", "postgres", "bbbb"),
+                "stackgres.io/v1",
+            ),
+            "true",
+        )];
+        assert!(detect_migration_pairs(&new, &old).is_empty());
+    }
+
+    #[test]
+    fn an_unmarked_side_uses_the_fallback() {
+        // The removed object was built by a Kix that wrote no mark, so its
+        // custom resource kind is assumed to hold data, and it pairs with a
+        // replacement marked "true".
+        let old = vec![with_api(
+            in_postgres("SGCluster", "postgres", "aaaa"),
+            "stackgres.io/v1",
+        )];
+        let new = vec![marked(
+            with_api(
+                in_postgres("Cluster", "postgres", "bbbb"),
+                "postgresql.cnpg.io/v1",
+            ),
+            "true",
+        )];
+        assert_eq!(detect_migration_pairs(&new, &old).len(), 1);
+        // An unmarked ConfigMap holds no data by its shape.
+        let old = vec![in_postgres("ConfigMap", "postgres", "aaaa")];
+        assert!(detect_migration_pairs(&new, &old).is_empty());
+    }
+
+    /// The CLI and the library draw the built-in boundary from the same
+    /// lists. Skipped when the repository tree is not there, so a packaged
+    /// crate still tests clean.
+    #[test]
+    fn built_in_groups_match_the_library() {
+        let Some(path) = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .map(|p| p.join("kix/lib/core/api-groups.json"))
+            .find(|p| p.is_file())
+        else {
+            return;
+        };
+        let lists: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let strings = |key: &str| -> Vec<String> {
+            lists[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} has no {key} list", path.display()))
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(strings("builtinGroups"), BUILTIN_GROUPS);
+        assert_eq!(strings("builtinGroupSuffixes"), BUILTIN_GROUP_SUFFIXES);
     }
 }
