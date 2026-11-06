@@ -99,10 +99,8 @@ pub fn unusable(reviewed: &Plan) -> Option<String> {
     }
     if reviewed.made_by == MadeBy::LiveRead && !matches!(reviewed.drift, Checked::Checked { .. }) {
         return Some(
-            "the plan is a `kix diff` that did not compare with the deployed build (a diff \
-             of a snapshot or export, or one made without the deployed build), so it shows \
-             no drift the deploy would revert; save a `kix diff` against the cluster with the \
-             deployed build available, or a `kix plan`"
+            "the plan is a `kix diff` of a snapshot or export, so it did not check drift \
+             the deploy would revert; save a `kix diff` against the cluster, or a `kix plan`"
                 .into(),
         );
     }

@@ -215,17 +215,19 @@ pub fn kix_owned_manifests(
 }
 
 /// Build [`kix_owned_manifests`] for comparison against `built` (keyed by
-/// identity hash), replacing any object that has not changed since apply with
-/// its build manifest.
+/// identity hash), replacing each object the build does not change with its
+/// build manifest.
 ///
-/// An object is considered unchanged when its `kix.run/identity-hash` matches a
-/// manifest in `built`, [`super::drift::check_object`] reports
-/// [`super::drift::DriftVerdict::InSync`], and every field set by the build
-/// manifest holds an equivalent value in the Kix-owned view (see
-/// [`build_holds_in`]). Replacing the view with the build manifest hides extra
-/// fields added inside atomic lists by mutating webhooks while still surfacing
-/// fields pruned by CRD schemas or overwritten by webhooks. Live `kix.run/*`
-/// annotations are preserved so package moves remain visible.
+/// The build does not change an object when the object's
+/// `kix.run/identity-hash` names a manifest in `built` for the same kind,
+/// namespace, and name. This is the rule `kix deploy` uses to skip an object.
+/// The identity hash is the hash of the manifest file, so the build manifest
+/// is what Kix applied. A value diff of the live object cannot stand in for
+/// it, because the API server drops `omitempty` values, defaults custom
+/// resources, and lets other field managers take fields. Whether someone has
+/// edited the object since apply is answered separately by
+/// [`super::drift::check_object`]. Live `kix.run/*` annotations are kept so
+/// the record and activation stamps read as the cluster has them.
 ///
 /// All other objects use their Kix-owned view after running [`redact_secret`]
 /// against the matching build manifest.
@@ -242,7 +244,7 @@ pub fn kix_owned_manifests_against(
         .map(|obj| {
             let mut view = unredacted_view(&obj);
             crate::legacy_domain::upgrade_manifest(&mut view);
-            if let Some(manifest) = unchanged_since_apply(&obj, &view, built) {
+            if let Some(manifest) = unchanged_by_build(&obj, &view, built) {
                 return manifest;
             }
             let build = by_id.get(&ResourceId::from_value(&view)).copied();
@@ -252,9 +254,9 @@ pub fn kix_owned_manifests_against(
         .collect()
 }
 
-/// Return the build manifest `obj` was applied from (with live `kix.run/*`
-/// annotations preserved) if the object has not changed since apply.
-fn unchanged_since_apply(
+/// Return the build manifest with `obj`'s identity hash and resource id, with
+/// the live `kix.run/*` annotations in place of the build's.
+fn unchanged_by_build(
     obj: &DynamicObject,
     view: &serde_json::Value,
     built: &HashMap<String, &serde_json::Value>,
@@ -265,9 +267,7 @@ fn unchanged_since_apply(
         .as_ref()
         .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
     let manifest = *built.get(hash)?;
-    if super::drift::check_object(obj).verdict != super::drift::DriftVerdict::InSync
-        || !build_holds_in(manifest, view, "$")
-    {
+    if ResourceId::from_value(manifest) != ResourceId::from_value(view) {
         return None;
     }
     let mut out = manifest.clone();
@@ -290,52 +290,6 @@ fn unchanged_since_apply(
         annotations.extend(live_stamps);
     }
     Some(out)
-}
-
-/// Return whether every field set in `build` is present in `live` with an
-/// equivalent value under the diff engine's rules. `live` may contain extra
-/// fields not present in `build`.
-fn build_holds_in(build: &serde_json::Value, live: &serde_json::Value, path: &str) -> bool {
-    use crate::manifest::diff::equivalence::{
-        equivalent_to_unset, is_quantity_field, same_quantity,
-    };
-    use crate::manifest::diff::keyed_lists::{path_leaf, try_key_lists};
-    use serde_json::Value;
-
-    match (build, live) {
-        (Value::Object(b), Value::Object(l)) => {
-            let parent = path_leaf(path);
-            b.iter().all(|(key, bv)| {
-                let child = format!("{path}.{key}");
-                match l.get(key) {
-                    None => equivalent_to_unset(&child, bv),
-                    Some(lv) => {
-                        (bv.is_null() && equivalent_to_unset(&child, lv))
-                            || (is_quantity_field(parent, key) && same_quantity(bv, lv))
-                            || build_holds_in(bv, lv, &child)
-                    }
-                }
-            })
-        }
-        (Value::Array(b), Value::Array(l)) => {
-            if b.len() != l.len() {
-                return false;
-            }
-            match try_key_lists(path_leaf(path), b, l) {
-                Some((b_map, l_map)) => b_map.iter().all(|(key, bv)| {
-                    l_map
-                        .get(key)
-                        .is_some_and(|lv| build_holds_in(bv, lv, &format!("{path}[{key}]")))
-                }),
-                None => b
-                    .iter()
-                    .zip(l)
-                    .enumerate()
-                    .all(|(i, (bv, lv))| build_holds_in(bv, lv, &format!("{path}[{i}]"))),
-            }
-        }
-        _ => build == live,
-    }
 }
 
 #[cfg(test)]
@@ -638,48 +592,6 @@ mod tests {
             .collect()
     }
 
-    /// A field the CRD schema pruned on apply is absent from the live object,
-    /// although drift finds it in sync. It shows as missing.
-    #[test]
-    fn a_field_pruned_on_apply_shows_in_the_comparison() {
-        let built = built_cluster(
-            json!({"postgres": {"extensions": [{"name": "cube"}], "flavour": "babelfish"}}),
-            json!({keys::IDENTITY_HASH: "h-pg"}),
-        );
-        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
-        let live = applied_cluster(
-            json!({"postgres": {"extensions": [{"name": "cube"}]}}),
-            &[(keys::IDENTITY_HASH, "h-pg")],
-            None,
-        );
-        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
-        assert_eq!(diff_paths(&built, &out), vec!["$.spec.postgres.flavour"]);
-    }
-
-    /// A value a mutating webhook overwrote on apply reads as changed, while
-    /// the field it added beside it still does not show.
-    #[test]
-    fn a_value_a_webhook_overwrote_shows_in_the_comparison() {
-        let built = built_cluster(
-            json!({"postgres": {"extensions": [{"name": "cube", "version": "1.5"}]}}),
-            json!({keys::IDENTITY_HASH: "h-pg"}),
-        );
-        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
-        let live = webhook_defaulted_cluster(
-            json!([{"name": "cube", "version": "1.6", "publisher": "com.ongres"}]),
-            None,
-        );
-        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
-        assert_eq!(
-            out["spec"]["postgres"]["extensions"][0]["version"],
-            json!("1.6")
-        );
-        assert!(
-            diff_paths(&built, &out)
-                .contains(&"$.spec.postgres.extensions[cube].version".to_string())
-        );
-    }
-
     /// Because identity and applied-content hashes exclude `kix.run/*`
     /// annotations, the comparison preserves live `kix.run/*` annotations so
     /// package moves or annotation edits remain visible.
@@ -722,8 +634,13 @@ mod tests {
         );
     }
 
+    /// The build does not change an object whose identity hash names a build
+    /// manifest of the same resource, so the object compares as that
+    /// manifest. That holds when it drifted since apply too, because drift is
+    /// reported apart from the diff. Another resource carrying the hash, or a
+    /// hash the build lacks, compares as the live view.
     #[test]
-    fn an_object_unchanged_since_apply_compares_as_its_build_manifest() {
+    fn an_object_the_build_does_not_change_compares_as_its_build_manifest() {
         let built = json!({
             "apiVersion": "stackgres.io/v1",
             "kind": "SGCluster",
@@ -740,19 +657,173 @@ mod tests {
             std::slice::from_ref(&built)
         );
 
-        // Drifted since apply: returns the live view, including webhook defaults.
         let drifted = webhook_defaulted_cluster(live_extensions.clone(), Some("other"));
         let out = kix_owned_manifests_against([drifted], &by_hash);
+        assert_eq!(out[0]["spec"], built["spec"]);
+
+        let mut renamed = webhook_defaulted_cluster(live_extensions.clone(), None);
+        renamed.metadata.name = Some("other".into());
+        let out = kix_owned_manifests_against([renamed], &by_hash);
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
 
-        // Build manifest no longer present: returns the live view.
         let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
         let out = kix_owned_manifests_against([in_sync], &HashMap::new());
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
     }
 
+    /// Build a live object Kix applied from `built` with the identity hash
+    /// `h-live`, holding `data` and the given `managedFields`. Kix's `Apply`
+    /// entry also owns the identity hash annotation, as a real apply does.
+    fn live_of(
+        built: &Value,
+        data: Value,
+        mut managed_fields: Vec<k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry>,
+    ) -> DynamicObject {
+        for entry in &mut managed_fields {
+            if entry.manager.as_deref() == Some("kix")
+                && let Some(fields) = &mut entry.fields_v1
+            {
+                fields.0["f:metadata"]["f:annotations"][format!("f:{}", keys::IDENTITY_HASH)] =
+                    json!({});
+            }
+        }
+        DynamicObject {
+            metadata: ObjectMeta {
+                name: built["metadata"]["name"].as_str().map(str::to_string),
+                namespace: built["metadata"]["namespace"].as_str().map(str::to_string),
+                annotations: Some(
+                    [
+                        (keys::IDENTITY_HASH.to_string(), "h-live".to_string()),
+                        (keys::APPLIED_HASH.to_string(), "stamp".to_string()),
+                    ]
+                    .into(),
+                ),
+                managed_fields: Some(managed_fields),
+                ..Default::default()
+            },
+            types: None,
+            data,
+        }
+    }
+
+    /// Assert that the Kix-owned view of `live` differs from `built`, so the
+    /// case reproduces, and that the comparison against the build does not.
+    fn assert_unchanged_by_build(built: &Value, live: DynamicObject) {
+        assert!(
+            !diff_paths(built, &kix_owned_view(&live)).is_empty(),
+            "the case does not reproduce"
+        );
+        let by_hash: HashMap<String, &Value> = [("h-live".to_string(), built)].into();
+        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        assert_eq!(diff_paths(built, &out), Vec::<String>::new());
+    }
+
+    /// The API server drops an `omitempty` value of `""`, so the live object
+    /// lacks a field the build sets. The build does not change the object.
+    #[test]
+    fn an_empty_string_the_server_drops_does_not_show() {
+        let built = json!({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "web", "namespace": "app",
+                         "annotations": {keys::IDENTITY_HASH: "h-live"}},
+            "spec": {"template": {"spec": {"containers": [{
+                "name": "controller", "image": "c:1",
+                "env": [{"name": "EXAMPLE_PULL_SECRET", "value": ""}]
+            }]}}}
+        });
+        let data = json!({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "spec": {"template": {"spec": {"containers": [{
+                "name": "controller", "image": "c:1",
+                "env": [{"name": "EXAMPLE_PULL_SECRET"}]
+            }]}}}
+        });
+        let fields = json!({"f:spec": {"f:template": {"f:spec": {"f:containers": {
+            "k:{\"name\":\"controller\"}": {
+                ".": {}, "f:name": {}, "f:image": {},
+                "f:env": {"k:{\"name\":\"EXAMPLE_PULL_SECRET\"}": {
+                    ".": {}, "f:name": {}, "f:value": {}
+                }}
+            }
+        }}}}});
+        let live = live_of(&built, data, vec![managed("kix", "Apply", None, fields)]);
+        assert_unchanged_by_build(&built, live);
+    }
+
+    fn virtual_machine(spec: Value, identity: bool) -> Value {
+        let mut vm = json!({
+            "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+            "metadata": {"name": "vm", "namespace": "app"},
+            "spec": spec
+        });
+        if identity {
+            vm["metadata"]["annotations"] = json!({keys::IDENTITY_HASH: "h-live"});
+        }
+        vm
+    }
+
+    /// `kubectl patch` set a field to the value the build holds, so its
+    /// manager owns the field and Kix's `Apply` entry does not. The build
+    /// does not change the object.
+    #[test]
+    fn a_field_another_manager_took_at_the_same_value_does_not_show() {
+        let spec = json!({"runStrategy": "Always", "template": {"spec": {"domain": {}}}});
+        let built = virtual_machine(spec.clone(), true);
+        let live = live_of(
+            &built,
+            virtual_machine(spec, false),
+            vec![
+                managed("kix", "Apply", None, json!({"f:spec": {"f:template": {}}})),
+                managed(
+                    "kubectl-patch",
+                    "Update",
+                    None,
+                    json!({"f:spec": {"f:runStrategy": {}}}),
+                ),
+            ],
+        );
+        assert_unchanged_by_build(&built, live);
+    }
+
+    /// An operator added `creationTimestamp: null` inside each item of an
+    /// atomic list Kix owns, so the live list differs from the build's. The
+    /// diff engine already reads a null as unset, so this checks only that
+    /// the comparison against the build shows nothing.
+    #[test]
+    fn a_null_creation_timestamp_in_an_atomic_list_does_not_show() {
+        let template = |name: &str, live: bool| {
+            let mut t = json!({"metadata": {"name": name},
+                               "spec": {"storage": {"resources": {"requests": {"storage": "1Gi"}}}}});
+            if live {
+                t["metadata"]["creationTimestamp"] = Value::Null;
+            }
+            t
+        };
+        let spec = |live: bool| {
+            json!({"runStrategy": "Always",
+                   "dataVolumeTemplates": [template("vm-root", live), template("vm-scratch", live)]})
+        };
+        let built = virtual_machine(spec(false), true);
+        let live = live_of(
+            &built,
+            virtual_machine(spec(true), false),
+            vec![managed(
+                "kix",
+                "Apply",
+                None,
+                json!({"f:spec": {"f:runStrategy": {}, "f:dataVolumeTemplates": {}}}),
+            )],
+        );
+        let by_hash: HashMap<String, &Value> = [("h-live".to_string(), &built)].into();
+        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        assert_eq!(diff_paths(&built, &out), Vec::<String>::new());
+    }
+
+    /// Compare `live` against a build holding only `built`, keyed by its
+    /// identity hash or by `h-new` when it has none.
     fn compare_with_build(live: DynamicObject, built: &Value) -> Value {
-        let by_hash: HashMap<String, &Value> = [("h-sec".to_string(), built)].into();
+        let hash = keys::get(built, keys::IDENTITY_HASH).unwrap_or("h-new");
+        let by_hash: HashMap<String, &Value> = [(hash.to_string(), built)].into();
         kix_owned_manifests_against([live], &by_hash).remove(0)
     }
 
@@ -847,9 +918,9 @@ mod tests {
         }
     }
 
-    /// Verify that a drifted `Secret` applied through `data` exposes no live
-    /// values, keeping matching build values and replacing changed ones with
-    /// [`HIDDEN_SECRET_VALUE`].
+    /// Verify that a `Secret` applied through `data` that the build changes
+    /// exposes no live values, keeping matching build values and replacing
+    /// changed ones with [`HIDDEN_SECRET_VALUE`].
     #[test]
     fn a_secret_applied_with_data_holds_no_live_value() {
         let live = || {
@@ -870,7 +941,7 @@ mod tests {
         let built = json!({
             "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
             "metadata": {"name": "creds", "namespace": "app",
-                         "annotations": {keys::IDENTITY_HASH: "h-sec"}},
+                         "annotations": {keys::IDENTITY_HASH: "h-sec-new"}},
             // "admin", "dev-password"
             "data": {"user": "YWRtaW4=", "password": "ZGV2LXBhc3N3b3Jk"}
         });
