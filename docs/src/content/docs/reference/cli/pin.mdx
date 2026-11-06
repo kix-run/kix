@@ -111,7 +111,7 @@ Each pin gets one verdict:
 repository or tag outside the OCI reference grammar. It writes keys in sorted order, so a diff shows only what moved. A
 file with no instance pins is written as version 1 and without `instances`,
 which a Kix that reads only version 1 still reads. Each pin has the fields
-listed under [`kix.pins`](/docs/reference/kix-helpers/image-and-pin-helpers/#kixpins).
+listed under [`kix.pins`](/docs/reference/composition-helpers/#image-and-pin-helpers).
 
 ## `kix pin list`
 
@@ -152,6 +152,6 @@ for the CI workflow.
 :::
 
 :::note[Explanation]
-See [Why deploy inputs are committed](/docs/explanation/why-deploy-inputs-are-committed/)
+See [Why deploy inputs are committed](/docs/explanation/server-side-apply-field-ownership-and-drift/#why-deploy-inputs-are-committed)
 for why the digest lives in the repository.
 :::

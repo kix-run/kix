@@ -1,4 +1,185 @@
 ---
 title: "12. Scorecards and compile-time policy"
-description: "TODO"
+description: "Enforce built-in security rules and author custom package-level and cluster-level scorecard policies."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import Recap from '/src/components/Recap.astro';
+import checkOutput from '/src/command-output/tutorials/19-scorecards/check.json';
+import buildOutput from '/src/command-output/tutorials/19-scorecards/build.json';
+import isProxy from '/src/snippets/tutorials/19-scorecards/scorecard/isProxy.json';
+import packageRule from '/src/snippets/tutorials/19-scorecards/scorecard/packageRule.json';
+import clusterRule from '/src/snippets/tutorials/19-scorecards/scorecard/clusterRule.json';
+
+In tutorial 09, you used `lib.mkOption` and `lib.types` to validate each option on a single package instance. Some policies, however, belong to the platform team rather than to an individual package author:
+
+- "Every reverse-proxy gateway in our production cluster must set `maxBodySize` explicitly rather than relying on the `1m` default."
+- "No two reverse-proxy gateways across the entire cluster may claim the same `proxyPath`."
+
+In Kix, you enforce these rules at build time using **scorecards**. Because scorecards evaluate inside Nix against the typed package options, metadata, and full cluster graph, they can check cross-instance invariants that single-manifest YAML linters cannot see.
+
+## Prerequisites
+
+- Finish the [flavors, roles, and imports tutorial](/docs/tutorials/11-flavors-roles-and-imports/).
+- Keep the same `kix-examples` checkout.
+
+## Inspect `19-scorecards`
+
+Open:
+
+```text
+tutorials/19-scorecards/cluster.nix
+tutorials/19-scorecards/scorecard.nix
+```
+
+In `tutorials/19-scorecards/cluster.nix`, the cluster defines two application namespaces (`app-v1` and `app-v2`), each with a `backend` and a `gateway` instance:
+
+- `app-v1.gateway` sets `proxyPath = "/v1/"` and `maxBodySize = "10m"`.
+- `app-v2.gateway` sets `proxyPath = "/v2/"` and `maxBodySize = "10m"`.
+
+At the top of `cluster.nix`, the cluster imports both `kix.flavors.kind` and `./scorecard.nix`:
+
+```nix title="tutorials/19-scorecards/cluster.nix"
+imports = [
+  kix.flavors.kind
+  ./scorecard.nix
+];
+```
+
+Keeping scorecard policy in a separate module (`./scorecard.nix`) lets platform teams share a single policy module across multiple clusters while keeping `cluster.nix` focused on topology and instances.
+
+## Enable Built-In Rules And `maxSeverity`
+
+Open `tutorials/19-scorecards/scorecard.nix`. At the top of the `scorecard` block, three settings configure how the scorecard runs:
+
+```nix title="tutorials/19-scorecards/scorecard.nix"
+scorecard = {
+  enable = true;
+  maxSeverity = "error";
+  rules = kix.rules.recommended // {
+    # custom rules ...
+  };
+};
+```
+
+Here is what each field controls:
+
+- **`enable = true`**: Turns on scorecard evaluation during `kix check`, `kix scorecard`, and `kix build`.
+- **`maxSeverity = "error"`**: Any finding with severity `"error"` becomes a build-blocking assertion failure. Findings with `"warning"` or `"info"` are still reported by `kix check` and `kix scorecard`, but they do not block `kix build`.
+- **`rules = kix.rules.recommended // { ... }`**: Starts from Kix's built-in rule catalog (`kix.rules.recommended`) and merges in custom rules for this cluster.
+
+:::note[Reference]
+See [Cluster scorecard configuration](/docs/reference/cluster-configuration/#scorecard) and [Built-in rules catalog](/docs/reference/scorecard-and-rules/#built-in-security-rules) for all scorecard options and built-in rules.
+:::
+
+## Write A Package-Level Rule
+
+Next, look at the first custom rule in `tutorials/19-scorecards/scorecard.nix`:
+
+<Snippet {...packageRule} />
+
+A `level = "package"` rule runs once per package instance and inspects the package's `meta`, `config`, and built resources:
+
+1. **`appliesTo = { meta, ... }: ...`**: Filters which instances this rule checks. Because `reverse-proxy-package.nix` declares `meta.provides = [ "reverse-proxy" ]`, `builtins.elem "reverse-proxy" (meta.provides or [ ])` runs this rule only on reverse-proxy instances and skips `echo-server` backends.
+2. **`check = { config, instanceName, ... }: ...`**: Inspects the instance's merged `config` directly. You do not have to parse nginx's `default.conf` text out of a rendered ConfigMap; you read `config.maxBodySize` as a structured Nix value. If it equals `"1m"`, `check` returns a finding with a descriptive message.
+
+## Write A Cluster-Level Rule
+
+Some mistakes only appear when you compare multiple instances across the cluster. If `app-v1/gateway` and `app-v2/gateway` both configure `proxyPath = "/v1/"`, each instance looks completely valid in isolation, yet their routes collide across the cluster.
+
+To catch that, `tutorials/19-scorecards/scorecard.nix` defines a helper predicate `isProxy` and a `level = "cluster"` rule named `custom.noProxyPathCollision`:
+
+<Snippet {...isProxy} />
+
+<Snippet {...clusterRule} />
+
+Look at how `custom.noProxyPathCollision` works:
+
+1. **`level = "cluster"`**: Runs once for the entire cluster and receives `allInstances` (`{ <namespace> = { <instance> = inst; }; }`).
+2. **Filter to reverse proxies**: Flattens `allInstances` and uses `isProxy` to keep only instances whose `meta.provides` includes `"reverse-proxy"`.
+3. **Group by `config.proxyPath`**: Reads `e.inst._meta.config.proxyPath` on every reverse-proxy instance and groups instances by path.
+4. **Report collisions**: Any `proxyPath` claimed by more than one gateway produces an error finding that lists every colliding `<namespace>/<instance>` pair.
+
+:::note[Explanation]
+See [Scorecard levels: manifest, package, namespace, cluster](/docs/explanation/scorecard-levels-manifest-package-namespace-cluster/) for how the four scorecard levels divide responsibility.
+:::
+
+## Run `kix check` And `kix build`
+
+Run `kix check 19-scorecards`:
+
+<Command {...checkOutput} />
+
+Both custom error rules pass (`0 errors`), while the built-in `kix.rules.recommended` rules report 6 warnings and 2 informational findings on the tutorial manifests. Because `maxSeverity = "error"` only blocks on errors, `kix build 19-scorecards` succeeds and renders all 14 resources:
+
+<Command expandable {...buildOutput} />
+
+## Trigger The Package-Level Rule
+
+Open `tutorials/19-scorecards/cluster.nix` and comment out `maxBodySize = "10m";` on the `gateway` in `app-v1` so it falls back to the `"1m"` default:
+
+```nix title="tutorials/19-scorecards/cluster.nix"
+gateway = {
+  package = reverseProxyPackage;
+  config = {
+    proxyPath = "/v1/";
+    # maxBodySize = "10m";
+  };
+};
+```
+
+Now run `kix check 19-scorecards`:
+
+<Command commands={["kix check 19-scorecards"]} cwd="kix-examples/" />
+
+Because `custom.proxyMaxBodySizeMustBeExplicit` has `severity = "error"` and `scorecard.maxSeverity = "error"`, evaluation fails and prints:
+
+```text
+[error] custom.proxyMaxBodySizeMustBeExplicit (app-v1/gateway): instance 'gateway' uses the default maxBodySize '1m'. nginx rejects larger request bodies - set this explicitly.
+```
+
+Uncomment `maxBodySize = "10m";` in `app-v1`.
+
+## Trigger The Cluster-Level Collision Rule
+
+Next, in `tutorials/19-scorecards/cluster.nix`, change `proxyPath` in `app-v2` from `"/v2/"` to `"/v1/"` so both namespaces claim `"/v1/"`:
+
+```nix title="tutorials/19-scorecards/cluster.nix"
+namespaces.app-v2.instances.gateway = {
+  package = reverseProxyPackage;
+  config = {
+    proxyPath = "/v1/";
+    maxBodySize = "10m";
+  };
+};
+```
+
+Run `kix check 19-scorecards` again:
+
+<Command commands={["kix check 19-scorecards"]} cwd="kix-examples/" />
+
+This time, `custom.noProxyPathCollision` catches the cross-namespace conflict at build time:
+
+```text
+[error] custom.noProxyPathCollision (cluster): 2 reverse-proxy gateways share proxyPath '/v1/': app-v1/gateway, app-v2/gateway
+```
+
+Change `app-v2`'s `proxyPath` back to `"/v2/"` and run `kix check 19-scorecards` to verify the cluster passes again.
+
+## What You Learned
+
+You completed the 12-part Kix tutorial path:
+
+<Recap>
+- `scorecard.enable = true` runs compile-time policy checks across your cluster;
+- `scorecard.maxSeverity` controls which severity levels (`"error"`, `"warning"`, `"info"`, `"none"`) fail the build;
+- `level = "package"` rules inspect an individual instance's `meta`, `config`, and resources without parsing rendered YAML strings;
+- `level = "cluster"` rules inspect `allInstances` across all namespaces to catch cross-instance collisions before deployment.
+</Recap>
+
+## Next Steps
+
+- Browse the [How-to guides](/docs/how-to/) for step-by-step recipes on secrets, CRDs, Helm chart adoption, NetworkPolicies, and scorecard customization.
+- Read the [Explanation](/docs/explanation/) pages for deeper dives into the dependency graph, availability synthesis, NetworkPolicy derivation, and Server-Side Apply field ownership.
+- Keep the [Reference](/docs/reference/cluster-configuration/) handy while authoring your own clusters and packages.

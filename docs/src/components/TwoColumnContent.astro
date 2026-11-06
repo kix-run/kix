@@ -6,10 +6,10 @@
 //
 // Below 72rem the rail slot only holds Starlight's fixed-position mobile
 // "On this page" bar (see PageSidebar.astro), so the aside takes no space.
-const { toc } = Astro.locals.starlightRoute;
+const { toc, hasSidebar } = Astro.locals.starlightRoute;
 ---
 
-<div class:list={['kix-columns', { 'has-rail': toc }]}>
+<div class:list={['kix-columns', { 'has-rail': toc, 'has-sidebar': hasSidebar }]}>
   <div class="main-pane"><slot /></div>
   {
     toc && (
@@ -22,7 +22,7 @@ const { toc } = Astro.locals.starlightRoute;
 
 <style>
   @media (min-width: 72rem) {
-    .kix-columns {
+    .kix-columns.has-sidebar {
       --sl-content-margin-inline: 0;
     }
     .kix-columns.has-rail {

@@ -1,0 +1,219 @@
+---
+title: "Helm and imports"
+description: "How to wrap upstream Helm charts as Kix packages and declare external or pre-installed services with kix.mkImport."
+---
+
+Not everything in your cluster starts as a native Kix package: you might want to deploy a complex third-party operator published as a Helm chart, or connect your workloads to a managed database or cloud ingress controller that already exists outside Kix. This page covers the two bridges for bringing external software into Kix's dependency graph: Helm chart wrappers (`kix.helmChart` and `scope.helm.importChart`) and external service markers (`kix.mkImport`).
+
+:::note[Helpful background]
+- [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): see how `kix.mkImport` connects packages to pre-installed cluster services.
+- [Helm integration and resource adoption](/docs/explanation/helm-integration-and-resource-adoption/): understand how Kix renders Helm charts inside the Nix sandbox and reconstructs their dependency graph.
+- [Adopt a Helm chart](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/): follow a practical guide to wrapping an upstream Helm chart.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/): learn how imported resources participate in deployment ordering and network policy generation.
+:::
+
+## Helm helpers
+
+Kix provides two entry points for Helm charts:
+1. **`kix.helmChart`**: A turn-key package constructor for quick chart adoption that exposes a `values` option (`options.values`) and wraps the rendered resources automatically.
+2. **`scope.helm.importChart`**: The full chart-adoption builder used inside custom packages that expose typed NixOS `options`, translate them into Helm `values`, and patch or extend the rendered resources.
+
+### Quick adoption with `kix.helmChart`
+
+```nix
+# pkgs/reloader/default.nix
+{ kix, ... }:
+kix.helmChart {
+  repo = "https://stakater.github.io/stakater-charts";
+  name = "reloader";
+  version = "1.0.115";
+  hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  metaExtra = {
+    description = "Kubernetes controller that watches ConfigMaps and Secrets and triggers rollouts";
+  };
+}
+```
+
+| `kix.helmChart` argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `repo` | string | Required | Helm repository URL (`https://...` or `oci://...`). |
+| `name` | string | Required | Upstream chart name. |
+| `version` | string | Required | Chart version string (also used as default `meta.version`). |
+| `hash` | string | Required | Fixed-output Nix SRI hash (`"sha256-..."`) of the fetched chart tarball. |
+| `releaseName` | string | `name` | Helm release name passed to `helm template`. |
+| `root` | `{ kind, name }` or `null` | `null` | Explicit root resource selector; when `null`, Kix selects the primary `Service` or workload automatically (`chart.autoRoot`). |
+| `includeCrds` | bool | `true` | Whether to pass `--include-crds` to `helm template`. |
+| `strip` | attrset | `{ }` | Filters out unneeded chart resources (`{ kinds ? [ ]; names ? [ ]; predicates ? [ ]; }`). |
+| `patchResources` | `attrs -> attrs` | `lib.id` | Function transforming the raw attribute set of parsed chart resources before Kix wraps them. |
+| `metaExtra` | attrset | `{ }` | Additional fields merged into the package's `meta` block. |
+
+### Full adoption with `scope.helm.fetchHelmChart` and `scope.helm.importChart`
+
+In a typed package, fetch the chart tarball with `scope.helm.fetchHelmChart` and render it into Kix resources with `scope.helm.importChart`:
+
+```nix
+{
+  scope,
+  lib,
+  kix,
+  ...
+}:
+
+let
+  chart = scope.helm.fetchHelmChart {
+    repo = "https://charts.jetstack.io";
+    name = "cert-manager";
+    version = "1.14.4";
+    hash = "sha256-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=";
+  };
+in
+{
+  meta = {
+    version = "1.14.4";
+    description = "X.509 certificate controller for Kubernetes";
+  };
+
+  options = {
+    replicas = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 1;
+      description = "Controller replica count.";
+    };
+    values = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      description = "Extra Helm values merged over typed options.";
+    };
+  };
+
+  build =
+    { self, config }:
+    let
+      rendered = scope.helm.importChart {
+        inherit chart scope;
+        releaseName = "cert-manager";
+        values = lib.recursiveUpdate {
+          replicaCount = config.replicas;
+          installCRDs = true;
+        } config.values;
+        strip.kinds = [ "Pod" ]; # Drop chart test pods
+      };
+    in
+    rendered.mkParts {
+      root = rendered.get "Deployment" "cert-manager";
+    };
+}
+```
+
+#### `scope.helm.importChart` arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `chart` | derivation | Required | Chart tarball derivation returned by `scope.helm.fetchHelmChart { repo, name, version, hash }`. |
+| `scope` | attrset | Required | Package `scope` (automatically configured with `labelStyle = "helm"` for wrapped resources). |
+| `values` | attrset | `{ }` | Nix attribute set serialized to `values.yaml` and passed to `helm template --values`. |
+| `releaseName` | string | `chart.chartName` or `"release"` | Release name passed to `helm template`. |
+| `namespace` | string | `scope.namespaceName` | Namespace passed to `helm template --namespace`. |
+| `includeCrds` | bool | `true` | Passes `--include-crds` and wraps rendered CRDs with `scope.mkCRD`. |
+| `includeHooks` | bool | `false` | When `false`, drops resources carrying a `helm.sh/hook` annotation (such as `test` or `pre-install` hooks), except CRDs (`crd-install`). |
+| `extraFlags` | list of strings | `[ ]` | Extra CLI flags passed to `helm template` (cannot contain `--values`, `--namespace`, `--kube-version`, or `--include-crds`). |
+| `strip` | `{ kinds ? [ ]; names ? [ ]; predicates ? [ ]; }` | `{ }` | Drops matching resources before DAG reconstruction (`kinds` matches `kind`, `names` matches `"<Kind>/<name>"` or `"<name>"`, `predicates` is a list of `manifest: bool` functions). |
+| `preserveAnnotationPrefixes` | list of strings | `[ ]` | Keeps matching Helm/Argo annotation prefixes that Kix would otherwise strip during normalization. |
+| `patchResources` | `attrs -> attrs` | `lib.id` | Transforms the raw manifest map (`"<kind>-<name>" = manifest`) before Kix wraps each object in `scope.mk*` builders. |
+| `extraEdges` | attrset of `listOf str` | `{ }` | Additional intra-chart dependencies merged with Kix's automatic DAG reconstruction, keyed by `"<Kind>/<name>"` (for example, `{ "Deployment/my-app" = [ "Job/my-migration" ]; }`). |
+| `networkDeps` | list of resources | `[ ]` | Upstream Kix dependencies whose endpoints should be wired into every workload in the chart for network-policy derivation. |
+| `deps` | list of resources | `[ ]` | Upstream Kix dependencies added to `requires` on every resource in the chart. |
+
+### Automatic intra-chart DAG reconstruction
+
+Raw Helm YAML files have no deployment ordering between objects. When `scope.helm.importChart` wraps a chart, Kix inspects every rendered manifest and reconstructs the intra-chart dependency graph automatically:
+
+- Workloads depend on the `ServiceAccount` named in `spec.template.spec.serviceAccountName`, any `ConfigMap`, `Secret`, or `PersistentVolumeClaim` mounted in `volumes` or referenced in `env` / `envFrom`, and any `CRD` whose custom resources are present.
+- `RoleBinding` and `ClusterRoleBinding` resources depend on their target `Role` / `ClusterRole` and `ServiceAccount` subjects.
+- `Service` resources depend on the workload whose pod template labels match `spec.selector`.
+- `Ingress`, `HTTPRoute`, `ServiceMonitor`, and webhook configurations depend on their target `Service`.
+
+Use `extraEdges` when a chart has a runtime dependency that is not visible in standard Kubernetes reference fields (for example, an application `Deployment` that expects a chart `Job` to initialize an external schema).
+
+### Collection methods on `importChart` results
+
+`scope.helm.importChart` returns a collection attribute set with the following selectors and helpers:
+
+| Attribute or method | Signature | Description |
+| --- | --- | --- |
+| `all` | list of resources | All wrapped Kix resources in the chart. |
+| `attrs` | attrset of resources | Map of `<partKey> = resource` (for example, `"deployment-cert-manager"`). |
+| `crds` | attrset of CRD resources | Map of `<Kind> = crdResource` for all CRDs rendered by the chart. |
+| `get` | `kind -> name -> resource` | Looks up a single resource by `kind` and `metadata.name`. Throws an evaluation error listing available resources if not found. |
+| `find` | `kind -> name -> resource or null` | Same as `get`, but returns `null` if the resource is not present. |
+| `byKind` | `kind -> attrset` | Returns `{ "<name>" = resource; ... }` for all resources of the given `kind`. |
+| `workloads` | list of resources | All `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, and `CronJob` resources in the chart. |
+| `excluding` | `[ resources ] -> list` | Returns `all` minus the listed resources. |
+| `depsOf` | `resource -> list` | Returns the reconstructed intra-chart dependencies of `resource`. |
+| `edges` | attrset | Full map of reconstructed intra-chart dependency edges (`"<Kind>/<name>" = [ "<DepKind>/<depName>" ]`). |
+| `autoRoot` | resource | Automatically selected root resource (prefers a single `Service`, then a single `Deployment` or `StatefulSet`, then the first resource). |
+| `replaceResource` | `kind -> name -> newResource -> collection` | Replaces a wrapped chart resource with a custom Kix resource and re-evaluates all downstream chart resources so they depend on `newResource`. |
+| `mkParts` | `{ root ? autoRoot, extraParts ? { }, extraRequires ? [ ], out ? { } } -> parts` | Produces the complete `build` return set (`attrs // { crds; } // extraParts // { root = ...; }`), wiring all chart resources into `root.requires` and populating `root.out.byKind.<Kind>.<name>`. If the chart contains a single `Service`, its `fqdn`, `port`, `ports`, and `url` are also promoted onto `root.out`. |
+
+### Extracting CRDs only with `scope.helm.importChartCrds`
+
+When you write a native Kix package for an operator but want to load its CRD definitions from the upstream Helm chart tarball, use `scope.helm.importChartCrds`:
+
+```nix
+crds = scope.helm.importChartCrds {
+  inherit chart scope;
+};
+```
+
+It returns `{ <Kind> = crdResource; ... }` ready to assign directly to `crds` in `build`.
+
+---
+
+## mkImport
+
+Clusters frequently rely on services or platform components that live outside the Kix cluster configuration, such as a cloud-managed PostgreSQL instance (RDS or Cloud SQL), an external OIDC provider, or a CNI / storage driver pre-installed by a managed Kubernetes control plane (EKS, GKE, or k3s).
+
+`kix.mkImport` creates an import definition that can be bound in `instances.<name>.package` (or inside a cluster flavor). Imports participate in dependency resolution, role binding, and contract checking without emitting workload manifests. At build time, Kix emits a `kix.run/v1alpha1` `PackageInstance` marker with `metadata.annotations."kix.run/import" = "true"` so `kix apply` can verify any expected in-cluster resources before deploying consumers.
+
+```nix
+# Importing an external managed PostgreSQL database in cluster configuration
+instances.postgres = {
+  namespace = "app";
+  package = kix.mkImport {
+    out = {
+      fqdn = "prod-db.cluster-xyz.us-east-1.rds.amazonaws.com";
+      port = 5432;
+      databases.grafana = {
+        user = "grafana";
+        secret = {
+          name = "rds-grafana-credentials";
+          keys = [ "password" ];
+        };
+      };
+    };
+  };
+};
+```
+
+### `kix.mkImport` arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `from` | package or `null` | `null` | Optional Kix package from which to derive `meta`, `roles`, `crds`, and default `out` surfaces (evaluated against a synthetic import scope). |
+| `out` | attrset | `{ }` | Output fields exposed to downstream consumers (`fqdn`, `port`, `storageClassName`, etc.). When both `from` and `out` are set, `out` overrides matching keys on the package-derived `out`. |
+| `kind` | string or `null` | `null` | Optional Kubernetes kind of an existing in-cluster resource (`"Service"`, `"StorageClass"`, etc.). When `kind` and `out.name` are set, Kix populates `kix.run/expects` on the import marker so `kix apply` checks that the resource exists in the cluster. |
+| `apiVersion` | string or `null` | Inferred from `kind` (`"v1"` for `"Service"`, `"storage.k8s.io/v1"` for `"StorageClass"`, etc.) | API version paired with `kind` in `kix.run/expects`. |
+| `roles` | list of strings | Inherited from `from.meta.roles` or `[ ]` | Platform roles satisfied by this import (`"cni"`, `"dns"`, `"loadBalancer"`, `"metricsApi"`, `"storageClasses"`, etc.). |
+| `crds` | list of `{ group, kind, plural, version?, servedVersions?, crdScope? }` | `[ ]` | Pre-installed CRDs provided by this import (wrapped via `scope.mkCRDRef` and exposed at `dep.crds.<Kind>`). |
+
+### Three ways to use `kix.mkImport`
+
+1. **Direct `out` import (`out = { ... }`)**: Provide the exact `.out` contract expected by consumers (such as `fqdn` and `port` for an external database, or `storageClassName = "gp3"` with `roles = [ "storageClasses" ]`).
+2. **Package-derived import (`from = pkgs.cilium`)**: Evaluates the referenced Kix package in an import scope to extract its `meta.roles`, `crds`, and `.out` surface while discarding its deployment manifests. Useful in cluster flavors when a managed Kubernetes distribution pre-installs an exact upstream component.
+3. **Hybrid import (`from = pkgs.traefik; out = { ... };`)**: Inherits roles and CRDs from `from` while overriding specific output fields in `out`.
+
+### Role shadowing and `optional = true`
+
+When a cluster flavor defines a pre-installed capability using `kix.mkImport` with `optional = true` on the instance:
+- The import instance activates **only** if at least one active package in the cluster depends on it (by name, alias, or role) or if it provides a core platform role (`"cni"`, `"dns"`, `"loadBalancer"`, `"metricsApi"`, `"storageClasses"`).
+- If the cluster operator explicitly instantiates a managed Kix package that provides the same role (for example, deploying a managed `cilium` or `coredns` instance), the managed instance automatically shadows and deactivates the flavor's import instance so the two never conflict.

@@ -1,4 +1,112 @@
 ---
 title: "11. Flavors, roles, and imports"
-description: "TODO"
+description: "See how Kix connects packages to pre-existing cluster services using flavors, infrastructure roles, and kix.mkImport."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import Recap from '/src/components/Recap.astro';
+import listPackages from '/src/command-output/tutorials/02-hello-world/list-packages.json';
+import importExistingService from '/src/snippets/how-to/adoption/cluster/importExistingService.json';
+import consumeImportedService from '/src/snippets/how-to/adoption/client-package/consumeImportedService.json';
+
+Back in tutorial 02, when you ran `kix list packages --cluster 02-hello-world`, the output included two rows you did not write in `cluster.nix`: `platform-dns` and `platform-storage`, both marked `import [kube-system]`.
+
+This tutorial explains where those `import` rows come from and how Kix models pre-existing cluster infrastructure. You will learn how **flavors** (`kix.flavors.kind`) declare what your Kubernetes distribution already provides, how **roles** (`dns`, `storageClasses`) wire those platform capabilities to workloads automatically, and how **`kix.mkImport`** lets your own packages depend on existing services through the standard `.out` contract.
+
+## Prerequisites
+
+- Finish the [reusing packages tutorial](/docs/tutorials/10-reusing-packages/).
+- Keep the same `kix-examples` checkout.
+
+## Inspect The `import` Rows From Tutorial 02
+
+Look again at the `kix list packages` output for `02-hello-world`:
+
+<Command {...listPackages} />
+
+In `tutorials/02-hello-world/cluster.nix`, you only declared one instance (`hello-world`), yet you also imported one module at the top of the file:
+
+```nix title="tutorials/02-hello-world/cluster.nix"
+{
+  kix,
+  packages,
+  ...
+}:
+{
+  imports = [ kix.flavors.kind ];
+  # ...
+}
+```
+
+That single line (`imports = [ kix.flavors.kind ];`) added `platform-dns` and `platform-storage` in `kube-system`.
+
+## What A Cluster Flavor Does
+
+Every Kubernetes distribution starts with a different set of pre-installed services:
+
+- **kind** ships with CoreDNS (`Deployment/coredns` and `Service/kube-dns` in `kube-system`) and Rancher local-path provisioner (`StorageClass/standard`).
+- **EKS**, **GKE**, and **k3s** ship with their own DNS services, storage classes, CNI capabilities, and cloud load balancer controllers.
+- **Bare-metal (`vanilla`)** clusters may require you to install your own storage provisioner, ingress controller, and CNI.
+
+Instead of forcing packages to guess what cluster they are running on, Kix packages declare what cluster capabilities they need, and a **cluster flavor** module (`kix.flavors.kind`, `kix.flavors.eks`, `kix.flavors.gke`, `kix.flavors.k3s`, or `kix.flavors.vanilla`) declares what the platform already provides.
+
+Specifically, `kix.flavors.kind` does two things:
+
+1. It registers two **imported instances** in `kube-system` (`platform-dns` and `platform-storage`) using `kix.mkImport`.
+2. It binds those imported instances to the cluster's **infrastructure roles** (`roles.dns` and `roles.storageClasses`).
+
+:::note[Reference]
+See [Built-in flavors](/docs/reference/flavors-and-capabilities/#provider-profiles) and [Cluster roles](/docs/reference/cluster-configuration/#cluster-roles) for all built-in flavors and role bindings.
+:::
+
+## How Infrastructure Roles Connect Workloads To The Platform
+
+Why does `kix.flavors.kind` register `platform-dns` and `platform-storage` as instances in the dependency graph?
+
+1. **Readiness barriers (`requires:`)**: Every Pod that uses cluster DNS (`dnsPolicy = "ClusterFirst"`, the Kubernetes default) needs CoreDNS to be running before it starts making upstream requests. And every `PersistentVolumeClaim` needs its `StorageClass` to exist before it can bind. Because `roles.dns` points to `platform-dns` (`Deployment/coredns` in `kube-system`), Kix automatically adds a `requires:` readiness dependency from your `gateway` Deployment to `platform-dns`. During `kix deploy`, Kix verifies that CoreDNS is live and ready in `kube-system` before rolling out workloads that depend on DNS.
+2. **Default `StorageClass` resolution**: When a stateful package asks for `scope.defaultStorageClass`, Kix resolves it from `roles.storageClasses` (`"standard"` on kind) and records a dependency on `platform-storage`. If a package requests a StorageClass that is neither installed in the cluster nor imported by the flavor, evaluation fails with an `unmet-storage-class` error before deploy.
+3. **DNS egress network policy**: When a namespace enables NetworkPolicy synthesis (`networkPolicy.enable = true`), Kix reads the selector and port facts from `roles.dns` so default-deny egress policies still allow UDP/TCP port 53 traffic to CoreDNS.
+
+You can see that `platform-dns` dependency in the `kix graph` output you ran in tutorial 08:
+
+```text
+PackageInstance/platform-dns@kube-system (import)
+├── Activation/08-namespace-deps-y50i580sy41b
+└── Deployment/gateway@app
+    └── Service/gateway@app
+```
+
+## Declare Your Own Imported Resource With `kix.mkImport`
+
+Flavors use `kix.mkImport` for cluster-level DNS and storage, and you can use the exact same `kix.mkImport` helper in `cluster.nix` whenever a Kix package needs to talk to an existing service that Kix does not manage (for example, a legacy Service in another namespace or a Helm release you have not migrated yet).
+
+In `how-to/adoption/cluster.nix`, the cluster declares an imported `Service` named `legacy-api` in the `legacy` namespace:
+
+<Snippet {...importExistingService} />
+
+Look at what `kix.mkImport` produces:
+
+- **No YAML manifest is applied to Kubernetes.** `kix deploy` will never create, modify, or prune `Service/legacy-api`. Instead, `kix deploy` verifies that `Service/legacy-api` exists in the `legacy` namespace before rolling out dependents.
+- **It exposes the standard `.out` interface.** Any Kix package can depend on `legacyApi` and read `legacyApi.out.fqdn` and `legacyApi.out.port`, just like it read `backend.out.fqdn` in tutorial 06:
+
+<Snippet {...consumeImportedService} />
+
+Later, if you migrate `legacy-api` into a native Kix package, you only replace `package = kix.mkImport { ... }` in `cluster.nix` with the real package. The consumer package (`client-package.nix`) does not change at all.
+
+:::note[Explanation]
+See [Helm integration and resource adoption](/docs/explanation/helm-integration-and-resource-adoption/) for how `kix.mkImport` and `kix.helm.mkPackage` let you adopt existing cluster workloads incrementally.
+:::
+
+## What You Learned
+
+You saw how Kix connects packages to the surrounding Kubernetes cluster:
+
+<Recap>
+- `imports = [ kix.flavors.kind ];` declares the capabilities and pre-installed services of a kind cluster;
+- `roles.dns` and `roles.storageClasses` connect workloads and PVCs to the cluster's DNS provider and storage classes;
+- `kix.mkImport` registers an existing Kubernetes resource in the dependency graph without managing its lifecycle;
+- packages consume imported services through `.out` (`.out.fqdn`, `.out.port`, `.out.name`) using the exact same syntax as Kix-managed instances.
+</Recap>
+
+In the final tutorial (`12. Scorecards and compile-time policy`), you will write custom scorecard rules that inspect package instances and enforce routing and configuration policies across the entire cluster at build time.

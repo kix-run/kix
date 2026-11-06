@@ -1,4 +1,123 @@
 ---
 title: "Reference"
-description: "Exact schemas, APIs, commands, annotations, and package interfaces in Kix."
+description: "Lookup tables, schemas, and examples for Kix cluster options, package functions, and policy rules."
 ---
+
+The Reference section documents the options, functions, schemas, and policy rules that make up Kix. Each page is organized for quick lookup with field tables, default values, and compact examples.
+
+## Reference sections
+
+### Cluster and instance configuration
+
+| Page | Covers |
+| --- | --- |
+| [Cluster configuration](/docs/reference/cluster-configuration/) | How to configure cluster-wide settings such as availability targets, namespaces, network policies, and scorecard enforcement. |
+| [Instances and composition](/docs/reference/instances-and-composition/) | How to declare package instances in a cluster, wire dependencies across namespaces, and stamp environments across teams. |
+| [Flavors and capabilities](/docs/reference/flavors-and-capabilities/) | Built-in provider profiles (`kix.flavors.*`) that pre-configure cloud capabilities, storage classes, and platform services. |
+
+### Package authoring and helpers
+
+| Page | Covers |
+| --- | --- |
+| [Package anatomy](/docs/reference/package-anatomy/) | The structure of a Kix package file, how it declares typed options, and how it builds Kubernetes resources. |
+| [Resources and `out`](/docs/reference/resources-and-out/) | How `scope` builders construct Kubernetes resources and expose `.out` fields that track dependencies automatically. |
+| [Composition helpers](/docs/reference/composition-helpers/) | Shorthand `kix.*` functions for environment variables, volume mounts, Services, ingress routes, monitoring, and health checks. |
+| [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/) | Specialized builders that validate Secret keys, CustomResourceDefinitions, and RBAC permissions at build time. |
+| [Helm and imports](/docs/reference/helm-and-imports/) | How to wrap upstream Helm charts as Kix packages and model pre-existing cluster services with `kix.mkImport`. |
+
+### Policy, validation, and runtime records
+
+| Page | Covers |
+| --- | --- |
+| [Scorecard and rules](/docs/reference/scorecard-and-rules/) | How build-time scorecard rules work, how to customize severities, and the full catalog of built-in checks. |
+| [Validation checks](/docs/reference/validation-checks/) | The 23 always-on cross-resource checks that verify selectors, ports, volumes, and CRD ordering on every build. |
+| [Annotations, CRDs, and receipts](/docs/reference/annotations-crds-and-receipts/) | Bookkeeping `kix.run/*` annotations, in-cluster `Activation` and `PackageInstance` records, and deploy receipts. |
+
+## I want to...
+
+| Goal | Where to look |
+| --- | --- |
+| Understand how dependencies control deploy order and network policies | [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/) |
+| Write a package with a Deployment and Service | [Package anatomy](/docs/reference/package-anatomy/), [Resources and `out`](/docs/reference/resources-and-out/), and [Composition helpers](/docs/reference/composition-helpers/) |
+| Add typed configuration options to a package | [Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/) and [Package anatomy](/docs/reference/package-anatomy/) |
+| Expose a Service with an Ingress or Gateway API HTTPRoute | [Expose a service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/), [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/), and [Composition helpers](/docs/reference/composition-helpers/) |
+| Wire a package to a specific database, cache, or storage instance | [Instances and composition](/docs/reference/instances-and-composition/#deps) and [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) |
+| Manage Secrets, CRDs, or RBAC permissions in a package | [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/) |
+| Wrap an upstream Helm chart as a Kix package | [Helm and imports](/docs/reference/helm-and-imports/) and [Helm integration and resource adoption](/docs/explanation/helm-integration-and-resource-adoption/) |
+| Set cluster availability levels and derive pod spread and PDBs | [Cluster configuration](/docs/reference/cluster-configuration/#cluster-availability) and [Availability levels and derived pod spread](/docs/explanation/availability-levels-and-derived-pod-spread/) |
+| Configure or override scorecard rules | [Scorecard and rules](/docs/reference/scorecard-and-rules/) and [Cluster configuration](/docs/reference/cluster-configuration/#scorecard) |
+| Customize an instance's resources from the cluster without editing the package | [Instances and composition](/docs/reference/instances-and-composition/#partsoverlays) and [Patch package output with overlays](/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/) |
+| Stamp the same application stack across multiple environments | [Instances and composition](/docs/reference/instances-and-composition/#multi-environment-stamping-and-fragments) |
+
+## Top Nix DSL idioms
+
+Common patterns used across Kix packages and cluster definitions:
+
+```nix
+# Reference a resource name while tracking the dependency:
+self.service.out.name
+
+# Reference a Service's in-cluster FQDN or URL:
+self.service.out.fqdn
+self.service.out.url { scheme = "http"; port = 8080; }
+
+# Reference a workload's pod selector while tracking the dependency:
+self.deployment.out.selector
+
+# Read a workload's pod selector without creating a dependency cycle:
+self.deployment.rawSelector
+
+# Build a workload with volume mounts using the pipe operator:
+{ name = "web"; spec = { ... }; }
+  |> kix.withMounts [ self.dataMount ]
+  |> scope.mkDeployment
+
+# Derive a Service from a workload's selector and container ports:
+self.deployment
+  |> kix.service.fromWorkload { name = "web"; }
+  |> scope.mkResource
+
+# Expose a Service via Ingress or Gateway API HTTPRoute:
+(kix.expose { service = "service"; })
+
+# Create a ServiceMonitor and optional alert rules when Prometheus is present:
+(kix.monitor { service = "service"; port = "metrics"; })
+
+# Run a post-deploy health check Job against service outputs:
+(kix.healthCheck {
+  script = builtins.readFile ./health-check.py;
+  env = { self, ... }: { TARGET_URL = self.service.out.url { }; };
+})
+
+# Reference a key from a Kix-managed Secret:
+self.credentials.out.keyRef "password"
+
+# Reference a key from an externally managed Secret:
+(scope.mkSecretRef {
+  name = "external-db-creds";
+  keys = [ "username" "password" ];
+}).out.keyRef "password"
+
+# Read a container image from a committed pin file and render repo:tag@digest:
+# (in cluster config) config.image = pins.get "web";
+# (in package build) image = kix.image.ref config.image;
+
+# Convert an attribute set of environment variables to a Kubernetes env list, dropping nulls:
+kix.mkEnvVars {
+  LOG_LEVEL = config.logLevel;
+  OPTIONAL_FLAG = config.optionalFlag or null;
+  DB_PASSWORD = database.out.credentials.out.keyRef "password";
+}
+
+# Gate an optional resource on a boolean condition:
+scope.mkOptional config.metrics.enabled (_: scope.mkResource { ... })
+
+# Write an intentional empty map (such as emptyDir) that must not be stripped:
+emptyDir = { };
+
+# Prevent a constructor-built map from collapsing when all optional fields are null:
+kix.keep {
+  medium = config.medium;
+  sizeLimit = config.sizeLimit;
+}
+```

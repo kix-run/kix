@@ -1,4 +1,32 @@
 ---
 title: "Tutorials"
-description: "Learn Kix by working through a sequence of small, runnable examples."
+description: "Step-by-step lessons that teach Kix from your first local cluster to authoring packages and enforcing compile-time policy."
 ---
+
+These tutorials form a sequential learning path. Each lesson builds on the previous one, introducing one concept at a time against runnable examples in the `kix-examples` repository. You only need basic familiarity with Kubernetes objects and `kubectl` to begin; Nix concepts are introduced as needed.
+
+## Part 1: Cluster fundamentals
+
+Start here to understand what a Kix repository looks like, deploy your first cluster to kind, and connect two services.
+
+1. **[01. Orientation: what Kix is and why it exists](/docs/tutorials/01-orientation/):** Learn the core vocabulary (packages, instances, `config`, `deps`, `out`, `scope`, and `root`) before running commands.
+2. **[02. Local setup and first run](/docs/tutorials/02-local-setup-and-first-run/):** Clone `kix-examples`, create a local kind cluster, deploy `02-hello-world`, and make your first configuration edit.
+3. **[03. Project files and flake entry point](/docs/tutorials/03-project-skeleton-and-flake-shape/):** Read `flake.nix` and `cluster.nix` to see how `mkFlake` and `kix.buildCluster` expose clusters to the CLI.
+4. **[04. First cluster from scratch](/docs/tutorials/04-first-cluster-from-scratch/):** Write a new cluster file in your checkout, register it in `flake.nix`, and deploy an `echo-server` instance.
+5. **[05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/):** Practice the day-to-day workflow with `kix check`, `kix build`, `kix diff`, `kix deploy`, `kix status`, and `kix graph`.
+6. **[06. Use a local package and service-to-service dependency](/docs/tutorials/06-first-local-package-and-service-to-service-dependency/):** Import a local reverse-proxy package and see how it consumes a backend Service's `out` values.
+
+## Part 2: Package authoring and policy
+
+Continue here to read and customize packages, wire dependencies across namespaces, integrate existing cluster infrastructure, and enforce policy at build time.
+
+7. **[07. Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/):** Look inside the reverse-proxy package to see how `scope.mkDeployment`, `kix.withMounts`, `kix.service.fromWorkload`, and `self` assemble resources safely.
+8. **[08. Basic dependency resolution and namespace boundaries](/docs/tutorials/08-basic-dependency-resolution-and-namespace-boundaries/):** Place the gateway and backend in separate namespaces and connect them explicitly with `deps` and `ref`.
+9. **[09. Typed package options](/docs/tutorials/09-typed-package-options/):** Declare validated configuration options with `lib.mkOption`, read `config` inside `build`, and catch invalid settings before deploy.
+10. **[10. Reuse packages across instances and environments](/docs/tutorials/10-reusing-packages/):** Instantiate the same package multiple times with distinct `config` and `deps` while `scope` keeps resource names and selectors collision-free.
+11. **[11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/):** Connect Kix packages to pre-existing cluster services using cluster flavors, infrastructure roles, and `kix.mkImport`.
+12. **[12. Scorecards and compile-time policy](/docs/tutorials/12-scorecards-and-compile-time-policy/):** Enable built-in scorecard rules and write custom package-level and cluster-level rules that fail evaluation when policy is broken.
+
+:::tip[Already know the basics?]
+Jump to the [How-to guides](/docs/how-to/) for task-focused recipes, or read [Explanation](/docs/explanation/) for the architecture behind the dependency graph.
+:::

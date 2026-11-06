@@ -1,4 +1,145 @@
 ---
 title: "08. Basic dependency resolution and namespace boundaries"
-description: TODO
+description: "Split a service dependency across two namespaces and wire it explicitly with ref."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import Recap from '/src/components/Recap.astro';
+import crossNamespaceDep from '/src/snippets/tutorials/08-namespace-deps/cluster/crossNamespaceDep.json';
+
+In tutorial 06, `backend` and `gateway` lived in the same namespace (`tutorial-06`), so Kix resolved the `backend` dependency automatically by matching the instance name within that namespace.
+
+In real clusters, services often live in different namespaces: shared backends or data stores might live in a `platform` namespace while user-facing gateways live in an `app` namespace. Kix never guesses across namespace boundaries. When a dependency crosses a namespace boundary, you wire it explicitly in `cluster.nix` using `deps` and `ref`.
+
+## Prerequisites
+
+- Finish the [package anatomy tutorial](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/).
+- Keep the same `kix-examples` checkout and kind cluster.
+
+## Why Cross-Namespace Resolution Is Explicit
+
+When a package function asks for a dependency such as `backend`:
+
+```nix
+build = { self, scope, kix, backend, ... }: { ... };
+```
+
+Kix resolves `backend` inside the consumer's namespace using a strict resolution order:
+
+1. **Explicit `deps.backend`** on the instance in `cluster.nix`.
+2. **Same-namespace instance** named `backend`.
+3. **Same-namespace `aliases.backend`** mapping.
+4. **Auto-instantiated catalog package** from `availablePackages.backend` (into the consumer's namespace).
+5. **Default value** (`backend ? null`) if the package marks the dependency optional.
+
+Notice that steps 2, 3, and 4 are all scoped to the consumer's own namespace. If two namespaces both define an instance named `backend`, or if `backend` lives in another namespace entirely, Kix will not guess which one you meant. Crossing a namespace boundary is an architectural decision, so Kix makes it visible in `cluster.nix`.
+
+:::note[Explanation]
+See [Dependency resolution and explicit deps](/docs/explanation/the-dependency-graph-as-the-model/#dependency-resolution-and-explicit-deps) for the design rationale behind the resolution order.
+:::
+
+## Inspect `08-namespace-deps`
+
+Open `tutorials/08-namespace-deps/cluster.nix`. This cluster defines two namespaces:
+
+| Namespace | Instance | Package | Role |
+|---|---|---|---|
+| `platform` | `backend` | `packages.echo-server` | Shared backend service |
+| `app` | `gateway` | local `reverse-proxy-package.nix` | Frontend reverse proxy |
+
+Notice that the module header at the top of `tutorials/08-namespace-deps/cluster.nix` includes `ref`:
+
+```nix title="tutorials/08-namespace-deps/cluster.nix"
+{
+  kix,
+  packages,
+  ref,
+  ...
+}:
+```
+
+`ref` is Kix's cluster-wide instance reference table, indexed by `ref.<namespace>.<instance>`.
+
+## Wire `deps.backend` Across Namespaces
+
+Inside `namespaces.app.instances`, the `gateway` instance connects its `backend` dependency to `ref.platform.backend`:
+
+<Snippet {...crossNamespaceDep} />
+
+Look at what changed and what stayed the same:
+
+- **`reverse-proxy-package.nix` did not change at all.** It still asks for `backend` in `build` and still writes `proxy_pass http://${backend.out.fqdn}:${backend.out.port}/;`.
+- **`cluster.nix` added one line:** `deps.backend = ref.platform.backend;`.
+- Because `backend` is now in the `platform` namespace, `backend.out.fqdn` automatically evaluates to `backend.platform.svc.cluster.local`, updating the gateway's nginx configuration without touching package code.
+
+:::note[Reference]
+See [Instance declaration schema](/docs/reference/instances-and-composition/#instances) for `deps` and `ref` syntax.
+:::
+
+## Check And Inspect The Cross-Namespace Graph
+
+Evaluate the cluster and print its dependency tree:
+
+<Command commands={["kix check 08-namespace-deps", "kix graph 08-namespace-deps --format tree"]} cwd="kix-examples/" />
+
+In the dependency tree output, look under `Namespace/platform`:
+
+```text
+Namespace/platform
+├── Service/backend@platform
+│   ├── ConfigMap/gateway@app
+│   │   └── Deployment/gateway@app
+│   │       └── Service/gateway@app
+│   │           └── PackageInstance/gateway@app
+```
+
+Even though `backend` and `gateway` are in different namespaces, the dependency graph connects `Service/backend@platform` directly to `ConfigMap/gateway@app` and `Deployment/gateway@app`. When you run `kix deploy 08-namespace-deps`, Kix creates both namespaces, deploys `backend@platform` first, waits for it to pass readiness, and only then rolls out `gateway@app`.
+
+## Deploy And Test The Cross-Namespace Proxy
+
+Deploy the cluster to your local kind environment:
+
+<Command commands={["kix deploy 08-namespace-deps"]} cwd="kix-examples/" />
+
+Port-forward to `gateway` in the `app` namespace. Because `gateway` is the only instance with that name in the cluster, `kix pf` finds it directly:
+
+<Command commands={["kix pf 08-namespace-deps gateway 8080:80"]} cwd="kix-examples/" />
+
+In another terminal, curl the gateway:
+
+<Command commands={[{ command: "curl http://localhost:8080/", stdout: "Hello from the platform namespace!" }]} />
+
+Stop the port-forward with `Ctrl-C`.
+
+## Try Removing The Explicit `deps` Line
+
+Comment out `deps.backend = ref.platform.backend;` in `tutorials/08-namespace-deps/cluster.nix`:
+
+```nix title="tutorials/08-namespace-deps/cluster.nix"
+gateway = {
+  package = reverseProxyPackage;
+  # deps.backend = ref.platform.backend;
+};
+```
+
+Now run `kix check 08-namespace-deps`:
+
+<Command commands={["kix check 08-namespace-deps"]} cwd="kix-examples/" />
+
+Evaluation fails immediately and tells you that `gateway` in namespace `app` requires a dependency named `backend`, and no instance named `backend` exists in `app`.
+
+Uncomment `deps.backend = ref.platform.backend;` so the example is back in its working state.
+
+## What You Learned
+
+You split a dependency across two namespaces without modifying the package:
+
+<Recap>
+- automatic name matching only resolves dependencies inside the same namespace;
+- cross-namespace dependencies must be wired explicitly in `cluster.nix` using `deps.<arg> = ref.<namespace>.<instance>`;
+- `backend.out.fqdn` always includes the provider's namespace, so cross-namespace DNS names stay accurate automatically;
+- `kix graph` and `kix deploy` track dependencies across namespaces just like same-namespace dependencies.
+</Recap>
+
+In the next tutorial, you will add typed configuration options to the reverse-proxy package so cluster files can customize its routing path and body-size limits with compile-time validation.

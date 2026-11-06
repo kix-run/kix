@@ -1,17 +1,32 @@
 ---
 title: Kix documentation
-description: Nix-evaluated Kubernetes packages and clusters
+description: Compile your whole Kubernetes cluster from one definition, verify it before deploy, and roll it out in dependency order.
+template: splash
 ---
 
 import Snippet from '/src/components/Snippet.astro';
 import isProxy from '/src/snippets/tutorials/19-scorecards/scorecard/isProxy.json';
 
-Welcome. Use the sidebar to navigate.
+Kix is a Kubernetes compiler. You define packages and clusters in Nix, evaluate and check the whole cluster locally before touching Kubernetes, preview the package-level plan against live state, and deploy in dependency order.
 
-## Live snippet demo
+## Where to start
 
-This block is extracted automatically from a `.nix` source file in
-the `kix-examples` repo. Edit the source, rebuild, and this updates.
-The "View source" link below jumps to the exact line range.
+| Section | What you will find |
+| --- | --- |
+| [Tutorials](/docs/tutorials/) | Step-by-step lessons that build a working local cluster and teach one concept at a time. |
+| [How-to guides](/docs/how-to/) | Focused recipes for operating clusters, authoring packages, wiring dependencies, adopting existing resources, and running Kix in CI. |
+| [Reference](/docs/reference/) | Complete schema, builder, helper, scorecard, and CLI reference tables. |
+| [Explanation](/docs/explanation/) | How the dependency graph, personas, network policy compiler, availability levels, scorecards, and server-side apply work together. |
+
+## Using Kix docs with coding agents
+
+Every documentation page is published as clean Markdown alongside its HTML view:
+
+- **Content negotiation:** Send `Accept: text/markdown` to any `/docs/...` URL (or append `.md` to the URL path) to receive the Markdown source directly.
+- **Discovery indexes:** Point your coding agent or IDE at `https://kix.run/llms.txt` for the curated documentation map, `/docs/llms.txt` for the full page index, `/docs/llms-small.txt` for the abridged single-file corpus, or `/docs/llms-full.txt` for the complete single-file corpus.
+
+## Live source snippets
+
+Code examples throughout the documentation are extracted from tested `.nix` files in `kix-examples` and `kixpkgs`, with direct links to the exact source lines:
 
 <Snippet {...isProxy} />

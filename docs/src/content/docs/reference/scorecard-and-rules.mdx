@@ -1,0 +1,218 @@
+---
+title: "Scorecard and rules"
+description: "How to write and configure build-time policy rules, plus the complete catalog of built-in scorecard checks."
+---
+
+The Kix scorecard checks your cluster for security, reliability, and operational best practices every time you compile. By default, built-in rules report warnings during `kix check` and `kix build` without blocking your work, and you can promote rules to build-failing errors or add custom organization policies whenever you are ready.
+
+:::note[Helpful background]
+- [12. Scorecards and compile-time policy](/docs/tutorials/12-scorecards-and-compile-time-policy/): learn how to enforce built-in rules and write custom policies step by step.
+- [Scorecard levels: manifest, package, namespace, cluster](/docs/explanation/scorecard-levels-manifest-package-namespace-cluster/): understand why rules run at four different scopes and how they differ from always-on validation checks.
+- [Cluster configuration: scorecard](/docs/reference/cluster-configuration/#scorecard): look up the cluster-level options for enabling rule sets and overriding severities.
+- [Pod Security Standards (Kubernetes docs)](https://kubernetes.io/docs/concepts/security/pod-security-standards/): review the baseline and restricted container security rules that many built-in scorecard checks enforce.
+:::
+
+## Rule schema
+
+Rules live under `scorecard.rules.<category>.<ruleName>`. Each rule's canonical name is `<category>.<ruleName>` (for example, `security.nonRoot`).
+
+```nix
+scorecard.rules.organization.requiresOwner = {
+  description = "Every package must declare an owner";
+  level = "package";
+  severity = "warning";
+  tags = [ "governance" ];
+  appliesTo = { meta, ... }: (meta.deprecated or null) == null;
+  check = { meta, ... }:
+    if (meta.owner or null) == null then
+      [ { message = "package has no meta.owner"; } ]
+    else
+      [ ];
+};
+```
+
+### Rule fields
+
+| Field | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `description` | `str` | no | `""` | Human-readable summary of what the rule checks. |
+| `level` | `"manifest" \| "package" \| "namespace" \| "cluster"` | yes | none | Scope at which the rule runs. An unknown or missing level fails evaluation. |
+| `severity` | `"info" \| "warning" \| "error"` | no | `scorecard.ruleDefaults.severity`, then `"warning"` | Declared severity of findings produced by the rule before overrides and `scorecard.maxSeverity` are applied. |
+| `tags` | `listOf str` | no | `[ ]` | Free-form labels copied onto every finding from this rule. |
+| `appliesTo` | `ctx -> bool` | no | `_: true` | Optional filter predicate receiving the level context. When it returns `false`, `check` is skipped. |
+| `check` | `ctx -> listOf { message, namespace?, resource? }` | yes | none | Evaluates the target and returns `[ ]` when it passes, or a list of finding attribute sets when it fails. |
+
+### Evaluation context by level
+
+| Level | Runs once per | Context arguments passed to `appliesTo` and `check` | Location fields filled automatically |
+| --- | --- | --- | --- |
+| `manifest` | Emitted Kubernetes resource | `resource`, `meta`, `instanceName`, `namespaceName`, `acceptedSecretSources` | `namespace`, `instance`, `resource` |
+| `package` | Active package instance | `resources`, `parts`, `config`, `meta`, `instanceName`, `namespaceName` | `namespace`, `instance` |
+| `namespace` | Cluster namespace | `instances`, `resources`, `namespaceName`, `networkPolicyKinds` | `namespace` |
+| `cluster` | Cluster build | `allInstances`, `allResources`, `clusterConfig`, `externalNames` | none (the rule's finding may supply `namespace` and `resource`) |
+
+At the `manifest` and `package` levels, `resources` includes all resources shipped for the instance, including derived `PodDisruptionBudget` and network policy objects. Kix resolves a rule's effective severity before calling `appliesTo` or `check`; if a rule is disabled via `ruleOverrides.byRule.<name>.enabled = false`, neither function is called.
+
+:::tip[Use it in a task]
+See [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/) to write custom rules and test them with `kix check`.
+:::
+
+## Finding schema
+
+When `scorecard.enable = true` and no error-severity finding aborts evaluation, Kix writes the scorecard report to `kix-scorecard.json` in the cluster build output.
+
+```json
+{
+  "findings": [
+    {
+      "rule": "reliability.hasProbes",
+      "severity": "warning",
+      "level": "manifest",
+      "namespace": "apps",
+      "instance": "web",
+      "resource": "web",
+      "message": "container 'web' has no livenessProbe",
+      "tags": ["reliability", "observability"]
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "errors": 0,
+    "warnings": 1,
+    "info": 0,
+    "byNamespace": { "apps": 1 },
+    "byRule": { "reliability.hasProbes": 1 }
+  }
+}
+```
+
+### Finding fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `rule` | `string` | Canonical `<category>.<ruleName>` identifier. |
+| `severity` | `"info" \| "warning" \| "error"` | Effective severity after defaults, overrides, and `scorecard.maxSeverity`. |
+| `level` | `"manifest" \| "package" \| "namespace" \| "cluster"` | Rule evaluation level. |
+| `namespace` | `string \| null` | Target namespace (`null` for cluster-level findings that do not specify one; counted under `"unknown"` in `summary.byNamespace`). |
+| `instance` | `string \| null` | Package instance name for `manifest` and `package` findings. |
+| `resource` | `string \| null` | Kubernetes object name for `manifest` findings or cluster rules that report a specific resource. |
+| `message` | `string` | Diagnostic message from `check` (defaults to `"check failed"` if omitted). |
+| `tags` | `array of string` | Tags copied from the rule definition. |
+
+When a finding resolves to `"error"` (which requires `scorecard.maxSeverity = "error"`), Kix converts it into a failed cluster assertion and stops the build. `kix check --sarif` exports the scorecard report (or the evaluation failure) in SARIF 2.1.0 format.
+
+## Severity override schema
+
+Configure [`scorecard.ruleOverrides`](/docs/reference/cluster-configuration/#scorecard) to disable individual rules or adjust severities by rule name, package owner, or namespace.
+
+```nix
+scorecard = {
+  maxSeverity = "error";
+  ruleOverrides = {
+    byRule."reliability.hasProbes" = {
+      enabled = true;
+      severity = "error";
+    };
+    byOwner."platform"."security.*".severity = "warning";
+    byNamespace."preview-*"."reliability.*".severity = "info";
+  };
+};
+```
+
+### Override sections
+
+| Section | Key pattern | Supported fields | Applies to levels |
+| --- | --- | --- | --- |
+| `byRule.<fullRuleName>` | Exact `<category>.<ruleName>` (no wildcards) | `enabled` (`bool`, default `true`), `severity` | `manifest`, `package`, `namespace`, `cluster` |
+| `byOwner.<ownerPattern>.<rulePattern>` | Exact string, `"*"`, or prefix `"prefix*"` | `severity` | `manifest`, `package` (matches `meta.owner`) |
+| `byNamespace.<nsPattern>.<rulePattern>` | Exact string, `"*"`, or prefix `"prefix*"` | `severity` | `manifest`, `package`, `namespace` |
+
+Avoid overlapping wildcard patterns within the same section (`byOwner` or `byNamespace`); Kix picks the first matching pattern in Nix attribute order rather than the most specific prefix.
+
+### Resolution precedence
+
+Kix computes a finding's effective severity in this order:
+1. `ruleOverrides.byRule.<name>.enabled = false` disables the rule completely.
+2. `ruleOverrides.byRule.<name>.severity`
+3. `ruleOverrides.byOwner.<ownerPattern>.<rulePattern>.severity`
+4. `ruleOverrides.byNamespace.<nsPattern>.<rulePattern>.severity`
+5. The rule's own `severity` field.
+6. `scorecard.ruleDefaults.severity`
+7. `"warning"`
+
+Finally, Kix caps the resolved severity at `scorecard.maxSeverity` (default `"warning"`). Raising a rule to `"error"` fails the build only when `scorecard.maxSeverity = "error"`.
+
+Packages can inspect the resolved severity of a rule at build time with:
+
+```nix
+kix.scorecard.effectiveSeverity {
+  inherit clusterConfig namespaceName;
+  rule = "security.nonRoot";
+  owner = meta.owner or null;
+}
+```
+
+It returns `"info"`, `"warning"`, `"error"`, or `null` (when the scorecard or rule is disabled).
+
+:::tip[Use it in a task]
+See [Override scorecard severity](/docs/how-to/policy-ci-and-compliance/override-scorecard-severity/), [Disable scorecard rules](/docs/how-to/policy-ci-and-compliance/disable-scorecard-rules/), and [Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/).
+:::
+
+## Built-in security rules
+
+Defined in `kix.rules.security` (`kix/lib/rules/security.nix`). Unless noted otherwise, `manifest` rules in this category apply to `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, and `CronJob` resources.
+
+| Rule | Level | Declared severity | `meta.unsafe` exemption | What it checks |
+| --- | --- | --- | --- | --- |
+| `security.secretSource` | `manifest` | `error` | none | When `cluster.secrets.accept` is non-null, checks every `Secret` and `scope.mkSecretRef` marker to ensure all non-`plain` keys come from an accepted source (`inline`, `sops`, `external`, `controller`, or `configuration`). |
+| `security.nonRoot` | `manifest` | `error` | `"run-as-root"` | Every regular and init container resolves to `runAsNonRoot = true`, or to `runAsNonRoot = null` with a non-zero `runAsUser` (container `securityContext` overrides pod `securityContext`). |
+| `security.noPrivileged` | `manifest` | `error` | `"privileged"` | No regular or init container sets `securityContext.privileged = true`. |
+| `security.readOnlyRootfs` | `manifest` | `warning` | none | Every regular and init container sets `securityContext.readOnlyRootFilesystem = true`. |
+| `security.noHostNetwork` | `manifest` | `error` | `"host-network"` | The pod spec does not enable `hostNetwork`, `hostPID`, or `hostIPC`. |
+| `security.noClusterAdmin` | `manifest` | `error` | `"cluster-admin"` | Checks `ClusterRoleBinding` and `ClusterRole` resources: no `ClusterRoleBinding` may bind `cluster-admin`, and no `ClusterRole` rule may set `"*"` on all three of `apiGroups`, `resources`, and `verbs`. |
+| `security.noLatestTag` | `manifest` | `warning` | none | Every regular and init container image has an explicit tag other than `:latest`. |
+| `security.noUnresolvedPlaceholder` | `manifest` | `warning` | none | No container image string contains `REPLACE_ME`, `REPLACEME`, `CHANGE_ME`, `CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, `XXX`, or an unexpanded `${...}`. |
+| `security.hasNetworkPolicy` | `namespace` | `warning` | none | Every namespace containing a `Deployment`, `StatefulSet`, or `DaemonSet` also contains at least one `NetworkPolicy` or enforcer policy kind (`out.netpol.policyKinds`). |
+
+When a package declares one of the four `meta.unsafe` grants above, the corresponding security rule is skipped for that package and [`architecture.unsafeGrants`](#built-in-architecture-rules) records an `info` finding so the exception stays visible in audits.
+
+## Built-in reliability rules
+
+Defined in `kix.rules.reliability` (`kix/lib/rules/reliability.nix`). All rules in this category run at the `manifest` level on `Deployment`, `StatefulSet`, and `DaemonSet` workloads.
+
+| Rule | Level | Declared severity | What it checks |
+| --- | --- | --- | --- |
+| `reliability.boundedResources` | `manifest` | `warning` | Every regular and init container sets both `cpu` and `memory` under `resources.requests` and `resources.limits`. |
+| `reliability.hasResourceLimits` | `manifest` | `warning` | Every regular and init container has a non-empty `resources.limits` block. |
+| `reliability.hasResourceRequests` | `manifest` | `warning` | Every regular and init container has a non-empty `resources.requests` block. |
+| `reliability.hasProbes` | `manifest` | `warning` | Every regular container (excluding init containers) defines both `livenessProbe` and `readinessProbe`. |
+| `reliability.gracefulShutdown` | `manifest` | `info` | The pod spec sets `terminationGracePeriodSeconds` to a positive integer. |
+| `reliability.volumeHasSource` | `manifest` | `error` | Every entry in `spec.template.spec.volumes` retains a volume source after manifest normalization (catches constructors where all optional fields were `null` and collapsed without [`kix.keep`](/docs/reference/composition-helpers/)). |
+
+## Built-in governance rules
+
+Defined in `kix.rules.governance` (`kix/lib/rules/governance.nix`).
+
+| Rule | Level | Declared severity | What it checks |
+| --- | --- | --- | --- |
+| `governance.hasOwner` | `package` | `warning` | The package's `meta.owner` is set (for example, `"platform"` or `"app-team"`). |
+| `governance.hasDescription` | `package` | `info` | The package's `meta.description` is a non-empty string. |
+| `governance.labelStandards` | `manifest` | `info` | Every `Deployment`, `StatefulSet`, and `DaemonSet` carries `app.kubernetes.io/name` and `app.kubernetes.io/managed-by` in `metadata.labels`. |
+
+## Built-in architecture rules
+
+Defined in `kix.rules.architecture` (`kix/lib/rules/architecture.nix`). These rules check dependency-graph hygiene, label and selector uniqueness, and service addressing.
+
+| Rule | Level | Declared severity | What it checks |
+| --- | --- | --- | --- |
+| `architecture.annotationDomainOwnership` | `package` | `warning` | Domain-prefixed keys in `metadata.annotations` must belong to a reserved domain (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`), a domain in `scorecard.knownAnnotationDomains`, or a domain declared in an in-cluster package's `meta.annotationDomains` that this package depends on (directly or transitively). |
+| `architecture.untrackedReferences` | `cluster` | `info` | Audits every [`kix.untrackedRef`](/docs/reference/composition-helpers/#facts-and-untrackedref) name that does not identify a creator via `{ kind; name; by; }` or a single-owner `{ name; by = "self"; }`. |
+| `architecture.unsafeGrants` | `package` | `info` | Lists every grant in a package's `meta.unsafe` (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
+| `architecture.distinctWorkloadSelectors` | `package` | `error` | Within an instance, no workload's `spec.selector.matchLabels` (on `Deployment`, `StatefulSet`, `DaemonSet`, or `Job`) may be a subset of another workload's pod template labels. |
+| `architecture.consistentPortNames` | `package` | `warning` | A named container port must map to the same port number across all workloads in the same package instance. |
+| `architecture.distinctSameKindLabels` | `package` | `error` | When an instance renders multiple `Service` objects, no Service's `metadata.labels` may be equal to or a subset of another Service's `metadata.labels` (add a distinguishing label such as `app.kubernetes.io/component`). |
+| `architecture.selectorCoherence` | `manifest` | `warning` | Every non-empty `Service` selector must carry Nix dependency context from a workload (for example, via `kix.service.fromWorkload` or `workload.out.selector`), unless the Service carries `kix.run/operand-of`. |
+| `architecture.monitorSelectorMatchesService` | `cluster` | `error` | Every `ServiceMonitor` and `VMServiceScrape` selector must match the `metadata.labels` of exactly one `Service` (or `scope.mkServiceRef`) with a matching port, unless exempted with `kix.run/monitors-external-service: "true"`. |
+| `architecture.externalMonitorTargets` | `manifest` | `info` | Audits every `ServiceMonitor` or `VMServiceScrape` annotated with `kix.run/monitors-external-service: "true"`. |
+| `architecture.fqdnWithoutContext` | `manifest` | `warning` | Strings containing `<service>.<namespace>.svc` in a workload spec must carry Nix dependency context from a `Service` or `scope.mkServiceRef` (`out.fqdn` or `out.url`). |
+| `architecture.clusterDomainLiteral` | `cluster` | `error` | When `clusterDomain` is not `"cluster.local"`, no rendered resource (other than a `CustomResourceDefinition`) may contain a string with literal `cluster.local` DNS labels. |

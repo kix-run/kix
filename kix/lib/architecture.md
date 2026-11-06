@@ -1,6 +1,6 @@
 # kix/lib architecture
 
-Internals map for editing the compiler. The tree is organized by ring: the deeper the ring, the higher the bar for changes. For authoring packages, read `guide/` instead.
+Internals map for editing the compiler. The tree is organized by ring: the deeper the ring, the higher the bar for changes. For authoring packages, read `docs/src/content/docs/reference/` and `.claude/skills/package-authoring/SKILL.md` instead.
 
 ## Layout by ring
 
@@ -127,7 +127,7 @@ Fixpoint safety: a hook may read `workloadInput` and outer-fixpoint data (DI dep
 
 - `core/` changes touch the CLI contract (Activation closure, `depends-on` format, and `PackageInstance` fields); coordinate with `cli/`.
 - `core/annotations.nix` and `cli/kix/src/manifest/keys.rs` move together; retiring a domain requires an entry in `cli/kix/src/legacy_domain/`.
-- Authoring-surface changes (scope builders, vocab, DI semantics) → update `guide/` and the `kix-migration` skill.
+- Authoring-surface changes (scope builders, vocab, DI semantics) → update `docs/src/content/docs/reference/` and the `kix-migration` skill.
 - New cross-cutting concerns belong in plugins registering hooks rather than inline calls in `eval/` or `scope/`.
 - Refactors must keep the manifest store path identical on `nix build ludo/#cluster-ludo-kind`; intentional output changes ship separately.
 - If a change invalidates a pattern above, update this file.

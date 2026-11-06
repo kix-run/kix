@@ -115,16 +115,33 @@ export default defineConfig({
               link: '/reference/',
               icon: 'information',
               items: [
-                { label: 'Cluster module', items: [{ autogenerate: { directory: 'reference/cluster-module' } }] },
-                { label: 'Package schema', items: [{ autogenerate: { directory: 'reference/package-schema' } }] },
-                { label: 'Instance schema', items: [{ autogenerate: { directory: 'reference/instance-schema' } }] },
-                { label: 'scope helpers', items: [{ autogenerate: { directory: 'reference/scope-helpers' } }] },
-                { label: 'kix helpers', items: [{ autogenerate: { directory: 'reference/kix-helpers' } }] },
-                { label: 'out', items: [{ autogenerate: { directory: 'reference/out' } }] },
-                { label: 'Flavors', items: [{ autogenerate: { directory: 'reference/flavors' } }] },
-                { label: 'Scorecard', items: [{ autogenerate: { directory: 'reference/scorecard' } }] },
+                {
+                  label: 'Clusters and instances',
+                  items: [
+                    'reference/cluster-configuration',
+                    'reference/instances-and-composition',
+                    'reference/flavors-and-capabilities',
+                  ],
+                },
+                {
+                  label: 'Package authoring',
+                  items: [
+                    'reference/package-anatomy',
+                    'reference/resources-and-out',
+                    'reference/composition-helpers',
+                    'reference/secrets-crds-and-rbac',
+                    'reference/helm-and-imports',
+                  ],
+                },
+                {
+                  label: 'Policy and runtime contracts',
+                  items: [
+                    'reference/scorecard-and-rules',
+                    'reference/validation-checks',
+                    'reference/annotations-crds-and-receipts',
+                  ],
+                },
                 { label: 'CLI', items: [{ autogenerate: { directory: 'reference/cli' } }] },
-                { label: 'Annotations and CRDs', items: [{ autogenerate: { directory: 'reference/annotations-and-crds' } }] },
                 { label: 'Package catalog', items: [{ autogenerate: { directory: 'reference/package-catalog' } }] },
               ],
             },

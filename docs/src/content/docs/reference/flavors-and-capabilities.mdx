@@ -1,0 +1,133 @@
+---
+title: "Flavors and capabilities"
+description: "Built-in provider profiles that tell Kix what your Kubernetes distribution or cloud provider already supplies."
+---
+
+Every Kubernetes provider comes with a different set of built-in features: a managed cloud cluster like EKS or GKE handles control-plane components and load balancers for you, while a local `kind` or bare-metal cluster leaves more for you to install. A Kix flavor (`kix.flavors.<name>`) is a ready-made preset you include at the top of `kix.buildCluster` so Kix knows what your cluster already provides and what capabilities your nodes support.
+
+:::note[Helpful background]
+- [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): see how flavors, infrastructure roles, and platform imports connect your packages to existing cluster services.
+- [Cluster configuration](/docs/reference/cluster-configuration/#cluster-capabilities-and-nodes): look up the underlying `cluster.capabilities` and `cluster.roles` options that each flavor sets.
+- [Personas, packages, and clusters](/docs/explanation/personas-packages-and-clusters/): understand how portable packages adapt to different cluster environments without code changes.
+- [Storage Classes (Kubernetes docs)](https://kubernetes.io/docs/concepts/storage/storage-classes/): review how Kubernetes provisions persistent storage across different cloud providers.
+:::
+
+Include a flavor as the first module in `kix.buildCluster`:
+
+```nix
+{ kix, packages }:
+kix.buildCluster {
+  name = "staging";
+  specialArgs = { inherit kix packages; };
+  modules = [
+    kix.flavors.eks
+    ./platform.nix
+    ./services.nix
+  ];
+}
+```
+
+Every setting in a flavor uses `lib.mkDefault`, so your cluster modules can override any capability, role binding, or network setting when your cluster differs from the stock distribution.
+
+## Provider profiles
+
+Kix ships 12 built-in flavor modules under `kix.flavors`:
+
+| Flavor | `cluster.provider` | Target environment | Notable flavor defaults |
+| --- | --- | --- | --- |
+| `kix.flavors.aks` | `"aks"` | Azure Kubernetes Service | Managed control plane, Azure CNI, Azure Load Balancer, `managed-csi` StorageClass, and `discardUnpackedLayers = false`. |
+| `kix.flavors.eks` | `"eks"` | Amazon EKS | Managed control plane, `aws-vpc-cni`, AWS cloud load balancer, `storageClasses` and `metricsApi` bound `"absent"`, and `discardUnpackedLayers = true`. |
+| `kix.flavors.gke` | `"gke"` | Google Kubernetes Engine (Standard) | Managed control plane, GKE Dataplane V2, GCP Network Load Balancer, `standard-rwo` StorageClass, and `/etc/containerd/hosts.d` registry config path. |
+| `kix.flavors.gke-autopilot` | `"gke-autopilot"` | Google Kubernetes Engine (Autopilot) | Sets `daemonSets = false`, `privilegedContainers = false`, `nodeAutoscaling = true`, `podSecurityEnforcement = "baseline"`, and places platform imports in `gke-managed` (since `kube-system` is restricted). |
+| `kix.flavors.k3s` | `"k3s"` | k3s | Sets `podCidr = "10.42.0.0/16"`, k3s containerd paths under `/run/k3s` and `/var/lib/rancher/k3s`, Flannel CNI, ServiceLB, `local-path` StorageClass, and `metrics-server`. |
+| `kix.flavors.kind` | `"kind"` | kind (Kubernetes in Docker) | Sets `multiNode = false`, `availabilityZones = [ ]`, `podCidr = "10.244.0.0/16"`, `kindnet` CNI, `standard` StorageClass, and platform network policy intents for CoreDNS and `local-path-provisioner`. |
+| `kix.flavors.kubeadm` | `"kubeadm"` | Upstream `kubeadm` | Marks `cni`, `storageClasses`, `loadBalancer`, and `metricsApi` as `"absent"` so Kix packages can provide them; imports `platform-dns`. |
+| `kix.flavors.openshift` | `"openshift"` | Red Hat OpenShift | Sets `privilegedContainers = false`, `podSecurityEnforcement = "restricted"`, `ovn-kubernetes` CNI, `openshift-monitoring` for `metricsApi`, and CoreDNS at `dns-default.openshift-dns.svc`. |
+| `kix.flavors.ovh` | `"ovh"` | OVHcloud Managed Kubernetes (MKS) | Sets `multiNode = true`, `managedControlPlane = true`, Canal CNI, `csi-cinder-high-speed` StorageClass, and paid OVH load balancer (`"shadowable"`). |
+| `kix.flavors.rke2` | `"rke2"` | RKE2 | Exposes `cluster.flavor.rke2.cni` (default `[ "canal" ]`), sets `podCidr = "10.42.0.0/16"`, RKE2 containerd paths, `rke2-snapshot-controller` import, and `kube-system` platform network policy intents. |
+| `kix.flavors.scaleway` | `"scaleway"` | Scaleway Kapsule | Sets `multiNode = true`, `managedControlPlane = true`, Kapsule-managed Cilium CNI (`"exclusive"`), `sbs-default` StorageClass, and `discardUnpackedLayers = false`. |
+| `kix.flavors.talos` | `"talos"` | Talos Linux | Sets Flannel CNI (`"exclusive"`), `storageClasses`, `loadBalancer`, and `metricsApi` as `"absent"`, and `/etc/cri/conf.d/hosts` for containerd registry mirrors. |
+
+### `cluster.flavor.rke2.cni`
+
+The `rke2` flavor adds the option `cluster.flavor.rke2.cni` (`listOf ("multus" | "canal" | "calico" | "cilium" | "flannel" | "none")`, default `[ "canal" ]`). Set it to match the `cni` list in your RKE2 server configuration:
+- `"canal"`, `"calico"`, or `"flannel"`: binds `cluster.roles.cni` as `"exclusive"`.
+- `"cilium"`: binds `cluster.roles.cni` as `"shadowable"` and declares `instances.kube-system.platform-cilium` with `out.helmChartConfig = { name = "rke2-cilium"; namespace = "kube-system"; }`, allowing a `packages.cilium` instance to configure RKE2's bundled Cilium chart via a `HelmChartConfig` resource.
+- `[ "none" ]`: binds `cluster.roles.cni` as `"absent"` so a managed CNI can be installed from scratch.
+- `"multus"` may precede one primary CNI (for example, `[ "multus" "cilium" ]`).
+
+## Capability matrix
+
+Each flavor sets defaults under [`cluster.capabilities`](/docs/reference/cluster-configuration/#cluster-capabilities-and-nodes) and [`cluster.containerd`](/docs/reference/cluster-configuration/#cluster-capabilities-and-nodes). Cells marked `null` are left unset by the flavor so you can declare them per cluster (for example, `multiNode` and `availabilityZones`, which depend on your node pools).
+
+| Flavor | `multiNode` | `availabilityZones` | `managedControlPlane` | `nodeAutoscaling` | `privilegedContainers` | `daemonSets` | `podSecurityEnforcement` | `containerd.discardUnpackedLayers` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `aks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `false` |
+| `eks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `true` |
+| `gke` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `true` |
+| `gke-autopilot` | `null` | `null` | `true` | `true` | `false` | `false` | `"baseline"` | `null` |
+| `k3s` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `false` |
+| `kind` | `false` | `[ ]` | `false` | `false` | `true` | `true` | `null` | `true` |
+| `kubeadm` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `null` |
+| `openshift` | `null` | `null` | `false` | `false` | `false` | `true` | `"restricted"` | `null` |
+| `ovh` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `null` |
+| `rke2` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `false` |
+| `scaleway` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `false` |
+| `talos` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `true` |
+
+`gke` also sets `cluster.capabilities.gpu = false` by default (override to `true` when attaching a GPU node pool).
+
+### Role bindings by flavor
+
+Each flavor configures [`cluster.roles.<role>.binding`](/docs/reference/cluster-configuration/#cluster-roles). No flavor binds `network-policy-enforcer`; declare an enforcer package such as `packages.cilium` when enabling `networkPolicy.enable`.
+
+| Flavor | `cni` | `dns` | `storageClasses` | `loadBalancer` | `metricsApi` | `snapshotController` | `registryMirror` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `aks` | `exclusive` (`azure-cni`) | `shadowable` | `shadowable` | `shadowable` (`azure-lb`) | `exclusive` | `null` | `null` |
+| `eks` | `exclusive` (`aws-vpc-cni`) | `shadowable` | `absent` | `shadowable` (`aws-cloud-provider`) | `absent` | `null` | `null` |
+| `gke` | `exclusive` (`gke-native`) | `shadowable` | `shadowable` | `shadowable` (`gcp-network-lb`) | `exclusive` | `null` | `null` |
+| `gke-autopilot` | `exclusive` (`gke-native`) | `shadowable` | `shadowable` | `exclusive` (`gcp-network-lb`) | `exclusive` | `null` | `null` |
+| `k3s` | `exclusive` (`flannel`) | `shadowable` | `shadowable` | `exclusive` (`servicelb`) | `exclusive` | `null` | `null` |
+| `kind` | `exclusive` (`kindnet`) | `shadowable` | `shadowable` | `absent` | `absent` | `absent` | `absent` |
+| `kubeadm` | `absent` | `shadowable` | `absent` | `absent` | `absent` | `null` | `null` |
+| `openshift` | `exclusive` (`ovn-kubernetes`) | `shadowable` | `absent` | `absent` | `exclusive` (`openshift-monitoring`) | `null` | `null` |
+| `ovh` | `exclusive` (`canal`) | `shadowable` | `shadowable` | `shadowable` (`ovh-loadbalancer`) | `null` | `null` | `null` |
+| `rke2` | via `rke2.cni` (default `exclusive` `canal`) | `shadowable` | `absent` | `absent` | `exclusive` (`rke2-metrics-server`) | `exclusive` (`rke2-snapshot-controller`) | `null` |
+| `scaleway` | `exclusive` (`cilium`) | `shadowable` | `shadowable` | `shadowable` (`scaleway-lb`) | `null` | `null` | `null` |
+| `talos` | `exclusive` (`flannel`) | `shadowable` | `absent` | `absent` | `absent` | `null` | `null` |
+
+## Platform imports
+
+Flavors declare [`kix.mkImport`](/docs/reference/helm-and-imports/) instances to represent services and CRDs that the platform installs out of band. Because dependency resolution prefers managed instances over imports, deploying a managed package that claims the same role (such as `packages.coredns` or `packages.storage-classes`) shadows a `"shadowable"` platform import automatically.
+
+| Import instance | Claimed role | Declared by flavors | `optional` | Purpose |
+| --- | --- | --- | --- | --- |
+| `kube-system/platform-dns` (`gke-managed/platform-dns` on `gke-autopilot`) | `dns` | All flavors | `false` on `kind`; `true` on all other flavors | Represents the cluster's built-in DNS Deployment (`coredns` or `kube-dns`). When active, `kix deploy` verifies the Deployment exists before applying dependent workloads. |
+| `kube-system/platform-storage` (`gke-managed/platform-storage` on `gke-autopilot`) | `storageClasses` | `aks`, `gke`, `gke-autopilot`, `k3s`, `kind`, `ovh`, `scaleway` | `false` | Represents the default `StorageClass` created by the provider. Always active so optional `storageClasses` dependencies on StatefulSets and PVCs resolve to it and cross-resource check 20 sees the class. |
+| `kube-system/platform-cilium` | `cni` | `rke2` (when `cluster.flavor.rke2.cni` includes `"cilium"`) | `false` | Exposes `out.helmChartConfig = { name = "rke2-cilium"; namespace = "kube-system"; }` so a managed `cilium` instance writes a `HelmChartConfig` instead of deploying a second Cilium chart. |
+| `kube-system/platform-snapshot-controller` | `snapshotController` | `rke2` | `false` | Exposes `out.crds` handles (`VolumeSnapshotClass`, `VolumeSnapshotContent`, `VolumeSnapshot`) for RKE2's bundled snapshot controller. |
+
+## Storage and DNS defaults
+
+The table below lists the exact DNS Service FQDNs and default `StorageClass` names exposed by each flavor's `platform-dns` and `platform-storage` imports:
+
+| Flavor | Import namespace | `platform-dns` Deployment name | `platform-dns.out.fqdn` | `platform-storage` (`out.storageClassName`) |
+| --- | --- | --- | --- | --- |
+| `aks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"managed-csi"` |
+| `eks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`; install the EBS CSI driver or declare a `storage-classes` instance) |
+| `gke` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard-rwo"` |
+| `gke-autopilot` | `gke-managed` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"premium-rwo"` |
+| `k3s` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"local-path"` |
+| `kind` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard"` |
+| `kubeadm` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+| `openshift` | `kube-system` | `coredns` | `dns-default.openshift-dns.svc.<clusterDomain>` | none (`storageClasses` is `"absent"` by default) |
+| `ovh` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"csi-cinder-high-speed"` |
+| `rke2` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+| `scaleway` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"sbs-default"` |
+| `talos` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+
+When a flavor imports a default `StorageClass` (`cluster.roles.storageClasses.binding = "shadowable"`), a `packages.storage-classes` instance in that cluster may not annotate a second `StorageClass` with `storageclass.kubernetes.io/is-default-class: "true"` (enforced by cross-resource [validation check 23](/docs/reference/validation-checks/)).
+
+:::tip[Use it in a task]
+See [Choose a cluster flavor](/docs/how-to/start-and-inspect/select-and-configure-a-cluster-flavor/) for selecting and customizing flavors in your cluster definition.
+:::

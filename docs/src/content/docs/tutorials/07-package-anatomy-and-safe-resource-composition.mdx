@@ -1,4 +1,190 @@
 ---
 title: "07. Package anatomy and safe resource composition"
-description: TODO
+description: "Inspect a local Kix package from top to bottom and see how scope, mounts, and workload helpers keep resources wired together."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import Recap from '/src/components/Recap.astro';
+import buildArgs from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/buildArgs.json';
+import configmap from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/configmap.json';
+import root from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/root.json';
+import buildOutput from '/src/command-output/tutorials/06-service-dep/build.json';
+
+In tutorial 06, you ran a local reverse-proxy package (`tutorials/06-service-dep/reverse-proxy-package.nix`) and saw how it reads `backend.out.fqdn` and `backend.out.port`.
+
+This tutorial opens that package file and walks through how a Kix package is put together: how it declares metadata and options, how it constructs resources inside an instance scope, how it mounts a ConfigMap into a Deployment without string drift, and how it exposes a Service as its public contract.
+
+## Prerequisites
+
+- Finish the [local package and service dependency tutorial](/docs/tutorials/06-first-local-package-and-service-to-service-dependency/).
+- Keep the `kix-examples` checkout open in your editor.
+
+## The Four Parts Of A Package
+
+Open `tutorials/06-service-dep/reverse-proxy-package.nix`. Every Kix package is a Nix attribute set with up to four top-level sections:
+
+```nix title="tutorials/06-service-dep/reverse-proxy-package.nix"
+{
+  meta = { ... };
+  options = { ... };
+  build = { self, scope, kix, backend, ... }: { ... };
+  out = self: { ... }; # optional custom output shape
+}
+```
+
+Each section has a distinct job:
+
+| Section | Purpose |
+|---|---|
+| `meta` | Static facts about the package (`name`, `version`, `description`, `provides`, `categories`) that `kix list packages` and scorecards can inspect without building the package |
+| `options` | Typed configuration options that a cluster can set in `config = { ... }` |
+| `build` | A function that takes resolved dependencies, `config`, `scope`, and `kix`, and returns the Kubernetes resources for one instance |
+| `out` | Optional function to customize the public contract exposed to downstream dependents when `root`'s default `out` is not enough |
+
+:::note[Reference]
+See [Top-level package schema](/docs/reference/package-anatomy/#root-function-and-return-shape) for the complete field reference.
+:::
+
+## Inspect `meta`
+
+At the top of `tutorials/06-service-dep/reverse-proxy-package.nix`, the `meta` block describes what the package is:
+
+```nix title="tutorials/06-service-dep/reverse-proxy-package.nix"
+meta = {
+  name = "reverse-proxy";
+  version = "0.0.1";
+  description = "Minimal nginx reverse proxy for tutorial 06.";
+  provides = [ "reverse-proxy" ];
+};
+```
+
+`meta.provides` is a list of capability tags. Later tutorials use `meta.provides` to write scorecard rules that apply to every reverse proxy in a cluster, regardless of what the instance is named.
+
+## Inspect The `build` Arguments
+
+Next, look at the argument list of `build`:
+
+<Snippet {...buildArgs} />
+
+Kix calls `build` once for each instance of the package in the cluster. The arguments fall into two groups:
+
+1. **Framework arguments** (`self`, `scope`, `kix`, `lib`, `config`, `meta`, `cluster`): always available to any package.
+2. **Dependency arguments** (`backend` in this package): any argument name that is not a built-in framework argument tells Kix that this package requires another instance.
+
+Because `backend` does not have a `? null` default in the function header, Kix treats it as a required dependency. If a cluster installs this package without a matching `backend` instance or explicit `deps.backend` binding, evaluation fails before any YAML is rendered.
+
+## Build The ConfigMap With `scope.mkResource`
+
+Inside `build`, the package creates its nginx configuration ConfigMap using `scope.mkResource`:
+
+<Snippet {...configmap} />
+
+Why call `scope.mkResource` instead of writing a plain Nix attribute set?
+
+- `scope.mkResource` stamps the resource with the instance's `metadata.namespace` and standard `app.kubernetes.io/*` labels automatically.
+- It validates the manifest shape and builds a derivation whose Nix store path tracks its content hash.
+- It attaches a `.out` record (`self.configmap.out.name`, `self.configmap.out.data`, and so on) so other resources in the same package can reference it safely.
+
+Notice that `data."default.conf"` interpolates `${backend.out.fqdn}` and `${backend.out.port}`. Because those strings come from the `backend` Service derivation, Nix records that `self.configmap` depends on `backend`'s Service.
+
+## Mount The ConfigMap And Build The Deployment
+
+Next, the package builds a Deployment that runs nginx and mounts `self.configmap` at `/etc/nginx/conf.d`:
+
+```nix title="tutorials/06-service-dep/reverse-proxy-package.nix"
+deployment = scope.mkDeployment (
+  kix.withMounts [
+    (kix.mount.configMap self.configmap "/etc/nginx/conf.d" { })
+  ] {
+    inherit name;
+    podSpec.containers = [
+      {
+        name = "nginx";
+        image = "nginx:1.27-alpine";
+        ports = [
+          {
+            name = "http";
+            containerPort = 80;
+          }
+        ];
+        readinessProbe = {
+          httpGet = {
+            path = "/healthz";
+            port = 80;
+          };
+          periodSeconds = 5;
+        };
+      }
+    ];
+  }
+);
+```
+
+Three pieces work together here:
+
+1. **`self.configmap` via the `self` fixpoint**: `self` refers to the attribute set returned by `build`. Passing `self.configmap` to `kix.mount.configMap` reads `self.configmap.out.name`, so the volume reference and the ConfigMap resource name cannot drift apart.
+2. **`kix.mount.configMap` and `kix.withMounts`**: In raw Kubernetes YAML, mounting a ConfigMap requires adding an entry to `spec.template.spec.volumes` and a matching entry to `spec.template.spec.containers[*].volumeMounts` with the same volume name. `kix.withMounts` adds both entries from a single declaration and propagates the dependency from the Deployment to the ConfigMap.
+3. **`scope.mkDeployment`**: Wraps the workload spec into an `apps/v1` Deployment, fills in `spec.selector.matchLabels` and `spec.template.metadata.labels` from `scope.selectorLabels`, and defaults `replicas = 1`.
+
+:::note[Reference]
+See [Workload and mount helpers](/docs/reference/composition-helpers/) for all options supported by `scope.mkDeployment`, `kix.withMounts`, and `kix.mount.configMap`.
+:::
+
+## Derive The Service From The Workload
+
+To expose the Deployment inside the cluster, the package creates a Service using `kix.service.fromWorkload`:
+
+```nix title="tutorials/06-service-dep/reverse-proxy-package.nix"
+service = scope.mkResource (
+  kix.service.fromWorkload self.deployment {
+    inherit name;
+  }
+);
+```
+
+In raw Kubernetes YAML, a Service can silently fail to route traffic if its `spec.selector` labels or `targetPort` numbers do not match the Deployment's pod template labels and `containerPort` declarations.
+
+`kix.service.fromWorkload self.deployment` reads `self.deployment.out.selector` and `self.deployment.out.ports` directly from the built Deployment:
+
+- `spec.selector` is copied from `self.deployment.out.selector`;
+- `spec.ports` is derived from the container ports declared on `self.deployment`;
+- the Service records a dependency on `self.deployment`, so `kix deploy` waits for the Deployment to roll out before marking the Service ready.
+
+## Expose The Public Contract With `root`
+
+At the bottom of `build`, a single line chooses the package's root resource:
+
+<Snippet {...root} />
+
+Setting `root = self.service` does two things:
+
+1. When another package depends on `gateway`, `gateway.out` forwards the `.out` fields of `self.service` (`gateway.out.name`, `gateway.out.fqdn`, `gateway.out.port`, `gateway.out.selector`, and so on).
+2. During deployment, the instance's `PackageInstance` resource waits on `root`, and any resource in `build` that is not already in `root`'s dependency chain is still included in the package's built resources.
+
+## Verify The Rendered Resources
+
+Run `kix build 06-service-dep` and look at the rendered `gateway` ConfigMap, Deployment, and Service:
+
+<Command expandable {...buildOutput} />
+
+Check three details in the rendered YAML for `gateway`:
+
+1. **Matching selector labels**: Both `Deployment/gateway` and `Service/gateway` carry `app.kubernetes.io/instance: gateway` and `app.kubernetes.io/name: gateway`, generated by `scope.mkDeployment` and copied by `kix.service.fromWorkload`.
+2. **Matching volume and mount**: `Deployment/gateway` has both `volumes` (`configMap.name: gateway`) and `volumeMounts` (`mountPath: /etc/nginx/conf.d`), generated by `kix.withMounts`.
+3. **Automatic `kix.run/depends-on` annotations**: `Deployment/gateway` lists the identity hash of `ConfigMap/gateway` in its `kix.run/depends-on` annotation, and `Service/gateway` lists the identity hash of `Deployment/gateway`. You did not write those hashes; Kix tracked them from `self.configmap` and `self.deployment`.
+
+## What You Learned
+
+You inspected every part of a local Kix package:
+
+<Recap>
+- a package is a Nix attribute set with `meta`, `options`, `build`, and an optional `out` function;
+- `build` receives framework helpers (`self`, `scope`, `kix`, `config`) plus any dependencies declared by parameter name;
+- `scope.mkResource` and `scope.mkDeployment` stamp namespace and instance labels and attach `.out` records;
+- `kix.withMounts` and `kix.mount.configMap` add both `volumes` and `volumeMounts` and record the ConfigMap dependency;
+- `kix.service.fromWorkload` derives Service selectors and ports directly from a workload;
+- `root = self.service` defines the default `.out` contract that downstream packages see.
+</Recap>
+
+In the next tutorial, you will move `backend` and `gateway` into separate namespaces and learn how Kix handles dependency resolution across namespace boundaries.

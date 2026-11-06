@@ -15,10 +15,10 @@ makes keeping this file current part of changing the package conventions.
 
 | Need | Read |
 |---|---|
-| The values a package is judged against | `PRINCIPLES.md`; `docs-legacy/BEST-PRACTICES.md` §6.1 (availability, line 215), §7.4 (one alias, one contract, line 491), §9.6 (alerts, line 773) |
-| The package file contract and option contract | `docs-legacy/HANDBOOK.md` §5 (line 251); `.claude/skills/kix-migration/SKILL.md` "Package Anatomy" (line 78) and "Package Meta" (line 704) |
+| The values a package is judged against | `PRINCIPLES.md`; `docs/src/content/docs/explanation/personas-packages-and-clusters.mdx`; `docs/src/content/docs/explanation/availability-levels-and-derived-pod-spread.mdx` |
+| The package file contract and option contract | `docs/src/content/docs/reference/package-anatomy.mdx`; `docs/src/content/docs/reference/resources-and-out.mdx`; `.claude/skills/kix-migration/SKILL.md` "Package Anatomy" (line 78) and "Package Meta" (line 704) |
 | Second implementation of an alias, facades, operator stacks | kix-migration "Two Implementations, One Alias" (line 794) and "Operator-Managed Stacks" (line 742); `.claude/skills/kix-migration/MULTI_COMPONENT.md`, `STORAGE.md`, and `SECRETS.md` |
-| CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md` |
+| CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md`; `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
 | Any prose, including comments and the header | `CLAUDE.prose.md`, `CLAUDE.md` "Code comments" |
 | Logging what you notice and do not fix | `CLAUDE.housekeeping.md` |
 
@@ -31,9 +31,7 @@ plausible; a server with a per-consumer facade, clickhouse and
 clickhouse-database; an operator and its kinds, cnpg-operator and
 cnpg-cluster.
 
-The HANDBOOK and BEST-PRACTICES sections on builders, workloads, selectors,
-and scorecard rules predate the lib rewrite of August and September 2026
-(BEST-PRACTICES.md:1135). Where they disagree with `kix/lib/` or a reference
+Where reference documentation disagrees with `kix/lib/` or a reference
 package in the pattern table below, the code wins.
 
 ## Setup
@@ -392,7 +390,7 @@ Conditional:
 9. `kix/lib/vocab/<contract>.nix`, `vocab/default.nix`, `units/<contract>.nix`,
    and `kix/lib/architecture.md` for a new contract. A new field on any
    contract, package-local ones included: `git grep -n` an existing field
-   name to find every list of fields (FEATURE-CATALOG, the kix-migration
+   name to find every list of fields (`docs/src/content/docs/reference/`, the kix-migration
    skill) and add it there.
 10. Provider packages the consumer exposed gaps in, with their tests (step 4).
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
@@ -400,7 +398,7 @@ Conditional:
     `alerts.nix`.
 12. `clusters/test-<contract>-swap/` for a second implementation of an alias,
     registered in `clusters/flake.nix` and the root `flake.nix`.
-13. `docs-legacy/HANDBOOK.md`, `FEATURE-CATALOG.md`, and `BEST-PRACTICES.md`,
+13. `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`,
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
 14. `kix/lib/eval/roles.nix` and `kix/lib/flavors/*.nix` only for a new role.

@@ -1,88 +1,69 @@
 ---
-title: "Availability levels and derived pod spread"
-description: "How one failure-scope setting drives replicas, topology spread, and disruption budgets across a cluster."
+title: "Availability levels"
+description: "Set a single availability target on a cluster and let Kix configure replica counts, pod placement across nodes and zones, and disruption budgets."
 ---
 
-Availability is a property of the cluster and the service it must provide, not
-of a Deployment in isolation. Kix represents that requirement with four
-levels:
+When you move a Kubernetes cluster from a single-node laptop environment to a multi-zone cloud environment, you normally have to revisit every Deployment and StatefulSet to bump replica counts, add pod anti-affinity rules, and create PodDisruptionBudgets. In Kix, you declare the failure scope your cluster needs (`none`, `pod`, `node`, or `zone`) in one place, and Kix works with each package to configure replicas, placement constraints, and disruption budgets automatically.
 
-| Level | Required outcome |
-|---|---|
-| `none` | A failure or rolling update may cause downtime. |
-| `pod` | Losing one pod, or replacing pods during an update, must not cause downtime. |
-| `node` | Losing one node must not cause downtime. |
-| `zone` | Losing one availability zone must not cause downtime. |
+:::note[Helpful background]
+- [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/): A quick guide to setting `availability.level` on a cluster and inspecting the generated resources.
+- [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/): How package authors translate an availability level into replica counts.
+- [Pod Topology Spread Constraints](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/): How Kubernetes spreads pods across nodes and availability zones.
+- [PodDisruptionBudgets](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/): How Kubernetes limits voluntary evictions during node drains and upgrades.
+:::
 
-The cluster's declared capabilities establish the largest level its substrate
-can support. Packages then translate the chosen level into their own replica
-and quorum counts. Kix uses the same level to derive placement constraints and
-PodDisruptionBudgets for those workloads.
+## One setting, four failure scopes
+
+Rather than asking a cluster operator to know the replica flags of every package in the cluster, Kix defines four availability levels based on what kind of failure the cluster must survive without downtime:
+
+| Level | What the service must survive |
+| --- | --- |
+| `none` | Nothing guaranteed; a pod crash or rolling update may cause brief downtime. |
+| `pod` | Losing a single pod, or replacing pods during a rolling update, must not cause downtime. |
+| `node` | Losing an entire Kubernetes worker node must not cause downtime. |
+| `zone` | Losing an entire cloud availability zone must not cause downtime. |
+
+The cluster's declared hardware capabilities establish the highest level the underlying nodes can actually support. Each package then translates the active level into its own replica and quorum counts, and Kix adds the matching placement rules and PodDisruptionBudgets.
 
 ## One requirement, several compiled decisions
 
-A stateless server may map every level above `none` to two replicas, since two
-copies spread across a failure domain survive the loss of one. A quorum store
-may need three members from `pod` upward. Another package may support
-only one active controller and declare that it cannot meet `node` availability.
+Different kinds of software need different numbers of replicas to survive the same failure. A stateless HTTP server only needs 2 replicas to survive a pod, node, or zone outage, as long as those 2 pods sit in different failure domains. A Raft or Paxos quorum store needs at least 3 members so it can lose one member and still keep a majority. A legacy controller that does not support leader election may only be able to run 1 replica no matter what the cluster asks for.
 
-Keeping those mappings in each package preserves the application's operational
-knowledge. Keeping the requested level on the cluster lets an operator change
-the failure requirement without learning every package's replica options.
+Kix splits this decision cleanly between the package author and the cluster operator:
 
-For a multi-replica Deployment or StatefulSet, Kix also derives:
+- **The package author** knows the software's architecture and uses `scope.byAvailability` to map `none`, `pod`, `node`, and `zone` to appropriate replica counts.
+- **The cluster operator** sets `availability.level` on the cluster (or overrides it on a specific instance) without needing to memorize each package's internal options.
 
-- topology spread across the cluster's failure-domain keys;
-- hard placement on the domain named by the requested level;
-- best-effort placement on the remaining domains;
-- a PodDisruptionBudget with `maxUnavailable = 1`.
+Whenever a Deployment or StatefulSet resolves to more than one replica under an availability level above `none`, Kix automatically derives:
 
-The derived constraints use `maxSkew = 1`. They balance replicas across the
-available domains; they do not require one replica per domain. Five replicas
-can therefore occupy three zones as `2/2/1`.
+- `topologySpreadConstraints` across the cluster's failure-domain labels (`kubernetes.io/hostname` and `topology.kubernetes.io/zone`);
+- hard placement (`DoNotSchedule`) on the domain required by the chosen level, and best-effort placement (`ScheduleAnyway`) on the remaining domains;
+- a `PodDisruptionBudget` with `maxUnavailable = 1` selecting the workload's pods.
 
-## The substrate is a boundary
+The generated topology spread constraints use `maxSkew = 1`. That balances pods evenly across the available failure domains without requiring the replica count to be an exact multiple of the zone count (for example, 5 replicas across 3 zones settle cleanly as `2/2/1`).
 
-`cluster.capabilities.multiNode` and
-`cluster.capabilities.availabilityZones` determine the substrate level. A
-confirmed single-node cluster supports `none`. A cluster with more than one
-declared zone supports `zone`. Other multi-node clusters support `node`.
+## Hardware capabilities keep configuration honest
 
-Kix rejects a requested level above a fully declared substrate. When the
-relevant capability is unknown, Kix warns because it cannot verify that the
-placement rule can be satisfied.
+Setting `replicas = 3` on a single-node cluster gives a false sense of security: if the one node goes down, all three pods go down with it. Similarly, adding zone spread constraints on a cluster whose nodes have no `topology.kubernetes.io/zone` labels will either leave pods Pending or pack them onto the same hardware.
 
-This distinction keeps configuration honest. A replica count of three cannot
-make a single-node cluster survive a node loss, and a zone constraint cannot
-help when the nodes have no usable zone labels.
+Kix checks the requested availability level against `cluster.capabilities.multiNode` and `cluster.capabilities.availabilityZones`:
+
+- A confirmed single-node cluster (`multiNode = false`, such as `kix.flavors.kind`) supports at most `none`.
+- A multi-node cluster without multiple zones supports up to `node`.
+- A multi-node cluster with two or more declared zones supports `zone`.
+
+If you request a level higher than the cluster's declared capabilities can support, evaluation fails immediately with a clear error. If a capability is left unset (`null`), Kix emits a warning so you know the substrate guarantees could not be verified at build time.
 
 ## Package and workload ceilings
 
-A package declares `meta.availability.max` when the program itself cannot
-meet a higher level. Kix lowers the resolved level to that ceiling and warns
-that the instance does not meet the cluster's request.
+Some programs cannot run multiple active replicas safely. When a package declares `meta.availability.max` (for example, `max = "none"` or `max = "pod"`), Kix caps the resolved availability level for that package at its ceiling and emits a warning when the cluster requested a higher level.
 
-Some packages contain both replicated data services and a workload that runs
-one pod at a time. A workload builder can set `availability.max = "none"` for
-that one workload. The rest of the package still receives the full instance
-level.
-
-The ceiling `none` means one pod at a time, so Kix refuses a Deployment or
-StatefulSet with more than one replica under it.
+Other packages combine a replicated data plane with a single-replica management component in the same package. For those cases, the individual workload builder (`scope.mkDeployment` or `scope.mkStatefulSet`) can set `availability.max = "none"` on just that workload while the rest of the package honors the full cluster level. Because a `none` ceiling means the workload cannot safely run concurrent copies, Kix rejects a workload that sets `availability.max = "none"` alongside `replicas > 1`.
 
 ## Explicit placement takes ownership
 
-When a package supplies `topologySpreadConstraints`, Kix does not add its own
-constraints or derive a PodDisruptionBudget for that workload. The package has
-taken responsibility for both placement and voluntary-disruption safety. Kix
-warns when no PDB in the instance selects those pods.
+When a package explicitly sets its own `topologySpreadConstraints` on a workload, Kix steps back: it neither injects generated spread constraints nor generates a default `PodDisruptionBudget` for that workload. If a multi-replica workload supplies custom placement constraints without shipping a matching `PodDisruptionBudget` in the same instance, Kix emits a warning so voluntary-disruption protection is not forgotten by accident.
 
 :::tip[Use it in a task]
-See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/)
-to configure a cluster and inspect the generated resources.
-:::
-
-:::tip[Author a package]
-See [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/)
-for replica mappings and ceilings.
+See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/) to configure a cluster and inspect the generated resources, or [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/) to use `scope.byAvailability` in your own packages.
 :::

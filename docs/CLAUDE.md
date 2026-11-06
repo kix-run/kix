@@ -108,8 +108,7 @@ boundaries are the biggest places to slow down and teach deliberately.
   check CLI facts against `cli/kix-cli/src/cli.rs` and command behavior against
   `cli/kix-cli/src/commands/`.
 - Treat older broad docs as source material, not truth. Verify before importing
-  from `docs-legacy/`, `docs-legacy/HANDBOOK.md`, `docs-legacy/FEATURE-CATALOG.md`,
-  `kix/lib/architecture.md`, `ROADMAP.md`, `MAJOR_FEATURES.md`, or raw `v2_discussions/` notes.
+  from `kix/lib/architecture.md`, `ROADMAP.md`, `MAJOR_FEATURES.md`, or raw `v2_discussions/` notes.
 
 ## Diátaxis Mode
 
@@ -191,11 +190,11 @@ when you already know the model and just need the steps.
 :::
 
 :::note[Reference]
-See [`deps`](/docs/reference/instance-schema/deps/) for the exact instance schema.
+See [`deps`](/docs/reference/instances-and-composition/#deps) for the exact instance schema.
 :::
 
 :::note[Explanation]
-See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
+See [Dependency resolution and why explicit deps matter](/docs/explanation/the-dependency-graph-as-the-model/#dependency-resolution-and-explicit-deps)
 for the design reasoning behind this rule.
 :::
 ```

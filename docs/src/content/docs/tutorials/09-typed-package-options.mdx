@@ -1,4 +1,149 @@
 ---
 title: "09. Typed package options"
-description: TODO
+description: "Declare typed package options with lib.mkOption, consume config inside build, and catch bad configuration at evaluation time."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import Recap from '/src/components/Recap.astro';
+import options from '/src/snippets/tutorials/09-typed-options/reverse-proxy-package/options.json';
+
+In tutorial 03, you passed `config.message` and `config.replicas` to `packages.echo-server`, and saw Kix reject an invalid `config.replicas = "two"` before talking to Kubernetes.
+
+In this tutorial, you will look at the package author's side of that contract. Using `tutorials/09-typed-options`, you will add typed `options` to the local reverse-proxy package (`proxyPath` and `maxBodySize`), use those values inside `build`, override them in `cluster.nix`, and see how `lib.types` catches invalid configuration at evaluation time.
+
+## Prerequisites
+
+- Finish the [cross-namespace dependency tutorial](/docs/tutorials/08-basic-dependency-resolution-and-namespace-boundaries/).
+- Keep the same `kix-examples` checkout.
+
+## Declare Typed `options` In The Package
+
+Open `tutorials/09-typed-options/reverse-proxy-package.nix`. Unlike the tutorial 06 version of the reverse proxy, this package includes an `options` section declared with `lib.mkOption`:
+
+<Snippet {...options} />
+
+Each option defines:
+
+- **`type`**: A NixOS module type from `lib.types`. Here, `lib.types.strMatching "^/.*$"` requires `proxyPath` to start with `/`, and `lib.types.strMatching "^[0-9]+[kKmMgG]?$"` requires `maxBodySize` to match nginx's size syntax (`1m`, `100k`, `50M`).
+- **`default`**: The value used when a cluster instance omits the option from `config`.
+- **`description` and `example`**: Human-readable documentation surfaced by `kix inspect package`.
+
+Why validate `proxyPath` and `maxBodySize` with `lib.types.strMatching`? If someone configures `proxyPath = "api"` (missing the leading slash) or `maxBodySize = "10mb"` (invalid `mb` suffix for nginx), raw templating would generate a broken `default.conf` that only fails when the nginx container starts in the cluster. With `lib.types.strMatching`, `kix check` and `kix build` catch the mistake immediately on your workstation.
+
+:::note[Reference]
+See [Options and config](/docs/reference/package-anatomy/#options) for common `lib.types` constructors (`ints.positive`, `port`, `enum`, `nullOr`, `submodule`, and more).
+:::
+
+## Consume `config` In `build`
+
+Still in `tutorials/09-typed-options/reverse-proxy-package.nix`, look at how `build` receives `config` and uses `config.maxBodySize` and `config.proxyPath` inside the nginx ConfigMap:
+
+```nix title="tutorials/09-typed-options/reverse-proxy-package.nix"
+build =
+  {
+    self,
+    scope,
+    kix,
+    config,
+    backend,
+    ...
+  }:
+  let
+    name = scope.instanceName;
+  in
+  {
+    configmap = scope.mkResource {
+      apiVersion = "v1";
+      kind = "ConfigMap";
+      inherit name;
+      data."default.conf" = ''
+        server {
+            listen 80;
+            client_max_body_size ${config.maxBodySize};
+
+            location /healthz {
+                default_type text/plain;
+                return 200 'ok\n';
+            }
+            location ${config.proxyPath} {
+                proxy_pass http://${backend.out.fqdn}:${backend.out.port}/;
+            }
+        }
+      '';
+    };
+    # ...
+  };
+```
+
+When Kix evaluates an instance of `reverse-proxy`, it merges the package's `options` declarations with the instance's `config = { ... }` overrides and passes the validated result into `build` as `config`.
+
+## Configure The Instance In `cluster.nix`
+
+Open `tutorials/09-typed-options/cluster.nix` to see how the `gateway` instance sets those options:
+
+```nix title="tutorials/09-typed-options/cluster.nix"
+gateway = {
+  package = reverseProxyPackage;
+  config = {
+    proxyPath = "/api/";
+    maxBodySize = "10m";
+  };
+};
+```
+
+## Check And Build The Cluster
+
+Run `kix check` and `kix build` on `09-typed-options`:
+
+<Command commands={["kix check 09-typed-options", "kix build 09-typed-options"]} cwd="kix-examples/" />
+
+In the rendered `ConfigMap/gateway` manifest, confirm that both options were interpolated into `default.conf`:
+
+```nginx
+server {
+    listen 80;
+    client_max_body_size 10m;
+    ...
+    location /api/ {
+        proxy_pass http://backend.tutorial-09.svc.cluster.local:80/;
+    }
+}
+```
+
+## Try Passing An Invalid Option Value
+
+Open `tutorials/09-typed-options/cluster.nix` and change `proxyPath` to `"api/"` (without a leading slash):
+
+```nix title="tutorials/09-typed-options/cluster.nix"
+gateway = {
+  package = reverseProxyPackage;
+  config = {
+    proxyPath = "api/";
+    maxBodySize = "10m";
+  };
+};
+```
+
+Run `kix check 09-typed-options`:
+
+<Command commands={["kix check 09-typed-options"]} cwd="kix-examples/" />
+
+Evaluation fails with a type error explaining that `"api/"` does not match the pattern `"^/.*$"` required by `proxyPath`.
+
+Also try adding an unknown option key, such as `timeout = 30;`, inside `gateway.config`. Kix rejects unknown options immediately rather than ignoring typos.
+
+Change `proxyPath` back to `"/api/"` and remove any extra test keys before moving on.
+
+## What You Learned
+
+You turned hardcoded package strings into a typed configuration contract:
+
+<Recap>
+- packages declare their configuration schema in `options` using `lib.mkOption` and `lib.types.*`;
+- `lib.types.strMatching`, `lib.types.ints.positive`, `lib.types.enum`, and other types validate `config` values at evaluation time;
+- `build` receives the merged, validated `config` attribute set;
+- invalid values or misspelled option names fail `kix check` and `kix build` before any manifests reach a cluster.
+</Recap>
+
+In the next tutorial, you will instantiate the same package multiple times in a single cluster and see how `scope` keeps each instance's resources isolated.

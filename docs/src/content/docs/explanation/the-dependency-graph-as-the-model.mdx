@@ -1,4 +1,82 @@
 ---
-title: "The dependency graph as the model"
-description: TODO
+title: "The dependency graph"
+description: "When one Kubernetes resource references another in Kix, that reference automatically records a dependency for deploy ordering and network policy."
 ---
+
+In most Kubernetes setups, YAML files know nothing about each other. If a Deployment reads a ConfigMap or dials a database Service, you have to remember to configure deploy ordering, readiness waits, and network policies in separate places. In Kix, referencing another resource's output automatically records that relationship in a cluster-wide dependency graph, and Kix uses that single graph to order deployments and generate firewall rules.
+
+:::note[Helpful background]
+- [01. Orientation: what Kix is and why it exists](/docs/tutorials/01-orientation/): A quick introduction to what Kix compiles and how a cluster project is organized.
+- [08. Basic dependency resolution and namespace boundaries](/docs/tutorials/08-basic-dependency-resolution-and-namespace-boundaries/): A hands-on walkthrough of wiring two packages together in a local cluster.
+- [Resources and `out`](/docs/reference/resources-and-out/): Reference tables for the `.out` attributes that every Kix resource exposes.
+- [Nix string context](https://nix.dev/manual/nix/latest/language/string-context.html): How Nix tracks hidden store-path references inside ordinary strings.
+:::
+
+## Store paths as dependency edges
+
+Kix does not ask you to maintain a separate `dependsOn` list for ordinary resource references. Instead, it uses Nix string context to discover dependencies from the values you actually use.
+
+When a package builds a resource with `scope.mkResource` or `scope.mkDeployment`, Kix serializes the manifest to JSON and writes it to a content-addressed file in `/nix/store/`. The file path includes a hash of the manifest's contents. Kix then builds the resource's public `out` attributes (`out.name`, `out.fqdn`, `out.selector`, `out.url`, and any custom `outputs`) and attaches the resource's Nix store path to each string's hidden context.
+
+When another resource reads one of those `out` values, the rendered string looks like an ordinary Kubernetes value, such as `"backend.app.svc.cluster.local"`, while carrying the hidden store-path reference alongside it:
+
+```nix
+# Inside the gateway package:
+proxy_pass = "http://${backend.out.fqdn}:${toString backend.out.port}/";
+```
+
+When Kix seals the consuming resource, `scope.mkResource` inspects the string context of the serialized JSON (`builtins.getContext`), extracts every referenced resource hash, and stamps those hashes into the `kix.run/depends-on` annotation. Because the value and the dependency travel together on the same string, you cannot read `backend.out.fqdn` and forget to declare the dependency. Conversely, typing a literal string like `"backend.app.svc.cluster.local"` carries no context and records no dependency, which is why Kix provides scorecard rules and cross-resource checks to catch untracked literals.
+
+String context carries two distinct kinds of tokens:
+
+- **Identity paths** point to the resource's derivation in the Nix store. Every `out` attribute carries an identity path, which tells Kix that the consumer was computed from the provider and must be deployed after it.
+- **Endpoint facts** attach to address-shaped attributes such as `out.fqdn` and `out.url`. An endpoint fact records the target Service's namespace, pod selector, and ports. Non-workload resources such as ConfigMaps conduct endpoint facts onward when mounted, and workloads terminate them. This lets Kix distinguish between a workload that merely names a resource and a workload that dials a Service over the network.
+
+Sometimes one resource must be applied before another even though no string value flows between their manifests. A CustomResourceDefinition must be established before any custom resource of its kind is applied, and a network policy must be in place before the pod it governs starts. For those cases, builders accept `requires` (hard ordering dependencies that must be ready first) and `extraDeps` (additional ordering hints). Kix folds both into `kix.run/depends-on` before sealing the resource.
+
+:::note[Reference]
+See [Resources and `out`](/docs/reference/resources-and-out/) for the attributes exposed on `out` and how `requires` and `extraDeps` affect resource sealing.
+:::
+
+## Dependency resolution and explicit deps
+
+Within a single package, resources reference siblings through the `self` fixpoint (`self.configmap.out.name`). Across packages, a package declares what it needs by naming arguments on its `build` function:
+
+```nix
+build = { self, config, database, redis ? null, ... }: {
+  # database is required; redis is optional
+};
+```
+
+Kix inspects the `build` function arguments before building any resources and resolves each non-system argument against the cluster's instances. The resolver acts like a linker with a strict priority ladder:
+
+1. **Explicit wiring (`deps.<arg>`):** If the consuming instance sets `deps.database = ref.data.postgres`, Kix binds the argument directly to that target instance.
+2. **Same-namespace match:** Otherwise, Kix looks in the consumer's own namespace for an instance whose name, `aliases`, or package `meta.defaultAliases` (or claimed `meta.roles`) matches the argument name. If two candidates in the same namespace match, evaluation fails with an ambiguity error.
+3. **Cluster-wide match:** If nothing matches in the same namespace, Kix looks across all other namespaces for candidates whose package allows cross-namespace consumption (`meta.scope = "cluster"`, the default). If exactly one candidate matches across the cluster, Kix binds it. If multiple namespaces provide a matching instance, evaluation fails and lists the candidates.
+4. **Auto-instantiation (`availablePackages`):** When a required dependency has no matching instance, Kix checks `availablePackages`. If a single shelf package answers the requested name, Kix instantiates it automatically in the requester's namespace (or `autoNamespace`).
+5. **Default or error:** If no candidate is found and the argument has a Nix default (`? null`), Kix leaves it unbound so the package receives `null`. If the argument is required, evaluation fails with a missing-dependency diagnostic.
+
+At every step of the ladder, managed instances take precedence over external imports (`kix.mkImport`). This allows cluster flavors to provide fallback imports for platform services like DNS or storage classes that are automatically shadowed as soon as the cluster installs a managed package for the same role.
+
+Explicit `deps` wiring with `ref.<namespace>.<instance>` is the right tool whenever a cluster runs multiple providers of the same kind (such as two database clusters or public and internal ingress controllers) or when you want cross-namespace dependencies to stay visible at the call site in `cluster.nix`. A `ref` pointer goes through the same validation as automatic resolution: it activates optional instances, enforces `meta.scope` and `meta.compatibleWith` version bounds, and forwards any dependency config injections declared by the consumer.
+
+:::tip[Use it in a task]
+See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) and [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/) for practical wiring workflows.
+:::
+
+## DAG-driven deployment scheduler
+
+At the top of a compiled cluster sits a single `Activation` custom resource. The `Activation` references every `PackageInstance` marker, and each `PackageInstance` references its package's root resource and transitively reachable manifests. Together with the `kix.run/depends-on` annotations on each manifest, this forms a complete directed acyclic graph (DAG) of the cluster.
+
+When you run `kix deploy` (or when `kix-operator` reconciles an `Activation` in the cluster), Kix does not apply files in alphabetical order or sleep between numbered waves. Instead, it runs a graph-streaming scheduler over the DAG:
+
+- **Predecessor gating:** A resource becomes eligible for server-side apply at the exact moment every resource in its `kix.run/depends-on` set reaches `Ready`. Independent branches of the graph deploy in parallel without waiting for unrelated slow resources in the same tier.
+- **Structured readiness gates:** Applying an object to the API server is separate from waiting for it to work. For Deployments, StatefulSets, DaemonSets, and Jobs, the scheduler watches pod rollout and completion conditions. For custom resources whose operators report health on custom status fields, packages attach a `kix.run/readiness` rule on the CRD handle so the scheduler waits for the operator's actual readiness condition before unblocking downstream dependents.
+- **CRD and import barriers:** Custom resources automatically depend on their CRD (or a `scope.mkCRDRef` marker). During deployment, Kix waits until the CRD reports `Established=True` and serves the required API versions before applying any custom resource of that kind. For external resources declared via `kix.mkImport` or `scope.mkSecretRef`, Kix polls until the target object (and any required Secret keys) exists in the cluster before unblocking consumers.
+- **Post-deploy health checks:** Packages can attach `postHooks` (such as a `kix.healthCheck` probe Job or database migration Job) that depend on the package's primary workload. These jobs run after the workload is ready and gate completion of the `PackageInstance` node.
+
+Because the deployment scheduler follows the exact same dependencies that resource references created during evaluation, any dependency expressed through `out` is respected during rollout.
+
+:::note[Reference]
+See [Instances and composition](/docs/reference/instances-and-composition/) for `ref` and `availablePackages`, and [Annotations, CRDs, and receipts](/docs/reference/annotations-crds-and-receipts/) for the `Activation` and `PackageInstance` schemas.
+:::

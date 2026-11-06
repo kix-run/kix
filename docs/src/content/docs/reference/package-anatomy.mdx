@@ -1,0 +1,589 @@
+---
+title: "Package anatomy"
+description: "The structure of a Kix package file, how it declares options, and how it returns Kubernetes resources."
+---
+
+A Kix package is a reusable blueprint for an application or cluster service. It declares the settings operators can customize (`options`), the other services it needs (`build` arguments), and the Kubernetes objects it creates (`build`). Reach for this page when you are writing a new package from scratch or adding typed configuration options to an existing one.
+
+:::note[Helpful background]
+- [07. Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/): walk through a complete Kix package from top to bottom.
+- [09. Typed package options](/docs/tutorials/09-typed-package-options/): learn how to declare typed options with `lib.mkOption` and catch invalid settings at build time.
+- [Personas, packages, and clusters](/docs/explanation/personas-packages-and-clusters/): see how packages separate application authoring from cluster-specific configuration.
+- [Module system (nix.dev)](https://nix.dev/tutorials/module-system/): review the NixOS `lib.mkOption` and `lib.types` system that Kix packages use for option declarations.
+:::
+
+```nix
+# pkgs/echo/default.nix
+{
+  scope,
+  lib,
+  kix,
+  availability,
+  ...
+}:
+
+{
+  meta = {
+    version = "1.10.0";
+    description = "HTTP echo server for testing";
+    availability.max = "node";
+  };
+
+  options = {
+    image = kix.options.image {
+      repository = "hashicorp/http-echo";
+      tag = "1.0.0";
+      digest = "sha256:fcb74f691c8b0bd1ebff992c0a3ce2bf29f61ccb2f3d85fe72c4bd8b34e05061";
+    };
+    replicas = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = availability.pick {
+        none = 1;
+        pod = 2;
+        node = 3;
+      };
+      description = "Number of echo server pods.";
+    };
+    resources = kix.options.resources {
+      cpu = "50m";
+      memory = "64Mi";
+    };
+    ingress = kix.options.ingress "echo";
+  };
+
+  build = [
+    (
+      { self, config }:
+      {
+        deployment = scope.mkDeployment {
+          name = "echo";
+          spec = {
+            replicas = config.replicas;
+            selector.matchLabels = scope.selectorLabels;
+            template.spec.containers = [
+              {
+                name = "echo";
+                image = kix.image.ref config.image;
+                ports = [ (kix.port "http" 5678) ];
+                resources = config.resources;
+              }
+            ];
+          };
+        };
+
+        service = scope.mkResource (
+          kix.service.fromWorkload { name = "echo"; } self.deployment
+        );
+
+        root = self.service;
+      }
+    )
+
+    (kix.expose { service = "service"; })
+  ];
+}
+```
+
+## Root function and return shape
+
+A package file is either a Nix function taking system arguments or a plain attribute set containing a `build` attribute.
+
+When written as a function, Kix calls it with four Phase 1 arguments before evaluating `options`:
+
+| Outer argument | Type | Description |
+| --- | --- | --- |
+| `scope` | attrset | Instance-scoped builders (`mkResource`, `mkDeployment`, `mkSecret`, `mkCRD`, `forNamespace`, `selectorLabels`, and related helpers). |
+| `lib` | attrset | Standard `nixpkgs.lib`. |
+| `kix` | attrset | Framework helpers (`kix.options`, `kix.image`, `kix.expose`, `kix.monitor`, `kix.mount`, `kix.contracts`, and related helpers). |
+| `availability` | attrset | Resolved availability helper for the instance (`availability.level`, `availability.pick`, `availability.atLeast`). |
+
+Include `...` in the outer function header (`{ scope, lib, kix, ... }:`) so the package accepts future framework arguments. Do not declare cross-package dependencies in the outer function header; declare them in `build` entries instead.
+
+### Top-level package attributes
+
+The package returns an attribute set with the following top-level keys:
+
+| Attribute | Type | Required | Description |
+| --- | --- | --- | --- |
+| `meta` | attrset | No | Package metadata, platform role declarations, availability ceiling, compatibility bounds, and network intents. |
+| `options` | attrset | No | NixOS module option declarations (`lib.mkOption` or `kix.options.*`) exposed to `instances.<name>.config`. |
+| `config` | attrset or module function | No | Package-level default configuration merged with `options` at priority `1250` (between option defaults at `1500` and instance overrides at `1000`). |
+| `deps` | attrset | No | Per-dependency configuration injection (`config`), `warnings`, and `assertions` keyed by `build` argument name. |
+| `build` | function or list of functions | Yes | One or more functions returning named resource parts and a `root` entry. |
+| `warnings` | `{ config, self, deps }: [ string ]` | No | Evaluation-time warnings collected into `cluster.warnings`. |
+| `assertions` | `{ config, self, deps }: [ { assertion; message; } ]` | No | Evaluation-time assertions checked before building manifests. |
+
+### The `root` entry and part reachability
+
+Across all `build` entries, the merged parts attribute set must define `root`. `root` designates the primary entry point of the package and determines what downstream packages receive when they depend on this instance.
+
+`root` accepts either a direct resource or an extended attribute set:
+
+```nix
+# Direct resource
+root = self.service;
+
+# Extended root with extra dependencies, post-deploy hooks, and custom outputs
+root = {
+  resource = self.service;
+  requires = [ self.migrationJob ];
+  postHooks = [ self.smokeTest ];
+  out = {
+    endpoint = "http://${self.service.out.fqdn}:8080";
+  };
+};
+```
+
+| `root` field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `resource` | resource derivation | Required | Primary resource of the package. Must also be assigned to a named attribute in `build` (for example, `service = ...; root = self.service;`). |
+| `requires` | list of resources | `[ ]` | Additional resources that must be ready before the package instance is considered ready. |
+| `postHooks` | list of resources | `[ ]` | Post-deployment resources (such as `kix.healthCheck` jobs) that run after `root.resource` and `requires` are ready. |
+| `out` | attrset | `{ }` | Extra fields merged onto `root.resource.out` and promoted to the top level of the dependency object passed to consumers. |
+
+Every resource defined in `build` must be reachable from `root.resource`, `root.requires`, or `root.postHooks` (either because `root` depends on it through `.out` string context or `requires`, or because it depends on a reachable resource such as an RBAC `RoleBinding` referencing a reachable `ServiceAccount`). Resources that are disconnected from `root` emit an orphaned-resource warning during evaluation.
+
+---
+
+## meta
+
+`meta` declares static package properties that Kix inspects during dependency binding, cluster validation, and scorecard evaluation.
+
+```nix
+meta = {
+  version = "2.51.0";
+  description = "Prometheus monitoring system and time series database";
+  roles = [ "metricsApi" ];
+  defaultAliases = [ "monitoring" ];
+  availability.max = "node";
+  podSecurity = "restricted";
+  lifecycle = "stateful";
+  owner = "platform-observability";
+  annotationDomains = [ "monitoring.coreos.com" ];
+  compatibleWith.grafana = {
+    minVersion = "10.0.0";
+    reason = "Requires Grafana 10+ data source provisioning format";
+  };
+  k8s = {
+    minVersion = "1.28";
+    maxVersion = "1.32";
+  };
+};
+```
+
+### Summary of `meta` fields
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `version` | string | None | Upstream software version (`[v]<digits>(.<digits>)*[_+-<tag>]`). Required by `hygiene.packageMeta`. |
+| `description` | string | None | Non-empty one-line summary of the package. Required by `hygiene.packageMeta`. |
+| `roles` | list of strings | `[ ]` | Platform capabilities provided by this package. |
+| `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
+| `availability.max` | `"none"` \| `"pod"` \| `"node"` | `"node"` | Highest availability level the package supports. |
+| `compatibleWith` | attrset of `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version bounds for upstream dependencies keyed by dependency argument name. |
+| `k8s` | `{ minVersion?; maxVersion?; reason?; }` | None | Supported Kubernetes minor or patch version range, checked against `cluster.k8sVersion`. |
+| `conflictsWith` | list of strings | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide). |
+| `podSecurity` | `"privileged"` \| `"baseline"` \| `"restricted"` | None | Pod Security Standards enforcement level applied to the instance namespace. |
+| `unsafe` | list of strings | `[ ]` | Acknowledged security or architectural exceptions (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
+| `annotationDomains` | list of strings | `[ ]` | Annotation domain prefixes (such as `"cert-manager.io"`) owned and consumed by this package. |
+| `network` | attrset | `{ }` | Ambient network intents (`intents.<part>.{egress,ingress}`) and `externalIngressEntities`. |
+| `lifecycle` | `"stateful"` | None | Marks the `PackageInstance` with `kix.run/lifecycle: stateful`. |
+| `scope` | `"cluster"` \| `"namespace"` | `"cluster"` | Whether dependency resolution binds this package across the cluster or within the consumer's namespace. |
+| `owner` | string | None | Team or owner identifier used by `governance.hasOwner` and `byOwner` policy rules. |
+| `deprecated` | `{ message; replacement?; }` | None | Emits an evaluation warning when the package is instantiated. |
+
+### `meta.version`
+
+Version strings must match `<digits>(.<digits>)*` with an optional leading `v` and an optional suffix separated by `-`, `+`, or `_` (for example, `"1.28.2"`, `"v2.4.0-rc1"`, or `"2024.1.0_debian-12"`).
+
+When comparing versions in `compatibleWith` and `k8s`:
+- Numeric segments are compared as integers from left to right.
+- Suffixed tags containing `alpha`, `beta`, `rc`, `pre`, `dev`, or `preview` are treated as pre-releases and sort **before** the corresponding release (`1.0.0-rc1 < 1.0.0`).
+- All other suffixes (such as `-r0`, `-debian-12`, or `+build1`) are treated as vendor build metadata and compare **equal** to the base version (`1.0.0-debian-12 == 1.0.0`).
+
+### `meta.roles` and `meta.defaultAliases`
+
+`meta.roles` registers the instance as a provider of one or more cluster roles from a closed vocabulary:
+
+| Role | Required `out` fields | Effect |
+| --- | --- | --- |
+| `"cni"` | None | Satisfies the cluster CNI capability check. |
+| `"dns"` | `fqdn` | Provides cluster DNS resolution; workloads automatically receive a dependency and network egress rule to the DNS service. |
+| `"loadBalancer"` | None | Satisfies `Service` resources of `type = "LoadBalancer"`. |
+| `"metricsApi"` | None | Satisfies consumers that call `scope.requireMetricsApi` (such as `HorizontalPodAutoscaler`). |
+| `"network-policy-enforcer"` | `netpol` | Enables cluster-wide `NetworkPolicy` enforcement when `cluster.networkPolicy.enable = true`. |
+| `"registryMirror"` | None | Registers a cluster container registry mirror. |
+| `"snapshotController"` | `crds` | Provides the `VolumeSnapshot` CRD family for backup and restore workflows. |
+| `"storageClasses"` | `storageClassName` | Provides a dynamic `StorageClass` for `PersistentVolumeClaim` resources. |
+
+Each role in `meta.roles` also registers that role name as a dependency alias so other packages can request `{ dns ? null }:` or `{ loadBalancer ? null }:`. At most one active instance in a cluster may provide a given role unless disambiguated.
+
+`meta.defaultAliases` provides additional dependency-injection names when the instance does not set `instances.<name>.aliases`. If an instance sets a non-empty `aliases` list, `defaultAliases` are replaced while `meta.roles` remain active.
+
+### `meta.availability`
+
+`meta.availability.max` declares the highest availability topology the package architecture supports (`"none"`, `"pod"`, or `"node"`). When a cluster requests a higher level (for example, `"zone"`), Kix clamps `availability.level` inside the package to `meta.availability.max` so replica counts and `topologySpreadConstraints` never exceed what the software can safely run.
+
+Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment` or `scope.mkStatefulSet`.
+
+### `meta.compatibleWith` and `meta.k8s`
+
+`meta.compatibleWith.<dep>` checks the `meta.version` of the bound `<dep>` provider at evaluation time:
+
+```nix
+meta.compatibleWith.postgres = {
+  minVersion = "15";
+  maxVersion = "17";
+  reason = "Uses PostgreSQL 15+ logical replication syntax";
+};
+```
+
+Bounds are inclusive (`minVersion <= actual <= maxVersion`) and compare only up to the segment precision of the bound. For example, `maxVersion = "1.29"` accepts `"1.29.4"`, while `maxVersion = "1.29.0"` rejects `"1.29.4"`. `meta.k8s` uses the same comparison rules against `cluster.k8sVersion`.
+
+### `meta.conflictsWith`
+
+Entries in `meta.conflictsWith` prevent incompatible packages from being deployed together:
+- `"<pkg>"` forbids another instance of `<pkg>` in the **same namespace**.
+- `"cluster:<pkg>"` forbids `<pkg>` anywhere in the **same cluster**.
+- Listing the package's own name in `"cluster:<self>"` enforces a cluster-wide singleton.
+
+### `meta.podSecurity` and `meta.unsafe`
+
+Setting `meta.podSecurity` to `"restricted"`, `"baseline"`, or `"privileged"` applies the corresponding `pod-security.kubernetes.io/enforce` label to the generated `Namespace` resource. When multiple instances share a namespace, the least restrictive level wins (`privileged` > `baseline` > `restricted`).
+
+`meta.unsafe` acknowledges intentional security or isolation trade-offs so the scorecard records them as reviewed grants (`architecture.unsafeGrants`) rather than unexpected violations:
+
+| `meta.unsafe` token | What it permits |
+| --- | --- |
+| `"raw-pvc"` | Constructing a raw `PersistentVolumeClaim` via `scope.mkResource` instead of a managed storage operator. |
+| `"host-network"` | Setting `hostNetwork = true`, `hostPID = true`, or `hostIPC = true` on a pod spec. |
+| `"privileged"` | Setting `securityContext.privileged = true` on a container. |
+| `"run-as-root"` | Running containers with `runAsNonRoot = false` or `runAsUser = 0`. |
+| `"cluster-admin"` | Binding a `ServiceAccount` to the built-in `cluster-admin` `ClusterRole` or granting wildcard `*` verbs and resources. |
+
+### `meta.network`
+
+When `cluster.networkPolicy.enable = true`, Kix derives `NetworkPolicy` resources from the dependency graph. Workloads that need ambient network access not represented by a Kix resource dependency (such as scraping all pods or calling external webhooks) declare that access in `meta.network`:
+
+```nix
+meta.network = {
+  intents.deployment = {
+    egress = [
+      {
+        to = "apiserver";
+      }
+      {
+        to = "world";
+        ports = [ { port = 443; protocol = "TCP"; } ];
+      }
+    ];
+    ingress = [
+      {
+        from = "all-pods";
+        ports = [ { port = 9090; protocol = "TCP"; } ];
+      }
+    ];
+  };
+  externalIngressEntities = [ "world" ];
+};
+```
+
+- `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"all-pods"`, `"apiserver"`, `"dns"`, or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`.
+- `intents.<partName>.ingress`: list of rules where `from` is `"world"`, `"all-pods"`, or `{ entities = [ ... ]; }`, with optional `ports`.
+- `externalIngressEntities`: list of Cilium entity names (such as `["world"]` or `["remote-node"]`) used when this package acts as a cluster ingress controller.
+
+---
+
+## options
+
+`options` defines the configuration schema for `instances.<name>.config` using standard NixOS module options (`lib.mkOption`) or [`kix.options.*` helpers](#reusable-option-sets).
+
+```nix
+options = {
+  logLevel = lib.mkOption {
+    type = lib.types.enum [ "debug" "info" "warn" "error" ];
+    default = "info";
+    description = "Minimum log severity emitted by the server.";
+  };
+
+  extraEnv = lib.mkOption {
+    type = lib.types.attrsOf lib.types.str;
+    default = { };
+    description = "Additional environment variables passed to the main container.";
+  };
+};
+```
+
+### Evaluation order and module priority
+
+When Kix evaluates an instance, it merges configuration layers using the NixOS module system in the following priority order (lowest number wins):
+
+1. **Option defaults** (`options.<name>.default`): priority `1500`.
+2. **Package `config` block** (top-level `config` in the package file): wrapped with `lib.mkDefault` and rewritten to priority `1250` so package-level computed defaults override option defaults but yield to dependency injections and instance config.
+3. **Dependency config injections** (`deps.<arg>.config` from downstream consumers) and **instance `config`** (`instances.<name>.config`): priority `1000` (or `lib.mkDefault` at `1000`, `lib.mkForce` at `50`).
+
+Both the package `config` block and instance `config` modules can take `{ config, lib, clusterConfig, ... }:` as module arguments to compute values from sibling options or cluster settings.
+
+### The option default contract
+
+Every package in a flake checked by `kix.mkFlake` or `kix.checkPackageOptions` must obey three rules on `options` defaults so users can override individual keys without unexpectedly wiping sibling defaults:
+
+1. **No untyped options with non-empty attrset defaults.** An option without a `type` (or typed as `lib.types.anything` / `lib.types.raw`) cannot have a non-empty attribute set as its `default`, because setting one subkey in `instances.<name>.config` replaces the entire attribute set. Use a submodule (`lib.types.submodule`) instead.
+2. **No `attrsOf` or `lazyAttrsOf` with non-empty defaults.** `lib.types.attrsOf` replaces the default map wholesale when a user sets a single key unless merged carefully, and prevents per-key schema documentation. Define known keys as explicit options or put user extensions in `extra*` options with `default = { };`.
+3. **Submodule defaults must match field defaults.** If a `lib.types.submodule` option has `default = { foo = "bar"; };`, the `foo` option inside that submodule must also declare `default = "bar";` so specifying another field in the submodule does not drop `foo`.
+
+---
+
+## Reusable option sets
+
+`kix.options.*` provides pre-typed option schemas that pair directly with composition helpers like `kix.expose`, `kix.monitor`, and `kix.healthCheck`.
+
+### `kix.options.*` builders
+
+| Helper | Signature | Generated options and types |
+| --- | --- | --- |
+| `kix.options.image` | `{ repository, tag, digest ? "", pullPolicy ? "IfNotPresent" }` | Submodule with `repository` (`str`), `tag` (`str`), `digest` (`str`), and `pullPolicy` (`"Always"` \| `"IfNotPresent"` \| `"Never"`). Consumed by `kix.image.ref`. |
+| `kix.options.resources` | `{ cpu, memory, limitsCpu ? null, limitsMemory ? memory }` | Submodule with `requests.cpu`, `requests.memory`, `limits.cpu` (nulls stripped), and `limits.memory`, all validated by `kix.types.quantity`. Ready to pass directly to a container's `resources` field. |
+| `kix.options.env` | `description` (string) | `lib.mkOption { type = lib.types.attrsOf (lib.types.nullOr lib.types.str); default = { }; description = ...; }`. |
+| `kix.options.ingress` | `defaultSubdomain` (string) | Submodule with `enable` (`bool`, default `true`), `subdomain` (`str`, default `defaultSubdomain`), `host` (`nullOr str`, default `null`), `tls` (`bool`, default `true`), `annotations` (`attrsOf str`, default `{ }`), and `paths` (`nullOr (listOf ...)`). Consumed by `kix.expose`. |
+| `kix.options.monitor` | `{ enabled ? true, interval ? "30s", scrapeTimeout ? null }` | Submodule with `enable` (`bool`), `interval` (`str`), `scrapeTimeout` (`nullOr str`), and `labels` (`attrsOf str`). Consumed by `kix.monitor`. |
+| `kix.options.alerts` | `{ enabled ? true }` | Submodule with `enable` (`bool`), `disabled` (`listOf str`, alert names to skip), and `overrides` (`attrsOf (submodule { expr; "for"; severity; labels; annotations; })`). Consumed by `kix.monitor` and `kix.alerts`. |
+| `kix.options.healthCheck` | `{ enabled ? true }` | Submodule with `enable` (`bool`, default `enabled`). Consumed by `kix.healthCheck`. |
+| `kix.options.oidc` | `{ scopes, autoLogin ? null }` | Submodule with `enable` (`bool`, default `true`), `scopes` (`listOf str`, default `scopes`), and optional `autoLogin` (`bool`, included only when `autoLogin != null`). |
+
+### Resource quantities (`kix.types.quantity` and `kix.parseQuantity`)
+
+`kix.types.quantity` is a NixOS option type that accepts standard Kubernetes resource quantity strings (such as `"100m"`, `"0.5"`, `"256Mi"`, `"2Gi"`, or `"1e3"`) and rejects malformed suffixes or numbers exceeding 64-bit signed integer limits or 18 significant digits.
+
+To compare or compute resource quantities in Nix code, use `kix.parseQuantity`:
+
+```nix
+# Returns millicores (integer) when the first argument is "cpu"
+cpuMillis = kix.parseQuantity "cpu" config.resources.requests.cpu; # "250m" -> 250, "2" -> 2000
+
+# Returns bytes (integer) for memory or storage
+memBytes = kix.parseQuantity "memory" config.resources.requests.memory; # "256Mi" -> 268435456
+```
+
+### Escape hatches and guard helpers
+
+Packages often expose an escape hatch option (`extraSpec`, `extraEnv`, `extraArgs`, or `settings`) so cluster operators can set fields not covered by first-class options. Use Kix's guard helpers to merge operator overrides while protecting invariants owned by the package:
+
+| Helper | Signature | Behavior |
+| --- | --- | --- |
+| `kix.mergeGuarded` | `{ who, locked, what ? "extraSpec" } base overrides` | Recursively merges `overrides` onto `base`, but throws an evaluation error naming `who` and `what` if `overrides` sets any attribute path listed in `locked` (for example, `[ "replicas" "selector" ]` or `[ "template.spec.serviceAccountName" ]`). |
+| `kix.mergeEnv` | `{ who, owned ? [ ], defaults ? { } } userEnv` | Validates that `userEnv` does not set any environment variable name in `owned`, merges `defaults // userEnv`, and passes the result to `kix.mkEnvVars`. |
+| `kix.guardArgs` | `{ who, option ? "extraArgs", owned } userArgs` | Validates a list of CLI flag strings (`userArgs`), throwing an error if any flag matches a prefix in `owned` (matching `--flag`, `--flag=value`, or `-f`), and returns `userArgs` unchanged. |
+
+```nix
+# Guarding CLI flags and environment variables owned by typed options
+args = [
+  "--storage.tsdb.retention.time=${config.retention}"
+  "--web.listen-address=:9090"
+] ++ kix.guardArgs {
+  who = "prometheus";
+  owned = [ "--storage.tsdb.retention.time" "--web.listen-address" ];
+} config.extraArgs;
+
+env = kix.mergeEnv {
+  who = "myapp";
+  owned = [ "DATABASE_URL" "PORT" ];
+  defaults = { LOG_FORMAT = "json"; };
+} config.extraEnv;
+```
+
+---
+
+## build and deps
+
+### `build` function arguments
+
+Each function in `build` is called via pattern matching on its attribute set parameter list. Kix recognizes the following built-in framework arguments, and treats **any other argument name** as a cross-package dependency request:
+
+| Built-in argument | Description |
+| --- | --- |
+| `self` | Lazy fixed point of the merged parts attribute set returned across all `build` entries. Use `self.<partName>` to reference sibling resources in the same package. |
+| `config` | Evaluated package options (`options` merged with package `config`, dependency injections, and `instances.<name>.config`). |
+| `clusterConfig` | Read-only cluster parameters (`domain`, `name`, `k8sVersion`, `availability`, `networkPolicyEnabled`, `podCidr`, `serviceCidr`). |
+| `scope` | Instance-scoped resource builders (identical to outer `scope`). |
+| `lib` | Standard `nixpkgs.lib`. |
+| `kix` | Framework helpers. |
+| `deps` | Attribute set of all bound dependencies declared across `build` entries and `deps`. |
+| `availability` | Resolved availability helper for the instance. |
+
+### Declaring dependencies
+
+Any argument to a `build` function outside the built-in list above requests another package instance by instance name, `aliases`, `meta.defaultAliases`, or `meta.roles`:
+
+- **Required dependency** (`{ postgres, ... }:` without `?`): Kix requires a matching instance (or auto-instantiates the package if `cluster.autoInstantiate = true`).
+- **Optional dependency** (`{ prometheus ? null, ... }:` with `? null`): Bound to the provider's output object if present in the cluster, or `null` if absent.
+
+When a dependency is bound, the argument receives the provider's consumer view:
+- `dep.out`: Full output attribute set (`dep.root.resource.out // dep.root.out`).
+- Top-level convenience fields: every key in `dep.out` (except reserved keys `out`, `manifest`, `rawManifest`, `outPath`, `requires`, `postHooks`, `resource`, and `crds`) is also promoted directly onto `dep` (for example, `postgres.fqdn` and `postgres.port`).
+- `dep.crds`: Map of `<Kind> = crdResource` for any CRDs in the provider's `crds` part folder.
+
+### Enriching dependencies with `deps.<arg>`
+
+The top-level `deps` attribute set lets a consumer package inject configuration into an upstream provider or attach dependency-specific assertions and warnings:
+
+```nix
+deps.postgres = {
+  config = consumerConfig: {
+    databases.${scope.instanceName} = {
+      owner = consumerConfig.dbUser;
+    };
+  };
+  assertions = pg: [
+    {
+      assertion = pg.out.tlsEnabled or false;
+      message = "myapp requires postgres to have TLS enabled.";
+    }
+  ];
+  warnings = pg:
+    lib.optional (pg.out.maxConnections or 100 < 200)
+      "myapp recommends postgres maxConnections >= 200.";
+};
+```
+
+| `deps.<arg>` field | Type | Description |
+| --- | --- | --- |
+| `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider locked the target option with `kix.mkLocked`. |
+| `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. |
+| `warnings` | `dep: [ string ]` | Warnings evaluated only when `<arg>` is non-null. |
+
+### Built-in dependency contract helpers (`kix.contracts.*`)
+
+Instead of writing repetitive `deps.<arg>.assertions` blocks, use `kix.contracts.*`:
+
+| Contract helper | Signature | What it validates on `dep` |
+| --- | --- | --- |
+| `kix.contracts.postgresDatabase` | `{ who, database ? null }` | Checks `dep.fqdn` and `dep.port`, and (when `database != null`) checks `dep.databases.${database}.secret` and `.user`. |
+| `kix.contracts.gateway` | `{ who }` | Checks `dep.name` and `dep.namespace` for Gateway API `parentRefs`. |
+| `kix.contracts.oidcProvider` | `{ who }` | Checks `dep.issuerUrl` and `dep.internalUrl`, plus `dep.jwksUrl` and `dep.tokenUrl` when exposed. |
+| `kix.contracts.otlpEndpoint` | `{ who, protocol ? "grpc" }` | Checks `dep.grpcEndpoint` (for `"grpc"`), `dep.httpEndpoint` (for `"http"`), or `dep.fqdn` (for `"any"`). |
+
+```nix
+deps.postgres = kix.contracts.postgresDatabase {
+  who = "grafana";
+  database = "grafana";
+};
+```
+
+---
+
+## Build entries
+
+`build` can be a single function or a list of functions (or file paths to functions). When `build` is a list:
+1. Kix inspects the function arguments of every entry and takes the union of all dependency requests. If any entry declares a dependency without a default (`{ redis }:`), the dependency is required for the package even if another entry declares `{ redis ? null }:`.
+2. Each entry is called with its requested arguments and returns an attribute set of named parts.
+3. Kix merges the returned attribute sets across all entries. Duplicate part names across entries (other than merging into the `crds` or `secrets` sub-attribute sets) throw an evaluation error.
+
+### Parts, folders, and conditional `null` entries
+
+Each attribute in a `build` return set is one of the following:
+- **A resource derivation** created by `scope.mkResource`, `scope.mkDeployment`, `scope.mkSecret`, `scope.mkCRD`, or a provider builder.
+- **`null`**, which Kix filters out automatically. Use `if config.metrics.enable then scope.mkResource { ... } else null` or `scope.mkOptional config.metrics.enable (scope.mkResource { ... })` for conditional resources.
+- **A nested folder** (up to 3 levels deep) grouping related resources, such as `rbac = { sa = ...; role = ...; binding = ...; };`.
+- **Reserved content-checked folders**:
+  - `secrets`: Every non-null entry inside `secrets = { ... };` must be created by `scope.mkSecret` or `scope.mkSecretRef`.
+  - `crds`: Every non-null entry inside `crds = { ... };` must be created by `scope.mkCRD` or `scope.mkCRDRef`. CRDs placed in `crds` are automatically exported to downstream consumers at `dep.crds.<Kind>`.
+
+### Composable build-entry helpers
+
+Because `build` accepts a list of functions, cross-cutting concerns are packaged as standalone `build` entries:
+
+```nix
+build = [
+  (
+    { self, config }:
+    {
+      deployment = ...;
+      service = ...;
+      root = self.service;
+    }
+  )
+  (kix.expose { service = "service"; })
+  (kix.monitor { service = "service"; port = "metrics"; })
+  (kix.healthCheck {
+    script = ''
+      curl -sf "http://$SERVICE_FQDN:8080/healthz"
+    '';
+    env = { self, ... }: { SERVICE_FQDN = self.service.out.fqdn; };
+  })
+];
+```
+
+See [Composition helpers](/docs/reference/composition-helpers/) for the full reference on `kix.expose`, `kix.monitor`, `kix.alerts`, and `kix.healthCheck`.
+
+---
+
+## Package diagnostics
+
+### Top-level `warnings` and `assertions`
+
+A package can define top-level `warnings` and `assertions` functions. Both receive `{ config, self, deps }` after options and `build` parts are wired:
+
+```nix
+warnings =
+  { config, deps, ... }:
+  lib.optional (config.ingress.enable && deps.gateway == null && deps.ingressNginx == null)
+    "echo: ingress.enable is true, but neither gateway nor ingressNginx is present in the cluster.";
+
+assertions =
+  { config, ... }:
+  [
+    {
+      assertion = !(config.tls.enable && config.tls.secretName == null);
+      message = "echo: config.tls.secretName must be set when config.tls.enable is true.";
+    }
+  ];
+```
+
+Failed `assertions` abort evaluation immediately with all failed messages. `warnings` are collected into `cluster.warnings` and reported by `kix validate` and `kix build`.
+
+### Structural build-time warnings
+
+During package evaluation, Kix also emits automatic structural warnings for common wiring mistakes:
+
+- **Orphaned resources**: A part defined in `build` is not reachable from `root.resource`, `root.requires`, or `root.postHooks`.
+- **Redundant `requires`**: A resource lists a dependency in `requires = [ ... ]` that is already tracked implicitly through `.out` string context in its manifest.
+- **Duplicate `requires`**: The same resource appears more than once in a `requires` list.
+- **Unordered `postHooks`**: A resource in `root.postHooks` does not depend on `root.resource` (either directly or transitively).
+
+### `kix.checkPackageOptions`
+
+`kix.checkPackageOptions` validates that a package's `options` block obeys the [option default contract](#the-option-default-contract):
+
+```nix
+kix.checkPackageOptions {
+  package = import ./pkgs/myapp;
+  who = "myapp";
+}
+```
+
+It returns a list of violation strings (empty when valid). `kix.mkFlake` runs this check automatically across all exported packages.
+
+### `kix.checkSecretKeys`
+
+When a package accepts an external Secret dependency (`{ credentialsSecret ? null }:`), use `kix.checkSecretKeys` inside `deps.<arg>.assertions` to verify that the passed Secret declares the expected keys in its `.out.keys` metadata:
+
+```nix
+deps.credentialsSecret.assertions =
+  secret:
+  kix.checkSecretKeys {
+    who = "myapp";
+    arg = "credentialsSecret";
+    dep = secret;
+    keys = [ "username" ];
+    anyOf = [ "password" "api-token" ];
+  };
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `who` | string | Required | Consumer package name used in error messages. |
+| `arg` | string | Required | Dependency argument name. |
+| `dep` | resource or `null` | Required | Bound Secret dependency (returns `[]` if `null` or if `dep.keys` is not exposed). |
+| `keys` | list of strings | `[ ]` | Keys that must all be present in `dep.keys`. |
+| `anyOf` | list of strings or `null` | `null` | When non-null, at least one key in `anyOf` must be present in `dep.keys`. |

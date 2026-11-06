@@ -18,7 +18,22 @@ When implementing new features or completing existing ones, check `ROADMAP.md` a
 
 If you want to understand internals of `kix/lib`, read `kix/lib/architecture.md`. If you edit anything in `kix/lib`, you may or may not need to update `architecture.md`.
 
-The user-facing reference docs are `docs-legacy/BEST-PRACTICES.md` (durable, principles-first) and `docs-legacy/HANDBOOK.md` (dense, low-level mechanics). When you change user-visible API surface or durable guidance, update them. The breadth-first inventory in `docs-legacy/FEATURE-CATALOG.md` is the third sibling: keep it in sync when adding new APIs. Do not create additional top-level docs; extend these.
+The user-facing documentation lives in `docs/src/content/docs/` (deployed to `https://kix.run/docs/`). When you change user-visible API surface, package-authoring helpers, cluster options, or durable conceptual guidance, update the corresponding pages in `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`. Follow `docs/CLAUDE.md` and `CLAUDE.prose.md` when editing docs. Do not create separate top-level documentation folders outside `docs/`.
+
+| Topic | Documentation file |
+|---|---|
+| Package function, `meta`, `options`, `build`, diagnostics | `docs/src/content/docs/reference/package-anatomy.mdx` |
+| `scope.mk*` resource/workload builders, `.out` surface, `kix.keep` | `docs/src/content/docs/reference/resources-and-out.mdx` |
+| `kix.*` helpers (mounts, env, expose, monitor, healthCheck, pins, availability) | `docs/src/content/docs/reference/composition-helpers.mdx` |
+| Secrets (`mkSecret`), CRDs (`mkCRD`), RBAC (`scope.rbac.*`) | `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
+| Helm (`importChart`, `helmChart`) and external imports (`mkImport`) | `docs/src/content/docs/reference/helm-and-imports.mdx` |
+| Top-level cluster options (`cluster.*`, `namespaces`, `networkPolicy`, `scorecard`) | `docs/src/content/docs/reference/cluster-configuration.mdx` |
+| Instance schema (`deps`, `ref`, `aliases`, `partsOverlays`), `mkEnv`, `mergeFragments` | `docs/src/content/docs/reference/instances-and-composition.mdx` |
+| Built-in flavors (`kix.flavors.*`), capability matrix, platform imports | `docs/src/content/docs/reference/flavors-and-capabilities.mdx` |
+| Scorecard schemas and built-in rules | `docs/src/content/docs/reference/scorecard-and-rules.mdx` |
+| Always-on cross-resource validation checks | `docs/src/content/docs/reference/validation-checks.mdx` |
+| `kix.run/*` annotations/labels, `Activation`, `PackageInstance`, deploy receipts | `docs/src/content/docs/reference/annotations-crds-and-receipts.mdx` |
+| Core architecture & mental model explanations | `docs/src/content/docs/explanation/the-dependency-graph-as-the-model.mdx`, `docs/src/content/docs/explanation/personas-packages-and-clusters.mdx`, `docs/src/content/docs/explanation/network-policy-derivation-from-the-graph.mdx`, `docs/src/content/docs/explanation/helm-integration-and-resource-adoption.mdx` |
 
 ## Housekeeping: log what you notice
 

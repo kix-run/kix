@@ -343,7 +343,7 @@ These items also apply to text the change adds under `docs/`, `housekeeping/`, a
 - T3. Could a test pass while the bug is present (feature off, level `none` only, no enforcer, a single instance, an earlier check firing first)? When two guards cover one mistake (`conflictsWith` and `annotationDomains`), test each with the other removed. Test auth and ACLs with the client libraries' discovery calls (Sentinel lookups, cluster topology commands), not only the CLI. Fix: assert the specific outcome.
 - T4. Does a new package or setting miss its `kix/package-eval.nix` entry (`settings`), or carry an unjustified `knownFailures` or other exception? Fix: add settings; grant or fix.
 - T5. Are header examples and docs snippets unevaluated? Fix: evaluate the exact snippet; a header example with a SOPS `source` is evaluated through its `stringData` twin in the test cluster, which the header names.
-- T6. Does a new public API miss HANDBOOK, FEATURE-CATALOG, the kix-migration skill, or this skill? Fix: add rows.
+- T6. Does a new public API miss `docs/src/content/docs/reference/`, the kix-migration skill, or this skill? Fix: add rows.
 - T7. Do docs, skills, examples, or lib test file names still name removed options, packages, or paths? `git grep -n -i` every spelling (`foo-bar`, `foo_bar`, `fooBar`, `foo bar`). Hits in `v2_discussions/archive/` and housekeeping history are acceptable. Fix: update them in the same change.
 - T8. Are noticed, unfixed problems missing from `housekeeping/`? Is an entry kept whose problem the change resolves, deleted while the problem holds, or written as a near-duplicate of an existing entry? Fix: one entry per problem; append to the existing entry; delete resolved ones in the same change.
 - T9. Are host prerequisites (kernel modules, `/dev/kvm`, architecture) undocumented? Fix: header line.
@@ -369,13 +369,14 @@ a source for each claim; they go in the pull request description.
 3. **List the failure modes.** For each, note the first metric that shows
    it, and whether a symptom would show before it is too late to act.
 4. **Sort each failure mode** into one of: covered by a kube-prometheus rule
-   in `prometheus-default-rules` (no package alert); a package alert, in the
-   four kinds of BEST-PRACTICES §9.6; or a dashboard concern, not an alert.
-5. **Decide vendor or write** (BEST-PRACTICES §9.6). To vendor, pin the file
+   in `prometheus-default-rules` (no package alert); a package alert (target
+   down, broken internal state, bounded capacity/quota exhaustion, or failed
+   periodic job); or a dashboard concern, not an alert.
+5. **Decide vendor or write.** To vendor, pin the file
    and its version beside the package, rewrite its selectors to the instance
    as `prometheus-default-rules` does (string substitution of the `job`
    matchers in `rebake`), and test that every expression got the selector.
-6. **Write and test the rules** against HANDBOOK §9.4 "Writing alerts" and
+6. **Write and test the rules** against `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`) and
    items Mo5 to Mo23. Test each rule with a fixture that breaks the condition
    and one that stays healthy.
 7. **Say what is covered.** The package header lists the alerts and the
@@ -409,8 +410,7 @@ not `origin/main`: on a branch behind main, a plain diff shows main's newer
 commits reversed. The package's header and `default.nix`, its
 `crds/sources.txt`, its `kix/package-eval.nix` entry, and the consumers:
 `git grep -n 'packages\.<name>\|<defaultAlias>' kix/packages clusters ludo docs`.
-Open HANDBOOK sections (§5 contract, §9 helpers, §16 netpol, §21 secrets, §22
-CRDs) only for an item you are judging. Run `git add` on new files before
+Open `docs/src/content/docs/reference/` pages (`package-anatomy.mdx`, `composition-helpers.mdx`, `secrets-crds-and-rbac.mdx`) only for an item you are judging. Run `git add` on new files before
 any Nix evaluation, and never use a `path:` flakeref.
 
 **1. Run the automation, then skip what it proves.**

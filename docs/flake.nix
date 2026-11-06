@@ -186,6 +186,7 @@
             cp -r --no-preserve=mode ${reference}/. src/content/docs/reference/package-catalog/
             chmod -R u+w src/content/docs/reference/package-catalog
             npm run check:local-imports
+            npm run check:doc-refs
           '';
 
           # `npm run build` writes the static site to ./dist.
@@ -305,6 +306,7 @@
               cd docs
 
               npm run check:local-imports
+              npm run check:doc-refs
 
               if [ ! -d node_modules ]; then
                 echo "→ installing npm dependencies (first run)"

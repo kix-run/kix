@@ -16,7 +16,6 @@ const topics = Astro.locals.starlightSidebarTopics?.topics ?? [];
 const topicLabel = topics.find((topic) => topic.isCurrent)?.label;
 const eyebrow = pageSection(topicLabel, sidebar, entry.data.title);
 const title = backticksToHtml(eyebrow?.title ?? entry.data.title);
-const lead = entry.data.description;
 ---
 
 <div class="kix-page-title">
@@ -30,7 +29,6 @@ const lead = entry.data.description;
     )
   }
   <h1 id="_top" set:html={title} />
-  {lead && <p class="lead">{lead}</p>}
   <VersionNotice />
 </div>
 

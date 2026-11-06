@@ -1,0 +1,314 @@
+---
+title: "Instances and composition"
+description: "How to place packages into namespaces, wire dependencies between them, and compose multi-environment clusters."
+---
+
+Once you have a cluster module, you populate it by declaring package instances under `instances.<namespace>.<name>`. Reach for this page when you are adding an application or database to a cluster, passing configuration values to a package, wiring a service to a dependency in another namespace, or sharing common configuration across staging and production environments.
+
+:::note[Helpful background]
+- [08. Basic dependency resolution and namespace boundaries](/docs/tutorials/08-basic-dependency-resolution-and-namespace-boundaries/): learn how Kix matches dependencies within a namespace and how to wire cross-namespace links with `ref`.
+- [10. Reuse packages across instances and environments](/docs/tutorials/10-reusing-packages/): see how to run multiple instances of the same package with different settings.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/): understand how instance dependencies control deployment ordering and network policies.
+- [Namespaces (Kubernetes docs)](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/): review how Kubernetes partitions resources inside a cluster by namespace.
+:::
+
+## Instances
+
+Each entry under `instances.<namespace>.<name>` places a managed package instance or an external resource marker (`kix.mkImport`) into `<namespace>` with the instance name `<name>`.
+
+```nix
+{ packages, ref, ... }:
+{
+  instances.apps.web = {
+    package = packages.web;
+    config = {
+      replicas = 3;
+      ingress.host = "web.example.com";
+    };
+    deps.database = ref.data.postgres;
+  };
+}
+```
+
+### Summary of instance fields
+
+| Field | Type | Default | Merge behavior across modules | Purpose |
+| --- | --- | --- | --- | --- |
+| `package` | raw function or attrset | required | single definition (conflict on duplicate) | Package function, evaluated package attribute set, or `kix.mkImport` marker. |
+| [`config`](#config) | `deferredModule` | `{ }` | NixOS module merge (`lib.mkDefault`, `lib.mkForce`) | Values evaluated against the package's `options`. |
+| [`deps`](#deps) | `attrsOf anything` | `{ }` | collision on same key is an error | Explicit dependency bindings (`ref.<ns>.<inst>`, list of `ref`s, or direct values) keyed by build argument name. |
+| [`aliases`](#aliases) | `listOf str` | `[ ]` | list merge | Dependency-resolution names for this instance. When non-empty, replaces `meta.defaultAliases`. |
+| [`optional`](#optional) | `bool` | `false` | boolean merge | Keeps the instance dormant unless an active instance transitively depends on it. |
+| [`availability`](#availability) | `null \| "none" \| "pod" \| "node" \| "zone"` | `null` | single definition | Overrides `cluster.availability.default` for this instance. |
+| [`partsOverlays`](#partsoverlays) | `listOf raw` | `[ ]` | lists concatenate in module order | Post-build functions (`scope: self: base: attrset`) that modify, add, or remove rendered parts. |
+| `labelStyle` | `"kix" \| "helm"` | `"kix"` | single definition | Selector and metadata label convention: `"kix"` (`app.kubernetes.io/*`) or `"helm"` (`app` and `release`). |
+| `selectorLabels` | `nullOr (attrsOf str)` | `null` | attribute set merge | Explicit `spec.selector.matchLabels` override for adopting workloads with immutable live selectors. |
+| `extraDeps` | `listOf raw` | `[ ]` | lists concatenate | Additional deployment-ordering dependencies (`ref.<ns>.<inst>` or resource values) on a `kix.mkImport` instance's marker. |
+| `platformIntents` | `attrsOf anything` | `{ }` | attribute set merge | Network connectivity intents for a `kix.mkImport` instance's pre-installed pods. |
+| `version` | `nullOr str` | `null` | single definition | Overrides `meta.version` on the instance's `PackageInstance` record. |
+
+### `package`, `labelStyle`, `selectorLabels`, `extraDeps`, `platformIntents`, and `version`
+
+- **`package`**: Required for every instance. Takes a package function (`{ scope, lib, kix, ... }: { ... }`), an inline package attribute set (`{ meta?; options?; build = ...; }`), or a [`kix.mkImport`](/docs/reference/helm-and-imports/) marker. Do not redefine `package` when writing an override module for an instance declared in another module; set only `config`, `deps`, `aliases`, or `partsOverlays`.
+- **`labelStyle` and `selectorLabels`**: Kubernetes forbids changing `spec.selector.matchLabels` on an existing Deployment or StatefulSet. When adopting a live workload that was installed with Helm (`app` and `release` labels), set `labelStyle = "helm"`. When the live workload uses custom selector keys, set `selectorLabels` to the exact label map from the cluster.
+- **`extraDeps` and `platformIntents`**: Valid only on `kix.mkImport` instances. Setting `extraDeps` on a managed instance fails evaluation. Each entry in `extraDeps` is a Kix resource or `ref.<namespace>.<instance>`; when the import is active, `ref` entries must point to active instances (an `extraDeps` reference does not activate a dormant `optional` instance). `platformIntents` uses the same schema as [`networkPolicy.platformIntents`](/docs/reference/cluster-configuration/#network-policy) and attaches the generated policies as dependencies of the import marker.
+- **`version`**: Overrides the version string written onto the `PackageInstance` resource. Dependency compatibility checks (`meta.compatibleWith`) still check the package's `meta.version` (or `out.version` on an import).
+
+## config
+
+`instances.<namespace>.<name>.config` sets values for the options declared in the package's `options` block.
+
+```nix
+instances.apps.web = {
+  package = packages.web;
+  config = {
+    replicas = 3;
+    ingress.host = "web.example.com";
+  };
+};
+```
+
+### Module merging and priorities
+
+Because `config` has type `deferredModule`, multiple cluster modules can contribute configuration to the same instance. Kix evaluates four layers together using `lib.evalModules`:
+
+| Priority (lower number wins) | Source | Notes |
+| --- | --- | --- |
+| `50` (`lib.mkForce`) | Any module using `lib.mkForce` | Overrides normal definitions and defaults. |
+| `100` (normal definition) | Instance `config` and dependency config injections (`deps.<arg>.config`) | Conflicting plain definitions fail evaluation with file attribution. |
+| `1000` (`lib.mkDefault`) | Instance `config` or dependency injection using `lib.mkDefault` | Wins over package-level defaults. |
+| `1250` (`packageDefaultPriority`) | `lib.mkDefault` inside the package's own `config` block | Replaces option defaults (`1500`) while yielding to any instance or injected value. |
+| `1500` (option default) | `default` in the package's `options` declarations | Base fallback value. |
+
+An instance `config` block can also be written as a module function taking `{ config, clusterConfig, lib, ... }`:
+
+```nix
+instances.apps.web.config = { config, clusterConfig, lib, ... }: {
+  ingress.host = lib.mkDefault "web.${clusterConfig.cluster.domain}";
+};
+```
+
+### Locking fields against dependency injection (`kix.mkLocked`)
+
+A package can inject configuration into one of its dependencies via `deps.<arg>.config` (for example, a database consumer injecting required PostgreSQL extensions into the database cluster). To prevent any consumer from injecting into a top-level option on an instance, wrap the value in `kix.mkLocked`:
+
+```nix
+instances.data.postgres.config.extensions = kix.mkLocked [ "pg_stat_statements" ];
+```
+
+If a consumer attempts to inject `extensions` into `data/postgres`, evaluation fails and names the consumer that tried to inject the locked field.
+
+:::tip[Use it in a task]
+See [Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/) for how packages declare options and defaults.
+:::
+
+## deps
+
+`instances.<namespace>.<name>.deps` overrides automatic dependency resolution for specific build arguments of the package.
+
+```nix
+{ packages, ref, ... }:
+{
+  instances.apps.web = {
+    package = packages.web;
+    deps = {
+      database = ref.data.postgres-primary;
+      cache = ref.apps.valkey;
+    };
+  };
+}
+```
+
+### Wiring instances with `ref`
+
+Every cluster module receives `ref` in its module arguments. Writing `ref.<namespace>.<instance>` points a dependency argument directly at that instance:
+
+- **Single instance**: `deps.database = ref.data.postgres;` resolves `database` to the package view of `instances.data.postgres`.
+- **List of instances**: `deps.registryLogins = [ ref.apps.operator-logins ref.apps.extra-logins ];` resolves the argument to a list of instance handles in the given order. Mixing `ref` pointers with non-`ref` values in the same list fails evaluation.
+- **Full dependency checks**: A `ref`-wired dependency receives the same validation and wiring as an auto-resolved dependency: `meta.scope = "namespace"` boundaries are enforced, `meta.compatibleWith` version constraints are checked, `deps.<arg>.config` injections are forwarded to the target instance, and pointing `ref` at an `optional = true` instance activates it.
+
+### Direct values and `null`
+
+- Any value that is not a `ref` (or a list of `ref`s) is passed as-is to the build argument without package view wrapping, compatibility checks, or config injection.
+- Setting `deps.<arg> = null;` behaves the same as leaving `deps.<arg>` unset: Kix falls back to automatic resolution or the build argument's default value.
+- Explicitly wiring `deps.<arg>` suppresses `availablePackages` auto-instantiation for that argument.
+
+:::tip[Use it in a task]
+See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) and [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/).
+:::
+
+## aliases
+
+`instances.<namespace>.<name>.aliases` sets the dependency-resolution aliases for an instance.
+
+```nix
+instances.apps.valkey-cache = {
+  package = packages.valkey;
+  aliases = [ "cache" "valkey" ];
+};
+```
+
+- The instance's own `<name>` (`valkey-cache` above) and any roles in the package's `meta.roles` are always registered as resolution keys.
+- When `aliases` is `[ ]` (the default), Kix registers the package's `meta.defaultAliases`.
+- When `aliases` is non-empty, it **replaces** `meta.defaultAliases`. Include any default alias the instance should still answer.
+
+When multiple instances in a cluster provide the same service (such as two PostgreSQL clusters or two ingress controllers), prefer wiring `deps.<arg> = ref.<namespace>.<instance>` on the consumer rather than inventing per-instance aliases.
+
+:::tip[Use it in a task]
+See [Use aliases and default aliases](/docs/how-to/debug-dependency-wiring/use-aliases-and-default-aliases/) for resolution order and disambiguation patterns.
+:::
+
+## optional
+
+Setting `optional = true` keeps a declared instance dormant unless an active instance transitively requires it.
+
+```nix
+instances.data.clickhouse = {
+  package = packages.clickhouse-cluster;
+  optional = true;
+  config.shards = 2;
+};
+```
+
+### When an optional instance activates
+
+Kix starts from all non-optional instances (`optional = false`) and walks the dependency graph to find all transitively required instances. An optional instance becomes active when an active instance reaches it through:
+1. a **required** build argument (one with no `? null` default) that matches the optional instance's name, `aliases`, `meta.defaultAliases`, or `meta.roles`; or
+2. an explicit `deps.<arg> = ref.<namespace>.<instance>` (or an entry in a `deps` ref list).
+
+An optional build argument (`{ prometheus ? null, ... }`) never activates a dormant optional instance, and a dormant optional instance or import never answers an optional build argument (the argument receives `null` unless an active instance matches). Note that `extraDeps` on a `kix.mkImport` instance also does not activate an optional instance.
+
+When activated, the instance is stamped with `kix.run/optional-activated: "true"` on its `PackageInstance` record and deployed normally. When dormant, it emits no manifests.
+
+## availability
+
+`instances.<namespace>.<name>.availability` overrides `cluster.availability.default` for a single instance.
+
+```nix
+instances.apps.preview = {
+  package = packages.web;
+  availability = "none";
+};
+```
+
+| Property | Value |
+| --- | --- |
+| Type | `null \| "none" \| "pod" \| "node" \| "zone"` |
+| Default | `null` (inherits `cluster.availability.default`) |
+| Maximum allowed | `cluster.availability.substrate` |
+
+An instance can request a higher or lower availability level than `cluster.availability.default`, as long as it does not exceed `cluster.availability.substrate`. If the package declares `meta.availability.max` (or a workload builder declares `availability.max`) below the requested level, Kix caps the effective level at that ceiling and emits a warning.
+
+## partsOverlays
+
+`instances.<namespace>.<name>.partsOverlays` transforms, adds, or removes resources in an instance's evaluated parts tree without modifying the package definition.
+
+```nix
+instances.apps.web = {
+  package = packages.web;
+  partsOverlays = [
+    (scope: self: base: {
+      # Modify an existing resource part:
+      deployment = base.deployment // {
+        spec = lib.recursiveUpdate base.deployment.spec {
+          template.spec.priorityClassName = self.highPriority.out.name;
+        };
+      };
+
+      # Add a new resource part:
+      highPriority = scope.mkClusterResource {
+        apiVersion = "scheduling.k8s.io/v1";
+        kind = "PriorityClass";
+        name = "web-high-priority";
+        extra.value = 1000;
+      };
+    })
+  ];
+};
+```
+
+### Evaluation order and arguments
+
+Kix evaluates an instance's parts inside a single `lib.fix` fixed point in this order:
+1. All `build` entries in the package run and merge (duplicate part names across `build` entries are an error).
+2. Cluster-wide `globalPartsOverlays` run in order.
+3. The instance's `partsOverlays` run in order.
+
+Each overlay function has signature `scope: self: base: attrset` and its return value is merged onto `base` with `//`:
+- `scope`: the instance's [resource builder scope](/docs/reference/resources-and-out/).
+- `self`: the final fixed point after all overlays have run. Read `self.<part>.out.*` when referencing another part so dependencies are tracked.
+- `base`: the parts attribute set produced before the current overlay ran. Read `base.<part>` when wrapping or modifying an existing part so you do not create an infinite recursion on `self.<part>`.
+- Setting a non-`root` part to `null` removes it from the emitted manifests (`root` itself must remain a valid resource).
+
+:::tip[Use it in a task]
+See [Patch package output with overlays](/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/) for common overlay recipes, including extending `root.out` on Helm packages.
+:::
+
+## Multi-environment stamping and fragments
+
+### `kix.mkEnv`
+
+`kix.mkEnv` stamps a reusable set of instances into environment-prefixed namespaces (`<envName>-<setName>`).
+
+```nix
+kix.mkEnv envName envConfig instanceSets
+```
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `envName` | `str` | Environment prefix prepended to each instance set key (`"${envName}-${setName}"`). |
+| `envConfig.config` | `attrs` (optional, default `{ }`) | Environment-wide parameters passed to each set function as `env.config`. |
+| `envConfig.overrides` | `attrs` (optional, default `{ }`) | Per-set, per-instance overrides (`overrides.<setName>.<instName>.{ config?, parts? }`). |
+| `instanceSets` | `attrsOf ({ ref, env } -> attrsOf instanceDef)` | Functions returning instance definitions for each logical namespace suffix `<setName>`. |
+
+```nix
+let
+  appSet = { env, ... }: {
+    api = {
+      package = packages.api;
+      config = {
+        replicas = env.config.replicas;
+        ingress.host = "api.${env.name}.example.com";
+      };
+    };
+  };
+in
+{
+  instances =
+    (kix.mkEnv "staging" {
+      config.replicas = 1;
+    } { app = appSet; })
+    // (kix.mkEnv "prod" {
+      config.replicas = 3;
+      overrides.app.api.config.replicas = 5;
+    } { app = appSet; });
+}
+```
+
+Key behaviors of `kix.mkEnv`:
+- The example above produces `instances."staging-app".api` and `instances."prod-app".api`.
+- Because dependency resolution prefers instances in the same namespace, services stamped into `"staging-app"` resolve dependencies in `"staging-app"` first.
+- `overrides.<setName>.<instName>.config` is shallow-merged (`//`) onto the instance's `config` attribute set. If you need deep module merging for nested options, define an additional module targeting `instances."<envName>-<setName>".<instName>.config` instead.
+- All environments stamped into one cluster share a single `Activation` record and deploy together. For environments that must deploy independently, build separate cluster definitions that import a shared base module.
+
+### `kix.mergeFragments`
+
+`kix.mergeFragments` combines cluster fragments authored by different teams into a single `namespaces` and `instances` configuration while rejecting collisions.
+
+```nix
+kix.mergeFragments {
+  fragments = [
+    ./teams/checkout.nix
+    ./teams/search.nix
+  ];
+  namespacePolicies = {
+    checkout.podSecurity = "restricted";
+    search.podSecurity = "restricted";
+  };
+}
+```
+
+| Field | Type | Default | Behavior |
+| --- | --- | --- | --- |
+| `fragments` | `listOf { namespaces?, instances? }` | required | Each fragment's `instances` may be an attribute set or a function `args: attrset`. Defining the same `instances.<namespace>.<name>` in more than one fragment throws an evaluation error. |
+| `namespacePolicies` | `attrsOf attrs` | `{ }` | Deep-merged with the fragments' `namespaces` definitions. Any conflicting leaf attribute across fragments or `namespacePolicies` throws an evaluation error. |
