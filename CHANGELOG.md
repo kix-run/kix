@@ -11,12 +11,16 @@ Every pull request that changes something a Kix user sees adds a line under
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-06
+
 ### Breaking
 
 - The `kix deploy --log-format json` log has a new event, `fields_not_kept`. A reader that validates each line against the deploy log schema of 0.5 rejects it: validate against the updated `cli/kix-cli/schema/deploy-log.schema.json`.
 - Each deploy now writes its build's package index to the Activation record, under `status.packageIndex`. Nothing changes when you upgrade: older Kix ignores the field, and records written without it work as before.
 - A package with `lifecycle = "stateful"` fails to build when it renders a custom resource whose kind does not declare `holdsData`. When you upgrade, add `holdsData = true` to the `scope.mkCRD`, `scope.mkCRDRef`, or `kix.mkImport` `crds` entry of each kind that keeps data deleting it loses (a database, a storage pool), and `holdsData = false` to the others (monitoring, certificates, policy). Build those custom resources with `scope.mkCR` so they carry the answer. The packages in this repository declare it already.
 - Kix writes a `kix.run/holds-data` annotation (`"true"` or `"false"`) on custom resources whose kind declares `holdsData`, and `"true"` on PersistentVolumeClaims, PersistentVolumes, and StatefulSets with volume claim templates. Cluster operators change nothing in their cluster definitions. Each marked object is re-applied to add the annotation. So is every object that depends on a marked object, directly or through other objects, because its `kix.run/depends-on` annotation names the changed object's new hash. These changes are to object metadata only, and pod templates do not change, so pods do not restart. The exception is a pod template that carries an object's `out.identityHash` as a `checksum/*` annotation (grafana, valkey, and plausible do this for their ConfigMaps and Secrets): its pods roll when that object depends on a marked one. Objects deployed by an earlier release are read as before until then. Because these objects are applied again, the first deploy after the upgrade is also the first time the new warning about fields Kubernetes did not keep (see Added) checks them. It may list fields a CRD has been dropping for a long time.
+- `cnpg-cluster` refuses `extraSpec.bootstrap.initdb.import`. Set the `import` option instead, which wires the source as a dependency and derives its network policy.
+- `filebrowser` keeps its database on the storage claim at `/data/database` and serves `/data/files`, so users survive a restart. The Deployment uses the `Recreate` strategy, because only one process can hold the database file. Release 0.5 served the whole claim, so when you upgrade, move the files already on the claim into a `files` folder at its top. Otherwise File Browser does not show them.
 
 ### Added
 
@@ -27,9 +31,7 @@ Every pull request that changes something a Kix user sees adds a line under
 
 ### Changed
 
-- `cnpg-cluster` refuses `extraSpec.bootstrap.initdb.import`. Set the `import` option instead, which wires the source as a dependency and derives its network policy.
 - Security patch upgrades: `immich` 3.3.5, `cilium` 1.19.10, `grafana` 13.1.8, and `prometheus` 3.13.5.
-- `filebrowser` keeps its database on the storage claim at `/data/database` and serves `/data/files`, so users survive a restart. The Deployment uses the `Recreate` strategy, because only one process can hold the database file.
 
 ### Fixed
 
