@@ -327,9 +327,66 @@ fn describe_versions(versions: &BTreeMap<String, Vec<String>>) -> String {
 pub fn tool(tool: Tool, want: Want) -> Result<Command, RuntimeError> {
     let mut cmd = Command::new(program_path(tool, want)?);
     if tool.program() == "nix" {
-        use_store(&mut cmd, &store_root())?;
+        let root = store_root();
+        use_store(&mut cmd, &root)?;
+        init_store(&root, || {
+            let mut init = Command::new(program_path(Tool::NixStore, Want::Shipped)?);
+            use_store(&mut init, &root)?;
+            init.arg("--init");
+            Ok(init)
+        })?;
     }
     Ok(cmd)
+}
+
+/// Create the database of the store under `root` once, before any Nix
+/// program uses it.
+///
+/// Nix creates a missing database when it first opens the store. Several
+/// Nix processes that do this at once fail with "SQLite database ... is
+/// busy", which happens on the first run of a machine, when Kix or the tests
+/// start Nix in parallel. A lock file makes one process create it while the
+/// others wait. Nix writes `schema` after the database is complete, so its
+/// presence means there is nothing to do.
+fn init_store(
+    root: &Path,
+    init: impl FnOnce() -> Result<Command, RuntimeError>,
+) -> Result<(), RuntimeError> {
+    let db = root.join("nix/var/nix/db");
+    if db.join("schema").is_file() {
+        return Ok(());
+    }
+    let fail = |message: String| RuntimeError::Store {
+        root: root.to_path_buf(),
+        message,
+    };
+    std::fs::create_dir_all(root).map_err(|e| fail(e.to_string()))?;
+    let lock =
+        std::fs::File::create(root.join(".kix-init.lock")).map_err(|e| fail(e.to_string()))?;
+    lock.lock().map_err(|e| {
+        fail(format!(
+            "could not lock {}: {e}",
+            root.join(".kix-init.lock").display()
+        ))
+    })?;
+    if db.join("schema").is_file() {
+        return Ok(());
+    }
+    let mut cmd = init()?;
+    let out = cmd.output().map_err(|e| {
+        fail(format!(
+            "could not run {}: {e}",
+            cmd.get_program().display()
+        ))
+    })?;
+    if !out.status.success() {
+        return Err(fail(format!(
+            "`nix-store --init` failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 /// Return the path of `tool`'s executable in the Kix runtime.
@@ -653,13 +710,23 @@ fn use_store(cmd: &mut Command, root: &Path) -> Result<(), RuntimeError> {
 
 /// Write `contents` to `path` through a temporary file, unless the file
 /// already holds them, so parallel Kix processes never read a partial file.
+///
+/// Each write gets its own temporary file. Threads of one process that
+/// shared a name would rename each other's file away.
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+
     if std::fs::read_to_string(path).is_ok_and(|old| old == contents) {
         return Ok(());
     }
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".nix.conf.{}", std::process::id()));
+    let tmp = dir.join(format!(
+        ".nix.conf.{}.{}",
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, contents)?;
     std::fs::rename(&tmp, path)
 }
@@ -966,6 +1033,60 @@ mod tests {
             verify_files(dir.path()).unwrap_err(),
             RuntimeError::Manifest { .. }
         ));
+    }
+
+    /// A fresh machine has no cache directory yet, and tests run Nix from
+    /// several threads at once, so the first runs prepare the store
+    /// together.
+    #[test]
+    fn threads_prepare_a_store_under_missing_folders_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("no/cache/yet/kix/store");
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| s.spawn(|| use_store(&mut Command::new("nix"), &root)))
+                .collect();
+            for h in handles {
+                h.join().unwrap().unwrap();
+            }
+        });
+        assert!(root.join("etc/nix/nix.conf").is_file());
+    }
+
+    /// One process creates the store database while the others wait, and
+    /// nobody creates it again once Nix has written its schema.
+    #[test]
+    fn the_store_is_initialised_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("missing/store");
+        let runs = std::sync::atomic::AtomicUsize::new(0);
+        let schema = root.join("nix/var/nix/db/schema");
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    init_store(&root, || {
+                        runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let mut cmd = Command::new("sh");
+                        cmd.arg("-c").arg(format!(
+                            "mkdir -p {0} && sleep 0.1 && echo 10 > {0}/schema",
+                            schema.parent().unwrap().display()
+                        ));
+                        Ok(cmd)
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(runs.into_inner(), 1);
+        assert!(schema.is_file());
+
+        let err = init_store(&dir.path().join("other"), || {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "echo broken >&2; exit 1"]);
+            Ok(cmd)
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("broken"), "{err}");
     }
 
     #[test]
