@@ -632,6 +632,36 @@ dup: 2
         );
     }
 
+    /// The charts this repository renders give the same JSON values as yq
+    /// 4.52.4 gave for the same `helm template` output. The fixtures are
+    /// Helm 4.3.1 renders: cilium with the values a test cluster passes,
+    /// and the others with their own defaults or the repository's values.
+    /// Numbers compare by type, so `1` and `1.0` differ.
+    #[test]
+    fn repository_charts_match_yq() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/helm-yaml");
+        let read = |name: String| {
+            let bytes = std::fs::read(dir.join(&name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            String::from_utf8(zstd::decode_all(&bytes[..]).unwrap()).unwrap()
+        };
+        let documents = |json: &str| -> Vec<serde_json::Value> {
+            let all: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
+            all.into_iter().filter(|d| !d.is_null()).collect()
+        };
+        for chart in [
+            "cilium",
+            "home-assistant",
+            "reflector",
+            "smartctl-exporter",
+            "test-app",
+        ] {
+            let ours = documents(&to_json(&read(format!("{chart}.yaml.zst"))).unwrap());
+            let yq = documents(&read(format!("{chart}.yq.json.zst")));
+            assert!(!yq.is_empty(), "{chart}");
+            assert_eq!(ours, yq, "{chart}");
+        }
+    }
+
     #[test]
     fn invalid_yaml_is_an_error() {
         let err = to_json("a: [1, 2\n").unwrap_err();
