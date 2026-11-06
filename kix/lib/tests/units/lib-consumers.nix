@@ -442,6 +442,42 @@ in
     (recordOf consumer).spec.interfaces.prod.sha256 == (recordOf platform).spec.consumers.acme.sha256
     || throw "the pinned hash differs from the platform's file: ${builtins.toJSON (recordOf consumer).spec.interfaces}";
 
+  # The platform's k8sVersion reaches the consumer through the interface
+  # file, and the consumer's index names the platform, so a version mismatch
+  # at deploy offers a new interface file as the fix. A consumer that sets
+  # its own value overrides the file, and the index names no platform.
+  lib-consumers-index-names-the-platform-that-set-k8s-version =
+    let
+      versioned = platformWith [
+        grant
+        { k8sVersion = "1.31"; }
+      ];
+      inherited = consumerWith { file = versioned.interfaces.acme; } [ ];
+      overridden = consumerWith { file = versioned.interfaces.acme; } [ { k8sVersion = "1.32"; } ];
+      kubernetesOf = cluster: cluster.packageIndexContent.kubernetes;
+    in
+    kubernetesOf inherited == {
+      uid = null;
+      version = "1.31";
+      versionFrom = "prod";
+    }
+    &&
+      kubernetesOf overridden == {
+        uid = null;
+        version = "1.32";
+        versionFrom = null;
+      }
+    && (kubernetesOf consumer).versionFrom == null
+    || throw "versionFrom: ${
+      builtins.toJSON (
+        map kubernetesOf [
+          inherited
+          overridden
+          consumer
+        ]
+      )
+    }";
+
   lib-consumers-interface-reads-in-modules =
     (consumer.instances.acme-app.db.out.fqdn == "db.dbns.svc.cluster.local")
     || throw "the db import does not carry the platform's out";

@@ -672,6 +672,9 @@ fn flags(prune: bool) -> PlanFlags {
 /// written. The target is a build this Kix cluster deployed here before, so
 /// only a target that names another Kubernetes cluster is refused; one from
 /// before the definition set `cluster.kubernetes.uid` rolls back as usual.
+/// A target made for another Kubernetes version rolls back too, with one
+/// line that says so, since a Kubernetes upgrade must not block a rollback
+/// during an incident.
 async fn plan_rollback(
     client: &kube::Client,
     context: Option<&str>,
@@ -708,6 +711,15 @@ async fn plan_rollback(
         )
         .await
         .map_err(|e| miette!("{e}"))?;
+    }
+    if let Some(line) = kix::cluster::kubernetes_version::note(
+        client,
+        cluster,
+        target_graph.kubernetes_version.as_deref(),
+    )
+    .await
+    {
+        crate::say!("{line}");
     }
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);

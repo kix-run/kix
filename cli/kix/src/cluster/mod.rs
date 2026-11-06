@@ -15,6 +15,7 @@ pub mod fieldsv1;
 pub mod graph;
 pub mod inventory;
 pub mod kept;
+pub mod kubernetes_version;
 pub mod migrate;
 pub(crate) mod ops;
 pub mod owned_view;

@@ -95,6 +95,59 @@ namespaces stops with a message that names that permission. The operator
 leaves such a record Queued, emits a Warning event, and retries once its
 service account is granted `get` on namespaces.
 
+## Check the Kubernetes version too
+
+A definition may also set `k8sVersion`, the Kubernetes version the build
+checks every package's `meta.k8s.minVersion` and `maxVersion` against. The
+build carries the value, and `kix deploy`, `kix plan`, and the operator
+compare it with the version the API server reports, right after the binding
+check and before anything is read or written. The comparison is as precise as
+you write the value:
+`k8sVersion = "1.31"` matches any 1.31.x, and `"1.31.4"` matches only
+1.31.4. A vendor suffix such as `+k3s1` or `-gke.1209000` on either side is
+ignored. Write the minor version. A value with a patch number stops the
+deploy after every patch upgrade, and managed clusters (GKE, EKS, AKS) apply
+those on their own.
+
+`kix status` prints the live version under the cluster ID:
+
+```
+$ kix status production --context prod
+Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
+Kubernetes version: v1.31.4+k3s1
+...
+```
+
+When the cluster runs another version, `kix deploy` and `kix plan` stop, and
+the operator marks a Queued record `Failed` with a Warning event. The message
+names both versions and the value to set, written as precisely as the
+definition writes it:
+
+```
+Kix refused to deploy production to context prod (https://prod.example:6443).
+Nothing was applied. production's definition sets k8sVersion = "1.30", but this
+cluster runs v1.31.4+k3s1. Package version checks used 1.30, so some packages
+in this build may not work on this cluster. Set k8sVersion = "1.31"; in
+production's definition, build again, and deploy again. If you are upgrading
+Kubernetes, make this change after the upgrade finishes.
+```
+
+After a Kubernetes upgrade, update `k8sVersion`, build again, and deploy. The
+new build runs the package checks against the version the cluster now runs.
+
+A consumer cluster built with `kix.interface` gets `k8sVersion` from the
+platform's interface file unless its own definition sets one. The build
+records where the value came from, and the message then names the platform
+and gives both fixes: export a new interface file from the platform after its
+upgrade and build against it, or set `k8sVersion` in the consumer's definition,
+which overrides the file.
+
+Two things go ahead on a mismatch, so that a Kubernetes upgrade never blocks
+them: `kix rollback` prints one line saying the target build was made for
+another version and rolls back anyway, and the operator keeps repairing an
+`Active` record. `kix diff` does not check. A definition that leaves
+`k8sVersion` unset is not compared, and nothing is printed.
+
 ## Move a definition to a rebuilt cluster
 
 When a Kubernetes cluster is recreated, its `kube-system` UID changes. Read

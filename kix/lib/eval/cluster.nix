@@ -827,11 +827,34 @@
       # PackageInstance marker.
       packageIndex = builtins.toFile "kix-packages.json" (builtins.toJSON packageIndexContent);
 
+      # The platform whose interface file supplied `k8sVersion`, or null when
+      # the definition writes it or nothing sets it. `kix.interface` sets the
+      # value with `mkDefault` (priority 1000), so a definition's own value
+      # outranks it and the option's priority tells the two apart. The CLI's
+      # refusal then names the platform and offers a new interface file as
+      # the fix.
+      k8sVersionFrom =
+        let
+          supplying = lib.filterAttrs (
+            _: i: cfg.k8sVersion != null && (i.facts.k8sVersion or null) == cfg.k8sVersion
+          ) cfg.interfaces;
+        in
+        if evaluated.options.k8sVersion.highestPrio == 1000 && supplying != { } then
+          builtins.head (builtins.attrNames supplying)
+        else
+          null;
+
       packageIndexContent = {
         cluster = name;
-        # The Kubernetes cluster the build is bound to, read by the CLI
-        # before it writes anything. `uid = null` means unbound.
-        kubernetes.uid = cfg.cluster.kubernetes.uid;
+        # The Kubernetes cluster the build is bound to and the version its
+        # package checks ran against, read by the CLI before it writes
+        # anything. `uid = null` means unbound; `version = null` means
+        # `k8sVersion` is unset and the CLI does not compare versions.
+        kubernetes = {
+          uid = cfg.cluster.kubernetes.uid;
+          version = cfg.k8sVersion;
+          versionFrom = k8sVersionFrom;
+        };
         packages = builtins.listToAttrs (
           map (inst: {
             name = builtins.unsafeDiscardStringContext (toString inst._packageInstance.outPath);

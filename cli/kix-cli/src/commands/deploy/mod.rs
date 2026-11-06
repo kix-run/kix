@@ -27,6 +27,7 @@ use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::binding;
 use kix::cluster::discovery;
+use kix::cluster::kubernetes_version;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult, NodeId};
@@ -503,19 +504,24 @@ async fn run_deploy_async(
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
     // Reuse the pre-confirm client, which the plan checked the build's
-    // binding through, or connect now, check it, and filter orphans shared
-    // with other Kix clusters.
+    // binding and Kubernetes version through, or connect now, check both,
+    // and filter orphans shared with other Kix clusters.
     let client = match pre_client {
         Some(c) => c,
         None => {
             let client = client::make_client(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-            binding::check(
+            let connection = binding::Connection::of_context(global.context.as_deref());
+            binding::check(&client, &connection, cluster_name, checked.kubernetes_uid())
+                .await
+                .map_err(|e| miette!("{e}"))?;
+            kubernetes_version::check(
                 &client,
-                &binding::Connection::of_context(global.context.as_deref()),
+                &connection,
                 cluster_name,
-                checked.kubernetes_uid(),
+                checked.kubernetes_version(),
+                checked.kubernetes_version_from(),
             )
             .await
             .map_err(|e| miette!("{e}"))?;

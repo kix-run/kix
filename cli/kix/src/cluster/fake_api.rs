@@ -8,7 +8,9 @@
 //! holds. An apply stores the manifest sent as it is, and a dry-run apply
 //! (`dryRun=All`) answers without storing.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
-//! resourceVersion on every change. Anything else answers 404.
+//! resourceVersion on every change. `/version` answers once
+//! [`FakeApi::serve_version`] has set what it says. Anything else answers
+//! 404.
 //!
 //! [`FakeApi::after_get`] changes an object right after the next GET of it
 //! is answered, which models a concurrent writer between a read and a delete.
@@ -80,6 +82,8 @@ struct State {
     failures: Vec<(String, u32, u16)>,
     /// Discovery also serves [`RETIRED_RECORDS`].
     retired_records: bool,
+    /// What `/version` answers, once set.
+    version: Option<Value>,
 }
 
 impl State {
@@ -162,6 +166,23 @@ impl FakeApi {
     /// the domain gate refuses.
     pub fn serve_retired_records(&self) {
         self.state.lock().unwrap().retired_records = true;
+    }
+
+    /// Answer `/version` with `git_version`, `major`, and `minor`, as the
+    /// API server reports them (`"v1.31.4+k3s1"`, `"1"`, `"31"`; EKS writes
+    /// `minor` as `"31+"`). Until this is called, `/version` answers 404.
+    pub fn serve_version(&self, git_version: &str, major: &str, minor: &str) {
+        self.state.lock().unwrap().version = Some(json!({
+            "major": major,
+            "minor": minor,
+            "gitVersion": git_version,
+            "gitCommit": "0000000000000000000000000000000000000000",
+            "gitTreeState": "clean",
+            "buildDate": "2026-01-01T00:00:00Z",
+            "goVersion": "go1.23.0",
+            "compiler": "gc",
+            "platform": "linux/amd64",
+        }));
     }
 
     /// Return the sorted names of held objects of `kind`.
@@ -252,6 +273,12 @@ impl FakeApi {
         apply: bool,
     ) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
+        if path == "/version" {
+            return match &st.version {
+                Some(info) => (200, info.clone()),
+                None => not_found(path),
+            };
+        }
         let mut kinds = KINDS.to_vec();
         if st.retired_records {
             kinds.push(RETIRED_RECORDS);

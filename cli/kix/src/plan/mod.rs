@@ -125,6 +125,10 @@ pub enum PlanError {
     /// while this one accepts only builds that name it.
     #[error("{0}")]
     Binding(Box<crate::cluster::binding::BindingError>),
+    /// The build was checked against a Kubernetes version this cluster
+    /// does not run.
+    #[error("{0}")]
+    KubernetesVersion(Box<crate::cluster::kubernetes_version::VersionError>),
     #[error("{0}")]
     Discovery(Box<FetchError>),
     #[error("{0}")]

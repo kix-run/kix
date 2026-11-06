@@ -215,6 +215,57 @@ view's JSON stays the bare array (`status::KubernetesId`).
 The lock is lifted by removing the label from the records, which the how-to
 page documents.
 
+## Kubernetes version check
+
+A definition may set `k8sVersion`, which the build checks every package's
+`meta.k8s.minVersion` and `maxVersion` against. The build carries it, as
+written, in `kix-packages.json` as `kubernetes.version` beside `uid`
+(`KubernetesBinding::version`, `StoreGraph::kubernetes_version`; absent or
+`null` means unset, and nothing is compared).
+`kubernetes.versionFrom` beside it names the platform whose interface file
+supplied the value through `kix.interface`, which sets it with `mkDefault`;
+`eval/cluster.nix` derives it from the option's priority and the loaded
+interfaces (`KubernetesBinding::version_from`,
+`StoreGraph::kubernetes_version_from`), and the refusal for such a build
+(`VersionError::MismatchInherited`) names the platform and offers a new
+interface file or an override in the definition.
+`cluster::kubernetes_version::check(client, connection, cluster, declared,
+platform)` runs right after `binding::check` at three of its sites:
+`Planner::run` under `OldSide::Cluster`, `deploy::run_deploy_async` when the
+plan did not connect (`CheckedPlan::kubernetes_version` and
+`kubernetes_version_from`), and the operator's Queued branch
+(`controller::check_version`, on the same `kix-packages.json` read as the
+binding). `kix plan --current-activation` does not connect, so it does not
+check; `kix deploy --current-activation` connects after its confirmation and
+checks then. `gc` does not run it: the garbage set does not depend on the
+version. It reads `/version` once (`kubernetes_version::live_version`,
+`LiveVersion { git_version, version }`) and parses `gitVersion` with
+`Version::parse`, which drops a leading `v` and anything from the first `-`
+or `+` (`v1.31.4+k3s1`, `v1.31.4-eks-2d5f260`, `v1.31.2-gke.1209000`), and
+falls back to `major` and `minor` (a trailing `+` on `minor` removed) when
+`gitVersion` does not parse or is all zeros, as a development build's
+`v0.0.0-master+$Format:%H$` is. `Version::accepts` compares over the parts the
+definition writes: `"1.31"` matches any 1.31.x, `"1.31.4"` only 1.31.4; when
+the live version is known less precisely than the declared one, the
+comparison stops at the parts it knows. `VersionError::Mismatch` carries the
+raw `gitVersion` and `Version::suggest`'s value, the live version written as
+precisely as the declared one, and its message follows `BindingError`'s
+shape ("Kix refused to deploy ... Nothing was applied.", cause, fix);
+`VersionError::Read` wraps a failed or unparseable `/version`. `kix plan`
+exits as it does on a binding refusal (`PlanError::KubernetesVersion`, exit
+1). `rollback::plan_rollback` calls `kubernetes_version::note` instead, which
+returns one line on a mismatch and `None` otherwise, including when the
+version cannot be read, so the rollback always goes ahead. The operator marks
+a refused Queued record Failed (`Records::fail_queued`) and publishes a
+`KubernetesVersionRefused` Warning event; a failed read (`VersionError::Read`,
+including an unparseable answer) publishes a `KubernetesVersionUnchecked`
+Warning event and returns an error, so the record stays Queued and is
+retried; an Active record is never checked. `kix status` prints
+the live `gitVersion` under the cluster ID (`status::KubernetesId`, the
+operator view's JSON `kubernetes_version`). `FakeApi::serve_version` makes
+the test apiserver answer `/version`; until it is called, `/version` is 404,
+so a test that expects no read fails loudly if one happens.
+
 The DAG-streaming `scheduler` makes each node
 eligible the moment its direct predecessors have emitted `Verdict::Ready`,
 streams independent subtrees through in parallel, and drives the inline TUI
