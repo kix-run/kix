@@ -51,6 +51,9 @@ in
       "prometheus"
       "vmOperator"
     ];
+    # One operator watches every namespace, so consumers in any namespace
+    # find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
     # This package owns the operator.victoriametrics.com annotation domain
     # (it stamps its CRDs with it); declared for the

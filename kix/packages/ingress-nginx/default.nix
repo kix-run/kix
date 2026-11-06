@@ -101,6 +101,9 @@ in
     description = "NGINX Ingress controller (legacy: upstream retired after v1.15.1; prefer envoy-gateway)";
     owner = "platform";
     defaultAliases = [ "ingressNginx" ];
+    # One controller serves Ingress objects in every namespace, so consumers
+    # in any namespace find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
     network.intents = {
       # Ingress objects name their backends at runtime, on any port, so the

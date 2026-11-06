@@ -54,6 +54,9 @@ in
     description = "Gateway API resources (GatewayClass + Gateway)";
     owner = "platform";
     defaultAliases = [ "gateway" ];
+    # One Gateway accepts HTTPRoutes from every namespace, so consumers in
+    # any namespace find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.26";
   };
 

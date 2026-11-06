@@ -7,28 +7,33 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (import ./consumer.nix { inherit packages; })
-    {
-      instances.clickhouse-system = {
-        clickhouse-operator.package = packages.clickhouse-operator;
-        clickhouse-operator-credentials = {
-          package = packages.secret;
-          aliases = [ "credentials" ];
-          config.stringData = {
-            username = "clickhouse_operator";
-            password = "swap-fixture-operator";
+    (
+      { ref, ... }:
+      {
+        instances.app.events-db.deps.clickhouse = ref.db.ch;
+
+        instances.clickhouse-system = {
+          clickhouse-operator.package = packages.clickhouse-operator;
+          clickhouse-operator-credentials = {
+            package = packages.secret;
+            aliases = [ "credentials" ];
+            config.stringData = {
+              username = "clickhouse_operator";
+              password = "swap-fixture-operator";
+            };
           };
         };
-      };
 
-      instances.db = {
-        keeper.package = packages.clickhouse-keeper;
-        ch.package = packages.clickhouse-cluster;
-        ch-credentials = {
-          package = packages.secret;
-          aliases = [ "credentials" ];
-          config.stringData.password = "swap-fixture-admin";
+        instances.db = {
+          keeper.package = packages.clickhouse-keeper;
+          ch.package = packages.clickhouse-cluster;
+          ch-credentials = {
+            package = packages.secret;
+            aliases = [ "credentials" ];
+            config.stringData.password = "swap-fixture-admin";
+          };
         };
-      };
-    }
+      }
+    )
   ];
 }

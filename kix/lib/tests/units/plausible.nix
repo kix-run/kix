@@ -206,6 +206,7 @@ let
       facadeConfig ? { },
       smtp ? false,
     }:
+    { ref, ... }:
     {
       instances.${ns} = {
         plausible = {
@@ -223,6 +224,8 @@ let
           if facade == null then
             {
               package = facadePackage;
+              # The server lives in `events`, so the cluster names it.
+              deps.clickhouse = ref.events.clickhouse;
               config = {
                 password = "events-pw";
               }

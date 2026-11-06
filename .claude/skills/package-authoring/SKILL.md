@@ -238,7 +238,10 @@ the defaults fails there.
   selectors, `crds.<Kind>` handles, and builders only where they gate,
   default, or refuse (D9, D13). Every value that names a resource derives
   from `self.<part>.out.*` so it carries string context (D24).
-- `meta.defaultAliases` when others consume it (M8); `meta.scope = "namespace"`
+- `meta.defaultAliases` when others consume it (M8); `meta.scope = "cluster"`
+  when consumers in every namespace should find its one instance by name
+  (an operator, an ingress controller, or an issuer) and it claims no role and
+  no `cluster:` conflict (M16); `meta.scope = "namespace"`
   when it hands consumers a Secret (S9); `meta.lifecycle = "stateful"` when it
   provides state others depend on (M6), and then every custom resource it
   renders is built with `scope.mkCR` from a declaration with `holdsData`; `meta.conflictsWith` only for a

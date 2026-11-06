@@ -51,6 +51,7 @@ let
     meta = {
       version = "test";
       defaultAliases = [ "prometheus" ];
+      scope = "cluster";
     };
     build =
       { self, scope, ... }:

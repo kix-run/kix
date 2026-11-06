@@ -28,12 +28,12 @@ build = { self, scope, kix, backend, ... }: { ... };
 Kix resolves `backend` inside the consumer's namespace using a strict resolution order:
 
 1. **Explicit `deps.backend`** on the instance in `cluster.nix`.
-2. **Same-namespace instance** named `backend`.
-3. **Same-namespace `aliases.backend`** mapping.
-4. **Auto-instantiated catalog package** from `availablePackages.backend` (into the consumer's namespace).
-5. **Default value** (`backend ? null`) if the package marks the dependency optional.
+2. **Same-namespace match**: an instance in the consumer's namespace whose name, `aliases`, or package `meta.defaultAliases` is `backend`.
+3. **Cluster-wide match**: an instance in another namespace whose package serves the whole cluster (`meta.scope = "cluster"`, a role in `meta.roles`, or a `cluster:` conflict; `kix.mkImport` stand-ins count). Several matches fail with a `deps` line for each.
+4. **Auto-instantiated catalog package** from `availablePackages.backend` (into the consumer's namespace, or `autoNamespace`), or an `optional = true` instance named `backend` that Kix enables when another instance depends on it. Either binds from any namespace, because the cluster definition chose where it lives.
+5. **Default value** (`backend ? null`) if the package marks the dependency optional; otherwise an error.
 
-Notice that steps 2, 3, and 4 are all scoped to the consumer's own namespace. If two namespaces both define an instance named `backend`, or if `backend` lives in another namespace entirely, Kix will not guess which one you meant. Crossing a namespace boundary is an architectural decision, so Kix makes it visible in `cluster.nix`.
+Notice that step 2 stays in the consumer's own namespace. Step 3 reaches another namespace only for a package that serves the whole cluster (such as an operator or an ingress controller), and step 4 reaches another namespace only when the cluster definition placed the instance there. If two namespaces both define an instance named `backend`, or if `backend` lives in another namespace and does not serve the whole cluster, Kix will not guess which one you meant. Crossing a namespace boundary is an architectural decision, so Kix makes it visible in `cluster.nix`.
 
 :::note[Explanation]
 See [Dependency resolution and explicit deps](/docs/explanation/the-dependency-graph/#dependency-resolution-and-explicit-deps) for the design rationale behind the resolution order.

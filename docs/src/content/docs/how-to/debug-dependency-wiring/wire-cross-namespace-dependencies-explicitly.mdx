@@ -12,6 +12,13 @@ Use an explicit `deps` entry when a package consumes an instance in another
 namespace. The wiring remains visible beside the consuming instance, and the
 package still receives the dependency through its build argument.
 
+Kix fills a package argument from the consumer's own namespace. It uses an
+instance in another namespace only when the cluster definition names it this
+way, or when the provider's package serves the whole cluster (an operator,
+an ingress controller, or a certificate issuer, for example). When the only
+match for a required argument is in another namespace, the error prints the
+`deps` line to add.
+
 This guide assumes the package already declares the dependency by naming it in
 a build function, such as `{ backend, ... }: ...`.
 

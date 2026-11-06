@@ -42,7 +42,9 @@ consumer's namespace. Check the cluster definition for spelling changes and
 for an instance that was removed or moved.
 
 If the intended provider has another name or lives in another namespace, wire
-it explicitly:
+it explicitly. When the only match is in another namespace, the error already
+prints the line to add (`To use it, add this line to instances.<namespace>.<instance>:`),
+and when several namespaces answer the name it prints one line per instance:
 
 ```nix title="cluster.nix"
 instances.apps.gateway = {

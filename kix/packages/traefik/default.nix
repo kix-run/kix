@@ -141,6 +141,9 @@ in
     description = "Traefik proxy as a Gateway API implementation (GatewayClass, Gateway, and data plane)";
     owner = "platform";
     defaultAliases = [ "gateway" ];
+    # One Gateway accepts HTTPRoutes from every namespace, so consumers in
+    # any namespace find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.26";
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph

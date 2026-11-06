@@ -32,6 +32,8 @@ counts as breaking.
 ### Breaking (no error)
 
 - `kix health` no longer reports a `completed` status. A Job that is gone is reported as missing. A finished Job now stays on the cluster and reads as `healthy`, so a script that looks for `completed` should look for `healthy`.
+- A dependency that Kix finds only in another namespace no longer binds on its own. Add `deps.<arg> = ref.<namespace>.<instance>` to the consumer, or `meta.scope = "cluster"` to the provider's package; the error prints the `deps` line to add. Packages that claim a role or declare a `cluster:` conflict, and `kix.mkImport` stand-ins, still bind from every namespace. So does an instance that Kix creates from `availablePackages` (in `autoNamespace` or elsewhere) or enables via `optional = true` to satisfy a dependency, because the cluster definition already chose where it lives. The packages in this repository that other namespaces use by name (prometheus-operator, victoria-metrics-operator, victoria-metrics-cluster, ingress-nginx, envoy-gateway, traefik, cluster-issuer, and clickhouse-operator) now set `meta.scope = "cluster"`. `meta.scope = "cluster"` also limits auto-instantiation to one instance per cluster. If consumers in two namespaces depend on a package in `availablePackages` that sets `meta.scope = "cluster"`, evaluation fails; declare one instance of the package, or remove `meta.scope = "cluster"` if the package can run in several namespaces (`"cluster"` was the default before). `meta.scope` accepts only `"cluster"` and `"namespace"`; any other value is an error.
+- An optional dependency (`x ? null`) whose only match is in another namespace now takes its default, and Kix prints a warning that names the instance and the `deps` line to add.
 
 ### Upgrade notes
 
@@ -55,6 +57,7 @@ counts as breaking.
 
 ### Changed
 
+- When several instances in other namespaces answer a dependency name, the error lists each one with a ready-to-paste `deps` line.
 - When a namespace is over its ResourceQuota, the error now lists every object Kix could not count, grouped by kind, so you can see that the real usage may be higher. Before, it left out custom resources whose kind declares no `usesAtLeast`. A kind whose `usesAtLeast` returns `{ }` runs nothing and is left out of the list; the packages in this repository now declare that for their kinds that only hold configuration, such as PrometheusRule, ServiceMonitor, Certificate, and CiliumNetworkPolicy. Each limit that is over now gets its own error.
 - `kix.guardArgs` also checks flags given as an attrset, the form a VictoriaMetrics CR's `extraArgs` takes (a key matches with or without leading dashes), and its error now reads `which this package does not accept:` followed by the reason and the option to set instead. `victoria-metrics-cluster` and `reloader` use it for the flags they refused before, so only the wording of those errors changes.
 - The first deploy after the upgrade applies the PackageInstance record again for each package that has no version, such as `persistent-volume-claim` and `storage-classes`, and for `stackgres-cluster` and `cnpg-cluster`, whose records gain a version. The record now leaves `spec.version` out instead of writing `<undefined>`, and building no longer prints `warning: package <name> has no version set`.

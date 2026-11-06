@@ -273,8 +273,22 @@
                 inherit packageMeta;
               };
               isImport = (instCfg.package._type or "") == "kix-import";
-              scope = packageMeta.scope or "cluster";
+              scope = meta.scopeOf {
+                inherit packageMeta;
+                context = "${nsName}/${instName}";
+              };
+              servesCluster = meta.servesCluster {
+                inherit packageMeta;
+                context = "${nsName}/${instName}";
+              };
               autoInstantiatedFor = instCfg._autoInstantiatedFor or null;
+              # A dependency demand created this instance from
+              # availablePackages or switched on this optional instance. The
+              # cluster author chose where it lives, so it binds from any
+              # namespace.
+              demanded =
+                (instCfg._autoInstantiatedFor or null) != null
+                || ((instCfg.optional or false) && autoResult.activatedOptionals ? "${nsName}/${instName}");
             };
           }
         ) nsInsts
@@ -424,6 +438,7 @@
                 inherit resolutionIndex;
                 namespace = nsName;
                 requester = describeRequester nsName instName instCfg;
+                requesterName = instName;
                 explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
               };
             in

@@ -83,6 +83,9 @@ in
     version = release;
     description = "Altinity ClickHouse operator: ClickHouseInstallation and ClickHouseKeeperInstallation controller";
     defaultAliases = [ "clickhouseOperator" ];
+    # One operator watches every namespace, so consumers in any namespace
+    # find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
   };
 
