@@ -377,6 +377,10 @@ fn fetch(spec: &FetchSpec, algo: &str, hash_hex: &str, out: &Path) -> Result<(),
     let chart = format!("{} {} from {}", spec.name, spec.version, spec.repo);
     let tmp = tempdir()?;
     let dest = tmp.path().join("pull");
+    std::fs::create_dir(&dest).map_err(|source| HelmError::Io {
+        path: dest.clone(),
+        source,
+    })?;
     let mut cmd = helm(&spec.helm, tmp.path())?;
     // A pull needs the network, so it keeps the proxy and certificate
     // settings that `helm` would otherwise lose with the environment.
