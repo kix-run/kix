@@ -19,7 +19,8 @@ has enough storage, CPU, and memory before deploying it.
 
 ## Add the stack
 
-Declare the five package instances in one namespace:
+Declare the five monitoring packages and the Grafana administrator Secret in
+one namespace:
 
 <Snippet {...victoriaMetricsHaStack} />
 
@@ -33,10 +34,15 @@ The package dependencies connect the components:
 - The operator supplies the custom resource definitions and reconciles the
   VictoriaMetrics workloads.
 
-The catalogue defaults create three vmstorage replicas, two vmselect replicas,
-two vminsert replicas, two VMAgent replicas, and two replicas for each alerting
-component. Pod disruption budgets allow one unavailable replica per component,
-and preferred pod anti-affinity spreads replicas across nodes when possible.
+Each component chooses its default replica count from the cluster's
+availability level via `kix.availability.pick`. At `node` and `zone`
+availability, those defaults create three vmstorage replicas, two vmselect
+replicas, two vminsert replicas, two VMAgent replicas, and two replicas for each
+alerting component (at `none` availability they run one replica, and at `pod`
+availability vmstorage, VMAgent, and VMAlert remain at one replica while
+vmselect and vminsert run two). Pod disruption budgets allow one unavailable
+replica per multi-replica component, and preferred pod anti-affinity spreads
+replicas across nodes when possible.
 
 ## Set retention and storage
 

@@ -133,6 +133,9 @@ Check these common causes:
   `clusterDomain` suffix.
 - Network policy blocks DNS or outbound connections from `tunnel-system`.
 
-When you rotate the tunnel token, replace the value in the encrypted file and
-deploy again. Restart the connector pods after the Secret update so each
-process reads the new token.
+When you rotate a SOPS-backed `packages.secret` token, replace the value in the
+encrypted file and deploy again; Kix updates the `checksum/tunnel-token` pod
+annotation from the Secret's identity hash, which rolls the connector pods
+automatically. When the token comes from an externally managed
+`packages.secret-ref` Secret instead, wire a `reloader` dependency or restart
+the connector pods after the external Secret changes.

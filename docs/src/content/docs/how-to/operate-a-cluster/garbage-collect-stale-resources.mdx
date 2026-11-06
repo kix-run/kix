@@ -25,9 +25,10 @@ It currently deletes those after confirmation without listing them in the
 plan. Use hard mode when the confirmation plan must be a complete inventory of
 live garbage.
 
-It also deletes orphans that a `kix deploy` without `--prune` listed and kept.
-That deploy records the builds they came from on its Activation, and the plan
-lists them under **Orphans kept by earlier deploys**.
+It also deletes orphans that an earlier `kix deploy` without `--prune` listed
+and kept. That deploy records the builds they came from on its Activation; the
+plan lists them under **Orphans kept by earlier deploys (warn-only)** and
+deletes them along with the rest of the garbage after confirmation.
 
 Check the package, kind, namespace, and name of each resource before approving
 the plan. Kix deletes dependants before their dependencies.
