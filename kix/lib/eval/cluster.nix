@@ -903,7 +903,8 @@
                 namespace = nsName;
                 inherit quotas resources;
                 # Pass every custom resource, so the refusal can list the
-                # ones whose kind declares no `usesAtLeast`.
+                # ones whose kind declares no `usesAtLeast`. A kind in a
+                # built-in group (`*.k8s.io`) still counts when it declares one.
                 customResources =
                   map
                     (r: {
@@ -912,7 +913,11 @@
                     })
                     (
                       builtins.filter (
-                        r: r ? rawManifest && k8s.facts.isForeignGroup (plain (r.rawManifest.apiVersion or ""))
+                        r:
+                        r ? rawManifest
+                        && (
+                          (r.usesAtLeast or null) != null || k8s.facts.isForeignGroup (plain (r.rawManifest.apiVersion or ""))
+                        )
                       ) sealed
                     );
               }

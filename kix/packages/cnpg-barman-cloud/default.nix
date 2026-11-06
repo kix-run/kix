@@ -307,6 +307,7 @@ in
         factBehavior.endpoint = "conduct";
         # Configuration only. The backups it points at outlive it.
         holdsData = false;
+        usesAtLeast = _: { };
       };
 
       serviceAccount = scope.mkResource {

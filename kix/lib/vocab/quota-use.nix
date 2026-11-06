@@ -271,7 +271,7 @@ rec {
   uncountedReason =
     kind:
     if kind == "DaemonSet" then
-      "1 pod per node (Kix does not know how many nodes the cluster has)"
+      "1 pod per matching node (Kix does not know how many nodes the cluster has)"
     else if kind == "CronJob" then
       "pods start on a schedule (Kix does not know how many run at once)"
     else
@@ -342,11 +342,23 @@ rec {
         }) (builtins.groupBy (f: f.kind) notCountedCustom)
       );
 
-      notCountedLines =
-        map (f: "    ${f.name}: ${uncountedReason f.kind}") notCountedBuiltin
+      customGroupNames = builtins.concatStringsSep ", " (
+        map (g: "${toString g.count} ${g.kind}") customGroups
+      );
+
+      # The built-in kinds Kix cannot count only use what their pods use, so
+      # they are left out of the list for a key that counts something else
+      # (storage, services, object counts).
+      notCountedLinesFor =
+        key:
+        lib.optionals (rejectedBy key == "pods") (
+          map (f: "    ${f.name}: ${uncountedReason f.kind}") notCountedBuiltin
+        )
         ++ lib.optional (customGroups != [ ]) (
-          "    ${builtins.concatStringsSep ", " (map (g: "${toString g.count} ${g.kind}") customGroups)}: "
-          + "pod usage is not declared by their packages (most custom resources create no pods, but Kix cannot verify this)"
+          if rejectedBy key == "pods" then
+            "    ${customGroupNames}: pod usage is not declared by their packages (most custom resources create no pods, but Kix cannot verify this)"
+          else
+            "    ${customGroupNames}: usage is not declared by their packages (Kix cannot verify what they use)"
         );
 
       messageFor =
@@ -354,7 +366,14 @@ rec {
         let
           charged = chargedKey key;
           contributing = builtins.filter (f: (f.use.${charged} or 0) > 0) counted;
-          fix = if key == "pods" then "run fewer pods" else "use less ${key}";
+          notCountedLines = notCountedLinesFor key;
+          fix =
+            if key == "pods" then
+              "run fewer pods"
+            else if isCount key then
+              "create fewer ${key}"
+            else
+              "use less ${key}";
         in
         builtins.concatStringsSep "\n" (
           [

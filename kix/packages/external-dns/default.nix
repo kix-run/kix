@@ -421,12 +421,16 @@ in
           map (
             ref:
             lib.nameValuePair "crdRef${ref.kind}" (
-              scope.mkCRDRef {
-                group = "gateway.networking.k8s.io";
-                inherit (ref) kind plural;
-                version = "v1";
-                crdScope = "Namespaced";
-              }
+              scope.mkCRDRef (
+                {
+                  group = "gateway.networking.k8s.io";
+                  inherit (ref) kind plural;
+                  version = "v1";
+                  crdScope = "Namespaced";
+                }
+                # A route runs no pods; a Gateway may, through its controller.
+                // lib.optionalAttrs (ref.kind != "Gateway") { usesAtLeast = _: { }; }
+              )
             )
           ) crdRefs
         );

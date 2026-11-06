@@ -400,7 +400,7 @@ in
             Deployment/w: 2 pods
 
           Not counted (actual usage may be higher):
-            DaemonSet/w: 1 pod per node (Kix does not know how many nodes the cluster has)
+            DaemonSet/w: 1 pod per matching node (Kix does not know how many nodes the cluster has)
             2 PrometheusRule, 1 Widget: pod usage is not declared by their packages (most custom resources create no pods, but Kix cannot verify this)
 
           To fix this, raise the pods limit in "app-quota" or run fewer pods in namespace "app".'';
@@ -450,6 +450,82 @@ in
       ])
     )
     || throw "a build over its namespace's quota was not refused, or one within it was";
+
+  # A plain custom resource (no CRD declaration) in a namespace over its
+  # quota reaches the check without breaking it and adds nothing to the
+  # total, and a kind in a `*.k8s.io` group is counted when it declares
+  # `usesAtLeast`. A failed cluster assertion throws, so the message text
+  # is checked in `quota-use-names-what-it-cannot-count` instead.
+  quota-use-cluster-passes-custom-resources =
+    let
+      withWidget = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            deployment = scope.mkDeployment {
+              name = "web";
+              spec = {
+                replicas = 3;
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.labels = scope.selectorLabels;
+                  spec = podSpec;
+                };
+              };
+            };
+            crd = scope.mkCRDRef {
+              group = "example.com";
+              kind = "Widget";
+              plural = "widgets";
+              version = "v1";
+            };
+            widget = scope.mkCR self.crd {
+              name = "w1";
+              spec = { };
+            };
+            root = {
+              resource = self.deployment;
+              requires = [ self.widget ];
+            };
+          };
+      };
+      withSnapshot = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            crd = scope.mkCRDRef {
+              group = "snapshot.storage.k8s.io";
+              kind = "VolumeSnapshot";
+              plural = "volumesnapshots";
+              version = "v1";
+              usesAtLeast = _: { pods = 5; };
+            };
+            snapshot = scope.mkCR self.crd {
+              name = "s1";
+              spec = { };
+            };
+            root = self.snapshot;
+          };
+      };
+      cluster =
+        package: pods:
+        mkCluster [
+          {
+            instances.app.web.package = package;
+            namespaces.app.resourceQuota.pods = pods;
+          }
+        ];
+      builds = cluster: builtins.deepSeq (manifests cluster) true;
+    in
+    (
+      builds (cluster withWidget "3")
+      && evalFails (cluster withWidget "2")
+      && evalFails (cluster withSnapshot "4")
+      && builds (cluster withSnapshot "5")
+    )
+    || throw "a plain custom resource changed the quota outcome, or a *.k8s.io kind with usesAtLeast was not counted";
 
   # Count custom resources via the CRD's `usesAtLeast` declaration
   # (`cnpg-operator` Cluster: `spec.instances` * `spec.resources`).

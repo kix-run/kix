@@ -248,10 +248,21 @@ in
       hostPath = path: type: { hostPath = { inherit path type; }; };
     in
     {
+      # Nodes, volumes, and snapshots are records the node agent keeps; a
+      # backup or restore runs in the agent too, but that is not checked here.
       crds = {
-        zfsNodes = scope.mkCRD { spec = vendored "zfsnodes.zfs.openebs.io.json"; };
-        zfsVolumes = scope.mkCRD { spec = vendored "zfsvolumes.zfs.openebs.io.json"; };
-        zfsSnapshots = scope.mkCRD { spec = vendored "zfssnapshots.zfs.openebs.io.json"; };
+        zfsNodes = scope.mkCRD {
+          spec = vendored "zfsnodes.zfs.openebs.io.json";
+          usesAtLeast = _: { };
+        };
+        zfsVolumes = scope.mkCRD {
+          spec = vendored "zfsvolumes.zfs.openebs.io.json";
+          usesAtLeast = _: { };
+        };
+        zfsSnapshots = scope.mkCRD {
+          spec = vendored "zfssnapshots.zfs.openebs.io.json";
+          usesAtLeast = _: { };
+        };
         zfsBackups = scope.mkCRD { spec = vendored "zfsbackups.zfs.openebs.io.json"; };
         zfsRestores = scope.mkCRD { spec = vendored "zfsrestores.zfs.openebs.io.json"; };
       };

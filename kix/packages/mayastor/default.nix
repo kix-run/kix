@@ -329,6 +329,8 @@ in
           installedBy = self.operatorDiskpool;
           # A pool is the disk the replicas of every volume on it live on.
           holdsData = true;
+          # The io-engine on the node serves the pool; no pod is created for it.
+          usesAtLeast = _: { };
           readiness.condition = {
             type = "PoolReady";
             status = "True";

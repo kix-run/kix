@@ -556,11 +556,14 @@ in
         throw (lib.concatStringsSep "\n" argProblems)
       else
         {
+          # Routes, grants, policies, and the class run no pods; a Gateway
+          # may, through its controller.
           # The same markers envoy-gateway and kix.expose emit, with the
           # Gateway API's readiness: a GatewayClass is usable once
           # Accepted=True, a Gateway once Programmed=True.
           gatewayClassCrd = crdRef "GatewayClass" "gatewayclasses" "v1" {
             crdScope = "Cluster";
+            usesAtLeast = _: { };
             readiness.condition = {
               type = "Accepted";
               status = "True";
@@ -573,11 +576,11 @@ in
               status = "True";
             };
           };
-          httpRouteCrd = crdRef "HTTPRoute" "httproutes" "v1" { };
-          grpcRouteCrd = crdRef "GRPCRoute" "grpcroutes" "v1" { };
-          tlsRouteCrd = crdRef "TLSRoute" "tlsroutes" "v1" { };
-          referenceGrantCrd = crdRef "ReferenceGrant" "referencegrants" "v1beta1" { };
-          backendTlsPolicyCrd = crdRef "BackendTLSPolicy" "backendtlspolicies" "v1" { };
+          httpRouteCrd = crdRef "HTTPRoute" "httproutes" "v1" { usesAtLeast = _: { }; };
+          grpcRouteCrd = crdRef "GRPCRoute" "grpcroutes" "v1" { usesAtLeast = _: { }; };
+          tlsRouteCrd = crdRef "TLSRoute" "tlsroutes" "v1" { usesAtLeast = _: { }; };
+          referenceGrantCrd = crdRef "ReferenceGrant" "referencegrants" "v1beta1" { usesAtLeast = _: { }; };
+          backendTlsPolicyCrd = crdRef "BackendTLSPolicy" "backendtlspolicies" "v1" { usesAtLeast = _: { }; };
 
           serviceAccount = scope.mkResource {
             apiVersion = "v1";
