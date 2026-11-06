@@ -298,6 +298,7 @@ in
         inherit installedBy;
         readiness = rules.policyReadiness;
         holdsData = false;
+        usesAtLeast = _: { };
       };
 
       ccnpCrd = scope.mkCRDRef {
@@ -309,6 +310,7 @@ in
         inherit installedBy;
         readiness = rules.policyReadiness;
         holdsData = false;
+        usesAtLeast = _: { };
       };
 
       # Under "always", a `kubectl run` debug pod, an operator's own Job, or
@@ -401,6 +403,7 @@ in
         plural = "helmchartconfigs";
         version = "v1";
         holdsData = false;
+        usesAtLeast = _: { };
       };
 
       helmChartConfig = scope.mkCR helmChartConfigCrd {

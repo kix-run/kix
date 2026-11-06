@@ -220,6 +220,7 @@ let
           readiness = operandReadiness;
           usesAtLeast = usesAtLeastFor;
         }
+        // lib.optionalAttrs (!def.operand) { usesAtLeast = _: { }; }
       )
     );
 in

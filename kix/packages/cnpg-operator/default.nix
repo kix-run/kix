@@ -422,10 +422,12 @@ in
         # resource is deleted unless `databaseReclaimPolicy` is `delete`, so
         # it is marked as holding data. Backups live in the object store and
         # outlive their Backup objects. The other kinds are configuration.
+        # Only a Cluster and a Pooler run pods.
         crds = {
           backups = scope.mkCRD {
             spec = vendored "backups.${group}.json";
             holdsData = false;
+            usesAtLeast = _: { };
           };
           # A ScheduledBackup and a Pooler report no conditions; a Pooler's
           # consumers wait on its Service's endpoints instead.
@@ -433,6 +435,7 @@ in
             scope.mkCRD {
               spec = vendored "scheduledbackups.${group}.json";
               holdsData = false;
+              usesAtLeast = _: { };
             }
           );
           poolers = gate (
@@ -455,6 +458,7 @@ in
           failoverQuorums = scope.mkCRD {
             spec = vendored "failoverquorums.${group}.json";
             holdsData = false;
+            usesAtLeast = _: { };
           };
           clusters = gate (
             scope.mkCRD {
@@ -519,6 +523,7 @@ in
               spec = vendored "databases.${group}.json";
               readiness = applied;
               holdsData = true;
+              usesAtLeast = _: { };
             }
           );
           databaseRoles = gate (
@@ -526,6 +531,7 @@ in
               spec = vendored "databaseroles.${group}.json";
               readiness = applied;
               holdsData = false;
+              usesAtLeast = _: { };
             }
           );
           publications = gate (
@@ -533,6 +539,7 @@ in
               spec = vendored "publications.${group}.json";
               readiness = applied;
               holdsData = false;
+              usesAtLeast = _: { };
             }
           );
           subscriptions = gate (
@@ -540,18 +547,21 @@ in
               spec = vendored "subscriptions.${group}.json";
               readiness = applied;
               holdsData = false;
+              usesAtLeast = _: { };
             }
           );
           imageCatalogs = gate (
             scope.mkCRD {
               spec = vendored "imagecatalogs.${group}.json";
               holdsData = false;
+              usesAtLeast = _: { };
             }
           );
           clusterImageCatalogs = gate (
             scope.mkCRD {
               spec = vendored "clusterimagecatalogs.${group}.json";
               holdsData = false;
+              usesAtLeast = _: { };
             }
           );
         };

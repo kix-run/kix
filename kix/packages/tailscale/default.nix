@@ -408,8 +408,14 @@ in
           proxyClasses = scope.mkCRD {
             spec = vendored "proxyclasses";
             readiness = ready "ProxyClassReady";
+            # A class and a policy configure proxies; the ProxyGroup and
+            # Connector that use them run the pods.
+            usesAtLeast = _: { };
           };
-          proxyGroupPolicies = scope.mkCRD { spec = vendored "proxygrouppolicies"; };
+          proxyGroupPolicies = scope.mkCRD {
+            spec = vendored "proxygrouppolicies";
+            usesAtLeast = _: { };
+          };
           proxyGroups = scope.mkCRD {
             spec = vendored "proxygroups";
             readiness = ready "ProxyGroupReady";

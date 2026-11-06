@@ -94,8 +94,15 @@ let
     defaults.requests.memory = "200Mi";
   };
 
-  # Kinds that configure the operator's workloads. Deleting one loses no data.
-  settings = file: vendored file // { holdsData = false; };
+  # Kinds that configure the operator's workloads. Deleting one loses no
+  # data, and none of them runs pods.
+  settings =
+    file:
+    vendored file
+    // {
+      holdsData = false;
+      usesAtLeast = _: { };
+    };
 
 in
 {

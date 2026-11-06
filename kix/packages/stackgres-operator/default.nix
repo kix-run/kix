@@ -971,6 +971,15 @@ in
                     "requests.storage" = cr.spec.persistentVolume.size or null;
                   };
                 }
+                # Profiles, configurations, storage definitions, and scripts
+                # are read by the clusters that name them and run no pods.
+                // lib.optionalAttrs (builtins.elem kind [
+                  "SGInstanceProfile"
+                  "SGObjectStorage"
+                  "SGPoolingConfig"
+                  "SGPostgresConfig"
+                  "SGScript"
+                ]) { usesAtLeast = _: { }; }
                 // lib.optionalAttrs (kind == "SGObjectStorage") {
                   # No pod dials the endpoint for the SGObjectStorage; the
                   # SGCluster that references it carries the address on.

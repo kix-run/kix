@@ -218,6 +218,8 @@ in
         kind = "EnvoyProxy";
         plural = "envoyproxies";
         version = "v1alpha1";
+        # A proxy configuration; the Gateway that uses it runs the pods.
+        usesAtLeast = _: { };
       };
 
       envoyProxy = scope.mkCR self.envoyProxyCrd {
@@ -237,6 +239,7 @@ in
         plural = "gatewayclasses";
         version = "v1";
         crdScope = "Cluster";
+        usesAtLeast = _: { };
         readiness.condition = {
           type = "Accepted";
           status = "True";

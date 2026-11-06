@@ -22,6 +22,7 @@ counts as breaking.
 
 ### Changed
 
+- When a namespace is over its ResourceQuota, the error now lists every object Kix could not count, grouped by kind, so you can see that the real usage may be higher. Before, it left out custom resources whose kind declares no `usesAtLeast`. A kind whose `usesAtLeast` returns `{ }` runs nothing and is left out of the list; the packages in this repository now declare that for their kinds that only hold configuration, such as PrometheusRule, ServiceMonitor, Certificate, and CiliumNetworkPolicy. Each limit that is over now gets its own error.
 - The JSON schemas of the `kix diff -o json` document and the `kix deploy --log-format json` log now say that later versions of Kix may add fields and new types of line. A program that reads them should skip the ones it does not know.
 
 ## 0.6.0 - 2026-11-06

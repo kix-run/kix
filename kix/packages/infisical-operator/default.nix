@@ -560,34 +560,44 @@ in
 
         # The controller lists every kind at start. Without a CRD its caches
         # never sync and the manager exits.
+        # Every kind syncs or generates Secrets from the manager; none runs pods.
         crds = {
-          clusterGenerators = scope.mkCRD { spec = vendored "clustergenerators"; };
+          clusterGenerators = scope.mkCRD {
+            spec = vendored "clustergenerators";
+            usesAtLeast = _: { };
+          };
           infisicalAuths = scope.mkCRD {
             spec = vendored "infisicalauths";
             readiness = condition "IsReady" "True";
+            usesAtLeast = _: { };
           };
           infisicalConnections = scope.mkCRD {
             spec = vendored "infisicalconnections";
             readiness = condition "IsReady" "True";
+            usesAtLeast = _: { };
           };
           infisicalDynamicSecrets = scope.mkCRD {
             spec = vendored "infisicaldynamicsecrets";
             readiness = condition "Reconcile" "True";
+            usesAtLeast = _: { };
           };
           # The operator sets Reconcile to True on an error and to False on
           # success.
           infisicalPushSecrets = scope.mkCRD {
             spec = vendored "infisicalpushsecrets";
             readiness = condition "Reconcile" "False";
+            usesAtLeast = _: { };
           };
           infisicalSecrets = scope.mkCRD {
             spec = vendored "infisicalsecrets";
             readiness = condition "ReadyToSyncSecrets" "True";
+            usesAtLeast = _: { };
           };
           # The operator sets no IsReady condition on this kind.
           infisicalStaticSecrets = scope.mkCRD {
             spec = vendored "infisicalstaticsecrets";
             readiness = condition "LastReconcileStatus" "True";
+            usesAtLeast = _: { };
           };
         };
 

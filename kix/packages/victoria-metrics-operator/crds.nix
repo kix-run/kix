@@ -362,6 +362,8 @@ let
     path = "/status/updateStatus";
     notEquals = "failed";
   };
+  # The configuration kinds run no pods, so `mkVMKindCRD` declares their
+  # usage as `{ }`.
   configKinds = [
     "VMServiceScrape"
     "VMPodScrape"
@@ -446,6 +448,7 @@ let
       // lib.optionalAttrs (extras ? factBehavior) {
         inherit (extras) factBehavior;
       }
+      // lib.optionalAttrs (builtins.elem def.kind configKinds) { usesAtLeast = _: { }; }
       // lib.optionalAttrs (extras ? usesAtLeast) {
         inherit (extras) usesAtLeast;
       }
@@ -473,7 +476,14 @@ let
       |> scope.crd.withVersion def.version
       |> scope.crd.withShortNames def.shortNames
       |> scope.crd.withPrinterColumns ageColumn
-      |> (crd: crd // { holdsData = false; })
+      |> (
+        crd:
+        crd
+        // {
+          holdsData = false;
+          usesAtLeast = _: { };
+        }
+      )
     );
 
   # Reference an existing prometheus-operator CRD without labels,
@@ -487,6 +497,7 @@ let
       group = promGroup;
       inherit (def) kind plural version;
       holdsData = false;
+      usesAtLeast = _: { };
     };
 
   mkPromCompat =

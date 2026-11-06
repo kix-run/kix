@@ -427,9 +427,10 @@ edge but NO netpol hole. Consequences when authoring:
   Add `persistentvolumeclaims`, `requests.storage`, or `services` with `kix.usage.add` when the
   operator always makes them (see `cnpg-operator` for `Cluster`). Count every container the operator
   always runs and whose size the custom resource sets; leave out anything the operator sizes itself.
-  A figure that is too high fails a valid build, so when unsure, leave a key out. If a CRD sets
-  `factBehavior.endpoint = "terminate"` without `usesAtLeast`, its custom resources are listed as
-  `Not counted` in quota failure messages.
+  A figure that is too high fails a valid build, so when unsure, leave a key out. A quota failure
+  lists every custom resource whose kind has no `usesAtLeast` under `Not counted`, grouped by kind.
+  Declare `usesAtLeast = _: { }` on a kind whose objects run no pods (rules, certificates, policies)
+  to drop it from that list.
 
 - **Declare `holdsData` on every CRD.** On `scope.mkCRD` or `scope.mkCRDRef`, `holdsData = true`
   when deleting a custom resource of the kind loses data (CNPG `Cluster`, `SGCluster`, mayastor's
