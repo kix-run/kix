@@ -809,6 +809,7 @@
           ) activeClusterInstances;
           index = packageIndex;
           extraDeps = clusterHookResources;
+          kubernetesUid = cfg.cluster.kubernetes.uid;
         }
         // lib.optionalAttrs (platformSide != null) {
           consumers = platformSide.recordConsumers;
@@ -828,6 +829,9 @@
 
       packageIndexContent = {
         cluster = name;
+        # The Kubernetes cluster the build is bound to, read by the CLI
+        # before it writes anything. `uid = null` means unbound.
+        kubernetes.uid = cfg.cluster.kubernetes.uid;
         packages = builtins.listToAttrs (
           map (inst: {
             name = builtins.unsafeDiscardStringContext (toString inst._packageInstance.outPath);

@@ -88,6 +88,7 @@ receipts) uses `kix::VERSION`.
 ```
 new Build (Build::of_flake, or --bundle → Build::carried; checked for a retired domain, then stamped) → Build::installable refuses a stale pin
   → kix::plan::Planner::run(build, OldSide) (kix/src/plan/planner.rs), which prints nothing and reports through PlanEvent:
+    → connect, then the binding check (`cluster::binding::check`, see "Cluster binding"): a build bound to another Kubernetes cluster, or an unbound build where a bound one has deployed, is refused before anything else is read
     → the baseline: Baseline::of_cluster (or --current-activation, OldSide::LocalCache: Baseline::of_cache)
       (store path GC'd? → reconstruct old manifests from the live objects naming the Active, Failed, or kept-orphan records: SweepScope::Records { cluster, hashes })
       → load the builds the Active record's status.orphansKeptFrom names
@@ -168,6 +169,51 @@ the flake has no such output for any system, `kix list` reports
 `NoKixOutputs`, the cluster lookups and the build keep `ClusterNotFound`,
 and `eval_cluster_name` keeps `Ok(None)`. When the check itself fails, the
 caller keeps that same original meaning. Exit codes do not change.
+
+## Cluster binding
+
+A definition may set `cluster.kubernetes.uid`, the UID of the target
+cluster's `kube-system` Namespace, which never changes for the life of a
+Kubernetes cluster and differs for every one. The build carries it in
+`kix-packages.json` as `kubernetes.uid` (`KixPackageIndex::kubernetes`,
+`StoreGraph::kubernetes_uid`; absent in builds from before the field, which
+read as unbound), the Nix-rendered Activation record carries it as the
+`kix.run/kubernetes-uid` label (`keys::KUBERNETES_UID`), and `Records::submit`
+writes the same label on an operator-driven record.
+
+`cluster::binding::check(client, connection, cluster, declared_uid)` runs in
+every command that applies a build of the definition, after it connects and
+before it reads or writes anything else: `Planner::run` under
+`OldSide::Cluster` (deploy, plan, `--plan`, `--bundle`, `--operator`),
+`deploy::run_deploy_async` when the plan did not connect
+(`--current-activation`), `gc::run_soft` and `gc::run_hard_async` right after
+connecting, and the operator's Queued branch (`controller::check_binding`,
+which reads only the build's `kix-packages.json`). It has two halves. A
+declared UID (`check_declared`) is compared with a GET of
+`/api/v1/namespaces/kube-system`; a 403 is its own refusal naming the
+permission to grant, worded for the account or for the operator's service
+account. An undeclared one (`check_unbound`) lists the Activation records
+with the label (`activation::bound_record`, one LIST with no discovery, 404
+when the CRD is absent) and refuses if any exists, whichever Kix cluster
+wrote it; it then reads the live UID too, so a label that is not this
+cluster's (records restored from another cluster, `UnboundRestored`) is
+named as such and the advice gives the live UID. `rollback::plan_rollback`
+runs only `check_declared`, once the target build is loaded: the target is a
+build this Kix cluster deployed here before, so a target from before the
+definition was bound is not a wrong-context mistake. The messages
+(`BindingError`) lead with "Kix refused to deploy ... Nothing was applied."
+and name the context and server URL from the kubeconfig
+(`binding::Connection::of_context`, no network), or the operator's own API
+server (`Connection::InCluster`); API refusals render through
+`errors::api_error` as `HTTP <code> <reason>: <message>`. The operator marks
+a refused Queued record Failed (`Records::fail_queued`) with the message and
+publishes a Warning event (`K8sEventObserver::warn_now`); on a 403 it leaves
+the record Queued, publishes the event, and returns an error so the record
+is retried. Read-only commands do not check; `kix status` prints the live
+UID in its header, and the operator view's JSON as `kubernetes_uid`; the flat
+view's JSON stays the bare array (`status::KubernetesId`).
+The lock is lifted by removing the label from the records, which the how-to
+page documents.
 
 The DAG-streaming `scheduler` makes each node
 eligible the moment its direct predecessors have emitted `Verdict::Ready`,

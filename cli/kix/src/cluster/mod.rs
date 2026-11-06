@@ -2,6 +2,7 @@
 
 pub mod activation;
 pub mod apply;
+pub mod binding;
 pub mod cancel;
 pub mod client;
 pub mod deploy_log;

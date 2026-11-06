@@ -25,6 +25,7 @@ use crate::output;
 use crate::plan;
 use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::ChangeAction;
+use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
@@ -501,14 +502,23 @@ async fn run_deploy_async(
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
-    // Reuse the pre-confirm client when available, or connect now and filter
-    // orphans shared with other Kix clusters.
+    // Reuse the pre-confirm client, which the plan checked the build's
+    // binding through, or connect now, check it, and filter orphans shared
+    // with other Kix clusters.
     let client = match pre_client {
         Some(c) => c,
         None => {
             let client = client::make_client(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+            binding::check(
+                &client,
+                &binding::Connection::of_context(global.context.as_deref()),
+                cluster_name,
+                checked.kubernetes_uid(),
+            )
+            .await
+            .map_err(|e| miette!("{e}"))?;
             let (_, shared) =
                 kix::plan::keep_shared(&client, cluster_name, checked.orphans().to_vec())
                     .await
@@ -713,6 +723,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     let cluster = p.build.graph().cluster_name.clone();
     let activation_identity_hash = p.checked.activation_identity_hash().map(str::to_string);
+    let kubernetes_uid = p.build.graph().kubernetes_uid.clone();
     let package_index = p.checked.package_index().clone();
     let build = p.build;
     let result_path = build.graph().result_dir.clone();
@@ -761,6 +772,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             &cluster,
             &source_path,
             activation_identity_hash.as_deref(),
+            kubernetes_uid.as_deref(),
             Some(&receipt),
             &package_index,
         )

@@ -7,6 +7,8 @@ use crate::client;
 use crate::output::{self, CommandResponse};
 use kix::build_source::Build;
 use kix::cluster::activation::{PinnedInterface, Record, Records, RecordsError};
+use kix::cluster::binding;
+use kix::cluster::errors::{api_error, forbidden};
 use kix::cluster::readiness;
 use kix::cluster::{discovery, inventory};
 use kix::eval::store_graph::StoreGraph;
@@ -26,6 +28,7 @@ struct ResourceStatus {
 }
 
 struct StatusResponse {
+    kubernetes: KubernetesId,
     statuses: Vec<ResourceStatus>,
 }
 
@@ -37,9 +40,11 @@ impl CommandResponse for StatusResponse {
         for s in &self.statuses {
             table.add_row([&s.name, &s.namespace, &s.kind, &s.ready, &s.status, &s.age]);
         }
-        table.to_string()
+        format!("{}\n\n{table}", self.kubernetes.line())
     }
 
+    // The JSON output is the bare array of resources; the Kubernetes ID
+    // appears only in the text header.
     fn as_json(&self) -> serde_json::Value {
         serde_json::to_value(&self.statuses).unwrap_or_default()
     }
@@ -77,6 +82,8 @@ struct ActivationStatus {
 #[derive(serde::Serialize)]
 struct OperatorStatusResponse {
     cluster: String,
+    #[serde(flatten)]
+    kubernetes: KubernetesId,
     activation: Option<ActivationStatus>,
     packages: Vec<PackageStatus>,
     unowned: Vec<PackageResourceStatus>,
@@ -87,6 +94,8 @@ impl CommandResponse for OperatorStatusResponse {
         let mut out = String::new();
 
         out.push_str(&format!("Cluster: {}\n", output::bold(&self.cluster)));
+        out.push_str(&self.kubernetes.line());
+        out.push('\n');
 
         match &self.activation {
             Some(act) => {
@@ -233,6 +242,8 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         .await
         .into_diagnostic()?;
 
+    let kubernetes = KubernetesId::read(&client).await;
+
     let opened = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
     let active = match opened.records() {
         Some(records) => records.active(cluster_name).await.into_diagnostic()?,
@@ -300,6 +311,7 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
 
     let response = OperatorStatusResponse {
         cluster: cluster_name.to_string(),
+        kubernetes,
         activation: activation_status,
         packages,
         unowned,
@@ -517,6 +529,7 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
     let discovery = discovery::discover_resources(&client)
         .await
         .into_diagnostic()?;
+    let kubernetes = KubernetesId::read(&client).await;
     // Past the domain gate: on a cluster whose records sit under a retired
     // group every object would be listed as this cluster's.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
@@ -576,8 +589,56 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
             .then_with(|| a.name.cmp(&b.name))
     });
 
-    let response = StatusResponse { statuses };
+    let response = StatusResponse {
+        kubernetes,
+        statuses,
+    };
     output::result(&response)
+}
+
+/// The Kubernetes cluster's ID, the UID of its `kube-system` Namespace,
+/// which `cluster.kubernetes.uid` names: `uid` when it could be read (the
+/// `kubernetes_uid` field of the operator view's JSON output, `null`
+/// otherwise), and why not when it could not (text output only).
+#[derive(serde::Serialize)]
+struct KubernetesId {
+    #[serde(rename = "kubernetes_uid")]
+    uid: Option<String>,
+    #[serde(skip)]
+    unread: Option<String>,
+}
+
+impl KubernetesId {
+    async fn read(client: &kube::Client) -> KubernetesId {
+        KubernetesId::of(binding::live_uid(client).await)
+    }
+
+    fn of(uid: Result<String, kube::Error>) -> KubernetesId {
+        match uid {
+            Ok(uid) => KubernetesId {
+                uid: Some(uid),
+                unread: None,
+            },
+            Err(e) if forbidden(&e) => KubernetesId {
+                uid: None,
+                unread: Some("not readable with this account (get on namespaces)".to_string()),
+            },
+            Err(e) => KubernetesId {
+                uid: None,
+                unread: Some(format!("not read: {}", api_error(&e))),
+            },
+        }
+    }
+
+    /// Return the header line of the text output.
+    fn line(&self) -> String {
+        let shown = match (&self.uid, &self.unread) {
+            (Some(uid), _) => uid.clone(),
+            (None, Some(why)) => output::dim(why).into_owned(),
+            (None, None) => output::dim("unknown").into_owned(),
+        };
+        format!("Kubernetes cluster ID: {shown}")
+    }
 }
 
 /// Compute a human-readable status string for a resource.
@@ -709,6 +770,33 @@ mod tests {
                 code,
             }),
         }
+    }
+
+    /// The header shows the UID, or why it could not be read; the JSON
+    /// field carries the bare UID or null.
+    #[test]
+    fn the_header_shows_the_kubernetes_id_or_why_not() {
+        let id = KubernetesId::of(Ok("4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c".into()));
+        assert_eq!(
+            id.line(),
+            "Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c"
+        );
+        assert_eq!(
+            serde_json::to_value(&id).unwrap(),
+            serde_json::json!({ "kubernetes_uid": "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c" })
+        );
+        let id = KubernetesId::of(Err(refused(403).source));
+        let line = id.line();
+        assert!(
+            line.starts_with("Kubernetes cluster ID: ") && line.contains("get on namespaces"),
+            "{line}"
+        );
+        assert_eq!(
+            serde_json::to_value(&id).unwrap(),
+            serde_json::json!({ "kubernetes_uid": null })
+        );
+        let line = KubernetesId::of(Err(refused(503).source)).line();
+        assert!(line.contains("not read: HTTP 503"), "{line}");
     }
 
     #[test]

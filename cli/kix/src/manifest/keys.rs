@@ -131,6 +131,12 @@ pub const DEPLOYED_AT: &str = key!("deployed-at");
 /// Cluster name. A **label**, so records can be listed per cluster.
 pub const CLUSTER_LABEL: &str = key!("cluster");
 
+/// The `cluster.kubernetes.uid` of the build a record was deployed from: the
+/// UID of the target cluster's `kube-system` Namespace. A **label**, so a
+/// deploy can list the records that carry one and refuse an unbound build
+/// on a Kubernetes cluster that has any. Absent on records of unbound builds.
+pub const KUBERNETES_UID: &str = key!("kubernetes-uid");
+
 /// `import` on a PackageInstance marks it as a marker for a resource Kix
 /// references but does not own.
 pub const MODE: &str = key!("mode");

@@ -1,0 +1,121 @@
+---
+title: "Bind a cluster definition to its Kubernetes cluster"
+description: "Name the one Kubernetes cluster a definition may deploy to, so a wrong --context or default context cannot apply it anywhere else."
+---
+
+`kix deploy <cluster> --context <ctx>` applies the build to whatever API
+server the context points at. Two commands run one after the other, or a
+default context that still points at the last cluster you worked on, are
+enough to deploy an example or test definition onto a live cluster.
+
+Binding a definition closes that gap. The definition names the Kubernetes
+cluster it belongs to, and Kix refuses to apply it anywhere else. Bind every
+definition that deploys to a live cluster.
+
+## Find the Kubernetes cluster's ID
+
+Kix identifies a Kubernetes cluster by the UID of its `kube-system` Namespace.
+That Namespace is created when the cluster is bootstrapped and cannot be
+deleted, so its UID stays the same for the life of the cluster, and every
+cluster has its own: a kind cluster, a k3s cluster, an EKS cluster, and a
+vCluster all differ.
+
+`kix status` prints it in its header:
+
+```
+$ kix status production --context prod
+Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
+...
+```
+
+`kubectl` gives the same value:
+
+```
+$ kubectl --context prod get namespace kube-system -o jsonpath='{.metadata.uid}'
+4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
+```
+
+The UID is known as soon as the cluster exists, so you can bind a definition
+before its first deploy.
+
+## Name it in the definition
+
+Set `cluster.kubernetes.uid` in a cluster module:
+
+```nix
+{ kix, packages }:
+kix.buildCluster {
+  name = "production";
+  modules = [
+    kix.flavors.gke
+    {
+      cluster.kubernetes.uid = "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c";
+      # ...
+    }
+  ];
+}
+```
+
+The value must be a lowercase UUID; anything else fails evaluation. Several
+Kix clusters on one Kubernetes cluster all set the same UID.
+
+## What happens after
+
+The build carries the UID, and the Activation record of each deploy of a
+bound build carries it as the label `kix.run/kubernetes-uid`.
+
+Every command that applies a build of the definition checks the binding after
+it connects and before it reads or writes anything else: `kix deploy` in all
+its modes (including `--plan`, `--bundle`, `--current-activation`, and
+`--operator`), `kix plan`, `kix gc` (soft and `--hard`), and the operator when
+it picks up a Queued record.
+
+- **The definition names another Kubernetes cluster.** The command stops and
+  names both IDs and the context. Nothing is applied.
+- **The definition names none, but a bound definition has deployed here.**
+  Once any Activation record on the Kubernetes cluster carries the label, that
+  cluster accepts only definitions that name it. The command stops and tells
+  you which Kix cluster bound it and which UID to add. This is what keeps an
+  unbound example from landing on a live cluster. If the records carry a UID
+  that is not this cluster's (they were restored from another cluster), the
+  message says so and names the live UID instead.
+- **The definition names none and nothing on the cluster is bound.** The
+  command runs as before.
+
+`kix rollback` applies a build this Kix cluster deployed here before, so it
+refuses only a target that names another Kubernetes cluster. A target built
+before the definition set `cluster.kubernetes.uid` rolls back as usual.
+
+Read-only commands such as `kix diff` and `kix status` do not check the
+binding. The operator marks a refused record `Failed` with the message and
+emits a Warning event on it.
+
+The check reads the `kube-system` Namespace. An account that may not `get`
+namespaces stops with a message that names that permission. The operator
+leaves such a record Queued, emits a Warning event, and retries once its
+service account is granted `get` on namespaces.
+
+## Move a definition to a rebuilt cluster
+
+When a Kubernetes cluster is recreated, its `kube-system` UID changes. Read
+the new ID as above and update `cluster.kubernetes.uid` in the definition. The
+commit records the move.
+
+## Lift a binding
+
+The lock on a Kubernetes cluster lives in the `kix.run/kubernetes-uid` label
+of its Activation records, so it outlives the Kix cluster that set it. When a
+bound Kix cluster is removed and its records stay behind, an unbound
+definition is still refused. To let unbound definitions deploy again, remove
+the label from every record that carries it:
+
+```
+kubectl label activations.kix.run -l kix.run/kubernetes-uid kix.run/kubernetes-uid-
+```
+
+Deleting the dead Kix cluster's records also lifts the lock. Do not delete an
+`Active` or `Degraded` record while the operator runs: its finalizer tears
+down everything that record deployed.
+
+A later deploy of a bound definition writes the label again and locks the
+cluster again.

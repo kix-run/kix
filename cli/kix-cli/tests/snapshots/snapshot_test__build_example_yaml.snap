@@ -14257,15 +14257,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/09knkc6806dwbg2sb2ph9gz286s6kgix-k8s-activation-example
+    kix.run/built-via: /nix/store/f3rqlni6rrk9zzaji9sn2xbfnq4w81lr-k8s-activation-example
     kix.run/depends-on: '0x9r939vb7jd9ywk36x8vx16x66j5g00,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,m83fgwn05ffcbvi57482v2kak0qzh4y0,mqw67saz0rk6fvjs2ypxvrqar85av6hh,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: j3jmqdr0vww626rvaxnrpmfcxds5yzw2
+    kix.run/identity-hash: n4hcmpn3zpr16kznnb3s50vnsj4k3hdv
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-j3jmqdr0vww6
+  name: example-n4hcmpn3zpr1
 spec:
   instances:
     cert-manager:

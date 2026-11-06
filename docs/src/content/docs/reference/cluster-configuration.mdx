@@ -45,6 +45,7 @@ kix.buildCluster {
 | [`cluster.nodes`](#cluster-capabilities-and-nodes) | `attrsOf submodule` | `{ }` | Optional static node inventory (`roles`, `cpu`, `memory`, `labels`, `taints`). |
 | [`cluster.provider`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` (or flavor default) | Display name of the Kubernetes distribution or cloud provider. |
 | [`k8sVersion`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` | Target Kubernetes version checked against package `meta.k8s` constraints. |
+| [`cluster.kubernetes.uid`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` | UID of the target cluster's `kube-system` Namespace. Binds the definition to that one Kubernetes cluster. |
 | [`cluster.domain`](#cluster-network) | `nullOr str` | `null` | Public base domain used by `kix.expose` when an instance omits `ingress.host`. |
 | [`clusterDomain`](#cluster-network) | `str` | `"cluster.local"` | In-cluster DNS suffix used when constructing `out.fqdn`. |
 | [`cluster.network`](#cluster-network) | submodule | `{ }` | Pod CIDR, Service CIDR, and upstream DNS resolvers. |
@@ -159,12 +160,13 @@ Packages whose pods are created by an operator rather than a Kix Deployment or S
 | `labels` | `attrsOf str` | `{ }` | Node labels. |
 | `taints` | `listOf anything` | `[ ]` | Node taints. |
 
-### `cluster.provider` and `k8sVersion`
+### `cluster.provider`, `k8sVersion`, and `cluster.kubernetes.uid`
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `cluster.provider` | `nullOr str` | `null` | Informational distribution name (such as `"k3s"`, `"eks"`, or `"talos"`). Used for display and telemetry only; Kix never branches on `cluster.provider`. |
 | `k8sVersion` | `nullOr str` | `null` | Target Kubernetes version string (such as `"1.31"` or `"v1.31.2-gke.1209000"`). Checked against package `meta.k8s.minVersion` and `meta.k8s.maxVersion`. |
+| `cluster.kubernetes.uid` | `nullOr str` | `null` | The UID of the target cluster's `kube-system` Namespace, a lowercase UUID (`kix status <cluster>` or `kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'`). When set, the build carries it, each deploy labels its Activation record `kix.run/kubernetes-uid`, and `kix deploy`, `kix plan`, `kix rollback`, `kix gc --hard`, and the operator refuse to apply the build to any other Kubernetes cluster. Once a bound build has deployed, that Kubernetes cluster also refuses definitions that leave this unset. Several Kix clusters on one Kubernetes cluster set the same UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
 
 ### `cluster.containerd`, `cluster.maintenance`, and `cluster.secrets.accept`
 

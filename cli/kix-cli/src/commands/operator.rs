@@ -54,18 +54,27 @@ async fn open_records(client: &Client) -> Result<Records> {
 /// Create or update an Activation CR to trigger operator reconciliation.
 ///
 /// The CR is created without a phase. The operator treats it as Queued and
-/// advances it through Deploying to Active.
+/// advances it through Deploying to Active. `kubernetes_uid` is the build's
+/// `cluster.kubernetes.uid`, which the record carries as a label.
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_activation(
     records: &Records,
     activation_name: &str,
     cluster_name: &str,
     source_path: &str,
     identity_hash: Option<&str>,
+    kubernetes_uid: Option<&str>,
     receipt: Option<&Value>,
     package_index: &RecordPackageIndex,
 ) -> Result<()> {
     records
-        .submit(activation_name, cluster_name, source_path, identity_hash)
+        .submit(
+            activation_name,
+            cluster_name,
+            source_path,
+            identity_hash,
+            kubernetes_uid,
+        )
         .await
         .map_err(|e| miette!("{e}"))?;
 

@@ -126,32 +126,78 @@ fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&ApiResource> {
         .map(|(ar, _)| ar)
 }
 
-/// Return `true` if any Activation record under the current API group carries
-/// `cluster` in its `kix.run/cluster` label, or `false` if none exists or the
-/// Activation CRD is not installed.
-///
-/// Used for CLI argument disambiguation before full discovery runs.
-pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, RecordsError> {
+/// Return the Activation `ApiResource` under the current API group, spelled
+/// from Kix's own constants rather than discovery, for the listings that run
+/// before discovery.
+fn record_resource() -> ApiResource {
     let version = keys::API_VERSION
         .rsplit_once('/')
         .map_or(keys::API_VERSION, |(_, v)| v);
-    let ar = ApiResource::from_gvk_with_plural(
+    ApiResource::from_gvk_with_plural(
         &kube::api::GroupVersionKind::gvk(
             keys::GROUP,
             version,
             crate::manifest::lifecycle::RECORD_KIND,
         ),
         "activations",
-    );
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
-    let lp = ListParams::default()
-        .labels(&cluster_selector(cluster))
-        .limit(1);
+    )
+}
+
+/// List up to `limit` Activation records under the current API group that
+/// match `selector`, or none when the Activation CRD is not installed.
+async fn list_undiscovered(
+    client: &Client,
+    selector: &str,
+    limit: u32,
+) -> Result<Vec<DynamicObject>, RecordsError> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), &record_resource());
+    let lp = ListParams::default().labels(selector).limit(limit);
     match api.list(&lp).await {
-        Ok(list) => Ok(!list.items.is_empty()),
-        Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
+        Ok(list) => Ok(list.items),
+        Err(kube::Error::Api(e)) if e.code == 404 => Ok(Vec::new()),
         Err(e) => Err(RecordsError::list(e)),
     }
+}
+
+/// Return `true` if any Activation record under the current API group carries
+/// `cluster` in its `kix.run/cluster` label, or `false` if none exists or the
+/// Activation CRD is not installed.
+///
+/// Used for CLI argument disambiguation before full discovery runs.
+pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, RecordsError> {
+    Ok(!list_undiscovered(client, &cluster_selector(cluster), 1)
+        .await?
+        .is_empty())
+}
+
+/// An Activation record that carries the `kix.run/kubernetes-uid` label: the
+/// Kix cluster that deployed it, and the UID its build named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundRecord {
+    pub cluster: String,
+    pub uid: String,
+}
+
+/// Return one Activation record on the Kubernetes cluster, of any Kix
+/// cluster and phase, whose build named a `cluster.kubernetes.uid`, or
+/// `None` when no record carries the label or the Activation CRD is not
+/// installed. Runs before discovery.
+pub async fn bound_record(client: &Client) -> Result<Option<BoundRecord>, RecordsError> {
+    let found = list_undiscovered(client, keys::KUBERNETES_UID, 1).await?;
+    Ok(found.first().map(|item| {
+        let label = |key: &str| {
+            item.metadata
+                .labels
+                .as_ref()
+                .and_then(|l| l.get(key))
+                .cloned()
+                .unwrap_or_default()
+        };
+        BoundRecord {
+            cluster: label(keys::CLUSTER_LABEL),
+            uid: label(keys::KUBERNETES_UID),
+        }
+    }))
 }
 
 /// Build the label selector matching all Activation records for `cluster`.
@@ -493,13 +539,16 @@ impl Records {
     /// `source_path` on `cluster`.
     ///
     /// Leaves `status.phase` unset so the operator treats the record as `Queued`
-    /// and advances it through `Deploying` to `Active`.
+    /// and advances it through `Deploying` to `Active`. `kubernetes_uid` is
+    /// the build's `cluster.kubernetes.uid`, written as the
+    /// `kix.run/kubernetes-uid` label when the build names one.
     pub async fn submit(
         &self,
         name: &str,
         cluster: &str,
         source_path: &str,
         identity_hash: Option<&str>,
+        kubernetes_uid: Option<&str>,
     ) -> Result<(), RecordsError> {
         let mut annotations = serde_json::Map::new();
         if let Some(hash) = identity_hash {
@@ -512,16 +561,28 @@ impl Records {
             keys::BUILT_VIA.to_string(),
             Value::String(source_path.to_string()),
         );
+        let mut labels = serde_json::Map::new();
+        labels.insert(
+            "app.kubernetes.io/managed-by".to_string(),
+            Value::String("kix".to_string()),
+        );
+        labels.insert(
+            keys::CLUSTER_LABEL.to_string(),
+            Value::String(cluster.to_string()),
+        );
+        if let Some(uid) = kubernetes_uid {
+            labels.insert(
+                keys::KUBERNETES_UID.to_string(),
+                Value::String(uid.to_string()),
+            );
+        }
 
         let patch = json!({
             "apiVersion": keys::API_VERSION,
             "kind": crate::manifest::lifecycle::RECORD_KIND,
             "metadata": {
                 "name": name,
-                "labels": {
-                    "app.kubernetes.io/managed-by": "kix",
-                    keys::CLUSTER_LABEL: cluster,
-                },
+                "labels": labels,
                 "annotations": annotations,
             },
             "spec": {
@@ -740,6 +801,33 @@ impl Records {
                  moved between packages only under its new package",
             );
         }
+    }
+
+    /// Mark a `Queued` record `Failed` with `reason` before the operator
+    /// applies anything from it, such as when its build is bound to another
+    /// Kubernetes cluster. Leaves a record that has already left `Queued`
+    /// alone.
+    pub async fn fail_queued(&self, name: &str, reason: &str) -> Result<(), RecordsError> {
+        let current = self.phase_of(name).await?;
+        if !(current.is_empty() || current == PHASE_QUEUED) {
+            tracing::debug!(activation = %name, phase = %current, "not Queued; left as is");
+            return Ok(());
+        }
+        self.patch_status(
+            name,
+            &json!({
+                "status": {
+                    "phase": PHASE_FAILED,
+                    "failure": {
+                        "reason": reason,
+                        "at": chrono::Utc::now().to_rfc3339(),
+                    },
+                },
+            }),
+        )
+        .await?;
+        tracing::info!(activation = %name, reason, "marked as Failed before applying");
+        Ok(())
     }
 
     /// Mark a record `Failed` when its deploy stops before finalizing.

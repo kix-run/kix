@@ -2,7 +2,7 @@
 //!
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! Job, ClusterRole, Kix's Activation, and two kinds of a group served at two
-//! versions), and GET, LIST (with an equality label
+//! versions), and GET, LIST (with an equality or existence label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
 //! DELETE (honoring `preconditions`), and server-side apply on the objects it
 //! holds. An apply stores the manifest sent as it is, and a dry-run apply
@@ -89,6 +89,16 @@ impl State {
     }
 }
 
+/// The `kube-system` Namespace with `uid`, which identifies the Kubernetes
+/// cluster the fake stands for (`cluster::binding`).
+pub fn kube_system(uid: &str) -> Value {
+    json!({
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": { "name": "kube-system", "uid": uid },
+    })
+}
+
 /// See the module docs. Clones share one state.
 #[derive(Clone, Default)]
 pub struct FakeApi {
@@ -104,12 +114,14 @@ impl FakeApi {
         api
     }
 
-    /// Add an object, assigning it a uid and a resourceVersion.
+    /// Add an object, assigning it a resourceVersion, and a uid unless it
+    /// brings one (as [`kube_system`] does).
     pub(crate) fn insert(&self, mut obj: Value) {
         let mut st = self.state.lock().unwrap();
         let rv = st.bump();
         let meta = obj["metadata"].as_object_mut().expect("metadata");
-        meta.insert("uid".into(), json!(format!("uid-{rv}")));
+        meta.entry("uid")
+            .or_insert_with(|| json!(format!("uid-{rv}")));
         meta.insert("resourceVersion".into(), json!(rv));
         st.objects.push(obj);
     }
@@ -253,9 +265,13 @@ impl FakeApi {
         let selector = label_selector(query);
         let matches = |o: &Value| {
             target.holds(o)
-                && selector
-                    .iter()
-                    .all(|(k, v)| o["metadata"]["labels"][k.as_str()].as_str() == Some(v.as_str()))
+                && selector.iter().all(|(k, v)| {
+                    let label = o["metadata"]["labels"][k.as_str()].as_str();
+                    match v {
+                        Some(v) => label == Some(v.as_str()),
+                        None => label.is_some(),
+                    }
+                })
         };
         match (method.as_str(), &target.name) {
             ("GET", None) => {
@@ -467,8 +483,9 @@ fn discovery(kinds: &[(&str, &str, &str, &str, bool)], path: &str) -> Option<Val
     }
 }
 
-/// Parse `k=v` pairs from a `labelSelector` query parameter.
-fn label_selector(query: &str) -> Vec<(String, String)> {
+/// Parse the terms of a `labelSelector` query parameter: `k=v` requires the
+/// value, a bare `k` requires the label to exist.
+fn label_selector(query: &str) -> Vec<(String, Option<String>)> {
     query
         .split('&')
         .filter_map(|kv| kv.strip_prefix("labelSelector="))
@@ -479,9 +496,10 @@ fn label_selector(query: &str) -> Vec<(String, String)> {
                 .replace("%2C", ",");
             decoded
                 .split(',')
-                .filter_map(|pair| {
-                    let (k, v) = pair.split_once('=')?;
-                    Some((k.to_string(), v.to_string()))
+                .filter(|term| !term.is_empty())
+                .map(|term| match term.split_once('=') {
+                    Some((k, v)) => (k.to_string(), Some(v.to_string())),
+                    None => (term.to_string(), None),
                 })
                 .collect::<Vec<_>>()
         })

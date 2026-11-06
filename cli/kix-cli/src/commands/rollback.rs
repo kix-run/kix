@@ -14,6 +14,7 @@ use crate::client;
 use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
+use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
@@ -291,7 +292,16 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         &target_hash[..8.min(target_hash.len())],
     );
 
-    let planned = plan_rollback(&client, &records, cluster, &current, selected, args.prune).await?;
+    let planned = plan_rollback(
+        &client,
+        ctx.global.context.as_deref(),
+        &records,
+        cluster,
+        &current,
+        selected,
+        args.prune,
+    )
+    .await?;
     if !output::quiet() {
         planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
     }
@@ -506,7 +516,16 @@ async fn run_operator_async(
 
     // The plan a direct rollback would show, with its check, though the
     // operator plans again against the live objects and always prunes.
-    let planned = plan_rollback(&client, &records, cluster, &current, selected, true).await?;
+    let planned = plan_rollback(
+        &client,
+        ctx.global.context.as_deref(),
+        &records,
+        cluster,
+        &current,
+        selected,
+        true,
+    )
+    .await?;
     if !output::quiet() {
         planned.print(cluster, &target_name, true, ctx.global.verbose > 0);
     }
@@ -550,6 +569,7 @@ async fn run_operator_async(
         cluster,
         &target_source_path,
         target_hash.as_deref(),
+        planned.checked.kubernetes_uid(),
         // A rollback re-applies a build from an earlier deploy, which wrote
         // its own receipt. See the non-operator path in this file.
         None,
@@ -644,9 +664,17 @@ fn flags(prune: bool) -> PlanFlags {
     }
 }
 
-/// Plan a rollback of `cluster` from `current` to `selected`.
+/// Plan a rollback of `cluster` from `current` to `selected`, through the
+/// kube context `context`.
+///
+/// The target build is known only once the records have been read, so the
+/// binding check runs after that read and before anything is planned or
+/// written. The target is a build this Kix cluster deployed here before, so
+/// only a target that names another Kubernetes cluster is refused; one from
+/// before the definition set `cluster.kubernetes.uid` rolls back as usual.
 async fn plan_rollback(
     client: &kube::Client,
+    context: Option<&str>,
     records: &Records,
     cluster: &str,
     current: &Record,
@@ -671,6 +699,16 @@ async fn plan_rollback(
     .map_err(|e| miette!("{e}"))?;
     let target_result_dir = target_graph.result_dir.clone();
     same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
+    if let Some(declared) = target_graph.kubernetes_uid.as_deref() {
+        binding::check_declared(
+            client,
+            &binding::Connection::of_context(context),
+            cluster,
+            declared,
+        )
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    }
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;
