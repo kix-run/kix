@@ -266,7 +266,10 @@ case "$status" in
 esac
 ```
 
-A build with no resources prints no plan, writes no file, and exits `0`.
+A build with no resources prints `Nothing to deploy.` and exits `0` when
+`--save` is not set. With `--save`, it fails with
+`the build has no resources, so there is no plan to save`, writes no file, and
+exits `1`.
 
 To deploy exactly what a reviewer approved, pass the plan file to
 [`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan),
