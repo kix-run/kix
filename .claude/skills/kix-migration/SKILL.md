@@ -554,7 +554,7 @@ argument.
 
 | Function | When to use | Description |
 |----------|-------------|-------------|
-| `kix.buildCluster { ... }` | Every cluster definition. | Takes `name`, `modules`, optional `specialArgs`. Returns `{ activation, instances, namespaces, rawManifests }`. |
+| `kix.buildCluster { ... }` | Every cluster definition. | Takes `modules`, optional `specialArgs`, and `name`, which `mkFlake` defaults to the cluster's `clusters` key (a direct call must pass it). Returns `{ activation, instances, namespaces, rawManifests }`. |
 | `kix.mkEnv envName envConfig instanceSets` | Same services in multiple environments. | Stamps instance sets into `{envName}-{setName}` namespaces with per-env config overrides. |
 | `kix.mergeFragments { fragments; namespacePolicies; }` | Multiple teams own different parts of a cluster. | Deep-merges namespaces, detects instance collisions across fragments. |
 | `kix.helmChart { repo; name; version; hash; }` | **Tier 1:** inline Helm chart in cluster definitions. | Quick one-off, no package file needed. Auto-selects root (pass `root = { kind; name; }` when the chart has several Services or workloads), exposes `config.values`. |

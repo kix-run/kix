@@ -12,10 +12,13 @@ A cluster module is where you describe your Kubernetes environment as a whole: w
 - [Module system (nix.dev)](https://nix.dev/tutorials/module-system/): understand the NixOS module syntax and merging rules that Kix cluster modules use.
 :::
 
+A cluster listed in `kix.lib.mkFlake` is named after its `clusters` key, so
+the file passes no `name`. See [Use `mkFlake` in a consuming repo](/docs/how-to/start-and-inspect/use-mkflake-in-a-consuming-repo/)
+for when to set one.
+
 ```nix
 { kix, packages }:
 kix.buildCluster {
-  name = "production";
   specialArgs = { inherit kix packages; };
   modules = [
     kix.flavors.gke

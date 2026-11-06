@@ -70,7 +70,6 @@ Put everything the environments share in a module they both import:
 { kix, packages }:
 
 kix.buildCluster {
-  name = "dev";
   # Modules receive `ref` and a minimal `kix` by default. Forward the full
   # `kix` and the package catalogue so shared modules can use them.
   specialArgs = { inherit kix packages; };
@@ -85,7 +84,6 @@ kix.buildCluster {
 { kix, packages }:
 
 kix.buildCluster {
-  name = "prod";
   specialArgs = { inherit kix packages; };
   modules = [
     kix.flavors.eks

@@ -20,6 +20,14 @@ counts as breaking.
 
 ## Unreleased
 
+### Breaking (shows an error)
+
+- `kix.buildCluster` no longer names a cluster `cluster` when it is called without `name`. Pass `name`, or list the cluster in `kix.lib.mkFlake`, which names it after its key. A cluster listed in `mkFlake` that already sets `name` keeps it.
+
+### Added
+
+- A cluster listed in `kix.lib.mkFlake`'s `clusters` is named after its key unless it sets `name`, so the name no longer has to be written in both `flake.nix` and the cluster file.
+
 ### Upgrade notes
 
 - The first deploy after the upgrade applies again each import marker (a `PackageInstance` named `secret-ref-*` or `service-ref-*`) that two packages share, to update its `kix.run/package` annotation. Only annotations change. The first `kix diff` or `kix plan` after the upgrade still reads the index the previous release recorded, which lists such a marker under both packages, so it shows the marker as removed from the package that no longer lists it. Nothing is deleted.

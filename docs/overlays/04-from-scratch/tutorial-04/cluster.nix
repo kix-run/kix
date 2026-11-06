@@ -9,8 +9,6 @@
 # update this file (and the mutate strings in `docs/nix/captures.nix`).
 
 kix.buildCluster {
-  name = "04-from-scratch";
-
   modules = [
     kix.flavors.kind
 

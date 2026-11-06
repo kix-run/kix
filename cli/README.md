@@ -111,10 +111,11 @@ new Build (Build::of_flake, or --bundle → Build::carried; checked for a retire
 ## Cluster identity
 
 The `<cluster>` argument is a flake attribute (`clusters.harbor =
-./test-harbor.nix` makes it `harbor`). A cluster is identified by the `name`
-its definition passes to `buildCluster` (`test-harbor`), which the build
-writes into `kix-packages.json` (`StoreGraph::cluster_name`) and the
-Activation record's `kix.run/cluster` label. Every lookup of cluster state
+./test-harbor.nix` makes it `harbor`). A cluster is identified by its
+`buildCluster` `name`, which `mkFlake` defaults to the attribute and a
+definition may set itself (`test-harbor`); the build writes it into
+`kix-packages.json` (`StoreGraph::cluster_name`) and the Activation record's
+`kix.run/cluster` label. Every lookup of cluster state
 uses that name: the Activation records, the `SweepScope::Cluster` sweep, and
 the local cache files `~/.cache/kix/activations/<name>.{path,root,kept-*}`.
 `kix deploy` and `kix gc --hard` take the name from the build, and `kix status`
