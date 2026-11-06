@@ -17,7 +17,6 @@ Include a flavor as the first module in `kix.buildCluster`:
 ```nix
 { kix, packages }:
 kix.buildCluster {
-  name = "staging";
   specialArgs = { inherit kix packages; };
   modules = [
     kix.flavors.eks

@@ -1,6 +1,9 @@
 {
   inputs,
 
+  # Cluster definitions keyed by name: each a `{ kix, packages, ... }:`
+  # function or a path to one. The key names the flake outputs and, unless
+  # the definition passes `name` to `buildCluster`, the cluster itself.
   clusters ? { },
 
   # Pin file passed to cluster functions that declare a `pins` argument.
@@ -48,18 +51,24 @@ let
     { pkgs, system }:
     let
       slib = pkgs.lib;
-      kix =
-        let
-          base = import ./. {
-            inherit pkgs;
-            lib = slib;
-            self = inputs.self or null;
-          };
-        in
-        base
+      kix = import ./. {
+        inherit pkgs;
+        lib = slib;
+        self = inputs.self or null;
+      };
+      # Return the `kix` a cluster definition receives. Its `buildCluster`
+      # prepends `clusterModules` and names the cluster after its `clusters`
+      # key unless the definition sets `name`. A definition keeps its own
+      # `name` because renaming a deployed cluster orphans its deploy records.
+      kixFor =
+        key:
+        kix
         // {
           buildCluster =
-            args: base.buildCluster (args // { modules = clusterModules ++ (args.modules or [ ]); });
+            args:
+            kix.buildCluster (
+              { name = key; } // args // { modules = clusterModules ++ (args.modules or [ ]); }
+            );
         };
       kixChecks = import ../checks.nix {
         inherit pkgs;
@@ -76,7 +85,7 @@ let
             else
               clusterDef;
           available = {
-            inherit kix;
+            kix = kixFor name;
             packages = catalogPackages;
             # Evaluated only when the cluster function requires `pins`.
             pins =

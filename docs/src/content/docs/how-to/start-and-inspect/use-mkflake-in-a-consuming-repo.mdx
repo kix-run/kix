@@ -41,17 +41,17 @@ The examples repository registers each cluster by name:
 
 <Snippet {...mkFlakeOutputs} />
 
-Each value under `clusters` is a cluster function. Its attribute name becomes
-the CLI cluster name, while the file's `kix.buildCluster.name` becomes the
-cluster identity recorded in manifests and activations.
+Each value under `clusters` is a cluster function. Its attribute name is the
+cluster name you pass to the CLI, and, unless the file passes `name` to
+`kix.buildCluster`, the name Kix records in the manifests and the Activation
+record. A cluster listed here needs no `name` of its own.
 
 :::caution
-Keep the two the same. The Activation record is labelled with the
-`buildCluster` name, and every command that reads cluster state filters on the
-CLI name. If the names differ, `kix health`, `kix rollback --list`, `kix gc`
-retention, and the baseline comparison in `kix deploy` cannot find the
-Activation. These commands currently report an empty result instead of
-identifying the mismatch.
+Set `name` only when the recorded name must differ from the attribute, such as
+a cluster that was deployed under another name. Kix looks cluster state up by
+the recorded name, so renaming a deployed cluster orphans its Activation
+records. When the two differ, commands that read cluster state first evaluate
+the flake to learn the recorded name.
 :::
 
 For a single project, a compact registration is enough:

@@ -121,8 +121,9 @@ The names are yours. The CLI discovers them by evaluating the flake.
 ## `cluster.nix` Defines What Is Installed
 
 The flake points at `./tutorials/02-hello-world/cluster.nix`. That file is the
-recipe for one cluster: it names the cluster, chooses the local kind flavor, and
-declares what should exist inside the cluster.
+recipe for one cluster: it chooses the local kind flavor and declares what
+should exist inside the cluster. The cluster takes its name from its key in the
+flake's `clusters`.
 
 At the top level, the file has this structure:
 

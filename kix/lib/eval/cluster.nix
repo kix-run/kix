@@ -34,7 +34,12 @@
 {
   buildCluster =
     {
-      name ? "cluster",
+      # The cluster's name. Kix writes it into the Activation record and the
+      # package index, and every later deploy looks the cluster's state up
+      # by it, so it must stay the same for the life of the cluster.
+      # `mkFlake` supplies the cluster's `clusters` key when the definition
+      # sets none.
+      name ? throw "kix.buildCluster needs a name. Kix stores it in the cluster's deploy records, so it must stay the same for the life of the cluster. Set name = \"...\"; or list the cluster in kix.lib.mkFlake, which names it after its key.",
       modules,
       specialArgs ? { },
       # The cluster's pin file from `kix.pins`. `buildCluster` applies its

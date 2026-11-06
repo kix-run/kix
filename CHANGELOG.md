@@ -20,6 +20,10 @@ counts as breaking.
 
 ## Unreleased
 
+### Breaking (shows an error)
+
+- `kix.buildCluster` no longer names a cluster `cluster` when it is called without `name`. Pass `name`, or list the cluster in `kix.lib.mkFlake`, which names it after its key. A cluster listed in `mkFlake` that already sets `name` keeps it.
+
 ### Upgrade notes
 
 - The first deploy after the upgrade applies again each import marker (a `PackageInstance` named `secret-ref-*` or `service-ref-*`) that two packages share, to update its `kix.run/package` annotation. Only annotations change. The first `kix diff` or `kix plan` after the upgrade still reads the index the previous release recorded, which lists such a marker under both packages, so it shows the marker as removed from the package that no longer lists it. Nothing is deleted.
@@ -27,6 +31,10 @@ counts as breaking.
 
 - `victoria-metrics-agent` no longer accepts `remoteWrite.url` or `promscrape.config` in `extraArgs`, and `victoria-metrics-operator` no longer accepts `--zap-log-level`, `--leader-elect`, or `--health-probe-bind-address` (in either the one-dash or two-dash spelling). The build stops with an error that names the option to use instead: the `vmCluster` dependency sets the remote-write target, the operator writes the scrape configuration, and `logLevel` sets the log level. Remove the other flags.
 - `victoria-metrics-cluster` no longer accepts `retentionPeriod` or `replicationFactor` in `vmstorage.extraArgs`, `vmselect.extraArgs`, or `vminsert.extraArgs`, nor `httpListenAddr` in `vmselect.extraArgs` or `vminsert.extraArgs`. Set the `retentionPeriod` and `replicationFactor` options instead, and remove `httpListenAddr`: the cluster's `out.serviceUrl` and `out.remoteWriteUrl` name ports 8481 and 8480. Release 0.6 already refused `dedup.minScrapeInterval` in `vmstorage.extraArgs` and `vmselect.extraArgs`.
+
+### Added
+
+- A cluster listed in `kix.lib.mkFlake`'s `clusters` is named after its key unless it sets `name`, so the name no longer has to be written in both `flake.nix` and the cluster file.
 
 ### Changed
 
