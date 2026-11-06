@@ -6,6 +6,7 @@ pub mod compliance;
 pub mod deploy;
 pub mod deploy_log;
 pub mod diff;
+pub mod doctor;
 pub mod drift;
 pub mod export;
 pub mod gc;

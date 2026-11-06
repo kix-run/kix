@@ -38,7 +38,16 @@
       craneLib = crane.mkLib pkgs;
 
       commonArgs = {
-        src = craneLib.cleanCargoSource ../cli;
+        # runtime/programs.json is compiled into kix, so keep it beside the
+        # Rust sources.
+        src = lib.cleanSourceWith {
+          src = ../cli;
+          filter =
+            path: type:
+            craneLib.filterCargoSources path type
+            || lib.hasSuffix "/cli/runtime" path
+            || lib.hasSuffix "/cli/runtime/programs.json" path;
+        };
         strictDeps = true;
 
         buildInputs = [ pkgs.openssl ] ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ];
