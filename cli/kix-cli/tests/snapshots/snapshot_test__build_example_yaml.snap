@@ -13257,8 +13257,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: '0hhmwz20qshqx15hyf7shvck2vh232l1,21936i9vikhm1v89pmwhfk6yk9306bv7,3l9jmh34sh7jrl8s2yrfarv5wad9lgf1,9vnmmjiysnmb8fjphb0fp0hs47fp16y5,awzwpm53w1kb4ysngrwmj47whaddgkih,bxbg9n5s07wzh6rxv068r81fds6zms6i,k7x17sc733q2jxarkgk3x95hi9il1m2l,z5m7565d2cip9r93cb7q723f4vcxl2pw,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z'
-    kix.run/identity-hash: yfsv84lvm2jp42h77ga9ghqf6d1x7p5m
+    kix.run/depends-on: '0hhmwz20qshqx15hyf7shvck2vh232l1,21936i9vikhm1v89pmwhfk6yk9306bv7,9vnmmjiysnmb8fjphb0fp0hs47fp16y5,awzwpm53w1kb4ysngrwmj47whaddgkih,bxbg9n5s07wzh6rxv068r81fds6zms6i,gbc3ndw2kx8r7bnpdgszcp2ajrq5a06k,k7x17sc733q2jxarkgk3x95hi9il1m2l,z5m7565d2cip9r93cb7q723f4vcxl2pw,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z'
+    kix.run/identity-hash: r3rbrf5ykacf3n9m6m5icn3983n1mv4c
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -13324,7 +13324,7 @@ spec:
               name: valkey-password
         - name: REDIS_SENTINEL_OPTIONS
           value: '{"name":"primary","sentinels":[{"host":"valkey.immich.svc.cluster.local","port":"26379"}]}'
-        image: ghcr.io/immich-app/immich-server:v3.0.3@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
+        image: ghcr.io/immich-app/immich-server:v3.3.5@sha256:485d546a2e31d6a8b4db8423fcba5c109de8c218d93410af115fd1ccfc4352a6
         imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 3
@@ -13392,7 +13392,7 @@ kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,fz71crbhgpvq0pbdylmb9yspljjrgvn8
-    kix.run/identity-hash: '4zszknqdaxbsc9ipfbm77b4mh02q6syc'
+    kix.run/identity-hash: pp8zhb1ifkqgfmp53sxgs2cqm3jgrhxl
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:
@@ -13424,7 +13424,7 @@ spec:
           value: /cache/huggingface-xet
         - name: MPLCONFIGDIR
           value: /cache/matplotlib-config
-        image: ghcr.io/immich-app/immich-machine-learning:v3.0.3@sha256:d76fe88b69282c09a97eac4f82dafa82cfd77bce274bc742591cde974f87dacb
+        image: ghcr.io/immich-app/immich-machine-learning:v3.3.5@sha256:5b28c9352c8374b8a1ed96fbdd8d6755fea6e43510ec43fdf6538aa02ea40f56
         imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 3
@@ -14257,15 +14257,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/ag5x6k7834j3nyann7nhs4cdyh1qiqkc-k8s-activation-example
-    kix.run/depends-on: '2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij,35i8mjh56ys8dz6yd89269yy5k86abin,3ylliw0rpywgm4lb948fywl1g7wvmv6g,4l42y305cgxwy3wbr0mrasihca5zczix,590al7hbiz804ha7f7q5ivm49ds9fxcg,5mv940cjcfv2zf1cm9zjfi61b117n128,5n47j74lzrsijy4r2z12cj7w81mgsnsh,6zygbc7qclphhhdfc56q310fncqhfwrs,cmc1p3p89byv00rfq647jm40cys8h0hz,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,w4jfxii3b0w1bl78pjanhkxinzl0kiys,zb275haixrx646n0736cjgmffpvsal2f,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: nws8yk0051g65djk16n8l6ksxi3j3rcx
+    kix.run/built-via: /nix/store/qh1bmwcnwr2s03mmli55jzsxbv9prqys-k8s-activation-example
+    kix.run/depends-on: '0dlqffrq545qbpkyp7yhs410d672my7z,2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij,3ylliw0rpywgm4lb948fywl1g7wvmv6g,4l42y305cgxwy3wbr0mrasihca5zczix,590al7hbiz804ha7f7q5ivm49ds9fxcg,5mv940cjcfv2zf1cm9zjfi61b117n128,5n47j74lzrsijy4r2z12cj7w81mgsnsh,cmc1p3p89byv00rfq647jm40cys8h0hz,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,ngm9sb16270f14w8rk2ydsxdm17xzsvf,w4jfxii3b0w1bl78pjanhkxinzl0kiys,zb275haixrx646n0736cjgmffpvsal2f,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
+    kix.run/identity-hash: spb0adrqppy45la14nff2kbga9ipdkl4
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-nws8yk0051g6
+  name: example-spb0adrqppy4
 spec:
   instances:
     cert-manager:
@@ -14313,8 +14313,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '698dl58jzkdrq41warpxr5z04i0zz3xn,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '6zygbc7qclphhhdfc56q310fncqhfwrs'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,rkzpniwsrasyl2n8ggfx8ja8xflny0v7,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: '0dlqffrq545qbpkyp7yhs410d672my7z'
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: immich-server
@@ -14328,7 +14328,7 @@ metadata:
 spec:
   instanceName: immich
   namespaceName: immich
-  version: '3.0.3'
+  version: '3.3.5'
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
@@ -14357,8 +14357,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '3l9jmh34sh7jrl8s2yrfarv5wad9lgf1,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '35i8mjh56ys8dz6yd89269yy5k86abin'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,gbc3ndw2kx8r7bnpdgszcp2ajrq5a06k,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: ngm9sb16270f14w8rk2ydsxdm17xzsvf
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: machine-learning
@@ -14372,7 +14372,7 @@ metadata:
 spec:
   instanceName: machine-learning
   namespaceName: immich
-  version: '3.0.3'
+  version: '3.3.5'
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
@@ -17351,8 +17351,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,yfsv84lvm2jp42h77ga9ghqf6d1x7p5m
-    kix.run/identity-hash: '698dl58jzkdrq41warpxr5z04i0zz3xn'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,r3rbrf5ykacf3n9m6m5icn3983n1mv4c
+    kix.run/identity-hash: rkzpniwsrasyl2n8ggfx8ja8xflny0v7
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -17376,8 +17376,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '4zszknqdaxbsc9ipfbm77b4mh02q6syc,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.run/identity-hash: '3l9jmh34sh7jrl8s2yrfarv5wad9lgf1'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,pp8zhb1ifkqgfmp53sxgs2cqm3jgrhxl
+    kix.run/identity-hash: gbc3ndw2kx8r7bnpdgszcp2ajrq5a06k
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:

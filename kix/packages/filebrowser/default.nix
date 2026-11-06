@@ -217,7 +217,9 @@ in
           env =
             fbEnv
             ++ kix.mkEnvVars (
-              lib.listToAttrs (lib.imap0 (i: n: lib.nameValuePair (passwordVar i) (usersSecret.out.keyRef n)) userNames)
+              lib.listToAttrs (
+                lib.imap0 (i: n: lib.nameValuePair (passwordVar i) (usersSecret.out.keyRef n)) userNames
+              )
             );
           command = [
             "sh"
