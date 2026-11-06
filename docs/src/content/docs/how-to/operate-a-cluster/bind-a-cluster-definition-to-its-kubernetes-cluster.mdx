@@ -73,8 +73,10 @@ it picks up a Queued record.
 - **The definition names another Kubernetes cluster.** The command stops and
   names both IDs and the context. Nothing is applied.
 - **The definition names none, but a bound definition has deployed here.**
-  Once any Activation record on the Kubernetes cluster carries the label, that
-  cluster accepts only definitions that name it. The command stops and tells
+  Once an Activation record that carries the label has finished a deploy on
+  the Kubernetes cluster, that cluster accepts only definitions that name it.
+  A record whose deploy never finished, such as one the operator refused
+  because its build names another Kubernetes cluster, does not lock it. The command stops and tells
   you which Kix cluster bound it and which UID to add. This is what keeps an
   unbound example from landing on a live cluster. If the records carry a UID
   that is not this cluster's (they were restored from another cluster), the

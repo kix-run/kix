@@ -23,6 +23,11 @@ use crate::text::printable;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KixPackageIndex {
     pub cluster: String,
+    /// Whether `kix.lib.mkFlake` named the cluster after its `clusters` key
+    /// because the definition set no `name`. Absent from the index of a
+    /// build made before the field existed, which reads as `false`.
+    #[serde(default, rename = "nameFromFlakeKey")]
+    pub name_from_flake_key: bool,
     /// The Kubernetes cluster the build is bound to. Absent from the index
     /// of a build made before the field existed, which reads as unbound.
     #[serde(default)]
@@ -69,6 +74,9 @@ pub fn read_index(result_dir: &Path) -> Result<KixPackageIndex, KixEvalError> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreGraph {
     pub cluster_name: String,
+    /// Whether `kix.lib.mkFlake` supplied `cluster_name` from the cluster's
+    /// `clusters` key, so the definition does not write it.
+    pub name_from_flake_key: bool,
     /// `cluster.kubernetes.uid` of the definition: the one Kubernetes
     /// cluster this build may deploy to, or `None` when unbound.
     pub kubernetes_uid: Option<String>,
@@ -251,6 +259,7 @@ impl StoreGraph {
     pub fn empty(cluster_name: &str) -> Self {
         Self {
             cluster_name: cluster_name.to_string(),
+            name_from_flake_key: false,
             kubernetes_uid: None,
             kubernetes_version: None,
             kubernetes_version_from: None,
@@ -449,6 +458,7 @@ impl StoreGraph {
 
         Ok(StoreGraph {
             cluster_name: index.cluster,
+            name_from_flake_key: index.name_from_flake_key,
             kubernetes_uid: index.kubernetes.uid,
             kubernetes_version: index.kubernetes.version,
             kubernetes_version_from: index.kubernetes.version_from,

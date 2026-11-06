@@ -88,7 +88,7 @@ receipts) uses `kix::VERSION`.
 ```
 new Build (Build::of_flake, or --bundle → Build::carried; checked for a retired domain, then stamped) → Build::installable refuses a stale pin
   → kix::plan::Planner::run(build, OldSide) (kix/src/plan/planner.rs), which prints nothing and reports through PlanEvent:
-    → connect, then the binding check (`cluster::binding::check`, see "Cluster binding"): a build bound to another Kubernetes cluster, or an unbound build where a bound one has deployed, is refused before anything else is read
+    → connect, then `TargetChecks::run`: the binding check (`cluster::binding::check`, see "Cluster binding"), the name check (`binding::check_name`), and the Kubernetes version check. A build bound to another Kubernetes cluster, an unbound build where a bound one has deployed, or a key-named build over a cluster that Kix 0.6 deployed as `cluster` is refused before anything else is read
     → the baseline: Baseline::of_cluster (or --current-activation, OldSide::LocalCache: Baseline::of_cache)
       (store path GC'd? → reconstruct old manifests from the live objects naming the Active, Failed, or kept-orphan records: SweepScope::Records { cluster, hashes })
       → load the builds the Active record's status.orphansKeptFrom names
@@ -181,28 +181,32 @@ read as unbound), the Nix-rendered Activation record carries it as the
 `kix.run/kubernetes-uid` label (`keys::KUBERNETES_UID`), and `Records::submit`
 writes the same label on an operator-driven record.
 
-`cluster::binding::check(client, connection, cluster, declared_uid)` runs in
-every command that applies a build of the definition, after it connects and
-before it reads or writes anything else: `Planner::run` under
+`cluster::binding::check(client, connection, action, cluster, declared_uid)`
+runs in every command that applies a build of the definition, after it
+connects and before it reads or writes anything else: `Planner::run` under
 `OldSide::Cluster` (deploy, plan, `--plan`, `--bundle`, `--operator`),
-`deploy::run_deploy_async` when the plan did not connect
-(`--current-activation`), `gc::run_soft` and `gc::run_hard_async` right after
-connecting, and the operator's Queued branch (`controller::check_binding`,
+`deploy::run_deploy_async` and `deploy::run_operator` when the plan did not
+connect (`--current-activation`, through `CheckedPlan::target_checks`),
+`gc::run_soft` and `gc::run_hard_async` right after connecting, and the
+operator's Queued branch (`controller::check_binding`,
 which reads only the build's `kix-packages.json`). It has two halves. A
 declared UID (`check_declared`) is compared with a GET of
 `/api/v1/namespaces/kube-system`; a 403 is its own refusal naming the
 permission to grant, worded for the account or for the operator's service
 account. An undeclared one (`check_unbound`) lists the Activation records
 with the label (`activation::bound_record`, one LIST with no discovery, 404
-when the CRD is absent) and refuses if any exists, whichever Kix cluster
-wrote it; it then reads the live UID too, so a label that is not this
+when the CRD is absent) and refuses if one of them finished a deploy
+(`Active` or `Degraded`, or carrying `kix.run/deployed-at`), whichever Kix
+cluster wrote it. A Failed or Queued record that never deployed does not
+lock the cluster; it then reads the live UID too, so a label that is not this
 cluster's (records restored from another cluster, `UnboundRestored`) is
 named as such and the advice gives the live UID. `rollback::plan_rollback`
 runs only `check_declared`, once the target build is loaded: the target is a
 build this Kix cluster deployed here before, so a target from before the
 definition was bound is not a wrong-context mistake. The messages
-(`BindingError`) lead with "Kix refused to deploy ... Nothing was applied."
-and name the context and server URL from the kubeconfig
+(`BindingError`) lead with "Kix refused to deploy ... Nothing was applied.",
+or for `gc` (`binding::Action::GarbageCollect`) "Kix refused to
+garbage-collect ... Nothing was deleted.", and name the context and server URL from the kubeconfig
 (`binding::Connection::of_context`, no network), or the operator's own API
 server (`Connection::InCluster`); API refusals render through
 `errors::api_error` as `HTTP <code> <reason>: <message>`. The operator marks
@@ -214,6 +218,17 @@ UID in its header, and the operator view's JSON as `kubernetes_uid`; the flat
 view's JSON stays the bare array (`status::KubernetesId`).
 The lock is lifted by removing the label from the records, which the how-to
 page documents.
+
+`binding::check_name(client, connection, cluster, name_from_flake_key)` runs
+beside the binding check in deploy and plan (`TargetChecks::run`). Kix 0.6
+named a cluster `cluster` when its definition called `kix.buildCluster`
+without `name`; `mkFlake` now names it after its `clusters` key and marks
+that in `kix-packages.json` as `nameFromFlakeKey`
+(`KixPackageIndex::name_from_flake_key`, `StoreGraph::name_from_flake_key`;
+absent reads as `false`). When it is set, the check refuses
+(`BindingError::RenamedByFlake`) if the cluster has no Activation records
+for the new name and has some for `cluster` (`activation::records_exist`,
+two LISTs with no discovery). Setting `name` in the definition turns it off.
 
 ## Kubernetes version check
 
@@ -232,8 +247,7 @@ interface file or an override in the definition.
 `cluster::kubernetes_version::check(client, connection, cluster, declared,
 platform)` runs right after `binding::check` at three of its sites:
 `Planner::run` under `OldSide::Cluster`, `deploy::run_deploy_async` when the
-plan did not connect (`CheckedPlan::kubernetes_version` and
-`kubernetes_version_from`), and the operator's Queued branch
+plan did not connect (`CheckedPlan::target_checks`), and the operator's Queued branch
 (`controller::check_version`, on the same `kix-packages.json` read as the
 binding). `kix plan --current-activation` does not connect, so it does not
 check; `kix deploy --current-activation` connects after its confirmation and

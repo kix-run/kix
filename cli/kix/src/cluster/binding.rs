@@ -17,6 +17,10 @@
 //! check ([`super::kubernetes_version::check`]) runs right after this one in
 //! deploy, plan, and the operator.
 //!
+//! [`check_name`] runs beside [`check`] in deploy and plan. It stops a
+//! cluster that Kix 0.6 deployed as `cluster` from being deployed under the
+//! name `kix.lib.mkFlake` now takes from its `clusters` key.
+//!
 //! [`StoreGraph::kubernetes_uid`]: crate::eval::store_graph::StoreGraph::kubernetes_uid
 
 use k8s_openapi::api::core::v1::Namespace;
@@ -27,6 +31,7 @@ use thiserror::Error;
 
 use super::activation::{self, RecordsError};
 use super::errors::{api_error, forbidden};
+use crate::manifest::keys::DOCS_URL;
 
 /// The Namespace whose UID identifies a Kubernetes cluster.
 pub const NAMESPACE: &str = "kube-system";
@@ -34,6 +39,39 @@ pub const NAMESPACE: &str = "kube-system";
 /// The how-to page that says how to bind a definition and how to lift a
 /// binding, named in the messages.
 const HOW_TO: &str = "Bind a cluster definition to its Kubernetes cluster";
+
+/// The path of [`HOW_TO`] under [`DOCS_URL`].
+const HOW_TO_PATH: &str =
+    "how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/";
+
+/// The name Kix 0.6 gave a cluster whose definition called
+/// `kix.buildCluster` without `name`.
+pub const OLD_DEFAULT_NAME: &str = "cluster";
+
+/// The command a refusal stopped, which sets the first sentence of its
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// `kix deploy`, `kix plan`, `kix rollback`, and the operator.
+    Deploy,
+    /// `kix gc`.
+    GarbageCollect,
+}
+
+impl Action {
+    /// Return the sentences that open a refusal: what Kix refused to do
+    /// with `cluster` on `target`, and that nothing changed.
+    fn refused(self, cluster: &str, target: &str) -> String {
+        match self {
+            Action::Deploy => {
+                format!("Kix refused to deploy {cluster} to {target}. Nothing was applied.")
+            }
+            Action::GarbageCollect => format!(
+                "Kix refused to garbage-collect {cluster} on {target}. Nothing was deleted."
+            ),
+        }
+    }
+}
 
 /// Where a command connected, for the messages that name the wrong cluster.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,7 +159,7 @@ impl Connection {
         match self {
             Connection::Context { .. } => {
                 "Grant this Kubernetes account get permission on namespaces, \
-                 or deploy with an account that has it."
+                 or use an account that has it."
             }
             Connection::InCluster => {
                 "Grant the operator's service account get permission on namespaces, \
@@ -158,21 +196,22 @@ impl Checking {
 }
 
 /// Why a build may not be applied to the Kubernetes cluster a command
-/// connected to. Every message says that nothing was applied.
+/// connected to. Every message says that nothing was applied or deleted.
 #[derive(Error, Debug)]
 pub enum BindingError {
     /// The build names a Kubernetes cluster and this is another one.
     #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
+        "{} \
          {cluster}'s definition sets cluster.kubernetes.uid = \"{declared}\", \
          which locks it to the Kubernetes cluster whose kube-system namespace has that UID. \
          This cluster's kube-system namespace has UID \"{live}\".{} \
          If this Kubernetes cluster was recreated and {cluster} now belongs here, \
          set cluster.kubernetes.uid = \"{live}\"; in {cluster}'s definition.",
-        connection.describe(),
+        action.refused(cluster, &connection.describe()),
         connection.check_context()
     )]
     Mismatch {
+        action: Action,
         cluster: String,
         declared: String,
         live: String,
@@ -182,17 +221,19 @@ pub enum BindingError {
     /// The build names no Kubernetes cluster, and a record on this one
     /// carries the `kix.run/kubernetes-uid` label with this cluster's UID.
     #[error(
-        "Kix refused to deploy {cluster} to this Kubernetes cluster. Nothing was applied. \
+        "{} \
          {bound_cluster} was deployed here with cluster.kubernetes.uid = \"{uid}\" \
          (the UID of this cluster's kube-system namespace), which locked this cluster \
          to definitions that set that UID. {cluster}'s definition does not set \
          cluster.kubernetes.uid.{} If {cluster} belongs on this cluster, \
          add cluster.kubernetes.uid = \"{uid}\"; to {cluster}'s definition. \
          If the Kix cluster that set it no longer exists, remove the label from its \
-         records (see the how-to page \"{HOW_TO}\").",
+         records (see \"{HOW_TO}\", {DOCS_URL}{HOW_TO_PATH}).",
+        action.refused(cluster, "this Kubernetes cluster"),
         connection.otherwise_check_context()
     )]
     Unbound {
+        action: Action,
         cluster: String,
         bound_cluster: String,
         uid: String,
@@ -203,17 +244,19 @@ pub enum BindingError {
     /// carries the label with another cluster's UID: the records were
     /// restored or copied from another Kubernetes cluster.
     #[error(
-        "Kix refused to deploy {cluster} to this Kubernetes cluster. Nothing was applied. \
+        "{} \
          {bound_cluster}'s Activation records here carry cluster.kubernetes.uid = \"{label}\", \
          but this cluster's kube-system namespace has UID \"{live}\", so those records \
          came from another Kubernetes cluster. {cluster}'s definition does not set \
          cluster.kubernetes.uid.{} If {cluster} belongs on this cluster, \
          add cluster.kubernetes.uid = \"{live}\"; to {cluster}'s definition. \
          To lift the lock the restored records hold, remove the label from them \
-         (see the how-to page \"{HOW_TO}\").",
+         (see \"{HOW_TO}\", {DOCS_URL}{HOW_TO_PATH}).",
+        action.refused(cluster, "this Kubernetes cluster"),
         connection.otherwise_check_context()
     )]
     UnboundRestored {
+        action: Action,
         cluster: String,
         bound_cluster: String,
         label: String,
@@ -223,13 +266,14 @@ pub enum BindingError {
 
     /// The account may not read the `kube-system` Namespace.
     #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
+        "{} \
          {} (HTTP 403 Forbidden) to check this cluster's UID. {}",
-        connection.describe(),
+        action.refused(cluster, &connection.describe()),
         checking.why(cluster),
         connection.grant_get_namespaces()
     )]
     Forbidden {
+        action: Action,
         cluster: String,
         checking: Checking,
         connection: Connection,
@@ -237,14 +281,15 @@ pub enum BindingError {
 
     /// Reading the `kube-system` Namespace failed for another reason.
     #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
+        "{} \
          {} to check this cluster's UID ({}). \
          Check that the cluster's API server is reachable and healthy, then retry.",
-        connection.describe(),
+        action.refused(cluster, &connection.describe()),
         checking.why(cluster),
         api_error(source)
     )]
     Read {
+        action: Action,
         cluster: String,
         checking: Checking,
         connection: Connection,
@@ -255,16 +300,61 @@ pub enum BindingError {
     /// Listing the Activation records failed, so whether the Kubernetes
     /// cluster accepts an unbound build is unknown.
     #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
+        "{} \
          {cluster}'s definition does not set cluster.kubernetes.uid, and Kix could not \
          read the Activation records on this cluster to check whether a previous deploy \
          locked it to a cluster.kubernetes.uid ({}). \
          Check that the API server is reachable and that this Kubernetes account has \
          list permission on activations, then retry.",
-        connection.describe(),
+        action.refused(cluster, &connection.describe()),
         api_error(&source.source)
     )]
     Records {
+        action: Action,
+        cluster: String,
+        connection: Connection,
+        #[source]
+        source: RecordsError,
+    },
+
+    /// `kix.lib.mkFlake` named the build after its `clusters` key, and the
+    /// Kubernetes cluster has records only for a Kix cluster named
+    /// [`OLD_DEFAULT_NAME`], the name Kix 0.6 gave the same definition.
+    #[error(
+        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
+         {cluster}'s definition in kix.lib.mkFlake calls kix.buildCluster without name. \
+         Kix 0.6 named such a cluster \"{OLD_DEFAULT_NAME}\", while Kix 0.7 names it \
+         \"{cluster}\" after its key. This Kubernetes cluster has Activation records for \
+         \"{OLD_DEFAULT_NAME}\" and none for \"{cluster}\", so Kix 0.6 probably deployed it \
+         under the old name. Deploying as \"{cluster}\" would start a new deploy history and \
+         ignore the old records. Kix would never delete objects that only the old build has, \
+         and the Kix operator (if running here) would keep repairing the old build while its \
+         record stays. To keep the old name and its deploy history, add \
+         name = \"{OLD_DEFAULT_NAME}\"; to the kix.buildCluster call in {cluster}'s definition. \
+         To confirm the new name and start a new deploy history, add name = \"{cluster}\"; \
+         instead, then remove the old \"{OLD_DEFAULT_NAME}\" records and any objects that only \
+         the old build has. Setting name to either value turns this check off.",
+        connection.describe()
+    )]
+    RenamedByFlake {
+        cluster: String,
+        connection: Connection,
+    },
+
+    /// Listing the Activation records failed, so whether Kix 0.6 deployed
+    /// this cluster under [`OLD_DEFAULT_NAME`] is unknown.
+    #[error(
+        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
+         {cluster}'s definition in kix.lib.mkFlake calls kix.buildCluster without name, \
+         and Kix could not read the Activation records on this cluster to check whether \
+         Kix 0.6 deployed it under the old name \"{OLD_DEFAULT_NAME}\" ({}). \
+         Check that the API server is reachable and that this Kubernetes account has \
+         list permission on activations, then retry. Setting name in the \
+         kix.buildCluster call turns this check off.",
+        connection.describe(),
+        api_error(&source.source)
+    )]
+    NameRecords {
         cluster: String,
         connection: Connection,
         #[source]
@@ -289,21 +379,24 @@ pub async fn live_uid(client: &Client) -> Result<String, kube::Error> {
 }
 
 /// Read the live UID for the check `checking` of `cluster`, turning a
-/// failure into the refusal that names it.
+/// failure into the refusal of `action` that names it.
 async fn read_live_uid(
     client: &Client,
     connection: &Connection,
+    action: Action,
     cluster: &str,
     checking: Checking,
 ) -> Result<String, BindingError> {
     match live_uid(client).await {
         Ok(live) => Ok(live),
         Err(e) if forbidden(&e) => Err(BindingError::Forbidden {
+            action,
             cluster: cluster.to_string(),
             checking,
             connection: connection.clone(),
         }),
         Err(source) => Err(BindingError::Read {
+            action,
             cluster: cluster.to_string(),
             checking,
             connection: connection.clone(),
@@ -312,19 +405,20 @@ async fn read_live_uid(
     }
 }
 
-/// Refuse to apply the build of Kix cluster `cluster`, whose definition
-/// names the Kubernetes cluster `declared` (`None` when unbound), to the
-/// cluster behind `client`: [`check_declared`] for a bound build,
-/// [`check_unbound`] for an unbound one.
+/// Refuse `action` with the build of Kix cluster `cluster`, whose
+/// definition names the Kubernetes cluster `declared` (`None` when
+/// unbound), on the cluster behind `client`: [`check_declared`] for a bound
+/// build, [`check_unbound`] for an unbound one.
 pub async fn check(
     client: &Client,
     connection: &Connection,
+    action: Action,
     cluster: &str,
     declared: Option<&str>,
 ) -> Result<(), BindingError> {
     match declared {
-        Some(declared) => check_declared(client, connection, cluster, declared).await,
-        None => check_unbound(client, connection, cluster).await,
+        Some(declared) => check_declared(client, connection, action, cluster, declared).await,
+        None => check_unbound(client, connection, action, cluster).await,
     }
 }
 
@@ -333,14 +427,16 @@ pub async fn check(
 pub async fn check_declared(
     client: &Client,
     connection: &Connection,
+    action: Action,
     cluster: &str,
     declared: &str,
 ) -> Result<(), BindingError> {
-    let live = read_live_uid(client, connection, cluster, Checking::Declared).await?;
+    let live = read_live_uid(client, connection, action, cluster, Checking::Declared).await?;
     if live == declared {
         return Ok(());
     }
     Err(BindingError::Mismatch {
+        action,
         cluster: cluster.to_string(),
         declared: declared.to_string(),
         live,
@@ -348,22 +444,24 @@ pub async fn check_declared(
     })
 }
 
-/// Refuse the unbound build of `cluster` when any Activation record on the
-/// Kubernetes cluster, of any Kix cluster, carries the
-/// `kix.run/kubernetes-uid` label, since the records of a bound definition
-/// make the Kubernetes cluster one that accepts only definitions that name
-/// it. The live UID is read to tell a record written here from one restored
+/// Refuse the unbound build of `cluster` when an Activation record on the
+/// Kubernetes cluster, of any Kix cluster, that finished a deploy carries
+/// the `kix.run/kubernetes-uid` label ([`activation::bound_record`]), since
+/// a deployed bound definition makes the Kubernetes cluster one that
+/// accepts only definitions that name it. The live UID is read to tell a record written here from one restored
 /// from another Kubernetes cluster, so the advice names this cluster's UID.
 /// An unbound build on a cluster with no such record passes, as before
 /// binding existed, with nothing else read.
 pub async fn check_unbound(
     client: &Client,
     connection: &Connection,
+    action: Action,
     cluster: &str,
 ) -> Result<(), BindingError> {
     let bound = activation::bound_record(client)
         .await
         .map_err(|source| BindingError::Records {
+            action,
             cluster: cluster.to_string(),
             connection: connection.clone(),
             source,
@@ -371,9 +469,10 @@ pub async fn check_unbound(
     let Some(bound) = bound else {
         return Ok(());
     };
-    let live = read_live_uid(client, connection, cluster, Checking::Locked).await?;
+    let live = read_live_uid(client, connection, action, cluster, Checking::Locked).await?;
     if live == bound.uid {
         return Err(BindingError::Unbound {
+            action,
             cluster: cluster.to_string(),
             bound_cluster: bound.cluster,
             uid: bound.uid,
@@ -381,10 +480,50 @@ pub async fn check_unbound(
         });
     }
     Err(BindingError::UnboundRestored {
+        action,
         cluster: cluster.to_string(),
         bound_cluster: bound.cluster,
         label: bound.uid,
         live,
+        connection: connection.clone(),
+    })
+}
+
+/// Refuse the build of `cluster` when `kix.lib.mkFlake` took its name from
+/// its `clusters` key (`name_from_flake_key`), the Kubernetes cluster has no
+/// Activation record for `cluster`, and it has one for
+/// [`OLD_DEFAULT_NAME`]. Kix 0.6 gave that name to the same definition, so
+/// deploying under the new name would leave the old records and their
+/// objects behind with no error. A definition that sets `name` passes with
+/// nothing read.
+pub async fn check_name(
+    client: &Client,
+    connection: &Connection,
+    cluster: &str,
+    name_from_flake_key: bool,
+) -> Result<(), BindingError> {
+    if !name_from_flake_key || cluster == OLD_DEFAULT_NAME {
+        return Ok(());
+    }
+    let refuse = |source| BindingError::NameRecords {
+        cluster: cluster.to_string(),
+        connection: connection.clone(),
+        source,
+    };
+    if activation::records_exist(client, cluster)
+        .await
+        .map_err(refuse)?
+    {
+        return Ok(());
+    }
+    if !activation::records_exist(client, OLD_DEFAULT_NAME)
+        .await
+        .map_err(refuse)?
+    {
+        return Ok(());
+    }
+    Err(BindingError::RenamedByFlake {
+        cluster: cluster.to_string(),
         connection: connection.clone(),
     })
 }
@@ -401,7 +540,10 @@ mod tests {
     const ELSEWHERE: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 
     fn record(cluster: &str, kubernetes_uid: Option<&str>) -> Value {
-        let mut labels = json!({ (keys::CLUSTER_LABEL): cluster });
+        let mut labels = json!({
+            "app.kubernetes.io/managed-by": "kix",
+            (keys::CLUSTER_LABEL): cluster,
+        });
         if let Some(uid) = kubernetes_uid {
             labels[keys::KUBERNETES_UID] = json!(uid);
         }
@@ -433,9 +575,15 @@ mod tests {
     async fn a_build_naming_this_cluster_passes() {
         let api = FakeApi::new([kube_system(HERE)]);
         let connection = context("prod", "https://prod.example:6443");
-        check(&api.client(), &connection, "cluster-a", Some(HERE))
-            .await
-            .unwrap();
+        check(
+            &api.client(),
+            &connection,
+            Action::Deploy,
+            "cluster-a",
+            Some(HERE),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             api.requests(),
             vec!["GET /api/v1/namespaces/kube-system".to_string()]
@@ -448,9 +596,15 @@ mod tests {
     async fn a_build_naming_another_cluster_is_refused() {
         let api = FakeApi::new([kube_system(HERE), record("lab1", Some(HERE))]);
         let connection = context("cluster-b", "https://b.example:6443");
-        let err = check(&api.client(), &connection, "cluster-a", Some(ELSEWHERE))
-            .await
-            .unwrap_err();
+        let err = check(
+            &api.client(),
+            &connection,
+            Action::Deploy,
+            "cluster-a",
+            Some(ELSEWHERE),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, BindingError::Mismatch { .. }));
         let text = err.to_string();
         assert!(
@@ -495,6 +649,7 @@ mod tests {
         let err = check(
             &api.client(),
             &Connection::InCluster,
+            Action::Deploy,
             "cluster-a",
             Some(ELSEWHERE),
         )
@@ -516,9 +671,15 @@ mod tests {
         let api = FakeApi::new([kube_system(HERE)]);
         api.fail_next("/api/v1/namespaces/kube-system", 1, 403);
         let connection = context("prod", "https://prod.example:6443");
-        let err = check(&api.client(), &connection, "cluster-a", Some(HERE))
-            .await
-            .unwrap_err();
+        let err = check(
+            &api.client(),
+            &connection,
+            Action::Deploy,
+            "cluster-a",
+            Some(HERE),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, BindingError::Forbidden { .. }));
         let text = err.to_string();
         assert!(
@@ -549,6 +710,7 @@ mod tests {
         let err = check(
             &api.client(),
             &Connection::InCluster,
+            Action::Deploy,
             "cluster-a",
             Some(HERE),
         )
@@ -560,7 +722,7 @@ mod tests {
             text.contains("Grant the operator's service account get permission on namespaces"),
             "{text}"
         );
-        assert!(!text.contains("deploy with an account"), "{text}");
+        assert!(!text.contains("use an account"), "{text}");
     }
 
     /// Any other failure to read the Namespace is refused with its cause.
@@ -571,6 +733,7 @@ mod tests {
         let err = check(
             &api.client(),
             &Connection::of_context(Some("prod")),
+            Action::Deploy,
             "cluster-a",
             Some(HERE),
         )
@@ -588,9 +751,15 @@ mod tests {
     async fn restored_records_name_the_live_uid() {
         let api = FakeApi::new([kube_system(HERE), record("lab1", Some(ELSEWHERE))]);
         let connection = context("prod", "https://prod.example:6443");
-        let err = check(&api.client(), &connection, "cluster-a", None)
-            .await
-            .unwrap_err();
+        let err = check(
+            &api.client(),
+            &connection,
+            Action::Deploy,
+            "cluster-a",
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, BindingError::UnboundRestored { .. }), "{err}");
         let text = err.to_string();
         assert!(
@@ -617,6 +786,7 @@ mod tests {
         let err = check(
             &api.client(),
             &Connection::of_context(None),
+            Action::Deploy,
             "cluster-a",
             None,
         )
@@ -641,9 +811,15 @@ mod tests {
             record("lab1", Some(HERE)),
         ]);
         let connection = context("prod", "https://prod.example:6443");
-        let err = check(&api.client(), &connection, "cluster-a", None)
-            .await
-            .unwrap_err();
+        let err = check(
+            &api.client(),
+            &connection,
+            Action::Deploy,
+            "cluster-a",
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, BindingError::Unbound { .. }));
         let text = err.to_string();
         assert!(
@@ -667,9 +843,15 @@ mod tests {
     async fn an_unbound_build_passes_where_nothing_is_bound() {
         let api = FakeApi::new([kube_system(HERE), record("cluster-a", None)]);
         let connection = Connection::of_context(None);
-        check(&api.client(), &connection, "cluster-a", None)
-            .await
-            .unwrap();
+        check(
+            &api.client(),
+            &connection,
+            Action::Deploy,
+            "cluster-a",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(api.requests().len(), 1, "{:?}", api.requests());
         assert!(
             api.requests()[0].contains(&format!(
@@ -682,14 +864,20 @@ mod tests {
 
         let api = FakeApi::new([kube_system(HERE)]);
         api.fail_next(&format!("/apis/{}/activations", keys::API_VERSION), 1, 404);
-        check(&api.client(), &connection, "cluster-a", None)
-            .await
-            .unwrap();
+        check(
+            &api.client(),
+            &connection,
+            Action::Deploy,
+            "cluster-a",
+            None,
+        )
+        .await
+        .unwrap();
     }
 
     /// A record the CLI submits for the operator carries the build's UID as
-    /// the label, so a later unbound build finds it; an unbound build's
-    /// record carries none.
+    /// the label, and locks the cluster once its deploy finishes; an unbound
+    /// build's record carries none.
     #[tokio::test]
     async fn a_submitted_record_carries_the_label_of_a_bound_build() {
         use crate::cluster::activation::{Records, bound_record};
@@ -702,13 +890,210 @@ mod tests {
             .submit("cluster-a-1", "cluster-a", "/nix/store/x", Some("h1"), None)
             .await
             .unwrap();
+        records
+            .finalize_deploy("cluster-a", "cluster-a-1", None, false, None, &[], &[])
+            .await
+            .unwrap();
         assert_eq!(bound_record(&client).await.unwrap(), None);
         records
             .submit("lab1-1", "lab1", "/nix/store/y", Some("h2"), Some(HERE))
             .await
             .unwrap();
+        assert_eq!(bound_record(&client).await.unwrap(), None);
+        records
+            .finalize_deploy("lab1", "lab1-1", None, false, None, &[], &[])
+            .await
+            .unwrap();
         let bound = bound_record(&client).await.unwrap().unwrap();
         assert_eq!((bound.cluster.as_str(), bound.uid.as_str()), ("lab1", HERE));
+    }
+
+    /// Return a record of `cluster` in `phase` that carries `uid` as its
+    /// label, with `kix.run/deployed-at` when `deployed`.
+    fn bound_in_phase(name: &str, cluster: &str, uid: &str, phase: &str, deployed: bool) -> Value {
+        let mut record = record(cluster, Some(uid));
+        record["metadata"]["name"] = json!(name);
+        record["status"]["phase"] = json!(phase);
+        if deployed {
+            record["metadata"]["annotations"] =
+                json!({ (keys::DEPLOYED_AT): "2026-11-01T10:00:00Z" });
+        }
+        record
+    }
+
+    /// A bound record that never finished a deploy does not lock the
+    /// cluster: an unbound build passes beside a Failed, Queued, or
+    /// Deploying record, and one superseded before it deployed.
+    #[tokio::test]
+    async fn a_bound_record_that_never_deployed_does_not_lock_the_cluster() {
+        use crate::manifest::lifecycle::{
+            PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
+        };
+        let api = FakeApi::new([
+            kube_system(HERE),
+            bound_in_phase("lab1-1", "lab1", ELSEWHERE, PHASE_FAILED, false),
+            bound_in_phase("lab1-2", "lab1", HERE, PHASE_QUEUED, false),
+            bound_in_phase("lab1-3", "lab1", HERE, PHASE_DEPLOYING, false),
+            bound_in_phase("lab1-4", "lab1", HERE, PHASE_SUPERSEDED, false),
+        ]);
+        check(
+            &api.client(),
+            &Connection::of_context(None),
+            Action::Deploy,
+            "cluster-a",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// A bound record that finished a deploy locks the cluster in any phase
+    /// it reaches afterwards.
+    #[tokio::test]
+    async fn a_bound_record_that_deployed_locks_the_cluster() {
+        use crate::manifest::lifecycle::{PHASE_DEGRADED, PHASE_FAILED, PHASE_SUPERSEDED};
+        for (phase, deployed) in [
+            (PHASE_ACTIVE, false),
+            (PHASE_DEGRADED, false),
+            (PHASE_SUPERSEDED, true),
+            (PHASE_FAILED, true),
+        ] {
+            let api = FakeApi::new([
+                kube_system(HERE),
+                bound_in_phase("lab1-1", "lab1", HERE, phase, deployed),
+            ]);
+            let err = check(
+                &api.client(),
+                &Connection::of_context(None),
+                Action::Deploy,
+                "cluster-a",
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, BindingError::Unbound { .. }),
+                "{phase}: {err}"
+            );
+        }
+    }
+
+    /// `kix gc` is told that nothing was deleted, not that nothing was
+    /// applied.
+    #[tokio::test]
+    async fn a_garbage_collection_refusal_says_nothing_was_deleted() {
+        let api = FakeApi::new([kube_system(HERE)]);
+        let connection = context("prod", "https://prod.example:6443");
+        let err = check(
+            &api.client(),
+            &connection,
+            Action::GarbageCollect,
+            "cluster-a",
+            Some(ELSEWHERE),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.starts_with(
+                "Kix refused to garbage-collect cluster-a on context prod (https://prod.example:6443). Nothing was deleted."
+            ),
+            "{err}"
+        );
+        assert!(!err.contains("deploy"), "{err}");
+
+        let api = FakeApi::new([kube_system(HERE), record("lab1", Some(HERE))]);
+        let err = check(
+            &api.client(),
+            &connection,
+            Action::GarbageCollect,
+            "cluster-a",
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.starts_with(
+                "Kix refused to garbage-collect cluster-a on this Kubernetes cluster. Nothing was deleted."
+            ),
+            "{err}"
+        );
+        assert!(err.contains(&format!("{DOCS_URL}{HOW_TO_PATH}")), "{err}");
+    }
+
+    /// A build that `mkFlake` named after its key is refused where only
+    /// records of a Kix cluster named `cluster` exist, before anything is
+    /// written, and the message gives both fixes.
+    #[tokio::test]
+    async fn a_key_derived_name_is_refused_over_old_default_records() {
+        let api = FakeApi::new([kube_system(HERE), record(OLD_DEFAULT_NAME, None)]);
+        let connection = context("prod", "https://prod.example:6443");
+        let err = check_name(&api.client(), &connection, "prod", true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BindingError::RenamedByFlake { .. }), "{err}");
+        let text = err.to_string();
+        assert!(
+            text.starts_with(
+                "Kix refused to deploy prod to context prod (https://prod.example:6443). Nothing was applied."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "add name = \"cluster\"; to the kix.buildCluster call in prod's definition"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("add name = \"prod\"; instead"), "{text}");
+        assert!(writes(&api).is_empty());
+    }
+
+    /// The name check passes when the definition sets `name`, when the
+    /// key-derived name already has records, when no record of `cluster`
+    /// exists, and when the key is `cluster` itself.
+    #[tokio::test]
+    async fn a_key_derived_name_passes_otherwise() {
+        let connection = Connection::of_context(None);
+
+        let api = FakeApi::new([kube_system(HERE), record(OLD_DEFAULT_NAME, None)]);
+        check_name(&api.client(), &connection, "prod", false)
+            .await
+            .unwrap();
+        assert!(api.requests().is_empty(), "{:?}", api.requests());
+
+        let api = FakeApi::new([
+            kube_system(HERE),
+            record(OLD_DEFAULT_NAME, None),
+            record("prod", None),
+        ]);
+        check_name(&api.client(), &connection, "prod", true)
+            .await
+            .unwrap();
+
+        let api = FakeApi::new([kube_system(HERE), record("other", None)]);
+        check_name(&api.client(), &connection, "prod", true)
+            .await
+            .unwrap();
+
+        let api = FakeApi::new([kube_system(HERE), record(OLD_DEFAULT_NAME, None)]);
+        check_name(&api.client(), &connection, OLD_DEFAULT_NAME, true)
+            .await
+            .unwrap();
+        assert!(api.requests().is_empty(), "{:?}", api.requests());
+    }
+
+    /// A failure to list the records refuses rather than letting the name
+    /// change.
+    #[tokio::test]
+    async fn a_failed_record_listing_refuses_a_key_derived_name() {
+        let api = FakeApi::new([kube_system(HERE)]);
+        api.fail_next(&format!("/apis/{}/activations", keys::API_VERSION), 1, 403);
+        let err = check_name(&api.client(), &Connection::of_context(None), "prod", true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BindingError::NameRecords { .. }), "{err}");
     }
 
     /// A failure to list the records refuses rather than passing an
@@ -720,6 +1105,7 @@ mod tests {
         let err = check(
             &api.client(),
             &Connection::of_context(None),
+            Action::Deploy,
             "cluster-a",
             None,
         )

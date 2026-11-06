@@ -220,6 +220,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .block_on(binding::check(
             &client,
             &binding::Connection::of_context(global.context.as_deref()),
+            binding::Action::GarbageCollect,
             &new_graph.cluster_name,
             new_graph.kubernetes_uid.as_deref(),
         ))
@@ -386,6 +387,7 @@ async fn run_hard_async(
     binding::check(
         &client,
         &binding::Connection::of_context(global.context.as_deref()),
+        binding::Action::GarbageCollect,
         cluster_name,
         kubernetes_uid,
     )
