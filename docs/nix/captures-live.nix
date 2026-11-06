@@ -48,6 +48,18 @@ let
   kubeContext = "kind-kix-docs";
   kindClusterName = "kix-docs";
 
+  # The newest Helm in kix's runtime, the release Kix renders charts with by
+  # default, so a chart a step installs by hand renders as Kix would.
+  helm =
+    let
+      versions = lib.mapAttrsToList (_: r: r.version) (lib.importJSON ../../kix/lib/helm-versions.json);
+      newest = lib.last (lib.sort lib.versionOlder versions);
+    in
+    pkgs.runCommand "helm-${newest}" { } ''
+      mkdir -p $out/bin
+      ln -s ${kix.runtime}/helm-${newest}/bin/helm $out/bin/helm
+    '';
+
   # PTY wrapper. kix and kubectl disable colour when their output is not a
   # terminal, and a capture redirects to a file, so every invocation runs
   # under `script`. The two implementations take the command differently:
@@ -160,7 +172,7 @@ let
     pkgs.jq
     pkgs.kind
     pkgs.kubectl
-    pkgs.kubernetes-helm
+    helm
     pkgs.sops
     pkgs.gnutar
     pkgs.bash

@@ -11,8 +11,10 @@
 //!    for a package of Kix that keeps the runtime elsewhere, when it holds a
 //!    `manifest.json`.
 //!
-//! With a runtime directory, every program comes from there and nowhere else.
-//! Without one, Kix runs the program of that name on `PATH`.
+//! Every program comes from that directory and nowhere else. Kix never runs
+//! a program from `PATH`, because a different Helm or Nix there could change
+//! what Kix produces without anyone noticing. Without a runtime directory,
+//! [`tool`] fails with [`RuntimeError::NotFound`].
 //!
 //! A runtime directory keeps each program in a directory of its own, named
 //! after its exact version, such as `helm-4.3.1/bin/helm`, so two versions of
@@ -142,10 +144,10 @@ pub enum RuntimeError {
     },
 
     #[error(
-        "Kix needs {program} {version} exactly, and only a Kix runtime can provide an exact version. Kix found no runtime in {}. Set {RUNTIME_DIR_VAR} to a runtime that ships it",
-        searched_text()
+        "Kix could not find its runtime, the directory that holds the nix, helm, kubectl, and sops programs Kix runs. Kix never runs these programs from PATH. It looked in: {}. Install Kix from its release archive, which keeps bin/kix and libexec/kix together, or set {RUNTIME_DIR_VAR} to a Kix runtime directory",
+        searched.join(", ")
     )]
-    NoRuntime { program: String, version: String },
+    NotFound { searched: Vec<String> },
 
     #[error(
         "the Kix runtime in {} ({found_by}) does not belong to this kix binary. It ships {found}, but kix {} expects {expected}. Install bin/kix and libexec/kix from the same Kix release{}",
@@ -210,14 +212,14 @@ pub struct Runtime {
     pub found_by: FoundBy,
 }
 
-/// Return the runtime directory Kix uses, or `None` when it runs programs
-/// from `PATH`.
+/// Return the runtime directory Kix uses.
 ///
-/// The first call checks a runtime's manifest against the programs compiled
-/// into this binary and fails on a mismatch. Later calls return the same
-/// runtime without reading the manifest again.
-pub fn runtime() -> Result<Option<Runtime>, RuntimeError> {
-    static CHECKED: OnceLock<Option<Runtime>> = OnceLock::new();
+/// Fail with [`RuntimeError::NotFound`] when there is none. The first call
+/// that finds one checks its manifest against the programs compiled into
+/// this binary and fails on a mismatch. Later calls return the same runtime
+/// without reading the manifest again.
+pub fn runtime() -> Result<Runtime, RuntimeError> {
+    static CHECKED: OnceLock<Runtime> = OnceLock::new();
     if let Some(found) = CHECKED.get() {
         return Ok(found.clone());
     }
@@ -227,10 +229,11 @@ pub fn runtime() -> Result<Option<Runtime>, RuntimeError> {
             .map(PathBuf::from),
         beside_binary(),
         BUILTIN_RUNTIME_DIR.map(PathBuf::from),
-    );
-    if let Some(rt) = &found {
-        check_manifest(rt)?;
-    }
+    )
+    .ok_or_else(|| RuntimeError::NotFound {
+        searched: searched(),
+    })?;
+    check_manifest(&found)?;
     Ok(CHECKED.get_or_init(|| found).clone())
 }
 
@@ -276,10 +279,6 @@ pub fn searched() -> Vec<String> {
         places.push(dir.to_string());
     }
     places
-}
-
-fn searched_text() -> String {
-    searched().join(", ")
 }
 
 /// Return the programs and versions this binary expects, from
@@ -333,22 +332,12 @@ pub fn tool(tool: Tool, want: Want) -> Result<Command, RuntimeError> {
     Ok(cmd)
 }
 
-/// Return the path of `tool`'s executable, or its bare name when Kix looks
-/// it up on `PATH`.
+/// Return the path of `tool`'s executable in the Kix runtime.
 pub fn program_path(tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
-    locate(runtime()?.map(|rt| rt.dir).as_deref(), tool, want)
+    locate(&runtime()?.dir, tool, want)
 }
 
-fn locate(dir: Option<&Path>, tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
-    let Some(dir) = dir else {
-        return match want {
-            Want::Shipped => Ok(PathBuf::from(tool.binary())),
-            Want::Exact(version) => Err(RuntimeError::NoRuntime {
-                program: tool.program().to_string(),
-                version: version.to_string(),
-            }),
-        };
-    };
+fn locate(dir: &Path, tool: Tool, want: Want) -> Result<PathBuf, RuntimeError> {
     let shipped = if dir.join(MANIFEST).exists() {
         from_manifest(dir, tool)?
     } else {
@@ -709,27 +698,22 @@ mod tests {
     }
 
     #[test]
-    fn without_a_runtime_programs_come_from_path() {
-        for (tool, name) in [
-            (Tool::Nix, "nix"),
-            (Tool::NixStore, "nix-store"),
-            (Tool::Kubectl, "kubectl"),
-            (Tool::Sops, "sops"),
-            (Tool::Helm, "helm"),
+    fn no_runtime_names_where_kix_looked_and_the_fixes() {
+        let err = RuntimeError::NotFound {
+            searched: vec![
+                "KIX_RUNTIME_DIR (not set)".into(),
+                "/opt/kix/libexec/kix".into(),
+            ],
+        };
+        let text = err.to_string();
+        for part in [
+            "KIX_RUNTIME_DIR (not set), /opt/kix/libexec/kix",
+            "never runs these programs from PATH",
+            "release archive",
+            "set KIX_RUNTIME_DIR",
         ] {
-            assert_eq!(
-                locate(None, tool, Want::Shipped).unwrap(),
-                PathBuf::from(name)
-            );
+            assert!(text.contains(part), "{part}: {text}");
         }
-    }
-
-    /// `PATH` cannot promise a version, so an exact version needs a runtime.
-    #[test]
-    fn an_exact_version_needs_a_runtime() {
-        let err = locate(None, Tool::Helm, Want::Exact("4.3.1")).unwrap_err();
-        assert!(matches!(err, RuntimeError::NoRuntime { .. }), "{err}");
-        assert!(err.to_string().contains("KIX_RUNTIME_DIR"), "{err}");
     }
 
     #[test]
@@ -740,7 +724,7 @@ mod tests {
             ("helm-4.3.1", &["helm"]),
             ("sops-3.12.1", &[]),
         ]);
-        let d = Some(dir.path());
+        let d = dir.path();
         assert_eq!(
             locate(d, Tool::Nix, Want::Shipped).unwrap(),
             dir.path().join("nix-2.31.3/bin/nix")
@@ -762,7 +746,7 @@ mod tests {
         assert!(matches!(err, RuntimeError::NoSuchVersion { .. }), "{err}");
         assert!(err.to_string().contains("ships 3.19.1, 4.3.1"), "{err}");
 
-        // A runtime never falls back to `PATH`, even for a program it lacks.
+        // A program the runtime lacks is an error, never a lookup on `PATH`.
         for tool in [Tool::Kubectl, Tool::Sops] {
             let err = locate(d, tool, Want::Shipped).unwrap_err();
             assert!(matches!(err, RuntimeError::Missing { .. }), "{err}");
@@ -781,7 +765,7 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let d = Some(dir.path());
+        let d = dir.path();
         assert_eq!(
             locate(d, Tool::Nix, Want::Shipped).unwrap(),
             dir.path().join("elsewhere/bin/nix")
@@ -805,24 +789,19 @@ mod tests {
                 format!(r#"{{"programs": [{{"name": "nix", "version": "1", "bin": {{"nix": "{bad}"}}}}]}}"#),
             )
             .unwrap();
-            let err = locate(Some(dir.path()), Tool::Nix, Want::Shipped).unwrap_err();
+            let err = locate(dir.path(), Tool::Nix, Want::Shipped).unwrap_err();
             assert!(matches!(err, RuntimeError::Manifest { .. }), "{bad}: {err}");
         }
         std::fs::write(dir.path().join(MANIFEST), "not json").unwrap();
         assert!(matches!(
-            locate(Some(dir.path()), Tool::Nix, Want::Shipped).unwrap_err(),
+            locate(dir.path(), Tool::Nix, Want::Shipped).unwrap_err(),
             RuntimeError::Manifest { .. }
         ));
     }
 
     #[test]
     fn a_missing_runtime_directory_is_named() {
-        let err = locate(
-            Some(Path::new("/nonexistent/kix")),
-            Tool::Nix,
-            Want::Shipped,
-        )
-        .unwrap_err();
+        let err = locate(Path::new("/nonexistent/kix"), Tool::Nix, Want::Shipped).unwrap_err();
         assert!(err.to_string().contains("/nonexistent/kix"), "{err}");
     }
 

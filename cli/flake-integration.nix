@@ -27,11 +27,15 @@
   #
   # { system, pkgs, lib, self', inputs', ... }:
 
+  # `runtime` is a Kix runtime directory (cli/runtime/in-store.nix). The
+  # package links it at libexec/kix beside bin/kix, where kix looks for it.
+  # Without one, kix finds no runtime unless KIX_RUNTIME_DIR names one.
   mkKixPackage =
     {
       pkgs,
       lib,
       crane,
+      runtime ? null,
       ...
     }:
     let
@@ -87,7 +91,27 @@
         }
       );
     in
-    kix;
+    if runtime == null then
+      kix
+    else
+      # kix resolves links to its own binary before it looks for
+      # ../libexec/kix, so bin/kix is a copy, not a link to the crane build.
+      # The runtime is a separate derivation, so a runtime change does not
+      # rebuild kix.
+      pkgs.runCommand "kix-${kix.version}"
+        {
+          inherit (kix) version meta;
+          passthru = {
+            unwrapped = kix;
+            inherit runtime;
+          };
+        }
+        ''
+          cp -R ${kix} $out
+          chmod -R u+w $out
+          mkdir -p $out/libexec
+          ln -s ${runtime} $out/libexec/kix
+        '';
 
   # --- Outputs to merge into perSystem ---
   #

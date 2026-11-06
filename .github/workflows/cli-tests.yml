@@ -237,15 +237,14 @@ jobs:
             kix-aarch64-darwin.tar
           if-no-files-found: error
 
-  # Builds the kix binary for a release, after the tests pass, and publishes
-  # it. Pushes to main that are not releases build nothing. This repository
-  # is private and so are its releases, so the binaries go to the public
-  # kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a fine-grained token
-  # with Contents read/write on that repository only.
+  # Builds the kix binary for a release, after the tests pass, and packs it
+  # with the runtime into one archive per platform. Pushes to main that are
+  # not releases build nothing. The `publish` job publishes the archives
+  # once `without-nix` has run them.
   #
-  # A workflow_dispatch run builds and uploads the binaries as a workflow
-  # artifact but publishes nothing, which is how to try a change to this
-  # job from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
+  # A workflow_dispatch run builds and uploads the archives as a workflow
+  # artifact but publishes nothing, which is how to try a change to these
+  # jobs from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
   release:
     needs: [test, version, runtime]
     if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
@@ -253,15 +252,9 @@ jobs:
     # nixpkgs has no musl standard library for its rustc in the binary
     # cache, while rustup's toolchains do not run on the NixOS image.
     runs-on: ubuntu-latest
-    # Write, to push the release tag to this repository and to start the
-    # docs deploy.
-    permissions:
-      contents: write
-      actions: write
     env:
       TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
       VERSION: ${{ needs.version.outputs.version }}
-      PUBLISH: ${{ needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -341,10 +334,73 @@ jobs:
           name: kix-${{ needs.version.outputs.version }}
           path: dist/
 
+  # Runs each release archive on a machine with no Nix, where kix must work
+  # from its own runtime and store: `kix doctor`, then `kix build` of a
+  # cluster without Helm and of one with Helm, which fetches nixpkgs and
+  # renders a chart. On Linux a plain Ubuntu container holds no /nix. On
+  # macOS sandbox-exec denies every access to /nix
+  # (cli/runtime/without-nix.sh).
+  without-nix:
+    needs: [version, release]
+    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NIX_CONFIG: |
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # A clone, not a worktree, with the full history that Nix's git
+      # fetcher needs.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Run the archive without Nix
+        run: |
+          test ! -e /nix || { echo "this runner has /nix"; ls -la /nix; exit 1; }
+          tar -xzf "dist/kix-${{ matrix.system }}.tar.gz" -C "$RUNNER_TEMP"
+          cli/runtime/without-nix.sh "$RUNNER_TEMP/kix-$VERSION-${{ matrix.system }}" .
+
+  # Publishes the archives the release job built, once they ran without Nix.
+  # This repository is private and so are its releases, so the binaries go
+  # to the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
+  # fine-grained token with Contents read/write on that repository only.
+  publish:
+    needs: [version, release, without-nix]
+    if: needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Write, to push the release tag to this repository and to start the
+    # docs deploy.
+    permissions:
+      contents: write
+      actions: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
       # A release that already exists in kix-releases is left alone, so a
       # run that published and then failed to tag can be run again.
       - name: Publish release
-        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
           NOTES: ${{ needs.version.outputs.notes }}
@@ -363,7 +419,6 @@ jobs:
       # Last, so a run that fails before this point leaves no tag and the
       # next run tries the release again.
       - name: Tag release
-        if: env.PUBLISH == 'true'
         run: |
           git tag "v$VERSION" "$GITHUB_SHA"
           git push origin "refs/tags/v$VERSION"
@@ -372,7 +427,6 @@ jobs:
       # pushed with this job's token starts no workflow, so the deploy is
       # started here.
       - name: Deploy the release's docs
-        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main

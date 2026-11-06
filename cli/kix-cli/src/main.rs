@@ -168,7 +168,7 @@ fn main() -> miette::Result<()> {
         validate_cluster_name(name)?;
     }
 
-    // Stop before any work when the runtime beside this binary comes from
+    // Stop before any work when Kix has no runtime, or its runtime comes from
     // another release.
     kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
 

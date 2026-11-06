@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Assemble a Kix runtime directory from the spec that runtime.nix builds.
 
-Usage: assemble.py <kix-runtime-spec.json> <out-dir>
+Usage: assemble.py [--in-store] <kix-runtime-spec.json> <out-dir>
 
 <out-dir> becomes libexec/kix/ in a release archive. It holds one directory
 per program, named <name>-<version>, the THIRD_PARTY_LICENSES file, and
@@ -33,6 +33,11 @@ the program's own lib/ directory, and each load command is rewritten to
 that program, so THIRD_PARTY_LICENSES covers each of them. Relocation runs
 only on macOS and needs the command line tools (otool, install_name_tool,
 codesign).
+
+With --in-store, no program is relocated, so a macOS nix keeps loading its
+libraries from /nix/store. That runtime works only on a machine with that
+store, such as one that installs Kix with Nix. It needs no command line
+tools, so it can run inside a Nix build on Linux and on macOS.
 """
 
 import hashlib
@@ -285,11 +290,15 @@ def file_entries(out, dirname):
 
 
 def main():
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    in_store = args[:1] == ["--in-store"]
+    if in_store:
+        args = args[1:]
+    if len(args) != 2:
         sys.exit(__doc__)
-    with open(sys.argv[1]) as f:
+    with open(args[0]) as f:
         spec = json.load(f)
-    out = sys.argv[2]
+    out = args[1]
     if os.path.exists(out) and os.listdir(out):
         sys.exit(f"{out} is not empty")
     os.makedirs(out, exist_ok=True)
@@ -301,7 +310,7 @@ def main():
     }
     for program in sorted(spec["programs"], key=lambda p: (p["name"], p["version"])):
         dirname, origins = copy_program(program, out)
-        if program.get("relocate"):
+        if program.get("relocate") and not in_store:
             relocate(
                 os.path.join(out, dirname),
                 origins,
