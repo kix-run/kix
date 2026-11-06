@@ -132,6 +132,14 @@ One rule holds even before 1.0: a Kix release reads the cluster state the previo
 
 Every pull request that changes something a Kix user sees adds a line under `## Unreleased` in `CHANGELOG.md`, and the Changelog workflow checks pull requests that change `cli/` or `kix/` for one. Label a pull request `no-changelog` when nothing a user sees changes, such as tests, CI, or an internal refactor. To cut a release, use the `release` skill (`.claude/skills/release/SKILL.md`).
 
+## User-facing text: Argon copy pass
+
+Antigravity, running the Gemini 4 Argon model, writes clearer user-facing text than Claude does. Before you open a pull request that adds or changes text a person reads, run `scripts/argon-copy-pass` on the branch. That text includes errors, warnings, and log lines in `cli/` and `kix/`, docs pages, the skills, and `CHANGELOG.md`. The script hands the changed text to Argon with `CLAUDE.prose.md` as its rules, and Argon edits the files in place. Review its edits, run the tests again (some check message text word for word), and commit.
+
+Then tick `- [x] Argon copy pass` in the pull request description. The Argon copy pass workflow fails a pull request that changes such text without it. If `agy` is not installed (exit 2), leave `- [ ] Argon copy pass` unticked, so someone who has it can run the pass. Never tick it unless the script ran and exited 0.
+
+For an important new message, such as a refusal that stops a deploy, you can also give Argon the facts and ask it to write the message: `agy --model "Gemini 4 Argon (Medium)" --print "<facts and request>"`.
+
 ## DSL design principles
 
 - **Don't invent new fields.** The DSL should work with standard K8s manifest fields, not introduce custom spec keys that could confuse users or diverge from K8s semantics.
