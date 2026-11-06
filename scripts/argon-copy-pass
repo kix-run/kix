@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+#
+# Hand the user-facing text changed on the current branch to Antigravity,
+# running the Gemini 4 Argon model, which rewrites it by CLAUDE.prose.md.
+#
+# Usage:
+#   scripts/argon-copy-pass [--base <ref>] [file...]
+#   scripts/argon-copy-pass --list [--base <ref>]
+#
+# Without file arguments it reviews every file on this branch that changes
+# text a person reads (see copy_files below). --list prints those files and
+# stops. The Argon copy pass workflow uses it to decide whether a pull
+# request needs the pass.
+#
+# Exit codes:
+#   0  the copy pass finished, or no file with user-facing text changed
+#   1  Antigravity did not finish (it was refused a tool, or said nothing)
+#   2  'agy' is not installed here. Leave '- [ ] Argon copy pass' unticked.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+base=""
+list_only=0
+files=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)
+      base="${2:?--base needs a git ref}"
+      shift 2
+      ;;
+    --list)
+      list_only=1
+      shift
+      ;;
+    -h | --help)
+      sed -n '2,18s/^# \{0,1\}//p' "$0"
+      exit 0
+      ;;
+    *)
+      files+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$base" ]; then
+  for cand in origin/main main; do
+    if git rev-parse --verify --quiet "${cand}^{commit}" >/dev/null; then
+      base="$cand"
+      break
+    fi
+  done
+fi
+if [ -z "$base" ]; then
+  echo "argon-copy-pass: cannot find origin/main or main. Pass --base <ref>." >&2
+  exit 1
+fi
+
+mb="$(git merge-base "$base" HEAD)"
+
+# The files on this branch that change text a person reads:
+# - every changed doc page, reference doc, skill, and the changelog;
+# - every Rust file under cli/ and Nix file under kix/ whose added lines
+#   hold a string of four or more words. Those strings reach people as
+#   errors, warnings, refusals, and log lines. Comments, asserts, tests,
+#   and fixtures do not count.
+copy_files() {
+  git diff --name-only --diff-filter=ACMR "$mb" -- \
+    ':(glob)docs/src/content/docs/**' \
+    ':(glob)docs-legacy/*.md' \
+    ':(glob).claude/skills/**/*.md' \
+    'CHANGELOG.md'
+  local literal='"([^"\\]|\\.)*("|\\$)|^\+[^"]*\\$'
+  local nix_literal="\"([^\"\\\\]|\\\\.)*\"|''"
+  local sentence="[A-Za-z][a-z']* [a-z']+ [a-z']+ [a-z']+"
+  local path added
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    added="$(git diff -U0 "$mb" -- "$path" | grep -E '^\+([^+]|$)' || true)"
+    case "$path" in
+      *.rs)
+        if grep -vE '^\+[[:space:]]*//|(assert[a-z_]*)!\(|\.expect\(' <<<"$added" |
+          grep -oE "$literal" | grep -qE "$sentence"; then
+          echo "$path"
+        fi
+        ;;
+      *.nix)
+        if grep -vE '^\+[[:space:]]*#' <<<"$added" | grep -qE "$sentence" &&
+          grep -vE '^\+[[:space:]]*#' <<<"$added" | grep -qE "$nix_literal|throw|warn|trace|message"; then
+          echo "$path"
+        fi
+        ;;
+    esac
+  done < <(git diff --name-only --diff-filter=ACMR "$mb" -- \
+    ':(glob)cli/**/*.rs' \
+    ':(glob)kix/**/*.nix' \
+    ':(exclude,glob)cli/**/tests/**' \
+    ':(exclude,glob)cli/**/*_test.rs' \
+    ':(exclude,glob)cli/**/tests.rs' \
+    ':(exclude,glob)kix/lib/tests/**' \
+    ':(exclude,glob)kix/**/crds/**')
+}
+
+if [ "$list_only" -eq 1 ]; then
+  copy_files
+  exit 0
+fi
+
+if [ ${#files[@]} -eq 0 ]; then
+  while IFS= read -r path; do
+    files+=("$path")
+  done < <(copy_files)
+fi
+
+if [ ${#files[@]} -eq 0 ]; then
+  echo "argon-copy-pass: no file with user-facing text changed against ${base}."
+  exit 0
+fi
+
+agy_bin=""
+if command -v agy >/dev/null 2>&1; then
+  agy_bin="$(command -v agy)"
+elif [ -x "$HOME/.local/bin/agy" ]; then
+  agy_bin="$HOME/.local/bin/agy"
+fi
+if [ -z "$agy_bin" ]; then
+  echo "argon-copy-pass: 'agy' (the Antigravity CLI) is not installed on this machine." >&2
+  echo "Leave '- [ ] Argon copy pass' unticked in the pull request description, so" >&2
+  echo "someone with Antigravity can run scripts/argon-copy-pass." >&2
+  exit 2
+fi
+
+model="${ARGON_MODEL:-Gemini 4 Argon (Medium)}"
+file_list="$(printf '  - %s\n' "${files[@]}")"
+
+# Headless Antigravity cannot ask for permission, so it gets every
+# permission, and the prompt tells it not to run anything. The script
+# writes the diff for it.
+diff_dir="$(mktemp -d)"
+trap 'rm -rf "$diff_dir"' EXIT
+git diff "$mb" -- "${files[@]}" >"$diff_dir/copy.diff"
+
+prompt="You are running the Argon copy pass on this branch of the Kix repository (merge-base: ${mb}). Kix is a Kubernetes compiler: a Nix library and packages describe a cluster, and a Rust CLI checks, plans, and deploys it.
+
+Changed files with user-facing text:
+${file_list}
+
+Instructions:
+1. Read CLAUDE.prose.md. It is the whole rule set. Also follow ISO 24495 plain language: short sentences, common words, and no jargon a reader would need Kix knowledge to understand. Readers run clusters or write packages; assume they do not know how Kix works inside.
+2. Read ${diff_dir}/copy.diff, the diff of those files on this branch, to see every user-facing string added or changed. If it is empty, read the listed files.
+3. For each changed string, find where it is used (rg or git grep) and read that code, so you know whether it is an error, a warning, a log line, a doc page, or a changelog entry, and what the reader can do next.
+4. Rewrite in place any changed text that breaks those rules. An error or warning says what went wrong and names the object, says what Kix did or did not do, and gives the exact fix. Keep facts, interpolations ({...} in Rust format strings, \${...} in Nix strings), field and option names, command names, flags, file paths, wire tokens, and codes unchanged. Do not change text this branch did not add or change. Do not touch code comments.
+5. If you change a string that a test, snapshot, or fixture checks word for word, update that test, snapshot, or fixture to match.
+6. Do not run tests, builds, or formatters, and do not commit, push, or change anything outside the working tree. Whoever runs this pass runs the checks afterwards.
+7. Output a short summary of what you changed, or say that the text already follows the rules."
+
+echo "==> Running Antigravity (${model}) copy pass on ${#files[@]} file(s)..."
+# --print takes the next word as its prompt, so it goes last.
+result="$("$agy_bin" --model "$model" --mode accept-edits --add-dir "$diff_dir" \
+  --dangerously-skip-permissions --output-format json --print "$prompt")"
+
+# agy exits 0 even when it was refused a tool and did nothing.
+if ! jq -e '.status == "SUCCESS" and (.denied_actions // [] | length == 0) and (.response // "" | length > 0)' \
+  <<<"$result" >/dev/null; then
+  echo "argon-copy-pass: the copy pass did not run to the end. Antigravity said:" >&2
+  jq -r '{status, denied_actions, response}' <<<"$result" >&2
+  exit 1
+fi
+jq -r '.response' <<<"$result"
+
+echo ""
+echo "argon-copy-pass: done. Review its edits, run the checks, then add '- [x] Argon copy pass' to the pull request description."

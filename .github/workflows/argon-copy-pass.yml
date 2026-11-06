@@ -1,0 +1,48 @@
+name: Argon copy pass
+
+# User-facing text in Kix (errors, warnings, and log lines in the CLI and the
+# Nix library, the docs, the skills, and the changelog) is rewritten by
+# Antigravity, running Gemini 4 Argon, through scripts/argon-copy-pass. When
+# `scripts/argon-copy-pass --list` names any file this pull request changes,
+# the description must tick `- [x] Argon copy pass`. Editing the description
+# runs the check again. Rules: CLAUDE.md § User-facing text.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: argon-copy-pass-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  copy-pass:
+    if: github.event.pull_request.draft != true
+    runs-on: [self-hosted, spindle-2c-4g]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Copy pass ticked
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          files=$(scripts/argon-copy-pass --list --base "origin/$BASE_REF")
+          if [ -z "$files" ]; then
+            echo "This pull request changes no user-facing text."
+            exit 0
+          fi
+          printf 'Files with user-facing text:\n%s\n\n' "$files"
+          if grep -qiF -- '- [x] Argon copy pass' <<<"$PR_BODY"; then
+            echo "The description says the Argon copy pass ran."
+            exit 0
+          fi
+          echo "This pull request changes user-facing text, and its description does not tick '- [x] Argon copy pass'."
+          echo "Run scripts/argon-copy-pass on the branch, review and commit its edits, then add '- [x] Argon copy pass' to the description."
+          exit 1
