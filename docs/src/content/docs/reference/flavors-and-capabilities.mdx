@@ -125,7 +125,7 @@ The table below lists the exact DNS Service FQDNs and default `StorageClass` nam
 | `scaleway` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"sbs-default"` |
 | `talos` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
 
-When a flavor imports a default `StorageClass` (`cluster.roles.storageClasses.binding = "shadowable"`), a `packages.storage-classes` instance in that cluster may not annotate a second `StorageClass` with `storageclass.kubernetes.io/is-default-class: "true"` (enforced by cross-resource [validation check 23](/docs/reference/validation-checks/)).
+When a flavor imports a default `StorageClass` (`cluster.roles.storageClasses.binding = "shadowable"`), `kix.storage.mkClasses` (used by `packages.storage-classes`) refuses to annotate a managed `StorageClass` with `storageclass.kubernetes.io/is-default-class: "true"` because the cluster's existing default class is not removed by Kix and Kubernetes would see two defaults. (When multiple rendered `StorageClass` manifests in the same build are marked default, cross-resource [validation check 23](/docs/reference/validation-checks/) also fails the build.)
 
 :::tip[Use it in a task]
 See [Choose a cluster flavor](/docs/how-to/start-and-inspect/select-and-configure-a-cluster-flavor/) for selecting and customizing flavors in your cluster definition.

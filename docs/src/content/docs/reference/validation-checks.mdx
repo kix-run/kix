@@ -1,9 +1,9 @@
 ---
 title: "Validation checks"
-description: "The 23 always-on checks that verify cross-resource references, selectors, and CRD ordering on every build."
+description: "The 24 always-on checks that verify cross-resource references, selectors, and CRD ordering on every build."
 ---
 
-Whenever you compile or deploy a cluster, Kix runs 23 cross-resource validation checks across all rendered manifests to catch wiring mistakes that would otherwise fail in Kubernetes. Because these checks guard against broken references (such as a Service pointing to a missing port, a workload mounting a nonexistent ConfigMap, or a custom resource deployed before its CRD), they are always active and cannot be turned off.
+Whenever you compile or deploy a cluster, Kix runs 24 cross-resource validation checks across all rendered manifests to catch wiring mistakes that would otherwise fail in Kubernetes. Because these checks guard against broken references (such as a Service pointing to a missing port, a workload mounting a nonexistent ConfigMap, or a custom resource deployed before its CRD), they are always active and cannot be turned off.
 
 :::note[Helpful background]
 - [05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): see how `kix check` validates a cluster before deployment.
@@ -12,14 +12,14 @@ Whenever you compile or deploy a cluster, Kix runs 23 cross-resource validation 
 - [Labels and Selectors (Kubernetes docs)](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/): review how Kubernetes connects Services, NetworkPolicies, and PodDisruptionBudgets to pods using label selectors.
 :::
 
-This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites in `kix/lib/tests/validate.nix` (checks 1 through 18) and `kix/lib/tests/units/lib-reference-checks.nix` (checks 18 through 23) contain passing and failing cases for each check.
+This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites in `kix/lib/tests/validate.nix` (checks 1 through 18) and `kix/lib/tests/units/lib-reference-checks.nix` (checks 18 through 24) contain passing and failing cases for each check.
 
 ## Checks
 
 | # | Check | Skips |
 | --- | --- | --- |
 | 1 | A workload's `serviceAccountName` names a `ServiceAccount` in its namespace. | `default`; unset |
-| 2 | A `RoleBinding` or `ClusterRoleBinding` `roleRef` names a `Role` or `ClusterRole` in the build. | Names starting with `system:` or ending with `-psp`; `admin`, `edit`, `view`, and `cluster-admin` |
+| 2 | A `RoleBinding` or `ClusterRoleBinding` `roleRef` names a `Role` or `ClusterRole` in the build. | Names starting with `system:` or ending with `-psp`; `admin`, `edit`, `view`, `cluster-admin`, and `extension-apiserver-authentication-reader` |
 | 3 | `volumes[].configMap.name` names a `ConfigMap` in the workload's namespace. | `Secret` volumes (often provisioned externally) |
 | 4 | A `Service` selector matches at least one workload pod template in its namespace. | Services with no selector; control-plane scrape selectors (`kube-dns`, `kube-scheduler`, and similar); Services carrying `kix.run/operand-of` |
 | 5 | A `HorizontalPodAutoscaler` `scaleTargetRef` names a workload in its namespace. | |
@@ -38,9 +38,10 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 18 | A resource of a namespaced kind sets `metadata.namespace`. | Custom kinds whose scope is not declared in the build (verified against cluster API discovery by `kix deploy` instead) |
 | 19 | A workload's `volumes[].persistentVolumeClaim.claimName` names a `PersistentVolumeClaim` in its namespace. | |
 | 20 | The `storageClassName` on a `PersistentVolumeClaim`, on a `StatefulSet`'s `volumeClaimTemplates`, or on an ephemeral volume's `volumeClaimTemplate` names a `StorageClass` in the build (or a platform import), or matches a `PersistentVolume` in the build. | Unset or `""`; storage class names embedded inside operator custom resource specs |
-| 21 | Every custom resource outside the built-in Kubernetes API groups depends (directly or transitively via `kix.run/depends-on`) on a `CustomResourceDefinition`, a CRD ref marker, or an `APIService` for its group and kind that serves its version. | Built-in groups (`""`, `apps`, `batch`, `policy`, `autoscaling`, `*.k8s.io`, and `kix.run`) |
+| 21 | Every custom resource outside the built-in Kubernetes API groups depends (directly or transitively via `kix.run/depends-on`) on a `CustomResourceDefinition`, a CRD ref marker, or an `APIService` for its group and kind that serves its version. | Built-in control-plane API groups (`""`, `apps`, `batch`, `autoscaling`, `policy`, `networking.k8s.io`, `rbac.authorization.k8s.io`, `storage.k8s.io`, `scheduling.k8s.io`, `admissionregistration.k8s.io`, `apiextensions.k8s.io`, `apiregistration.k8s.io`, `coordination.k8s.io`, `discovery.k8s.io`, `events.k8s.io`, `node.k8s.io`, `certificates.k8s.io`, `flowcontrol.apiserver.k8s.io`, `resource.k8s.io`, `authentication.k8s.io`, `authorization.k8s.io`, `internal.apiserver.k8s.io`, `storagemigration.k8s.io`, and `kix.run`); extension groups under `*.k8s.io` such as `gateway.networking.k8s.io`, `snapshot.storage.k8s.io`, and `metrics.k8s.io` are **not** skipped |
 | 22 | Every key a container reads by name from a `Secret` or `ConfigMap` (`secretKeyRef`, `configMapKeyRef`, volume or projected `items[].key`, or the first path segment of a `subPath` mount without `items`) is declared on that `Secret` or present in that `ConfigMap`. | References with `optional = true`; whole-object mounts (`envFrom`, volumes without `items` or `subPath`); names wrapped in `kix.untrackedRef`; Secrets without `kix.run/secret-keys` (such as raw Helm chart Secrets); objects ceding `data`, `binaryData`, or `stringData` via `kix.run/cede-fields` |
 | 23 | At most one `PriorityClass` sets `globalDefault: true`, at most one `StorageClass` carries `storageclass.kubernetes.io/is-default-class: "true"` (or the beta `storageclass.beta.kubernetes.io/is-default-class`), and at most one `IngressClass` carries `ingressclass.kubernetes.io/is-default-class: "true"`. | |
+| 24 | A `Job` does not set `spec.ttlSecondsAfterFinished` (so Kubernetes does not delete finished Jobs behind Kix's back and cause later deploys to re-run them). | `CronJob` `spec.jobTemplate` specs (whose Jobs are created and cleaned up by Kubernetes) |
 
 ## Check 18 and deploy-time scope verification
 
