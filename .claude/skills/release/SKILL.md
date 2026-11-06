@@ -27,15 +27,29 @@ You may merge the release pull request yourself once its checks pass.
 
 ## 1. Pick the version
 
-Read every entry under `## Unreleased`. An entry under Added, Changed, or
-Fixed that is breaking (`CLAUDE.md` § Versioning and breaking changes lists
-what counts) moves under `### Breaking` first. Removing or renaming a
-command, flag, package option, or output field is the usual case.
+Read every entry under `## Unreleased`, and check that each one is under
+the right heading. `CLAUDE.md` § Versioning and breaking changes says what
+counts as breaking. Use these headings, in this order, and leave out any
+that would be empty:
+
+1. `### Breaking (shows an error)`: Kix stops with an error that says what
+   to change, such as a build that fails until a package sets a new value.
+2. `### Breaking (no error)`: nothing fails, but the result is different,
+   such as a package that now looks for its files in another folder.
+3. `### Upgrade notes`: nothing to change, but worth knowing, such as a
+   first deploy that restarts some pods once.
+4. `### Added`, `### Changed`, and `### Fixed`.
+
+Move an entry that is under the wrong heading. Adding a field, event type,
+annotation, option, or command is not breaking. Removing or renaming one is.
+Each breaking entry says what users change when they upgrade. If an entry
+under `### Breaking (no error)` could have shown an error with little work,
+tell the person.
 
 Then read `version` under `[workspace.package]` in `cli/Cargo.toml`. Kix is
 below 1.0, so:
 
-- If `## Unreleased` has a `### Breaking` section, raise the minor version
+- If `## Unreleased` has either `### Breaking` section, raise the minor version
   and set the patch to 0: `0.3.2` becomes `0.4.0`.
 - Otherwise raise the patch version: `0.3.2` becomes `0.3.3`.
 

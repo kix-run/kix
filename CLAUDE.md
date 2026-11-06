@@ -92,9 +92,26 @@ consensus on dev-tool hero anatomy.
 
 ## Versioning and breaking changes
 
-Kix uses semantic versioning and is still below 1.0. A breaking change may go in a minor release (0.5 to 0.6), never in a patch release. Prioritize clean design over backwards compatibility, and give each breaking change a line under `### Breaking` in `CHANGELOG.md` that says what users change when they upgrade.
+Kix uses semantic versioning and is still below 1.0. A breaking change may go in a minor release (0.5 to 0.6), never in a patch release. Prefer a clean design to keeping old behavior. Do not count a change as breaking just to be safe.
 
-These count as breaking: removing or renaming a CLI command or flag, or changing an exit code; changing `-o json` output (which also moves the plan document's `SCHEMA_VERSION`); changing the `kix` Nix library or the package shape `{ scope, lib }: { meta, options, build }`; removing or renaming a package option; and changing the state Kix writes into a cluster (Activation records, `kix.run/*` annotations, PackageInstance, and Kix's CRDs). The Rust crates are not a public API.
+A change is breaking when a user who upgrades must change something, or gets a different result from the same definition. These are breaking:
+
+- removing or renaming a CLI command, flag, or package option, or changing an exit code
+- removing or renaming a field or event in JSON output (`-o json`, `--log-format json`), or changing what a value means. This also moves the `SCHEMA_VERSION` of the plan document or the deploy log.
+- a change to the `kix` Nix library or to the package shape `{ scope, lib }: { meta, options, build }` that makes an existing package or cluster definition fail or work differently
+- a change to the state Kix writes into a cluster (Activation records, `kix.run/*` annotations, PackageInstance, and Kix's CRDs) that makes existing state read differently
+- a change to what a package deploys that the user has to act on, such as moving where it keeps its data
+
+Adding something is not breaking. That covers a new command, flag, option, field, event type, annotation, or field in cluster state. Programs that read Kix's JSON output or cluster state must skip fields and event types they do not know, and the JSON schemas say so. The Rust crates are not a public API.
+
+There are two kinds of breaking change, and `CHANGELOG.md` lists each under its own heading:
+
+- `### Breaking (shows an error)`: Kix stops with an error that says what to change. For example, a build fails until a package sets a new value. A user cannot miss this kind.
+- `### Breaking (no error)`: nothing fails, but the result is different. For example, a package now looks for its files in another folder. A user can miss this kind, so it is the more serious one.
+
+Where you can, turn a breaking change with no error into one that shows an error. For example, make the build refuse the old setting and name the new one. This is a goal, not a rule: do it when the cost is reasonable.
+
+Each breaking change gets a line that says what users change when they upgrade. A change that needs no action, but that users should know about, goes under `### Upgrade notes`. For example, the first deploy after an upgrade applies many objects again, or restarts some pods once.
 
 One rule holds even before 1.0: a Kix release reads the cluster state the previous minor release wrote. Cluster state outlives the binary that wrote it, so a change to that state keeps a way to read the old form for at least one minor release.
 

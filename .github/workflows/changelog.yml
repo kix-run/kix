@@ -39,6 +39,6 @@ jobs:
           grep -qE '^(cli|kix)/' <<<"$changed" || exit 0
           grep -qx 'CHANGELOG.md' <<<"$changed" && exit 0
           echo "This pull request changes cli/ or kix/ and not CHANGELOG.md."
-          echo "Add a line under '## Unreleased' in Breaking, Added, Changed, or Fixed,"
+          echo "Add a line under '## Unreleased', in a section such as Added, Changed, or Fixed,"
           echo "or label the pull request no-changelog if nothing a Kix user sees changes."
           exit 1

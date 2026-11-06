@@ -2382,6 +2382,9 @@ so the apiserver answers for each object. `kix diff` reads only. Both write
 the same plan file with `--save F.kixplan`, and `kix diff -o json|yaml`
 prints the document the file holds (`cli/kix-cli/schema/plan.schema.json`),
 so a consumer can read either. `kix plan` prints no JSON or YAML.
+Later versions of Kix may add fields to this document, and new types of
+line to the `kix deploy --log-format json` log. A program that reads them
+should skip the ones it does not know.
 
 A plan file (`cli/kix/src/plan/file.rs`, header schema
 `cli/kix-cli/schema/kixplan.schema.json`) is a seekable zstd file, the

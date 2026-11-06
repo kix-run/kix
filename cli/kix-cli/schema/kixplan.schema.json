@@ -992,7 +992,7 @@
       "type": "object"
     },
     "Plan": {
-      "description": "What a deploy of a build would change, or how two things differ.",
+      "description": "What a deploy of a build would change, or how two things differ.\n\nLater versions of Kix may add fields. Skip the ones you do not know.",
       "properties": {
         "admission": {
           "$ref": "#/$defs/Checked3",
