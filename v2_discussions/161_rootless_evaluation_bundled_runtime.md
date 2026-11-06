@@ -300,7 +300,47 @@ The `cluster-<name>-activation` output is gone by this phase (section 4), so a
 plain `nix build` of a cluster is a missing-attribute error rather than a
 failed build.
 
-### 6. Isolation
+### 6. Licences
+
+Kix starts each bundled program as a separate process and links none of them,
+so their licences do not reach Kix's own code. Distributing them still carries
+duties. The bundle contains Apache 2.0 (Helm, `kubectl`, OpenSSL, AWS
+libraries), permissive (MIT, BSD, ISC, zlib, Boost, curl), MPL 2.0 (`sops`,
+the public suffix list), and LGPL (Nix, libunistring, libidn2, GNU libiconv,
+libseccomp) code. libgit2 is GPL 2 with a linking exception. Nothing is
+GPL-only: bash and the gettext tools are in the `nix` closure but not in the
+bundle.
+
+The release build does four things, following projects that ship the same
+tools, such as Rancher Desktop:
+
+1. **Licence texts.** Write `libexec/kix/THIRD_PARTY_LICENSES` with every
+   licence text and every Apache NOTICE file.
+2. **Source.** Attach one archive, `kix-<version>-third-party-sources.tar.zst`,
+   to each release in `kix-releases`. It holds the exact source of the LGPL
+   components, including the patches nixpkgs applies. LGPL 2.1 (Nix, GNU
+   libiconv, libseccomp) asks for the source from the same place as the
+   binaries, or a written offer kept open for three years, so a link to
+   upstream is not enough for these. For everything else, `THIRD_PARTY_LICENSES`
+   lists the upstream source URL and hash, which MPL 2.0 accepts and the
+   permissive licences do not require. The runtime recipe and the macOS bundle
+   script are public in this repo, which covers the changes the script makes
+   to the macOS binaries.
+3. **Licence check.** Read each component's licence from nixpkgs metadata, or
+   from the upstream archive for Helm, `kubectl`, and `sops`, and fail on any
+   licence that is not on an approved list. A nixpkgs update cannot then add a
+   GPL-only library unnoticed.
+4. **A bundled-programs docs page** listing each program and version per
+   release.
+
+Users must be able to run their own build of an LGPL component. The startup
+check compares manifests and does not hash files, and `KIX_RUNTIME_DIR` points
+Kix at any runtime directory. Keep both true.
+
+Helm, Kubernetes, and Nix are trademarks. Kix ships their unmodified programs
+under their real names and does not claim endorsement.
+
+### 7. Isolation
 
 The bundled Nix always runs in pure mode against a user-owned store under
 `$XDG_CACHE_HOME/kix/store`, with the environment from section 2. A CI job runs
@@ -332,7 +372,7 @@ Each phase is one pull request and leaves `main` working.
    Rust YAML conversion.
 5. **The runtime archive.** `runtime.nix`, the generalised bundle script,
    `manifest.json` and the startup check, macOS targets in the release
-   workflow, and a `kix doctor` check.
+   workflow, a `kix doctor` check, and the licence duties in section 6.
 6. **Bundled by default.** Kix uses its runtime and its own store on every
    machine, with or without Nix installed, and no longer looks on `PATH`. Add
    the `/nix`-blocked CI job. Update the install docs, `cli/README.md`, and the
