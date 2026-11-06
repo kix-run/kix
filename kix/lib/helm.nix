@@ -33,9 +33,7 @@ let
   # The exact Helm release Kix runs for each major version it ships. The kix
   # binary of the same release ships these, and refuses a spec that names a
   # release it does not ship.
-  helmReleases = lib.mapAttrs (_: release: release.version or release) (
-    lib.importJSON ./helm-versions.json
-  );
+  helmReleases = lib.mapAttrs (_: release: release.version) (lib.importJSON ./helm-versions.json);
 
   helmMajors = lib.sort (a: b: lib.toInt a < lib.toInt b) (builtins.attrNames helmReleases);
 
