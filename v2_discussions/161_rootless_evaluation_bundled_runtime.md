@@ -387,9 +387,14 @@ The size of a program's update decides which Kix release can carry it:
 - A major update (Helm 4 to Helm 5) is decided when it comes. It is not tied
   to a Kix major release by rule.
 
-Helm is stricter. The library names the exact Helm version, and a library and
-binary that name different versions stop with an error (section 5). So any
-Helm update, patch updates included, goes in a minor release.
+Helm follows the same rule, with one cost. The library names the exact Helm
+version, and a library and binary that name different versions stop with an
+error (section 5). So a patch release that updates Helm makes projects that
+use Helm stop until they run `kix lib update`, which moves `flake.lock` to the
+library of the same release using Kix's own Nix. The changelog lists it under
+"Breaking (shows an error)". This is acceptable because Kix treats Helm as a
+stopgap for charts not yet ported to native packages, and security fixes must
+ship fast.
 
 ## Open questions
 
