@@ -205,6 +205,7 @@ instances.postgres = {
 | `apiVersion` | string or `null` | Inferred from `kind` (`"v1"` for `"Service"`, `"storage.k8s.io/v1"` for `"StorageClass"`, etc.) | API version paired with `kind` in `kix.run/expects`. |
 | `roles` | list of strings | Inherited from `from.meta.roles` or `[ ]` | Platform roles satisfied by this import (`"cni"`, `"dns"`, `"loadBalancer"`, `"metricsApi"`, `"storageClasses"`, etc.). |
 | `crds` | list of `{ group, kind, plural, version?, servedVersions?, crdScope? }` | `[ ]` | Pre-installed CRDs provided by this import (wrapped via `scope.mkCRDRef` and exposed at `dep.crds.<Kind>`). |
+| `scope` | `"cluster"` \| `"namespace"` | `"cluster"` | Which namespaces resolve a dependency to this import by name. The default offers it to every namespace, unlike a managed package with `meta.scope` unset; `"namespace"` keeps it to its own namespace, even against `ref`. When several imports answer one name, name the one you mean with `deps.<arg> = ref.<namespace>.<instance>`. |
 
 ### Three ways to use `kix.mkImport`
 

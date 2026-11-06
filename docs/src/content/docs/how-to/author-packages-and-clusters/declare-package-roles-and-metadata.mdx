@@ -24,10 +24,24 @@ Use these fields to describe the package:
 - `lifecycle` classifies its state as `stateless`, `stateful`, `durable`, or
   `ephemeral`. Kix records it in the `kix.run/lifecycle` annotation. Replacing
   a package marked `stateful` triggers the deployment migration gate.
-- `scope` constrains dependencies. With `scope = "namespace"`, instances in
-  other namespaces cannot depend on the package: automatic resolution skips it
-  for consumers in other namespaces, and an explicit
-  `deps.<x> = ref.<ns>.<instance>` to it fails. The default is `cluster`.
+- `scope` says which namespaces may use the package. A package argument is
+  filled from the consumer's own namespace. An instance in another namespace
+  is used only when the cluster definition names it, with
+  `deps.<arg> = ref.<namespace>.<instance>`, or when the provider's package
+  serves the whole cluster. A package serves the whole cluster when it sets
+  `meta.scope = "cluster"`, claims a role in `meta.roles`, or declares
+  `meta.conflictsWith` on a `cluster:` key; operators, ingress controllers,
+  and certificate issuers are the usual cases. Stand-ins made with
+  `kix.mkImport` serve the whole cluster unless they set `scope = "namespace"`;
+  when several imports answer one name, name the one you mean with `ref`.
+  `meta.scope = "cluster"` also makes auto-instantiation place the package
+  once per cluster. An instance that Kix creates from
+  `availablePackages` or enables via `optional = true` to satisfy a dependency binds
+  from any namespace, unless its scope is `"namespace"`. `meta.scope = "namespace"` goes the
+  other way: the package is never used from another namespace, not even with
+  `ref`. Databases, caches, and anything that hands out a Secret leave
+  `scope` unset, so a consumer in another namespace names the instance it
+  means.
 
 `version`, `description`, and `owner` describe the package. `lifecycle` and
 `scope` affect evaluation and deployment behavior, so choose them carefully.

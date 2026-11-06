@@ -83,6 +83,9 @@ in
       "prometheusServer"
       "vmCluster"
     ];
+    # One metrics store receives remote writes from every namespace, so
+    # consumers in any namespace find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
     # Historical metrics are expendable on storage backend swaps.
     lifecycle = "ephemeral";

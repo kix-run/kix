@@ -1070,10 +1070,15 @@ in
   prometheus-scrape-remote-write-operand-egress =
     let
       cnps = cnpsOf (clusterWith {
-        extra.instances = {
-          sink.receiver.package = receiver;
-          monitoring.writer.package = remoteWriter;
-        };
+        extra =
+          { ref, ... }:
+          {
+            instances.sink.receiver.package = receiver;
+            instances.monitoring.writer = {
+              package = remoteWriter;
+              deps.receiver = ref.sink.receiver;
+            };
+          };
       });
       crOperand = builtins.filter (
         p: (p.metadata.labels.${kixKeys.policyType} or null) == "cr-operand"

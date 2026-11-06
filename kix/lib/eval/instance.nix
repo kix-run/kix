@@ -101,6 +101,7 @@ in
         _dnsResolution = resolveArg {
           argName = "dns";
           inherit resolutionIndex requester;
+          requesterName = instanceName;
           requesterNamespace = namespaceName;
           hasDefault = true;
           explicitOverride = null;
@@ -221,26 +222,28 @@ in
         resolvedDeps = resolveDeclaredDeps {
           declaredDeps = discoveredDeps;
           inherit resolutionIndex allInstances requester;
+          requesterName = instanceName;
           namespace = namespaceName;
           explicitOverrides = deps;
         };
 
+        resolutions = lib.mapAttrs (
+          argName: depSpec:
+          resolveArg {
+            inherit argName resolutionIndex requester;
+            explicitOverride = deps.${argName} or null;
+            requesterName = instanceName;
+            requesterNamespace = namespaceName;
+            hasDefault = depSpec.optional or false;
+          }
+        ) discoveredDeps;
+
+        resolutionWarnings = builtins.concatMap (r: r.warnings or [ ]) (builtins.attrValues resolutions);
+
         resolvedDepMeta = builtins.foldl' (
           acc: argName:
           let
-            depSpec = discoveredDeps.${argName};
-            isOptional = depSpec.optional or false;
-            explicitOverride = deps.${argName} or null;
-            resolution = resolveArg {
-              inherit
-                argName
-                resolutionIndex
-                explicitOverride
-                requester
-                ;
-              requesterNamespace = namespaceName;
-              hasDefault = isOptional;
-            };
+            resolution = resolutions.${argName};
           in
           if resolution.found && !(resolution.direct or false) then
             acc
@@ -258,21 +261,6 @@ in
         ) { } depArgNames;
 
         allDepTargets = builtins.concatMap (depInfo: depInfo.targets) (builtins.attrValues resolvedDepMeta);
-
-        _crossNsCheck =
-          let
-            crossNsDeps = builtins.filter (
-              depTarget:
-              let
-                depScope = (depTarget.instance._meta.packageMeta or { }).scope or "cluster";
-              in
-              depTarget.resolution.namespace != namespaceName && depScope == "namespace"
-            ) allDepTargets;
-          in
-          lib.foldl' (
-            _: depTarget:
-            throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depTarget.resolution.instanceName}' (namespace '${depTarget.resolution.namespace}') which declares meta.scope = \"namespace\" and can only be used within its own namespace"
-          ) null crossNsDeps;
 
         metaResult = meta.checkMetaStatic {
           inherit
@@ -659,8 +647,26 @@ in
           else
             [ ];
 
-        scorecardFindings = scorecardManifestFindings ++ scorecardPackageFindings;
-        scorecardDiag = scorecard.scorecardToWarnings scorecardFindings;
+        # Report each skipped optional dependency as a scorecard finding too,
+        # so `kix check`, `kix plan`, and SARIF output show it; the CLI does
+        # not surface Nix trace output on a successful evaluation. The
+        # message keeps the warning text without the requester prefix.
+        # `scorecardDiag` leaves these out because `resolutionWarnings`
+        # already traces them once.
+        resolutionFindings = map (w: {
+          rule = "dependencies.optionalInOtherNamespace";
+          severity = "warning";
+          level = "package";
+          namespace = namespaceName;
+          instance = instanceName;
+          resource = null;
+          message = lib.removePrefix "${requester}: " w;
+          tags = [ "dependencies" ];
+        }) resolutionWarnings;
+
+        ruleFindings = scorecardManifestFindings ++ scorecardPackageFindings;
+        scorecardFindings = ruleFindings ++ resolutionFindings;
+        scorecardDiag = scorecard.scorecardToWarnings ruleFindings;
 
         packageInstance = mkPackageInstance {
           inherit instanceName namespaceName;
@@ -825,6 +831,7 @@ in
             warn = msg: items: map (x: "[${instanceName}] ${msg x}") items;
           in
           lib.concatLists [
+            resolutionWarnings
             (warn (
               w:
               "resource '${res w.resource}' already references '${res w.req}'. Remove the redundant entry from requires; Kix tracks this dependency automatically."
@@ -854,36 +861,34 @@ in
         };
 
       in
-      builtins.seq _crossNsCheck (
-        builtins.seq _dnsResolutionCheck (
-          builtins.seq diagnostics.emitWarnings (
-            builtins.seq diagnostics.emitAssertionWarnings (
-              let
-                view' = mkPackageView {
-                  inherit
-                    parts
-                    instanceName
-                    namespaceName
-                    packageMeta
-                    packageInstance
-                    evaluatedConfig
-                    ;
-                  rootOut = (rootRes.out or { }) // packageOut;
-                  aliases = instCfg.aliases or [ ];
-                };
-              in
-              view'
-              // {
-                _depLinks = directDepLinks;
-                _hookResources = _scopeInjectedResources ++ processorResources;
-                _scorecardFindings = scorecardFindings;
-                _diagnostics = {
-                  warnings = diagnostics.allWarnings;
-                  assertions = diagnostics.allAssertions;
-                  inherit (diagnostics) failedAssertions;
-                };
-              }
-            )
+      builtins.seq _dnsResolutionCheck (
+        builtins.seq diagnostics.emitWarnings (
+          builtins.seq diagnostics.emitAssertionWarnings (
+            let
+              view' = mkPackageView {
+                inherit
+                  parts
+                  instanceName
+                  namespaceName
+                  packageMeta
+                  packageInstance
+                  evaluatedConfig
+                  ;
+                rootOut = (rootRes.out or { }) // packageOut;
+                aliases = instCfg.aliases or [ ];
+              };
+            in
+            view'
+            // {
+              _depLinks = directDepLinks;
+              _hookResources = _scopeInjectedResources ++ processorResources;
+              _scorecardFindings = scorecardFindings;
+              _diagnostics = {
+                warnings = diagnostics.allWarnings;
+                assertions = diagnostics.allAssertions;
+                inherit (diagnostics) failedAssertions;
+              };
+            }
           )
         )
       );

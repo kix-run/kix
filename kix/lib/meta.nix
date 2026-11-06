@@ -120,6 +120,45 @@ rec {
       in
       result.meta or { };
 
+  scopeValues = [
+    "cluster"
+    "namespace"
+  ];
+
+  # Return `meta.scope` as declared, or null when the package leaves it
+  # unset. Refuse a value outside `scopeValues`.
+  scopeOf =
+    { packageMeta, context }:
+    let
+      scope = packageMeta.scope or null;
+    in
+    if scope == null || builtins.elem scope scopeValues then
+      scope
+    else
+      throw "kix: meta.scope of ${context} is ${builtins.toJSON scope}. Set it to \"cluster\" or \"namespace\", or leave it unset.";
+
+  # Return whether a package serves every namespace. Dependency resolution
+  # binds an instance of such a package from any namespace, and
+  # auto-instantiation places it once per cluster. A package serves the whole
+  # cluster when it sets `meta.scope = "cluster"`, claims a role in
+  # `meta.roles`, or declares `meta.conflictsWith` on a `cluster:` key.
+  # `meta.scope = "namespace"` wins over a role or a conflict. A package
+  # that sets none of these is used from another namespace only when the
+  # cluster definition names it with `ref`.
+  servesCluster =
+    { packageMeta, context }:
+    let
+      scope = scopeOf { inherit packageMeta context; };
+    in
+    scope == "cluster"
+    || (
+      scope != "namespace"
+      && (
+        (packageMeta.roles or [ ]) != [ ]
+        || builtins.any (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ])
+      )
+    );
+
   # Return the DI aliases for an instance. Role names always remain active,
   # while `instanceAliases` replaces `meta.defaultAliases` when non-empty.
   effectiveAliases =
@@ -231,6 +270,13 @@ rec {
         )
       ) (packageMeta.conflictsWith or [ ]);
 
+      # Validate `meta.scope` up front, because resolution reads it only for
+      # a dependency from another namespace.
+      scopeValue = packageMeta.scope or null;
+      scopeAssertions = lib.optional (scopeValue != null && !(builtins.elem scopeValue scopeValues)) (
+        fail "meta.scope is ${builtins.toJSON scopeValue}. Set it to \"cluster\" or \"namespace\", or leave it unset."
+      );
+
       # Validate `meta.unsafe` grants up front so unknown grant names fail even
       # when the corresponding rule does not fire during evaluation.
       unsafeAssertions = builtins.concatMap (
@@ -256,6 +302,7 @@ rec {
       assertions = lib.concatLists [
         (builtins.concatMap (d: d.assertions) versionDiags)
         conflictAssertions
+        scopeAssertions
         unsafeAssertions
       ];
       warnings =

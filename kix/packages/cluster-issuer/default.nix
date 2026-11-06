@@ -225,6 +225,9 @@ in
     description = "A cert-manager ClusterIssuer; `kix.expose` uses it for Ingress TLS";
     owner = "platform";
     defaultAliases = [ "clusterIssuer" ];
+    # A ClusterIssuer is cluster-scoped, so consumers in any namespace find
+    # it by name.
+    scope = "cluster";
   };
 
   options.spec = lib.mkOption {

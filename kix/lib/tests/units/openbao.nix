@@ -113,10 +113,16 @@ let
           };
         }
       ]
-      ++ lib.optional (consumer != null) {
-        instances.external-secrets.external-secrets.package = externalSecretsPackage;
-        instances.${consumerNamespace}.consumer.package = consumer;
-      }
+      ++ lib.optional (consumer != null) (
+        { ref, ... }:
+        {
+          instances.external-secrets.external-secrets.package = externalSecretsPackage;
+          instances.${consumerNamespace}.consumer = {
+            package = consumer;
+            deps.openbao = ref.secrets.openbao;
+          };
+        }
+      )
       ++ modules
     );
 

@@ -104,7 +104,13 @@ rec {
       ) acc nsInsts
     ) null instances;
 
-  # Resolve a package dependency argument against `explicitOverride` or `resolutionIndex`.
+  # Resolve a package dependency argument against `explicitOverride` or
+  # `resolutionIndex`. An instance in another namespace binds only when the
+  # override names it, when its package serves the whole cluster
+  # (`meta.servesCluster`), or when a dependency demand created or switched
+  # it on (`demanded` in the index). An unbound optional argument carries `warnings`
+  # when an instance in another namespace answers its name, because a
+  # `ref` would bind it.
   resolveArg =
     {
       argName,
@@ -113,25 +119,59 @@ rec {
       hasDefault,
       explicitOverride,
       requester ? null,
+      # The requesting instance's name, for the `instances.<ns>.<name>` path
+      # in messages.
+      requesterName ? null,
     }:
     let
       prefix = lib.optionalString (requester != null) "${requester}: ";
+      label = c: "${c.namespace}/${c.instName}";
+      labels = cs: builtins.concatStringsSep ", " (map label cs);
+      depLine = c: "  deps.${argName} = ref.${c.namespace}.${c.instName};";
+      depLines = cs: builtins.concatStringsSep "\n" (map depLine cs);
+      consumerPath =
+        if requesterName != null then
+          "instances.${requesterNamespace}.${requesterName}"
+        else
+          "the consumer's instance";
+
+      # Return the index entry for a ref target, or null when no active
+      # instance has that name. `checkRefTargets` reports a missing target.
+      indexed =
+        t:
+        lib.findFirst (c: c.namespace == t.namespace && c.instName == t.instanceName) null (
+          resolutionIndex.byKey.${t.instanceName} or [ ]
+        );
+
+      # Refuse a ref from another namespace to an instance whose package
+      # declares `meta.scope = "namespace"`.
+      checkRefScope =
+        t:
+        let
+          c = indexed t;
+        in
+        if t.namespace != requesterNamespace && c != null && (c.meta.scope or null) == "namespace" then
+          throw "${prefix}deps.${argName} = ref.${t.namespace}.${t.instanceName} names an instance in another namespace whose package declares meta.scope = \"namespace\", so it serves only namespace '${t.namespace}'. Use an instance in namespace '${requesterNamespace}', or set meta.scope = \"cluster\" in its package if every namespace may use it."
+        else
+          t;
     in
     if explicitOverride != null then
       # Resolve `ref` and `[ ref ... ]` overrides with `direct = false` so they
-      # run through the same cross-namespace and meta checks as auto-resolved
-      # dependencies.
+      # run through the same meta checks as auto-resolved dependencies.
       if isRef explicitOverride then
+        let
+          t = checkRefScope { inherit (explicitOverride) namespace instanceName; };
+        in
         {
           found = true;
-          inherit (explicitOverride) namespace instanceName;
+          inherit (t) namespace instanceName;
           direct = false;
         }
       else if builtins.isList explicitOverride && builtins.any isRef explicitOverride then
         if builtins.all isRef explicitOverride then
           {
             found = true;
-            targets = map (r: { inherit (r) namespace instanceName; }) explicitOverride;
+            targets = map (r: checkRefScope { inherit (r) namespace instanceName; }) explicitOverride;
             direct = false;
           }
         else
@@ -145,63 +185,83 @@ rec {
 
     else
       let
-        # Filter out foreign `meta.scope = "namespace"` candidates before
-        # preferring managed instances over imports. This allows a
-        # cluster-scoped import to satisfy the dependency when the only managed
-        # candidates are scoped to other namespaces.
-        allCandidates = resolutionIndex.byKey.${argName} or [ ];
-        isForeignNamespaced =
-          c: c.namespace != requesterNamespace && (c.meta.scope or "cluster") == "namespace";
-        candidates = builtins.filter (c: !isForeignNamespaced c) allCandidates;
-        skipped = builtins.filter isForeignNamespaced allCandidates;
+        all = resolutionIndex.byKey.${argName} or [ ];
+        sameNs = builtins.filter (c: c.namespace == requesterNamespace) all;
+        foreign = builtins.filter (c: c.namespace != requesterNamespace) all;
+        # Foreign instances every namespace may use: the package serves the
+        # whole cluster, or a dependency demand created or switched on the
+        # instance (`demanded`), which binds it for every requester of its
+        # name. `meta.scope = "namespace"` stays within its namespace.
+        usableFromHere =
+          c:
+          (c.meta.servesCluster or false)
+          || ((c.meta.demanded or false) && (c.meta.scope or null) != "namespace");
+        serving = builtins.filter usableFromHere foreign;
+        # Foreign instances that bind only when a ref names them.
+        nameable = builtins.filter (
+          c: !(usableFromHere c) && (c.meta.scope or null) != "namespace"
+        ) foreign;
+        namespaced = builtins.filter (c: (c.meta.scope or null) == "namespace") foreign;
 
-        managed = builtins.filter (c: !(c.meta.isImport or false)) candidates;
-        effectiveCandidates = if managed != [ ] then managed else candidates;
+        # Prefer managed instances over imports among the instances this
+        # namespace may use, so a managed provider that serves the cluster
+        # shadows a flavour's import in the requester's namespace.
+        eligible = sameNs ++ serving;
+        managed = builtins.filter (c: !(c.meta.isImport or false)) eligible;
+        candidates = if managed != [ ] then managed else eligible;
+        own = builtins.filter (c: c.namespace == requesterNamespace) candidates;
+        shared = builtins.filter (c: c.namespace != requesterNamespace) candidates;
 
-        sameNs = builtins.filter (c: c.namespace == requesterNamespace) effectiveCandidates;
-        otherNs = builtins.filter (c: c.namespace != requesterNamespace) effectiveCandidates;
+        bind = c: {
+          found = true;
+          namespace = c.namespace;
+          instanceName = c.instName;
+          direct = false;
+        };
+        none = "dependency '${argName}' has no instance in namespace '${requesterNamespace}'.";
+        several =
+          cs:
+          "${toString (builtins.length cs)} instances in other namespaces match: ${labels cs}. Kix does not choose between them. Add one of these lines to ${consumerPath}:\n${depLines cs}";
       in
-      if builtins.length sameNs == 1 then
-        let
-          c = builtins.head sameNs;
-        in
-        {
-          found = true;
-          namespace = c.namespace;
-          instanceName = c.instName;
-          direct = false;
-        }
+      if builtins.length own == 1 then
+        bind (builtins.head own)
 
-      else if builtins.length sameNs > 1 then
+      else if builtins.length own > 1 then
         throw "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
-          builtins.concatStringsSep ", " (map (c: c.instName) sameNs)
+          builtins.concatStringsSep ", " (map (c: c.instName) own)
         }. Set deps.${argName} explicitly to the intended instance."
 
-      else if sameNs == [ ] && builtins.length otherNs == 1 then
-        let
-          c = builtins.head otherNs;
-        in
-        {
-          found = true;
-          namespace = c.namespace;
-          instanceName = c.instName;
-          direct = false;
-        }
+      else if builtins.length shared == 1 then
+        bind (builtins.head shared)
 
-      else if builtins.length otherNs > 1 then
-        throw "${prefix}dependency '${argName}' matches instances in multiple namespaces: ${
-          builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") otherNs)
-        }. Set deps.${argName} explicitly to the intended instance."
+      else if builtins.length shared > 1 then
+        throw "${prefix}${none} ${several (shared ++ nameable)}"
 
       else if hasDefault then
-        { found = false; }
+        {
+          found = false;
+          warnings = lib.optional (nameable != [ ]) (
+            "${prefix}optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skips it. "
+            + (
+              if builtins.length nameable == 1 then
+                "${labels nameable} matches in another namespace. To use it, add this line to ${consumerPath}:"
+              else
+                "${labels nameable} match in other namespaces. To use one, add one of these lines to ${consumerPath}:"
+            )
+            + "\n${depLines nameable}"
+          );
+        }
+
+      else if builtins.length nameable == 1 then
+        throw "${prefix}${none} One instance in another namespace matches: ${labels nameable}. Kix uses an instance from another namespace only when the cluster definition names it or its package serves the whole cluster. To use it, add this line to ${consumerPath}:\n${depLines nameable}\nIf this package serves the whole cluster, set meta.scope = \"cluster\" in its package instead."
+
+      else if builtins.length nameable > 1 then
+        throw "${prefix}${none} ${several nameable}"
 
       else
         throw "${prefix}dependency '${argName}' was not found for namespace '${requesterNamespace}'.${
-          lib.optionalString (skipped != [ ])
-            " Instances in other namespaces (${
-               builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") skipped)
-             }) declare meta.scope = \"namespace\" and serve only their own namespace."
+          lib.optionalString (namespaced != [ ])
+            " Instances in other namespaces (${labels namespaced}) declare meta.scope = \"namespace\" and serve only their own namespace."
         } Add an instance with that name or alias, or set deps.${argName} explicitly.";
 
   # Unwrap `deferredModule` definitions into `{ file, value }` pairs,
@@ -464,6 +524,7 @@ rec {
       explicitOverrides,
       allInstances,
       requester ? null,
+      requesterName ? null,
     }:
     builtins.foldl' (
       acc: argName:
@@ -477,6 +538,7 @@ rec {
             resolutionIndex
             explicitOverride
             requester
+            requesterName
             ;
           requesterNamespace = namespace;
           hasDefault = isOptional;
@@ -504,6 +566,7 @@ rec {
       namespace,
       explicitOverrides,
       requester ? null,
+      requesterName ? null,
     }:
     lib.mapAttrs (
       argName: depSpec:
@@ -516,6 +579,7 @@ rec {
             resolutionIndex
             explicitOverride
             requester
+            requesterName
             ;
           requesterNamespace = namespace;
           hasDefault = isOptional;

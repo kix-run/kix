@@ -133,7 +133,11 @@ let
   # (collectResources excludes the `root` key). See the latent-quirk note
   # in architecture.md.
   dnsPackage = {
-    meta.version = "test";
+    meta = {
+      version = "test";
+      # Every namespace resolves the implicit `dns` dependency to it.
+      scope = "cluster";
+    };
     build =
       { self, scope, ... }:
       {
@@ -147,7 +151,12 @@ let
   };
 
   dbPackage = {
-    meta.version = "test";
+    meta = {
+      version = "test";
+      # baseInstances consumes it from another namespace by name, so the
+      # cross-namespace edge tests need no `ref` module.
+      scope = "cluster";
+    };
     build =
       { self, scope, ... }:
       {
@@ -611,6 +620,8 @@ let
       meta = {
         version = "test";
         defaultAliases = [ "testOperator" ];
+        # Like a real operator, one instance serves every namespace.
+        scope = "cluster";
       };
       build =
         { self, scope, ... }:
@@ -873,6 +884,8 @@ let
     meta = {
       version = "test";
       defaultAliases = [ "prometheus" ];
+      # Like prometheus-operator, one instance serves every namespace.
+      scope = "cluster";
     };
     build =
       { self, scope, ... }:
@@ -1940,7 +1953,10 @@ let
             instances.infra.operator.package = mkAnnotatedCmPackage {
               key = "example.io/managed";
               name = "operator-cm";
-              metaExtra.annotationDomains = [ "example.io" ];
+              metaExtra = {
+                annotationDomains = [ "example.io" ];
+                scope = "cluster";
+              };
             };
             # The consumer links the operator via DI; must not warn.
             instances.appns.writer.package = mkAnnotatedCmPackage {
@@ -2817,9 +2833,13 @@ let
     # the rule follows the chain rather than the first edge only.
     t91-annotation-domain-transitive-dep-satisfies =
       let
-        # Depends on `operator` and writes nothing under the domain.
+        # Depends on `operator` and writes nothing under the domain. Serves
+        # the whole cluster, as an issuer does, so `writer` finds it by name.
         intermediary = {
-          meta.version = "test";
+          meta = {
+            version = "test";
+            scope = "cluster";
+          };
           build =
             {
               self,
@@ -2862,7 +2882,10 @@ let
           {
             instances.infra.operator.package = mkCmPackage {
               name = "operator-cm";
-              metaExtra.annotationDomains = [ "example.io" ];
+              metaExtra = {
+                annotationDomains = [ "example.io" ];
+                scope = "cluster";
+              };
             };
             instances.mid.issuer.package = intermediary;
             instances.appns.writer.package = writer;
