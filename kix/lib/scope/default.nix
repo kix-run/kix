@@ -35,6 +35,10 @@ rec {
       instanceName,
       namespaceName,
       namespaceResource,
+      # Namespace the instance lives in. `forNamespace` changes
+      # `namespaceName` and keeps this, so a resource built into another
+      # namespace still records this instance as its builder.
+      homeNamespaceName ? namespaceName,
       namespaces ? { },
       clusterLabels ? { },
       labelStyle ? "kix",
@@ -118,6 +122,7 @@ rec {
           factBehaviorOverrides
           scopeObj
           ;
+        builtBy = "${homeNamespaceName}/${instanceName}";
       };
 
       inherit (builders)
@@ -226,6 +231,7 @@ rec {
           mkScope {
             inherit
               instanceName
+              homeNamespaceName
               namespaces
               clusterLabels
               labelStyle

@@ -65,7 +65,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `eval/import.nix` | `mkImport`, `mkImportScope`, `evaluateImportInstance`, and `resolveExtraDep` for externally managed resources and platform imports. |
 | `eval/namespace.nix` / `view.nix` / `helpers.nix` | `mkNamespace`, `mkPackageView`, and shared traversal/merge helpers (`collectTypedAttrs`, `mergeCollide`). |
 | `scope/default.nix` | `mkScope`: assembles labels, validators, and builders into the package `scope` object, plus `forNamespace` and `forService` subscopes. |
-| `scope/builders.nix` | Resource builders and the `sealWorkload` pipeline (edge analysis, DNS dependency injection, `workloadInterceptors`, `podSpec` merging, pre-seal `requires` splicing, and `_injectedResources` attachment). |
+| `scope/builders.nix` | Resource builders and the `sealWorkload` pipeline (edge analysis, DNS dependency injection, `workloadInterceptors`, `podSpec` merging, pre-seal `requires` splicing, and `_injectedResources` attachment). Every sealed resource carries `_builtBy` (`<namespace>/<instance>`, outside the manifest); `eval/cluster.nix` `ownedResources` uses it to list a resource that several instances hold under the one that built it. |
 | `scope/validators.nix` | Spec-level validators: cross-namespace references, selector subset, ports, resources, capability/role gates (`checkLoadBalancer`, `requireMetricsApi`), `checkRawPvc`, and `checkResourceName`. |
 | `scope/labels.nix` | Standard label generation (`kix` and `helm` styles, selector labels). |
 | `plugins/netpol/module.nix` | Declares `networkPolicy.*` options and registers `workloadInterceptors`, `instanceProcessors`, and `clusterProcessors` hooks. |

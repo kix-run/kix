@@ -530,6 +530,44 @@
         ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ])
         ++ (inst._hookResources or [ ]);
 
+      # Return the `<namespace>/<instance>` key of an instance, the form a
+      # resource's `_builtBy` uses.
+      instanceKey = inst: "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+
+      # Instance keys that hold each store path, sorted, keyed by path.
+      holdersOf = builtins.mapAttrs (_: keys: builtins.sort builtins.lessThan (lib.unique keys)) (
+        builtins.zipAttrsWith (_: keys: keys) (
+          map (
+            inst:
+            builtins.listToAttrs (
+              map (r: {
+                name = outPathKey r;
+                value = instanceKey inst;
+              }) (collectResources inst)
+            )
+          ) allInstancesList
+        )
+      );
+
+      # Return the resources the package index and the owner map list under
+      # an instance, so that every store path is listed under exactly one
+      # instance. A resource that several instances hold, such as an import
+      # marker a provider exposes through `out`, belongs to the instance whose
+      # scope built it when that instance is active and holds it. Otherwise it
+      # belongs to the first holder by instance key, which keeps its
+      # `kix.run/package` stable across unrelated hash changes.
+      ownedResources =
+        inst:
+        builtins.filter (
+          r:
+          let
+            holders = holdersOf.${outPathKey r} or [ ];
+            builder = r._builtBy or null;
+            owner = if builder != null && builtins.elem builder holders then builder else builtins.head holders;
+          in
+          holders == [ ] || owner == instanceKey inst
+        ) (collectResources inst);
+
       # `resources` holds the sealed resources of every active instance,
       # including the policies instance hooks derived.
       clusterHookCtx = {
@@ -788,7 +826,7 @@
         packages = builtins.listToAttrs (
           map (inst: {
             name = builtins.unsafeDiscardStringContext (toString inst._packageInstance.outPath);
-            value = map (r: toString r.outPath) (dedupeByOutPath (collectResources inst));
+            value = map (r: toString r.outPath) (dedupeByOutPath (ownedResources inst));
           }) allInstancesList
         );
       };
@@ -1043,16 +1081,16 @@
           }
         ) shared;
 
-      # Map each resource's store path to the `<ns>/<instance>` that produced
-      # it. Namespace resources, cluster hook outputs, and the Activation
-      # record have no instance owner.
+      # Map each resource's store path to the `<ns>/<instance>` that owns it
+      # (`ownedResources`). Namespace resources, cluster hook outputs, and the
+      # Activation record have no instance owner.
       resourceOwners = builtins.listToAttrs (
         builtins.concatMap (
           inst:
           map (r: {
             name = outPathKey r;
-            value = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
-          }) (collectResources inst)
+            value = instanceKey inst;
+          }) (ownedResources inst)
         ) allInstancesList
       );
 
