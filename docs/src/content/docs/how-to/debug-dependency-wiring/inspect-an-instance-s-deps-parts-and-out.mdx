@@ -31,11 +31,12 @@ resource values and explicit `requires` or `extraDeps` edges. A package build
 argument by itself does not create an edge; the edge appears when a resource
 uses an output from that dependency.
 
-Use JSON when you need to filter the graph by resource fields:
+Use `--format json` when you need the machine-readable list of `nodes` and
+`edges`:
 
 <Command
   commands={[
-    "kix graph how-to-application --format json | jq '.nodes[] | select(.namespace == \"how-to-app\" and .name == \"production\")'",
+    "kix graph how-to-application --format json",
   ]}
   cwd="kix-examples/"
 />

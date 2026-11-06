@@ -112,10 +112,9 @@ and Kix Enterprise read. It holds:
   so only a build manifest the cluster would refuse is replaced by a size note.
 
 The file is a seekable zstd file, the container a bundle uses. Any zstd tool
-reads it: `zstd -dc plan.kixplan` gives the header, JSON, followed by each
-manifest, so `zstd -dc plan.kixplan | jq -s '.[0].plan'` prints the `Plan`
-document. The same plan gives the same bytes from the same Kix. The
-header's JSON Schema is `cli/kix-cli/schema/kixplan.schema.json`.
+reads it: `zstd -dc plan.kixplan` prints the JSON header object followed by
+each manifest JSON document. The same plan gives the same bytes from the same
+Kix. The header's JSON Schema is `cli/kix-cli/schema/kixplan.schema.json`.
 
 | Header key | Content |
 | --- | --- |

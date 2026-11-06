@@ -68,14 +68,16 @@ required by a hard constraint.
 
 ## Inspect the result
 
-Evaluate the cluster, then inspect the generated constraints and budgets:
+Evaluate the cluster and render the manifests to inspect the generated
+constraints and budgets:
 
 <Command commands={[
   "kix check demo",
-  "kix build demo -o json | jq '.[] | select(.kind == \"Deployment\" or .kind == \"StatefulSet\" or .kind == \"PodDisruptionBudget\") | {kind, name: .metadata.name, replicas: .spec.replicas, spread: .spec.template.spec.topologySpreadConstraints, maxUnavailable: .spec.maxUnavailable}'",
+  "kix build demo",
 ]} />
 
-Multi-replica Deployments and StatefulSets receive derived spread and a PDB.
+Multi-replica Deployments and StatefulSets receive derived
+`topologySpreadConstraints` and a `PodDisruptionBudget`.
 A confirmed single-node cluster has no failure-domain keys, so Kix derives
 neither.
 

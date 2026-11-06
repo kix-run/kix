@@ -96,14 +96,18 @@ mounts, and Kix does not check that it does.
 
 ## Check the rendered resources
 
-Evaluate the cluster and inspect the StorageClass and claim together:
+Evaluate the cluster and render the manifests to inspect the `StorageClass` and
+`PersistentVolumeClaim` together:
 
 <Command
   commands={[
     "kix check doc-how-tos",
-    "kix build doc-how-tos --output json | jq '.[] | select(.kind == \"StorageClass\" or .kind == \"PersistentVolumeClaim\") | {kind, name: .metadata.name, spec}'",
+    "kix build doc-how-tos",
   ]}
 />
+
+Confirm that the `PersistentVolumeClaim` sets `spec.storageClassName` to the
+name of your `StorageClass`.
 
 Changing a bound claim's StorageClass is normally an immutable, stateful
 migration. Review the diff and the storage provider's reclaim behavior before

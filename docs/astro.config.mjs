@@ -7,6 +7,7 @@ import starlightLinksValidator from 'starlight-links-validator';
 import starlightGitHubAlerts from 'starlight-github-alerts';
 import starlightPageActions from 'starlight-page-actions';
 import rehypeTableWrap from './src/lib/rehype-table-wrap.mjs';
+import rehypeLinkTypes from './src/lib/rehype-link-types.mjs';
 import remarkDocsBase from './src/lib/remark-docs-base.mjs';
 
 const base = process.env.KIX_DOCS_BASE ?? '/docs';
@@ -21,7 +22,7 @@ export default defineConfig({
   base,
   markdown: {
     remarkPlugins: [[remarkDocsBase, { base }]],
-    rehypePlugins: [rehypeTableWrap],
+    rehypePlugins: [rehypeTableWrap, [rehypeLinkTypes, { base }]],
   },
   integrations: [
     starlight({

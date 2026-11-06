@@ -35,19 +35,6 @@ The complete file contains:
 An image component includes a SHA-256 hash when its rendered reference has an
 `@sha256:` digest.
 
-## Verify the file
-
-Check that the command produced a CycloneDX 1.6 document:
-
-<Command
-  commands={["jq -e '.bomFormat == \"CycloneDX\" and .specVersion == \"1.6\"' sbom.json"]}
-  cwd="kix-examples/"
-/>
-
-The capture pipeline runs this same assertion on every regeneration, so a
-change to the emitted CycloneDX version fails the docs build rather than
-reaching you as a surprise.
-
 Use `--output yaml` if the receiving system expects YAML:
 
 <Command

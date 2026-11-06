@@ -46,19 +46,8 @@ Keep this behavior in mind before promoting a rule to `error` in
 An error rule stops the build instead of contributing all of its findings to
 the completed report.
 
-## Check the file before upload
-
-A short validation catches an empty or truncated shell redirect:
-
-<Command
-  commands={[
-    "jq -e '.version == \"2.1.0\" and (.runs | length) > 0' kix-results.sarif",
-  ]}
-  cwd="kix-examples/"
-/>
-
-Run the upload step even when `kix check` exits non-zero, then propagate the
-original failure. The exact job syntax depends on the CI provider.
+In CI, configure the upload step to run even when `kix check` exits non-zero,
+then propagate the original exit status so the job still fails.
 
 :::note[Reference]
 See [`kix check`](/docs/reference/cli/check/) for check phases and exit

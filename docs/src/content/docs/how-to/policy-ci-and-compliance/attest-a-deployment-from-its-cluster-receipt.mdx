@@ -41,17 +41,6 @@ Redirect stdout when the statement will be stored or signed by another tool:
 Kix writes an unsigned JSON statement. Signing and publishing can be handled
 by the attestation system used by your CI environment.
 
-## Check the statement
-
-Confirm that the subject names the deployed cluster and has an activation
-digest:
-
-<Command
-  commands={[
-    "jq -e '.predicate.buildDefinition.externalParameters.cluster == \"how-to-application\" and (.subject[0].digest.nixStoreHash | length) > 0' provenance.json",
-  ]}
-/>
-
 If Kix reports that no receipt exists, deploy the cluster again with a Kix
 version that writes receipts. If it cannot find an Activation CRD, confirm the
 Kubernetes context and cluster name before retrying.

@@ -273,6 +273,80 @@ body {
   text-decoration: none;
 }
 
+/* Document-type link indicators (populated at build time by rehype-link-types.mjs):
+ * 1. Inside "Helpful background" callout boxes, append a compact monospace
+ *    pill badge (TUTORIAL, HOW-TO, EXPLANATION, REFERENCE) for internal docs.
+ * 2. Mark external links everywhere with a Wikipedia-style external link icon.
+ * 3. Show a contextual monospace breadcrumb tooltip on hover/focus for
+ *    internal doc links in body prose.
+ */
+.starlight-aside[aria-label='Helpful background' i] a[data-link-badge]::after {
+  content: attr(data-link-badge);
+  display: inline-block;
+  margin-inline-start: 0.4rem;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--kix-line);
+  border-radius: 4px;
+  background-color: var(--kix-paper);
+  color: var(--kix-ink-2);
+  font-family: var(--kix-mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1.35;
+  text-decoration: none;
+  text-transform: uppercase;
+  vertical-align: 0.12em;
+}
+
+.sl-markdown-content a[data-link-kind='external']::after {
+  content: '';
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-inline-start: 0.25em;
+  vertical-align: -0.06em;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'/%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cline x1='10' y1='14' x2='21' y2='3'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'/%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cline x1='10' y1='14' x2='21' y2='3'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.sl-markdown-content a[data-link-tooltip]:not(
+  :where(.starlight-aside[aria-label='Helpful background' i] *)
+) {
+  position: relative;
+}
+.sl-markdown-content a[data-link-tooltip]:not(
+  :where(.starlight-aside[aria-label='Helpful background' i] *)
+):is(:hover, :focus-visible)::after {
+  content: attr(data-link-tooltip);
+  position: absolute;
+  inset-block-end: calc(100% + 0.25rem);
+  inset-inline-start: 0;
+  z-index: 20;
+  padding: 0.125rem 0.45rem;
+  border: 1px solid var(--kix-line);
+  border-radius: 4px;
+  background-color: var(--kix-paper-2);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.2);
+  color: var(--kix-ink);
+  font-family: var(--kix-mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* First row inside .kix-table (overflow-x: auto) renders tooltip below so it is not clipped */
+.sl-markdown-content .kix-table tbody tr:first-child a[data-link-tooltip]:is(:hover, :focus-visible)::after {
+  inset-block-end: auto;
+  inset-block-start: calc(100% + 0.25rem);
+}
+
 /* Inline code */
 .sl-markdown-content :not(pre) > code:not(:where(.not-content, .not-content *)) {
   padding: 0.0625rem 0.375rem;
