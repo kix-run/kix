@@ -2,8 +2,10 @@
 //!
 //! `kix/lib/helm.nix` turns a chart fetch and a chart render into
 //! placeholder derivations of system `kix-helm`. No Nix can build them, so
-//! an evaluation that reads one stops with an error that names its `.drv`.
-//! [`realise_pending`] finds those derivations, runs the Helm release each
+//! an evaluation that reads one stops with an error. On Linux the error
+//! names its `.drv`. Elsewhere only a `--show-trace` stack trace names its
+//! output, and Kix asks the store for the `.drv` that produces it.
+//! [`pending`] finds those derivations, runs the Helm release each
 //! spec names, writes the output into Kix's store under the path the
 //! derivation fixes, and registers it there. The next evaluation reads it.
 //!
@@ -176,6 +178,7 @@ impl Placeholder {
 pub fn pending(stderr: &str) -> Result<Vec<Placeholder>, HelmError> {
     let mut seen = std::collections::HashSet::new();
     let mut queue: Vec<PathBuf> = drv_paths(stderr);
+    queue.extend(derivers(&context_paths(stderr))?);
     let mut found = Vec::new();
     while let Some(drv_path) = queue.pop() {
         if !seen.insert(drv_path.clone()) || !real_path(&drv_path).is_file() {
@@ -197,6 +200,59 @@ pub fn pending(stderr: &str) -> Result<Vec<Placeholder>, HelmError> {
         .collect();
     pending.sort_by_key(|p| (matches!(p.job, Job::Render(_)), p.out.clone()));
     Ok(pending)
+}
+
+/// Return whether `stderr` says Nix refused to build in Kix's store.
+///
+/// Outside Linux, Nix cannot build in a store whose real location is not
+/// its store directory. It fails before it checks the derivation's system,
+/// so the error names no `.drv`. Only the stack trace of `--show-trace`
+/// names the output it wanted, which [`pending`] reads.
+pub fn store_cannot_build(stderr: &str) -> bool {
+    stderr.contains("building using a diverted store is not supported")
+}
+
+/// Return the store paths that a `--show-trace` stack trace says Nix was
+/// realising, in Nix's logical form.
+///
+/// The trace prints each path under the store's real location, so the
+/// logical path is the part from the last store directory on.
+fn context_paths(text: &str) -> Vec<PathBuf> {
+    const MARKER: &str = "while realising the context of path '";
+    let prefix = format!("{}/", super::store_path::STORE_DIR);
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for (start, _) in text.match_indices(MARKER) {
+        let quoted = &text[start + MARKER.len()..];
+        let Some(end) = quoted.find('\'') else {
+            continue;
+        };
+        let real = &quoted[..end];
+        if let Some(at) = real.rfind(&prefix) {
+            let path = PathBuf::from(&real[at..]);
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+/// Return the derivations in Kix's store that produce `outputs`.
+fn derivers(outputs: &[PathBuf]) -> Result<Vec<PathBuf>, HelmError> {
+    if outputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let out = output(
+        command(Tool::NixStore)?
+            .args(["--query", "--valid-derivers"])
+            .args(outputs),
+    )?;
+    Ok(String::from_utf8_lossy(&out)
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.ends_with(".drv"))
+        .map(PathBuf::from)
+        .collect())
 }
 
 /// Return every `.drv` store path in `text`, in order of first mention.
@@ -630,6 +686,24 @@ mod tests {
             [
                 PathBuf::from("/nix/store/8ra65ddc4yn0clazfx013bblflvrahp5-chart.tgz.drv"),
                 PathBuf::from("/nix/store/ix2wlpn7zd422fv6srm7g1kkia6g65ma-helm-render-x.json.drv"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_trace_names_the_outputs_it_was_realising() {
+        let stderr = "… while realising the context of path '/Users/a/Library/Caches/kix/store/nix/store/cicmixrzynsw1hcvsfv9gibpc6wqpmz5-helm-render-test-app.json'\n\
+            … while calling the 'readFile' builtin at /x/nix/store/1xxrs2mxddy5g2xjm4ivqwwi8wfsfb9w-source/kix/lib/helm.nix:26:30\n\
+            … while realising the context of path '/nix/store/zpabqz317wmlqihflawkmbklavail6i3-helm-render-x.json'\n\
+            error: building using a diverted store is not supported on this platform";
+        assert!(store_cannot_build(stderr));
+        assert_eq!(
+            context_paths(stderr),
+            [
+                PathBuf::from(
+                    "/nix/store/cicmixrzynsw1hcvsfv9gibpc6wqpmz5-helm-render-test-app.json"
+                ),
+                PathBuf::from("/nix/store/zpabqz317wmlqihflawkmbklavail6i3-helm-render-x.json"),
             ]
         );
     }

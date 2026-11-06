@@ -153,16 +153,17 @@ fn canonicalize_in(root: &Path, path: &Path) -> std::io::Result<PathBuf> {
     Ok(out)
 }
 
-/// Return the default cache directory (`~/.cache/kix/`).
+/// Return Kix's cache directory: `$XDG_CACHE_HOME/kix`, or `~/.cache/kix`.
+///
+/// macOS gets the same directory as Linux, not `~/Library/Caches`, so one
+/// setting moves the cache on every machine. The XDG specification ignores
+/// a relative `XDG_CACHE_HOME`, and so does Kix.
 pub fn default_cache_dir() -> PathBuf {
-    directories::ProjectDirs::from("", "", "kix")
-        .map(|dirs| dirs.cache_dir().to_path_buf())
-        .unwrap_or_else(|| {
-            let mut home = dirs_fallback_home();
-            home.push(".cache");
-            home.push("kix");
-            home
-        })
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .unwrap_or_else(|| dirs_fallback_home().join(".cache"))
+        .join("kix")
 }
 
 /// Resolve symlinks because Nix store paths must not traverse them. On macOS,
