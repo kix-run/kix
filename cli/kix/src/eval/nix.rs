@@ -247,8 +247,9 @@ pub fn eval_with_helm(
     status_fn: &dyn Fn(&str),
 ) -> Result<String, KixEvalError> {
     let mut realised = std::collections::HashSet::new();
+    let mut show_trace = false;
     for _ in 0..MAX_EVALUATIONS {
-        let error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
+        let error = match eval_raw(flake_path, args, input_overrides, show_trace, status_fn)? {
             Ok(stdout) => return Ok(stdout),
             Err(error) => error,
         };
@@ -257,6 +258,12 @@ pub fn eval_with_helm(
         }
         let pending = super::helm::pending(&error.stderr)?;
         if pending.is_empty() {
+            // Outside Linux the error names no derivation, so evaluate
+            // again with the stack trace that names the chart's output.
+            if !show_trace && super::helm::store_cannot_build(&error.stderr) {
+                show_trace = true;
+                continue;
+            }
             return Err(error.into());
         }
         for placeholder in pending {
@@ -284,6 +291,7 @@ fn eval_raw(
     flake_path: &Path,
     args: &[&str],
     input_overrides: &[(String, String)],
+    show_trace: bool,
     status_fn: &dyn Fn(&str),
 ) -> Result<Result<String, NixCommandError>, KixEvalError> {
     let mut cmd = command(Tool::Nix)?;
@@ -291,6 +299,9 @@ fn eval_raw(
         "--extra-experimental-features",
         "nix-command flakes pipe-operators",
     ]);
+    if show_trace {
+        cmd.arg("--show-trace");
+    }
     for (name, url) in input_overrides {
         cmd.arg("--override-input").arg(name).arg(url);
     }
