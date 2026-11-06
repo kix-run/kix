@@ -68,13 +68,12 @@ fn kubectl_stdout(context: &str, args: &[&str]) -> String {
 }
 
 /// Clear the activation cache for a Kix cluster name so the next deploy
-/// sees no previous state. The cache persists across kind cluster recreations.
+/// sees no previous state, and release the Nix gc root Kix keeps on that
+/// build. The cache persists across kind cluster recreations.
 fn clear_activation_cache(kix_cluster: &str) {
-    if let Ok(home) = std::env::var("HOME") {
-        let activation_file =
-            Path::new(&home).join(format!(".cache/kix/activations/{kix_cluster}.path"));
-        let _ = std::fs::remove_file(&activation_file);
-    }
+    let dir = kix::eval::store::default_cache_dir().join("activations");
+    let _ = std::fs::remove_file(dir.join(format!("{kix_cluster}.path")));
+    let _ = std::fs::remove_file(dir.join(format!("{kix_cluster}.root")));
 }
 
 const KIND_CLUSTER: &str = "kix-integration";
@@ -476,52 +475,44 @@ fn deploy_and_gc() {
     // Phase 5: Hard GC: detect an orphaned resource created outside Kix
     eprintln!("\n=== Phase 5: Hard GC (detect orphan) ===");
 
-    // Create a ConfigMap with Kix labels that's NOT in the activation
+    // Create a ConfigMap stamped like a Kix object, with an identity hash no
+    // build has. It is written under Kix's field manager because a stamped
+    // object with no `managedFields` entry for `kix` counts as a copy another
+    // program made, which hard gc keeps unless `--include-copies` is passed.
+    let orphan_dir = tempfile::tempdir().unwrap();
+    let orphan_file = orphan_dir.path().join("orphan.yaml");
+    std::fs::write(
+        &orphan_file,
+        format!(
+            "apiVersion: v1\n\
+             kind: ConfigMap\n\
+             metadata:\n\
+             \x20 name: orphan-test\n\
+             \x20 namespace: echo\n\
+             \x20 labels:\n\
+             \x20   app.kubernetes.io/managed-by: kix\n\
+             \x20 annotations:\n\
+             \x20   {}: fake00000000orphan000000000000\n\
+             data:\n\
+             \x20 key: value\n",
+            keys::IDENTITY_HASH
+        ),
+    )
+    .unwrap();
     let create_result = kubectl(
         KUBE_CTX,
         &[
-            "create",
-            "configmap",
-            "orphan-test",
-            "-n",
-            "echo",
-            "--from-literal=key=value",
+            "apply",
+            "--server-side",
+            "--field-manager=kix",
+            "-f",
+            orphan_file.to_str().unwrap(),
         ],
     );
     assert!(
         create_result.status.success(),
-        "should create test configmap"
-    );
-
-    // Label it as Kix-managed so hard GC picks it up
-    let label_result = kubectl(
-        KUBE_CTX,
-        &[
-            "label",
-            "configmap",
-            "orphan-test",
-            "-n",
-            "echo",
-            "app.kubernetes.io/managed-by=kix",
-        ],
-    );
-    assert!(label_result.status.success(), "should label configmap");
-
-    // Annotate with a fake identity-hash that won't match any expected resource
-    let annotate_result = kubectl(
-        KUBE_CTX,
-        &[
-            "annotate",
-            "configmap",
-            "orphan-test",
-            "-n",
-            "echo",
-            &format!("{}=fake00000000orphan000000000000", keys::IDENTITY_HASH),
-        ],
-    );
-    assert!(
-        annotate_result.status.success(),
-        "should annotate configmap"
+        "should create test configmap: {}",
+        String::from_utf8_lossy(&create_result.stderr)
     );
 
     // Hard GC should now detect this as garbage
@@ -788,29 +779,38 @@ fn two_kix_clusters_share_one_kind_cluster() {
 
     // 3. The rebuild-from-live path: the Active record's build is not in
     //    the store, so deploy reads the previous state from live objects.
+    //    Kix finds a record's build in the local store by its hash whatever
+    //    the record's `built-via` says, so the build itself is deleted,
+    //    after releasing the gc root Kix keeps on it.
     let records = format!("activations.{}", keys::DOMAIN);
     let selector = format!("{}=sweep-a", keys::CLUSTER_LABEL);
-    let record = kubectl_stdout(
+    let listed: serde_json::Value = serde_json::from_str(&kubectl_stdout(
         &ctx,
-        &[
-            "get",
-            &records,
-            "-l",
-            &selector,
-            "-o",
-            "jsonpath={range .items[?(@.status.phase==\"Active\")]}{.metadata.name}{end}",
-        ],
+        &["get", &records, "-l", &selector, "-o", "json"],
+    ))
+    .unwrap();
+    let built_via = listed["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|r| r["status"]["phase"] == "Active")
+        .and_then(|r| r["metadata"]["annotations"][keys::BUILT_VIA].as_str())
+        .expect("the Active record names its build")
+        .to_string();
+    assert!(
+        Path::new(&built_via).join("kix-packages.json").exists(),
+        "the Active record's build {built_via} should be in the local store"
     );
-    let gone = format!(
-        "{}=/nix/store/00000000000000000000000000000000-gone",
-        keys::BUILT_VIA
-    );
-    let annotate = kubectl(
-        &ctx,
-        &["annotate", &records, record.trim(), &gone, "--overwrite"],
-    );
-    assert!(annotate.status.success());
     clear_activation_cache("sweep-a");
+    let deleted = Command::new("nix")
+        .args(["store", "delete", &built_via])
+        .output()
+        .expect("nix should run");
+    assert!(
+        deleted.status.success(),
+        "nix store delete {built_via}: {}",
+        String::from_utf8_lossy(&deleted.stderr)
+    );
     flake.write_cluster("a", "hello again from sweep-a", true);
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
     assert!(ok, "{out}");
