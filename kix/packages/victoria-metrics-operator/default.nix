@@ -175,7 +175,7 @@ in
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Extra arguments appended to the operator container's args.";
+      description = "Extra arguments appended to the operator container's args. The package refuses `--zap-log-level`, which `logLevel` sets, and `--leader-elect` and `--health-probe-bind-address`, which it sets itself.";
     };
     env = lib.mkOption {
       type = lib.types.listOf lib.types.anything;

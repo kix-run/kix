@@ -1,4 +1,0 @@
-# 2026-10-02 · `kix/lib/vocab/compose.nix` `kix.guardArgs` · guardArgs words every refused flag as one "the package owns", so packages copy its matcher for flags they refuse as unsupported.
-
-The message is `<who>: extraArgs sets "<arg>", which the package owns: <reason>`. A flag the package neither sets nor supports (reloader's `--namespace-selector`, `--is-Argo-Rollouts`, `--enable-csi-integration`) reads wrongly under it. `kix/packages/reloader/default.nix` (`refuseUnsupported`) keeps a local copy of the flag matcher with its own sentence. Other packages that refuse unsupported flags will copy it again.
-- Hit again 2026-10-03 by `kix/packages/traefik`, which keeps its own matcher because Traefik reads flag names in any case and any key under a provider (`--providers.kubernetescrd.*`) turns that provider on; `kix.guardArgs` matches exact, case-sensitive flags only.

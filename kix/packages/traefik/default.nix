@@ -456,9 +456,9 @@ in
           if flag == null then
             null
           else if ownedFlags ? ${flag} then
-            "which the package owns: ${ownedFlags.${flag}}"
+            "which this package does not accept: ${ownedFlags.${flag}}"
           else if family != null then
-            "which this package refuses: ${refusedFamilies.${family}}"
+            "which this package does not accept: ${refusedFamilies.${family}}"
           else
             null;
         argProblems = builtins.concatMap (

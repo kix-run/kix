@@ -49,7 +49,7 @@ let
   who = "reloader ${scope.namespaceName}/${name}";
   reloadAnnotation = "secret.reloader.stakater.com/reload";
 
-  # Reasons follow guardArgs' "which the package owns: ".
+  # Reasons follow guardArgs' "which this package does not accept: ".
   replay = "the package sets it so that each new leader replays every Secret and restarts only the workloads whose Secret changed. Remove it.";
   annotationName = "withReloadOn and meta.annotationDomains use the default annotation names. Remove it.";
   ownedFlags = {
@@ -77,6 +77,8 @@ let
     "--pause-deployment-annotation" = annotationName;
     "--pause-deployment-time-annotation" = annotationName;
   };
+  # Flags the package neither sets nor supports: each needs RBAC the
+  # package does not grant.
   unsupportedFlags = {
     "--namespace-selector" =
       "reloader then reads Namespaces, which the package's RBAC does not allow. Remove it.";
@@ -85,25 +87,6 @@ let
     "--enable-csi-integration" =
       "reloader then watches secrets-store.csi.x-k8s.io resources, which the package's RBAC does not allow. Remove it.";
   };
-  # Matches a flag as kix.guardArgs does: the bare flag or "<flag>=...".
-  refuseUnsupported =
-    extraArgs:
-    let
-      flagOf =
-        arg:
-        lib.findFirst (flag: arg == flag || lib.hasPrefix "${flag}=" arg) null (
-          builtins.attrNames unsupportedFlags
-        );
-      lines = lib.concatMap (
-        arg:
-        let
-          flag = flagOf arg;
-        in
-        lib.optional (flag != null)
-          "${who}: extraArgs sets \"${arg}\", which this package does not support: ${unsupportedFlags.${flag}}"
-      ) extraArgs;
-    in
-    if lines != [ ] then throw (lib.concatStringsSep "\n" lines) else extraArgs;
 
   # Flags whose values withReloadOn checks. Each is a pflag string slice:
   # repeats add to the list and each value is split on commas.
@@ -252,8 +235,8 @@ in
           baseArgs
           ++ kix.guardArgs {
             inherit who;
-            owned = ownedFlags;
-          } (refuseUnsupported config.extraArgs);
+            owned = ownedFlags // unsupportedFlags;
+          } config.extraArgs;
 
         read = lib.genAttrs readFlags (valuesOf config.extraArgs);
         watched = lib.unique read."--namespaces";
