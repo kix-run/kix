@@ -216,26 +216,8 @@ in
     (markOf "g" ms == null && markOf "w" ms == null)
     || throw "an undeclared custom resource in a non-stateful package was marked";
 
-  # `holdsData` is a boolean, and built-in kinds take theirs from their shape.
-  holds-data-rejects-bad-declarations =
-    let
-      onBuiltIn =
-        holdsData:
-        build (gadgetsPackage {
-          inherit (declared) gadget widget;
-          extraParts = scope: {
-            settings = scope.mkResource (
-              {
-                apiVersion = "v1";
-                kind = "ConfigMap";
-                name = "settings";
-                extra.data.a = "b";
-              }
-              // lib.optionalAttrs (holdsData != null) { inherit holdsData; }
-            );
-          };
-        });
-    in
+  # `holdsData` is a boolean.
+  holds-data-rejects-non-boolean =
     (
       evalFails (
         build (gadgetsPackage {
@@ -247,8 +229,141 @@ in
           widget.holdsData = 1;
         })
       )
-      && evalFails (onBuiltIn true)
-      && builds (onBuiltIn null)
+      && builds (build (gadgetsPackage declared))
     )
-    || throw "a non-boolean holdsData or one on a built-in kind was accepted";
+    || throw "a non-boolean holdsData was accepted";
+
+  # scope.mkResource takes no `holdsData`, for a built-in kind or a custom
+  # one. It is declared per kind on mkCRD or mkCRDRef.
+  holds-data-scope-mk-resource-refuses-it =
+    let
+      withPart =
+        part:
+        build (
+          gadgetsPackage (
+            declared
+            // {
+              extraParts = scope: rec {
+                probeCrd = scope.mkCRDRef {
+                  group = "monitoring.example.com";
+                  kind = "Probe";
+                  plural = "probes";
+                  version = "v1";
+                  holdsData = false;
+                };
+                extra = part probeCrd scope;
+              };
+            }
+          )
+        );
+      configMap =
+        args: _: scope:
+        scope.mkResource (
+          {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "settings";
+            extra.data.a = "b";
+          }
+          // args
+        );
+      probe =
+        args: probeCrd: scope:
+        scope.mkResource (
+          {
+            apiVersion = "monitoring.example.com/v1";
+            kind = "Probe";
+            name = "probe";
+            requires = [ probeCrd ];
+          }
+          // args
+        );
+      viaMkCR =
+        args: probeCrd: scope:
+        scope.mkCR probeCrd ({ name = "probe"; } // args);
+    in
+    (
+      evalFails (
+        withPart (configMap {
+          holdsData = true;
+        })
+      )
+      && builds (withPart (configMap { }))
+      && evalFails (
+        withPart (probe {
+          holdsData = true;
+        })
+      )
+      && builds (withPart (probe { }))
+      && evalFails (
+        withPart (viaMkCR {
+          holdsData = true;
+        })
+      )
+      && builds (withPart (viaMkCR { }))
+    )
+    || throw "scope.mkResource or mkCR accepted a holdsData argument, or refused an object without one";
+
+  # Kinds in the groups Kix treats as built-in (`core/api-groups.json`) take
+  # their mark from their shape, so a declaration for one is refused,
+  # `networking.k8s.io` included.
+  holds-data-refuses-built-in-groups =
+    let
+      withRef =
+        group: holdsData:
+        build (
+          gadgetsPackage (
+            declared
+            // {
+              extraParts = scope: rec {
+                ref = scope.mkCRDRef (
+                  {
+                    inherit group;
+                    kind = "Snapshot";
+                    plural = "snapshots";
+                    version = "v1";
+                  }
+                  // lib.optionalAttrs (holdsData != null) { inherit holdsData; }
+                );
+                snapshot = scope.mkCR ref { name = "s"; };
+              };
+            }
+          )
+        );
+      direct =
+        apiVersion:
+        k8s.mkResource {
+          inherit apiVersion;
+          kind = "Ingress";
+          name = "i";
+          namespace = "app";
+          _crd = {
+            declaredBy = "a test";
+            holdsData = true;
+          };
+        };
+      seals = r: (builtins.tryEval (builtins.deepSeq r.rawManifest true)).success;
+    in
+    (
+      evalFails (withRef "snapshot.storage.k8s.io" true)
+      && builds (withRef "snapshot.storage.k8s.io" null)
+      && builds (withRef "snapshot.example.com" true)
+      && !(seals (direct "networking.k8s.io/v1"))
+      && !(seals (direct "apps/v1"))
+      && seals (direct "example.com/v1")
+    )
+    || throw "holdsData was accepted for a built-in group, or refused for a custom one";
+
+  # The group list is shared with the CLI's `is_known_api`.
+  holds-data-built-in-groups =
+    (
+      !(k8s.facts.isForeignGroup "v1")
+      && !(k8s.facts.isForeignGroup "apps/v1")
+      && !(k8s.facts.isForeignGroup "networking.k8s.io/v1")
+      && !(k8s.facts.isForeignGroup "gateway.networking.k8s.io/v1")
+      && !(k8s.facts.isForeignGroup (import ../../core/annotations.nix).apiVersion)
+      && k8s.facts.isForeignGroup "postgresql.cnpg.io/v1"
+      && k8s.facts.isForeignGroup "extensions/v1beta1"
+    )
+    || throw "isForeignGroup drew the built-in boundary wrongly";
 }

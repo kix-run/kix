@@ -947,19 +947,30 @@
                 r: "${builtins.head (lib.splitString "/" (plain r.apiVersion))}/${plain r.kind}"
               ) undeclared;
             in
-            lib.mapAttrsToList (groupKind: rs: {
-              assertion = false;
-              message =
-                let
-                  kind = plain (builtins.head rs).kind;
-                in
-                "kix: instance ${owner} has lifecycle = \"stateful\" and renders ${kind} "
-                + builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) rs)
-                + ", but ${groupKind} does not declare whether it holds data. "
-                + "Set holdsData on the scope.mkCRD or scope.mkCRDRef that declares ${groupKind}: true when deleting a ${kind} loses data (a database, a storage pool), "
-                + "false when it does not (monitoring, certificates, policy, configuration). "
-                + "Build the ${kind} with scope.mkCR from that declaration so it carries the answer.";
-            }) byKind;
+            lib.mapAttrsToList (
+              groupKind: rs:
+              let
+                kind = plain (builtins.head rs).kind;
+                names = builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) rs);
+                declarations = lib.unique (builtins.filter (d: d != null) (map (r: r.crdDeclaredBy or null) rs));
+                raw = builtins.filter (r: (r.crdDeclaredBy or null) == null) rs;
+                answer = "true when deleting a ${kind} loses data (a database, a storage pool), false when it does not (monitoring, certificates, policy, configuration)";
+              in
+              {
+                assertion = false;
+                message =
+                  "kix: instance ${owner} has lifecycle = \"stateful\" and renders ${kind} ${names}, "
+                  + "but Kix does not know whether ${groupKind} objects hold data. "
+                  + lib.optionalString (declarations != [ ]) (
+                    "Set holdsData on ${builtins.concatStringsSep " and " declarations}, which declares the kind: ${answer}. "
+                  )
+                  + lib.optionalString (raw != [ ]) (
+                    "${builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) raw)} "
+                    + "is built with scope.mkResource, which carries no declaration. "
+                    + "Build it with scope.mkCR from the scope.mkCRD or scope.mkCRDRef of ${groupKind}, and set holdsData there: ${answer}."
+                  );
+              }
+            ) byKind;
         in
         builtins.concatMap ofInstance (builtins.filter isStateful allInstancesList);
 

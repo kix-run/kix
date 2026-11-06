@@ -96,11 +96,6 @@ rec {
     else
       null;
 
-  # Return whether `apiVersion` names a group with no dot: the core group
-  # and `apps`, `batch`, `policy`, and `autoscaling`. Their kinds hold data
-  # only by shape, so `holdsData` cannot be set on them.
-  isCoreGroup = apiVersion: !(lib.hasInfix "." (builtins.head (lib.splitString "/" apiVersion)));
-
   mkImportResource =
     {
       name,
@@ -207,9 +202,11 @@ rec {
       # declaration, or null. `buildCluster` calls it on the rendered manifest
       # to check namespace ResourceQuotas.
       usesAtLeast ? null,
-      # Boolean from the CRD declaration, or null. Written as
+      # Set only by the typed CRD builders (`cr` and `mkCR`), not by packages:
+      # `{ declaredBy; holdsData; }`, the declaration the kind comes from and
+      # its `holdsData` (a boolean or null). `holdsData` is written as
       # `kix.run/holds-data` (see `holdsDataOf`).
-      holdsData ? null,
+      _crd ? null,
       # Field paths (`ownership.cede = [ "spec.versions" "webhooks[*].rules" ]`)
       # that another controller takes over after creation. When a subsequent
       # apply hits a field-ownership conflict limited to these paths, deploy
@@ -217,14 +214,15 @@ rec {
       ownership ? { },
     }:
     let
+      holdsData = if _crd == null then null else _crd.holdsData;
       cede = ownership.cede or [ ];
       _ownershipCheck =
         if builtins.attrNames ownership != (if ownership == { } then [ ] else [ "cede" ]) then
           throw "k8s-resource '${kind}/${name}': ownership takes only `cede`, got ${builtins.toJSON (builtins.attrNames ownership)}"
         else if !(builtins.isList cede) || !(builtins.all builtins.isString cede) then
           throw "k8s-resource '${kind}/${name}': ownership.cede must be a list of field paths, e.g. [ \"spec.versions\" ]"
-        else if holdsData != null && isCoreGroup apiVersion then
-          throw "k8s-resource '${kind}/${name}': holdsData is not accepted for the built-in kind ${kind}. Kix decides whether a built-in object holds data from its shape. Declare holdsData on the scope.mkCRD or scope.mkCRDRef of a custom resource kind"
+        else if holdsData != null && !(facts.isForeignGroup apiVersion) then
+          throw "k8s-resource '${kind}/${name}': ${_crd.declaredBy} declares holdsData for ${apiVersion}, a group whose kinds Kix treats as built-in. Kix decides whether those hold data from their shape. Remove holdsData from that declaration"
         else
           null;
       cedeAnnotations = lib.optionalAttrs (cede != [ ]) {
@@ -615,10 +613,13 @@ rec {
         # The netpol instance processor uses podSelector and absorbed endpoint
         # facts to derive policies for pods created by custom controllers.
         inherit factBehavior usesAtLeast;
-        # The `holdsData` this object was built with: the kind's declaration,
-        # or null. `buildCluster` refuses a stateful package's custom
-        # resources that have none.
+        # The `holdsData` this object was built with (the kind's declaration,
+        # or null) and the declaration it came from (null when the object was
+        # not built through `cr` or `mkCR`). `buildCluster` refuses a stateful
+        # package's custom resources that have no `holdsData` and names the
+        # declaration to change.
         declaredHoldsData = holdsData;
+        crdDeclaredBy = if _crd == null then null else _crd.declaredBy;
         absorbedEndpointFacts = _absorbedEndpointFacts;
 
         rawManifest = rawManifestStamped;
@@ -858,10 +859,14 @@ rec {
       _validatedReadiness = validateReadiness "mkCRDBuilders" "${group}/${kind}" readiness;
 
       _validatedHoldsData =
-        if holdsData == null || builtins.isBool holdsData then
-          holdsData
+        if holdsData == null then
+          null
+        else if !builtins.isBool holdsData then
+          throw "${declaredBy}: holdsData for ${group}/${kind} is ${builtins.toJSON holdsData}; set it to true when a ${kind} keeps data that deleting it loses, such as a database or a storage pool, and false otherwise."
+        else if !(facts.isForeignGroup "${group}/${version}") then
+          throw "${declaredBy}: holdsData is not accepted for ${group}/${kind}. Kix treats the kinds of ${group} as built-in and decides whether they hold data from their shape. Remove holdsData."
         else
-          throw "${declaredBy}: holdsData for ${group}/${kind} is ${builtins.toJSON holdsData}; set it to true when a ${kind} keeps data that deleting it loses, such as a database or a storage pool, and false otherwise.";
+          holdsData;
 
       # A CR can override the default version, normally the CRD's storage
       # version, with another served one. `consumer` is "ns/instance" when
@@ -890,7 +895,12 @@ rec {
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (usesAtLeast != null) { inherit usesAtLeast; }
-        // lib.optionalAttrs (_validatedHoldsData != null) { holdsData = _validatedHoldsData; }
+        // {
+          _crd = {
+            inherit declaredBy;
+            holdsData = _validatedHoldsData;
+          };
+        }
         // lib.optionalAttrs (_validatedReadiness != null) {
           annotations = (args.annotations or { }) // {
             ${kixKeys.readiness} = builtins.toJSON _validatedReadiness;

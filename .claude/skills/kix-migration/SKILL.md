@@ -439,7 +439,8 @@ edge but NO netpol hole. Consequences when authoring:
   to build when it renders a custom resource without it, including one built with `scope.mkResource`
   instead of `scope.mkCR`. Built-in kinds need nothing: a PersistentVolumeClaim, a PersistentVolume,
   and a StatefulSet with `volumeClaimTemplates` are marked `"true"` from their shape, and
-  `holdsData` on a built-in kind is refused.
+  `holdsData` for a built-in group (`kix/lib/core/api-groups.json`, which includes every `*.k8s.io`
+  group) is refused. `scope.mkResource` and `scope.mkCR` refuse a per-object `holdsData`.
 
 ### Composition helpers (kix.*)
 

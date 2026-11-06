@@ -60,17 +60,15 @@ let
 
   # The apiserver refuses a CRD in a *.k8s.io group unless it carries the
   # api-approved.kubernetes.io annotation, so the upstream value goes with
-  # the spec. `holdsData` is true for the kinds whose deletion can delete
-  # the snapshot itself.
+  # the spec.
   approvedCrd =
-    file: holdsData:
+    file:
     let
       crd = vendored file;
     in
     scope.mkCRD {
       inherit (crd) spec;
       annotations."api-approved.kubernetes.io" = crd.metadata.annotations."api-approved.kubernetes.io";
-      inherit holdsData;
     };
 
   # The CRDs come from `release`; a controller of another minor release may
@@ -197,9 +195,9 @@ in
       in
       {
         crds = {
-          volumeSnapshotClasses = approvedCrd "volumesnapshotclasses.snapshot.storage.k8s.io.json" false;
-          volumeSnapshotContents = approvedCrd "volumesnapshotcontents.snapshot.storage.k8s.io.json" true;
-          volumeSnapshots = approvedCrd "volumesnapshots.snapshot.storage.k8s.io.json" true;
+          volumeSnapshotClasses = approvedCrd "volumesnapshotclasses.snapshot.storage.k8s.io.json";
+          volumeSnapshotContents = approvedCrd "volumesnapshotcontents.snapshot.storage.k8s.io.json";
+          volumeSnapshots = approvedCrd "volumesnapshots.snapshot.storage.k8s.io.json";
         };
 
         serviceAccount = scope.mkResource {

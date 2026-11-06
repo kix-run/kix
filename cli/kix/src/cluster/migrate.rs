@@ -126,9 +126,18 @@ fn holds_data(manifest: &Value) -> bool {
         || declared(spec.get("storage"))
 }
 
+/// API groups whose kinds Kix treats as built-in, besides the core group and
+/// Kix's own. The library reads the same lists from
+/// `kix/lib/core/api-groups.json` (`facts.isForeignGroup`), and a test below
+/// checks that the two agree.
+const BUILTIN_GROUPS: &[&str] = &["apps", "batch", "policy", "autoscaling"];
+
+/// Suffixes of API groups whose kinds Kix treats as built-in.
+const BUILTIN_GROUP_SUFFIXES: &[&str] = &[".k8s.io"];
+
 /// Return whether the manifest's API group is one whose kinds Kix knows: the
-/// core group, `apps`, `batch`, `policy`, `autoscaling`, any `*.k8s.io` group,
-/// and Kix's own group.
+/// core group, a [`BUILTIN_GROUPS`] entry, a group ending in one of
+/// [`BUILTIN_GROUP_SUFFIXES`], and Kix's own group.
 fn is_known_api(manifest: &Value) -> bool {
     let api_version = manifest
         .get("apiVersion")
@@ -137,8 +146,8 @@ fn is_known_api(manifest: &Value) -> bool {
     let Some((group, _)) = api_version.split_once('/') else {
         return true;
     };
-    matches!(group, "apps" | "batch" | "policy" | "autoscaling")
-        || group.ends_with(".k8s.io")
+    BUILTIN_GROUPS.contains(&group)
+        || BUILTIN_GROUP_SUFFIXES.iter().any(|s| group.ends_with(s))
         || group == keys::GROUP
 }
 
@@ -826,5 +835,30 @@ mod tests {
         // An unmarked ConfigMap holds no data by its shape.
         let old = vec![in_postgres("ConfigMap", "postgres", "aaaa")];
         assert!(detect_migration_pairs(&new, &old).is_empty());
+    }
+
+    /// The CLI and the library draw the built-in boundary from the same
+    /// lists. Skipped when the repository tree is not there, so a packaged
+    /// crate still tests clean.
+    #[test]
+    fn built_in_groups_match_the_library() {
+        let Some(path) = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .map(|p| p.join("kix/lib/core/api-groups.json"))
+            .find(|p| p.is_file())
+        else {
+            return;
+        };
+        let lists: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let strings = |key: &str| -> Vec<String> {
+            lists[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} has no {key} list", path.display()))
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(strings("builtinGroups"), BUILTIN_GROUPS);
+        assert_eq!(strings("builtinGroupSuffixes"), BUILTIN_GROUP_SUFFIXES);
     }
 }

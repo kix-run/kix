@@ -776,17 +776,7 @@ let
 
         netpolApi = {
           policyKinds = [ "CiliumNetworkPolicy" ];
-          mkPolicy =
-            { mkResource, extraArgs }:
-            mkResource (
-              extraArgs
-              // {
-                apiVersion = "cilium.io/v2";
-                kind = "CiliumNetworkPolicy";
-                holdsData = false;
-                requires = (extraArgs.requires or [ ]) ++ [ crdRef ];
-              }
-            );
+          mkPolicy = { mkResource, extraArgs }: mkResource (crdRef.out.cr extraArgs);
           mkDefaultDenySpec =
             { denyIngress, denyEgress }:
             {
