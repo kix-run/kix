@@ -10,7 +10,8 @@
 # deploys or drift.
 #
 # This test is eval-only (no cluster). It exercises:
-#   - `nix build .#<variant>` round-trip determinism
+#   - `kix build` round-trip determinism, written to the store as the
+#     `cluster-<name>` directory (scripts/kix-manifests.sh)
 #   - Content-addressed store path stability
 #   - File-tree hash equality before/after a detour
 #
@@ -28,12 +29,6 @@ set -euo pipefail
 FLAKE="./ludo"
 VARIANT_A="cluster-ludo-kind"
 VARIANT_B="cluster-ludo-kind-gateway-migrate"
-# Use an array so `--extra-experimental-features` stays a single arg
-# with a space-separated value: word-splitting would otherwise pass
-# `nix-command` and `flakes` as separate positional args.
-NIX_OPTS=(
-    --extra-experimental-features "pipe-operators nix-command flakes"
-)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -51,12 +46,19 @@ ok()   { echo -e "${G}✓${N} $*"; }
 fail() { echo -e "${R}✗${N} $*" >&2; FAILED=1; }
 FAILED=0
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+ROUND=0
+
 build() {
     local variant="$1"
-    # `nix build` prints the out path with --print-out-paths. --no-link
-    # skips creating ./result so we don't fight the three rounds for
-    # the same symlink name. stderr is kept to surface genuine failures.
-    nix build "${FLAKE}#${variant}" "${NIX_OPTS[@]}" --print-out-paths --no-link 2>/dev/null
+    ROUND=$((ROUND + 1))
+    # Plain `nix build` cannot render the Helm charts these clusters use,
+    # so the manifests come from `kix build`. One link per round, so the
+    # rounds do not share a link name.
+    "$REPO_ROOT/scripts/kix-manifests.sh" "$FLAKE" "${variant#cluster-}" "$WORK/round-$ROUND" >&2
+    readlink -f "$WORK/round-$ROUND"
 }
 
 # Compute the canonical content hash of a store path's file tree.
