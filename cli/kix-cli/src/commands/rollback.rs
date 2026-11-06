@@ -551,6 +551,7 @@ async fn run_operator_async(
         // A rollback re-applies a build from an earlier deploy, which wrote
         // its own receipt. See the non-operator path in this file.
         None,
+        planned.checked.package_index(),
     )
     .await?;
 

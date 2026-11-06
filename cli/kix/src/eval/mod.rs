@@ -24,6 +24,7 @@ pub mod manifest_json;
 #[cfg(test)]
 mod mock;
 pub mod nix;
+pub mod package_index;
 pub mod stamp;
 pub mod store;
 pub mod store_graph;

@@ -3,7 +3,8 @@
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality label
-//! selector), and DELETE (honoring `preconditions`) on the objects it holds.
+//! selector), PATCH (as a JSON merge patch, on the object or its `status`),
+//! and DELETE (honoring `preconditions`) on the objects it holds.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. Anything else answers 404.
 //!
@@ -268,6 +269,16 @@ impl FakeApi {
                 let gone = st.objects.remove(i);
                 (200, gone)
             }
+            ("PATCH", Some(_)) => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let patch: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                merge_patch(&mut st.objects[i], &patch);
+                let rv = st.bump();
+                st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
+                (200, st.objects[i].clone())
+            }
             _ => status(405, "MethodNotAllowed", "not served by the fake"),
         }
     }
@@ -320,6 +331,25 @@ impl Target {
                     .as_deref()
                     .is_none_or(|ns| meta["namespace"] == ns))
             && self.name.as_deref().is_none_or(|n| meta["name"] == n)
+    }
+}
+
+/// Apply `patch` to `target` as a JSON merge patch (RFC 7386).
+fn merge_patch(target: &mut Value, patch: &Value) {
+    let Value::Object(fields) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = json!({});
+    }
+    let object = target.as_object_mut().expect("an object");
+    for (key, value) in fields {
+        if value.is_null() {
+            object.remove(key);
+        } else {
+            merge_patch(object.entry(key.clone()).or_insert(Value::Null), value);
+        }
     }
 }
 

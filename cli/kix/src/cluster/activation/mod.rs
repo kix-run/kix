@@ -26,6 +26,7 @@ mod tests;
 
 use std::collections::HashSet;
 
+use crate::eval::package_index::{self, RecordPackageIndex};
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -673,16 +674,24 @@ impl Records {
         Ok(read_phase(&item).to_string())
     }
 
-    /// Set the Activation phase to `Deploying` and initialize wave counters.
+    /// Set the Activation phase to `Deploying`, initialize wave counters, and
+    /// write the build's package index.
     ///
     /// Called at the start of the apply loop after the record is created. Sets
     /// `status.phase = Deploying` and `status.totalWaves = total_waves`, unless
     /// the record is already current (see [`phase_on_begin`]), in which case
     /// only the wave counters and failure field are reset.
+    ///
+    /// Then writes `package_index` to `status.packageIndex` with a patch of
+    /// its own. The index only helps a later diff group objects, so a failure
+    /// to write it, or an index over [`package_index::MAX_BYTES`], logs a
+    /// warning and the deploy goes on. Writing it separately keeps such a
+    /// failure from losing the phase.
     pub(crate) async fn begin_deploy(
         &self,
         activation_name: &str,
         total_waves: usize,
+        package_index: Option<&RecordPackageIndex>,
     ) -> Result<(), RecordsError> {
         let current = self.phase_of(activation_name).await?;
 
@@ -696,7 +705,41 @@ impl Records {
         status.insert("failure".to_string(), Value::Null);
 
         self.patch_status(activation_name, &json!({ "status": status }))
-            .await
+            .await?;
+
+        if let Some(index) = package_index {
+            self.write_package_index(activation_name, index).await;
+        }
+        Ok(())
+    }
+
+    /// Write `index` to the record's `status.packageIndex`, warning instead
+    /// of failing. The index only helps a later diff group objects, so a
+    /// failure must not stop a deploy. See [`Records::begin_deploy`].
+    pub async fn write_package_index(&self, activation_name: &str, index: &RecordPackageIndex) {
+        let value = index.to_value();
+        let bytes = value.to_string().len();
+        if bytes > package_index::MAX_BYTES {
+            tracing::warn!(
+                activation = %activation_name,
+                bytes,
+                limit = package_index::MAX_BYTES,
+                "the build's package index is too large to store on its record; \
+                 a diff on a machine without this build will show an object that \
+                 moved between packages only under its new package",
+            );
+            return;
+        }
+        let patch = json!({ "status": { (keys::PACKAGE_INDEX_FIELD): value } });
+        if let Err(e) = self.patch_status(activation_name, &patch).await {
+            tracing::warn!(
+                activation = %activation_name,
+                error = %e,
+                "could not store the build's package index on its record; \
+                 a diff on a machine without this build will show an object that \
+                 moved between packages only under its new package",
+            );
+        }
     }
 
     /// Mark a record `Failed` when its deploy stops before finalizing.
