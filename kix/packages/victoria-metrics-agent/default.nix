@@ -133,7 +133,7 @@ in
     extraArgs = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
-      description = "vmagent flags for the VMAgent CR's `extraArgs`, keyed by flag name without the leading dash. Merged over the package's flags, so an entry here replaces the package's value for that flag. The package sets `promscrape.streamParse = \"true\"`.";
+      description = "vmagent flags for the VMAgent CR's `extraArgs`, keyed by flag name without the leading dash. Merged over the package's flags, so an entry here replaces the package's value for that flag. The package sets `promscrape.streamParse = \"true\"`. It refuses `remoteWrite.url`, which comes from the vmCluster dependency, and `promscrape.config`, which the operator writes.";
     };
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
@@ -171,11 +171,24 @@ in
         ...
       }:
       let
+        who = "victoria-metrics-agent ${scope.namespaceName}/${name}";
         # Stream-parse scrape responses instead of buffering them whole;
         # bounds vmagent memory on large targets (k8s-stack chart default).
         baseArgs = {
           "promscrape.streamParse" = "true";
         };
+        # The operator turns `spec.remoteWrite` and the scrape objects it
+        # selects into these two flags, and an `extraArgs` entry would replace
+        # either one.
+        extraArgs = kix.guardArgs {
+          inherit who;
+          owned = {
+            "remoteWrite.url" =
+              "the vmCluster dependency sets it to the cluster's insert Service, which the network policy also opens. Change the vmCluster dependency instead.";
+            "promscrape.config" =
+              "the operator points it at the scrape configuration it generates from the scrape objects the agent selects. Remove it.";
+          };
+        } config.extraArgs;
         baseSpec = {
           replicaCount = config.replicaCount;
           image = crImage config.image;
@@ -205,7 +218,7 @@ in
             }) clusterConfig.cluster.topology.failureDomainKeys;
           };
           resources = config.resources;
-          extraArgs = baseArgs // config.extraArgs;
+          extraArgs = baseArgs // extraArgs;
         }
         // lib.optionalAttrs (config.externalLabels != { }) {
           externalLabels = config.externalLabels;
@@ -215,7 +228,7 @@ in
         vmAgent = vmOperator.out.mkVMAgent scope {
           inherit name;
           spec = kix.mergeGuarded {
-            who = "victoria-metrics-agent ${scope.namespaceName}/${name}";
+            inherit who;
             locked = map lib.toList [
               "remoteWrite"
               "scrapeInterval"

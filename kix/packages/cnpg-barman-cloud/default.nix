@@ -257,10 +257,10 @@ in
         inherit who;
         owned = {
           "--server-cert" =
-            "the server certificate mounted from the Certificate the package issues; remove it.";
-          "--server-key" = "the server key mounted from the Certificate the package issues; remove it.";
+            "the package mounts the server certificate from the Certificate it issues; remove it.";
+          "--server-key" = "the package mounts the server key from the Certificate it issues; remove it.";
           "--client-cert" =
-            "the client certificate the operator presents, which the package issues and names on the Service; remove it.";
+            "the package issues the client certificate the operator presents and names it on the Service; remove it.";
           "--server-address" =
             "the Service and the readiness probe use port ${toString grpcPort}; remove it.";
           "--health-probe-bind-address" = "the liveness probe uses port ${toString healthPort}; remove it.";

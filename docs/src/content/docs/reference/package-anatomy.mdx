@@ -373,7 +373,7 @@ Packages often expose an escape hatch option (`extraSpec`, `extraEnv`, `extraArg
 | --- | --- | --- |
 | `kix.mergeGuarded` | `{ who, locked, what ? "extraSpec" } base overrides` | Recursively merges `overrides` onto `base`, but throws an evaluation error naming `who` and `what` if `overrides` sets any attribute path listed in `locked` (for example, `[ "replicas" "selector" ]` or `[ "template.spec.serviceAccountName" ]`). |
 | `kix.mergeEnv` | `{ who, owned ? [ ], defaults ? { } } userEnv` | Validates that `userEnv` does not set any environment variable name in `owned`, merges `defaults // userEnv`, and passes the result to `kix.mkEnvVars`. |
-| `kix.guardArgs` | `{ who, option ? "extraArgs", owned } userArgs` | Validates a list of CLI flag strings (`userArgs`), throwing an error if any flag matches a prefix in `owned` (matching `--flag`, `--flag=value`, or `-f`), and returns `userArgs` unchanged. |
+| `kix.guardArgs` | `{ who, option ? "extraArgs", owned } userArgs` | Validates CLI flags and returns `userArgs` unchanged. `userArgs` can be a list of flag strings (matching `--flag`, `--flag=value`, or a one-letter `-f` with an attached value) or an attrset keyed by flag name, like a VictoriaMetrics CR's `extraArgs` (matching each key with or without leading dashes). `owned` maps each refused flag to its reason and fix; the error reads `<who>: <option> sets "<flag>", which this package does not accept: <reason>`. |
 
 ```nix
 # Guarding CLI flags and environment variables owned by typed options
@@ -382,7 +382,10 @@ args = [
   "--web.listen-address=:9090"
 ] ++ kix.guardArgs {
   who = "prometheus";
-  owned = [ "--storage.tsdb.retention.time" "--web.listen-address" ];
+  owned = {
+    "--storage.tsdb.retention.time" = "set retention instead.";
+    "--web.listen-address" = "the Service and the probes use port 9090; remove it.";
+  };
 } config.extraArgs;
 
 env = kix.mergeEnv {
