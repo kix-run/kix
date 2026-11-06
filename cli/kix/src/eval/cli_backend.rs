@@ -48,6 +48,21 @@ impl CliNixBackend {
             cmd.arg("--override-input").arg(name).arg(url);
         }
     }
+
+    /// Explain a `legacyPackages.<system>.<attr>` lookup that Nix said the
+    /// flake at `flake_path` does not provide: the flake has that output
+    /// for other systems only, or it has no Kix outputs at all.
+    fn missing_output(&self, flake_path: &Path, attr: &str) -> KixEvalError {
+        nix::system_not_provided(
+            ".",
+            "legacyPackages",
+            Some(flake_path),
+            &self.input_overrides,
+        )
+        .unwrap_or_else(|| KixEvalError::NoKixOutputs {
+            attr: format!("legacyPackages.{}.{attr}", nix::current_system()),
+        })
+    }
 }
 
 impl NixBackend for CliNixBackend {
@@ -147,7 +162,7 @@ impl NixBackend for CliNixBackend {
         // `mkFlake.nix` exports this attribute set for the CLI because
         // `nix flake show --json` can omit cluster attributes when
         // `--override-input` introduces a path input.
-        let attr = format!(".#legacyPackages.{}.kixClusters", current_nix_system());
+        let attr = format!(".#legacyPackages.{}.kixClusters", nix::current_system());
 
         let mut cmd = Command::new("nix");
         cmd.args([
@@ -160,7 +175,12 @@ impl NixBackend for CliNixBackend {
             "nix-command flakes pipe-operators",
         ]);
         self.apply_overrides(&mut cmd);
-        let output = nix::output(cmd.current_dir(flake_path))?;
+        let output = match nix::output(cmd.current_dir(flake_path)) {
+            Err(e) if e.missing_attribute() => {
+                return Err(self.missing_output(flake_path, "kixClusters"));
+            }
+            output => output?,
+        };
 
         let mut clusters: Vec<String> =
             serde_json::from_slice(&output).map_err(|e| KixEvalError::StoreGraphError {
@@ -179,7 +199,7 @@ impl NixBackend for CliNixBackend {
     ) -> Result<BTreeMap<String, PackageInfo>, KixEvalError> {
         tracing::debug!("listing packages via nix eval");
 
-        let attr = format!(".#legacyPackages.{}.kixPackages", current_nix_system());
+        let attr = format!(".#legacyPackages.{}.kixPackages", nix::current_system());
 
         let mut cmd = Command::new("nix");
         cmd.args([
@@ -190,7 +210,12 @@ impl NixBackend for CliNixBackend {
             "nix-command flakes pipe-operators",
         ]);
         self.apply_overrides(&mut cmd);
-        let output = nix::output(cmd.current_dir(flake_path))?;
+        let output = match nix::output(cmd.current_dir(flake_path)) {
+            Err(e) if e.missing_attribute() => {
+                return Err(self.missing_output(flake_path, "kixPackages"));
+            }
+            output => output?,
+        };
 
         let packages: BTreeMap<String, PackageInfo> =
             serde_json::from_slice(&output).map_err(|e| KixEvalError::StoreGraphError {
@@ -220,7 +245,7 @@ impl NixBackend for CliNixBackend {
 
         let attr = format!(
             ".#legacyPackages.{}.kixClusters.{}.info",
-            current_nix_system(),
+            nix::current_system(),
             cluster_name
         );
 
@@ -234,7 +259,15 @@ impl NixBackend for CliNixBackend {
         ]);
         self.apply_overrides(&mut cmd);
         let output = match nix::output(cmd.current_dir(flake_path)) {
-            Err(e) if e.missing_attribute() => return Err(KixEvalError::not_found(cluster_name)),
+            Err(e) if e.missing_attribute() => {
+                return Err(nix::system_not_provided(
+                    ".",
+                    "legacyPackages",
+                    Some(flake_path),
+                    &self.input_overrides,
+                )
+                .unwrap_or_else(|| KixEvalError::not_found(cluster_name)));
+            }
             output => output?,
         };
 
@@ -255,7 +288,8 @@ impl NixBackend for CliNixBackend {
 
 /// Evaluate the `name` of the cluster defined by flake attribute `attr`, or
 /// return `None` when `kixClusters` lacks `attr` or the flake has no
-/// `kixClusters` output.
+/// `kixClusters` output. A flake that has Kix outputs for other systems
+/// only is an error, since the attribute may well be defined there.
 ///
 /// The returned name is the value passed to `buildCluster` and written into
 /// the Activation record's `kix.run/cluster` label. It differs from `attr`
@@ -274,9 +308,14 @@ pub fn eval_cluster_name(
         return Ok(None);
     };
     let output = match nix::output(&mut cmd) {
-        // A flake without `legacyPackages.<sys>.kixClusters` is not a Kix
-        // flake and defines no clusters.
-        Err(e) if e.missing_attribute() => return Ok(None),
+        // A flake without `legacyPackages.<sys>.kixClusters` for any system
+        // is not a Kix flake and defines no clusters.
+        Err(e) if e.missing_attribute() => {
+            return match nix::system_not_provided(flake, "legacyPackages", None, input_overrides) {
+                Some(err) => Err(err),
+                None => Ok(None),
+            };
+        }
         output => output?,
     };
     serde_json::from_slice(&output).map_err(|e| KixEvalError::StoreGraphError {
@@ -300,7 +339,7 @@ pub fn cluster_name_command(
     }
     let flake_attr = format!(
         "{flake}#legacyPackages.{}.kixClusters",
-        current_nix_system()
+        nix::current_system()
     );
     let apply = format!(
         "cs: if builtins.hasAttr \"{attr}\" cs then (builtins.getAttr \"{attr}\" cs).name else null"
@@ -321,21 +360,6 @@ pub fn cluster_name_command(
     Some(cmd)
 }
 
-/// Determine the current Nix system string at compile time.
-fn current_nix_system() -> &'static str {
-    if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
-        "x86_64-linux"
-    } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
-        "aarch64-linux"
-    } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
-        "x86_64-darwin"
-    } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
-        "aarch64-darwin"
-    } else {
-        "x86_64-linux"
-    }
-}
-
 /// Return a deterministic sort key `(apiVersion, kind, namespace, name)` for `manifest`.
 pub fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, String, String) {
     let field = |pointer: &str| {
@@ -351,4 +375,77 @@ pub fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, Strin
         field("/metadata/namespace"),
         field("/metadata/name"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::nix::other_system;
+
+    fn flake_with(outputs: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("flake.nix"),
+            format!("{{ outputs = _: {{ {outputs} }}; }}"),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// A flake with Kix outputs for other systems only names them, in every
+    /// lookup, instead of reporting the cluster or the flake as missing.
+    #[test]
+    fn a_flake_for_other_systems_names_them_in_every_lookup() {
+        let other = other_system();
+        let dir = flake_with(&format!(
+            "legacyPackages.{other}.kixClusters = {{ }}; legacyPackages.{other}.kixPackages = {{ }};"
+        ));
+        let mut backend = CliNixBackend::new();
+        let is_system_not_provided = |err: &KixEvalError| matches!(err, KixEvalError::SystemNotProvided { provided, .. } if provided == &[other.to_string()]);
+        let err = backend.list_clusters(dir.path()).unwrap_err();
+        assert!(is_system_not_provided(&err), "{err}");
+        let err = backend.list_packages(dir.path()).unwrap_err();
+        assert!(is_system_not_provided(&err), "{err}");
+        let err = backend.list_cluster_packages(dir.path(), "c").unwrap_err();
+        assert!(is_system_not_provided(&err), "{err}");
+        let err = eval_cluster_name(&dir.path().display().to_string(), "c", &[]).unwrap_err();
+        assert!(is_system_not_provided(&err), "{err}");
+    }
+
+    /// A flake with no Kix outputs for any system is not a Kix flake, and
+    /// the error says so, naming the attribute `kix list` looked for.
+    #[test]
+    fn a_flake_with_no_kix_outputs_says_so() {
+        let dir = flake_with("");
+        let mut backend = CliNixBackend::new();
+        let err = backend.list_clusters(dir.path()).unwrap_err();
+        assert!(
+            matches!(&err, KixEvalError::NoKixOutputs { attr }
+                if *attr == format!("legacyPackages.{}.kixClusters", nix::current_system())),
+            "{err}"
+        );
+        assert!(matches!(
+            backend.list_cluster_packages(dir.path(), "c").unwrap_err(),
+            KixEvalError::ClusterNotFound { .. }
+        ));
+    }
+
+    /// A flake with Kix outputs for this system reports a cluster it does
+    /// not define as missing.
+    #[test]
+    fn a_missing_cluster_on_a_flake_for_this_system_is_not_found() {
+        let dir = flake_with(&format!(
+            "legacyPackages.{}.kixClusters = {{ }};",
+            nix::current_system()
+        ));
+        let mut backend = CliNixBackend::new();
+        assert_eq!(
+            backend.list_clusters(dir.path()).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(matches!(
+            backend.list_cluster_packages(dir.path(), "c").unwrap_err(),
+            KixEvalError::ClusterNotFound { .. }
+        ));
+    }
 }

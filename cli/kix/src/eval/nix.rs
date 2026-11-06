@@ -86,6 +86,92 @@ pub(crate) fn output(cmd: &mut Command) -> Result<Vec<u8>, NixCommandError> {
     Ok(out.stdout)
 }
 
+/// Return the Nix system this binary was built for, which is the system Kix
+/// looks a flake's outputs up under.
+pub(crate) fn current_system() -> &'static str {
+    if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
+        "x86_64-linux"
+    } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+        "aarch64-linux"
+    } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
+        "x86_64-darwin"
+    } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        "aarch64-darwin"
+    } else {
+        "x86_64-linux"
+    }
+}
+
+/// Return the systems `flake` provides the output `flake_output`
+/// (`legacyPackages` or `packages`) for, or an empty list when the flake has
+/// no such output. `dir` is the working directory for a relative `flake`.
+fn provided_systems(
+    flake: &str,
+    flake_output: &str,
+    dir: Option<&Path>,
+    input_overrides: &[(String, String)],
+) -> Result<Vec<String>, NixCommandError> {
+    let mut cmd = Command::new("nix");
+    cmd.args([
+        "eval",
+        &format!("{flake}#{flake_output}"),
+        "--apply",
+        "builtins.attrNames",
+        "--json",
+        "--extra-experimental-features",
+        "nix-command flakes pipe-operators",
+    ]);
+    for (name, url) in input_overrides {
+        cmd.arg("--override-input").arg(name).arg(url);
+    }
+    if let Some(dir) = dir {
+        cmd.current_dir(dir);
+    }
+    let out = match output(&mut cmd) {
+        Err(e) if e.missing_attribute() => return Ok(Vec::new()),
+        out => out?,
+    };
+    Ok(serde_json::from_slice(&out).unwrap_or_default())
+}
+
+/// Explain a lookup under `flake_output` that Nix said the flake does not
+/// provide, when the cause is that the flake provides that output for other
+/// systems and not for this binary's. Return `None` when the flake provides
+/// it for this system or for no system, or when the check itself fails, so
+/// that the caller keeps its own meaning for the missing attribute.
+pub(crate) fn system_not_provided(
+    flake: &str,
+    flake_output: &str,
+    dir: Option<&Path>,
+    input_overrides: &[(String, String)],
+) -> Option<KixEvalError> {
+    let provided = match provided_systems(flake, flake_output, dir, input_overrides) {
+        Ok(provided) => provided,
+        Err(e) => {
+            tracing::debug!(error = %e, "could not list the systems the flake provides");
+            return None;
+        }
+    };
+    let system = current_system();
+    if provided.is_empty() || provided.iter().any(|s| s == system) {
+        return None;
+    }
+    Some(KixEvalError::SystemNotProvided {
+        system: system.to_string(),
+        provided,
+    })
+}
+
+/// Return a Nix system that is not the one the tests run on.
+#[cfg(test)]
+pub(crate) fn other_system() -> &'static str {
+    if current_system() == "aarch64-darwin" {
+        "x86_64-linux"
+    } else {
+        "aarch64-darwin"
+    }
+}
+
 /// Build `cluster-<name>-activation` and return the result store path.
 ///
 /// The result folder holds `activation`, a link to the Activation
@@ -173,7 +259,10 @@ pub(crate) fn build_cluster_activation(
         // "while evaluating the attribute", so matching looser words turned
         // real evaluation errors into "cluster not found".
         if error.missing_attribute() {
-            return Err(KixEvalError::not_found(cluster_name));
+            return Err(
+                system_not_provided(".", "packages", Some(flake_path), input_overrides)
+                    .unwrap_or_else(|| KixEvalError::not_found(cluster_name)),
+            );
         }
         return Err(error.into());
     }
@@ -387,6 +476,48 @@ mod tests {
         );
         assert!(matches!(
             build("other").unwrap_err(),
+            KixEvalError::ClusterNotFound { .. }
+        ));
+    }
+
+    /// A flake that provides its outputs for other systems only is reported
+    /// as such, naming this system and the systems it has, not as a missing
+    /// cluster.
+    #[test]
+    fn a_flake_for_other_systems_names_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = other_system();
+        std::fs::write(
+            dir.path().join("flake.nix"),
+            format!("{{ outputs = _: {{ packages.{other}.cluster-c-activation = null; }}; }}"),
+        )
+        .unwrap();
+        let err = build_cluster_activation(dir.path(), "c", &[], &|_| {}).unwrap_err();
+        match &err {
+            KixEvalError::SystemNotProvided { system, provided } => {
+                assert_eq!(system, current_system());
+                assert_eq!(provided, &[other.to_string()]);
+            }
+            e => panic!("{e}"),
+        }
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!(
+                "systems = [ \"{other}\" \"{}\" ]",
+                current_system()
+            )),
+            "{msg}"
+        );
+    }
+
+    /// A flake that provides no `packages` at all says nothing about
+    /// systems, so a missing cluster is still a missing cluster.
+    #[test]
+    fn a_flake_with_no_packages_has_no_system_to_blame() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("flake.nix"), "{ outputs = _: { }; }").unwrap();
+        assert!(matches!(
+            build_cluster_activation(dir.path(), "c", &[], &|_| {}).unwrap_err(),
             KixEvalError::ClusterNotFound { .. }
         ));
     }

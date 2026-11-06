@@ -149,6 +149,26 @@ record (`kix::plan::baseline::active_build_dir`, which uses the cache only when
 --current-activation` refuses after connecting when the cached build is not
 the context's Active build (`check_cached_baseline`).
 
+## System resolution
+
+Every flake lookup names the system the `kix` binary was built for
+(`eval::nix::current_system`, chosen at compile time from the target
+triple): `legacyPackages.<system>.kixClusters`,
+`legacyPackages.<system>.kixPackages`, `kixClusters.<attr>.info`, and the
+`cluster-<name>-activation` package that `nix build` resolves under
+`packages.<system>`. There is no `--system` flag and no probing of other
+systems; `kix.lib.mkFlake` emits all four systems by default, so a flake
+usually has the one Kix asks for. When Nix says the flake "does not provide"
+the attribute, the caller runs one `nix eval <flake>#legacyPackages` (or
+`#packages` for the build) with `builtins.attrNames`
+(`eval::nix::system_not_provided`). When the current system is absent and
+others exist, the lookup fails with `KixEvalError::SystemNotProvided`, which
+names both and says how to add the system to `mkFlake`'s `systems`. When
+the flake has no such output for any system, `kix list` reports
+`NoKixOutputs`, the cluster lookups and the build keep `ClusterNotFound`,
+and `eval_cluster_name` keeps `Ok(None)`. When the check itself fails, the
+caller keeps that same original meaning. Exit codes do not change.
+
 The DAG-streaming `scheduler` makes each node
 eligible the moment its direct predecessors have emitted `Verdict::Ready`,
 streams independent subtrees through in parallel, and drives the inline TUI
