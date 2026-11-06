@@ -7,7 +7,7 @@ Not everything in your cluster starts as a native Kix package: you might want to
 
 :::note[Helpful background]
 - [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): see how `kix.mkImport` connects packages to pre-installed cluster services.
-- [Helm integration and resource adoption](/docs/explanation/helm-integration/): understand how Kix renders Helm charts inside the Nix sandbox and reconstructs their dependency graph.
+- [Helm integration and resource adoption](/docs/explanation/helm-integration/): understand how Kix renders Helm charts with its bundled Helm and reconstructs their dependency graph.
 - [Adopt a Helm chart](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/): follow a practical guide to wrapping an upstream Helm chart.
 - [The dependency graph as the model](/docs/explanation/the-dependency-graph/): learn how imported resources participate in deployment ordering and network policy generation.
 :::
@@ -41,6 +41,7 @@ kix.helmChart {
 | `version` | string | Required | Chart version string (also used as default `meta.version`). |
 | `hash` | string | Required | Fixed-output Nix SRI hash (`"sha256-..."`) of the fetched chart tarball. |
 | `releaseName` | string | `name` | Helm release name passed to `helm template`. |
+| `helmVersion` | `"3"` or `"4"` | `"4"` | Major version of Kix's bundled Helm used to render the chart (`"4"` is `4.3.1`, `"3"` is `3.19.1`; see [Helm versions](#helm-versions)). |
 | `root` | `{ kind, name }` or `null` | `null` | Explicit root resource selector; when `null`, Kix selects the primary `Service` or workload automatically (`chart.autoRoot`). |
 | `includeCrds` | bool | `true` | Whether to pass `--include-crds` to `helm template`. |
 | `strip` | attrset | `{ }` | Filters out unneeded chart resources (`{ kinds ? [ ]; names ? [ ]; predicates ? [ ]; }`). |
@@ -114,9 +115,10 @@ in
 | `values` | attrset | `{ }` | Nix attribute set serialized to `values.yaml` and passed to `helm template --values`. |
 | `releaseName` | string | `chart.chartName` or `"release"` | Release name passed to `helm template`. |
 | `namespace` | string | `scope.namespaceName` | Namespace passed to `helm template --namespace`. |
+| `helmVersion` | `"3"` or `"4"` | `"4"` | Major version of Kix's bundled Helm used to render the chart (`"4"` is `4.3.1`, `"3"` is `3.19.1`; see [Helm versions](#helm-versions)). |
 | `includeCrds` | bool | `true` | Passes `--include-crds` and wraps rendered CRDs with `scope.mkCRD`. |
 | `includeHooks` | bool | `false` | When `false`, drops resources carrying a `helm.sh/hook` annotation (such as `test` or `pre-install` hooks), except CRDs (`crd-install`). |
-| `extraFlags` | list of strings | `[ ]` | Extra CLI flags passed to `helm template` (cannot contain `--values`, `--namespace`, `--kube-version`, or `--include-crds`). |
+| `extraFlags` | list of strings | `[ ]` | Extra CLI arguments passed to `helm template`, one argument per list element (cannot contain `--values`, `--namespace`, `--kube-version`, or `--include-crds`). |
 | `strip` | `{ kinds ? [ ]; names ? [ ]; predicates ? [ ]; }` | `{ }` | Drops matching resources before DAG reconstruction (`kinds` matches `kind`, `names` matches `"<Kind>/<name>"` or `"<name>"`, `predicates` is a list of `manifest: bool` functions). |
 | `preserveAnnotationPrefixes` | list of strings | `[ ]` | Keeps matching Helm/Argo annotation prefixes that Kix would otherwise strip during normalization. |
 | `patchResources` | `attrs -> attrs` | `lib.id` | Transforms the raw manifest map (`"<kind>-<name>" = manifest`) before Kix wraps each object in `scope.mk*` builders. |
@@ -165,7 +167,15 @@ crds = scope.helm.importChartCrds {
 };
 ```
 
-It returns `{ <Kind> = crdResource; ... }` ready to assign directly to `crds` in `build`.
+It returns `{ <Kind> = crdResource; ... }` ready to assign directly to `crds` in `build`. Pass `helmVersion = "3";` or `helmVersion = "4";` (default `"4"`) to select the Helm major version used to render the chart's CRDs.
+
+### Helm versions
+
+`kix.helmChart`, `scope.helm.importChart`, and `scope.helm.importChartCrds` render charts with **Helm 4** (`4.3.1`) by default. If an upstream chart relies on template behavior that changed in Helm 4, set `helmVersion = "3";` to render that chart with **Helm 3** (`3.19.1`). Upstream Helm 3 receives security fixes until 10 February 2027. Passing any other major version fails evaluation and lists the shipped versions.
+
+The exact Helm release for each major version is pinned in `kix/lib/helm-versions.json` and shipped in Kix's bundled runtime. When you upgrade the `kix` CLI to a release that updates a bundled Helm version, projects whose `flake.lock` still points to an older `kixpkgs` library will stop before rendering and ask you to align the two with [`kix lib update`](/docs/reference/cli/lib/).
+
+Because Kix fetches and renders Helm charts itself during evaluation, clusters that use Helm must be evaluated through `kix` (`kix check`, `kix build`, `kix diff`, `kix plan`, or `kix deploy`) rather than a raw `nix build`.
 
 ---
 

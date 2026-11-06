@@ -55,11 +55,12 @@ kix compliance attest <CLUSTER> [--builder-id <URI>] [--invocation-id <ID>]
 | `--context <CONTEXT>` | Kubeconfig context for `--from-cluster`. |
 
 The statement's subject is the activation identity hash. It records the flake
-reference, a digest of `flake.lock`, the Git commit and whether the working
-tree was dirty, every flake input, and every container image (with a `sha256`
-digest only when the reference carries one). A build from a dirty tree prints
-a warning and marks the statement dirty. The statement is not signed. Output
-is JSON by default, YAML with `-o yaml`.
+reference, a digest of `flake.lock`, the Git commit and whether tracked files in
+the working tree had uncommitted changes, every flake input, and every
+container image (with a `sha256` digest only when the reference carries one). A
+build from a dirty tree prints a warning and marks the statement dirty
+(untracked files are ignored by Nix flake evaluation). The statement is not
+signed. Output is JSON by default, YAML with `-o yaml`.
 
 ## `kix compliance audit <CLUSTER>`
 
