@@ -1,0 +1,3 @@
+# 2026-11-06 · `.github/workflows/pages.yml` · The docs site build runs only after a merge to main, so a PR can break it without failing any check.
+
+The "Build main docs" step runs `docs/scripts/check-how-to-coverage.mjs`, which fails when a how-to page is missing from `docs/how-to-coverage.json` or has more hand-written `nix` blocks than the ledger declares. No pull request check runs this script or the site build. Six merges in a row (#308 to #317) failed the "Deploy site to Cloudflare Pages" run on main, and nobody saw it until someone looked at main's runs. The live site stayed on the last good build the whole time.
