@@ -8,7 +8,12 @@
 #
 # Each program here also needs a `Tool` variant in cli/kix/src/runtime.rs
 # before Kix can run it.
-{ pkgs }:
+#
+# `nixRelease` is the flake of the Nix release to ship (the `nix-runtime`
+# input of the root flake). Its own pinned nixpkgs builds it, and Hydra
+# caches those builds, so the runtime takes Nix's libraries and their licence
+# metadata from that nixpkgs rather than from `pkgs`.
+{ pkgs, nixRelease }:
 let
   inherit (pkgs) lib;
   inherit (pkgs.stdenv.hostPlatform) system isDarwin;
@@ -177,7 +182,10 @@ let
   # Linux gets a static build with no library to bundle. macOS has no static
   # build in the binary cache, so the assembly step copies the dynamic build's
   # libraries beside it (`relocate`).
-  nixPackage = if isDarwin then pkgs.nix else pkgs.pkgsStatic.nix;
+  nixCli =
+    nixRelease.packages.${system}.${if isDarwin then "nix-cli" else "nix-cli-static"}
+      or (throw "The Nix release in the nix-runtime flake input has no build for ${system}.");
+  nixPkgs = nixRelease.inputs.nixpkgs.legacyPackages.${system};
 
   # Licence decisions for the libraries in the `nix` build. Each entry names
   # the licence nixpkgs lists, so a nixpkgs update that changes it fails
@@ -220,11 +228,6 @@ let
       ships = [ "LGPL-2.1-or-later" ];
       why = "Nix links only libintl, which is LGPL. The GPL covers the gettext tools.";
     };
-    icu4c = {
-      nixpkgs = [ ];
-      ships = [ "Unicode-3.0" ];
-      why = "nixpkgs records no licence for ICU. ICU 74 and later use the Unicode License v3.";
-    };
     gcc = {
       nixpkgs = [ "GPL-3.0-or-later" ];
       ships = [ "GPL-3.0-or-later WITH GCC-exception-3.1" ];
@@ -247,22 +250,22 @@ let
   # Libraries every Mac provides, which the macOS bundle loads from /usr/lib
   # instead of shipping (see `system_substitute` in assemble.py).
   systemLibraries = lib.optionals isDarwin [
-    pkgs.darwin.libiconv
-    pkgs.darwin.libresolv
+    nixPkgs.darwin.libiconv
+    nixPkgs.darwin.libresolv
   ];
 
   # The C and C++ runtime the static Linux build links in. Nothing in the
   # build-input graph names them.
   toolchainRuntime = lib.optionals (!isDarwin) [
-    pkgs.pkgsStatic.stdenv.cc.libc
-    pkgs.pkgsStatic.stdenv.cc.cc
+    nixCli.stdenv.cc.libc
+    nixCli.stdenv.cc.cc
   ];
 
   # Cross compilers carry the target in their name, such as
   # `x86_64-unknown-linux-musl-gcc`.
   nameOf =
     d:
-    lib.removePrefix "${pkgs.pkgsStatic.stdenv.hostPlatform.config}-" (
+    lib.removePrefix "${nixCli.stdenv.hostPlatform.config}-" (
       d.pname or (builtins.parseDrvName d.name).name
     );
 
@@ -307,8 +310,8 @@ let
       walked = builtins.genericClosure {
         startSet = [
           {
-            key = nixPackage.nix-cli.outPath;
-            drv = nixPackage.nix-cli;
+            key = nixCli.outPath;
+            drv = nixCli;
           }
         ];
         operator =
@@ -345,8 +348,8 @@ let
   nix = {
     program = {
       name = "nix";
-      inherit (nixPackage) version;
-      files."bin/nix" = "${nixPackage}/bin/nix";
+      inherit (nixCli) version;
+      files."bin/nix" = "${nixCli}/bin/nix";
       links."bin/nix-store" = "nix";
       bin = [
         "nix"
@@ -388,6 +391,7 @@ let
     "MPL-2.0"
     "Unicode-3.0"
     "Zlib"
+    "bzip2-1.0.6"
     "curl"
     "publicDomain"
     "LGPL-2.0-or-later"

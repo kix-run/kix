@@ -472,12 +472,17 @@ fn references_graph(info: Vec<(String, Vec<String>)>) -> HashMap<PathBuf, Vec<Pa
 
 /// Query every path in the closure of `path` and its references via
 /// `nix path-info --json --recursive`.
+///
+/// Format 1 keys the output by full store path. Nix 2.34 and later warn when
+/// `--json` comes without a format and plan to refuse it.
 pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError> {
     let out = output(
         command(Tool::Nix)?
             .args([
                 "path-info",
                 "--json",
+                "--json-format",
+                "1",
                 "--recursive",
                 "--extra-experimental-features",
                 "nix-command",

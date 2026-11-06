@@ -3,9 +3,9 @@
 # The result is one JSON file that names every file to ship, the licence
 # texts, and the LGPL sources. assemble.py turns it into libexec/kix/.
 # Building it fetches every program and source it names.
-{ pkgs }:
+{ pkgs, nixRelease }:
 let
-  runtime = import ./runtime.nix { inherit pkgs; };
+  runtime = import ./runtime.nix { inherit pkgs nixRelease; };
 
   legal =
     pkgs.runCommand "kix-runtime-legal-${runtime.system}"
