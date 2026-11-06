@@ -94,7 +94,17 @@
             crane = inputs.crane;
           };
         }
+        # The programs a Kix release ships beside the binary
+        # (cli/runtime/default.nix).
+        // lib.optionalAttrs (builtins.elem system runtimeSystems) {
+          kix-runtime-spec = import ./cli/runtime { inherit pkgs; };
+        }
       );
+      runtimeSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
 
       # Run the kix/lib evaluation test matrix (kix/lib/tests) as a flake check
       # so `nix flake check` covers it. Forcing `ok` evaluates every case; a
