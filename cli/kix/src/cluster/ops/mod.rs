@@ -31,6 +31,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
@@ -91,11 +93,15 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError>;
 
     /// Wait for the object (or, for an import marker, the object it
-    /// describes) to be ready. `on_status` is called on every poll.
+    /// describes) to be ready. `applied_at` is when this deploy changed the
+    /// object, or `None` when it left the object as it was; a declared
+    /// failure state the controller last reported before that time is not
+    /// trusted. `on_status` is called on every poll.
     async fn wait_ready(
         &self,
         rid: &ResourceId,
         import_target: Option<&ImportTarget>,
+        applied_at: Option<DateTime<Utc>>,
         timeout: Duration,
         cancel: &CancelToken,
         on_status: OnStatus<'_>,

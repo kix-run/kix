@@ -428,6 +428,12 @@ in
       # StorageClass is WaitForFirstConsumer. CDI binds at once when the
       # annotation is present, whatever its value
       # (pkg/controller/common/util.go ImmediateBindingRequested).
+      #
+      # The phase is Failed only when the claim is lost
+      # (pkg/controller/datavolume/controller-base.go, the ClaimLost case in
+      # updateStatus), after which the controller stops queueing the
+      # DataVolume. A failed import pod keeps the phase at ImportInProgress
+      # while CDI retries it.
       mkDataVolume =
         consumerScope: args:
         self.crds.dataVolumes.out.mkCR consumerScope (
@@ -438,6 +444,13 @@ in
               ${kix.keys.readiness} = builtins.toJSON {
                 path = "/status/phase";
                 equals = "Succeeded";
+                failed = [
+                  {
+                    path = "/status/phase";
+                    equals = "Failed";
+                    hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
+                  }
+                ];
               };
             };
           }

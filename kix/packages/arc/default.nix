@@ -447,7 +447,10 @@ in
           # URL keep it at `Pending`, so the deploy fails. The rule compares
           # no observedGeneration, so a deploy can read a stale `Running`
           # right after an apply. `Outdated` (a runner image GitHub no longer
-          # accepts) fails until the runner spec changes.
+          # accepts) fails until the runner spec changes, but is not declared
+          # as a failed state: the status carries no observedGeneration and no
+          # timestamp, so an old `Outdated` cannot be told from a new one
+          # while a new controller waits for its leader lease.
           autoscalingRunnerSets = scope.mkCRD {
             spec = vendored "autoscalingrunnersets";
             holdsData = false;

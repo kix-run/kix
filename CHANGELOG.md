@@ -33,6 +33,8 @@ counts as breaking.
 ### Added
 
 - A cluster listed in `kix.lib.mkFlake`'s `clusters` is named after its key unless it sets `name`, so the name no longer has to be written in both `flake.nix` and the cluster file.
+- The first deploy after the upgrade applies the Cilium network policies again, and every object that depends on one. You do not need to change your cluster definitions. The `kix.run/readiness` annotation on each `CiliumNetworkPolicy` and `CiliumClusterwideNetworkPolicy` now also lists the state that means Cilium rejected the policy, which changes the policy's hash. The same applies to Velero Backups, Restores, and Schedules and CDI DataVolumes, and to the objects that depend on them. Every workload that uses network policy depends on its policies, so Kix applies it again to record the new hash. Only annotations change, so most pods do not restart. Pods whose template carries a checksum of a ConfigMap or Secret that itself depends on a network policy restart once: on the `ludo-kind` test cluster these are `grafana`, `loki-logs`, and `immich-server`.
+- A CRD declaration can list the states that mean a custom resource will not become ready until its spec changes: `readiness.failed`, a list of `{ condition = { type; status; reason ? }; }` or `{ path; equals; }` entries beside the ready rule. When the controller reports one of them for the current spec, `kix deploy` stops waiting at once and shows the controller's condition, reason, and message, instead of failing at the readiness timeout. Packages declare it where the controller's verdict is known to stand until the spec changes: `cilium` for `Valid=False` on its network policies, `velero` for a Backup or Restore in `FailedValidation`, `Failed`, or `PartiallyFailed` and a Schedule in `FailedValidation`, and `cdi` for a DataVolume whose phase is `Failed` (its claim is lost). The message says what the controller reported and, for a runtime outcome such as a failed backup, what the package says to do next.
 
 ### Changed
 
@@ -47,6 +49,7 @@ counts as breaking.
 ### Fixed
 
 - An object that two package instances list, such as a provider's Secret reference that a consumer holds as a part, now belongs to the instance that built it. Before, its owner could switch between the two on any unrelated change to either package.
+- A network policy that Cilium rejects (`Valid=False`, for example a rule with no `ingress` or `egress` section) now fails the deploy as soon as Cilium reports it, with Cilium's reason, instead of after the readiness timeout with a timeout message.
 
 ## 0.6.0 - 2026-11-06
 

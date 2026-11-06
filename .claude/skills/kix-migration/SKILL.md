@@ -420,6 +420,32 @@ edge but NO netpol hole. Consequences when authoring:
   Cluster) can still read as ready from its previous status right after
   a spec change.
 
+  When the operator reports that it rejects a resource, and that verdict
+  stands until the spec changes, list the state in `failed` beside the
+  ready rule so `kix deploy` fails the resource at once instead of at the
+  timeout: `readiness = { condition = { type = "Valid"; status = "True"; };
+  failed = [ { condition = { type = "Valid"; status = "False"; }; } ]; }`
+  (`cilium/netpol-rules.nix`). An entry is a condition with an optional
+  `reason` (matched only when declared) or `{ path; equals; }` for a phase
+  field, with `rejected = true` when the phase is a verdict on the spec,
+  `message` (a JSON pointer or list) naming status fields to quote, and
+  `hint` with the next step for a runtime outcome such as a failed backup
+  (`velero/workloads.nix`, `cdi/default.nix`). Declare only verified
+  permanent states: a `Ready=False` the operator retries (cert-manager,
+  external-secrets) or a `Pending` is not one, and neither is a phase with
+  no generation and no timestamp that a restarting controller may leave
+  stale (ARC `Outdated`). The CLI trusts the match once the condition's `observedGeneration`
+  (or `status.observedGeneration`) has reached `metadata.generation`;
+  without a generation, once the condition's `lastTransitionTime` is later
+  than this deploy's apply of the object (Cilium writes neither generation,
+  so this is the check its policies get); and with neither field, once the
+  state has held for ten seconds (phase fields such as Velero's and ARC's).
+  So a stale status right after an apply does not fail a deploy that fixed
+  the problem. The annotation gains a `"failed"` list; an older CLI ignores
+  it. Declared today: cilium (`Valid=False`), velero Backup and Restore
+  (`FailedValidation`, `Failed`, `PartiallyFailed`) and Schedule
+  (`FailedValidation`), cdi DataVolume (`Failed`, in `out.mkDataVolume`).
+
 - **Declare `usesAtLeast` on CRDs whose operator always runs pods or makes claims.** On `scope.mkCRD`
   or `scope.mkCRDRef`, return the least the operator always uses for a custom resource, keyed like a
   ResourceQuota's `spec.hard`. Build it with `kix.usage`:
