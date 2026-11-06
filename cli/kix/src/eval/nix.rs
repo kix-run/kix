@@ -263,6 +263,17 @@ pub fn eval_with_helm(
             }
             return Err(error.into());
         }
+        // Check every Helm version before running any, so a project whose
+        // library and kix program disagree learns which to move.
+        if let Some((wanted, shipped)) = super::helm::unshipped(&pending)? {
+            let mismatch = crate::library::HelmMismatch {
+                library: crate::library::eval_version(flake_path, input_overrides),
+                wanted,
+                program: crate::library::PROGRAM_VERSION.to_string(),
+                shipped,
+            };
+            return Err(super::helm::HelmError::LibraryMismatch(Box::new(mismatch)).into());
+        }
         for placeholder in pending {
             if !realised.insert(placeholder.out.clone()) {
                 return Err(super::helm::HelmError::Stuck {

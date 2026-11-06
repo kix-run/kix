@@ -172,6 +172,12 @@ fn main() -> miette::Result<()> {
     // another release.
     kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
 
+    // `kix lib update` repairs flake.lock, so it needs no evaluator or eval
+    // cache.
+    if let Command::Lib(command) = &cli.command {
+        return commands::library::run(command, &cli.global);
+    }
+
     let mut ctx = commands::CommandContext::new(
         &cli.global,
         &commands::compliance::receipt::ComplianceReceipts,
@@ -204,6 +210,7 @@ fn main() -> miette::Result<()> {
         | Command::Doctor
         | Command::Drift(_)
         | Command::Pin(_)
+        | Command::Lib(_)
         | Command::Plugin(_) => unreachable!(),
     }
 }

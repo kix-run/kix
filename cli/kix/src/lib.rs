@@ -23,6 +23,7 @@ pub mod build_source;
 pub mod cluster;
 pub mod eval;
 pub mod legacy_domain;
+pub mod library;
 pub mod manifest;
 pub mod pins;
 pub mod plan;
