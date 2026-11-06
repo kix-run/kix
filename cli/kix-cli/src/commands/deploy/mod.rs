@@ -566,6 +566,8 @@ async fn run_deploy_async(
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         rerun_failed: true,
+        check_unchanged: true,
+        names_flags: true,
     };
     // Forward SIGINT and SIGTERM to the scheduler so an interrupted run aborts
     // its Activation record instead of leaving it in `Deploying`.

@@ -260,6 +260,8 @@ pub(crate) fn dry_run(
             concurrency: scheduler::CONCURRENCY,
             stall: StallPolicy::from_env(),
             rerun_failed: true,
+            check_unchanged: true,
+            names_flags: true,
         };
         let cancel = config.cancel.clone();
         cancel.cancel_on_interrupt();

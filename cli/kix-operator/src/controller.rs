@@ -496,6 +496,12 @@ async fn run_reconcile(
         // Never retry a failed probe from the reconcile loop: it would
         // delete and recreate the Job every 30 s on a degraded cluster.
         rerun_failed: false,
+        // A new build is checked against the objects it leaves unchanged.
+        // Drift repair of a running build runs every requeue, and an
+        // unchanged object that never reports ready would fail the record
+        // every cycle.
+        check_unchanged: manage_lifecycle,
+        names_flags: false,
     };
 
     // Compose two observers: tracing (structured logs) + K8s Events

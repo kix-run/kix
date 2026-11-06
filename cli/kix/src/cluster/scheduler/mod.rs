@@ -57,8 +57,8 @@ use super::{apply::ChangeAction, graph::ResourceGraph};
 
 #[cfg(test)]
 use node::recreate_refusal;
-use node::{NodeCtx, NodeOutcome, execute_node, prune_order};
-use plan::{SchedulerState, is_crd_like};
+use node::{NodeCtx, NodeOutcome, execute_node, prune_order, with_sentence};
+use plan::{SchedulerState, is_crd_like, runs_task};
 
 pub use plan::{DeployPlan, PlanNodeEntry, failed_skipped_jobs};
 
@@ -111,6 +111,16 @@ pub struct SchedulerConfig {
     /// objects and requeues failed runs every 30 seconds, which would otherwise
     /// recreate a failing probe Job in an infinite loop.
     pub rerun_failed: bool,
+    /// Read the live object of every unchanged node that a node with work
+    /// depends on before its dependents run, and fail the deploy on it when
+    /// it is not ready. `kix deploy` and the operator's deploy of a new build
+    /// enable this. The operator disables it while it repairs drift on a
+    /// running build, because that runs every requeue and an unchanged object
+    /// that never reports ready would fail the record every cycle.
+    pub check_unchanged: bool,
+    /// Whether failure messages may name `kix deploy` flags as the next step.
+    /// The CLI sets it; the operator has no flags to pass.
+    pub names_flags: bool,
 }
 
 #[derive(Error, Debug)]
@@ -348,7 +358,7 @@ impl<'a> Run<'a> {
             record: cluster.record().cloned(),
             ctx,
             result: DeployResult::default(),
-            state: SchedulerState::new(plan),
+            state: SchedulerState::new(plan, config.check_unchanged),
             tasks: JoinSet::new(),
             kinds: HashMap::new(),
             nodes_in_flight: 0,
@@ -466,10 +476,17 @@ impl<'a> Run<'a> {
             };
             let entry = self.state.node_entry(&node_id).clone();
 
-            // Complete ordinary Skip nodes immediately without spawning a task.
-            // A skipped Job still spawns a task to inspect the live object and
-            // report a failed run, or recreate it under `kix.run/rerun`.
-            if matches!(entry.kind, TransitionKind::Skip) && !plan::skip_reads_live(&entry) {
+            // Complete a Skip node without a task unless its task reads the
+            // live object. A skipped Job always does, to report a failed run
+            // or recreate it under `kix.run/rerun`, and it also waits for a
+            // run still in progress when something depends on it. Any other
+            // Skip node reads it only when something in this deploy depends
+            // on it (`SchedulerState::is_checked`), so the dependents run
+            // only after the live object is checked.
+            if matches!(entry.kind, TransitionKind::Skip)
+                && !plan::skip_reads_live(&entry)
+                && !self.state.is_checked(&node_id)
+            {
                 self.emit(DeployEvent::NodeStateChanged {
                     node: node_id.clone(),
                     kind: entry.kind,
@@ -499,9 +516,10 @@ impl<'a> Run<'a> {
             });
             let ctx = self.ctx.clone();
             let id = node_id.clone();
+            let checked = self.state.is_checked(&node_id);
             self.nodes_in_flight += 1;
             let handle = self.tasks.spawn(async move {
-                let out = execute_node(&ctx, &entry).await;
+                let out = execute_node(&ctx, &entry, checked).await;
                 Done::Node(id, out)
             });
             self.kinds.insert(handle.id(), TaskKind::Node(node_id));
@@ -680,7 +698,8 @@ impl<'a> Run<'a> {
 
     /// Record a ready node. CRD-like nodes hold their dependents until the next
     /// discovery refresh completes; all other nodes promote their dependents
-    /// immediately.
+    /// immediately. An unchanged CRD was served before the run began, so its
+    /// kinds are already in the discovery view and it needs no refresh.
     fn node_ready(
         &mut self,
         node_id: &NodeId,
@@ -695,7 +714,7 @@ impl<'a> Run<'a> {
             verdict: Verdict::Ready,
             detail: Some(detail),
         });
-        if is_crd_like(entry) {
+        if is_crd_like(entry) && entry.kind != TransitionKind::Skip {
             self.state.mark_terminal_deferred(node_id);
             self.barrier.awaiting.push(node_id.clone());
         } else {
@@ -712,14 +731,6 @@ impl<'a> Run<'a> {
     ) {
         self.result.failed += 1;
         self.checkpoints.failed += 1;
-        self.emit(DeployEvent::NodeStateChanged {
-            node: node_id.clone(),
-            kind: entry.kind,
-            verdict: Verdict::Failed {
-                message: message.clone(),
-            },
-            detail: Some(detail),
-        });
         self.state.mark_terminal(node_id, false);
 
         // Dry runs persist nothing, so promote dependents even when a
@@ -730,6 +741,36 @@ impl<'a> Run<'a> {
         } else {
             self.state.cascade_cancel(node_id)
         };
+        // The failure line says what the failure cost before the cancelled
+        // dependents are listed one by one. Only dependents that had work to
+        // do count: an unchanged dependent was never going to be deployed.
+        let undone = cancelled
+            .iter()
+            .filter(|id| runs_task(self.state.node_entry(id)))
+            .count();
+        let mut full = message.clone();
+        match undone {
+            0 => {}
+            1 => full = with_sentence(&full, "Kix did not deploy the object that depends on it."),
+            n => {
+                full = with_sentence(
+                    &full,
+                    &format!("Kix did not deploy the {n} objects that depend on it."),
+                )
+            }
+        }
+        if is_checked_unchanged(entry) {
+            full = with_sentence(
+                &full,
+                &next_step_for_unchanged(entry, self.config.names_flags),
+            );
+        }
+        self.emit(DeployEvent::NodeStateChanged {
+            node: node_id.clone(),
+            kind: entry.kind,
+            verdict: Verdict::Failed { message: full },
+            detail: Some(detail),
+        });
         let because = match node_id {
             NodeId::Resource(rid) => CancelReason::PredecessorFailed(rid.clone()),
             NodeId::Synthetic(_) => CancelReason::External,
@@ -1126,6 +1167,41 @@ impl<'a> Run<'a> {
             }
         }
         Ok(self.result)
+    }
+}
+
+/// Return whether `entry` is an unchanged node the scheduler ran a task for
+/// only to check its live object. Such a node fails only through that check.
+/// A skipped Job is not one: its own failure message already gives the next
+/// step.
+fn is_checked_unchanged(entry: &PlanNodeEntry) -> bool {
+    entry.kind == TransitionKind::Skip && !plan::skip_reads_live(entry)
+}
+
+/// Return the next step after an unchanged object failed its check. An
+/// import marker names its target, since the marker itself is fine.
+/// `names_flags` adds the `--on-error continue` alternative.
+fn next_step_for_unchanged(entry: &PlanNodeEntry, names_flags: bool) -> String {
+    let step = match (&entry.meta.import_target, &entry.id) {
+        (Some(target), _) => {
+            let ns = target
+                .namespace
+                .as_deref()
+                .map(|ns| format!("@{ns}"))
+                .unwrap_or_default();
+            format!(
+                "Fix {}/{}{ns}, or whatever creates it, and deploy again",
+                target.kind, target.name
+            )
+        }
+        (None, id) => format!("Fix {id} and deploy again"),
+    };
+    if names_flags {
+        format!(
+            "{step}, or pass --on-error continue to deploy the objects that do not depend on it."
+        )
+    } else {
+        format!("{step}.")
     }
 }
 

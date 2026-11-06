@@ -35,14 +35,14 @@ pub use declared::{check_readiness, is_immediate_kind};
 pub use imports::{ImportTarget, MalformedMarker, import_target_from_manifest};
 pub use terminal::{TerminalReason, classify_pod_terminal, classify_workload_terminal};
 
-pub(crate) use declared::daemonset_pending_restart;
+pub(crate) use declared::{check_job_ready, daemonset_pending_restart};
 pub(crate) use imports::{wait_for_expectations, wait_for_import_target};
 pub(crate) use terminal::termination_output;
 
 #[cfg(test)]
 use declared::{
-    DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, ReadyRule, check_job_ready,
-    declared_readiness, served_crd_versions, unserved_crd_versions,
+    DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, ReadyRule, declared_readiness,
+    served_crd_versions, unserved_crd_versions,
 };
 #[cfg(test)]
 use imports::{check_secret_keys, expectations, split_api_version};

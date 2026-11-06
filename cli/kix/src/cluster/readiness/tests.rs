@@ -430,6 +430,60 @@ fn deployment_not_ready_replicas() {
     assert!(!check_readiness(&obj, "Deployment"));
 }
 
+/// A stuck rollout: the old pod is still ready and the updated pod never
+/// starts. `readyReplicas` and `updatedReplicas` both reach one, but the
+/// Deployment still runs a pod of the old revision.
+#[test]
+fn deployment_with_a_stuck_rollout_is_not_ready() {
+    let stuck = make_obj_gen(
+        8,
+        json!({
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 8,
+                "replicas": 2,
+                "readyReplicas": 1,
+                "updatedReplicas": 1,
+                "unavailableReplicas": 1,
+            }
+        }),
+    );
+    assert!(!check_readiness(&stuck, "Deployment"));
+    let done = make_obj_gen(
+        8,
+        json!({
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 8,
+                "replicas": 1,
+                "readyReplicas": 1,
+                "updatedReplicas": 1,
+            }
+        }),
+    );
+    assert!(check_readiness(&done, "Deployment"));
+}
+
+/// A StatefulSet counts a terminating pod in `status.replicas`, so a
+/// scale-down with a pod still terminating is ready once the pods it keeps
+/// are ready and updated.
+#[test]
+fn statefulset_with_a_terminating_pod_is_ready() {
+    let scaling_down = make_obj_gen(
+        4,
+        json!({
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 4,
+                "replicas": 3,
+                "readyReplicas": 2,
+                "updatedReplicas": 2,
+            }
+        }),
+    );
+    assert!(check_readiness(&scaling_down, "StatefulSet"));
+}
+
 #[test]
 fn deployment_stale_status_not_ready() {
     // When an update increments metadata.generation to 2 while status still
