@@ -60,8 +60,8 @@ fn system_not_provided_message(system: &str, provided: &[String]) -> String {
     format!(
         "this flake has no Kix outputs for {system}, the system this kix binary runs on. \
          It has them for {}. Add {system} to the systems the flake builds for: \
-         pass systems = [ {systems} ] to kix.lib.mkFlake, or call kix.lib.forPkgs \
-         once per system in a flake wired by hand",
+         pass systems = [ {systems} ] to kix.lib.mkFlake, or add {system} to the \
+         systems your flake calls kix.lib.forPkgs for",
         provided.join(", ")
     )
 }
