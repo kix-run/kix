@@ -115,14 +115,23 @@ rec {
     in
     builtins.seq _enum (builtins.seq _sel (builtins.seq _ns (builtins.seq _scrapes entry)));
 
-  # Return true when `apiVersion` belongs to a custom API group outside
-  # `*.k8s.io` and Kix's own group.
+  # The API groups whose kinds Kix treats as built-in, besides the core group
+  # and Kix's own. `api-groups.json` is shared with the CLI, whose
+  # `is_known_api` in `cli/kix/src/manifest/types.rs` must agree (a Rust test
+  # compares them).
+  apiGroups = builtins.fromJSON (builtins.readFile ./api-groups.json);
+
+  # Return true when `apiVersion` belongs to a custom API group: not the core
+  # group, not one listed in `api-groups.json`, and not Kix's own group.
   isForeignGroup =
     apiVersion:
     let
       group = if lib.hasInfix "/" apiVersion then builtins.head (lib.splitString "/" apiVersion) else "";
     in
-    lib.hasInfix "." group && !(lib.hasSuffix ".k8s.io" group) && group != kixAnnotations.group;
+    group != ""
+    && !(builtins.elem group apiGroups.builtinGroups)
+    && !(builtins.any (suffix: lib.hasSuffix suffix group) apiGroups.builtinGroupSuffixes)
+    && group != kixAnnotations.group;
 
   isFactPath = p: lib.hasPrefix factPrefix (markers.pathName p);
 

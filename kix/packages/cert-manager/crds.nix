@@ -31,33 +31,48 @@ let
       };
     };
 in
+# A certificate can be issued again, so no cert-manager kind holds data.
 {
   crds = {
     certificates = gate (
       scope.mkCRD {
         spec = vendored "certificates.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
       }
     );
     certificateRequests = gate (
       scope.mkCRD {
         spec = vendored "certificaterequests.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
       }
     );
-    challenges = gate (scope.mkCRD { spec = vendored "challenges.acme.cert-manager.io.json"; });
+    challenges = gate (
+      scope.mkCRD {
+        spec = vendored "challenges.acme.cert-manager.io.json";
+        holdsData = false;
+      }
+    );
     clusterIssuers = gate (
       scope.mkCRD {
         spec = vendored "clusterissuers.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
       }
     );
     issuers = gate (
       scope.mkCRD {
         spec = vendored "issuers.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
       }
     );
-    orders = gate (scope.mkCRD { spec = vendored "orders.acme.cert-manager.io.json"; });
+    orders = gate (
+      scope.mkCRD {
+        spec = vendored "orders.acme.cert-manager.io.json";
+        holdsData = false;
+      }
+    );
   };
 }

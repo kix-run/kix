@@ -305,6 +305,8 @@ in
         # The sidecar in the instance pods dials the endpoint; the Cluster
         # that names the ObjectStore carries the address on to them.
         factBehavior.endpoint = "conduct";
+        # Configuration only. The backups it points at outlive it.
+        holdsData = false;
       };
 
       serviceAccount = scope.mkResource {

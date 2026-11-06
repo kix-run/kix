@@ -431,6 +431,17 @@ edge but NO netpol hole. Consequences when authoring:
   `factBehavior.endpoint = "terminate"` without `usesAtLeast`, its custom resources are listed as
   `Not counted` in quota failure messages.
 
+- **Declare `holdsData` on every CRD.** On `scope.mkCRD` or `scope.mkCRDRef`, `holdsData = true`
+  when deleting a custom resource of the kind loses data (CNPG `Cluster`, `SGCluster`, mayastor's
+  `DiskPool`), `false` for monitoring, certificate, policy, and configuration kinds. Each custom
+  resource carries it as `kix.run/holds-data`, and `kix diff` and `kix deploy` read it to tell a data
+  migration from an object swap that moves none. A package with `meta.lifecycle = "stateful"` fails
+  to build when it renders a custom resource without it, including one built with `scope.mkResource`
+  instead of `scope.mkCR`. Built-in kinds need nothing: a PersistentVolumeClaim, a PersistentVolume,
+  and a StatefulSet with `volumeClaimTemplates` are marked `"true"` from their shape, and
+  `holdsData` for a built-in group (`kix/lib/core/api-groups.json`, which includes every `*.k8s.io`
+  group) is refused. `scope.mkResource` and `scope.mkCR` refuse a per-object `holdsData`.
+
 ### Composition helpers (kix.*)
 
 #### Mount helpers

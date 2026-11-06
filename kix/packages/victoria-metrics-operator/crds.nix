@@ -375,6 +375,22 @@ let
     "VMAnomalyConfig"
   ];
 
+  # Kinds whose operands keep stored data on their volumes: metrics, logs,
+  # traces, and Alertmanager silences. An agent's buffer, an alerting rule
+  # evaluator, and the configuration kinds hold none.
+  storageKinds = [
+    "VMCluster"
+    "VMSingle"
+    "VMDistributed"
+    "VMAlertmanager"
+    "VLCluster"
+    "VLSingle"
+    "VLDistributed"
+    "VLogs"
+    "VTCluster"
+    "VTSingle"
+  ];
+
   # Read the vendored upstream spec schema for consumer-facing kinds.
   # `fromKind` mints a stub whose spec is x-kubernetes-preserve-unknown-
   # fields, which registers the kind and validates nothing. A mistyped
@@ -425,6 +441,7 @@ let
       schemed
       // {
         readiness = if builtins.elem def.kind configKinds then vmConfigReadiness else vmReadiness;
+        holdsData = builtins.elem def.kind storageKinds;
       }
       // lib.optionalAttrs (extras ? factBehavior) {
         inherit (extras) factBehavior;
@@ -456,6 +473,7 @@ let
       |> scope.crd.withVersion def.version
       |> scope.crd.withShortNames def.shortNames
       |> scope.crd.withPrinterColumns ageColumn
+      |> (crd: crd // { holdsData = false; })
     );
 
   # Reference an existing prometheus-operator CRD without labels,
@@ -468,6 +486,7 @@ let
     scope.mkCRDRef {
       group = promGroup;
       inherit (def) kind plural version;
+      holdsData = false;
     };
 
   mkPromCompat =

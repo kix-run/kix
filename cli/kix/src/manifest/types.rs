@@ -16,8 +16,8 @@ pub(crate) fn is_secret(manifest: &serde_json::Value) -> bool {
 }
 
 /// Return whether the manifest's API group is one whose kinds Kix knows: the
-/// core group, `apps`, `batch`, `policy`, `autoscaling`, any `*.k8s.io` group,
-/// and Kix's own group.
+/// core group, a [`BUILTIN_GROUPS`] entry, a group ending in one of
+/// [`BUILTIN_GROUP_SUFFIXES`], and Kix's own group.
 ///
 /// Every built-in Kubernetes group is in this set. So are some groups that
 /// CRDs serve, such as `gateway.networking.k8s.io`, so a caller must not rely
@@ -30,10 +30,19 @@ pub(crate) fn is_known_api(manifest: &serde_json::Value) -> bool {
     let Some((group, _)) = api_version.split_once('/') else {
         return true;
     };
-    matches!(group, "apps" | "batch" | "policy" | "autoscaling")
-        || group.ends_with(".k8s.io")
+    BUILTIN_GROUPS.contains(&group)
+        || BUILTIN_GROUP_SUFFIXES.iter().any(|s| group.ends_with(s))
         || group == super::keys::GROUP
 }
+
+/// API groups whose kinds Kix treats as built-in, besides the core group and
+/// Kix's own. The library reads the same lists from
+/// `kix/lib/core/api-groups.json` (`facts.isForeignGroup`), and a test in
+/// `cluster/migrate.rs` checks that the two agree.
+pub(crate) const BUILTIN_GROUPS: &[&str] = &["apps", "batch", "policy", "autoscaling"];
+
+/// Suffixes of API groups whose kinds Kix treats as built-in.
+pub(crate) const BUILTIN_GROUP_SUFFIXES: &[&str] = &[".k8s.io"];
 
 /// Unique identifier for a K8s resource.
 #[derive(

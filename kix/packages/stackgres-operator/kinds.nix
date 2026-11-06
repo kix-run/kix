@@ -8,6 +8,10 @@
 #   version         the storage version, which custom resources use
 #   servedVersions  every served version, when there is more than one
 #   readiness       the condition that marks a custom resource ready
+#   holdsData       whether deleting a custom resource loses data: the
+#                   clusters and their logs keep databases on their volumes,
+#                   and the operator deletes a backup's files with its
+#                   SGBackup. Configuration and operation kinds are false.
 #
 # Kinds with conditions but no readiness:
 #   - SGDbOps and SGShardedDbOps set Completed=True when the operation ends,
@@ -28,26 +32,32 @@ let
   v1 = part: plural: {
     inherit part plural;
     version = "v1";
+    holdsData = false;
   };
+  data.holdsData = true;
 in
 {
-  SGBackup = v1 "sgBackups" "sgbackups";
-  SGCluster = v1 "sgClusters" "sgclusters" // {
-    readiness = bootstrapped;
-  };
+  SGBackup = v1 "sgBackups" "sgbackups" // data;
+  SGCluster =
+    v1 "sgClusters" "sgclusters"
+    // data
+    // {
+      readiness = bootstrapped;
+    };
   SGConfig = v1 "sgConfigs" "sgconfigs";
   SGDbOps = v1 "sgDbOps" "sgdbops";
-  SGDistributedLogs = v1 "sgDistributedLogs" "sgdistributedlogs";
+  SGDistributedLogs = v1 "sgDistributedLogs" "sgdistributedlogs" // data;
   SGInstanceProfile = v1 "sgInstanceProfiles" "sginstanceprofiles";
   SGObjectStorage = {
     part = "sgObjectStorages";
     plural = "sgobjectstorages";
     version = "v1beta1";
+    holdsData = false;
   };
   SGPoolingConfig = v1 "sgPoolingConfigs" "sgpoolconfigs";
   SGPostgresConfig = v1 "sgPostgresConfigs" "sgpgconfigs";
   SGScript = v1 "sgScripts" "sgscripts";
-  SGShardedBackup = v1 "sgShardedBackups" "sgshardedbackups";
+  SGShardedBackup = v1 "sgShardedBackups" "sgshardedbackups" // data;
   SGShardedCluster = {
     part = "sgShardedClusters";
     plural = "sgshardedclusters";
@@ -57,11 +67,13 @@ in
       "v1alpha1"
     ];
     readiness = bootstrapped;
+    holdsData = true;
   };
   SGShardedDbOps = v1 "sgShardedDbOps" "sgshardeddbops";
   SGStream = {
     part = "sgStreams";
     plural = "sgstreams";
     version = "v1alpha1";
+    holdsData = false;
   };
 }
