@@ -378,6 +378,19 @@ Each phase is one pull request and leaves `main` working.
    the `/nix`-blocked CI job. Update the install docs, `cli/README.md`, and the
    changelog.
 
+## Updating bundled programs
+
+The size of a program's update decides which Kix release can carry it:
+
+- A patch update (2.35.3 to 2.35.4) can go in a Kix patch release.
+- A minor update (2.35 to 2.36) goes in a Kix minor release.
+- A major update (Helm 4 to Helm 5) is decided when it comes. It is not tied
+  to a Kix major release by rule.
+
+Helm is stricter. The library names the exact Helm version, and a library and
+binary that name different versions stop with an error (section 5). So any
+Helm update, patch updates included, goes in a minor release.
+
 ## Open questions
 
 1. **Which `kubectl` version?** Kubernetes supports `kubectl` within one minor
