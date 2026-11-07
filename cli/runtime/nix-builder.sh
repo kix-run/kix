@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Check the nix builder with an unpacked Kix release archive on a machine
+# Check the `nix` builder with an unpacked Kix release archive on a machine
 # that has Nix installed, as a user the Nix daemon does not trust.
 #
 # usage: cli/runtime/nix-builder.sh <unpacked-archive> <kixpkgs-checkout>
 #
-# 1. The repository's Helm cluster builds to the same YAML under the kix
-#    builder and the nix builder.
+# 1. The repository's Helm cluster builds to the same YAML under the `kix`
+#    builder and the `nix` builder.
 # 2. A new project with `builder = "nix"` in kix.toml:
 #    - stops with the "not visible to Nix" error while kix.toml is untracked,
 #    - builds with `kix build` once git tracks it, to the same YAML as 1,

@@ -77,7 +77,7 @@ use crate::text::printable;
 
 /// The `format` field of every plan file's header.
 pub const FORMAT: &str = "kixplan";
-/// The format version that this Kix writes and reads. Readers reject any other
+/// The format version that Kix writes and reads. Readers reject any other
 /// version.
 pub const VERSION: u32 = 1;
 /// The file extension of a plan file.
@@ -198,8 +198,9 @@ pub enum PlanFileError {
     )]
     NotAPlanFile,
     #[error(
-        "the plan file's format is '{}' version {version}; this kix reads '{FORMAT}' version {VERSION}",
-        printable(.format)
+        "the plan file's format is '{}' version {version}; Kix {} reads '{FORMAT}' version {VERSION}",
+        printable(.format),
+        crate::VERSION
     )]
     WrongFormat { format: String, version: u32 },
     #[error("the plan file is too large: {}", printable(.0))]
@@ -695,7 +696,7 @@ mod tests {
         }
         assert!(
             std::fs::read(&path).unwrap_or_default() == bytes,
-            "kix/tests/fixtures/plan.kixplan is not what this kix writes. Regenerate it with \
+            "kix/tests/fixtures/plan.kixplan is not what Kix writes. Regenerate it with \
              KIX_WRITE_FIXTURES=1 cargo test -p kix-lib plan::file"
         );
     }

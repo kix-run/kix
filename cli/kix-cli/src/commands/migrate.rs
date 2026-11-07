@@ -103,7 +103,7 @@ fn kix_crds(build: &InstallableBuild) -> Result<Vec<Value>> {
     if crds.len() != wanted.len() {
         return Err(miette!(
             "this build does not render Kix's own CustomResourceDefinitions ({}). \
-             The kixpkgs pin is older than the domain move; update it first.",
+             The project's Kix library is older than the domain move; update it first.",
             wanted.join(", ")
         ));
     }

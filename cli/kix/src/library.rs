@@ -1,11 +1,11 @@
 //! The Kix library a project pins in its `flake.lock`, and moving it to the
-//! release that matches this kix program.
+//! version that matches this version of Kix.
 //!
 //! The library names the exact Helm versions it renders charts with, and a
-//! kix program ships exactly those versions. When the two disagree, Kix stops
+//! version of Kix ships exactly those versions. When the two disagree, Kix stops
 //! before it renders and says which side to move ([`HelmMismatch`]).
 //! `kix lib update` ([`update`]) moves the project's side: it locks the
-//! library input to the release tag `v<version>` of this program with
+//! library input to the release tag `v<version>` of this version of Kix with
 //! `nix flake lock --override-input`. That records the tag's revision in
 //! `flake.lock` and keeps the input's `original` from `flake.nix`, so a later
 //! plain evaluation keeps the lock as it is.
@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::eval::nix::{NixCommandError, command, current_system, output};
 use crate::runtime::Tool;
 
-/// The release of this kix program, which names the library release that
+/// The version of Kix running now, which names the library release that
 /// matches it (`v<version>`).
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -98,7 +98,7 @@ pub fn compare_versions(a: &str, b: &str) -> Option<Ordering> {
     }))
 }
 
-/// The library asks for a Helm version this kix program does not ship.
+/// The library asks for a Helm version this version of Kix does not ship.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelmMismatch {
     pub library: LibraryVersion,
@@ -106,7 +106,7 @@ pub struct HelmMismatch {
     pub wanted: String,
     /// This program's release.
     pub program: String,
-    /// The Helm versions this program ships.
+    /// The Helm versions this version of Kix ships.
     pub shipped: Vec<String>,
 }
 
@@ -193,7 +193,7 @@ impl fmt::Display for HelmMismatch {
             ),
             _ => write!(
                 f,
-                "Run `kix lib update` to move this project to the {program} library and commit flake.lock, or use the Kix release that matches the library."
+                "Run `kix lib update` to move this project to the {program} library and commit flake.lock, or use the version of Kix that matches the library."
             ),
         }
     }
@@ -474,8 +474,8 @@ pub struct Updated {
     pub changed: bool,
 }
 
-/// Move the Kix library inputs of the flake in `flake` to the release of this
-/// program, `v<PROGRAM_VERSION>`. With `dry_run`, work out the new lock
+/// Move the Kix library inputs of the flake in `flake` to the version of Kix
+/// running now, `v<PROGRAM_VERSION>`. With `dry_run`, work out the new lock
 /// without writing it.
 pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
     let dir = Path::new(flake);
@@ -858,7 +858,7 @@ mod tests {
             assert_eq!(m.fix(), Fix::Either);
             let text = m.to_string();
             assert!(text.contains("Run `kix lib update`"), "{text}");
-            assert!(text.contains("or use the Kix release"), "{text}");
+            assert!(text.contains("or use the version of Kix"), "{text}");
         }
     }
 

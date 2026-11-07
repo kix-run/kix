@@ -9,7 +9,7 @@ import mkFlakeOutputs from '/src/snippets/flake/mkFlakeOutputs.json';
 import listClusters from '/src/command-output/how-to/application-list/list-clusters.json';
 
 Use `kixpkgs.lib.mkFlake` in the repository that owns your cluster definitions.
-It exposes the cluster outputs that the Kix CLI discovers.
+It exposes the cluster outputs that Kix discovers.
 
 ## Add the flake inputs
 
@@ -181,8 +181,8 @@ that uses it misses each output `mkFlake` adds, and cannot use
 
 ## Choose a project builder (optional)
 
-By default (`builder = "kix"`), Kix evaluates your project with its bundled
-runtime and local store (`~/.cache/kix/store`). If your project needs the
+By default (`builder = "kix"`), Kix evaluates your project with the Kix
+runtime and Kix's local store (`~/.cache/kix/store`). If your project needs the
 machine's Nix installation and its configured binary caches or remote builders,
 add [`kix.toml`](/docs/reference/kix-toml/) beside `flake.nix` and stage it in
 Git:
@@ -197,7 +197,7 @@ See [`kix.toml`](/docs/reference/kix-toml/) for the full builder reference.
 
 ## Lock the inputs
 
-Pin `kixpkgs` in `flake.lock` to match your installed Kix CLI:
+Pin the Kix library (`kixpkgs` in `flake.lock`) to match your installed Kix:
 
 <Command commands={["kix lib update"]} cwd="infrastructure/" />
 

@@ -42,7 +42,7 @@ pub fn run(args: &[OsString], global: &GlobalArgs) -> miette::Result<()> {
     }
     let kix = std::env::current_exe().map_err(|e| {
         miette::miette!(
-            "could not find the kix binary to pass to {}: {e}",
+            "could not find the path of the `kix` command to pass to {}: {e}",
             program.display()
         )
     })?;

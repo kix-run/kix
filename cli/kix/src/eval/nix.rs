@@ -198,7 +198,7 @@ const MAX_EVALUATIONS: usize = 200;
 /// nothing is built. [`crate::build_source::Build::of_flake`] then loads and
 /// stamps the graph.
 ///
-/// When evaluation stops at a Helm chart that is not in Kix's store yet,
+/// When evaluation stops at a Helm chart that is not in Kix's local store yet,
 /// Kix fetches or renders it ([`super::helm`]) and evaluates again.
 ///
 /// `status_fn` is called with progress lines from Nix as they arrive,
@@ -242,7 +242,7 @@ pub fn eval_activation_index(
 }
 
 /// Run `nix eval --raw <args>` in `flake_path` and return what it prints.
-/// When evaluation stops at a Helm chart that is not in Kix's store yet,
+/// When evaluation stops at a Helm chart that is not in Kix's local store yet,
 /// fetch or render it ([`super::helm`]) and evaluate again.
 ///
 /// Under the `nix` builder, Nix renders the charts itself, so this runs
@@ -284,7 +284,7 @@ pub fn eval_with_helm(
             return Err(error.into());
         }
         // Check every Helm version before running any, so a project whose
-        // library and kix program disagree learns which to move.
+        // library and Kix disagree learns which to move.
         if let Some((wanted, shipped)) = super::helm::unshipped(&pending)? {
             let mismatch = crate::library::HelmMismatch {
                 library: crate::library::eval_version(flake_path, input_overrides),
@@ -317,7 +317,7 @@ pub fn eval_with_helm(
 /// failed command, whose stderr may name Helm placeholders.
 ///
 /// The full stack trace is always on. Outside Linux, Nix refuses to build in
-/// Kix's store before it checks a derivation's system, and only the trace
+/// Kix's local store before it checks a derivation's system, and only the trace
 /// names the output of the Helm placeholder it stopped at.
 fn eval_raw(
     flake_path: &Path,

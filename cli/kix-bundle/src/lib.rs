@@ -154,14 +154,14 @@ pub use write::{BundleFile, Contents, from_local};
 
 /// The `format` field of every bundle header.
 pub(crate) const FORMAT: &str = "kix-bundle";
-/// The version this kix writes and reads. A reader refuses any other.
+/// The version Kix writes and reads. A reader refuses any other.
 pub(crate) const VERSION: u32 = 3;
 /// The file extension `kix bundle` suggests.
 pub const EXTENSION: &str = "kixbundle";
 /// The store name of the package index.
 pub const INDEX_NAME: &str = "kix-packages.json";
 
-/// The largest bundle file kix reads.
+/// The largest bundle file Kix reads.
 pub const MAX_STORED_BYTES: u64 = 64 * 1024 * 1024;
 /// The largest header, decompressed. A header takes about 100 bytes a file.
 pub(crate) const MAX_HEADER_BYTES: u64 = 32 * 1024 * 1024;
@@ -283,12 +283,10 @@ pub enum Role {
 pub enum BundleError {
     #[error("the bundle cannot be read: {}", printable(.0))]
     Unreadable(String),
-    #[error(
-        "the bundle is a format 1 bundle, a tar file; this kix reads '{FORMAT}' version {VERSION}"
-    )]
+    #[error("the bundle is a format 1 bundle, a tar file; Kix reads '{FORMAT}' version {VERSION}")]
     Format1,
     #[error(
-        "the bundle's format is '{}' version {version}; this kix reads '{FORMAT}' version {VERSION}",
+        "the bundle's format is '{}' version {version}; Kix reads '{FORMAT}' version {VERSION}",
         printable(.format)
     )]
     WrongFormat { format: String, version: u32 },
@@ -314,7 +312,7 @@ pub enum BundleError {
     )]
     NotARecord(String),
     #[error(
-        "the Activation record {} does not reference one {INDEX_NAME}, so its name does not cover the whole build. A kixpkgs lib older than this kix builds records like that: update the flake's kixpkgs input and build again",
+        "the Activation record {} does not reference one {INDEX_NAME}, so its name does not cover the whole build. A Kix library older than this version of Kix builds records like that: run `kix lib update` to update the Kix library in flake.lock, then build the bundle again",
         printable(.0)
     )]
     NoIndex(String),

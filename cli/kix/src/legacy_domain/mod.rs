@@ -282,7 +282,7 @@ pub enum LegacyDomainError {
     #[error(
         "this build renders Kix's own records under the retired {group} API \
          group, which would put the old CRDs back on the cluster.\n\
-         Update the kixpkgs pin to a revision at or after the {current} move."
+         Update the project's Kix library to a revision at or after the {current} move."
     )]
     StalePin { group: String, current: String },
 }
@@ -340,7 +340,7 @@ pub(crate) fn check_build<'a>(
             && DOMAINS.contains(&group)
             // Kix's own two kinds only. Kix does not own the retired domain,
             // so a third party's CRD can sit in that group legitimately, and
-            // calling it a stale kixpkgs pin would be the wrong diagnosis.
+            // calling it a stale Kix library would be the wrong diagnosis.
             // The same restraint `upgrade_own_crd` shows.
             && m.pointer("/spec/names/plural")
                 .and_then(Value::as_str)

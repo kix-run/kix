@@ -29,7 +29,7 @@ A small Kix cluster usually has:
 - a `flake.nix` that exposes one or more named clusters;
 - a `cluster.nix` that says which packages are installed where;
 - package definitions that know how to produce Kubernetes resources;
-- the `kix` CLI, which renders, checks, diffs, deploys, and inspects the result.
+- Kix, the program you run as `kix`, which renders, checks, diffs, deploys, and inspects the result.
 
 You can think of Kix as sitting one step before YAML: it builds the YAML, keeps
 track of relationships while doing so, and gives the CLI enough structure to

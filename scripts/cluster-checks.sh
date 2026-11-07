@@ -12,7 +12,7 @@
 #
 #   scripts/cluster-checks.sh clusters cnpg clusters/test-cnpg.rules-test.yaml
 #
-# Set KIX to the kix binary to run (default: kix on PATH).
+# Set KIX to the `kix` command to run (default: `kix` on PATH).
 
 set -euo pipefail
 

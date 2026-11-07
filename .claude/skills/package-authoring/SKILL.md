@@ -363,7 +363,7 @@ A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
 (`clickhouse/health-check.py`, shared with clickhouse-cluster).
 
-Kix's store evaluates Nix expressions and writes files with `builtins.toFile`
+Kix evaluates Nix expressions in its local store and writes files with `builtins.toFile`
 (and renders Helm charts through `scope.helm.*`), but it cannot run Nix
 derivation builds (`pkgs.runCommand`, `pkgs.stdenv.mkDerivation`,
 `pkgs.writeText`). Never use a derivation builder inside a package or cluster
