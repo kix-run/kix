@@ -410,7 +410,8 @@ ship fast.
   nixpkgs `lib` and saving charts for transfer are separate issues.
 - **Vulnerability scanning.** ROADMAP keeps scanners outside Kix.
 - **x86_64-darwin.** Nixpkgs 26.11 no longer supports it.
-- **Using the machine's own Nix.** A later advanced option.
+- **Using the machine's own Nix.** Planned per project in
+  `162_project_builders.md`.
 
 ## Alternatives considered
 
