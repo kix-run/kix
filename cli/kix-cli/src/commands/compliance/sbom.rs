@@ -31,7 +31,7 @@ pub fn run(args: &ComplianceSbomArgs, ctx: &mut CommandContext) -> Result<()> {
     let sbom = build_sbom(&graph, &ctx.global.flake);
 
     let text = match output::format() {
-        OutputFormat::Yaml => serde_yml::to_string(&sbom).into_diagnostic()?,
+        OutputFormat::Yaml => kix::yaml::to_string(&sbom).into_diagnostic()?,
         _ => serde_json::to_string_pretty(&sbom).into_diagnostic()?,
     };
 

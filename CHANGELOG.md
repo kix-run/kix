@@ -55,6 +55,7 @@ counts as breaking.
 
 ### Breaking (no error)
 
+- YAML that `kix build`, `kix export`, `kix snapshot save`, and `-o yaml` print uses double quotes, and leaves a value unquoted where YAML allows it, such as `kix.run/identity-hash` values and `20Gi`. The data is the same. Update scripts that compare this YAML as text or look for single-quoted values.
 - `kix health` no longer reports a `completed` status. A Job that is gone is reported as missing. A finished Job now stays on the cluster and reads as `healthy`, so a script that looks for `completed` should look for `healthy`.
 - An optional dependency (`x ? null`) whose only match is in another namespace now takes its default, and Kix prints a warning that names the instance and the `deps` line to add.
 - Helm charts now render with Helm 4 (`4.3.1`) by default instead of Helm 3 (`3.19.1`). Set `helmVersion = "3";` on `kix.helmChart`, `scope.helm.importChart`, or `scope.helm.importChartCrds` if an upstream chart relies on Helm 3 template behavior.
@@ -62,6 +63,7 @@ counts as breaking.
 
 ### Upgrade notes
 
+- Kix reads YAML from snapshot folders and SOPS files with tighter limits: at most 64 levels of nesting, and at most one million values from alias expansion. Parse errors name the line and column as `at line L, column C`.
 - The Activation records of a cluster definition that sets `cluster.kubernetes.uid` carry a new label, `kix.run/kubernetes-uid`. Older Kix ignores it.
 - The first `kix diff` or `kix plan` after the upgrade may show a `secret-ref-*` or `service-ref-*` PackageInstance as removed from one package. Nothing is deleted, and the first deploy corrects it.
 - The first deploy after the upgrade applies the Cilium network policies again, and every object that depends on them, because the `kix.run/readiness` annotation on each policy now lists the state that means Cilium rejected it. The same goes for Velero Backups, Restores, and Schedules, CDI DataVolumes, and the objects that depend on them. Only annotations change, so most pods do not restart. A pod whose template carries a checksum of a ConfigMap or Secret that depends on a network policy restarts once, for example `grafana`, `loki-logs`, and `immich-server`.
@@ -110,6 +112,7 @@ counts as breaking.
 
 ### Fixed
 
+- Kix no longer depends on crates that RustSec marks unsound or unmaintained: `serde_yml`, `libyml`, `unsafe-libyaml`, `lru` 0.12, `rand` 0.8, `paste`, `number_prefix`, and `pin-utils`. It reads and writes YAML with `serde-saphyr`, talks to Kubernetes through kube 5, and uses tokio 1.54.
 - Kix uses versions of `rustls`, `rustls-webpki`, `quinn-proto`, `zstd`, `zstd-safe`, `zstd-sys`, and `crossbeam-epoch` that fix 16 published security advisories, among them TLS certificate checks that could accept distrusted intermediates and a TLS downgrade.
 - A Deployment whose rollout is stuck is no longer counted as ready. Before, Kix counted it as ready when a pod from the old version was still running next to a new pod that never started, for example because its image does not exist. Kix now waits until no pod from the old version is left, and fails on the new pod's error. The waiting message says how many old pods are left.
 - An object that two package instances list, such as a provider's Secret reference that a consumer holds as a part, now belongs to the instance that built it. Before, its owner could switch between the two on any unrelated change to either package.

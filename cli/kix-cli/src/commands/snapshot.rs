@@ -140,7 +140,7 @@ fn write_resources(dir: &Path, resources: &[(ResourceId, Value)]) -> Result<usiz
         std::fs::create_dir_all(&file_dir).into_diagnostic()?;
 
         let filename = format!("{}-{}.yaml", id.name, id.kind.to_lowercase());
-        let yaml = serde_yml::to_string(&value).into_diagnostic()?;
+        let yaml = kix::yaml::to_string(&value).into_diagnostic()?;
         std::fs::write(file_dir.join(&filename), &yaml).into_diagnostic()?;
     }
     Ok(resources.len())

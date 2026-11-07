@@ -95,7 +95,11 @@ impl Record {
             previous_activation: status("/status/previousActivation"),
             failure_reason: status("/status/failure/reason"),
             failed_at: status("/status/failure/at"),
-            created_at: obj.metadata.creation_timestamp.as_ref().map(|t| t.0),
+            created_at: obj
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .and_then(crate::cluster::chrono_time),
             operator_driven: obj.data.pointer("/spec/source").is_some(),
             orphans_kept_from: orphans_kept_from(obj),
             package_index: obj

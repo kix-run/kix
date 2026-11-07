@@ -222,7 +222,7 @@ pub fn result(response: &dyn CommandResponse) -> miette::Result<()> {
         OutputFormat::Json => {
             serde_json::to_string_pretty(&response.as_json()).into_diagnostic()?
         }
-        OutputFormat::Yaml => serde_yml::to_string(&response.as_json()).into_diagnostic()?,
+        OutputFormat::Yaml => kix::yaml::to_string(&response.as_json()).into_diagnostic()?,
     };
     println!("{rendered}");
     Ok(())

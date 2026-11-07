@@ -248,12 +248,11 @@ mod tests {
 
     #[test]
     fn classify_api_error_uses_status() {
-        let err = kube::Error::Api(kube::error::ErrorResponse {
-            status: "Failure".into(),
-            message: "storage is (re)initializing".into(),
-            reason: "TooManyRequests".into(),
-            code: 429,
-        });
+        let err = kube::Error::Api(
+            kube::core::Status::failure("storage is (re)initializing", "TooManyRequests")
+                .with_code(429)
+                .boxed(),
+        );
         assert_eq!(classify(&err), FailureClass::RateLimited);
     }
 

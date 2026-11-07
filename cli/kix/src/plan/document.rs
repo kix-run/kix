@@ -688,8 +688,8 @@ impl Plan {
         serde_json::to_string_pretty(self).expect("a Plan serializes")
     }
 
-    pub fn to_yaml(&self) -> Result<String, serde_yml::Error> {
-        serde_yml::to_string(self)
+    pub fn to_yaml(&self) -> Result<String, crate::yaml::SerializeError> {
+        crate::yaml::to_string(self)
     }
 }
 
