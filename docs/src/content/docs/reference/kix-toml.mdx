@@ -158,6 +158,7 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
 | Unknown key in `kix.toml` | `<path> has a setting this version of Kix does not know: \`<key>\`. Kix <version> knows these settings: builder. Check the spelling, or upgrade Kix if the project needs a newer version` |
 | Unknown `builder` value | `<path> sets builder = "<value>", which this version of Kix does not know. Kix <version> knows these builders: kix, nix, remote. Check the spelling, or upgrade Kix if the project needs a newer version` |
+| `builder` without quotes, such as `builder = 3` | `<path> sets builder to a number. Write the builder's name in quotes, such as builder = "kix". Kix <version> knows these builders: kix, nix, remote` |
 | `builder = "remote"` | `<path> sets builder = "remote", but this version of Kix cannot use a remote builder. Set builder = "kix", or remove the setting` |
 | `builder = "nix"` in `kix.toml`, but `kix.toml` is not tracked by Git | `kix.toml is not visible to Nix. Run \`git add kix.toml\`. Kix reads builder = "nix" from <path>, but Nix leaves out files that git does not track, so the project's Kix library uses builder = "kix"` |
 | `KIX_STORE_ROOT` set when `builder = "nix"` | `KIX_STORE_ROOT is set, but it does not apply to this project. The project's builder is "nix", which uses the machine's Nix and its store. Unset KIX_STORE_ROOT` |

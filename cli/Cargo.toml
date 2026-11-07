@@ -18,7 +18,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 serde_yml = "0.0.12"
 yaml-rust2 = { version = "0.13", default-features = false }
 # A project's kix.toml
-toml = { version = "0.9", default-features = false, features = ["std", "parse", "display", "serde"] }
+toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
 # JSON Schema of the `kix plan` and `kix diff` document
 schemars = "1"
 
