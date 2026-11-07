@@ -135,6 +135,13 @@ pub enum ProjectError {
     },
 
     #[error(
+        "{origin} sets builder to {kind}. Write the builder's name in quotes, such as builder = \"kix\". Kix {} knows these builders: {}",
+        crate::VERSION,
+        builder_names()
+    )]
+    NotText { origin: BuilderSource, kind: String },
+
+    #[error(
         "{origin} sets builder = \"remote\", but this version of Kix cannot use a remote builder. Set builder = \"kix\", or remove the setting"
     )]
     RemoteUnsupported { origin: BuilderSource },
@@ -211,9 +218,16 @@ impl ProjectConfig {
         let builder = match value.as_str() {
             Some(name) => parse_builder(name, origin.clone())?,
             None => {
-                return Err(ProjectError::UnknownBuilder {
+                return Err(ProjectError::NotText {
                     origin,
-                    value: value.to_string(),
+                    kind: match value {
+                        toml::Value::Integer(_) | toml::Value::Float(_) => "a number",
+                        toml::Value::Boolean(_) => "true or false",
+                        toml::Value::Array(_) => "a list",
+                        toml::Value::Table(_) => "a table",
+                        _ => "a value that is not text",
+                    }
+                    .to_string(),
                 });
             }
         };
@@ -369,7 +383,8 @@ mod tests {
         assert!(err.contains("kix.toml"), "{err}");
 
         let err = read(Some("builder = 3\n")).unwrap_err().to_string();
-        assert!(err.contains("builder = 3"), "{err}");
+        assert!(err.contains("sets builder to a number"), "{err}");
+        assert!(err.contains("builder = \"kix\""), "{err}");
     }
 
     #[test]
