@@ -6,7 +6,7 @@ description: "Set a single availability target on a cluster and let Kix configur
 When you move a Kubernetes cluster from a single-node laptop environment to a multi-zone cloud environment, you normally have to revisit every Deployment and StatefulSet to bump replica counts, add pod anti-affinity rules, and create PodDisruptionBudgets. In Kix, you declare the failure scope your cluster needs (`none`, `pod`, `node`, or `zone`) in one place, and Kix works with each package to configure replicas, placement constraints, and disruption budgets automatically.
 
 :::note[Helpful background]
-- [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/): A quick guide to setting `availability.level` on a cluster and inspecting the generated resources.
+- [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/): A quick guide to setting `cluster.availability.default` on a cluster and inspecting the generated resources.
 - [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/): How package authors translate an availability level into replica counts.
 - [Pod Topology Spread Constraints](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/): How Kubernetes spreads pods across nodes and availability zones.
 - [PodDisruptionBudgets](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/): How Kubernetes limits voluntary evictions during node drains and upgrades.
@@ -23,7 +23,7 @@ Rather than asking a cluster operator to know the replica flags of every package
 | `node` | Losing an entire Kubernetes worker node must not cause downtime. |
 | `zone` | Losing an entire cloud availability zone must not cause downtime. |
 
-The cluster's declared hardware capabilities establish the highest level the underlying nodes can actually support. Each package then translates the active level into its own replica and quorum counts, and Kix adds the matching placement rules and PodDisruptionBudgets.
+The cluster's declared hardware capabilities establish the read-only `cluster.availability.substrate` option, which records the highest level the underlying nodes can support and provides the default for `cluster.availability.default`. Each package then translates the active level into its own replica and quorum counts, and Kix adds the matching placement rules and PodDisruptionBudgets.
 
 ## One requirement, several compiled decisions
 
@@ -31,8 +31,8 @@ Different kinds of software need different numbers of replicas to survive the sa
 
 Kix splits this decision cleanly between the package author and the cluster operator:
 
-- **The package author** knows the software's architecture and uses `scope.byAvailability` to map `none`, `pod`, `node`, and `zone` to appropriate replica counts.
-- **The cluster operator** sets `availability.level` on the cluster (or overrides it on a specific instance) without needing to memorize each package's internal options.
+- **The package author** knows the software's architecture and uses `kix.availability.pick availability { ... }` to map `none`, `pod`, `node`, and `zone` to appropriate replica counts.
+- **The cluster operator** sets `cluster.availability.default` on the cluster (or overrides `availability` on a specific instance) without needing to memorize each package's internal options.
 
 Whenever a Deployment or StatefulSet resolves to more than one replica under an availability level above `none`, Kix automatically derives:
 
@@ -52,7 +52,7 @@ Kix checks the requested availability level against `cluster.capabilities.multiN
 - A multi-node cluster without multiple zones supports up to `node`.
 - A multi-node cluster with two or more declared zones supports `zone`.
 
-If you request a level higher than the cluster's declared capabilities can support, evaluation fails immediately with a clear error. If a capability is left unset (`null`), Kix emits a warning so you know the substrate guarantees could not be verified at build time.
+If you request a level higher than the cluster's substrate and the deciding capabilities are explicitly set (`multiNode = false` or an explicit `availabilityZones` list with fewer than two zones), evaluation fails immediately with a clear error. When the requested level is above the inferred substrate and the substrate is uncertain because a deciding capability is left unset (`null`), Kix emits a warning so you know the substrate guarantees could not be verified at build time.
 
 ## Package and workload ceilings
 
@@ -65,5 +65,5 @@ Other packages combine a replicated data plane with a single-replica management 
 When a package explicitly sets its own `topologySpreadConstraints` on a workload, Kix steps back: it neither injects generated spread constraints nor generates a default `PodDisruptionBudget` for that workload. If a multi-replica workload supplies custom placement constraints without shipping a matching `PodDisruptionBudget` in the same instance, Kix emits a warning so voluntary-disruption protection is not forgotten by accident.
 
 :::tip[Use it in a task]
-See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/) to configure a cluster and inspect the generated resources, or [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/) to use `scope.byAvailability` in your own packages.
+See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/) to configure a cluster and inspect the generated resources, or [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/) to use `kix.availability.pick` in your own packages.
 :::

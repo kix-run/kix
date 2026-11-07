@@ -299,8 +299,8 @@ Key behaviors of `kix.mkEnv`:
 ```nix
 kix.mergeFragments {
   fragments = [
-    ./teams/checkout.nix
-    ./teams/search.nix
+    (import ./teams/checkout.nix)
+    (import ./teams/search.nix)
   ];
   namespacePolicies = {
     checkout.podSecurity = "restricted";

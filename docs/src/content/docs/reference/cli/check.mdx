@@ -65,7 +65,7 @@ Kix then writes the evaluation failure as one error result. Its rule ID is
 | Code | Meaning |
 | --- | --- |
 | `0` | No step reported `fail` |
-| `1` | A step reported `fail`, or the cluster was not found. The same with `--sarif`, after the SARIF document is printed. |
+| `1` | A step reported `fail`, or the cluster was not found. With `--sarif`, a failed step exits `1` after printing the SARIF document, whereas an unknown cluster errors on stderr before printing any SARIF. |
 
 :::note[Reference]
 See [Finding schema](/docs/reference/scorecard-and-rules/#finding-schema) for the

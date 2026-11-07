@@ -62,9 +62,10 @@ Excluded:
 - resources that only carry the label because a controller copied it, such as
   Pods and EndpointSlices.
 
-A resource Kix manages can be a `Secret`. Its data is part of what Kix
-applied, so it is part of the snapshot. Store snapshots where you would store
-the rendered manifests.
+A resource Kix manages can be a `Secret`. `owned_view::kix_owned_manifests`
+redacts every `data` and `stringData` value on `Secret` manifests to
+`"(live value differs from the build, not shown)"`, while `ConfigMap` data and
+literal values in other resources are written as applied.
 
 ### Directory layout
 

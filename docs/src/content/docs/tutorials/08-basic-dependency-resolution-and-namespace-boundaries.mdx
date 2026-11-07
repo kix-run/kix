@@ -48,22 +48,35 @@ Open `tutorials/08-namespace-deps/cluster.nix`. This cluster defines two namespa
 | `platform` | `backend` | `packages.echo-server` | Shared backend service |
 | `app` | `gateway` | local `reverse-proxy-package.nix` | Frontend reverse proxy |
 
-Notice that the module header at the top of `tutorials/08-namespace-deps/cluster.nix` includes `ref`:
+Notice that inside `kix.buildCluster`, the cluster module in `modules` is written as a function that accepts `ref` (while the top-level file header remains `{ kix, packages }:`):
 
 ```nix title="tutorials/08-namespace-deps/cluster.nix"
-{
-  kix,
-  packages,
-  ref,
-  ...
-}:
+{ kix, packages }:
+
+let
+  reverseProxyPackage = import ./reverse-proxy-package.nix;
+in
+kix.buildCluster {
+  name = "08-namespace-deps";
+
+  modules = [
+    kix.flavors.kind
+
+    (
+      { ref, ... }:
+      {
+        # namespaces and instances ...
+      }
+    )
+  ];
+}
 ```
 
-`ref` is Kix's cluster-wide instance reference table, indexed by `ref.<namespace>.<instance>`.
+`ref` is Kix's cluster-wide instance reference table, passed to cluster modules and indexed by `ref.<namespace>.<instance>`.
 
 ## Wire `deps.backend` Across Namespaces
 
-Inside `namespaces.app.instances`, the `gateway` instance connects its `backend` dependency to `ref.platform.backend`:
+Inside `instances.app`, the `gateway` instance connects its `backend` dependency to `ref.platform.backend`:
 
 <Snippet {...crossNamespaceDep} />
 
@@ -108,7 +121,7 @@ Port-forward to `gateway` in the `app` namespace. Because `gateway` is the only 
 
 In another terminal, curl the gateway:
 
-<Command commands={[{ command: "curl http://localhost:8080/", stdout: "Hello from the platform namespace!" }]} />
+<Command commands={[{ command: "curl http://localhost:8080/", stdout: "Hello from the platform-owned backend!" }]} />
 
 Stop the port-forward with `Ctrl-C`.
 
