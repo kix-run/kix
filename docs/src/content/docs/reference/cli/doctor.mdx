@@ -78,8 +78,8 @@ Verify a healthy installation in a project using the default `kix` builder:
 
 ```text
 ok    Kix runtime in /home/alice/.local/libexec/kix (beside the kix binary)
-ok    it ships the programs this kix expects: nix 2.35.4, helm 3.19.1, helm 4.3.1, kubectl 1.37.2, sops 3.12.1
-ok    all 10 files match the SHA-256 in manifest.json
+ok    it ships the programs Kix expects: helm 3.19.1, helm 4.3.1, kubectl 1.37.2, nix 2.35.4, sops 3.12.1
+ok    all 6 files match the SHA-256 in manifest.json
 ok    builder: kix (the default, since no kix.toml sets a builder)
 ```
 
@@ -89,8 +89,8 @@ Verify a project that sets `builder = "nix"` in `kix.toml`:
 
 ```text
 ok    Kix runtime in /home/alice/.local/libexec/kix (beside the kix binary)
-ok    it ships the programs this kix expects: nix 2.35.4, helm 3.19.1, helm 4.3.1, kubectl 1.37.2, sops 3.12.1
-ok    all 10 files match the SHA-256 in manifest.json
+ok    it ships the programs Kix expects: helm 3.19.1, helm 4.3.1, kubectl 1.37.2, nix 2.35.4, sops 3.12.1
+ok    all 6 files match the SHA-256 in manifest.json
 ok    builder: nix (set in ./kix.toml)
 ok    the machine's Nix: nix (Nix) 2.28.3
 ok    allow-import-from-derivation is on, so Nix can render Helm charts during evaluation
