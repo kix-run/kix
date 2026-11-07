@@ -363,6 +363,12 @@ A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
 (`clickhouse/health-check.py`, shared with clickhouse-cluster).
 
+Kix's store evaluates Nix expressions and writes files with `builtins.toFile`
+(and renders Helm charts through `scope.helm.*`), but it cannot run Nix
+derivation builds (`pkgs.runCommand`, `pkgs.stdenv.mkDerivation`,
+`pkgs.writeText`). Never use a derivation builder inside a package or cluster
+definition.
+
 ## The files a complete change touches
 
 Mandatory:
@@ -414,13 +420,13 @@ Cheap first. Each step assumes the earlier ones pass.
 ```bash
 F=--extra-experimental-features; P=pipe-operators
 git add -A kix/packages/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
-nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on; read its traces
+nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh ./clusters <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls
-nix build ./clusters#checks.x86_64-linux.rules-cluster-<cluster> $F $P   # 4. promtool check and the .rules-test.yaml (alerts only)
+nix build ./clusters#checks.x86_64-linux.rules-cluster-<cluster> $F $P   # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)
 nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CRDs only
-nix build ludo/#cluster-ludo-kind $F $P                                  # 7. smoke over the full package set
+nix run .#kix -- check ludo-kind --flake ./ludo                          # 7. smoke over the full package set
 ```
 
 `<cluster>` is the key in `clusters/flake.nix`. When `every-package-evaluates`

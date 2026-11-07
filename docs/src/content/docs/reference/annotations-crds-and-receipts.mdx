@@ -40,7 +40,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | `kix.run/package-namespace` | CLI on load | Namespace of the owning package instance. |
 | `kix.run/lifecycle` | CLI on load | Lifecycle classification from `meta.lifecycle` (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes Kix behavior (requiring `holdsData` on custom resources in the instance and marking resources as stateful during migration checks); other values are informational. |
 | `kix.run/holds-data` | `scope.mkResource` / `scope.mkCR` | `"true"` or `"false"`. Indicates whether deleting the resource loses persistent data. Derived automatically for `PersistentVolumeClaim`, `PersistentVolume`, and `StatefulSet` resources with `volumeClaimTemplates`, and required via CRD `holdsData` for custom resources in stateful packages. |
-| `kix.run/built-via` | CLI on `Activation` | Store path of the cluster activation output directory (`k8s-activation-<cluster>`), which holds `kix-packages.json`, `kix-image-sources.json`, and related build metadata. |
+| `kix.run/built-via` | CLI on `Activation` | Store path of the cluster activation index (`kix-activation-<cluster>.json`), a JSON file that names the store paths of `kix-packages.json`, `kix-image-sources.json`, and related build metadata. Records written by Kix 0.6 and earlier name the activation output directory (`k8s-activation-<cluster>`) instead, and Kix still reads them. |
 | `kix.run/activations` | CLI after apply | Comma-separated `Activation` identity hashes that reference the live object. Used by `kix deploy --prune` and `kix gc`. |
 | `kix.run/applied-hash` | CLI after apply | Hash of the fields owned by the `kix` field manager after apply. Compared against live state by `kix drift` and `kix health`. |
 
@@ -117,7 +117,7 @@ metadata:
     kix.run/cluster: production
   annotations:
     kix.run/identity-hash: jak8b4glx8fnbq2c3hkb0khyyvigb96i
-    kix.run/built-via: /nix/store/...-k8s-activation-production
+    kix.run/built-via: /nix/store/...-kix-activation-production.json
     kix.run/depends-on: ...
 spec:
   instances:

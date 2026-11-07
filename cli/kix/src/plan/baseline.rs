@@ -674,17 +674,17 @@ impl LiveClosures {
     }
 }
 
-/// Return the result directory of the build matching `identity_hash` on this
+/// Return the store path of the build matching `identity_hash` on this
 /// machine, validated by [`record_graph`].
 fn checked_dir(
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
-    record_graph(None, cluster, identity_hash, built_via).map(|g| g.map(|g| g.result_dir))
+    record_graph(None, cluster, identity_hash, built_via).map(|g| g.map(|g| g.built_via))
 }
 
-/// Return the result directory of the build named by `active`, along with a
+/// Return the store path of the build named by `active`, along with a
 /// warning when the local activation cache was ignored.
 ///
 /// Because `store::load_activation_path` is keyed by cluster name alone, it
@@ -763,7 +763,7 @@ pub fn record_graph(
     }
     let built_via = built_via
         .map(PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists());
+        .filter(|p| crate::eval::build_files::BuildFiles::is_build(p));
     checked_build(
         identity_hash,
         built_via,
@@ -788,7 +788,7 @@ pub fn target_build(
     })
 }
 
-/// Load the build in a result directory with stamps applied. A record's build
+/// Load the build at `dir` with stamps applied. A record's build
 /// can predate a domain move, so it is not checked with [`Build::installable`].
 fn load_build(dir: &Path) -> Result<StoreGraph, crate::eval::KixEvalError> {
     Build::local(dir, &|_| {}).map(Build::into_graph)

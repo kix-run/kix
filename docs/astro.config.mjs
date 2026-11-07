@@ -119,6 +119,7 @@ export default defineConfig({
                 {
                   label: 'Clusters and instances',
                   items: [
+                    'reference/kix-toml',
                     'reference/cluster-configuration',
                     'reference/instances-and-composition',
                     'reference/flavors-and-capabilities',

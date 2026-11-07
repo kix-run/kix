@@ -275,8 +275,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // `--current-activation` plan to skip unapplied nodes.
     if end.current
         && p.build.is_local()
-        && let Err(e) =
-            kix::eval::store::save_activation_path(&cluster, &p.build.graph().result_dir)
+        && let Err(e) = kix::eval::store::save_activation_path(&cluster, &p.build.graph().built_via)
     {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
@@ -732,7 +731,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let kubernetes_uid = p.build.graph().kubernetes_uid.clone();
     let package_index = p.checked.package_index().clone();
     let build = p.build;
-    let result_path = build.graph().result_dir.clone();
+    let result_path = build.graph().built_via.clone();
 
     // Compute provenance on the CLI because the operator has no access to the
     // source repository.

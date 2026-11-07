@@ -4,6 +4,9 @@
   # The calling flake (`self`), used to record flake-relative pin file paths
   # in image sources.
   self ? null,
+  # How Helm charts are fetched and rendered: "placeholder" for the `kix`
+  # builder or "nix" for the `nix` builder (see helm.nix).
+  helmRoute ? "placeholder",
 }:
 
 let
@@ -18,7 +21,7 @@ let
   };
   env = import ./env.nix { inherit lib; };
   fragments = import ./vocab/fragments.nix { inherit lib; };
-  helm = import ./helm.nix { inherit pkgs lib; };
+  helm = import ./helm.nix { inherit lib pkgs helmRoute; };
   rbac = import ./vocab/rbac.nix { inherit lib; };
   kixlib = import ./vocab { inherit lib; };
   meta = import ./meta.nix { inherit lib; };
@@ -31,6 +34,17 @@ let
 
   # Encode colons in the filename because Nix store path names cannot contain
   # them. Resource identity comes from the manifest itself.
+  # Read the Kix release from the workspace version in cli/Cargo.toml, the
+  # file a release bumps. The kix program reports the same version, so Kix
+  # can tell a project which program matches its library. A copy of the
+  # library without that file has no version.
+  cargoToml = ../../cli/Cargo.toml;
+  version =
+    if builtins.pathExists cargoToml then
+      (builtins.fromTOML (builtins.readFile cargoToml)).workspace.package.version
+    else
+      null;
+
   manifestFileName =
     manifest:
     let
@@ -41,6 +55,8 @@ let
 in
 
 {
+  inherit version;
+
   inherit (k8s)
     clusterScoped
     mkResource

@@ -8,8 +8,9 @@
 # checks first (`eval/cluster.nix`), the PackageInstance wiring is validated
 # as `mkFlake` validates a real cluster's, and `scorecard.maxSeverity = "error"`
 # matches the cap `clusters/flake.nix` and `ludo/flake.nix` set. Nothing is
-# built except the Helm template derivations that chart packages read at
-# evaluation time.
+# built. Only `kix` renders the charts that chart packages read, so plain
+# `nix flake check` stops at the first one. The kix-cli test
+# `flake_checks_evaluate_with_helm` evaluates this check through `kix`.
 #
 # `knownFailures` lists the error-severity scorecard rules a package is known
 # to fail. Its cluster downgrades those rules to warnings so the rest of the

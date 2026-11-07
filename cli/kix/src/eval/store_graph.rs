@@ -1,8 +1,8 @@
 //! Store graph: in-memory representation of a Kix cluster's Nix store DAG.
 //!
-//! Reads the result folder produced by `nix build .#cluster-<name>-activation`
-//! (containing `activation` symlink + `kix-packages.json`) and builds a
-//! complete graph of packages, resources, and cross-package dependencies.
+//! Reads a build through [`BuildFiles`] (its Activation record and
+//! `kix-packages.json`) and builds a complete graph of packages, resources,
+//! and cross-package dependencies.
 //!
 //! Uses `nix-store -q --graph` for bulk graph loading (one subprocess call
 //! for the entire closure) instead of per-path `--references` queries.
@@ -13,8 +13,10 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use super::build_files::BuildFiles;
 use super::error::KixEvalError;
 use super::package_index::RecordPackageIndex;
+use super::store::disk_path;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
@@ -54,14 +56,19 @@ pub struct KubernetesBinding {
     pub version_from: Option<String>,
 }
 
-/// Read `kix-packages.json` from `result_dir`.
-pub fn read_index(result_dir: &Path) -> Result<KixPackageIndex, KixEvalError> {
-    let index_path = result_dir.join("kix-packages.json");
-    let bytes = std::fs::read(&index_path).map_err(|e| KixEvalError::StoreGraphError {
-        message: format!(
-            "failed to read kix-packages.json at {}: {e}",
-            index_path.display()
-        ),
+/// Read `kix-packages.json` of the build at `built_via`.
+pub fn read_index(built_via: &Path) -> Result<KixPackageIndex, KixEvalError> {
+    read_index_file(&BuildFiles::packages_of(built_via)?)
+}
+
+fn read_index_file(index_path: &Path) -> Result<KixPackageIndex, KixEvalError> {
+    let bytes = disk_path(index_path).and_then(std::fs::read).map_err(|e| {
+        KixEvalError::StoreGraphError {
+            message: format!(
+                "failed to read kix-packages.json at {}: {e}",
+                index_path.display()
+            ),
+        }
     })?;
     super::manifest_json::parse_index(&index_path.to_string_lossy(), &bytes).map_err(|e| {
         KixEvalError::StoreGraphError {
@@ -87,8 +94,10 @@ pub struct StoreGraph {
     /// `None` when the definition writes it.
     pub kubernetes_version_from: Option<String>,
     pub activation_path: PathBuf,
-    /// The result directory containing kix-packages.json + activation symlink.
-    pub result_dir: PathBuf,
+    /// The store path Kix records as `kix.run/built-via`: the build's index
+    /// file, or the result directory of a build that names its files with
+    /// links ([`BuildFiles`]).
+    pub built_via: PathBuf,
     pub packages: IndexMap<PathBuf, PackageNode>,
     pub resources: HashMap<PathBuf, ResourceNode>,
     /// Resource store path to owning PI store path.
@@ -159,9 +168,11 @@ fn is_k8s_path(path: &Path) -> bool {
 
 /// Read a file from a store path.
 fn read_store_file(path: &Path) -> Result<Vec<u8>, KixEvalError> {
-    std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
-        message: format!("failed to read store path {}: {e}", path.display()),
-    })
+    disk_path(path)
+        .and_then(std::fs::read)
+        .map_err(|e| KixEvalError::StoreGraphError {
+            message: format!("failed to read store path {}: {e}", path.display()),
+        })
 }
 
 /// Format `path` for error messages with hidden characters escaped.
@@ -264,7 +275,7 @@ impl StoreGraph {
             kubernetes_version: None,
             kubernetes_version_from: None,
             activation_path: PathBuf::new(),
-            result_dir: PathBuf::new(),
+            built_via: PathBuf::new(),
             packages: IndexMap::new(),
             resources: HashMap::new(),
             resource_owner: HashMap::new(),
@@ -281,36 +292,29 @@ impl StoreGraph {
             .collect()
     }
 
-    /// Build a StoreGraph from a result directory. Commands load one through
-    /// [`crate::build_source::Build::local`], which stamps it.
+    /// Build a StoreGraph from the build at `built_via` in the local store.
+    /// Commands load one through [`crate::build_source::Build::local`],
+    /// which stamps it.
     ///
     /// `status_fn` is called with progress messages during loading.
-    pub(crate) fn from_result_dir(
-        result_dir: &Path,
+    pub(crate) fn from_local(
+        built_via: &Path,
         status_fn: &dyn Fn(&str),
     ) -> Result<Self, KixEvalError> {
         // 1. Read kix-packages.json
         status_fn("Reading package index...");
-        let index = read_index(result_dir)?;
+        let files = BuildFiles::read(built_via)?;
+        let index = read_index_file(&files.packages)?;
+        let activation_path = files.activation;
 
-        // 2. Resolve activation symlink
-        let activation_link = result_dir.join("activation");
-        let activation_path =
-            std::fs::canonicalize(&activation_link).map_err(|e| KixEvalError::StoreGraphError {
-                message: format!(
-                    "failed to resolve activation symlink at {}: {e}",
-                    activation_link.display()
-                ),
-            })?;
-
-        // 3. Bulk-load the entire store graph in one nix-store call
+        // 3. Bulk-load the entire store graph in one `nix path-info` call
         status_fn("Loading store graph...");
         let ref_cache = super::nix::closure_graph(&activation_path)?;
 
         let graph = Self::assemble(
             index,
             activation_path,
-            result_dir.to_path_buf(),
+            built_via.to_path_buf(),
             ref_cache,
             &mut read_store_file,
             status_fn,
@@ -330,7 +334,7 @@ impl StoreGraph {
     pub fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
-        result_dir: PathBuf,
+        built_via: PathBuf,
         ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
         read: &mut dyn FnMut(&Path) -> Result<Vec<u8>, KixEvalError>,
         status_fn: &dyn Fn(&str),
@@ -463,7 +467,7 @@ impl StoreGraph {
             kubernetes_version: index.kubernetes.version,
             kubernetes_version_from: index.kubernetes.version_from,
             activation_path,
-            result_dir,
+            built_via,
             packages,
             resources,
             resource_owner,

@@ -8,7 +8,7 @@
 # Deployment it broke with kubectl, to check that the deploy fails on the
 # Deployment and not on the Service.
 #
-# Build:  nix build .#cluster-kind-port-activation --extra-experimental-features pipe-operators
+# Build:  kix build kind-port
 
 { kix, packages }:
 

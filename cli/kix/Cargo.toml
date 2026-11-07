@@ -14,6 +14,10 @@ path = "src/lib.rs"
 serde.workspace = true
 serde_json.workspace = true
 serde_yml.workspace = true
+# Helm renders: an event parser, so Kix chooses each scalar's JSON type
+yaml-rust2.workspace = true
+# A project's kix.toml
+toml.workspace = true
 # The plan document's JSON Schema
 schemars.workspace = true
 
@@ -62,7 +66,6 @@ blake3.workspace = true
 sha2.workspace = true
 
 # Paths
-directories.workspace = true
 walkdir.workspace = true
 tempfile.workspace = true
 

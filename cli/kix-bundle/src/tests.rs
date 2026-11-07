@@ -100,7 +100,7 @@ fn real() -> Contents {
 fn the_libs_fixture_is_this_bundles_build() {
     let mut graph = read(FIXTURE).unwrap();
     let fixture = kix::plan::fixtures::kix_enterprise_test();
-    graph.result_dir = fixture.result_dir.clone();
+    graph.built_via = fixture.built_via.clone();
     assert!(graph == fixture && graph.packages.keys().eq(fixture.packages.keys()));
 }
 
@@ -333,7 +333,7 @@ fn a_real_build_reads_and_gives_its_graph() {
     assert_eq!(bundle.cluster(), "kix-enterprise-test");
     assert_eq!(graph.cluster_name, "kix-enterprise-test");
     assert_eq!(
-        graph.result_dir,
+        graph.built_via,
         PathBuf::from(format!("bundle:sha256:{}", bundle.sha256()))
     );
     assert_eq!(graph.activation_path, PathBuf::from(bundle.record()));

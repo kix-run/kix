@@ -91,18 +91,35 @@ jobs:
       - name: Tests
         run: nix develop --command bash -c 'cd cli && cargo test --workspace'
 
-  # Decides whether this push is a release, from the workspace version in
+      # Evaluating the runtime spec runs the checks in cli/runtime/runtime.nix:
+      # that programs.json, which kix compiles in, matches what the runtime
+      # ships, and that every licence is on the approved list. Evaluation
+      # downloads nothing, so this covers every target from one machine. The
+      # release builds the runtime itself.
+      - name: Runtime checks
+        run: |
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            nix eval --raw ".#packages.$system.kix-runtime-spec.drvPath" >/dev/null
+          done
+
+  # Decides whether this run is a release, from the workspace version in
   # cli/Cargo.toml: it is when this repository has no `v<version>` tag yet.
   # A version lower than the latest tag, or one with no CHANGELOG.md
   # section, fails here, before anything is built. cli/README.md § Releases
   # has the whole process.
+  #
+  # It also decides whether the archive jobs run (`build`). They run for a
+  # release push, for workflow_dispatch, and for a pull request that changes
+  # how kix runs Nix or Helm without a Nix install. Only `publish` makes a
+  # release public, and only for a push to main.
   version:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
       notes: ${{ steps.version.outputs.notes }}
+      build: ${{ steps.build.outputs.build }}
+      runtime: ${{ steps.build.outputs.runtime }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -146,31 +163,159 @@ jobs:
             echo 'KIX_RELEASE_NOTES_END'
           } >> "$GITHUB_OUTPUT"
 
-  # Builds the kix binary for a release, after the tests pass, and publishes
-  # it. Pushes to main that are not releases build nothing. This repository
-  # is private and so are its releases, so the binaries go to the public
-  # kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a fine-grained token
-  # with Contents read/write on that repository only.
-  #
-  # A workflow_dispatch run builds and uploads the binaries as a workflow
-  # artifact but publishes nothing, which is how to try a change to this
-  # job from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
-  release:
+      # `build` runs the whole archive pipeline: the release binaries, and
+      # the archives run without Nix and with the machine's Nix. It runs for
+      # a release, for a pull request that makes one (its version has no
+      # tag yet), and for workflow_dispatch. Building the release binaries
+      # takes about ten minutes on a GitHub-hosted runner, so other pull
+      # requests skip it.
+      #
+      # `runtime` builds only the runtime for each platform and checks its
+      # programs run. A pull request runs it when it changes the runtime,
+      # the code that evaluates a cluster and renders its Helm charts, or
+      # the Nix side of those renders. To run the whole pipeline on such a
+      # pull request: `gh workflow run cli-tests.yml --ref <branch>`.
+      - name: Build the archives?
+        id: build
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          build=false
+          runtime=false
+          case $EVENT in
+            workflow_dispatch) build=true ;;
+            push | pull_request) build=$RELEASE ;;
+          esac
+          runtime=$build
+          if [ "$EVENT" = pull_request ] && git diff --name-only "$BASE_SHA...HEAD" | grep -Eq \
+            '^(cli/runtime/|cli/kix/src/eval/|kix/lib/helm\.nix$|kix/lib/helm-versions\.json$|\.github/workflows/cli-tests\.yml$)'; then
+            runtime=true
+          fi
+          echo "build=$build" | tee -a "$GITHUB_OUTPUT"
+          echo "runtime=$runtime" | tee -a "$GITHUB_OUTPUT"
+
+  # Builds the runtime a release ships beside the binary, in libexec/kix/
+  # (cli/runtime/), on a runner of each target platform: Nix fetches the
+  # programs for its own platform, and the macOS bundle step needs macOS to
+  # rewrite and sign the libraries. The macOS job also builds kix for
+  # aarch64-apple-darwin, which cargo zigbuild cannot link. Each job uploads
+  # tar files, because workflow artifacts drop file modes and symbolic
+  # links.
+  runtime:
     needs: [test, version]
-    if: needs.version.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.version.outputs.runtime == 'true'
+    strategy:
+      # Each platform's result is worth seeing, even when another fails.
+      fail-fast: false
+      matrix:
+        include:
+          # Spindle's image ships Nix.
+          - system: x86_64-linux
+            runner: [self-hosted, spindle-8c-16g]
+          # GitHub-hosted: Spindle has no ARM machines.
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            install-nix: true
+          # The Mac Studio's self-hosted runner: a fresh macOS VM for each
+          # job, with Nix installed.
+          - system: aarch64-darwin
+            runner: kix-macos-nix
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    # macOS tar would otherwise store extended attributes as ._ files, which
+    # the Linux release job would unpack into the archive.
+    env:
+      COPYFILE_DISABLE: '1'
+      # For the Nix that Spindle's and the Mac's images ship. `extra-`
+      # keeps what the image enabled.
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v31
+        if: matrix.install-nix
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes pipe-operators
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      # The Mac image ships a damaged ~/.cache/nix (its fetcher cache
+      # database is malformed). Nix rebuilds the cache when it is missing.
+      - name: Clear the Mac image's Nix cache
+        if: runner.os == 'macOS'
+        run: rm -rf ~/.cache/nix
+
+      # assemble.py prints each program it ships. On macOS it also relocates
+      # the nix build's libraries and fails on any library that runtime.nix
+      # does not list, so THIRD_PARTY_LICENSES covers everything shipped.
+      - name: Build the runtime
+        run: |
+          spec=$(nix build ".#packages.${{ matrix.system }}.kix-runtime-spec" --no-link --print-out-paths)
+          # Spindle's image has no python3 of its own.
+          py() { nix shell --inputs-from . nixpkgs#python3 --command python3 "$@"; }
+          py cli/runtime/assemble.py "$spec" runtime/libexec/kix
+          tar -cf "runtime-${{ matrix.system }}.tar" -C runtime libexec
+          # Writable copies, so the release job can unpack the sources of
+          # every platform into one directory, over each other.
+          cp -R "$(py -c 'import json, sys; print(json.load(open(sys.argv[1]))["sources"])' "$spec")" sources
+          chmod -R u+w sources
+          tar -cf "sources-${{ matrix.system }}.tar" -C sources .
+
+      - name: Check the bundled programs run
+        run: |
+          r=runtime/libexec/kix
+          for helm in "$r"/helm-*/bin/helm; do "$helm" version --short; done
+          for nix in "$r"/nix-*/bin/nix "$r"/nix-*/bin/nix-store; do "$nix" --version; done
+          for kubectl in "$r"/kubectl-*/bin/kubectl; do "$kubectl" version --client; done
+          for sops in "$r"/sops-*/bin/sops; do "$sops" --version --disable-version-check; done
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'macOS'
+
+      - name: Build kix for macOS
+        if: runner.os == 'macOS'
+        env:
+          KIX_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cargo build --manifest-path cli/Cargo.toml --locked --release -p kix-cli
+          bin=cli/target/release/kix
+          test "$("$bin" --version)" = "kix $KIX_VERSION" || { "$bin" --version; exit 1; }
+          tar -cf kix-aarch64-darwin.tar -C cli/target/release kix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.system }}
+          path: |
+            runtime-${{ matrix.system }}.tar
+            sources-${{ matrix.system }}.tar
+            kix-aarch64-darwin.tar
+          if-no-files-found: error
+
+  # Builds the kix binary for a release, after the tests pass, and packs it
+  # with the runtime into one archive per platform. Pushes to main that are
+  # not releases build nothing. The `publish` job publishes the archives
+  # once `without-nix` has run them.
+  #
+  # A workflow_dispatch run builds and uploads the archives as a workflow
+  # artifact but publishes nothing, which is how to try a change to these
+  # jobs from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
+  release:
+    needs: [test, version, runtime]
+    if: needs.version.outputs.build == 'true'
     # GitHub-hosted rather than Spindle. The binaries are static musl, and
     # nixpkgs has no musl standard library for its rustc in the binary
     # cache, while rustup's toolchains do not run on the NixOS image.
     runs-on: ubuntu-latest
-    # Write, to push the release tag to this repository and to start the
-    # docs deploy.
-    permissions:
-      contents: write
-      actions: write
     env:
       TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
       VERSION: ${{ needs.version.outputs.version }}
-      PUBLISH: ${{ needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -199,20 +344,50 @@ jobs:
               -p kix-cli --target "$target"
           done
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: runtime
+          merge-multiple: true
+
+      # Each archive holds kix-<version>-<system>/bin/kix beside
+      # libexec/kix/, where kix looks for its runtime. Asset names carry no
+      # version, so releases/latest/download/kix-<arch>-<os>.tar.gz always
+      # resolves.
       - name: Package
         run: |
           bin=cli/target/x86_64-unknown-linux-musl/release/kix
           file "$bin" | grep -Eq 'statically linked|static-pie linked' || { file "$bin"; exit 1; }
           test "$("$bin" --version)" = "kix $VERSION" || { "$bin" --version; exit 1; }
 
-          # Asset names carry no version, so
-          # releases/latest/download/kix-<arch>-linux.tar.gz always resolves.
-          mkdir dist
-          for target in $TARGETS; do
-            tar -czf "dist/kix-${target%%-*}-linux.tar.gz" \
-              -C "cli/target/$target/release" kix
+          mkdir dist darwin
+          tar -xf runtime/kix-aarch64-darwin.tar -C darwin
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            case $system in
+              *-linux) kix="cli/target/${system%%-*}-unknown-linux-musl/release/kix" ;;
+              *-darwin) kix=darwin/kix ;;
+            esac
+            dir="kix-$VERSION-$system"
+            mkdir -p "pkg/$dir/bin"
+            install -m 755 "$kix" "pkg/$dir/bin/kix"
+            tar -xf "runtime/runtime-$system.tar" -C "pkg/$dir"
+            tar -czf "dist/kix-$system.tar.gz" -C pkg "$dir"
           done
-          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+
+          # The x86_64 Linux archive runs here: kix must find the runtime
+          # beside it and every file must match the manifest.
+          "pkg/kix-$VERSION-x86_64-linux/bin/kix" doctor
+
+          # One archive with the LGPL sources of every platform. A source
+          # that two platforms share lands once.
+          sources="kix-$VERSION-third-party-sources"
+          mkdir "$sources"
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            tar -xf "runtime/sources-$system.tar" -C "$sources"
+          done
+          tar -I 'zstd -19 -T0' -cf "dist/$sources.tar.zst" "$sources"
+
+          (cd dist && sha256sum -- *.tar.gz *.tar.zst > SHA256SUMS)
           cat dist/SHA256SUMS
 
       - uses: actions/upload-artifact@v4
@@ -220,10 +395,140 @@ jobs:
           name: kix-${{ needs.version.outputs.version }}
           path: dist/
 
+  # Runs each release archive on a machine with no Nix, where kix must work
+  # from its own runtime and store: `kix doctor`, then `kix build` of a
+  # cluster without Helm and of one with Helm, which fetches nixpkgs and
+  # renders a chart. On Linux a plain Ubuntu container holds no /nix. On
+  # macOS sandbox-exec denies every access to /nix
+  # (cli/runtime/without-nix.sh).
+  without-nix:
+    needs: [version, release]
+    if: needs.version.outputs.build == 'true'
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          # The Mac Studio's self-hosted runner, with no Nix in the image.
+          - system: aarch64-darwin
+            runner: kix-macos-nonix
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NIX_CONFIG: |
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # A clone, not a worktree, with the full history that Nix's git
+      # fetcher needs.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Run the archive without Nix
+        run: |
+          test ! -e /nix || { echo "this runner has /nix"; ls -la /nix; exit 1; }
+          tar -xzf "dist/kix-${{ matrix.system }}.tar.gz" -C "$RUNNER_TEMP"
+          cli/runtime/without-nix.sh "$RUNNER_TEMP/kix-$VERSION-${{ matrix.system }}" .
+
+  # Builds with the machine's Nix (the nix builder in kix.toml), as a user
+  # the Nix daemon does not trust, which is how most machines with Nix are
+  # set up. cli/runtime/nix-builder.sh checks that the Helm cluster builds
+  # to the same YAML under both builders, and that a project choosing the
+  # nix builder works with `kix build` and with a plain `nix build`.
+  nix-builder:
+    needs: [version, release]
+    if: needs.version.outputs.build == 'true'
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          # The Mac Studio's self-hosted runner, with Nix in the image.
+          - system: aarch64-darwin
+            runner: kix-macos-nix
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NIX_CONFIG: |
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # The installer makes the runner user trusted. The later
+      # `trusted-users` line replaces that, so the check runs untrusted.
+      - uses: cachix/install-nix-action@v31
+        if: runner.os != 'macOS'
+        with:
+          extra_nix_config: |
+            trusted-users = root
+
+      # The Mac image ships a damaged ~/.cache/nix (its fetcher cache
+      # database is malformed). Nix rebuilds the cache when it is missing.
+      - name: Clear the Mac image's Nix cache
+        if: runner.os == 'macOS'
+        run: rm -rf ~/.cache/nix
+
+      # The Mac image comes with Nix. If its daemon trusts the runner user,
+      # limit trust to root, so the check runs untrusted here too.
+      - name: Make the runner user untrusted
+        if: runner.os == 'macOS'
+        run: |
+          trusted() { nix store info --json | jq -r .trusted; }
+          if [ "$(trusted)" != false ]; then
+            echo 'trusted-users = root' | sudo tee -a /etc/nix/nix.conf
+            sudo launchctl kickstart -k system/org.nixos.nix-daemon
+            sleep 3
+          fi
+          test "$(trusted)" = false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Build with the machine's Nix
+        run: |
+          tar -xzf "dist/kix-${{ matrix.system }}.tar.gz" -C "$RUNNER_TEMP"
+          cli/runtime/nix-builder.sh "$RUNNER_TEMP/kix-$VERSION-${{ matrix.system }}" .
+
+  # Publishes the archives the release job built, once they ran without Nix.
+  # This repository is private and so are its releases, so the binaries go
+  # to the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
+  # fine-grained token with Contents read/write on that repository only.
+  publish:
+    needs: [version, release, without-nix, nix-builder]
+    if: needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Write, to push the release tag to this repository and to start the
+    # docs deploy.
+    permissions:
+      contents: write
+      actions: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
       # A release that already exists in kix-releases is left alone, so a
       # run that published and then failed to tag can be run again.
       - name: Publish release
-        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
           NOTES: ${{ needs.version.outputs.notes }}
@@ -242,7 +547,6 @@ jobs:
       # Last, so a run that fails before this point leaves no tag and the
       # next run tries the release again.
       - name: Tag release
-        if: env.PUBLISH == 'true'
         run: |
           git tag "v$VERSION" "$GITHUB_SHA"
           git push origin "refs/tags/v$VERSION"
@@ -251,7 +555,6 @@ jobs:
       # pushed with this job's token starts no workflow, so the deploy is
       # started here.
       - name: Deploy the release's docs
-        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main

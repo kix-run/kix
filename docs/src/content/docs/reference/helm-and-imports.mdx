@@ -43,6 +43,7 @@ kix.helmChart {
 | `version` | string | Required | Chart version string (also used as default `meta.version`). |
 | `hash` | string | Required | Fixed-output Nix SRI hash (`"sha256-..."`) of the fetched chart tarball. |
 | `releaseName` | string | `name` | Helm release name passed to `helm template`. |
+| `helmVersion` | `"3"` or `"4"` | `"4"` | Major version of Kix's bundled Helm used to render the chart (`"4"` is `4.3.1`, `"3"` is `3.19.1`; see [Helm versions](#helm-versions)). |
 | `root` | `{ kind, name }` or `null` | `null` | Explicit root resource selector; when `null`, Kix selects the primary `Service` or workload automatically (`chart.autoRoot`). |
 | `includeCrds` | bool | `true` | Whether to pass `--include-crds` to `helm template`. |
 | `strip` | `{ helmAnnotations ? true; helmLabels ? true; defaultStrategy ? true; }` | `{ }` | Controls normalization of Helm metadata annotations (`helmAnnotations`), `app.kubernetes.io/managed-by` and `helm.sh/chart` labels (`helmLabels`), and default `RollingUpdate` strategy blocks (`defaultStrategy`). |
@@ -116,9 +117,10 @@ in
 | `values` | attrset | `{ }` | Nix attribute set serialized to `values.yaml` and passed to `helm template --values`. |
 | `releaseName` | string | `"release"` | Release name passed to `helm template`. |
 | `namespace` | string | `scope.namespaceName` | Namespace passed to `helm template --namespace`. |
+| `helmVersion` | `"3"` or `"4"` | `"4"` | Major version of Kix's bundled Helm used to render the chart (`"4"` is `4.3.1`, `"3"` is `3.19.1`; see [Helm versions](#helm-versions)). |
 | `includeCrds` | bool | `true` | Passes `--include-crds` and wraps rendered CRDs with `scope.mkCRD`. |
 | `includeHooks` | bool | `true` | When `false`, passes `--no-hooks` to `helm template`. Chart test hooks (`helm.sh/hook` containing `"test"`) are always dropped when wrapping resources. |
-| `extraFlags` | list of strings | `[ ]` | Extra CLI flags passed to `helm template` (cannot contain `--values`, `--namespace`, `--kube-version`, or `--include-crds`). |
+| `extraFlags` | list of strings | `[ ]` | Extra CLI arguments passed to `helm template`, one argument per list element (cannot contain `--values`, `--namespace`, `--kube-version`, or `--include-crds`). |
 | `strip` | `{ helmAnnotations ? true; helmLabels ? true; defaultStrategy ? true; }` | `{ }` | Normalization booleans controlling whether Kix strips `meta.helm.sh/*`, `helm.sh/*`, and `checksum/*` annotations (`helmAnnotations`), `app.kubernetes.io/managed-by` and `helm.sh/chart` labels (`helmLabels`), and default `RollingUpdate` strategy blocks (`defaultStrategy`). To filter or modify rendered resources, use `patchResources`. |
 | `preserveAnnotationPrefixes` | list of strings | `[ ]` | Keeps matching annotation prefixes (such as `"argocd.argoproj.io/"`) when `strip.helmAnnotations` is enabled. |
 | `patchResources` | `list -> list` | `lib.id` | Transforms the list of parsed chart resource attribute sets (after `List` expansion and test-hook filtering) before DAG reconstruction and `scope.mk*` wrapping. |
@@ -167,7 +169,20 @@ crdList = scope.helm.importChartCrds {
 };
 ```
 
-`scope.helm.importChartCrds` accepts `{ chart, scope, releaseName ? "release", values ? { } }` and returns a **list** of wrapped `CustomResourceDefinition` resources.
+`scope.helm.importChartCrds` accepts `{ chart, scope, releaseName ? "release", values ? { }, helmVersion ? "4" }` and returns a **list** of wrapped `CustomResourceDefinition` resources. Pass `helmVersion = "3";` to render the chart's CRDs with Helm 3.
+
+### Helm versions
+
+`kix.helmChart`, `scope.helm.importChart`, and `scope.helm.importChartCrds` render charts with **Helm 4** (`4.3.1`) by default. If an upstream chart relies on template behavior that changed in Helm 4, set `helmVersion = "3";` to render that chart with **Helm 3** (`3.19.1`). Upstream Helm 3 receives security fixes until 10 February 2027. Passing any other major version fails evaluation and lists the shipped versions.
+
+The exact Helm release for each major version is pinned in `kix/lib/helm-versions.json` and shipped with `kix`. A Kix patch or minor release can update a bundled Helm version (for example, a Helm security or patch update). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), when you upgrade `kix` to a release that updates a Helm version, projects that use Helm charts stop before rendering and ask you to align `flake.lock` with [`kix lib update`](/docs/reference/cli/lib/).
+
+### How project builders fetch and render charts
+
+How `fetchHelmChart` and `importChart` run depends on the project's builder in [`kix.toml`](/docs/reference/kix-toml/):
+
+- **`builder = "kix"` (default):** The `kix` CLI runs its bundled `helm` binaries (`3.19.1` or `4.3.1`) to pull each chart tarball, verify its SRI `hash`, run `helm template`, and store the rendered manifests in Kix's local store (`~/.cache/kix/store`).
+- **`builder = "nix"`:** The machine's Nix fetches the chart and runs the same Helm release (`kix/lib/helm-versions.json`) with the same `helm template` flags during evaluation (`allow-import-from-derivation` must be `true`, the Nix default). A chart renders the same way under either builder.
 
 ---
 

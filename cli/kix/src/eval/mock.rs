@@ -1,4 +1,4 @@
-//! Mock Nix backend for this crate's tests.
+//! Mock builder for this crate's tests.
 //!
 //! Returns canned responses without any real Nix evaluation.
 
@@ -8,14 +8,14 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::error::KixEvalError;
-use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
+use super::evaluator::{Builder, ClusterOutput, ClusterPackageInfo, PackageInfo};
 
-/// Mock backend that returns pre-configured cluster data.
-pub(crate) struct MockNixBackend {
+/// Mock builder that returns pre-configured cluster data.
+pub(crate) struct MockBuilder {
     clusters: HashMap<String, Vec<Value>>,
 }
 
-impl MockNixBackend {
+impl MockBuilder {
     /// Create an empty mock backend.
     pub(crate) fn new() -> Self {
         Self {
@@ -29,13 +29,13 @@ impl MockNixBackend {
     }
 }
 
-impl Default for MockNixBackend {
+impl Default for MockBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl NixBackend for MockNixBackend {
+impl Builder for MockBuilder {
     fn eval_cluster(
         &mut self,
         _flake_path: &Path,
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn mock_returns_registered_cluster() {
-        let mut backend = MockNixBackend::new();
+        let mut backend = MockBuilder::new();
         backend.add_cluster(
             "test",
             vec![json!({"kind": "Namespace", "metadata": {"name": "test"}})],

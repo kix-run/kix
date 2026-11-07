@@ -117,11 +117,89 @@ outputs = inputs: inputs.kixpkgs.lib.mkFlake {
 partly discarded by an instance that sets part of the option, at any
 availability level the package can run at.
 
+## Use `mkFlake` inside a larger flake
+
+A repository whose flake also builds other things, such as NixOS machines or
+container images, can still use `mkFlake` for its Kix outputs. Call it in a
+`let` binding and merge its `packages`, `checks`, and `legacyPackages` into
+the flake's own, one system at a time:
+
+```nix title="flake.nix"
+outputs =
+  inputs:
+  let
+    systems = [ "x86_64-linux" "aarch64-darwin" ];
+    forAllSystems = inputs.nixpkgs.lib.genAttrs systems;
+    kixOutputs = inputs.kixpkgs.lib.mkFlake {
+      inherit inputs systems;
+      clusters.production =
+        { kix, packages }:
+        import ./clusters/production.nix {
+          inherit kix packages;
+          shared = import ./clusters/shared.nix { inherit kix; };
+        };
+    };
+  in
+  {
+    nixosConfigurations.web-1 = ...;
+
+    packages = forAllSystems (
+      system: kixOutputs.packages.${system} // { deploy-tool = ...; }
+    );
+    checks = forAllSystems (
+      system:
+      kixOutputs.checks.${system}
+      // {
+        policy = import ./checks/policy.nix {
+          inherit (kixOutputs.legacyPackages.${system}.kixLib) kix packages;
+        };
+      }
+    );
+    legacyPackages = forAllSystems (system: kixOutputs.legacyPackages.${system});
+  };
+```
+
+- **A cluster that needs more arguments** is given as a function. `mkFlake`
+  passes it `kix` and `packages`, and the function passes the rest to the
+  cluster file. Build anything the cluster uses, such as `shared` above, from
+  the `kix` the function receives.
+- **A check or tool outside the clusters** takes the library from
+  `legacyPackages.<system>.kixLib`. It holds `kix` and `packages`, set up
+  for the builder in [`kix.toml`](/docs/reference/kix-toml/), so it renders
+  Helm charts the same way as the clusters.
+- **Keep your own output names apart from Kix's.** `//` keeps the right-hand
+  value when two names clash, without an error. Kix's outputs start with
+  `cluster-`, `schema-cluster-`, `rules-cluster-`, `pi-wiring-cluster-`,
+  `option-contract-`, and, under `legacyPackages`, `kix`.
+
+:::caution
+Do not publish Kix's outputs yourself with `kixpkgs.lib.forPkgs`. `forPkgs`
+returns the library but none of the outputs the `kix` program reads, so a flake
+that uses it misses each output `mkFlake` adds, and cannot use
+`builder = "nix"`.
+:::
+
+## Choose a project builder (optional)
+
+By default (`builder = "kix"`), Kix evaluates your project with its bundled
+runtime and local store (`~/.cache/kix/store`). If your project needs the
+machine's Nix installation and its configured binary caches or remote builders,
+add [`kix.toml`](/docs/reference/kix-toml/) beside `flake.nix` and stage it in
+Git:
+
+```toml title="kix.toml"
+builder = "nix"
+```
+
+<Command commands={["git add kix.toml"]} cwd="infrastructure/" />
+
+See [`kix.toml`](/docs/reference/kix-toml/) for the full builder reference.
+
 ## Lock the inputs
 
-Create or update `flake.lock` after adding the inputs:
+Pin `kixpkgs` in `flake.lock` to match your installed Kix CLI:
 
-<Command commands={["nix flake lock"]} cwd="infrastructure/" />
+<Command commands={["kix lib update"]} cwd="infrastructure/" />
 
 Commit `flake.nix` and `flake.lock` together. Other machines and CI will then
 evaluate the same Kix and nixpkgs revisions.

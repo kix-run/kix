@@ -1,0 +1,3 @@
+# 2026-11-06 · `cli/kix/src/runtime.rs` (`use_store`) · Nix cannot build a derivation in Kix's own store on a Linux machine whose store sits on `/scratch`.
+
+`nix build` of any derivation with `NIX_CONF_DIR` pointing at Kix's store (`$XDG_CACHE_HOME/kix/store`) stops with "suspicious ownership or permission on ... .drv.chroot/root/nix/store/...; rejecting this build output". Kix evaluates without building, so `kix build` works. A cluster whose packages read any other derivation's output during evaluation, or a flake check run against that store, would fail the same way. Seen while trying to run `checks.x86_64-linux.pi-wiring-cluster-minimal` that way.

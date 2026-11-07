@@ -8,7 +8,9 @@ name: Bundle checks
 #   bundles in cli/kix-bundle/tests/fixtures and the plan file in
 #   cli/kix/tests/fixtures, under the README's 4 GiB RSS cap;
 # - `every_test_cluster_bundles`, which builds and bundles every test
-#   cluster.
+#   cluster;
+# - `flake_checks_evaluate_with_helm`, which evaluates every cluster's
+#   PackageInstance wiring check and `every-package-evaluates` through kix.
 #
 # A short run catches a reader change that breaks on the seeds' first
 # mutations without holding a Spot VM long enough to be preempted. The weekly
@@ -28,6 +30,7 @@ on:
       - 'cli/kix-container/**'
       - 'cli/kix/src/plan/file.rs'
       - 'cli/kix/src/eval/**'
+      - 'kix/lib/helm.nix'
       - 'cli/kix-cli/src/commands/bundle.rs'
       - 'cli/kix-cli/tests/commands_test.rs'
       - 'cli/fuzz/**'
@@ -89,6 +92,13 @@ jobs:
         run: |
           nix develop --command bash -c \
             'cd cli && cargo test -p kix-cli --test commands_test -- --ignored every_test_cluster_bundles'
+
+      # Plain `nix flake check` cannot render Helm charts, so the
+      # evaluation-only flake checks run through kix here.
+      - name: Flake checks evaluate with Helm
+        run: |
+          nix develop --command bash -c \
+            'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'
 
       - name: Upload crashing inputs
         if: failure()

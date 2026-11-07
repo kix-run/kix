@@ -24,6 +24,13 @@ pub enum KixEvalError {
     )]
     NoKixOutputs { attr: String },
 
+    /// The cluster exists, but its Kix library is older than this binary
+    /// and writes no `activationIndex`.
+    #[error(
+        "cluster '{cluster}' uses a Kix library older than this Kix release, so Kix could not evaluate it. Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library"
+    )]
+    NoActivationIndex { cluster: String },
+
     #[error("could not access the Nix evaluation cache: {source}")]
     CacheError {
         #[source]
@@ -35,6 +42,25 @@ pub enum KixEvalError {
 
     #[error(transparent)]
     Nix(#[from] super::nix::NixCommandError),
+
+    /// The machine's Nix refused to build a Helm chart during evaluation.
+    #[error(
+        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), and its setting allow-import-from-derivation is off. The nix builder needs it to render Helm charts during evaluation. Set allow-import-from-derivation = true in nix.conf, or ask the administrator of this machine's Nix to set it"
+    )]
+    ImportFromDerivationDisabled,
+
+    /// Under the nix builder, evaluation reached a chart that only the kix
+    /// builder renders. The library's nix route should never produce one.
+    #[error(
+        "internal error: under the nix builder, evaluation reached a Helm chart prepared for Kix's own builder ({path}). This is a bug in Kix. Please report it with the output of `kix -v`"
+    )]
+    PlaceholderUnderNix { path: String },
+
+    #[error(transparent)]
+    Project(#[from] crate::project::ProjectMismatch),
+
+    #[error(transparent)]
+    Helm(#[from] super::helm::HelmError),
 
     /// A manifest or package index in the build could not be parsed as strict JSON.
     #[error("could not read the built resources and their dependencies: {0}")]

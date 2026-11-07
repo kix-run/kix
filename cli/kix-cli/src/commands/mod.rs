@@ -6,6 +6,7 @@ pub mod compliance;
 pub mod deploy;
 pub mod deploy_log;
 pub mod diff;
+pub mod doctor;
 pub mod drift;
 pub mod export;
 pub mod gc;
@@ -14,6 +15,7 @@ pub mod graph_stream;
 pub mod health;
 pub mod images;
 pub mod inspect;
+pub mod library;
 pub mod list;
 pub mod logs;
 pub mod migrate;
@@ -174,7 +176,7 @@ fn resolve_identity(
 }
 
 /// Build `cluster` from `global.flake` into the local Nix store, reporting
-/// progress lines to `status` and prefixing `nix build` errors with `build_failed`.
+/// progress lines to `status` and prefixing evaluation errors with `build_failed`.
 pub(crate) fn build_flake(
     global: &GlobalArgs,
     cluster: &str,
@@ -188,9 +190,9 @@ pub(crate) fn build_flake(
     })
 }
 
-/// Error prefix for commands whose `nix build` step fails.
+/// Error prefix for commands whose evaluation step fails.
 pub(crate) const BUILD_FAILED: &str = "failed to build cluster";
-/// Error prefix for activation-oriented commands whose `nix build` step fails.
+/// Error prefix for activation-oriented commands whose evaluation step fails.
 pub(crate) const ACTIVATION_BUILD_FAILED: &str = "failed to build cluster activation";
 
 /// Resolve a local flake path to an absolute path, or pass a remote flake URI through unchanged.
@@ -208,12 +210,34 @@ pub(crate) fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     }
 }
 
+/// Return the local project directory `flake` names, or `None` for a remote
+/// flake reference.
+pub(crate) fn project_dir(flake: &str) -> Option<PathBuf> {
+    if flake.contains(':') {
+        return None;
+    }
+    // `absolute` drops `.` components, so messages name `kix.toml` cleanly.
+    resolve_flake_path(flake)
+        .ok()
+        .map(|p| std::path::absolute(&p).unwrap_or(p))
+}
+
+/// Read the project's `kix.toml` and choose the Nix runner its builder
+/// needs. Call it before Kix runs any Nix program.
+pub(crate) fn select_builder(global: &GlobalArgs) -> miette::Result<()> {
+    let config = kix::project::ProjectConfig::load(project_dir(&global.flake).as_deref())
+        .map_err(|e| miette::miette!("{e}"))?;
+    kix::runtime::select_builder(config.builder, config.builder_source)
+        .map_err(|e| miette::miette!("{e}"))?;
+    Ok(())
+}
+
 fn create_evaluator(
     flake: &str,
     no_cache: bool,
     input_overrides: Vec<(String, String)>,
 ) -> miette::Result<kix::eval::KixEvaluator> {
-    let backend = kix::eval::CliNixBackend::with_overrides(input_overrides);
+    let backend = kix::eval::LocalBuilder::with_overrides(input_overrides);
     let flake_path = resolve_flake_path(flake)?;
 
     if no_cache {

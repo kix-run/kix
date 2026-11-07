@@ -14,11 +14,11 @@ Helm chart that does not have a native Kix package yet.
 
 :::caution[Helm is a fallback bridge]
 Wrapping a Helm chart brings its rendered YAML into Kix's deploy graph, but you
-give up several guarantees that native Kix packages provide: `config.values` is
-an untyped attribute set rather than a validated option schema, intra-chart
+give up several guarantees that native Kix packages provide. `config.values` is
+an untyped attribute set rather than a validated option schema, and intra-chart
 dependencies and network policies rely on YAML heuristics rather than `.out`
-references, `cluster.availability` does not scale or spread workloads
-automatically, and upstream chart defaults often require patching or exemptions
+references. `cluster.availability` does not scale or spread workloads
+automatically, and upstream chart defaults often need patching or exemptions
 to pass Kix scorecard rules. Prefer native Kix packages whenever one is
 available; see
 [Trade-offs of wrapping a Helm chart](/docs/explanation/helm-integration/#trade-offs-of-wrapping-a-helm-chart)

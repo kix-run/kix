@@ -1,6 +1,6 @@
 # 161: Rootless evaluation with a bundled runtime
 
-**Status:** Draft (implementation plan)
+**Status:** Implemented (kixpkgs#319, 2026-11-07)
 **Related:** kixpkgs#315, `120_compiler_theory_mapping.md` (Helm render caching)
 
 ## Goal
@@ -378,6 +378,24 @@ Each phase is one pull request and leaves `main` working.
    the `/nix`-blocked CI job. Update the install docs, `cli/README.md`, and the
    changelog.
 
+## Updating bundled programs
+
+The size of a program's update decides which Kix release can carry it:
+
+- A patch update (2.35.3 to 2.35.4) can go in a Kix patch release.
+- A minor update (2.35 to 2.36) goes in a Kix minor release.
+- A major update (Helm 4 to Helm 5) is decided when it comes. It is not tied
+  to a Kix major release by rule.
+
+Helm follows the same rule, with one cost. The library names the exact Helm
+version, and a library and binary that name different versions stop with an
+error (section 5). So a patch release that updates Helm makes projects that
+use Helm stop until they run `kix lib update`, which moves `flake.lock` to the
+library of the same release using Kix's own Nix. The changelog lists it under
+"Breaking (shows an error)". This is acceptable because Kix treats Helm as a
+stopgap for charts not yet ported to native packages, and security fixes must
+ship fast.
+
 ## Open questions
 
 1. **Which `kubectl` version?** Kubernetes supports `kubectl` within one minor
@@ -392,7 +410,8 @@ Each phase is one pull request and leaves `main` working.
   nixpkgs `lib` and saving charts for transfer are separate issues.
 - **Vulnerability scanning.** ROADMAP keeps scanners outside Kix.
 - **x86_64-darwin.** Nixpkgs 26.11 no longer supports it.
-- **Using the machine's own Nix.** A later advanced option.
+- **Using the machine's own Nix.** Planned per project in
+  `162_project_builders.md`.
 
 ## Alternatives considered
 

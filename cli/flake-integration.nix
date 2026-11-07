@@ -27,18 +27,32 @@
   #
   # { system, pkgs, lib, self', inputs', ... }:
 
+  # `runtime` is a Kix runtime directory (`cli/runtime/in-store.nix`,
+  # exposed as `packages.<system>.kix-runtime`). The package links it at
+  # libexec/kix beside bin/kix, where kix looks for it. Without one, kix
+  # finds no runtime unless KIX_RUNTIME_DIR names one.
   mkKixPackage =
     {
       pkgs,
       lib,
       crane,
+      runtime ? null,
       ...
     }:
     let
       craneLib = crane.mkLib pkgs;
 
       commonArgs = {
-        src = craneLib.cleanCargoSource ../cli;
+        # runtime/programs.json is compiled into kix, so keep it beside the
+        # Rust sources.
+        src = lib.cleanSourceWith {
+          src = ../cli;
+          filter =
+            path: type:
+            craneLib.filterCargoSources path type
+            || lib.hasSuffix "/cli/runtime" path
+            || lib.hasSuffix "/cli/runtime/programs.json" path;
+        };
         strictDeps = true;
 
         buildInputs = [ pkgs.openssl ] ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ];
@@ -78,11 +92,31 @@
         }
       );
     in
-    kix;
+    if runtime == null then
+      kix
+    else
+      # kix resolves links to its own binary before it looks for
+      # ../libexec/kix, so bin/kix is a copy, not a link to the crane build.
+      # The runtime is a separate derivation, so a runtime change does not
+      # rebuild kix.
+      pkgs.runCommand "kix-${kix.version}"
+        {
+          inherit (kix) version meta;
+          passthru = {
+            unwrapped = kix;
+            inherit runtime;
+          };
+        }
+        ''
+          cp -R ${kix} $out
+          chmod -R u+w $out
+          mkdir -p $out/libexec
+          ln -s ${runtime} $out/libexec/kix
+        '';
 
   # --- Outputs to merge into perSystem ---
   #
-  # packages.kix = mkKixPackage { inherit pkgs lib; crane = inputs'.crane; nix-src = inputs'.nix-src; };
+  # packages.kix = mkKixPackage { inherit pkgs lib; crane = inputs'.crane; runtime = self'.packages.kix-runtime; };
   #
   # apps.kix = {
   #   type = "app";

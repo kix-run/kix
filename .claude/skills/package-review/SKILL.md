@@ -426,7 +426,7 @@ any Nix evaluation, and never use a `path:` flakeref.
 | scorecard | part of the eval; `kix check <cluster>` | probes, resources, non-root, `latest`, placeholders, owner, description, `monitorSelectorMatchesService`, `clusterDomainLiteral`, `selectorCoherence`, `unsafeGrants`, `volumeHasSource` |
 | validate and cross-resource checks | part of the eval | SA and roleRef exist, Service selectors, unique names, CR-to-CRD declarations and served versions, declared Secret keys, managed Secret keys without values, one default class, claim and class references |
 | CRD vendoring | `nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check` | stale or orphaned vendored CRDs and roles |
-| smoke cluster | `nix build ludo/#cluster-ludo-kind --extra-experimental-features pipe-operators` | regressions in the full package set |
+| smoke cluster | `nix run .#kix -- check ludo-kind --flake ./ludo` | regressions in the full package set |
 
 Check `df -BG --output=avail /` before a build. Redundant-requires and
 orphaned-part warnings are traces, not failures, and appear only when the

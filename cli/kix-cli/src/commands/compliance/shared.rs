@@ -59,7 +59,8 @@ pub fn now_rfc3339() -> String {
 pub struct GitState {
     /// The commit `HEAD` points at.
     pub rev: String,
-    /// Whether the working tree differs from `rev`, including untracked files.
+    /// Whether tracked files differ from `rev`. Untracked files are not part
+    /// of the flake Nix evaluates, so they do not count.
     pub dirty: bool,
 }
 
@@ -74,33 +75,20 @@ impl GitState {
     }
 }
 
-/// Read the Git commit and working-tree status at `flake_path`, returning `None`
-/// if `flake_path` is not in a Git worktree or `git` is unavailable.
+/// Read the Git commit and working-tree status of the flake at `flake_path`
+/// from `nix flake metadata`, returning `None` if the flake is not in a Git
+/// repository with a commit, or Nix cannot read it.
 pub fn git_state(flake_path: &Path) -> Option<GitState> {
-    let rev = run_git(flake_path, &["rev-parse", "HEAD"])?;
-    if rev.is_empty() {
-        return None;
+    match kix::eval::nix::flake_revision(flake_path) {
+        Ok(revision) => revision.map(|r| GitState {
+            rev: r.rev,
+            dirty: r.dirty,
+        }),
+        Err(e) => {
+            tracing::debug!(error = %e, "could not read the flake's Git revision");
+            None
+        }
     }
-    // `git status --porcelain` reports modified, staged, and untracked files,
-    // all of which can affect what Nix evaluates in a local directory.
-    let status = run_git(flake_path, &["status", "--porcelain"])?;
-    Some(GitState {
-        rev,
-        dirty: !status.is_empty(),
-    })
-}
-
-fn run_git(path: &Path, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
 }
 
 /// Generate a syntactically valid UUID v4 string from a BLAKE3 hash of the

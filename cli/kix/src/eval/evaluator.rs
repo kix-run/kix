@@ -1,7 +1,7 @@
-//! Core evaluator: trait-based Nix backend abstraction with caching.
+//! Core evaluator: the [`Builder`] trait with a cache in front of it.
 //!
-//! The `NixBackend` trait has two implementations: `CliNixBackend`, which
-//! runs the `nix` command, and `MockNixBackend` in this crate's tests.
+//! The `Builder` trait has two implementations: `LocalBuilder`, which
+//! runs the `nix` command, and `MockBuilder` in this crate's tests.
 
 use std::path::{Path, PathBuf};
 
@@ -89,9 +89,13 @@ pub struct ClusterPackageInfo {
     pub available_packages: std::collections::BTreeMap<String, PackageInfo>,
 }
 
-/// Abstraction over Nix evaluation: the `nix` command in production, canned
-/// data in tests.
-pub trait NixBackend: Send {
+/// Build a project's clusters and list what it defines.
+///
+/// Each builder a project can choose in `kix.toml` implements this trait,
+/// and commands use the trait without asking which builder is in use. A
+/// result can name store paths. The builder must make every path it names
+/// available in the local store before it returns, wherever it did the work.
+pub trait Builder: Send {
     /// Evaluate a cluster attribute and return its manifests.
     fn eval_cluster(
         &mut self,
@@ -116,9 +120,9 @@ pub trait NixBackend: Send {
     ) -> Result<ClusterPackageInfo, KixEvalError>;
 }
 
-/// Evaluator wrapping a `NixBackend`.
+/// Evaluator wrapping a [`Builder`].
 pub struct KixEvaluator {
-    backend: Box<dyn NixBackend>,
+    backend: Box<dyn Builder>,
     cache: SqliteCache,
     /// The flake path to evaluate (resolved, no symlinks).
     flake_path: PathBuf,
@@ -127,7 +131,7 @@ pub struct KixEvaluator {
 impl KixEvaluator {
     /// Create a new evaluator with the given backend and cache directory.
     pub fn new(
-        backend: impl NixBackend + 'static,
+        backend: impl Builder + 'static,
         flake_path: &Path,
         cache_dir: &Path,
     ) -> Result<Self, KixEvalError> {
@@ -147,7 +151,7 @@ impl KixEvaluator {
     /// Uses an ephemeral in-memory SQLite database, so every evaluation
     /// goes straight to Nix. Useful for debugging stale-cache issues.
     pub fn new_uncached(
-        backend: impl NixBackend + 'static,
+        backend: impl Builder + 'static,
         flake_path: &Path,
     ) -> Result<Self, KixEvalError> {
         let cache = SqliteCache::open_in_memory()?;
@@ -170,8 +174,11 @@ impl KixEvaluator {
         tracing::debug!(cluster = cluster_name, "evaluating");
 
         let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
-        let cache_key =
-            SqliteCache::compute_key_with_source(&self.flake_path, cluster_name, &fingerprint)?;
+        let cache_key = SqliteCache::compute_key_with_source(
+            &self.flake_path,
+            &super::nix::activation_index_attr(cluster_name),
+            &fingerprint,
+        )?;
 
         if let Some(cached_json) = self.cache.get(&cache_key)? {
             if let Ok(output) = serde_json::from_str::<ClusterOutput>(&cached_json) {
@@ -314,7 +321,7 @@ impl KixEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::mock::MockNixBackend;
+    use crate::eval::mock::MockBuilder;
     use serde_json::json;
 
     #[test]
@@ -341,8 +348,8 @@ mod tests {
         assert_eq!(output(vec![ns]).cluster_name(), None);
     }
 
-    fn test_backend() -> MockNixBackend {
-        let mut backend = MockNixBackend::new();
+    fn test_backend() -> MockBuilder {
+        let mut backend = MockBuilder::new();
         backend.add_cluster(
             "test-cluster",
             vec![json!({

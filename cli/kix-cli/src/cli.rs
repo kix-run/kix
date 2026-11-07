@@ -144,6 +144,8 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "images",
             "compliance",
             "pin",
+            "lib",
+            "doctor",
         ],
     ),
     // Only commands that evaluate through the SQLite eval cache.
@@ -348,12 +350,25 @@ pub enum Command {
     /// Generate shell completions
     Completions(CompletionsArgs),
 
+    /// Check the Kix installation
+    ///
+    /// Reports which runtime directory Kix runs its programs (nix, helm,
+    /// kubectl, sops) from, checks that its manifest.json lists the programs
+    /// this kix expects, and checks every file against its SHA-256 in the
+    /// manifest. Also reports the project's builder and where it was chosen
+    /// (kix.toml, or the default). Exits 1 when a check fails.
+    Doctor,
+
     /// Compliance exports: SBOM, SLSA attestations, audit bundles
     Compliance(ComplianceArgs),
 
     /// Resolve image references and record them in a committed pin file
     #[command(subcommand)]
     Pin(PinCommand),
+
+    /// Manage the Kix library this project pins in flake.lock
+    #[command(subcommand)]
+    Lib(LibCommand),
 
     /// Run an external `kix-<NAME>` plugin from `PATH`
     #[command(external_subcommand)]
@@ -393,11 +408,33 @@ impl Command {
             Command::Snapshot(a) => match &a.command {
                 SnapshotCommand::Save(s) => Some(&s.cluster),
             },
-            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
-                None
-            }
+            Command::Completions(_)
+            | Command::Doctor
+            | Command::Drift(_)
+            | Command::Pin(_)
+            | Command::Lib(_)
+            | Command::Plugin(_) => None,
         }
     }
+}
+
+/// Manage the Kix library this project pins in flake.lock.
+#[derive(Subcommand)]
+pub enum LibCommand {
+    /// Move this project's Kix library to the release of this kix program
+    ///
+    /// Locks the project's Kix library input (github:kix-run/kixpkgs) to the
+    /// tag `v<version>` of this program's release and writes flake.lock. It
+    /// does not change flake.nix. When flake.nix pins another release, or the
+    /// input is a local path or a fork, it says what to change by hand.
+    Update(LibUpdateArgs),
+}
+
+#[derive(clap::Args)]
+pub struct LibUpdateArgs {
+    /// Show what would change without writing flake.lock
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// Resolve container image tags to digests and record them in a committed pin file.
@@ -619,10 +656,11 @@ pub struct DiffArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Compare against a local directory instead of the live cluster: either a
-    /// previous build result (containing `kix-packages.json`) or a manifest
+    /// Compare against a local build or directory instead of the live
+    /// cluster: a previous build (its `kix.run/built-via` store path, or a
+    /// result directory containing `kix-packages.json`) or a manifest
     /// directory from `kix snapshot save` or `kix export`
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "PATH")]
     pub from: Option<String>,
 
     /// Read the target build from a `.kixbundle` file instead of evaluating.

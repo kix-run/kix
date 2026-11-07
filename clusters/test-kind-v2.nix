@@ -3,7 +3,7 @@
 # Changes from v1: different message, 2 replicas.
 # Used by demo/vhs/run-demos.sh to simulate a cluster config change.
 #
-# Build:  nix build .#cluster-kind-activation --extra-experimental-features pipe-operators
+# Build:  kix build kind-v2
 
 { kix, packages }:
 

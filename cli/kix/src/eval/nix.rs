@@ -12,6 +12,8 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use super::error::KixEvalError;
 use super::store_graph::store_name;
+use crate::project::BuilderKind;
+use crate::runtime::{self, RuntimeError, Tool, Want};
 
 /// A `nix` or `nix-store` command that did not run, or exited non-zero.
 #[derive(Debug)]
@@ -40,6 +42,17 @@ impl std::fmt::Display for NixCommandError {
 }
 
 impl std::error::Error for NixCommandError {}
+
+/// Return a command that runs `tool`, a Nix program, as this run's Nix
+/// runner chooses it ([`runtime::tool`]).
+pub(crate) fn command(tool: Tool) -> Result<Command, NixCommandError> {
+    runtime::tool(tool, Want::Shipped).map_err(|e: RuntimeError| NixCommandError {
+        command: tool.binary().to_string(),
+        dir: None,
+        status: None,
+        stderr: e.to_string(),
+    })
+}
 
 impl NixCommandError {
     fn new(cmd: &Command, status: Option<ExitStatus>, stderr: String) -> Self {
@@ -88,7 +101,7 @@ pub(crate) fn output(cmd: &mut Command) -> Result<Vec<u8>, NixCommandError> {
 
 /// Return the Nix system this binary was built for, which is the system Kix
 /// looks a flake's outputs up under.
-pub(crate) fn current_system() -> &'static str {
+pub fn current_system() -> &'static str {
     if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
         "x86_64-linux"
     } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
@@ -111,7 +124,7 @@ fn provided_systems(
     dir: Option<&Path>,
     input_overrides: &[(String, String)],
 ) -> Result<Vec<String>, NixCommandError> {
-    let mut cmd = Command::new("nix");
+    let mut cmd = command(Tool::Nix)?;
     cmd.args([
         "eval",
         &format!("{flake}#{flake_output}"),
@@ -172,16 +185,25 @@ pub(crate) fn other_system() -> &'static str {
     }
 }
 
-/// Build `cluster-<name>-activation` and return the result store path.
+/// The most evaluations [`eval_with_helm`] runs. Each one after the first
+/// follows a Helm fetch or render, so this bounds the charts a cluster can
+/// render on its first build.
+const MAX_EVALUATIONS: usize = 200;
+
+/// Evaluate the `activationIndex` of `cluster_name` and return its store path.
 ///
-/// The result folder holds `activation`, a link to the Activation
-/// resource's store path, and `kix-packages.json`, the index of packages to
-/// resource store paths. [`crate::build_source::Build::of_flake`] then loads
-/// and stamps the graph.
+/// The index names the Activation record, `kix-packages.json`, and the
+/// cluster's other files ([`super::build_files::BuildFiles`]). Each is a
+/// `builtins.toFile` path, so evaluation writes them all to the store and
+/// nothing is built. [`crate::build_source::Build::of_flake`] then loads and
+/// stamps the graph.
 ///
-/// `status_fn` is called with nix build progress lines as they arrive,
+/// When evaluation stops at a Helm chart that is not in Kix's store yet,
+/// Kix fetches or renders it ([`super::helm`]) and evaluates again.
+///
+/// `status_fn` is called with progress lines from Nix as they arrive,
 /// allowing the caller to update a spinner or progress bar.
-pub(crate) fn build_cluster_activation(
+pub fn eval_activation_index(
     flake_path: &Path,
     cluster_name: &str,
     input_overrides: &[(String, String)],
@@ -194,26 +216,122 @@ pub(crate) fn build_cluster_activation(
         return Err(KixEvalError::not_found(cluster_name));
     }
 
-    let flake_ref = format!(".#cluster-{}-activation", cluster_name);
+    check_library_builder(flake_path, input_overrides)?;
+
+    let flake_ref = format!(".#{}", activation_index_attr(cluster_name));
 
     tracing::info!(
         cluster = cluster_name,
         flake_ref = %flake_ref,
         flake_path = %flake_path.display(),
-        "building cluster activation"
+        "evaluating cluster activation"
     );
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
 
-    let mut cmd = Command::new("nix");
-    cmd.args([
-        "build",
-        &flake_ref,
-        "--no-link",
-        "--print-out-paths",
-        "--extra-experimental-features",
-        "nix-command flakes pipe-operators",
-    ]);
+    match eval_with_helm(flake_path, &[&flake_ref], input_overrides, status_fn) {
+        Ok(index) => index_path(cluster_name, &index),
+        // Only Nix's wording for a missing flake output. A stack trace says
+        // "while evaluating the attribute", so matching looser words turned
+        // real evaluation errors into "cluster not found".
+        Err(KixEvalError::Nix(e)) if e.missing_attribute() => {
+            Err(missing_index(flake_path, cluster_name, input_overrides))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Run `nix eval --raw <args>` in `flake_path` and return what it prints.
+/// When evaluation stops at a Helm chart that is not in Kix's store yet,
+/// fetch or render it ([`super::helm`]) and evaluate again.
+///
+/// Under the `nix` builder, Nix renders the charts itself, so this runs
+/// `nix eval` once.
+pub fn eval_with_helm(
+    flake_path: &Path,
+    args: &[&str],
+    input_overrides: &[(String, String)],
+    status_fn: &dyn Fn(&str),
+) -> Result<String, KixEvalError> {
+    if runtime::nix_runner() == runtime::NixRunner::System {
+        let mut error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
+            Ok(stdout) => return Ok(stdout),
+            Err(error) => error,
+        };
+        if let Some(e) = system_eval_error(&error.stderr) {
+            return Err(e);
+        }
+        if !tracing::enabled!(tracing::Level::INFO) {
+            error.stderr = shorten_trace(&error.stderr);
+        }
+        return Err(error.into());
+    }
+    let mut realised = std::collections::HashSet::new();
+    for _ in 0..MAX_EVALUATIONS {
+        let mut error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
+            Ok(stdout) => return Ok(stdout),
+            Err(error) => error,
+        };
+        let pending = if error.missing_attribute() {
+            Vec::new()
+        } else {
+            super::helm::pending(&error.stderr)?
+        };
+        if pending.is_empty() {
+            if !tracing::enabled!(tracing::Level::INFO) {
+                error.stderr = shorten_trace(&error.stderr);
+            }
+            return Err(error.into());
+        }
+        // Check every Helm version before running any, so a project whose
+        // library and kix program disagree learns which to move.
+        if let Some((wanted, shipped)) = super::helm::unshipped(&pending)? {
+            let mismatch = crate::library::HelmMismatch {
+                library: crate::library::eval_version(flake_path, input_overrides),
+                wanted,
+                program: crate::library::PROGRAM_VERSION.to_string(),
+                shipped,
+            };
+            return Err(super::helm::HelmError::LibraryMismatch(Box::new(mismatch)).into());
+        }
+        for placeholder in pending {
+            if !realised.insert(placeholder.out.clone()) {
+                return Err(super::helm::HelmError::Stuck {
+                    path: placeholder.out,
+                }
+                .into());
+            }
+            status_fn(&placeholder.describe());
+            super::helm::realise(&placeholder)?;
+        }
+    }
+    Err(KixEvalError::StoreGraphError {
+        message: format!(
+            "evaluating {} still needed Helm charts after Kix had rendered charts {MAX_EVALUATIONS} times",
+            args.join(" ")
+        ),
+    })
+}
+
+/// Run `nix eval --raw <args>` in `flake_path`. Return its output, or the
+/// failed command, whose stderr may name Helm placeholders.
+///
+/// The full stack trace is always on. Outside Linux, Nix refuses to build in
+/// Kix's store before it checks a derivation's system, and only the trace
+/// names the output of the Helm placeholder it stopped at.
+fn eval_raw(
+    flake_path: &Path,
+    args: &[&str],
+    input_overrides: &[(String, String)],
+    status_fn: &dyn Fn(&str),
+) -> Result<Result<String, NixCommandError>, KixEvalError> {
+    let mut cmd = command(Tool::Nix)?;
+    cmd.args(["eval", "--raw", "--show-trace"])
+        .args(args)
+        .args([
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ]);
     for (name, url) in input_overrides {
         cmd.arg("--override-input").arg(name).arg(url);
     }
@@ -224,27 +342,13 @@ pub(crate) fn build_cluster_activation(
         .spawn()
         .map_err(|e| NixCommandError::new(&cmd, None, e.to_string()))?;
 
-    // Stream stderr to update progress
     let stderr = child.stderr.take().unwrap();
-    let stderr_reader = BufReader::new(stderr);
     let mut stderr_lines = Vec::new();
-
-    for line in stderr_reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-        // Show the latest Nix build progress line from stderr.
+    for line in BufReader::new(stderr).lines() {
+        let Ok(line) = line else { continue };
         let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            // Extract meaningful progress from nix output
-            if trimmed.starts_with("building") || trimmed.starts_with("copying") {
-                status_fn(trimmed);
-            } else if trimmed.contains("evaluating") {
-                status_fn(&format!("Evaluating '{cluster_name}'..."));
-            } else if trimmed.starts_with("this derivation") {
-                status_fn(&format!("Building '{cluster_name}'..."));
-            }
+        if trimmed.starts_with("building") || trimmed.starts_with("copying") {
+            status_fn(trimmed);
         }
         stderr_lines.push(line);
     }
@@ -254,103 +358,241 @@ pub(crate) fn build_cluster_activation(
         .map_err(|e| NixCommandError::new(&cmd, None, e.to_string()))?;
 
     if !output.status.success() {
-        let error = NixCommandError::new(&cmd, Some(output.status), stderr_lines.join("\n"));
-        // Only Nix's wording for a missing flake output. A stack trace says
-        // "while evaluating the attribute", so matching looser words turned
-        // real evaluation errors into "cluster not found".
-        if error.missing_attribute() {
-            return Err(
-                system_not_provided(".", "packages", Some(flake_path), input_overrides)
-                    .unwrap_or_else(|| KixEvalError::not_found(cluster_name)),
-            );
-        }
-        return Err(error.into());
+        return Ok(Err(NixCommandError::new(
+            &cmd,
+            Some(output.status),
+            stderr_lines.join("\n"),
+        )));
     }
+    Ok(Ok(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let result_path = stdout.trim();
-    if result_path.is_empty() {
+/// Explain a failed evaluation under the `nix` builder whose cause Kix
+/// knows: the machine's Nix forbids import from derivation, or evaluation
+/// reached a Helm placeholder, which the library's nix route never writes.
+fn system_eval_error(stderr: &str) -> Option<KixEvalError> {
+    if stderr.contains("allow-import-from-derivation") && stderr.contains("disabled") {
+        return Some(KixEvalError::ImportFromDerivationDisabled);
+    }
+    if stderr.contains(super::helm::PLACEHOLDER_SYSTEM) {
+        let path = stderr
+            .split(|c: char| c.is_whitespace() || "'\"`".contains(c))
+            .find(|word| word.starts_with(super::store_path::STORE_DIR))
+            .unwrap_or("unknown path")
+            .to_string();
+        return Some(KixEvalError::PlaceholderUnderNix { path });
+    }
+    None
+}
+
+/// Return the flake attribute under `legacyPackages.<system>` that holds the
+/// clusters as this run's builder builds them. The two differ in how Helm
+/// charts are rendered.
+pub(crate) fn clusters_attr() -> &'static str {
+    match runtime::builder() {
+        BuilderKind::Nix => "kixClustersNix",
+        BuilderKind::Kix | BuilderKind::Remote => "kixClusters",
+    }
+}
+
+/// Check, once per run, that the project's Kix library read the same
+/// builder from `kix.toml` as Kix did ([`crate::project::check_agreement`]).
+fn check_library_builder(
+    flake_path: &Path,
+    input_overrides: &[(String, String)],
+) -> Result<(), KixEvalError> {
+    static AGREED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if AGREED.get().is_some() {
+        return Ok(());
+    }
+    let Some(origin) = runtime::builder_source() else {
+        return Ok(());
+    };
+    let library = library_builder(flake_path, input_overrides)?;
+    crate::project::check_agreement(runtime::builder(), &origin, library.as_deref())?;
+    let _ = AGREED.set(());
+    Ok(())
+}
+
+/// Return the builder the project's Kix library read from `kix.toml`, or
+/// `None` when the flake publishes no such setting.
+fn library_builder(
+    flake_path: &Path,
+    input_overrides: &[(String, String)],
+) -> Result<Option<String>, KixEvalError> {
+    let attr = format!(".#legacyPackages.{}.kixConfig.builder", current_system());
+    let mut cmd = command(Tool::Nix)?;
+    cmd.args([
+        "eval",
+        "--raw",
+        &attr,
+        "--extra-experimental-features",
+        "nix-command flakes pipe-operators",
+    ]);
+    for (name, url) in input_overrides {
+        cmd.arg("--override-input").arg(name).arg(url);
+    }
+    match output(cmd.current_dir(flake_path)) {
+        Ok(out) => Ok(Some(String::from_utf8_lossy(&out).trim().to_string())),
+        Err(e) if e.missing_attribute() => {
+            match system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
+                Some(err) => Err(err),
+                None => Ok(None),
+            }
+        }
+        Err(e) => match system_eval_error(&e.stderr) {
+            Some(err) => Err(err),
+            None => Err(e.into()),
+        },
+    }
+}
+
+/// The trace frames [`shorten_trace`] keeps, as many as Nix shows without
+/// `--show-trace`.
+const SHORT_TRACE_FRAMES: usize = 3;
+
+/// Return `stderr` of a Nix evaluation with its stack trace cut to the
+/// first [`SHORT_TRACE_FRAMES`] frames, like Nix prints it without
+/// `--show-trace`. Text that is not such a trace comes back unchanged.
+fn shorten_trace(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let Some(first) = lines.iter().position(|l| l.starts_with("error:")) else {
+        return stderr.to_string();
+    };
+    // The innermost error message follows the frames, indented under the
+    // first `error:`.
+    let Some(last) = lines
+        .iter()
+        .rposition(|l| l.starts_with(' ') && l.trim_start().starts_with("error:"))
+        .filter(|&last| last > first)
+    else {
+        return stderr.to_string();
+    };
+    let frames: Vec<usize> = (first..last)
+        .filter(|&i| lines[i].trim_start().starts_with('…'))
+        .collect();
+    let Some(&cut) = frames.get(SHORT_TRACE_FRAMES) else {
+        return stderr.to_string();
+    };
+    let indent = &lines[last][..lines[last].len() - lines[last].trim_start().len()];
+    let mut short: Vec<String> = lines[..cut].iter().map(|l| l.to_string()).collect();
+    short.push(format!(
+        "{indent}(stack trace truncated; run kix with -v to show the full trace)"
+    ));
+    short.push(String::new());
+    short.extend(lines[last..].iter().map(|l| l.to_string()));
+    short.join("\n")
+}
+
+fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError> {
+    let index = stdout.trim();
+    if !index.starts_with(super::store_path::STORE_DIR) {
         return Err(KixEvalError::StoreGraphError {
-            message: "nix build produced no output path".to_string(),
+            message: format!("evaluation returned {index:?} instead of a store path"),
         });
     }
 
-    let path = PathBuf::from(result_path);
+    let path = PathBuf::from(index);
     tracing::info!(
         cluster = cluster_name,
         path = %path.display(),
-        "activation built"
+        "cluster activation evaluated"
     );
     Ok(path)
 }
 
-/// Query the direct references of every path in the closure of `root_path`
-/// via `nix-store -q --graph`.
+/// Return the flake attribute that holds the activation index of
+/// `cluster_name` on this system.
+pub(crate) fn activation_index_attr(cluster_name: &str) -> String {
+    format!(
+        "legacyPackages.{}.{}.{cluster_name}.activationIndex",
+        current_system(),
+        clusters_attr()
+    )
+}
+
+/// Explain why the flake has no `activationIndex` for `cluster_name`: the
+/// flake has its outputs for other systems only, the cluster does not
+/// exist, or the cluster comes from a Kix library too old to write the
+/// index.
+fn missing_index(
+    flake_path: &Path,
+    cluster_name: &str,
+    input_overrides: &[(String, String)],
+) -> KixEvalError {
+    if let Some(e) = system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
+        return e;
+    }
+    let attr = format!(".#legacyPackages.{}.{}", current_system(), clusters_attr());
+    let listed = command(Tool::Nix).ok().and_then(|mut cmd| {
+        cmd.args([
+            "eval",
+            &attr,
+            "--apply",
+            "builtins.attrNames",
+            "--json",
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ]);
+        for (name, url) in input_overrides {
+            cmd.arg("--override-input").arg(name).arg(url);
+        }
+        let out = output(cmd.current_dir(flake_path)).ok()?;
+        serde_json::from_slice::<Vec<String>>(&out).ok()
+    });
+    match listed {
+        Some(names) if names.iter().any(|n| n == cluster_name) => KixEvalError::NoActivationIndex {
+            cluster: cluster_name.to_string(),
+        },
+        _ => KixEvalError::not_found(cluster_name),
+    }
+}
+
+/// Map every path in the closure of `root_path` that refers to other paths
+/// to those paths, leaving out a path's reference to itself.
 ///
 /// Propagates subprocess failures rather than returning an empty graph, which
 /// would cause a plan to treat all live resources as orphans.
 pub(crate) fn closure_graph(
     root_path: &Path,
-) -> Result<HashMap<PathBuf, Vec<PathBuf>>, NixCommandError> {
-    let out = output(
-        Command::new("nix-store")
-            .args(["-q", "--graph"])
-            .arg(root_path),
-    )?;
+) -> Result<HashMap<PathBuf, Vec<PathBuf>>, KixEvalError> {
+    Ok(references_graph(path_info(root_path)?))
+}
 
-    let stdout = String::from_utf8_lossy(&out);
-    let nix_store = "/nix/store/";
-    let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if !line.contains("->") {
+fn references_graph(info: Vec<(String, Vec<String>)>) -> HashMap<PathBuf, Vec<PathBuf>> {
+    let mut deps = HashMap::new();
+    for (path, references) in info {
+        let mut refs: Vec<PathBuf> = references
+            .into_iter()
+            .filter(|r| *r != path)
+            .map(PathBuf::from)
+            .collect();
+        if refs.is_empty() {
             continue;
         }
-        let Some((src_part, dst_part)) = line.split_once("->") else {
-            continue;
-        };
-        let src_base = src_part.trim().trim_matches('"').trim();
-        let dst_base = dst_part
-            .split('[')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .trim_matches('"')
-            .trim()
-            .trim_end_matches(';');
-
-        if src_base.is_empty() || dst_base.is_empty() {
-            continue;
-        }
-
-        let src = PathBuf::from(format!("{nix_store}{src_base}"));
-        let dst = PathBuf::from(format!("{nix_store}{dst_base}"));
-
-        // DOT edges point from dependency to dependent, so invert them to map
-        // each path to its dependencies.
-        deps.entry(dst).or_default().push(src);
-    }
-
-    for refs in deps.values_mut() {
         refs.sort_by(|a, b| {
             store_name(a)
                 .to_lowercase()
                 .cmp(&store_name(b).to_lowercase())
         });
+        deps.insert(PathBuf::from(path), refs);
     }
-
-    Ok(deps)
+    deps
 }
 
 /// Query every path in the closure of `path` and its references via
 /// `nix path-info --json --recursive`.
+///
+/// Format 1 keys the output by full store path. Nix 2.34 and later warn when
+/// `--json` comes without a format and plan to refuse it.
 pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError> {
     let out = output(
-        Command::new("nix")
+        command(Tool::Nix)?
             .args([
                 "path-info",
                 "--json",
+                "--json-format",
+                "1",
                 "--recursive",
                 "--extra-experimental-features",
                 "nix-command",
@@ -390,7 +632,7 @@ fn path_info_references(info: &serde_json::Value) -> Vec<(String, Vec<String>)> 
 /// Register `link` as a Nix GC root for `target` with `nix-store --add-root`.
 pub(crate) fn add_gc_root(link: &Path, target: &Path) -> Result<(), NixCommandError> {
     output(
-        Command::new("nix-store")
+        command(Tool::NixStore)?
             .arg("--add-root")
             .arg(link)
             .arg("--realise")
@@ -399,22 +641,117 @@ pub(crate) fn add_gc_root(link: &Path, target: &Path) -> Result<(), NixCommandEr
     .map(drop)
 }
 
+/// The commit a flake's source comes from, as `nix flake metadata` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlakeRevision {
+    /// The commit `HEAD` points at.
+    pub rev: String,
+    /// Whether tracked files differ from `rev`. Nix leaves untracked files
+    /// out of a Git flake, so they do not count.
+    pub dirty: bool,
+}
+
+/// Return the commit of the Git checkout that holds the flake in
+/// `flake_dir`. Return `None` for a flake outside Git or in a repository
+/// with no commit.
+pub fn flake_revision(flake_dir: &Path) -> Result<Option<FlakeRevision>, KixEvalError> {
+    let out = output(
+        command(Tool::Nix)?
+            .args([
+                "flake",
+                "metadata",
+                "--json",
+                "--no-write-lock-file",
+                "--extra-experimental-features",
+                "nix-command flakes",
+            ])
+            .arg(flake_dir),
+    )?;
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&out).map_err(|e| KixEvalError::StoreGraphError {
+            message: format!("nix flake metadata printed something other than JSON: {e}"),
+        })?;
+    Ok(revision_of(&metadata))
+}
+
+fn revision_of(metadata: &serde_json::Value) -> Option<FlakeRevision> {
+    let text = |key: &str| metadata.get(key).and_then(serde_json::Value::as_str);
+    if let Some(rev) = text("revision") {
+        return Some(FlakeRevision {
+            rev: rev.to_string(),
+            dirty: false,
+        });
+    }
+    let rev = text("dirtyRevision")?.strip_suffix("-dirty")?;
+    Some(FlakeRevision {
+        rev: rev.to_string(),
+        dirty: true,
+    })
+}
+
 /// Return the output of `nix --version`, or `None` if `nix` cannot be run.
 pub fn version() -> Option<String> {
-    let out = output(Command::new("nix").arg("--version")).ok()?;
+    let out = output(command(Tool::Nix).ok()?.arg("--version")).ok()?;
     String::from_utf8(out).ok().map(|s| s.trim().to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_trace_is_cut_like_nix_cuts_it() {
+        let frame =
+            |what: &str| format!("       … {what}\n         at /f.nix:1:1:\n            1| x\n");
+        let full = format!(
+            "warning: Git tree is dirty\nerror:\n{}\n{}\n{}\n{}\n       error: boom",
+            frame("while evaluating the file"),
+            frame("while evaluating the attribute 'y'"),
+            frame("while evaluating the attribute 'a'"),
+            frame("while calling 'h'"),
+        );
+        let short = shorten_trace(&full);
+        assert!(
+            short.starts_with(
+                "warning: Git tree is dirty\nerror:\n       … while evaluating the file"
+            )
+        );
+        assert!(short.contains("attribute 'a'"));
+        assert!(!short.contains("while calling 'h'"));
+        assert!(short.ends_with(
+            "       (stack trace truncated; run kix with -v to show the full trace)\n\n       error: boom"
+        ));
+    }
+
+    #[test]
+    fn a_short_error_is_left_alone() {
+        let text = "error: attribute 'c' missing\n       at «string»:1:24:\n       Did you mean b?";
+        assert_eq!(shorten_trace(text), text);
+        assert_eq!(shorten_trace("not a nix error"), "not a nix error");
+    }
     use serde_json::json;
 
     #[test]
     fn a_graph_query_that_fails_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let err = closure_graph(dir.path()).unwrap_err();
-        assert!(err.to_string().contains("nix-store -q --graph"), "{err}");
+        assert!(err.to_string().contains("nix path-info"), "{err}");
+    }
+
+    /// Only paths with references other than themselves get an entry, and
+    /// each list is in name order.
+    #[test]
+    fn the_graph_leaves_out_self_references() {
+        let p = |s: &str| format!("/nix/store/{:0>32}-{s}", s.len());
+        let graph = references_graph(vec![
+            (p("a"), vec![p("a"), p("zz"), p("bbb")]),
+            (p("bbb"), vec![p("bbb")]),
+            (p("zz"), vec![]),
+        ]);
+        assert_eq!(
+            graph,
+            HashMap::from([(PathBuf::from(p("a")), vec![p("bbb").into(), p("zz").into()])])
+        );
     }
 
     #[test]
@@ -461,13 +798,13 @@ mod tests {
         std::fs::write(
             dir.path().join("flake.nix"),
             r#"{
-              outputs = _: let c.cluster-c-activation = throw "attribute 'root' missing"; in {
-                packages = { x86_64-linux = c; aarch64-linux = c; x86_64-darwin = c; aarch64-darwin = c; };
+              outputs = _: let c.kixClusters.c.activationIndex = throw "attribute 'root' missing"; in {
+                legacyPackages = { x86_64-linux = c; aarch64-linux = c; x86_64-darwin = c; aarch64-darwin = c; };
               };
             }"#,
         )
         .unwrap();
-        let build = |cluster| build_cluster_activation(dir.path(), cluster, &[], &|_| {});
+        let build = |cluster| eval_activation_index(dir.path(), cluster, &[], &|_| {});
         let err = build("c").unwrap_err();
         assert!(matches!(err, KixEvalError::Nix(_)), "{err}");
         assert!(
@@ -489,10 +826,12 @@ mod tests {
         let other = other_system();
         std::fs::write(
             dir.path().join("flake.nix"),
-            format!("{{ outputs = _: {{ packages.{other}.cluster-c-activation = null; }}; }}"),
+            format!(
+                "{{ outputs = _: {{ legacyPackages.{other}.kixClusters.c.activationIndex = null; }}; }}"
+            ),
         )
         .unwrap();
-        let err = build_cluster_activation(dir.path(), "c", &[], &|_| {}).unwrap_err();
+        let err = eval_activation_index(dir.path(), "c", &[], &|_| {}).unwrap_err();
         match &err {
             KixEvalError::SystemNotProvided { system, provided } => {
                 assert_eq!(system, current_system());
@@ -510,16 +849,63 @@ mod tests {
         );
     }
 
-    /// A flake that provides no `packages` at all says nothing about
+    /// A flake that provides no `legacyPackages` at all says nothing about
     /// systems, so a missing cluster is still a missing cluster.
     #[test]
     fn a_flake_with_no_packages_has_no_system_to_blame() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("flake.nix"), "{ outputs = _: { }; }").unwrap();
         assert!(matches!(
-            build_cluster_activation(dir.path(), "c", &[], &|_| {}).unwrap_err(),
+            eval_activation_index(dir.path(), "c", &[], &|_| {}).unwrap_err(),
             KixEvalError::ClusterNotFound { .. }
         ));
+    }
+
+    /// A cluster from a library that writes no activation index is not
+    /// reported as missing.
+    #[test]
+    fn a_cluster_without_an_index_names_the_old_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = current_system();
+        std::fs::write(
+            dir.path().join("flake.nix"),
+            format!("{{ outputs = _: {{ legacyPackages.{system}.kixClusters.c = {{ }}; }}; }}"),
+        )
+        .unwrap();
+        let err = eval_activation_index(dir.path(), "c", &[], &|_| {}).unwrap_err();
+        assert!(
+            matches!(err, KixEvalError::NoActivationIndex { .. }),
+            "{err}"
+        );
+        assert!(matches!(
+            eval_activation_index(dir.path(), "other", &[], &|_| {}).unwrap_err(),
+            KixEvalError::ClusterNotFound { .. }
+        ));
+    }
+
+    #[test]
+    fn a_flake_revision_is_clean_dirty_or_absent() {
+        let rev = "0b88f978a1ed669ea9f12b63605c8101d2f48fcd";
+        assert_eq!(
+            revision_of(&json!({"revision": rev, "dirtyRevision": null})),
+            Some(FlakeRevision {
+                rev: rev.into(),
+                dirty: false
+            })
+        );
+        assert_eq!(
+            revision_of(&json!({"revision": null, "dirtyRevision": format!("{rev}-dirty")})),
+            Some(FlakeRevision {
+                rev: rev.into(),
+                dirty: true
+            })
+        );
+        // A path flake, or a repository with no commit.
+        assert_eq!(revision_of(&json!({"url": "path:/x"})), None);
+        assert_eq!(
+            revision_of(&json!({"revision": null, "dirtyRevision": null})),
+            None
+        );
     }
 
     #[test]

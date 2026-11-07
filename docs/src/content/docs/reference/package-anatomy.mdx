@@ -536,6 +536,12 @@ build = [
 
 See [Composition helpers](/docs/reference/composition-helpers/) for the full reference on `kix.expose`, `kix.monitor`, `kix.alerts`, and `kix.healthCheck`.
 
+### Evaluation-only store (no shell builders)
+
+Kix evaluates packages in its local store without running shell build scripts. Package and cluster definitions can evaluate expressions, read files from the repository (`builtins.readFile`, `builtins.fromJSON`), write files with `builtins.toFile` or `builtins.path`, and render Helm charts through `scope.helm.fetchHelmChart` and `scope.helm.importChart`.
+
+Do not call `pkgs.runCommand`, `pkgs.stdenv.mkDerivation`, or `pkgs.writeText` inside a package or cluster definition; evaluation fails under the default `kix` builder.
+
 ---
 
 ## Package diagnostics
