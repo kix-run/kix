@@ -27,7 +27,9 @@ pub enum KixEvalError {
     /// The cluster exists, but its Kix library is older than this binary
     /// and writes no `activationIndex`.
     #[error(
-        "cluster '{cluster}' uses a Kix library older than this Kix release, so Kix could not evaluate it. Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library"
+        "cluster '{cluster}' uses a Kix library older than Kix {}, so Kix could not evaluate it. Run `kix lib update` to move flake.lock to the Kix library {}, or use the version of Kix that matches the library",
+        crate::VERSION,
+        crate::VERSION
     )]
     NoActivationIndex { cluster: String },
 
@@ -84,7 +86,7 @@ fn system_not_provided_message(system: &str, provided: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "this flake has no Kix outputs for {system}, the system this kix binary runs on. \
+        "this flake has no Kix outputs for {system}, the system Kix runs on. \
          It has them for {}. Add {system} to the systems the flake builds for: \
          pass systems = [ {systems} ] to kix.lib.mkFlake, or add {system} to the \
          systems your flake calls kix.lib.forPkgs for",

@@ -6,14 +6,14 @@
 #
 # <unpacked-archive> holds bin/kix and libexec/kix. <kixpkgs-checkout> must be
 # a git clone, not a git worktree, because only the checkout is visible to
-# kix.
+# Kix.
 #
-# On Linux, kix runs in a plain Ubuntu container, which has no /nix. Only the
+# On Linux, Kix runs in a plain Ubuntu container, which has no /nix. Only the
 # archive, the checkout, and the host's CA bundle are mounted into it.
 #
-# On macOS, sandbox-exec denies every access to /nix. kix runs with an empty
+# On macOS, sandbox-exec denies every access to /nix. Kix runs with an empty
 # environment except for PATH=/usr/bin:/bin and a fresh HOME and XDG
-# folders, and its store sits under the resolved temporary folder
+# folders, and its local store sits under the resolved temporary folder
 # (/private/var/...), as it would for a user whose TMPDIR is a link.
 #
 # NIX_CONFIG passes through, so CI can give Nix a GitHub token for fetching
@@ -38,7 +38,7 @@ if [[ ! -d "$repo/.git" ]]; then
   exit 2
 fi
 
-# Runs inside the isolation, with $KIX set to the kix binary.
+# Runs inside the isolation, with $KIX set to the `kix` command.
 checks='
 set -eu
 cd "$REPO"

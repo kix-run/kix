@@ -1,12 +1,12 @@
 ---
-title: "Install and run the Kix CLI"
-description: "Install the Kix CLI from a release archive and verify that it can discover and evaluate your clusters."
+title: "Install and run Kix"
+description: "Install Kix from a release archive and verify that it can discover and evaluate your clusters."
 ---
 
 import Command from '/src/components/Command.astro';
 import version from '/src/command-output/how-to/application-install/version.json';
 
-Install the Kix CLI from a pre-built release archive and verify that it can
+Install Kix from a pre-built release archive and verify that it can
 discover and evaluate your clusters.
 
 ## Install from a release archive
@@ -59,7 +59,7 @@ If the project is in another directory, pass `--flake`:
 
 <Command commands={["kix --flake /path/to/project list clusters"]} />
 
-By default (`builder = "kix"`), Kix evaluates with its bundled runtime and
+By default (`builder = "kix"`), Kix evaluates with the Kix runtime and
 downloads the project's locked inputs into Kix's local store
 (`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Later commands reuse
 the cached inputs. Set `KIX_STORE_ROOT` if you want Kix to keep its local store
@@ -77,7 +77,7 @@ the `kixpkgs` flake:
 :::note[Reference]
 See [`kix doctor`](/docs/reference/cli/doctor/) for how Kix verifies its
 runtime directory and project builder, [`kix.toml`](/docs/reference/kix-toml/)
-for choosing between Kix's bundled runtime and the machine's Nix, and
+for choosing between the Kix runtime and the machine's Nix, and
 [Global flags](/docs/reference/cli/global-flags/) for shared CLI flags and
 environment variables.
 :::

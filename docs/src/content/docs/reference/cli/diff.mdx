@@ -47,7 +47,7 @@ kix diff <CLUSTER> [--bundle <FILE>] [--from <PATH> | --from-bundle <FILE>]
 | Live cluster | Omit `--from` | Yes |
 | Bundled build | `--from-bundle <FILE>`, with `--bundle` for the new side | No |
 | Saved manifests | `--from <DIR>` where `<DIR>` holds YAML written by `kix snapshot save` or `kix export --for audit` | No |
-| Previous build | `--from <PATH>` where `<PATH>` is the activation index path (`kix.run/built-via`) of a build in Kix's store, or a directory containing `kix-packages.json` whose referenced store paths exist in Kix's store | No |
+| Previous build | `--from <PATH>` where `<PATH>` is the activation index path (`kix.run/built-via`) of a build in Kix's local store, or a directory containing `kix-packages.json` whose referenced store paths exist in Kix's local store | No |
 | Nothing | `--bundle <FILE>` alone: every package is added | No |
 
 Each bundle is checked against its content as it is read, and must be a build

@@ -921,7 +921,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
         .to_string();
     assert!(
         kix::eval::store::exists(Path::new(&built_via)),
-        "the Active record's build {built_via} should be in Kix's store"
+        "the Active record's build {built_via} should be in Kix's local store"
     );
     clear_activation_cache("sweep-a");
     let deleted = kix::runtime::tool(kix::runtime::Tool::Nix, kix::runtime::Want::Shipped)

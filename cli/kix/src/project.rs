@@ -153,7 +153,7 @@ fn builder_names() -> String {
 
 impl ProjectConfig {
     /// Read the settings of the project in `flake_dir`, apply
-    /// [`TEST_BUILDER_VAR`], and check that this Kix can use the builder.
+    /// [`TEST_BUILDER_VAR`], and check that this version of Kix can use the builder.
     ///
     /// `None` means there is no local project directory, such as a remote
     /// flake reference, and the project gets the default settings.
@@ -164,7 +164,7 @@ impl ProjectConfig {
     }
 
     /// Read the settings of the project in `flake_dir` and apply
-    /// [`TEST_BUILDER_VAR`], without checking that this Kix can use the
+    /// [`TEST_BUILDER_VAR`], without checking that this version of Kix can use the
     /// builder.
     pub fn read_with_env(flake_dir: Option<&Path>) -> Result<Self, ProjectError> {
         let test_builder = std::env::var_os(TEST_BUILDER_VAR).filter(|v| !v.is_empty());
@@ -172,7 +172,7 @@ impl ProjectConfig {
     }
 
     /// Read the settings of the project in `flake_dir` without checking that
-    /// this Kix can use the builder. `test_builder` is the value of
+    /// this version of Kix can use the builder. `test_builder` is the value of
     /// [`TEST_BUILDER_VAR`], and replaces the file when set.
     pub fn read(
         flake_dir: Option<&Path>,

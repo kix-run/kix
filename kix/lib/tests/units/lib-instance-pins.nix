@@ -184,7 +184,7 @@ in
     )
     || throw "a version 1 pin file no longer reads";
 
-  # A version this Kix does not read is refused, as a Kix that reads only
+  # A version Kix does not read is refused, as a Kix that reads only
   # version 1 refuses version 2. Instance pins in a file that declares
   # version 1 are refused rather than ignored.
   lib-instance-pins-unknown-version-refused =
@@ -410,7 +410,7 @@ in
     }";
 
   # A value read with `pins.get` in a cluster that does not pass its pin
-  # file to buildCluster is `code`, and its place is never kix's own reader.
+  # file to buildCluster is `code`, and its place is never Kix's own reader.
   lib-instance-pins-get-without-pins-names-no-kix-file =
     let
       src = sourceOf (build null {

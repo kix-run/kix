@@ -164,7 +164,7 @@ fn open_deployed(path: &Path) -> Result<Option<OpenBundle<BufReader<File>>>, Str
         Err(BundleError::Format1) => {
             tracing::warn!(
                 bundle = %path.display(),
-                "set aside a deployed bundle of format 1, which this kix cannot read. For the Active build, the plan reads its objects from the cluster. For a failed or kept build, this plan cannot list or prune its orphans"
+                "set aside a deployed bundle of format 1, which Kix cannot read. For the Active build, the plan reads its objects from the cluster. For a failed or kept build, this plan cannot list or prune its orphans"
             );
             Ok(None)
         }

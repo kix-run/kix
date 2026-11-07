@@ -29,7 +29,7 @@ When Kix seals the consuming resource, `scope.mkResource` inspects the string co
 
 String context carries two distinct kinds of tokens:
 
-- **Identity paths** identify the upstream resource in Kix's store. Every `out` attribute carries an identity path, which tells Kix that the consumer was computed from the provider and must be deployed after it.
+- **Identity paths** identify the upstream resource in Kix's local store. Every `out` attribute carries an identity path, which tells Kix that the consumer was computed from the provider and must be deployed after it.
 - **Endpoint facts** attach to address-shaped attributes such as `out.fqdn` and `out.url`. An endpoint fact records the target Service's namespace, pod selector, and ports. Non-workload resources such as ConfigMaps conduct endpoint facts onward when mounted, and workloads terminate them. This lets Kix distinguish between a workload that merely names a resource and a workload that dials a Service over the network.
 
 Sometimes one resource must be applied before another even though no string value flows between their manifests. A CustomResourceDefinition must be established before any custom resource of its kind is applied, and a network policy must be in place before the pod it governs starts. For those cases, builders accept `requires` (hard ordering dependencies that must be ready first) and `extraDeps` (additional ordering hints). Kix folds both into `kix.run/depends-on` before sealing the resource.

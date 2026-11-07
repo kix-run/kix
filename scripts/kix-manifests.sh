@@ -9,7 +9,7 @@
 #
 # usage: scripts/kix-manifests.sh <flake-dir> <cluster> <out-link>
 #
-# Set KIX to the kix binary to run (default: kix on PATH).
+# Set KIX to the `kix` command to run (default: `kix` on PATH).
 
 set -euo pipefail
 

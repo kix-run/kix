@@ -574,7 +574,7 @@
       "type": "object"
     },
     "KixBuild": {
-      "description": "A Kix binary, so a plan can be checked against the Kix that deploys it.",
+      "description": "The build of Kix that made a plan, so the plan can be checked against\nthe Kix that deploys it.",
       "properties": {
         "store_path": {
           "description": "The Nix store path the running binary is in, `null` for a binary\noutside the store (a `cargo build`). Two binaries with the same store\npath are the same build.",

@@ -352,9 +352,9 @@ pub enum Command {
 
     /// Check the Kix installation
     ///
-    /// Reports which runtime directory Kix runs its programs (nix, helm,
-    /// kubectl, sops) from, checks that its manifest.json lists the programs
-    /// this kix expects, and checks every file against its SHA-256 in the
+    /// Reports where Kix found the Kix runtime (nix, helm, kubectl, sops),
+    /// checks that its manifest.json lists the programs Kix expects, and
+    /// checks every file against its SHA-256 in the
     /// manifest. Also reports the project's builder and where it was chosen
     /// (kix.toml, or the default). Exits 1 when a check fails.
     Doctor,
@@ -421,10 +421,10 @@ impl Command {
 /// Manage the Kix library this project pins in flake.lock.
 #[derive(Subcommand)]
 pub enum LibCommand {
-    /// Move this project's Kix library to the release of this kix program
+    /// Move this project's Kix library to the version of the installed Kix
     ///
     /// Locks the project's Kix library input (github:kix-run/kixpkgs) to the
-    /// tag `v<version>` of this program's release and writes flake.lock. It
+    /// tag `v<version>` of the installed Kix and writes flake.lock. It
     /// does not change flake.nix. When flake.nix pins another release, or the
     /// input is a local path or a fork, it says what to change by hand.
     Update(LibUpdateArgs),

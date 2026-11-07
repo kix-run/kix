@@ -338,8 +338,8 @@ let
   # status.updateStatus == "operational". Its conditions are
   # consumer-prefixed, never Ready/Available, so the generic condition check
   # would wait forever. The rule rides the typed chain into every CR as the
-  # `kix.run/readiness` annotation, which the Kix CLI evaluates at deploy
-  # time, so the CLI keeps no kind list.
+  # `kix.run/readiness` annotation, which Kix evaluates at deploy
+  # time, so Kix keeps no kind list.
   #
   # The operator reconciles operand kinds (VMCluster, VMAgent, ...) itself
   # and always writes updateStatus. It writes updateStatus on a

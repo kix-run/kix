@@ -47,7 +47,7 @@ let
 
   checkedEnvelope =
     if !(builtins.elem version SCHEMA_VERSIONS) then
-      throw "kix.pins: ${where} declares version ${builtins.toString version}, and this Kix reads versions 1 and 2. Upgrade Kix, or check the file."
+      throw "kix.pins: ${where} declares version ${builtins.toString version}, and Kix reads versions 1 and 2. Upgrade Kix, or check the file."
     else if version == 1 && parsed ? instances then
       throw "kix.pins: ${where} has instance pins (`instances`) but declares version 1. A file with instance pins declares version 2."
     else

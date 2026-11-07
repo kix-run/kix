@@ -58,7 +58,7 @@ hyper-util = { version = "0.1", features = ["client-legacy"] }
 fastrand = "2"
 
 # Container registry client (`kix pin`). rustls rather than the platform TLS
-# stack, so a static kix binary behaves the same everywhere; no default
+# stack, so a static build of Kix behaves the same everywhere; no default
 # features, so this does not drag in a second TLS implementation alongside
 # the one kube already uses.
 reqwest = { version = "0.12", default-features = false, features = [

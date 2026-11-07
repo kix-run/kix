@@ -7,7 +7,7 @@
 //! `.drv` or only its output. [`pending`] takes every store path the text
 //! names, asks the store for the derivers of the ones that are not `.drv`
 //! files, and keeps the placeholders among them. It then runs the Helm release each
-//! spec names, writes the output into Kix's store under the path the
+//! spec names, writes the output into Kix's local store under the path the
 //! derivation fixes, and registers it there. The next evaluation reads it.
 //!
 //! A render's output is registered with its real NAR hash, so
@@ -40,8 +40,10 @@ const SPEC_VERSION: u64 = 1;
 #[derive(Debug, thiserror::Error)]
 pub enum HelmError {
     #[error(
-        "This cluster's Kix library renders Helm charts with Helm {wanted}, but this Kix release ships {}. Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library",
-        shipped_text(shipped)
+        "This cluster's Kix library renders Helm charts with Helm {wanted}, but Kix {} ships {}. Run `kix lib update` to move flake.lock to the Kix library {}, or use the version of Kix that matches the library",
+        crate::VERSION,
+        shipped_text(shipped),
+        crate::VERSION
     )]
     VersionNotShipped {
         wanted: String,
@@ -52,7 +54,9 @@ pub enum HelmError {
     LibraryMismatch(Box<crate::library::HelmMismatch>),
 
     #[error(
-        "this cluster's Kix library does not match this Kix release (Helm format {found}, expected {SPEC_VERSION}). Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library"
+        "this cluster's Kix library does not match Kix {} (Helm format {found}, expected {SPEC_VERSION}). Run `kix lib update` to move flake.lock to the Kix library {}, or use the version of Kix that matches the library",
+        crate::VERSION,
+        crate::VERSION
     )]
     SpecVersion { found: u64 },
 
@@ -248,7 +252,7 @@ fn store_paths(text: &str) -> Vec<PathBuf> {
     paths
 }
 
-/// Return the derivations in Kix's store that produce `outputs`. A path with
+/// Return the derivations in Kix's local store that produce `outputs`. A path with
 /// no known deriver adds nothing.
 ///
 /// A failure here only means Kix finds no placeholder through these paths,
@@ -779,9 +783,12 @@ mod tests {
             wanted: "4.3.1".into(),
             shipped: vec!["4.3.2".into()],
         };
+        let v = crate::VERSION;
         assert_eq!(
             err.to_string(),
-            "This cluster's Kix library renders Helm charts with Helm 4.3.1, but this Kix release ships Helm 4.3.2. Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library"
+            format!(
+                "This cluster's Kix library renders Helm charts with Helm 4.3.1, but Kix {v} ships Helm 4.3.2. Run `kix lib update` to move flake.lock to the Kix library {v}, or use the version of Kix that matches the library"
+            )
         );
     }
 }
