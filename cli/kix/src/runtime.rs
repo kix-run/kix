@@ -753,7 +753,7 @@ fn check_file(path: &Path, expected: &ManifestFile) -> Option<String> {
             }
             match sha256_hex(path) {
                 Ok(actual) if actual.eq_ignore_ascii_case(sha256) => None,
-                Ok(_) => Some("its SHA-256 differs from the manifest".to_string()),
+                Ok(_) => Some("contents changed".to_string()),
                 Err(e) => Some(format!("cannot be read: {e}")),
             }
         }
@@ -1154,7 +1154,7 @@ mod tests {
             BTreeMap::from([
                 ("nix-1/bin/extra", "is not a link to nix"),
                 ("nix-1/bin/gone", "missing"),
-                ("nix-1/bin/nix", "its SHA-256 differs from the manifest"),
+                ("nix-1/bin/nix", "contents changed"),
                 ("nix-1/bin/nix-store", "links to nix, not other"),
             ])
         );

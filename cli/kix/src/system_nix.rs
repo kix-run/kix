@@ -141,16 +141,6 @@ pub fn import_from_derivation_allowed() -> Option<bool> {
     }
 }
 
-/// Return whether the machine's Nix store trusts this user, as
-/// `nix store info --json` reports it, or `None` when it does not say.
-pub fn store_trusted() -> Option<bool> {
-    let out = nix_stdout(&["store", "info", "--json"])?;
-    serde_json::from_str::<serde_json::Value>(&out)
-        .ok()?
-        .get("trusted")?
-        .as_bool()
-}
-
 fn nix_stdout(args: &[&str]) -> Option<String> {
     let out = Command::new("nix")
         .args(["--extra-experimental-features", "nix-command"])

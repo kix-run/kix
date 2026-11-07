@@ -305,11 +305,10 @@ fn without_a_runtime_kix_refuses_to_run_programs() {
                 .and(predicate::str::contains("fake nix ran").not()),
         );
 
-    without_runtime()
-        .arg("doctor")
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("Kix could not find its runtime"));
+    without_runtime().arg("doctor").assert().failure().stdout(
+        predicate::str::contains("✗ Kix runtime not found")
+            .and(predicate::str::contains("Kix could not find its runtime")),
+    );
 
     without_runtime().arg("--version").assert().success();
 }
@@ -334,7 +333,7 @@ fn kix_toml_chooses_the_builder() {
     run(&["doctor"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("builder: kix (the default"));
+        .stdout(predicate::str::contains("✓ Builder: kix (default)"));
 
     std::fs::write(&file, "builder = \"remote\"\n").unwrap();
     run(&["build", "minimal"])
@@ -342,7 +341,7 @@ fn kix_toml_chooses_the_builder() {
         .failure()
         .stderr(predicate::str::contains("cannot use a remote builder"));
     run(&["doctor"]).assert().failure().stdout(
-        predicate::str::contains("builder: remote (set in")
+        predicate::str::contains("✗ Builder: remote (set in")
             .and(predicate::str::contains("cannot use a remote builder")),
     );
 
@@ -356,5 +355,5 @@ fn kix_toml_chooses_the_builder() {
     run(&["doctor"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("builder: kix (set in"));
+        .stdout(predicate::str::contains("✓ Builder: kix (set in"));
 }
