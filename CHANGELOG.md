@@ -20,6 +20,8 @@ counts as breaking.
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-07
+
 **Before you upgrade**, check each of these in your cluster definitions and packages. The entries below say more.
 
 - A cluster listed in `kix.lib.mkFlake` that calls `kix.buildCluster` without `name`, and that Kix 0.6 deployed: add `name = "cluster";` to keep its deploy history.
@@ -35,6 +37,8 @@ counts as breaking.
 - Machines that run `kix` from `PATH` without its `libexec/kix` folder: install the whole release archive, or set `KIX_RUNTIME_DIR`.
 - Helm `extraFlags` that hold a flag and its value in one string, such as `"--set a=b"`: split them into separate list items.
 - Helm charts that need Helm 3: set `helmVersion = "3"`. The default is now Helm 4.
+- Each project's `flake.lock`: run `kix lib update` after installing Kix 0.7, so the project uses the Kix library of the same release.
+- Scripts that compare the YAML that `kix build`, `kix export`, or `-o yaml` print as text, or look for single-quoted values: update them for double quotes.
 
 ### Breaking (shows an error)
 
