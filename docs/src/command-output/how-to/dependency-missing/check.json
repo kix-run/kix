@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "kix check 06-service-dep",
-      "stdout": "error: tutorial-06/gateway: dependency 'backend' was not found for namespace 'tutorial-06'. Add an instance with that name or alias, or set deps.backend explicitly.                                                                                                                                                                                                                                                                                                                \n",
+      "stdout": "error: tutorial-06/gateway: dependency 'backend' was not found for namespace 'tutorial-06'. Add an instance with that name or alias, or set deps.backend explicitly.                                                                                                                                                                                                                                                                                                                             \n",
       "stderr": "",
       "stdoutDrift": "error: tutorial-06/gateway: dependency 'backend' was not found for namespace 'tutorial-06'. Add an instance with that name or alias, or set deps.backend explicitly.\n",
       "stderrDrift": "",
