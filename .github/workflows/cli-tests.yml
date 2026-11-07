@@ -212,13 +212,21 @@ jobs:
             runner: ubuntu-latest
           - system: aarch64-linux
             runner: ubuntu-24.04-arm
+          # The Mac Studio's self-hosted runner: a fresh macOS VM for each
+          # job, with Nix installed.
           - system: aarch64-darwin
-            runner: macos-15
+            runner: kix-macos-nix
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     # macOS tar would otherwise store extended attributes as ._ files, which
     # the Linux release job would unpack into the archive.
     env:
       COPYFILE_DISABLE: '1'
+      # For the Mac image's Nix. The Linux runners get the same settings
+      # from install-nix-action.
+      NIX_CONFIG: |
+        extra-experimental-features = pipe-operators
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -226,6 +234,7 @@ jobs:
           fetch-depth: 0
 
       - uses: cachix/install-nix-action@v31
+        if: runner.os != 'macOS'
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
@@ -414,9 +423,11 @@ jobs:
         include:
           - system: x86_64-linux
             runner: ubuntu-latest
+          # The Mac Studio's self-hosted runner, with no Nix in the image.
           - system: aarch64-darwin
-            runner: macos-15
+            runner: kix-macos-nonix
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     env:
       VERSION: ${{ needs.version.outputs.version }}
       NIX_CONFIG: |
@@ -453,9 +464,11 @@ jobs:
         include:
           - system: x86_64-linux
             runner: ubuntu-latest
+          # The Mac Studio's self-hosted runner, with Nix in the image.
           - system: aarch64-darwin
-            runner: macos-15
+            runner: kix-macos-nix
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     env:
       VERSION: ${{ needs.version.outputs.version }}
       NIX_CONFIG: |
@@ -469,9 +482,23 @@ jobs:
       # The installer makes the runner user trusted. The later
       # `trusted-users` line replaces that, so the check runs untrusted.
       - uses: cachix/install-nix-action@v31
+        if: runner.os != 'macOS'
         with:
           extra_nix_config: |
             trusted-users = root
+
+      # The Mac image comes with Nix. If its daemon trusts the runner user,
+      # limit trust to root, so the check runs untrusted here too.
+      - name: Make the runner user untrusted
+        if: runner.os == 'macOS'
+        run: |
+          trusted() { nix store info --json | jq -r .trusted; }
+          if [ "$(trusted)" != false ]; then
+            echo 'trusted-users = root' | sudo tee -a /etc/nix/nix.conf
+            sudo launchctl kickstart -k system/org.nixos.nix-daemon
+            sleep 3
+          fi
+          test "$(trusted)" = false
 
       - uses: actions/download-artifact@v4
         with:

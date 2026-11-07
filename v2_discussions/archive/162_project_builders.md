@@ -1,6 +1,6 @@
 # 162: Project builders: Kix, Nix, and remote
 
-**Status:** Draft (plan)
+**Status:** Implemented (kixpkgs#319, 2026-11-07)
 **Related:** `161_rootless_evaluation_bundled_runtime.md`
 **Branch:** `feat/rootless-runtime` (PR #319)
 

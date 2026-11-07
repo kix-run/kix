@@ -271,6 +271,14 @@ let
         kixLibrary = {
           inherit (kix) version;
         };
+        # The library and package set the flake's builder uses, in the shape
+        # a cluster function receives them. A project that merges these
+        # outputs into a larger flake builds its own checks from this, so
+        # they render Helm charts the same way as its clusters.
+        kixLib = {
+          inherit (built) kix;
+          packages = catalogPackages;
+        };
         kixPackages = lib.mapAttrs (
           _name: pkg:
           let

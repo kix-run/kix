@@ -102,6 +102,28 @@ in
     )
     || throw "packages: ${builtins.toJSON (builtins.attrNames flake.packages.test-system)}";
 
+  # `kixLib` hands back the library the builder uses. Under the kix builder
+  # a chart is a placeholder that needs no nixpkgs. Under the nix builder
+  # it is a real derivation, which forces the stubbed nixpkgs here.
+  mkflake-kixlib-follows-the-builder =
+    let
+      chart =
+        flake:
+        flake.legacyPackages.test-system.kixLib.kix.fetchHelmChart {
+          repo = "https://charts.example.com";
+          name = "demo";
+          version = "1.0.0";
+          hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        };
+      kixLib = (projectFlake "nix-builder").legacyPackages.test-system.kixLib;
+    in
+    (
+      (chart (flakeOf null { })).system == "kix-helm"
+      && !(builtins.tryEval (chart (projectFlake "nix-builder")).drvPath).success
+      && kixLib.packages ? cert-manager
+    )
+    || throw "kixLib does not follow the builder";
+
   mkflake-unknown-builder-fails =
     !(builtins.tryEval (projectFlake "unknown-builder").legacyPackages.test-system.kixConfig.builder)
     .success;
