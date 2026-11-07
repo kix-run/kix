@@ -91,6 +91,16 @@ jobs:
       - name: Tests
         run: nix develop --command bash -c 'cd cli && cargo test --workspace'
 
+      # Fails when a dependency in cli/Cargo.lock has a published security
+      # advisory (RustSec). Advisories about unmaintained or unsound crates
+      # are printed as warnings and do not fail the job. The advisory
+      # database is fetched fresh on each run, so a new advisory can fail a
+      # branch that passed yesterday.
+      - name: Security advisories
+        run: |
+          nix shell --inputs-from . nixpkgs#cargo-audit \
+            --command cargo-audit audit --file cli/Cargo.lock
+
       # Evaluating the runtime spec runs the checks in cli/runtime/runtime.nix:
       # that programs.json, which kix compiles in, matches what the runtime
       # ships, and that every licence is on the approved list. Evaluation
@@ -279,12 +289,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         if: runner.os == 'macOS'
 
+      - uses: taiki-e/install-action@v2
+        if: runner.os == 'macOS'
+        with:
+          tool: cargo-auditable@0.7.2
+
+      # `cargo auditable` embeds the crate list in the binary (see the
+      # release job).
       - name: Build kix for macOS
         if: runner.os == 'macOS'
         env:
           KIX_VERSION: ${{ needs.version.outputs.version }}
         run: |
-          cargo build --manifest-path cli/Cargo.toml --locked --release -p kix-cli
+          cargo auditable build --manifest-path cli/Cargo.toml --locked --release -p kix-cli
           bin=cli/target/release/kix
           test "$("$bin" --version)" = "kix $KIX_VERSION" || { "$bin" --version; exit 1; }
           tar -cf kix-aarch64-darwin.tar -C cli/target/release kix
@@ -331,16 +348,19 @@ jobs:
           version: 0.14.1
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild
+          tool: cargo-zigbuild,cargo-audit@0.22.0,cargo-auditable@0.7.2
 
       # kix::VERSION reads KIX_VERSION at compile time, so `kix --version`,
       # plan documents and compliance receipts carry the version.
+      # `cargo auditable` embeds the list of crates and versions in each
+      # binary, so `cargo audit bin`, syft, trivy, or grype can read what a
+      # released kix contains without its source.
       - name: Build
         env:
           KIX_VERSION: ${{ needs.version.outputs.version }}
         run: |
           for target in $TARGETS; do
-            cargo zigbuild --manifest-path cli/Cargo.toml --locked --release \
+            cargo auditable zigbuild --manifest-path cli/Cargo.toml --locked --release \
               -p kix-cli --target "$target"
           done
 
@@ -370,6 +390,24 @@ jobs:
             dir="kix-$VERSION-$system"
             mkdir -p "pkg/$dir/bin"
             install -m 755 "$kix" "pkg/$dir/bin/kix"
+
+            # The RustSec report for the crates built into this binary, read
+            # from the binary itself. It ships in the archive and as a release
+            # asset. A binary without the embedded crate list, or with a known
+            # vulnerability, stops the release.
+            report="dist/kix-$VERSION-$system-cargo-audit.json"
+            status=0
+            cargo audit --json bin "$kix" > "$report" || status=$?
+            jq -r '"\(.lockfile["dependency-count"]) crates, \(.vulnerabilities.count) vulnerabilities, " + ([.warnings[] | length] | add // 0 | tostring) + " warnings"' "$report"
+            if [ "$(jq '.lockfile["dependency-count"]' "$report")" -lt 100 ]; then
+              echo "$kix carries no embedded crate list; build it with cargo auditable" >&2
+              exit 1
+            fi
+            if [ "$status" -ne 0 ]; then
+              cargo audit bin "$kix" || true
+              exit "$status"
+            fi
+            install -Dm 644 "$report" "pkg/$dir/share/kix/cargo-audit.json"
             tar -xf "runtime/runtime-$system.tar" -C "pkg/$dir"
             tar -czf "dist/kix-$system.tar.gz" -C pkg "$dir"
           done
@@ -387,7 +425,7 @@ jobs:
           done
           tar -I 'zstd -19 -T0' -cf "dist/$sources.tar.zst" "$sources"
 
-          (cd dist && sha256sum -- *.tar.gz *.tar.zst > SHA256SUMS)
+          (cd dist && sha256sum -- *.tar.gz *.tar.zst *.json > SHA256SUMS)
           cat dist/SHA256SUMS
 
       - uses: actions/upload-artifact@v4

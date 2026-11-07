@@ -78,6 +78,7 @@ counts as breaking.
 
 ### Added
 
+- Each `kix` binary in a release archive carries the list of Rust crates and versions it was built from, embedded with `cargo auditable`. `cargo audit bin`, syft, trivy, and grype read it, so you can check a binary for known security advisories without its source. Each archive also holds the advisory report made at release time as `share/kix/cargo-audit.json`, and the release lists it as `kix-<version>-<system>-cargo-audit.json`. A release with a known vulnerability in its dependencies is not published.
 - `kix status` prints the cluster's Kubernetes version under its ID, and `kix status --operator -o json` adds `kubernetes_version`.
 - A cluster listed in `kix.lib.mkFlake`'s `clusters` is named after its key unless it sets `name`, so the name no longer has to be written in both `flake.nix` and the cluster file.
 - A CRD declaration can list the states that mean a custom resource will not become ready until its spec changes: `readiness.failed`, a list of `{ condition = { type; status; reason ? }; }` or `{ path; equals; }` entries beside the ready rule. When the controller reports one of them for the current spec, `kix deploy` stops waiting at once and shows the controller's condition, reason, and message, instead of failing at the readiness timeout. A package author can give an entry a `hint` that says what to do next. Packages in this repository declare it where the controller's verdict stands until the spec changes, for example Cilium, Velero, and CDI.
@@ -110,6 +111,7 @@ counts as breaking.
 
 ### Fixed
 
+- Kix uses versions of `rustls`, `rustls-webpki`, `quinn-proto`, `zstd`, `zstd-safe`, `zstd-sys`, and `crossbeam-epoch` that fix 16 published security advisories, among them TLS certificate checks that could accept distrusted intermediates and a TLS downgrade.
 - A Deployment whose rollout is stuck is no longer counted as ready. Before, Kix counted it as ready when a pod from the old version was still running next to a new pod that never started, for example because its image does not exist. Kix now waits until no pod from the old version is left, and fails on the new pod's error. The waiting message says how many old pods are left.
 - An object that two package instances list, such as a provider's Secret reference that a consumer holds as a part, now belongs to the instance that built it. Before, its owner could switch between the two on any unrelated change to either package.
 - A network policy that Cilium rejects (`Valid=False`, for example a rule with no `ingress` or `egress` section) now fails the deploy as soon as Cilium reports it, with Cilium's reason, instead of after the readiness timeout with a timeout message.
