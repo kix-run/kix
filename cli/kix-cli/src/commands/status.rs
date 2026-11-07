@@ -506,7 +506,12 @@ fn resource_status_from_obj(obj: &kube::api::DynamicObject) -> PackageResourceSt
 }
 
 fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
-    compute_age(obj.metadata.creation_timestamp.as_ref().map(|t| t.0))
+    compute_age(
+        obj.metadata
+            .creation_timestamp
+            .as_ref()
+            .and_then(kix::cluster::chrono_time),
+    )
 }
 
 /// Format the elapsed time since `created`, or `"-"` when `None`.
@@ -784,12 +789,11 @@ mod tests {
         RecordsError {
             op: "list",
             name: None,
-            source: kube::Error::Api(kube::error::ErrorResponse {
-                status: "Failure".into(),
-                message: "refused".into(),
-                reason: "Forbidden".into(),
-                code,
-            }),
+            source: kube::Error::Api(
+                kube::core::Status::failure("refused", "Forbidden")
+                    .with_code(code)
+                    .boxed(),
+            ),
         }
     }
 

@@ -253,9 +253,12 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
             let mut de = serde_json::Deserializer::from_str(&text);
             seed.deserialize(&mut de).and_then(|()| de.end()).is_ok()
         }
-        _ => seed
-            .deserialize(serde_yml::Deserializer::from_str(&text))
-            .is_ok(),
+        _ => serde_saphyr::with_deserializer_from_str_with_options(
+            &text,
+            sops_read_options(),
+            |de| seed.deserialize(de),
+        )
+        .is_ok(),
     };
     if !checked {
         return Err(refuse(
@@ -266,7 +269,8 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
     }
     let doc: Value = match input_type {
         "json" => serde_json::from_str(&text).map_err(|e| e.to_string()),
-        _ => serde_yml::from_str(&text).map_err(|e| e.to_string()),
+        _ => serde_saphyr::from_str_with_options(&text, sops_read_options())
+            .map_err(|e| e.to_string()),
     }
     .map_err(|_| refuse("only YAML or JSON SOPS files can come with a build"))?;
     // Go's `encoding/json` matches `"sops"` case-insensitively.
@@ -325,6 +329,18 @@ fn folds_to_sops(key: &str) -> bool {
 /// value plus key and string lengths, with YAML aliases counted each time they
 /// are expanded.
 const MAX_SOPS_TEXT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Return the YAML reader options for a carried SOPS file.
+///
+/// [`UniqueKeys`] counts every value an alias expands to and refuses past
+/// [`MAX_SOPS_TEXT_BYTES`] with a message that says so. The YAML reader's own
+/// cap on replayed alias events is raised above what that count admits, so the
+/// count refuses first. Each counted value is at most two events.
+fn sops_read_options() -> serde_saphyr::Options {
+    let mut options = crate::yaml::read_options();
+    options.alias_limits.max_total_replayed_events = 2 * MAX_SOPS_TEXT_BYTES + 1024;
+    options
+}
 
 /// Deserializer seed that rejects duplicate map keys and documents exceeding
 /// [`MAX_SOPS_TEXT_BYTES`] without allocating a value tree.
@@ -885,7 +901,7 @@ mod tests {
     }
 
     /// sops reads YAML with yaml.v3, which refuses a repeated key and matches
-    /// `sops` exactly. serde_yml refuses a repeated key too.
+    /// `sops` exactly. Kix's YAML reader refuses a repeated key too.
     #[test]
     fn a_yaml_sops_file_with_a_repeated_key_is_refused() {
         let text = format!("sops:\n  kms:\n    - arn: arn:aws:kms:x\n{AGE_ONLY}");

@@ -33,6 +33,7 @@ pub mod registry;
 pub mod runtime;
 pub mod system_nix;
 pub mod text;
+pub mod yaml;
 
 /// The Kix version. A release build sets `KIX_VERSION` at compile time to
 /// the crate version with the CI run number as semver build metadata

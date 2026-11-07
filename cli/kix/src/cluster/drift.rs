@@ -264,7 +264,11 @@ pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
             manager: e.manager.clone().unwrap_or_else(|| "unknown".to_string()),
             operation: e.operation.clone().unwrap_or_else(|| "?".to_string()),
             subresource: e.subresource.clone(),
-            time: e.time.as_ref().map(|t| t.0.to_rfc3339()),
+            time: e
+                .time
+                .as_ref()
+                .and_then(crate::cluster::chrono_time)
+                .map(|t| t.to_rfc3339()),
             paths: e
                 .fields_v1
                 .as_ref()

@@ -103,7 +103,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
                 }).collect::<Vec<_>>(),
             });
             if matches!(format, OutputFormat::Yaml) {
-                print!("{}", serde_yml::to_string(&value).into_diagnostic()?);
+                print!("{}", kix::yaml::to_string(&value).into_diagnostic()?);
             } else {
                 println!(
                     "{}",
