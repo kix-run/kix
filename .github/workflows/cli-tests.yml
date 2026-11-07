@@ -402,12 +402,55 @@ jobs:
           tar -xzf "dist/kix-${{ matrix.system }}.tar.gz" -C "$RUNNER_TEMP"
           cli/runtime/without-nix.sh "$RUNNER_TEMP/kix-$VERSION-${{ matrix.system }}" .
 
+  # Builds with the machine's Nix (the nix builder in kix.toml), as a user
+  # the Nix daemon does not trust, which is how most machines with Nix are
+  # set up. cli/runtime/nix-builder.sh checks that the Helm cluster builds
+  # to the same YAML under both builders, and that a project choosing the
+  # nix builder works with `kix build` and with a plain `nix build`.
+  nix-builder:
+    needs: [version, release]
+    if: needs.version.outputs.build == 'true'
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NIX_CONFIG: |
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # The installer makes the runner user trusted. The later
+      # `trusted-users` line replaces that, so the check runs untrusted.
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            trusted-users = root
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Build with the machine's Nix
+        run: |
+          tar -xzf "dist/kix-${{ matrix.system }}.tar.gz" -C "$RUNNER_TEMP"
+          cli/runtime/nix-builder.sh "$RUNNER_TEMP/kix-$VERSION-${{ matrix.system }}" .
+
   # Publishes the archives the release job built, once they ran without Nix.
   # This repository is private and so are its releases, so the binaries go
   # to the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
   # fine-grained token with Contents read/write on that repository only.
   publish:
-    needs: [version, release, without-nix]
+    needs: [version, release, without-nix, nix-builder]
     if: needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Write, to push the release tag to this repository and to start the
