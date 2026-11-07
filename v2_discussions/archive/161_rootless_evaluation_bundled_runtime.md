@@ -1,6 +1,6 @@
 # 161: Rootless evaluation with a bundled runtime
 
-**Status:** Draft (implementation plan)
+**Status:** Implemented (kixpkgs#319, 2026-11-07)
 **Related:** kixpkgs#315, `120_compiler_theory_mapping.md` (Helm render caching)
 
 ## Goal
