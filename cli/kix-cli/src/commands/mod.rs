@@ -216,7 +216,10 @@ pub(crate) fn project_dir(flake: &str) -> Option<PathBuf> {
     if flake.contains(':') {
         return None;
     }
-    resolve_flake_path(flake).ok()
+    // `absolute` drops `.` components, so messages name `kix.toml` cleanly.
+    resolve_flake_path(flake)
+        .ok()
+        .map(|p| std::path::absolute(&p).unwrap_or(p))
 }
 
 /// Read the project's `kix.toml` and choose the Nix runner its builder
@@ -224,7 +227,8 @@ pub(crate) fn project_dir(flake: &str) -> Option<PathBuf> {
 pub(crate) fn select_builder(global: &GlobalArgs) -> miette::Result<()> {
     let config = kix::project::ProjectConfig::load(project_dir(&global.flake).as_deref())
         .map_err(|e| miette::miette!("{e}"))?;
-    kix::runtime::select_builder(config.builder).map_err(|e| miette::miette!("{e}"))?;
+    kix::runtime::select_builder(config.builder, config.builder_source)
+        .map_err(|e| miette::miette!("{e}"))?;
     Ok(())
 }
 

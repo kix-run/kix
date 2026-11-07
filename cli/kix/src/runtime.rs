@@ -57,7 +57,7 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 
 use crate::eval::store::{STORE_ROOT_VAR, bundled_store_root};
-use crate::project::BuilderKind;
+use crate::project::{BuilderKind, BuilderSource};
 
 /// The environment variable that names a Kix runtime directory.
 pub const RUNTIME_DIR_VAR: &str = "KIX_RUNTIME_DIR";
@@ -184,6 +184,9 @@ pub enum RuntimeError {
         "{STORE_ROOT_VAR} is set, but it does not apply to this project. The project's builder is \"nix\", which uses the machine's Nix and its store. Unset {STORE_ROOT_VAR}"
     )]
     StoreRootWithSystemNix,
+
+    #[error(transparent)]
+    SystemNix(#[from] crate::system_nix::SystemNixError),
 }
 
 fn versions(shipped: &[String]) -> String {
@@ -369,23 +372,33 @@ impl NixRunner {
     }
 }
 
-/// The builder this run uses and the runner it needs, set once by
-/// [`select_builder`].
-static SELECTED: OnceLock<(BuilderKind, NixRunner)> = OnceLock::new();
+/// The builder this run uses, where the choice came from, and the runner it
+/// needs, set once by [`select_builder`].
+static SELECTED: OnceLock<(BuilderKind, BuilderSource, NixRunner)> = OnceLock::new();
 
-/// Choose the Nix runner for `builder` for the rest of this run.
+/// Choose the Nix runner for `builder`, which `source` chose, for the rest of
+/// this run.
 ///
 /// Call it once, before Kix runs any Nix program. A later call keeps the
 /// first choice and returns it.
-pub fn select_builder(builder: BuilderKind) -> Result<NixRunner, RuntimeError> {
+pub fn select_builder(
+    builder: BuilderKind,
+    source: BuilderSource,
+) -> Result<NixRunner, RuntimeError> {
     let runner = NixRunner::for_builder(builder, std::env::var_os(STORE_ROOT_VAR).as_deref())?;
-    Ok(SELECTED.get_or_init(|| (builder, runner)).1.clone())
+    Ok(SELECTED.get_or_init(|| (builder, source, runner)).2.clone())
 }
 
 /// Return the builder this run uses: the one [`select_builder`] chose, or
 /// `kix` when nothing chose one.
 pub fn builder() -> BuilderKind {
-    SELECTED.get().map_or(BuilderKind::Kix, |(b, _)| *b)
+    SELECTED.get().map_or(BuilderKind::Kix, |(b, _, _)| *b)
+}
+
+/// Return where the builder of this run came from, or `None` when nothing
+/// chose one.
+pub fn builder_source() -> Option<BuilderSource> {
+    SELECTED.get().map(|(_, source, _)| source.clone())
 }
 
 /// Return the Nix runner this run uses: the one [`select_builder`] chose, or
@@ -393,7 +406,7 @@ pub fn builder() -> BuilderKind {
 /// reads no project.
 pub fn nix_runner() -> NixRunner {
     match SELECTED.get() {
-        Some((_, runner)) => runner.clone(),
+        Some((_, _, runner)) => runner.clone(),
         None => NixRunner::Bundled {
             root: bundled_store_root(),
         },
@@ -405,9 +418,15 @@ pub fn nix_runner() -> NixRunner {
 /// Under [`NixRunner::Bundled`], a Nix program comes from the runtime and
 /// its command also selects Kix's store. Under [`NixRunner::System`], it is
 /// the `nix` or `nix-store` on `PATH`, run with the machine's settings, and
-/// `want` does not apply to it.
+/// `want` does not apply to it. The first such command of a run checks that
+/// the machine's Nix is one the `nix` builder supports
+/// ([`crate::system_nix`]).
 pub fn tool(tool: Tool, want: Want) -> Result<Command, RuntimeError> {
-    command_for(&nix_runner(), tool, want, program_path)
+    let runner = nix_runner();
+    if runner == NixRunner::System && tool.program() == "nix" {
+        crate::system_nix::check_once()?;
+    }
+    command_for(&runner, tool, want, program_path)
 }
 
 fn command_for(

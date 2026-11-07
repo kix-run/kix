@@ -12,6 +12,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use super::error::KixEvalError;
 use super::store_graph::store_name;
+use crate::project::BuilderKind;
 use crate::runtime::{self, RuntimeError, Tool, Want};
 
 /// A `nix` or `nix-store` command that did not run, or exited non-zero.
@@ -42,7 +43,8 @@ impl std::fmt::Display for NixCommandError {
 
 impl std::error::Error for NixCommandError {}
 
-/// Return a command that runs `tool`, a Nix program, from the Kix runtime.
+/// Return a command that runs `tool`, a Nix program, as this run's Nix
+/// runner chooses it ([`runtime::tool`]).
 pub(crate) fn command(tool: Tool) -> Result<Command, NixCommandError> {
     runtime::tool(tool, Want::Shipped).map_err(|e: RuntimeError| NixCommandError {
         command: tool.binary().to_string(),
@@ -214,6 +216,8 @@ pub fn eval_activation_index(
         return Err(KixEvalError::not_found(cluster_name));
     }
 
+    check_library_builder(flake_path, input_overrides)?;
+
     let flake_ref = format!(".#{}", activation_index_attr(cluster_name));
 
     tracing::info!(
@@ -240,12 +244,28 @@ pub fn eval_activation_index(
 /// Run `nix eval --raw <args>` in `flake_path` and return what it prints.
 /// When evaluation stops at a Helm chart that is not in Kix's store yet,
 /// fetch or render it ([`super::helm`]) and evaluate again.
+///
+/// Under the `nix` builder, Nix renders the charts itself, so this runs
+/// `nix eval` once.
 pub fn eval_with_helm(
     flake_path: &Path,
     args: &[&str],
     input_overrides: &[(String, String)],
     status_fn: &dyn Fn(&str),
 ) -> Result<String, KixEvalError> {
+    if runtime::nix_runner() == runtime::NixRunner::System {
+        let mut error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
+            Ok(stdout) => return Ok(stdout),
+            Err(error) => error,
+        };
+        if let Some(e) = system_eval_error(&error.stderr) {
+            return Err(e);
+        }
+        if !tracing::enabled!(tracing::Level::INFO) {
+            error.stderr = shorten_trace(&error.stderr);
+        }
+        return Err(error.into());
+    }
     let mut realised = std::collections::HashSet::new();
     for _ in 0..MAX_EVALUATIONS {
         let mut error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
@@ -347,6 +367,86 @@ fn eval_raw(
     Ok(Ok(String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
+/// Explain a failed evaluation under the `nix` builder whose cause Kix
+/// knows: the machine's Nix forbids import from derivation, or evaluation
+/// reached a Helm placeholder, which the library's nix route never writes.
+fn system_eval_error(stderr: &str) -> Option<KixEvalError> {
+    if stderr.contains("allow-import-from-derivation") && stderr.contains("disabled") {
+        return Some(KixEvalError::ImportFromDerivationDisabled);
+    }
+    if stderr.contains(super::helm::PLACEHOLDER_SYSTEM) {
+        let path = stderr
+            .split(|c: char| c.is_whitespace() || "'\"`".contains(c))
+            .find(|word| word.starts_with(super::store_path::STORE_DIR))
+            .unwrap_or("unknown path")
+            .to_string();
+        return Some(KixEvalError::PlaceholderUnderNix { path });
+    }
+    None
+}
+
+/// Return the flake attribute under `legacyPackages.<system>` that holds the
+/// clusters as this run's builder builds them. The two differ in how Helm
+/// charts are rendered.
+pub(crate) fn clusters_attr() -> &'static str {
+    match runtime::builder() {
+        BuilderKind::Nix => "kixClustersNix",
+        BuilderKind::Kix | BuilderKind::Remote => "kixClusters",
+    }
+}
+
+/// Check, once per run, that the project's Kix library read the same
+/// builder from `kix.toml` as Kix did ([`crate::project::check_agreement`]).
+fn check_library_builder(
+    flake_path: &Path,
+    input_overrides: &[(String, String)],
+) -> Result<(), KixEvalError> {
+    static AGREED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if AGREED.get().is_some() {
+        return Ok(());
+    }
+    let Some(origin) = runtime::builder_source() else {
+        return Ok(());
+    };
+    let library = library_builder(flake_path, input_overrides)?;
+    crate::project::check_agreement(runtime::builder(), &origin, library.as_deref())?;
+    let _ = AGREED.set(());
+    Ok(())
+}
+
+/// Return the builder the project's Kix library read from `kix.toml`, or
+/// `None` when the library is older than that setting.
+fn library_builder(
+    flake_path: &Path,
+    input_overrides: &[(String, String)],
+) -> Result<Option<String>, KixEvalError> {
+    let attr = format!(".#legacyPackages.{}.kixConfig.builder", current_system());
+    let mut cmd = command(Tool::Nix)?;
+    cmd.args([
+        "eval",
+        "--raw",
+        &attr,
+        "--extra-experimental-features",
+        "nix-command flakes pipe-operators",
+    ]);
+    for (name, url) in input_overrides {
+        cmd.arg("--override-input").arg(name).arg(url);
+    }
+    match output(cmd.current_dir(flake_path)) {
+        Ok(out) => Ok(Some(String::from_utf8_lossy(&out).trim().to_string())),
+        Err(e) if e.missing_attribute() => {
+            match system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
+                Some(err) => Err(err),
+                None => Ok(None),
+            }
+        }
+        Err(e) => match system_eval_error(&e.stderr) {
+            Some(err) => Err(err),
+            None => Err(e.into()),
+        },
+    }
+}
+
 /// The trace frames [`shorten_trace`] keeps, as many as Nix shows without
 /// `--show-trace`.
 const SHORT_TRACE_FRAMES: usize = 3;
@@ -407,8 +507,9 @@ fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError>
 /// `cluster_name` on this system.
 pub(crate) fn activation_index_attr(cluster_name: &str) -> String {
     format!(
-        "legacyPackages.{}.kixClusters.{cluster_name}.activationIndex",
-        current_system()
+        "legacyPackages.{}.{}.{cluster_name}.activationIndex",
+        current_system(),
+        clusters_attr()
     )
 }
 
@@ -424,7 +525,7 @@ fn missing_index(
     if let Some(e) = system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
         return e;
     }
-    let attr = format!(".#legacyPackages.{}.kixClusters", current_system());
+    let attr = format!(".#legacyPackages.{}.{}", current_system(), clusters_attr());
     let listed = command(Tool::Nix).ok().and_then(|mut cmd| {
         cmd.args([
             "eval",

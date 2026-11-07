@@ -12,12 +12,13 @@
 //! change, renders the plan document printed by `kix plan` and `kix diff`, and
 //! verifies that a deploy applies only the objects shown in its plan.
 //!
-//! Six smaller modules sit beside them: [`build_source`] loads and validates
-//! builds from the local Nix store or a carried bundle, [`pins`] manages the
-//! committed record of resolved image digests, [`project`] reads a project's
-//! `kix.toml`, [`registry`] resolves image references against container
-//! registries, [`runtime`] finds the external programs Kix runs, and [`text`]
-//! sanitizes untrusted text for terminal output.
+//! Seven smaller modules sit beside them: [`build_source`] loads and
+//! validates builds from the local Nix store or a carried bundle, [`pins`]
+//! manages the committed record of resolved image digests, [`project`] reads
+//! a project's `kix.toml`, [`registry`] resolves image references against
+//! container registries, [`runtime`] finds the external programs Kix runs,
+//! [`system_nix`] checks the machine's Nix for the `nix` builder, and
+//! [`text`] sanitizes untrusted text for terminal output.
 
 pub mod build_source;
 pub mod cluster;
@@ -30,6 +31,7 @@ pub mod plan;
 pub mod project;
 pub mod registry;
 pub mod runtime;
+pub mod system_nix;
 pub mod text;
 
 /// The Kix version. A release build sets `KIX_VERSION` at compile time to

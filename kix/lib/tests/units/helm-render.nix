@@ -1,7 +1,8 @@
-# Tests for the Helm placeholders in helm.nix and for importing a chart
-# from a render. Nix cannot build a placeholder, so these read the spec a
+# Tests for the two Helm routes in helm.nix and for importing a chart from
+# a render. Nix cannot build a placeholder, so these read the spec a
 # placeholder carries, and import charts through a stub `readRender` that
-# returns a fixed resource list instead of a Helm render.
+# returns a fixed resource list instead of a Helm render. The nix route gets
+# a stub nixpkgs whose derivations are never built.
 # Loaded by ../default.nix with the other files in this directory.
 
 {
@@ -86,6 +87,53 @@ let
       };
     }
   ];
+
+  # Enough of nixpkgs for the nix route to create its derivations. Each is a
+  # plain `derivation`, so it has a real store path, and `passthru` shows
+  # through as with nixpkgs' own `runCommand`.
+  stubPkgs = {
+    stdenv.hostPlatform.system = "x86_64-linux";
+    cacert = "cacert";
+    yq-go = "yq-go";
+    fetchurl =
+      { url, sha256 }:
+      derivation {
+        name = baseNameOf url;
+        system = "x86_64-linux";
+        builder = "/bin/sh";
+        outputHashAlgo = "sha256";
+        outputHash = sha256;
+        outputHashMode = "flat";
+      };
+    runCommand =
+      name: env: script:
+      derivation (
+        builtins.removeAttrs env [ "passthru" ]
+        // {
+          inherit name;
+          system = "x86_64-linux";
+          builder = "/bin/sh";
+          args = [
+            "-c"
+            script
+          ];
+        }
+      )
+      // (env.passthru or { });
+  };
+
+  nixHelm = import ../../helm.nix {
+    inherit lib;
+    pkgs = stubPkgs;
+    helmRoute = "nix";
+  };
+
+  fetchArgs = {
+    repo = "https://charts.example.com";
+    name = "web";
+    version = "1.2.3";
+    hash = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=";
+  };
 
   stubHelm = import ../../helm.nix {
     inherit lib;
@@ -197,6 +245,105 @@ in
         }
     )
     || throw "fetch: ${drv.kixHelmFetch}";
+
+  # The nix route passes the flags the spec holds, each extra flag as one
+  # argument however many spaces it has.
+  helm-render-nix-route-passes-the-spec =
+    let
+      drv = nixHelm.helmTemplateDerivation {
+        inherit chart;
+        releaseName = "web";
+        namespace = null;
+        includeHooks = false;
+        kubeVersion = "1.31.0";
+        extraFlags = [
+          "--set"
+          "greeting=hello world"
+        ];
+        values.replicas = 2;
+      };
+      expected = [
+        "template"
+        "web"
+        chart
+        "--values"
+        "values.json"
+        "--include-crds"
+        "--no-hooks"
+        "--kube-version"
+        "1.31.0"
+        "--set"
+        "greeting=hello world"
+      ];
+    in
+    (
+      drv.helmArgs == expected
+      && lib.hasInfix "helm ${lib.escapeShellArgs expected}" (builtins.elemAt drv.args 1)
+      && lib.hasInfix "'greeting=hello world'" (builtins.elemAt drv.args 1)
+      && drv.values == ''{"replicas":2}''
+      && drv.name == render.name
+    )
+    || throw "args: ${builtins.toJSON drv.helmArgs}";
+
+  # The nix route writes the namespace flag when the spec has one, and
+  # leaves out --no-hooks and --kube-version when the spec asks for neither.
+  helm-render-nix-route-defaults =
+    let
+      drv = nixHelm.helmTemplateDerivation {
+        inherit chart;
+        releaseName = "web";
+        namespace = "apps";
+      };
+    in
+    drv.helmArgs == [
+      "template"
+      "web"
+      chart
+      "--values"
+      "values.json"
+      "--namespace"
+      "apps"
+      "--include-crds"
+    ]
+    || throw "args: ${builtins.toJSON drv.helmArgs}";
+
+  # A chart has one store path whichever route fetches it.
+  helm-fetch-has-one-path-under-both-routes =
+    let
+      placeholder = helm.fetchHelmChart fetchArgs;
+      real = nixHelm.fetchHelmChart fetchArgs;
+    in
+    (placeholder.outPath == real.outPath && real.outputHashMode == "flat")
+    || throw "placeholder ${placeholder.outPath}, nix ${real.outPath}";
+
+  helm-fetch-nix-route-pulls-like-the-cli =
+    let
+      oci = nixHelm.fetchHelmChart (fetchArgs // { repo = "oci://registry.example.com/charts/"; });
+    in
+    (
+      (nixHelm.fetchHelmChart fetchArgs).helmArgs == [
+        "pull"
+        "web"
+        "--repo"
+        "https://charts.example.com"
+        "--version"
+        "1.2.3"
+        "--destination"
+        "pull"
+      ]
+      && builtins.head (builtins.tail oci.helmArgs) == "oci://registry.example.com/charts/web"
+    )
+    || throw "args: ${builtins.toJSON oci.helmArgs}";
+
+  helm-nix-route-needs-pkgs =
+    let
+      noPkgs = import ../../helm.nix {
+        inherit lib;
+        helmRoute = "nix";
+      };
+    in
+    !(builtins.tryEval (noPkgs.helmTemplateDerivation { inherit chart; }).drvPath).success
+    && !(builtins.tryEval (noPkgs.fetchHelmChart fetchArgs).drvPath).success;
 
   helm-import-crds-keeps-only-crds =
     let

@@ -138,11 +138,6 @@ pub enum ProjectError {
         "{origin} sets builder = \"remote\", but this version of Kix cannot use a remote builder. Set builder = \"kix\", or remove the setting"
     )]
     RemoteUnsupported { origin: BuilderSource },
-
-    #[error(
-        "{origin} sets builder = \"nix\", but the nix builder is not available in this version of Kix yet. Set builder = \"kix\", or remove the setting"
-    )]
-    NixNotReady { origin: BuilderSource },
 }
 
 fn builder_names() -> String {
@@ -232,10 +227,65 @@ impl ProjectConfig {
     pub fn check_supported(&self) -> Result<(), ProjectError> {
         let origin = self.builder_source.clone();
         match self.builder {
-            BuilderKind::Kix => Ok(()),
-            BuilderKind::Nix => Err(ProjectError::NixNotReady { origin }),
+            BuilderKind::Kix | BuilderKind::Nix => Ok(()),
             BuilderKind::Remote => Err(ProjectError::RemoteUnsupported { origin }),
         }
+    }
+}
+
+/// Why the builder Kix read from `kix.toml` and the one the project's Kix
+/// library read differ.
+///
+/// The library reads `kix.toml` through Nix, which sees only the files git
+/// tracks, so the two can disagree.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ProjectMismatch {
+    #[error(
+        "{origin} sets builder = \"nix\", but this project's Kix library is too old for the nix builder. Run `kix lib update` to move flake.lock to this kix release"
+    )]
+    LibraryTooOld { origin: BuilderSource },
+
+    #[error(
+        "kix.toml is not visible to Nix. Run `git add kix.toml`. Kix reads builder = \"nix\" from {origin}, but Nix leaves out files that git does not track, so the project's Kix library uses builder = \"kix\""
+    )]
+    NotVisible { origin: BuilderSource },
+
+    #[error(
+        "Kix and the project's Kix library disagree about the builder. Kix uses builder = \"{cli}\" ({origin}), and the library uses builder = \"{library}\". Check that git tracks kix.toml, and that flake.nix passes its `self` input to kix.lib.mkFlake"
+    )]
+    Disagree {
+        origin: BuilderSource,
+        cli: BuilderKind,
+        library: String,
+    },
+}
+
+/// Check that the builder Kix uses, which `origin` chose, agrees with
+/// `library`, the builder the project's Kix library read from `kix.toml`.
+/// `library` is `None` when the library is older than the setting.
+///
+/// The test override replaces the file on purpose, so it is never compared.
+pub fn check_agreement(
+    cli: BuilderKind,
+    origin: &BuilderSource,
+    library: Option<&str>,
+) -> Result<(), ProjectMismatch> {
+    if *origin == BuilderSource::TestOverride {
+        return Ok(());
+    }
+    let origin = origin.clone();
+    match library {
+        None if cli == BuilderKind::Nix => Err(ProjectMismatch::LibraryTooOld { origin }),
+        None => Ok(()),
+        Some(library) if library == cli.name() => Ok(()),
+        Some("kix") if cli == BuilderKind::Nix && matches!(origin, BuilderSource::File(_)) => {
+            Err(ProjectMismatch::NotVisible { origin })
+        }
+        Some(library) => Err(ProjectMismatch::Disagree {
+            origin,
+            cli,
+            library: library.to_string(),
+        }),
     }
 }
 
@@ -333,23 +383,50 @@ mod tests {
     }
 
     #[test]
-    fn remote_and_nix_are_refused() {
+    fn remote_is_refused() {
         let config = read(Some("builder = \"remote\"\n")).unwrap();
         let err = config.check_supported().unwrap_err().to_string();
         assert!(err.contains("cannot use a remote builder"), "{err}");
         assert!(err.contains("kix.toml sets builder"), "{err}");
 
-        let config = read(Some("builder = \"nix\"\n")).unwrap();
-        let err = config.check_supported().unwrap_err().to_string();
+        for builder in ["kix", "nix"] {
+            read(Some(&format!("builder = \"{builder}\"\n")))
+                .unwrap()
+                .check_supported()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_library_must_read_the_same_builder() {
+        let file = BuilderSource::File(PathBuf::from("/p/kix.toml"));
+        check_agreement(BuilderKind::Nix, &file, Some("nix")).unwrap();
+        check_agreement(BuilderKind::Kix, &BuilderSource::Default, Some("kix")).unwrap();
+        // An older library has no setting, which only the nix builder needs.
+        check_agreement(BuilderKind::Kix, &BuilderSource::Default, None).unwrap();
+
+        let err = check_agreement(BuilderKind::Nix, &file, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("too old for the nix builder"), "{err}");
+        assert!(err.contains("kix lib update"), "{err}");
+
+        let err = check_agreement(BuilderKind::Nix, &file, Some("kix"))
+            .unwrap_err()
+            .to_string();
         assert!(
-            err.contains("not available in this version of Kix yet"),
+            err.starts_with("kix.toml is not visible to Nix. Run `git add kix.toml`."),
             "{err}"
         );
 
-        read(Some("builder = \"kix\"\n"))
-            .unwrap()
-            .check_supported()
-            .unwrap();
+        let err = check_agreement(BuilderKind::Kix, &BuilderSource::Default, Some("nix"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Kix uses builder = \"kix\""), "{err}");
+        assert!(err.contains("the library uses builder = \"nix\""), "{err}");
+
+        check_agreement(BuilderKind::Nix, &BuilderSource::TestOverride, Some("kix")).unwrap();
+        check_agreement(BuilderKind::Nix, &BuilderSource::TestOverride, None).unwrap();
     }
 
     #[test]
@@ -358,6 +435,7 @@ mod tests {
         let config = ProjectConfig::read(Some(dir.path()), Some(OsStr::new("nix"))).unwrap();
         assert_eq!(config.builder, BuilderKind::Nix);
         assert_eq!(config.builder_source, BuilderSource::TestOverride);
+        let config = ProjectConfig::read(Some(dir.path()), Some(OsStr::new("remote"))).unwrap();
         let err = config.check_supported().unwrap_err().to_string();
         assert!(err.starts_with("KIX_TEST_BUILDER sets builder"), "{err}");
 

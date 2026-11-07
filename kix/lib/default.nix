@@ -4,6 +4,9 @@
   # The calling flake (`self`), used to record flake-relative pin file paths
   # in image sources.
   self ? null,
+  # How Helm charts are fetched and rendered: "placeholder" for the `kix`
+  # builder or "nix" for the `nix` builder (see helm.nix).
+  helmRoute ? "placeholder",
 }:
 
 let
@@ -18,7 +21,7 @@ let
   };
   env = import ./env.nix { inherit lib; };
   fragments = import ./vocab/fragments.nix { inherit lib; };
-  helm = import ./helm.nix { inherit lib; };
+  helm = import ./helm.nix { inherit lib pkgs helmRoute; };
   rbac = import ./vocab/rbac.nix { inherit lib; };
   kixlib = import ./vocab { inherit lib; };
   meta = import ./meta.nix { inherit lib; };

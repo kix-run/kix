@@ -13,27 +13,47 @@
 # `mkParts` exposes every resource through `out.byKind`. For a workload root
 # selected by exactly one Service, it also promotes that Service's outputs.
 #
-# Nix does not run Helm. A chart fetch and a chart render are placeholder
-# derivations of system `kix-helm`, which no Nix machine can build. The `kix`
-# command reads each one whose output evaluation needs, runs the Helm release
-# its spec names, writes the output into Kix's own store, and evaluates again.
-# So a cluster that uses Helm builds only through `kix`.
+# A chart fetch and a chart render take one of two routes, chosen by
+# `helmRoute`:
+#
+# - "placeholder" (the `kix` builder): Nix does not run Helm. A fetch and a
+#   render are placeholder derivations of system `kix-helm`, which no Nix
+#   machine can build. The `kix` command reads each one whose output
+#   evaluation needs, runs the Helm release its spec names, writes the output
+#   into Kix's own store, and evaluates again.
+# - "nix" (the `nix` builder): a fetch and a render are ordinary derivations
+#   that run the same Helm release, and evaluation reads their output through
+#   import from derivation.
+#
+# Both routes build the Helm command line from the same spec, and a chart
+# fetch has the same store path under both.
 
 {
   lib,
+  # The nixpkgs package set. Only the "nix" route uses it.
+  pkgs ? null,
+  # "placeholder" or "nix", as described above.
+  helmRoute ? "placeholder",
   # Return the resource list a render derivation's output holds. Tests
   # replace it to evaluate a chart import without running Helm.
   readRender ? drv: builtins.fromJSON (builtins.readFile drv),
 }:
 
+assert lib.assertOneOf "helmRoute" helmRoute [
+  "placeholder"
+  "nix"
+];
+
 let
   k8s = import ./core { inherit lib; };
   helmDag = import ./helm-dag.nix { inherit lib; };
 
+  helmVersions = lib.importJSON ./helm-versions.json;
+
   # The exact Helm release Kix runs for each major version it ships. The kix
   # binary of the same release ships these, and refuses a spec that names a
   # release it does not ship.
-  helmReleases = lib.mapAttrs (_: release: release.version) (lib.importJSON ./helm-versions.json);
+  helmReleases = lib.mapAttrs (_: release: release.version) helmVersions;
 
   helmMajors = lib.sort (a: b: lib.toInt a < lib.toInt b) (builtins.attrNames helmReleases);
 
@@ -44,6 +64,53 @@ let
     helmVersion:
     helmReleases.${toString helmVersion}
     or (throw "This chart asks for Helm ${toString helmVersion}, but Kix renders charts with Helm ${lib.concatStringsSep " or " helmMajors}. Set `helmVersion` to one of them.");
+
+  nixPkgs =
+    if pkgs == null then
+      throw "kix/lib/helm.nix: the nix Helm route needs `pkgs`. Pass the nixpkgs package set as `pkgs` when you import the Kix library with helmRoute = \"nix\"."
+    else
+      pkgs;
+
+  # The name of Helm's release archive for each Nix system.
+  helmPlatforms = {
+    x86_64-linux = "linux-amd64";
+    aarch64-linux = "linux-arm64";
+    x86_64-darwin = "darwin-amd64";
+    aarch64-darwin = "darwin-arm64";
+  };
+
+  # Return the official Helm build of major `helmVersion` for the system
+  # `pkgs` builds for, from the archive and hash helm-versions.json names.
+  # The Kix runtime ships the same builds.
+  helmPackage =
+    helmVersion:
+    let
+      release = builtins.seq (helmRelease helmVersion) helmVersions.${toString helmVersion};
+      system = nixPkgs.stdenv.hostPlatform.system;
+      platform =
+        helmPlatforms.${system}
+          or (throw "Kix can run Helm on ${lib.concatStringsSep ", " (builtins.attrNames helmPlatforms)}, but this system is ${system}. Build this project on one of those systems.");
+      tarball = nixPkgs.fetchurl {
+        url = "https://get.helm.sh/helm-v${release.version}-${platform}.tar.gz";
+        sha256 =
+          release.sha256.${system}
+            or (throw "kix/lib/helm-versions.json has no hash for Helm ${release.version} on ${system}.");
+      };
+    in
+    nixPkgs.runCommand "helm-${release.version}" { } ''
+      mkdir -p $out/bin unpacked
+      tar -xzf ${tarball} -C unpacked --strip-components=1
+      install -m755 unpacked/helm $out/bin/helm
+    '';
+
+  # Set up an empty Helm home, so no user setting or repository changes what
+  # Helm does. The CLI gives Helm the same environment.
+  helmHome = ''
+    export HOME="$(mktemp -d)"
+    export HELM_CACHE_HOME="$HOME/cache"
+    export HELM_CONFIG_HOME="$HOME/config"
+    export HELM_DATA_HOME="$HOME/data"
+  '';
 
   helpers = import ./eval/helpers.nix { inherit lib; };
 
@@ -136,9 +203,11 @@ rec {
   inherit isClusterScopedKind;
 
   # Fetch a Helm chart from an OCI or HTTP registry. The result is a
-  # fixed-output placeholder: Nix computes its path from `hash` and the name,
-  # and `kix` pulls the chart with the newest Helm it ships, checks the hash,
-  # and adds the file at that path.
+  # fixed-output derivation, so Nix computes its path from `hash` and the
+  # name alone, and the path is the same under both routes. Under the
+  # placeholder route, `kix` pulls the chart with the newest Helm it ships,
+  # checks the hash, and adds the file at that path. Under the nix route, the
+  # derivation runs the same `helm pull`.
   fetchHelmChart =
     {
       repo,
@@ -146,27 +215,125 @@ rec {
       version,
       hash,
     }:
-    derivation {
-      name = "helm-chart-${name}-${version}";
-      system = "kix-helm";
-      builder = "kix";
-      outputHashAlgo = if lib.hasPrefix "sha256-" hash then "sha256" else "sha512";
-      outputHash = hash;
-      outputHashMode = "flat";
-      allowSubstitutes = false;
-      kixHelmFetch = builtins.toJSON {
-        specVersion = 1;
-        helm = helmRelease newestHelmMajor;
-        inherit repo name version;
+    let
+      spec = fetchSpec { inherit repo name version; };
+      fixedOutput = {
+        name = "helm-chart-${name}-${version}";
+        outputHashAlgo = if lib.hasPrefix "sha256-" hash then "sha256" else "sha512";
+        outputHash = hash;
+        outputHashMode = "flat";
       };
+    in
+    if helmRoute == "nix" then
+      nixPkgs.runCommand fixedOutput.name
+        (
+          builtins.removeAttrs fixedOutput [ "name" ]
+          // {
+            nativeBuildInputs = [
+              (helmPackage newestHelmMajor)
+              nixPkgs.cacert
+            ];
+            impureEnvVars = lib.fetchers.proxyImpureEnvVars;
+            passthru.helmArgs = helmPullArgs spec;
+          }
+        )
+        ''
+          ${helmHome}
+          mkdir pull
+          helm ${lib.escapeShellArgs (helmPullArgs spec)}
+          cp pull/* $out
+        ''
+    else
+      derivation (
+        fixedOutput
+        // {
+          system = "kix-helm";
+          builder = "kix";
+          allowSubstitutes = false;
+          kixHelmFetch = builtins.toJSON spec;
+        }
+      );
+
+  # Return the spec of a chart fetch. The placeholder route hands it to
+  # `kix` as JSON, and the nix route turns it into a `helm pull` command line.
+  fetchSpec =
+    {
+      repo,
+      name,
+      version,
+    }:
+    {
+      specVersion = 1;
+      helm = helmRelease newestHelmMajor;
+      inherit repo name version;
     };
 
-  # Render a chart with `helm template`. The result is a placeholder whose
-  # output is a JSON array with one element per YAML document Helm prints.
+  # Return the arguments of the `helm pull` that `spec` describes, as the
+  # CLI passes them, writing the chart into the directory `pull`.
+  helmPullArgs =
+    spec:
+    [ "pull" ]
+    ++ (
+      if lib.hasPrefix "oci://" spec.repo then
+        [ "${lib.removeSuffix "/" spec.repo}/${spec.name}" ]
+      else
+        [
+          spec.name
+          "--repo"
+          spec.repo
+        ]
+    )
+    ++ [
+      "--version"
+      spec.version
+      "--destination"
+      "pull"
+    ];
+
+  # Render a chart with `helm template`. The output is a JSON array with one
+  # element per YAML document Helm prints.
   #
   # The spec names the exact Helm release and a `specVersion`, so a new Helm
   # release or a change to how `kix` converts YAML gives a new output path.
   helmTemplateDerivation =
+    args:
+    let
+      spec = renderSpec args;
+    in
+    if helmRoute == "nix" then
+      nixPkgs.runCommand "helm-render-${spec.releaseName}.json"
+        {
+          nativeBuildInputs = [
+            (helmPackage (args.helmVersion or newestHelmMajor))
+            nixPkgs.yq-go
+          ];
+          inherit (spec) values;
+          passAsFile = [ "values" ];
+          passthru.helmArgs = helmTemplateArgs spec;
+        }
+        ''
+          set -o pipefail
+          ${helmHome}
+          mkdir work
+          cd work
+          cp "$valuesPath" values.json
+          helm ${lib.escapeShellArgs (helmTemplateArgs spec)} \
+            | yq eval-all -o=json '[.]' > $out
+        ''
+    else
+      derivation {
+        name = "helm-render-${spec.releaseName}.json";
+        system = "kix-helm";
+        builder = "kix";
+        allowSubstitutes = false;
+        preferLocalBuild = true;
+        kixHelmSpec = builtins.toJSON spec;
+      };
+
+  # Return the spec of a chart render. The placeholder route hands it to
+  # `kix` as JSON, and the nix route turns it into a `helm template` command
+  # line with `helmTemplateArgs`, so the two routes pass the same flags.
+  renderSpec =
     {
       chart,
       releaseName ? "release",
@@ -181,30 +348,47 @@ rec {
       # The Helm major version to render with, as a string such as "3".
       helmVersion ? newestHelmMajor,
     }:
-    derivation {
-      name = "helm-render-${releaseName}.json";
-      system = "kix-helm";
-      builder = "kix";
-      allowSubstitutes = false;
-      preferLocalBuild = true;
-      kixHelmSpec = builtins.toJSON {
-        specVersion = 1;
-        helm = helmRelease helmVersion;
-        chart = "${chart}";
-        inherit
-          releaseName
-          namespace
-          includeCrds
-          includeHooks
-          kubeVersion
-          extraFlags
-          ;
-        # Without the string context of dependency outputs in `values`, a
-        # dependency's manifest change does not re-render the chart. `deps`
-        # and `networkDeps` record those dependencies instead.
-        values = builtins.unsafeDiscardStringContext (builtins.toJSON values);
-      };
+    {
+      specVersion = 1;
+      helm = helmRelease helmVersion;
+      chart = "${chart}";
+      inherit
+        releaseName
+        namespace
+        includeCrds
+        includeHooks
+        kubeVersion
+        extraFlags
+        ;
+      # Without the string context of dependency outputs in `values`, a
+      # dependency's manifest change does not re-render the chart. `deps`
+      # and `networkDeps` record those dependencies instead.
+      values = builtins.unsafeDiscardStringContext (builtins.toJSON values);
     };
+
+  # Return the arguments of the `helm template` that `spec` describes, in the
+  # order the CLI passes them (`render` in cli/kix/src/eval/helm.rs). The
+  # values file is `values.json` in the working directory.
+  helmTemplateArgs =
+    spec:
+    [
+      "template"
+      spec.releaseName
+      spec.chart
+      "--values"
+      "values.json"
+    ]
+    ++ lib.optionals (spec.namespace != null) [
+      "--namespace"
+      spec.namespace
+    ]
+    ++ lib.optional spec.includeCrds "--include-crds"
+    ++ lib.optional (!spec.includeHooks) "--no-hooks"
+    ++ lib.optionals (spec.kubeVersion != null) [
+      "--kube-version"
+      spec.kubeVersion
+    ]
+    ++ spec.extraFlags;
 
   # Render a chart's CRDs and wrap them as cluster-scoped resources.
   importChartCrds =

@@ -1,7 +1,7 @@
 //! The builder that runs `nix` commands on this machine:
 //! - `list_clusters`, `list_packages`, and `list_cluster_packages` run
-//!   `nix eval --json` against the flake's `kixClusters` and `kixPackages`
-//!   attributes.
+//!   `nix eval --json` against the flake's `kixClusters` (`kixClustersNix`
+//!   under the `nix` builder) and `kixPackages` attributes.
 //! - `eval_cluster` runs `nix eval` of the cluster's `activationIndex` and
 //!   extracts manifests through `StoreGraph`.
 //!
@@ -171,7 +171,11 @@ impl Builder for LocalBuilder {
         // `mkFlake.nix` exports this attribute set for the CLI because
         // `nix flake show --json` can omit cluster attributes when
         // `--override-input` introduces a path input.
-        let attr = format!(".#legacyPackages.{}.kixClusters", nix::current_system());
+        let attr = format!(
+            ".#legacyPackages.{}.{}",
+            nix::current_system(),
+            nix::clusters_attr()
+        );
 
         let mut cmd = nix::command(Tool::Nix)?;
         cmd.args([
@@ -186,7 +190,7 @@ impl Builder for LocalBuilder {
         self.apply_overrides(&mut cmd);
         let output = match nix::output(cmd.current_dir(flake_path)) {
             Err(e) if e.missing_attribute() => {
-                return Err(self.missing_output(flake_path, "kixClusters"));
+                return Err(self.missing_output(flake_path, nix::clusters_attr()));
             }
             output => output?,
         };
@@ -253,8 +257,9 @@ impl Builder for LocalBuilder {
         );
 
         let attr = format!(
-            ".#legacyPackages.{}.kixClusters.{}.info",
+            ".#legacyPackages.{}.{}.{}.info",
             nix::current_system(),
+            nix::clusters_attr(),
             cluster_name
         );
 
@@ -347,8 +352,9 @@ pub fn cluster_name_command(
         return Ok(None);
     }
     let flake_attr = format!(
-        "{flake}#legacyPackages.{}.kixClusters",
-        nix::current_system()
+        "{flake}#legacyPackages.{}.{}",
+        nix::current_system(),
+        nix::clusters_attr()
     );
     let apply = format!(
         "cs: if builtins.hasAttr \"{attr}\" cs then (builtins.getAttr \"{attr}\" cs).name else null"

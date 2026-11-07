@@ -847,12 +847,19 @@
       # closure holds the whole build. Every listed file is a `builtins.toFile`
       # path, so evaluating the index builds nothing. Kix records this file's
       # store path as `kix.run/built-via`.
-      activationIndex =
+      activationIndex = builtins.toFile "kix-activation-${name}.json" (
+        builtins.toJSON ({ version = 1; } // activationFiles)
+      );
+
+      # The store paths of the build's files, keyed as the activation index
+      # names them. `mkFlake` links the same files into the
+      # `cluster-<name>-activation` output of a project that uses the nix
+      # builder.
+      activationFiles =
         let
           jsonFile = fileName: value: builtins.toFile fileName (builtins.toJSON value);
         in
-        jsonFile "kix-activation-${name}.json" {
-          version = 1;
+        {
           activation = "${activation}";
           packages = packageIndex;
           scorecard = if scorecardReport == null then null else jsonFile "kix-scorecard.json" scorecardReport;
@@ -1344,6 +1351,7 @@
                       inherit
                         activation
                         activationIndex
+                        activationFiles
                         packageIndex
                         packageIndexContent
                         info

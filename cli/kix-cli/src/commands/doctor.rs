@@ -1,8 +1,9 @@
 //! `kix doctor`: check the installation Kix runs from and the project's
 //! builder.
 
-use kix::project::{BuilderSource, ProjectConfig};
+use kix::project::{BuilderKind, BuilderSource, ProjectConfig};
 use kix::runtime::{self, Runtime};
+use kix::system_nix;
 use miette::miette;
 
 use crate::cli::GlobalArgs;
@@ -54,16 +55,54 @@ fn check_builder(flake: &str) -> usize {
     };
     let line = builder_line(&config);
     match config.check_supported() {
-        Ok(()) => {
-            println!("{}  {line}", green("ok  "));
-            0
-        }
+        Ok(()) => println!("{}  {line}", green("ok  ")),
         Err(e) => {
             println!("{}  {line}", red("fail"));
             println!("      {e}");
-            1
+            return 1;
         }
     }
+    if config.builder == BuilderKind::Nix {
+        check_system_nix()
+    } else {
+        0
+    }
+}
+
+/// Report the machine's Nix, which the nix builder uses. Return 1 when it is
+/// missing, too old, or Lix. The other lines are information.
+fn check_system_nix() -> usize {
+    let version = match system_nix::version_line()
+        .and_then(|line| system_nix::check_version(&line).map(|()| line))
+    {
+        Ok(version) => version,
+        Err(e) => {
+            println!("{}  {e}", red("fail"));
+            return 1;
+        }
+    };
+    println!("{}  the machine's Nix: {version}", green("ok  "));
+    match system_nix::import_from_derivation_allowed() {
+        Some(true) => println!(
+            "{}  allow-import-from-derivation is on, so Nix can render Helm charts during evaluation",
+            green("ok  ")
+        ),
+        Some(false) => println!(
+            "{}  allow-import-from-derivation is off, so a cluster that uses Helm charts cannot build. Set allow-import-from-derivation = true in nix.conf",
+            yellow("warn")
+        ),
+        None => println!(
+            "{}  could not read allow-import-from-derivation from `nix config show`",
+            yellow("warn")
+        ),
+    }
+    let trust = match system_nix::store_trusted() {
+        Some(true) => "trusts this user",
+        Some(false) => "does not trust this user. The nix builder does not need trust",
+        None => "does not say whether it trusts this user",
+    };
+    println!("info  the Nix store {trust}");
+    0
 }
 
 fn builder_line(config: &ProjectConfig) -> String {

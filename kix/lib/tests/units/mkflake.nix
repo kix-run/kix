@@ -6,19 +6,28 @@ let
   # The `kixClusters` output of a flake that lists `clusters`, with nixpkgs
   # stubbed down to its `lib`. Forcing `pkgs` is an error, so a cluster that
   # evaluates here needs no derivation.
-  clustersOf =
-    clusters:
-    (import ../../mkFlake.nix {
+  flakeOf =
+    self: clusters:
+    import ../../mkFlake.nix {
       inputs = {
         nixpkgs = {
           inherit lib;
           legacyPackages.test-system = throw "evaluating the cluster forced pkgs";
         };
-        self = null;
+        inherit self;
       };
       systems = [ "test-system" ];
       inherit clusters;
-    }).legacyPackages.test-system.kixClusters;
+    };
+
+  clustersOf = clusters: (flakeOf null clusters).legacyPackages.test-system.kixClusters;
+
+  # A flake whose project directory holds the kix.toml in ./projects/<name>.
+  projectFlake =
+    name:
+    flakeOf ./projects/${name} {
+      alpha = { kix, ... }: kix.buildCluster { modules = [ ]; };
+    };
 in
 {
   mkflake-names-cluster-after-key =
@@ -63,6 +72,39 @@ in
       && index.interfaces == { }
     )
     || throw "unexpected activation index: ${builtins.toJSON index}";
+
+  # Without kix.toml the builder is kix, and there is no activation output.
+  mkflake-default-builder-is-kix =
+    let
+      flake = flakeOf null {
+        alpha = { kix, ... }: kix.buildCluster { modules = [ ]; };
+      };
+    in
+    (
+      flake.legacyPackages.test-system.kixConfig.builder == "kix"
+      && builtins.attrNames flake.packages.test-system == [ "cluster-alpha" ]
+      && flake.legacyPackages.test-system.kixClustersNix.alpha.name == "alpha"
+    )
+    || throw "packages: ${builtins.toJSON (builtins.attrNames flake.packages.test-system)}";
+
+  # builder = "nix" adds the activation output beside the manifests.
+  mkflake-nix-builder-adds-the-activation-output =
+    let
+      flake = projectFlake "nix-builder";
+    in
+    (
+      flake.legacyPackages.test-system.kixConfig.builder == "nix"
+      &&
+        builtins.attrNames flake.packages.test-system == [
+          "cluster-alpha"
+          "cluster-alpha-activation"
+        ]
+    )
+    || throw "packages: ${builtins.toJSON (builtins.attrNames flake.packages.test-system)}";
+
+  mkflake-unknown-builder-fails =
+    !(builtins.tryEval (projectFlake "unknown-builder").legacyPackages.test-system.kixConfig.builder)
+    .success;
 
   mkflake-buildcluster-without-name-fails =
     !(builtins.tryEval (eval.buildCluster { modules = [ ]; }).name).success

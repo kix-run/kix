@@ -30,6 +30,30 @@
 let
   lib = inputs.nixpkgs.lib;
 
+  # The project's settings from `kix.toml` beside its flake.nix. Nix sees the
+  # file only once git tracks it, and the kix program checks that its own
+  # reading agrees with `kixConfig.builder`.
+  builders = [
+    "kix"
+    "nix"
+    "remote"
+  ];
+  self = inputs.self or null;
+  configFile = if self == null then null else "${self}/kix.toml";
+  settings =
+    if configFile != null && builtins.pathExists configFile then
+      builtins.fromTOML (builtins.readFile configFile)
+    else
+      { };
+  builder =
+    let
+      value = settings.builder or "kix";
+    in
+    if builtins.elem value builders then
+      value
+    else
+      throw "kix.toml sets builder = ${builtins.toJSON value}, which this Kix library does not know. It knows these builders: ${lib.concatStringsSep ", " builders}. Check the spelling, or update the Kix library if the project needs a newer one.";
+
   catalogPackages =
     let
       entries = builtins.readDir ../packages;
@@ -53,15 +77,20 @@ let
       # `lib` comes from the nixpkgs input rather than `pkgs.lib`, so
       # evaluating a cluster forces `pkgs` only when a package needs it.
       kix = import ./. {
-        inherit pkgs lib;
-        self = inputs.self or null;
+        inherit pkgs lib self;
+      };
+      # The same library with Helm run by Nix, for the nix builder. Nothing
+      # evaluates it unless something reads its clusters.
+      kixNix = import ./. {
+        inherit pkgs lib self;
+        helmRoute = "nix";
       };
       # Return the `kix` a cluster definition receives. Its `buildCluster`
       # prepends `clusterModules` and names the cluster after its `clusters`
       # key unless the definition sets `name`. A definition keeps its own
       # `name` because renaming a deployed cluster orphans its deploy records.
       kixFor =
-        key:
+        kix: key:
         kix
         // {
           buildCluster =
@@ -75,48 +104,96 @@ let
       };
       piChecks = import ../pi-checks.nix { inherit lib; };
 
-      resolvedClusters = lib.mapAttrs (
-        name: clusterDef:
-        let
-          fn =
-            if builtins.isPath clusterDef || builtins.isString clusterDef then
-              import clusterDef
-            else
-              clusterDef;
-          available = {
-            kix = kixFor name;
-            packages = catalogPackages;
-            # Evaluated only when the cluster function requires `pins`.
-            pins =
-              if pins == null then
-                throw "mkFlake: cluster '${name}' takes a `pins` argument, but this flake declares no pin file. Add `pins = ./pins.json;` beside `clusters` in flake.nix, or read one directly with `kix.pins ./pins.json`."
-              else
-                kix.kixlib.pins pins;
-          };
-        in
-        if builtins.isFunction fn then
+      # Return the clusters as the library instance `kix` builds them.
+      resolveClusters =
+        kix:
+        lib.mapAttrs (
+          name: clusterDef:
           let
-            fArgs = builtins.functionArgs fn;
-            # functionArgs marks defaulted arguments as true. Omit `pins`
-            # when no shared file exists so the function's default applies.
-            wantsItsOwnDefault = pins == null && (fArgs.pins or false);
-            passArgs =
-              let
-                all = lib.intersectAttrs fArgs available;
-              in
-              if wantsItsOwnDefault then builtins.removeAttrs all [ "pins" ] else all;
+            fn =
+              if builtins.isPath clusterDef || builtins.isString clusterDef then
+                import clusterDef
+              else
+                clusterDef;
+            available = {
+              kix = kixFor kix name;
+              packages = catalogPackages;
+              # Evaluated only when the cluster function requires `pins`.
+              pins =
+                if pins == null then
+                  throw "mkFlake: cluster '${name}' takes a `pins` argument, but this flake declares no pin file. Add `pins = ./pins.json;` beside `clusters` in flake.nix, or read one directly with `kix.pins ./pins.json`."
+                else
+                  kix.kixlib.pins pins;
+            };
           in
-          fn passArgs
-        else
-          fn
-      ) clusters;
+          if builtins.isFunction fn then
+            let
+              fArgs = builtins.functionArgs fn;
+              # functionArgs marks defaulted arguments as true. Omit `pins`
+              # when no shared file exists so the function's default applies.
+              wantsItsOwnDefault = pins == null && (fArgs.pins or false);
+              passArgs =
+                let
+                  all = lib.intersectAttrs fArgs available;
+                in
+                if wantsItsOwnDefault then builtins.removeAttrs all [ "pins" ] else all;
+            in
+            fn passArgs
+          else
+            fn
+        ) clusters;
 
-      # Plain Nix cannot render a Helm chart, so for a cluster that uses Helm
-      # these packages and the checks below stop at the first chart. Only
-      # `kix` builds such a cluster.
-      clusterPackages = lib.concatMapAttrs (cname: cluster: {
-        "cluster-${cname}" = kix.mkManifests cluster;
-      }) resolvedClusters;
+      resolvedClusters = resolveClusters kix;
+      resolvedClustersNix = resolveClusters kixNix;
+
+      # The library and clusters that the packages and checks below build.
+      # Under the kix builder a cluster that uses Helm stops at its first
+      # chart there, because only the kix program renders charts. Under the
+      # nix builder, Nix renders them.
+      built =
+        if builder == "nix" then
+          {
+            kix = kixNix;
+            clusters = resolvedClustersNix;
+          }
+        else
+          {
+            inherit kix;
+            clusters = resolvedClusters;
+          };
+
+      clusterPackages = lib.concatMapAttrs (
+        cname: cluster:
+        {
+          "cluster-${cname}" = built.kix.mkManifests cluster;
+        }
+        // lib.optionalAttrs (builder == "nix") {
+          "cluster-${cname}-activation" = activationOutput cluster;
+        }
+      ) built.clusters;
+
+      # Return a directory with a link to each file of the cluster's build,
+      # named as `kix build` names them, and to the activation index itself.
+      activationOutput =
+        cluster:
+        let
+          files = cluster.activationFiles;
+          link = name: path: lib.optionalString (path != null) "ln -s ${path} $out/${name}\n";
+        in
+        pkgs.runCommand "k8s-activation-${cluster.name}" { } (
+          ''
+            mkdir -p $out
+          ''
+          + link "activation" files.activation
+          + link "kix-packages.json" files.packages
+          + link "kix-scorecard.json" files.scorecard
+          + link "kix-extra-images.json" files.extraImages
+          + link "kix-image-sources.json" files.imageSources
+          + lib.concatStrings (
+            lib.mapAttrsToList (consumer: file: link "kix-interface-${consumer}.json" file) files.interfaces
+          )
+          + link "kix-activation-index.json" cluster.activationIndex
+        );
 
       # Return the `<name>.rules-test.yaml` path beside a cluster file if it
       # exists, or null when the cluster is given as an inline value.
@@ -132,8 +209,10 @@ let
         if sibling != null && builtins.pathExists sibling then sibling else null;
 
       clusterChecks = lib.concatMapAttrs (cname: cluster: {
-        "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (kix.mkManifests cluster);
-        "rules-cluster-${cname}" = kixChecks.rulesCheck "cluster-${cname}" (kix.mkManifests cluster) (
+        "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (
+          built.kix.mkManifests cluster
+        );
+        "rules-cluster-${cname}" = kixChecks.rulesCheck "cluster-${cname}" (built.kix.mkManifests cluster) (
           ruleTestsOf clusters.${cname}
         );
         "pi-wiring-cluster-${cname}" =
@@ -142,7 +221,7 @@ let
             echo "PI wiring validation passed for cluster-${cname}."
             touch $out
           '';
-      }) resolvedClusters;
+      }) built.clusters;
 
       packageChecks = lib.mapAttrs' (
         name: package:
@@ -170,6 +249,14 @@ let
       checks = clusterChecks // packageChecks;
       legacyPackages = {
         kixClusters = resolvedClusters;
+        # The same clusters with Helm charts rendered by Nix. The kix program
+        # reads these under the nix builder.
+        kixClustersNix = resolvedClustersNix;
+        # The project's settings from kix.toml. The kix program compares
+        # `builder` with its own reading of the file.
+        kixConfig = {
+          inherit builder;
+        };
         # The kix program reads this to name the library release in its
         # messages and to compare it with its own version.
         kixLibrary = {

@@ -43,6 +43,22 @@ pub enum KixEvalError {
     #[error(transparent)]
     Nix(#[from] super::nix::NixCommandError),
 
+    /// The machine's Nix refused to build a Helm chart during evaluation.
+    #[error(
+        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), and its setting allow-import-from-derivation is off. The nix builder needs it to render Helm charts during evaluation. Set allow-import-from-derivation = true in nix.conf, or ask the administrator of this machine's Nix to set it"
+    )]
+    ImportFromDerivationDisabled,
+
+    /// Under the nix builder, evaluation reached a chart that only the kix
+    /// builder renders. The library's nix route should never produce one.
+    #[error(
+        "internal error: under the nix builder, evaluation reached a Helm chart prepared for Kix's own builder ({path}). This is a bug in Kix. Please report it with the output of `kix -v`"
+    )]
+    PlaceholderUnderNix { path: String },
+
+    #[error(transparent)]
+    Project(#[from] crate::project::ProjectMismatch),
+
     #[error(transparent)]
     Helm(#[from] super::helm::HelmError),
 
