@@ -59,13 +59,13 @@ If the project is in another directory, pass `--flake`:
 
 <Command commands={["kix --flake /path/to/project list clusters"]} />
 
-By default (`builder = "kix"`), Kix evaluates with its bundled Nix and
-downloads the project's locked inputs into its local store
+By default (`builder = "kix"`), Kix evaluates with its bundled runtime and
+downloads the project's locked inputs into Kix's local store
 (`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Later commands reuse
 the cached inputs. Set `KIX_STORE_ROOT` if you want Kix to keep its local store
-in a different directory. Projects that set `builder = "nix"` in
-[`kix.toml`](/docs/reference/kix-toml/) use the machine's `nix` on `PATH` and
-`/nix/store` instead.
+in a different directory.
+A project can instead use the Nix already installed on the machine. See
+[`kix.toml`](/docs/reference/kix-toml/).
 
 ### Install with Nix
 

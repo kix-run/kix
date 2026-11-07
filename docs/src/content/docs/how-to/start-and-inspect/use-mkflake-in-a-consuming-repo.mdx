@@ -101,11 +101,11 @@ availability level the package can run at.
 
 ## Choose a project builder (optional)
 
-By default (`builder = "kix"`), Kix evaluates your flake with its own bundled
-Nix and local store (`~/.cache/kix/store`). If your project needs the machine's
-Nix installation, configured binary caches, `packages.<system>.cluster-<name>-activation`,
-or `nix build` and `nix flake check` on clusters that render Helm charts, add
-[`kix.toml`](/docs/reference/kix-toml/) beside `flake.nix` and stage it in Git:
+By default (`builder = "kix"`), Kix evaluates your project with its bundled
+runtime and local store (`~/.cache/kix/store`). If your project needs the
+machine's Nix installation and its configured binary caches or remote builders,
+add [`kix.toml`](/docs/reference/kix-toml/) beside `flake.nix` and stage it in
+Git:
 
 ```toml title="kix.toml"
 builder = "nix"
@@ -113,11 +113,7 @@ builder = "nix"
 
 <Command commands={["git add kix.toml"]} cwd="infrastructure/" />
 
-When `builder = "nix"` and a cluster uses Helm charts, pass `systems` to
-`mkFlake` with only the platforms you build on (for example
-`systems = [ "x86_64-linux" ];`) so `nix flake check` does not require builders
-for other architectures. See [`kix.toml`](/docs/reference/kix-toml/) for the
-full builder reference.
+See [`kix.toml`](/docs/reference/kix-toml/) for the full builder reference.
 
 ## Lock the inputs
 

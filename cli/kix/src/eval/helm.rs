@@ -40,7 +40,7 @@ const SPEC_VERSION: u64 = 1;
 #[derive(Debug, thiserror::Error)]
 pub enum HelmError {
     #[error(
-        "This cluster's Kix library renders Helm charts with Helm {wanted}, but this kix binary ships {}. Update the kix input in flake.lock, or use the kix binary of the same version as the library",
+        "This cluster's Kix library renders Helm charts with Helm {wanted}, but this kix binary ships {}. Run `kix lib update` to move flake.lock to this kix release, or use the kix binary of the same version as the library",
         shipped_text(shipped)
     )]
     VersionNotShipped {
@@ -781,7 +781,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "This cluster's Kix library renders Helm charts with Helm 4.3.1, but this kix binary ships Helm 4.3.2. Update the kix input in flake.lock, or use the kix binary of the same version as the library"
+            "This cluster's Kix library renders Helm charts with Helm 4.3.1, but this kix binary ships Helm 4.3.2. Run `kix lib update` to move flake.lock to this kix release, or use the kix binary of the same version as the library"
         );
     }
 }

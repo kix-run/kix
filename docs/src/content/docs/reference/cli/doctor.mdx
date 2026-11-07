@@ -66,7 +66,7 @@ When the project uses `builder = "nix"`, `kix doctor` also inspects the `nix` in
 
 1. **`nix` version (`ok` or `fail`):** Runs `nix --version` and verifies that `nix` is upstream Nix (not Lix) at version `2.24` or later. A missing `nix`, a version older than `2.24`, or Lix prints `fail` and exits `1`.
 2. **`allow-import-from-derivation` (`ok` or `warn`):** Runs `nix config show` and checks that `allow-import-from-derivation` is `true` so Nix can render Helm charts during evaluation. If it is `false` or cannot be read, `kix doctor` prints a `warn` line (and does not fail the exit status).
-3. **Store trust (`info` or `warn`):** Runs `nix store info --json` and reports whether the Nix store trusts the current user (`info  the Nix store trusts this user` or `info  the Nix store does not trust this user. The nix builder does not need trust`). This line is informational only.
+3. **Store trust (`info`):** Runs `nix store info --json` and reports whether the Nix store trusts the current user (`info  the Nix store trusts this user` or `info  the Nix store does not trust this user. The nix builder does not need trust`). This line is informational only.
 
 ## Examples
 

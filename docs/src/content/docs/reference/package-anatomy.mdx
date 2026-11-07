@@ -521,11 +521,11 @@ build = [
 
 See [Composition helpers](/docs/reference/composition-helpers/) for the full reference on `kix.expose`, `kix.monitor`, `kix.alerts`, and `kix.healthCheck`.
 
-### Evaluation-only store (no Nix derivation builds)
+### Evaluation-only store (no shell builders)
 
-By default (`builder = "kix"` in [`kix.toml`](/docs/reference/kix-toml/)), Kix evaluates packages in its own local store without a Nix build sandbox or builder environment. Package and cluster definitions can evaluate Nix expressions, read files from the repository (`builtins.readFile`, `builtins.fromJSON`), write files with `builtins.toFile` or `builtins.path`, and render Helm charts through `scope.helm.fetchHelmChart` and `scope.helm.importChart`.
+Kix evaluates packages in its local store without running shell build scripts. Package and cluster definitions can evaluate expressions, read files from the repository (`builtins.readFile`, `builtins.fromJSON`), write files with `builtins.toFile` or `builtins.path`, and render Helm charts through `scope.helm.fetchHelmChart` and `scope.helm.importChart`.
 
-Packages **cannot** build arbitrary Nix derivations (such as `pkgs.runCommand`, `pkgs.stdenv.mkDerivation`, or `pkgs.writeText`). Any package or cluster expression that forces a Nix derivation build during evaluation will fail under the default `kix` builder. (Projects that set `builder = "nix"` in [`kix.toml`](/docs/reference/kix-toml/) use the machine's Nix and render Helm charts as Nix derivations, but Kix packages still must not rely on custom derivation builds.)
+Do not call `pkgs.runCommand`, `pkgs.stdenv.mkDerivation`, or `pkgs.writeText` inside a package or cluster definition; evaluation fails under the default `kix` builder.
 
 ---
 

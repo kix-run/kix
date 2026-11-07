@@ -37,7 +37,7 @@ builder = "kix"
 | --- | --- | --- | --- |
 | `"kix"` | Default | Bundled `nix` (`2.35.4`) in `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store`, overridden by `KIX_STORE_ROOT`) | `kix` runs its bundled `helm` binaries outside Nix and writes chart tarballs and rendered JSON into the Kix store |
 | `"nix"` | Supported | `nix` and `nix-store` from `PATH`, using `/nix/store` and the machine's `nix.conf` | Nix fetches charts as fixed-output derivations and runs `helm template` inside ordinary Nix builds during evaluation |
-| `"remote"` | Reserved | Open-API build service (not yet implemented) | Refused by this version of Kix |
+| `"remote"` | Reserved | Remote build service (not yet implemented) | Refused by this version of Kix |
 
 ### `builder = "kix"` (default)
 
@@ -113,8 +113,8 @@ Run [`kix doctor`](/docs/reference/cli/doctor/) in the project directory to chec
 
 Setting `builder = "nix"` in `kix.toml` changes what `kix.lib.mkFlake` exports in your flake:
 
-- **`packages.<system>.cluster-<name>-activation` is exported.** This derivation creates a directory linking `activation` (the per-object manifest directory), `kix-packages.json`, `kix-scorecard.json`, `kix-extra-images.json`, `kix-image-sources.json`, `kix-interface-*.json`, and `kix-activation-index.json`. You can build it with `nix build` and pass the result to [`kix diff --from`](/docs/reference/cli/diff/). Projects using the default `kix` builder omit this output because they evaluate into `~/.cache/kix/store` without building derivations in `/nix/store`.
-- **`packages.<system>.cluster-<name>` and `checks.<system>.*` support Helm charts.** Under the default `kix` builder, plain `nix build` and `nix flake check` cannot render Helm charts because chart rendering uses placeholder derivations (`system = "kix-helm"`) that only the `kix` CLI fulfills. Under `builder = "nix"`, `mkFlake` switches `packages.<system>.cluster-<name>` and the cluster checks (`schema-cluster-<name>`, `rules-cluster-<name>`, and `pi-wiring-cluster-<name>`) to the Nix Helm route, so plain `nix build` and `nix flake check` work on clusters with Helm charts.
+- **`packages.<system>.cluster-<name>-activation` is exported.** This output creates a directory linking `activation` (the `Activation` resource manifest), `kix-packages.json`, `kix-scorecard.json`, `kix-extra-images.json`, `kix-image-sources.json`, `kix-interface-*.json`, and `kix-activation-index.json`. You can build it with `nix build` and pass the result to [`kix diff --from`](/docs/reference/cli/diff/). Projects using the default `kix` builder omit this output because they evaluate into `~/.cache/kix/store` without building derivations in `/nix/store`.
+- **`packages.<system>.cluster-<name>` and `checks.<system>.*` support Helm charts.** Under the default `kix` builder, the `kix` CLI renders Helm charts outside Nix, so plain `nix build` and `nix flake check` cannot build clusters that use Helm charts. Under `builder = "nix"`, `mkFlake` renders Helm charts through Nix, so `packages.<system>.cluster-<name>` and the cluster checks (`schema-cluster-<name>`, `rules-cluster-<name>`, and `pi-wiring-cluster-<name>`) work with plain `nix build` and `nix flake check`.
 - **`legacyPackages.<system>.kixClustersNix.<name>` is used by `kix`.** Alongside `legacyPackages.<system>.kixClusters.<name>`, `mkFlake` exposes `kixClustersNix.<name>` evaluated with the Nix Helm route. When `builder = "nix"`, the `kix` CLI evaluates `kixClustersNix.<name>` so `kix build`, `kix plan`, and `kix deploy` share the exact derivations that `nix build` produces.
 
 ### Running `nix` directly on a `nix` project

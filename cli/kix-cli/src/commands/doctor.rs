@@ -92,7 +92,7 @@ fn check_system_nix() -> usize {
             yellow("warn")
         ),
         None => println!(
-            "{}  could not read allow-import-from-derivation from `nix config show`",
+            "{}  could not read allow-import-from-derivation from `nix config show`, so Kix could not check whether Nix can render Helm charts",
             yellow("warn")
         ),
     }
