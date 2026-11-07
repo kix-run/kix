@@ -99,6 +99,17 @@ already exists in kix-releases and creates the tag last. A manual run
 workflow artifact, reporting `<version>+<run number>`, and publishes
 nothing.
 
+A pull request that makes a release (its version has no tag yet) runs the
+same steps, except `publish`. Another pull request that changes the runtime,
+cluster evaluation (`cli/kix/src/eval/`), or the Nix side of Helm renders
+runs only the `runtime` job, which checks that each platform's runtime builds
+and its programs run. The `release` binaries take about ten minutes on a
+GitHub-hosted runner, so such a pull request runs `without-nix` and
+`nix-builder` only through a manual run. The x86_64 Linux runtime builds on
+Spindle, the macOS jobs run on the self-hosted Mac Studio runners
+(`kix-macos-nix`, and `kix-macos-nonix` for `without-nix`), and the rest on
+GitHub-hosted runners.
+
 The version reaches the build as `KIX_VERSION`. `kix::VERSION` reads it at
 compile time and falls back to the crate version, and everything that
 reports a Kix version (`kix --version`, a plan's `kix.version`, compliance

@@ -119,6 +119,7 @@ jobs:
       release: ${{ steps.version.outputs.release }}
       notes: ${{ steps.version.outputs.notes }}
       build: ${{ steps.build.outputs.build }}
+      runtime: ${{ steps.build.outputs.runtime }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -162,9 +163,18 @@ jobs:
             echo 'KIX_RELEASE_NOTES_END'
           } >> "$GITHUB_OUTPUT"
 
-      # The paths are what the without-nix jobs test: the bundled runtime,
-      # the code that evaluates a cluster and renders its Helm charts, and
-      # the Nix side of those renders.
+      # `build` runs the whole archive pipeline: the release binaries, and
+      # the archives run without Nix and with the machine's Nix. It runs for
+      # a release, for a pull request that makes one (its version has no
+      # tag yet), and for workflow_dispatch. Building the release binaries
+      # takes about ten minutes on a GitHub-hosted runner, so other pull
+      # requests skip it.
+      #
+      # `runtime` builds only the runtime for each platform and checks its
+      # programs run. A pull request runs it when it changes the runtime,
+      # the code that evaluates a cluster and renders its Helm charts, or
+      # the Nix side of those renders. To run the whole pipeline on such a
+      # pull request: `gh workflow run cli-tests.yml --ref <branch>`.
       - name: Build the archives?
         id: build
         env:
@@ -173,17 +183,18 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           build=false
+          runtime=false
           case $EVENT in
             workflow_dispatch) build=true ;;
-            push) build=$RELEASE ;;
-            pull_request)
-              if git diff --name-only "$BASE_SHA...HEAD" | grep -Eq \
-                '^(cli/runtime/|cli/kix/src/eval/|kix/lib/helm\.nix$|kix/lib/helm-versions\.json$|\.github/workflows/cli-tests\.yml$)'; then
-                build=true
-              fi
-              ;;
+            push | pull_request) build=$RELEASE ;;
           esac
+          runtime=$build
+          if [ "$EVENT" = pull_request ] && git diff --name-only "$BASE_SHA...HEAD" | grep -Eq \
+            '^(cli/runtime/|cli/kix/src/eval/|kix/lib/helm\.nix$|kix/lib/helm-versions\.json$|\.github/workflows/cli-tests\.yml$)'; then
+            runtime=true
+          fi
           echo "build=$build" | tee -a "$GITHUB_OUTPUT"
+          echo "runtime=$runtime" | tee -a "$GITHUB_OUTPUT"
 
   # Builds the runtime a release ships beside the binary, in libexec/kix/
   # (cli/runtime/), on a runner of each target platform: Nix fetches the
@@ -194,14 +205,17 @@ jobs:
   # links.
   runtime:
     needs: [test, version]
-    if: needs.version.outputs.build == 'true'
+    if: needs.version.outputs.runtime == 'true'
     strategy:
       matrix:
         include:
+          # Spindle's image ships Nix.
           - system: x86_64-linux
-            runner: ubuntu-latest
+            runner: [self-hosted, spindle-8c-16g]
+          # GitHub-hosted: Spindle has no ARM machines.
           - system: aarch64-linux
             runner: ubuntu-24.04-arm
+            install-nix: true
           # The Mac Studio's self-hosted runner: a fresh macOS VM for each
           # job, with Nix installed.
           - system: aarch64-darwin
@@ -212,10 +226,10 @@ jobs:
     # the Linux release job would unpack into the archive.
     env:
       COPYFILE_DISABLE: '1'
-      # For the Mac image's Nix. The Linux runners get the same settings
-      # from install-nix-action.
+      # For the Nix that Spindle's and the Mac's images ship. `extra-`
+      # keeps what the image enabled.
       NIX_CONFIG: |
-        extra-experimental-features = pipe-operators
+        extra-experimental-features = nix-command flakes pipe-operators
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
@@ -224,7 +238,7 @@ jobs:
           fetch-depth: 0
 
       - uses: cachix/install-nix-action@v31
-        if: runner.os != 'macOS'
+        if: matrix.install-nix
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
@@ -236,11 +250,13 @@ jobs:
       - name: Build the runtime
         run: |
           spec=$(nix build ".#packages.${{ matrix.system }}.kix-runtime-spec" --no-link --print-out-paths)
-          python3 cli/runtime/assemble.py "$spec" runtime/libexec/kix
+          # Spindle's image has no python3 of its own.
+          py() { nix shell --inputs-from . nixpkgs#python3 --command python3 "$@"; }
+          py cli/runtime/assemble.py "$spec" runtime/libexec/kix
           tar -cf "runtime-${{ matrix.system }}.tar" -C runtime libexec
           # Writable copies, so the release job can unpack the sources of
           # every platform into one directory, over each other.
-          cp -R "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["sources"])' "$spec")" sources
+          cp -R "$(py -c 'import json, sys; print(json.load(open(sys.argv[1]))["sources"])' "$spec")" sources
           chmod -R u+w sources
           tar -cf "sources-${{ matrix.system }}.tar" -C sources .
 
