@@ -8,6 +8,8 @@ import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
 import checkOutput from '/src/command-output/tutorials/19-scorecards/check.json';
 import buildOutput from '/src/command-output/tutorials/19-scorecards/build.json';
+import scorecardCluster from '/src/snippets/tutorials/19-scorecards/cluster/scorecardCluster.json';
+import scorecardStructure from '/src/snippets/tutorials/19-scorecards/scorecard/scorecardStructure.json';
 import isProxy from '/src/snippets/tutorials/19-scorecards/scorecard/isProxy.json';
 import packageRule from '/src/snippets/tutorials/19-scorecards/scorecard/packageRule.json';
 import clusterRule from '/src/snippets/tutorials/19-scorecards/scorecard/clusterRule.json';
@@ -40,23 +42,12 @@ In `tutorials/19-scorecards/cluster.nix`, the cluster defines two application na
 
 At the top of `cluster.nix`, the cluster module inside `modules` sets `scorecard` by importing `./scorecard.nix`:
 
-```nix title="tutorials/19-scorecards/cluster.nix"
-kix.buildCluster {
-  name = "19-scorecards";
-
-  modules = [
-    kix.flavors.kind
-
-    (
-      { ref, lib, ... }:
-      {
-        scorecard = import ./scorecard.nix { inherit lib kix; };
-        # ...
-      }
-    )
-  ];
-}
-```
+<Snippet
+  {...scorecardCluster}
+  elide={{
+    scorecardInstances: '        # ...',
+  }}
+/>
 
 Keeping scorecard policy in a separate file (`./scorecard.nix`) lets platform teams share a single policy definition across multiple clusters while keeping `cluster.nix` focused on topology and instances.
 
@@ -64,19 +55,12 @@ Keeping scorecard policy in a separate file (`./scorecard.nix`) lets platform te
 
 Open `tutorials/19-scorecards/scorecard.nix`. At the top of the file, `enable`, `ruleOverrides`, and `rules` configure what the scorecard checks:
 
-```nix title="tutorials/19-scorecards/scorecard.nix"
-{
-  enable = true;
-
-  ruleOverrides.byRule."reliability.hasProbes".severity = "error";
-
-  rules = {
-    reliability = kix.rules.reliability;
-
-    # custom rules ...
-  };
-}
-```
+<Snippet
+  {...scorecardStructure}
+  elide={{
+    customRules: '    # custom rules ...',
+  }}
+/>
 
 Here is what each field controls:
 

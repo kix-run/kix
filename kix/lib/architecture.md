@@ -121,7 +121,7 @@ Fixpoint safety: a hook may read `workloadInput` and outer-fixpoint data (DI dep
 - **Ceded fields.** `ownership.cede` on `mkResource` / `mkCRD` stamps `kix.run/cede-fields` so the CLI (`cli/kix/src/cluster/apply/`) preserves controller-managed fields on apply.
 - **Scorecard evaluation.** Enabled by default and capped at `scorecard.maxSeverity` (`warning` by default; `error` in this repository's flakes via `mkFlake { clusterModules }`). Manifest and package rules run over both authored parts and processor-derived resources (`eval/instance.nix`), and cluster/namespace findings feed into `collectClusterDiagnostics` (`eval/cluster.nix`).
 - **Committed pins.** Values decided outside the compilation unit live in a committed JSON pin file (`kix.pins`, applied per instance by `eval/instance-pins.nix` and provenance-tracked in `kix-image-sources.json`).
-- **`parts.root` is an alias, not a standalone resource.** `collectResources` excludes the `root` key; packages must alias `root` to a named part (`root = self.service`).
+- **`parts.root` aliases a named part.** `collectResources` excludes the `root` key; packages must alias `root` to a named part (`root = self.service`).
 
 ## When editing lib/
 

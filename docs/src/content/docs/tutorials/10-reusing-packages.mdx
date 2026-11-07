@@ -4,7 +4,10 @@ description: "Instantiate the same package multiple times with different configu
 ---
 
 import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
+import reusedInstances from '/src/snippets/tutorials/10-reuse-packages/cluster/reusedInstances.json';
+import scopedResourceName from '/src/snippets/tutorials/10-reuse-packages/reverse-proxy-package/scopedResourceName.json';
 
 Once a package uses `scope` for resource naming and `options` for configuration, you can instantiate it as many times as you need: across multiple environment namespaces (`app-v1` and `app-v2`, or `staging` and `production`) or multiple times inside the same namespace.
 
@@ -19,42 +22,7 @@ In this tutorial, you will inspect `tutorials/10-reuse-packages/cluster.nix`, wh
 
 Open `tutorials/10-reuse-packages/cluster.nix`. The cluster defines two namespaces (`app-v1` and `app-v2`) and instantiates `packages.echo-server` and `reverseProxyPackage` in both `instances.app-v1` and `instances.app-v2`:
 
-```nix title="tutorials/10-reuse-packages/cluster.nix"
-namespaces = {
-  app-v1 = { };
-  app-v2 = { };
-};
-
-instances.app-v1 = {
-  backend = {
-    package = packages.echo-server;
-    config.message = "Response from app-v1";
-  };
-  gateway = {
-    package = reverseProxyPackage;
-    config = {
-      proxyPath = "/v1/";
-      maxBodySize = "10m";
-    };
-    deps.backend = ref.app-v1.backend;
-  };
-};
-
-instances.app-v2 = {
-  backend = {
-    package = packages.echo-server;
-    config.message = "Response from app-v2";
-  };
-  gateway = {
-    package = reverseProxyPackage;
-    config = {
-      proxyPath = "/v2/";
-      maxBodySize = "10m";
-    };
-    deps.backend = ref.app-v2.backend;
-  };
-};
-```
+<Snippet {...reusedInstances} />
 
 Look at what stays identical and what changes between the two stacks:
 
@@ -83,18 +51,12 @@ What if you want two instances of the same package inside a single namespace, su
 
 In `tutorials/10-reuse-packages/reverse-proxy-package.nix`, look at how the package names its ConfigMap, Deployment, and Service:
 
-```nix title="tutorials/10-reuse-packages/reverse-proxy-package.nix"
-let
-  name = scope.instanceName;
-in
-{
-  configmap = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    inherit name;
-    # ...
-  };
-```
+<Snippet
+  {...scopedResourceName}
+  elide={{
+    configmapData: '        # ...',
+  }}
+/>
 
 Because the package derives `name` from `scope.instanceName` (instead of hardcoding `"reverse-proxy"` or `"gateway"`), every instance in a namespace gets its own distinct resource names and selector labels:
 

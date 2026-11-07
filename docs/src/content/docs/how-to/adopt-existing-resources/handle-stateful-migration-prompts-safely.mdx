@@ -10,8 +10,7 @@ import refusal from '/src/command-output/how-to/adoption-stateful-migration/refu
 import acceptedDryRun from '/src/command-output/how-to/adoption-stateful-migration/accepted-dry-run.json';
 
 Kix stops a deployment when one stateful resource replaces another in the
-same package slot. Treat this as a data-migration gate, not as an ordinary
-confirmation prompt.
+same package slot. Treat this prompt as a data-migration gate.
 
 The migration gate applies only when one stateful resource replaces another.
 If a stateful resource is removed without a replacement, Kix treats it as an

@@ -12,7 +12,7 @@ You do not need to rewrite every third-party operator from scratch or migrate an
 - [Helm Charts](https://helm.sh/docs/topics/charts/): How upstream Helm charts package templated Kubernetes YAML.
 :::
 
-## Helm is a fallback, not the target model
+## Trade-offs of wrapping a Helm chart
 
 Helm support in Kix is a migration bridge and a fallback for third-party software that does not have a native Kix package yet. Wrapping a Helm chart brings its rendered YAML into Kix's deployment workflow, but a Helm chart is still templated YAML under the hood. When you deploy a Helm chart instead of a native Kix package, you give up several guarantees that Kix normally provides:
 

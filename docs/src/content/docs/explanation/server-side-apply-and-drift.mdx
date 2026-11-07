@@ -11,7 +11,7 @@ In a live Kubernetes cluster, your deployment tool is rarely the only thing modi
 - [Kubernetes Server-Side Apply](https://kubernetes.io/docs/reference/using-api/server-side-apply/): How the Kubernetes API server tracks per-field ownership in `metadata.managedFields`.
 :::
 
-## Ownership follows fields, not whole objects
+## Per-field ownership in Server-Side Apply
 
 When `kix deploy` applies a manifest, it uses Kubernetes Server-Side Apply with the field manager name `kix`. Instead of storing a giant "last-applied-configuration" JSON blob in an annotation, the Kubernetes API server records which manager owns each individual field inside `metadata.managedFields`.
 

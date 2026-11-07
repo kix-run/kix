@@ -6,6 +6,8 @@ description: "Declare typed package options with lib.mkOption, consume config in
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
+import buildWithOptions from '/src/snippets/tutorials/09-typed-options/reverse-proxy-package/buildWithOptions.json';
+import configuredGateway from '/src/snippets/tutorials/09-typed-options/cluster/configuredGateway.json';
 import options from '/src/snippets/tutorials/09-typed-options/reverse-proxy-package/options.json';
 
 In earlier tutorials, you passed `config = { message = "..."; };` to `packages.echo-server` to customize the HTTP response body.
@@ -39,42 +41,12 @@ See [Options and config](/docs/reference/package-anatomy/#options) for common `l
 
 Still in `tutorials/09-typed-options/reverse-proxy-package.nix`, look at how `build` receives `config` and uses `config.maxBodySize` and `config.proxyPath` inside the nginx ConfigMap:
 
-```nix title="tutorials/09-typed-options/reverse-proxy-package.nix"
-build =
-  {
-    self,
-    scope,
-    kix,
-    config,
-    backend,
-    ...
-  }:
-  let
-    name = scope.instanceName;
-  in
-  {
-    configmap = scope.mkResource {
-      apiVersion = "v1";
-      kind = "ConfigMap";
-      inherit name;
-      data."default.conf" = ''
-        server {
-            listen 80;
-            client_max_body_size ${config.maxBodySize};
-
-            location /healthz {
-                default_type text/plain;
-                return 200 'ok\n';
-            }
-            location ${config.proxyPath} {
-                proxy_pass http://${backend.out.fqdn}:${backend.out.port}/;
-            }
-        }
-      '';
-    };
-    # ...
-  };
-```
+<Snippet
+  {...buildWithOptions}
+  elide={{
+    restOfBuild: '      # ...',
+  }}
+/>
 
 When Kix evaluates an instance of `reverse-proxy`, it merges the package's `options` declarations with the instance's `config = { ... }` overrides and passes the validated result into `build` as `config`.
 
@@ -82,16 +54,7 @@ When Kix evaluates an instance of `reverse-proxy`, it merges the package's `opti
 
 Open `tutorials/09-typed-options/cluster.nix` to see how the `gateway` instance sets those options:
 
-```nix title="tutorials/09-typed-options/cluster.nix"
-gateway = {
-  package = reverseProxyPackage;
-  config = {
-    proxyPath = "/";
-    maxBodySize = "10m";
-  };
-  deps.backend = ref.tutorial-09.backend;
-};
-```
+<Snippet {...configuredGateway} />
 
 ## Check And Build The Cluster
 

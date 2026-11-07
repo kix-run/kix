@@ -32,6 +32,10 @@ whenever Adam corrects writing style.
   has always been the price of admission." Reads as AI-generated. Cut these
   rather than rewording them; the surrounding copy usually already makes the
   point.
+- **No "X is A, not B" antithesis.** Avoid headings and declarative sentences
+  built around the rhetorical contrast "X is A, not B" (e.g. "Helm is a
+  fallback, not the target model", "Ownership follows fields, not whole
+  objects"). State what the thing is directly.
 
 ## Reader context
 

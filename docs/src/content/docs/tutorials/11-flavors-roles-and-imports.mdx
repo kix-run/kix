@@ -7,6 +7,7 @@ import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
 import listPackages from '/src/command-output/tutorials/02-hello-world/list-packages.json';
+import clusterFrame from '/src/snippets/tutorials/02-hello-world/cluster/clusterFrame.json';
 import importExistingService from '/src/snippets/how-to/adoption/cluster/importExistingService.json';
 import consumeImportedService from '/src/snippets/how-to/adoption/client-package/consumeImportedService.json';
 
@@ -27,18 +28,12 @@ Look again at the `kix list packages` output for `02-hello-world`:
 
 In `tutorials/02-hello-world/cluster.nix`, you only declared one instance (`hello-world`), yet you also included `kix.flavors.kind` in the cluster's `modules` list:
 
-```nix title="tutorials/02-hello-world/cluster.nix"
-{ kix, packages }:
-
-kix.buildCluster {
-  name = "02-hello-world";
-
-  modules = [
-    kix.flavors.kind
-    # ...
-  ];
-}
-```
+<Snippet
+  {...clusterFrame}
+  elide={{
+    helloWorldInstance: '        # ...',
+  }}
+/>
 
 That single entry (`kix.flavors.kind` in `modules`) added `platform-dns` and `platform-storage` in `kube-system`.
 
