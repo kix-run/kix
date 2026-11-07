@@ -12,6 +12,24 @@ fn kix() -> Command {
     cmd
 }
 
+/// Return a predicate that holds when stderr contains every one of `parts`.
+///
+/// miette wraps a message to the terminal width and draws a frame in the
+/// margin, and it can break a line inside a word such as `ns/app`. Where it
+/// breaks depends on how long the paths in the message are. So the check
+/// drops the frame and all whitespace from both sides before comparing.
+fn stderr_has(parts: &'static [&'static str]) -> impl predicates::Predicate<[u8]> {
+    fn squash(text: &str) -> String {
+        text.chars()
+            .filter(|c| !c.is_whitespace() && !matches!(c, '│' | '×' | '├' | '╰' | '─'))
+            .collect()
+    }
+    predicate::function(move |out: &[u8]| {
+        let flat = squash(&String::from_utf8_lossy(out));
+        parts.iter().all(|part| flat.contains(&squash(part)))
+    })
+}
+
 fn digest(c: char) -> String {
     format!("sha256:{}", c.to_string().repeat(64))
 }
@@ -83,11 +101,11 @@ fn set_names_another_option_with_option() {
         .arg(&file)
         .assert()
         .failure()
-        .stderr(
-            predicate::str::contains("a new pin needs a repository")
-                .and(predicate::str::contains("--option"))
-                .and(predicate::str::contains("server.image")),
-        );
+        .stderr(stderr_has(&[
+            "a new pin needs a repository",
+            "--option",
+            "server.image",
+        ]));
     kix()
         .args(["pin", "set", "monitoring/alloy", "--option", "server.image"])
         .args(["--repository", "docker.io/grafana/alloy", "--tag", "v1"])
@@ -119,7 +137,7 @@ fn option_is_refused_for_a_pin_name() {
         .arg(&file)
         .assert()
         .failure()
-        .stderr(predicate::str::contains("<namespace>/<instance>"));
+        .stderr(stderr_has(&["<namespace>/<instance>"]));
 }
 
 #[test]
@@ -273,8 +291,5 @@ fn rm_removes_package_and_instance_pins_and_reverts_version_to_1() {
         .arg(&file)
         .assert()
         .failure()
-        .stderr(
-            predicate::str::contains("has no pin named")
-                .and(predicate::str::contains("'ns/app image'")),
-        );
+        .stderr(stderr_has(&["has no pin named", "'ns/app image'"]));
 }
