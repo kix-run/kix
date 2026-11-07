@@ -177,6 +177,13 @@ It returns `{ <Kind> = crdResource; ... }` ready to assign directly to `crds` in
 
 The exact Helm release for each major version is pinned in `kix/lib/helm-versions.json` and shipped with `kix`. A Kix patch or minor release can update a bundled Helm version (for example, a Helm security or patch update). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), when you upgrade `kix` to a release that updates a Helm version, projects that use Helm charts stop before rendering and ask you to align `flake.lock` with [`kix lib update`](/docs/reference/cli/lib/).
 
+### How project builders fetch and render charts
+
+How `fetchHelmChart` and `importChart` execute depends on the project's builder in [`kix.toml`](/docs/reference/kix-toml/):
+
+- **`builder = "kix"` (default):** `fetchHelmChart` and `importChart` emit lightweight placeholder derivations (`system = "kix-helm"`). When evaluation stops at a chart that has not been fetched or rendered yet, the `kix` CLI runs its bundled `helm` binaries (`3.19.1` or `4.3.1`) to pull each chart tarball and render `helm template`, verifies the chart's SRI `hash`, converts the YAML documents to JSON, and writes the outputs into Kix's local store (`~/.cache/kix/store`). Because `kix-helm` placeholders are fulfilled by the `kix` CLI rather than a Nix builder, plain `nix build` and `nix flake check` cannot render Helm charts in a `"kix"` project.
+- **`builder = "nix"`:** `fetchHelmChart` builds a standard fixed-output Nix derivation (`outputHash = hash`) with the same derivation name (`helm-chart-<name>-<version>`), and `importChart` builds an ordinary Nix derivation in `/nix/store` using the official Helm binary pinned in `kix/lib/helm-versions.json` and `yq-go`, passing the exact same `helm template` flags. Both `kix` commands and plain `nix build` or `nix flake check` work on clusters that use Helm charts (as long as `allow-import-from-derivation` is `true`, the Nix default). A chart renders the same way under either builder.
+
 ---
 
 ## mkImport

@@ -30,11 +30,16 @@ When you use Helm directly in a cluster, `helm upgrade` renders Go templates at 
 
 Kix evaluates Helm charts at build time instead:
 
-1. **Content-addressed chart fetching (`scope.helm.fetchHelmChart`):** Kix fetches the upstream chart tarball from an HTTP or OCI registry and verifies it against the SRI `hash` pinned in your package or `cluster.nix`. Once fetched and verified, the chart tarball is cached in Kix's local store (`~/.cache/kix/store`), so later runs reuse the cached bytes.
-2. **Deterministic template rendering (`scope.helm.importChart`):** When evaluation reaches a chart, Kix runs `helm template` (`4.3.1` by default, or `3.19.1` when `helmVersion = "3"`), converts the rendered YAML documents to JSON, stores the rendered output in Kix's local store, and continues evaluating the cluster. Kix strips Helm-specific release bookkeeping (`helm.sh/chart`, `meta.helm.sh/*`, `app.kubernetes.io/managed-by: Helm`, and test hooks) so the manifests match what the Kubernetes API server stores.
+1. **Content-addressed chart fetching (`scope.helm.fetchHelmChart`):** The upstream chart tarball is fetched from an HTTP or OCI registry and verified against the SRI `hash` pinned in your package or `cluster.nix`. Once fetched and verified, the chart tarball is cached in the evaluation store (`~/.cache/kix/store` under the default `kix` builder, or `/nix/store` when `builder = "nix"` in [`kix.toml`](/docs/reference/kix-toml/)), so later runs reuse the cached bytes.
+2. **Deterministic template rendering (`scope.helm.importChart`):** When evaluation reaches a chart, `helm template` runs (`4.3.1` by default, or `3.19.1` when `helmVersion = "3"`), converts the rendered YAML documents to JSON, stores the rendered output in the evaluation store, and continues evaluating the cluster. Kix strips Helm-specific release bookkeeping (`helm.sh/chart`, `meta.helm.sh/*`, `app.kubernetes.io/managed-by: Helm`, and test hooks) so the manifests match what the Kubernetes API server stores.
 3. **Sealing into the Kix graph:** Every rendered object is wrapped through `scope.mkResource` or `scope.mkHelmWorkload`, giving each resource a content hash (`identityHash`) and an `out` surface.
 
-Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions shipped with the CLI. If your `kix` binary and your `kixpkgs` lockfile ever disagree on the pinned Helm versions, run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with your installed `kix`.
+Both project builders ([`kix.toml`](/docs/reference/kix-toml/)) run the same pinned Helm release (`kix/lib/helm-versions.json`) with the same `helm template` arguments, so a chart renders the same way under either builder:
+
+- **Under `builder = "kix"` (the default):** The `kix` CLI fulfills `fetchHelmChart` and `importChart` outside Nix using its bundled `helm` binaries and writes the results into `~/.cache/kix/store`. Because chart derivations use `system = "kix-helm"` placeholders in this mode, plain `nix build` and `nix flake check` cannot render Helm charts in a `"kix"` project.
+- **Under `builder = "nix"`:** Nix fetches the chart as a fixed-output derivation and runs `helm template` inside a standard Nix derivation in `/nix/store` during evaluation (`allow-import-from-derivation`). Plain `nix build` and `nix flake check` work on clusters that include Helm charts.
+
+Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. If your `kix` binary and your `kixpkgs` lockfile ever disagree on the pinned Helm versions, run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with your installed `kix`.
 
 Kix supports three tiers of Helm integration depending on how much control you need:
 

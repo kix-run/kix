@@ -27,6 +27,7 @@ The user-facing documentation lives in `docs/src/content/docs/` (deployed to `ht
 | `kix.*` helpers (mounts, env, expose, monitor, healthCheck, pins, availability) | `docs/src/content/docs/reference/composition-helpers.mdx` |
 | Secrets (`mkSecret`), CRDs (`mkCRD`), RBAC (`scope.rbac.*`) | `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
 | Helm (`importChart`, `helmChart`) and external imports (`mkImport`) | `docs/src/content/docs/reference/helm-and-imports.mdx` |
+| Project configuration (`kix.toml`) and builders (`kix`, `nix`, `remote`) | `docs/src/content/docs/reference/kix-toml.mdx` |
 | Top-level cluster options (`cluster.*`, `namespaces`, `networkPolicy`, `scorecard`) | `docs/src/content/docs/reference/cluster-configuration.mdx` |
 | Instance schema (`deps`, `ref`, `aliases`, `partsOverlays`), `mkEnv`, `mergeFragments` | `docs/src/content/docs/reference/instances-and-composition.mdx` |
 | Built-in flavors (`kix.flavors.*`), capability matrix, platform imports | `docs/src/content/docs/reference/flavors-and-capabilities.mdx` |

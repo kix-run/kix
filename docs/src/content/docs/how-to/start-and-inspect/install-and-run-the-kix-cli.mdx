@@ -59,10 +59,13 @@ If the project is in another directory, pass `--flake`:
 
 <Command commands={["kix --flake /path/to/project list clusters"]} />
 
-On the first evaluation, Kix downloads the project's locked inputs into its
-local store (`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Later
-commands reuse the cached inputs. Set `KIX_STORE_ROOT` if you want Kix to keep
-its local store in a different directory.
+By default (`builder = "kix"`), Kix evaluates with its bundled Nix and
+downloads the project's locked inputs into its local store
+(`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Later commands reuse
+the cached inputs. Set `KIX_STORE_ROOT` if you want Kix to keep its local store
+in a different directory. Projects that set `builder = "nix"` in
+[`kix.toml`](/docs/reference/kix-toml/) use the machine's `nix` on `PATH` and
+`/nix/store` instead.
 
 ### Install with Nix
 
@@ -73,8 +76,10 @@ the `kixpkgs` flake:
 
 :::note[Reference]
 See [`kix doctor`](/docs/reference/cli/doctor/) for how Kix verifies its
-runtime directory, and [Global flags](/docs/reference/cli/global-flags/) for
-shared CLI flags and environment variables.
+runtime directory and project builder, [`kix.toml`](/docs/reference/kix-toml/)
+for choosing between Kix's bundled runtime and the machine's Nix, and
+[Global flags](/docs/reference/cli/global-flags/) for shared CLI flags and
+environment variables.
 :::
 
 :::tip[Try it as a tutorial]
