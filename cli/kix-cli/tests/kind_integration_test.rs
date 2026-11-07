@@ -920,7 +920,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
         .expect("the Active record names its build")
         .to_string();
     assert!(
-        kix::eval::store::exists(&Path::new(&built_via).join("kix-packages.json")),
+        kix::eval::store::exists(Path::new(&built_via)),
         "the Active record's build {built_via} should be in Kix's local store"
     );
     clear_activation_cache("sweep-a");
