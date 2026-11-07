@@ -68,13 +68,19 @@ pass:
    `aarch64-linux`, and `aarch64-darwin`.
 2. The `release` matrix job builds `kix` for each platform (`x86_64-linux` and
    `aarch64-linux` on Ubuntu with `cargo zigbuild` targeting `musl`, and
-   `aarch64-darwin` natively on `macos-15`), runs `cli/runtime/assemble.py` and
+   `aarch64-darwin` natively on `macos-15`), each through `cargo auditable` so
+   the binary carries its crate list, runs `cli/runtime/assemble.py` and
    `cli/runtime/legal.py`, and packages each self-contained tarball
    (`kix-<system>.tar.gz`, unpacking to `kix-<version>-<system>/`) containing
    `bin/kix` and `libexec/kix/` (`nix-2.35.4`, `helm-3.19.1`, `helm-4.3.1`,
    `kubectl-1.37.2`, `sops-3.12.1`, `manifest.json`, and
    `THIRD_PARTY_LICENSES`), alongside `kix-<version>-third-party-sources.tar.zst`
-   for LGPL compliance.
+   for LGPL compliance. For each binary it writes the RustSec report that
+   `cargo audit bin` reads from the binary's embedded crate list, ships it in
+   the archive as `share/kix/cargo-audit.json` and beside it as
+   `kix-<version>-<system>-cargo-audit.json`, and stops when a binary has no
+   crate list or a known vulnerability. The `test` job runs `cargo audit` on
+   `cli/Cargo.lock` for every change.
 3. The `without-nix` matrix job unpacks each archive on a runner with `/nix`
    unreachable and runs `cli/runtime/without-nix.sh` (`kix doctor`,
    `kix build minimal`, and `kix build helm`). In parallel, the `nix-builder`
@@ -84,7 +90,8 @@ pass:
    `git add kix.toml` hint, and that `nix build .#cluster-helm-activation` works
    on a `builder = "nix"` project.
 4. Once `without-nix` and `nix-builder` pass, `publish` uploads the three
-   platform archives, the third-party sources archive, and `SHA256SUMS` to the
+   platform archives, the third-party sources archive, the three audit
+   reports, and `SHA256SUMS` to the
    public [kix-run/kix-releases](https://github.com/kix-run/kix-releases) as
    `v<version>`, with that version's `CHANGELOG.md` section as the notes, and
    marks it `latest`. The job then tags the commit `v<version>` here, and
