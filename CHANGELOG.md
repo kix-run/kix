@@ -37,7 +37,7 @@ counts as breaking.
 - Machines that run `kix` from `PATH` without its `libexec/kix` folder: install the whole release archive, or set `KIX_RUNTIME_DIR`.
 - Helm `extraFlags` that hold a flag and its value in one string, such as `"--set a=b"`: split them into separate list items.
 - Helm charts that need Helm 3: set `helmVersion = "3"`. The default is now Helm 4.
-- Each project's `flake.lock`: run `kix lib update` after installing Kix 0.7, so the project uses the Kix library of the same release.
+- Each project's `flake.lock`: run `kix lib update` after installing Kix 0.7, so the project uses a matching version of the Kix library.
 - Scripts that compare the YAML that `kix build`, `kix export`, or `-o yaml` print as text, or look for single-quoted values: update them for double quotes.
 
 ### Breaking (shows an error)
