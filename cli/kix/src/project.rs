@@ -255,10 +255,9 @@ impl ProjectConfig {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProjectMismatch {
     #[error(
-        "{origin} sets builder = \"nix\", but this project's Kix library is too old for the nix builder. Run `kix lib update` to move flake.lock to the Kix library {}",
-        crate::VERSION
+        "{origin} sets builder = \"nix\", but the project's flake does not say which builder it uses. If flake.nix calls kixpkgs.lib.mkFlake, run `kix lib update` to move flake.lock to this Kix release. If flake.nix publishes its Kix outputs itself, for example with kixpkgs.lib.forPkgs, merge the outputs of kixpkgs.lib.mkFlake into it instead, as the Kix docs page \"Use mkFlake in a consuming repo\" shows"
     )]
-    LibraryTooOld { origin: BuilderSource },
+    NoBuilderSetting { origin: BuilderSource },
 
     #[error(
         "kix.toml is not visible to Nix. Run `git add kix.toml`. Kix reads builder = \"nix\" from {origin}, but Nix leaves out files that git does not track, so the project's Kix library uses builder = \"kix\""
@@ -266,7 +265,7 @@ pub enum ProjectMismatch {
     NotVisible { origin: BuilderSource },
 
     #[error(
-        "Kix and the project's Kix library disagree about the builder. Kix uses builder = \"{cli}\" ({origin}), and the library uses builder = \"{library}\". Check that git tracks kix.toml, and that flake.nix passes its `self` input to kix.lib.mkFlake"
+        "Kix and the project's Kix library disagree about the builder. Kix uses builder = \"{cli}\" ({origin}), and the library uses builder = \"{library}\". Check that git tracks kix.toml, and that flake.nix passes its `self` input to kixpkgs.lib.mkFlake"
     )]
     Disagree {
         origin: BuilderSource,
@@ -277,7 +276,8 @@ pub enum ProjectMismatch {
 
 /// Check that the builder Kix uses, which `origin` chose, agrees with
 /// `library`, the builder the project's Kix library read from `kix.toml`.
-/// `library` is `None` when the library is older than the setting.
+/// `library` is `None` when the flake publishes no builder setting: its
+/// library is older than the setting, or the flake does not use `mkFlake`.
 ///
 /// The test override replaces the file on purpose, so it is never compared.
 pub fn check_agreement(
@@ -290,7 +290,7 @@ pub fn check_agreement(
     }
     let origin = origin.clone();
     match library {
-        None if cli == BuilderKind::Nix => Err(ProjectMismatch::LibraryTooOld { origin }),
+        None if cli == BuilderKind::Nix => Err(ProjectMismatch::NoBuilderSetting { origin }),
         None => Ok(()),
         Some(library) if library == cli.name() => Ok(()),
         Some("kix") if cli == BuilderKind::Nix && matches!(origin, BuilderSource::File(_)) => {
@@ -418,14 +418,16 @@ mod tests {
         let file = BuilderSource::File(PathBuf::from("/p/kix.toml"));
         check_agreement(BuilderKind::Nix, &file, Some("nix")).unwrap();
         check_agreement(BuilderKind::Kix, &BuilderSource::Default, Some("kix")).unwrap();
-        // An older library has no setting, which only the nix builder needs.
+        // A flake without the setting (an older library, or a flake that does
+        // not use mkFlake) works only with the kix builder.
         check_agreement(BuilderKind::Kix, &BuilderSource::Default, None).unwrap();
 
         let err = check_agreement(BuilderKind::Nix, &file, None)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("too old for the nix builder"), "{err}");
+        assert!(err.contains("does not say which builder"), "{err}");
         assert!(err.contains("kix lib update"), "{err}");
+        assert!(err.contains("mkFlake"), "{err}");
 
         let err = check_agreement(BuilderKind::Nix, &file, Some("kix"))
             .unwrap_err()

@@ -68,7 +68,7 @@ pass:
    `aarch64-linux`, and `aarch64-darwin`.
 2. The `release` matrix job builds `kix` for each platform (`x86_64-linux` and
    `aarch64-linux` on Ubuntu with `cargo zigbuild` targeting `musl`, and
-   `aarch64-darwin` natively on `macos-15`), runs `cli/runtime/assemble.py` and
+   `aarch64-darwin` natively on the self-hosted Mac Studio runner `kix-macos-nix`), runs `cli/runtime/assemble.py` and
    `cli/runtime/legal.py`, and packages each self-contained release archive
    (`kix-<system>.tar.gz`, unpacking to `kix-<version>-<system>/`) containing
    `bin/kix` and `libexec/kix/` (`nix-2.35.4`, `helm-3.19.1`, `helm-4.3.1`,
@@ -709,11 +709,11 @@ a record line need regenerating.
 
 #### project (`kix/src/project.rs`)
 
-- `project.rs`: reads `kix.toml` beside `flake.nix` in the `--flake` directory (`ProjectConfig::load`). Its one key, `builder`, is `kix` (the default when the file or key is missing), `nix`, or `remote` (`BuilderKind`); `builder_source` records where the choice came from (`BuilderSource`). Unknown keys, unknown values, and invalid TOML are errors that name the file. `ProjectConfig::check_supported` is the one place that refuses `remote`. `check_agreement` compares the builder with `legacyPackages.<system>.kixConfig.builder`, which the library reads from the same file through Nix and so misses while git does not track `kix.toml`; `eval::nix::eval_activation_index` runs it once per run before it evaluates a cluster (skipped for `KIX_TEST_BUILDER`), and its `ProjectMismatch` names the fix (`git add kix.toml`, `kix lib update` for a library without `kixConfig`, or both values). `KIX_TEST_BUILDER` overrides the file, for Kix's own tests only. A remote flake reference gets the default.
+- `project.rs`: reads `kix.toml` beside `flake.nix` in the `--flake` directory (`ProjectConfig::load`). Its one key, `builder`, is `kix` (the default when the file or key is missing), `nix`, or `remote` (`BuilderKind`); `builder_source` records where the choice came from (`BuilderSource`). Unknown keys, unknown values, and invalid TOML are errors that name the file. `ProjectConfig::check_supported` is the one place that refuses `remote`. `check_agreement` compares the builder with `legacyPackages.<system>.kixConfig.builder`, which the library reads from the same file through Nix and so misses while git does not track `kix.toml`; `eval::nix::eval_activation_index` runs it once per run before it evaluates a cluster (skipped for `KIX_TEST_BUILDER`), and its `ProjectMismatch` names the fix (`git add kix.toml`, `kix lib update` or merging `mkFlake` for a flake without `kixConfig`, or both values). `KIX_TEST_BUILDER` overrides the file, for Kix's own tests only. A remote flake reference gets the default.
 
 #### system_nix (`kix/src/system_nix.rs`)
 
-- `system_nix.rs`: checks the machine's `nix` on `PATH` when `NixRunner::System` (`builder = "nix"`) is selected. `check_once()` runs `check_version()` once per process before the first `nix` or `nix-store` subprocess and caches the result in a `OnceLock`: requires upstream Nix (refusing Lix, which reports `(Lix, like Nix)` in `nix --version`) at version `2.24` (`MIN_VERSION`) or later (for `pipe-operators`), returning `SystemNixError` with the builder's `BuilderSource` and instructions to install Nix 2.24+ or set `builder = "kix"`. Also provides `version_line()`, `check_ifd()` (reads `allow-import-from-derivation` from `nix config show`), and `store_trusted()` (reads the `trusted` field from `nix store info --json`) for `kix doctor`.
+- `system_nix.rs`: checks the machine's `nix` on `PATH` when `NixRunner::System` (`builder = "nix"`) is selected. `check_once()` runs `check_version()` once per process before the first `nix` or `nix-store` subprocess and caches the result in a `OnceLock`: requires upstream Nix (refusing Lix, which reports `(Lix, like Nix)` in `nix --version`) at version `2.24` (`MIN_VERSION`) or later (for `pipe-operators`), returning `SystemNixError` with the builder's `BuilderSource` and instructions to install Nix 2.24+ or set `builder = "kix"`. Also provides `version_line()`, and `import_from_derivation_allowed()` (reads `allow-import-from-derivation` from `nix config show`) for `kix doctor`.
 
 #### library (`kix/src/library.rs`)
 

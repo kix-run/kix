@@ -415,7 +415,7 @@ fn check_library_builder(
 }
 
 /// Return the builder the project's Kix library read from `kix.toml`, or
-/// `None` when the library is older than that setting.
+/// `None` when the flake publishes no such setting.
 fn library_builder(
     flake_path: &Path,
     input_overrides: &[(String, String)],
