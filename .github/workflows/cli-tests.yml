@@ -207,6 +207,8 @@ jobs:
     needs: [test, version]
     if: needs.version.outputs.runtime == 'true'
     strategy:
+      # Each platform's result is worth seeing, even when another fails.
+      fail-fast: false
       matrix:
         include:
           # Spindle's image ships Nix.
