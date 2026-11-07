@@ -8,7 +8,10 @@ import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
 import buildArgs from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/buildArgs.json';
 import configmap from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/configmap.json';
+import deployment from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/deployment.json';
+import meta from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/meta.json';
 import root from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/root.json';
+import service from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/service.json';
 import buildOutput from '/src/command-output/tutorials/06-service-dep/build.json';
 
 In tutorial 06, you ran a local reverse-proxy package (`tutorials/06-service-dep/reverse-proxy-package.nix`) and saw how it reads `backend.out.fqdn` and `backend.out.port`.
@@ -48,12 +51,7 @@ See [Top-level package schema](/docs/reference/package-anatomy/#root-function-an
 
 At the top of `tutorials/06-service-dep/reverse-proxy-package.nix`, the `meta` block records the package version and description:
 
-```nix title="tutorials/06-service-dep/reverse-proxy-package.nix"
-meta = {
-  version = "0.0.1";
-  description = "nginx reverse-proxy in front of a backend Service";
-};
-```
+<Snippet {...meta} />
 
 Later tutorials add `provides = [ "reverse-proxy" ];` to `meta` so scorecard rules can target every reverse proxy in a cluster, regardless of what the instance is named.
 
@@ -88,47 +86,7 @@ Notice that `data."default.conf"` interpolates `${backend.out.fqdn}` and `${back
 
 Next, the package builds a Deployment that runs nginx and mounts `self.configmap` at `/etc/nginx/conf.d`:
 
-```nix title="tutorials/06-service-dep/reverse-proxy-package.nix"
-deployment =
-  {
-    inherit name;
-    spec = {
-      replicas = 1;
-      selector.matchLabels = scope.selectorLabels;
-      template.spec = {
-        containers = [
-          {
-            name = "nginx";
-            image = "nginx:1.27-alpine";
-            imagePullPolicy = "IfNotPresent";
-            ports = [ (kix.port "http" 80) ];
-            readinessProbe = {
-              httpGet = {
-                path = "/healthz";
-                port = 80;
-              };
-              periodSeconds = 5;
-            };
-            volumeMounts = [
-              {
-                name = "config";
-                mountPath = "/etc/nginx/conf.d";
-                readOnly = true;
-              }
-            ];
-          }
-        ];
-        volumes = [
-          {
-            name = "config";
-            configMap.name = self.configmap.out.name;
-          }
-        ];
-      };
-    };
-  }
-  |> scope.mkDeployment;
-```
+<Snippet {...deployment} />
 
 Three pieces work together here:
 
@@ -144,22 +102,7 @@ See [Workload and mount helpers](/docs/reference/composition-helpers/) for all o
 
 To expose the Deployment inside the cluster, the package creates a Service using `kix.service.fromWorkload`:
 
-```nix title="tutorials/06-service-dep/reverse-proxy-package.nix"
-service =
-  self.deployment
-  |> kix.service.fromWorkload {
-    inherit name;
-    ports = [
-      {
-        name = "http";
-        port = 80;
-        targetPort = "http";
-        protocol = "TCP";
-      }
-    ];
-  }
-  |> scope.mkResource;
-```
+<Snippet {...service} />
 
 In raw Kubernetes YAML, a Service can silently fail to route traffic if its `spec.selector` labels or `targetPort` names do not match the Deployment's pod template labels and `containerPort` declarations.
 

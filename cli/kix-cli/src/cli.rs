@@ -1309,4 +1309,134 @@ mod tests {
             assert!(parse_record_annotation(&refused).is_err(), "{refused}");
         }
     }
+
+    #[test]
+    fn documented_commands_parse_with_clap() {
+        fn walk_mdx(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            let mut paths: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+            paths.sort();
+            for path in paths {
+                if path.is_dir() {
+                    walk_mdx(&path, out);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("mdx") {
+                    out.push(path);
+                }
+            }
+        }
+
+        fn extract_command_strings(mdx: &str) -> Vec<String> {
+            let mut commands = Vec::new();
+            let mut rest = mdx;
+            while let Some(start) = rest.find("<Command") {
+                let after = &rest[start..];
+                let Some(end) = after.find("/>") else {
+                    break;
+                };
+                let block = &after[..end];
+                let mut scan = block;
+                while let Some(q_start) = scan.find("\"kix ") {
+                    let after_q = &scan[q_start + 1..];
+                    let Some(q_end) = after_q.find('"') else {
+                        break;
+                    };
+                    commands.push(after_q[..q_end].to_string());
+                    scan = &after_q[q_end + 1..];
+                }
+                rest = &after[end + 2..];
+            }
+
+            for fence in ["```sh\n", "```bash\n", "```shell\n"] {
+                let mut scan = mdx;
+                while let Some(start) = scan.find(fence) {
+                    let after = &scan[start + fence.len()..];
+                    let Some(end) = after.find("```") else {
+                        break;
+                    };
+                    let body = after[..end].replace("\\\n", " ");
+                    for line in body.lines() {
+                        let trimmed = line.trim().trim_start_matches("$ ");
+                        if trimmed.starts_with("kix ") {
+                            commands.push(trimmed.to_string());
+                        }
+                    }
+                    scan = &after[end + 3..];
+                }
+            }
+            commands
+        }
+
+        fn normalize_command(raw: &str) -> Vec<String> {
+            let mut s = raw.replace("\\\n", " ");
+            for sep in [" | ", " > ", " || ", " #"] {
+                if let Some(idx) = s.find(sep) {
+                    s.truncate(idx);
+                }
+            }
+            let s = s
+                .replace(
+                    "<64-hex-characters>",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .replace("<CLUSTER>", "demo")
+                .replace("<DIR>", "/tmp/dir");
+            s.split_whitespace().map(str::to_string).collect()
+        }
+
+        let docs_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src/content/docs");
+        if !docs_root.exists() {
+            return;
+        }
+
+        let mut mdx_files = Vec::new();
+        walk_mdx(&docs_root, &mut mdx_files);
+        assert!(!mdx_files.is_empty(), "expected .mdx files in docs");
+
+        let mut checked = 0usize;
+        for file in mdx_files {
+            let content = std::fs::read_to_string(&file).expect("read mdx file");
+            for raw_cmd in extract_command_strings(&content) {
+                let argv = normalize_command(&raw_cmd);
+                assert!(
+                    !argv.iter().any(|arg| arg == "apply"),
+                    "{}: use `kix deploy` instead of `kix apply` in `{raw_cmd}`",
+                    file.display()
+                );
+                match command().try_get_matches_from(&argv) {
+                    Ok(matches) => {
+                        let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| {
+                            panic!("{}: `{raw_cmd}` failed FromArgMatches: {e}", file.display())
+                        });
+                        if let Command::Plugin(args) = &cli.command {
+                            let plugin_name = args.first().and_then(|a| a.to_str()).unwrap_or("");
+                            assert_eq!(
+                                plugin_name,
+                                "enterprise",
+                                "{}: `{raw_cmd}` fell back to external subcommand `{plugin_name}` (unknown subcommand?)",
+                                file.display()
+                            );
+                        }
+                    }
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            clap::error::ErrorKind::DisplayHelp
+                                | clap::error::ErrorKind::DisplayVersion
+                        ) => {}
+                    Err(err) => panic!(
+                        "{}: documented command `{raw_cmd}` (argv: {argv:?}) failed clap parse:\n{err}",
+                        file.display()
+                    ),
+                }
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 100,
+            "expected at least 100 documented kix commands, found {checked}"
+        );
+    }
 }

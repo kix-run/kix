@@ -14,7 +14,7 @@ Not everything in your cluster starts as a native Kix package: you might want to
 
 ## Helm helpers
 
-Helm chart wrappers are a fallback bridge for third-party software that does not have a native Kix package yet. Compared to native Kix packages, Helm charts use untyped `values` maps (unless wrapped with custom `options`), rely on YAML heuristics rather than `.out` references for dependency and network-policy discovery, ignore `cluster.availability` scaling by default, and often require overrides to satisfy scorecard rules. See [Helm is a fallback, not the target model](/docs/explanation/helm-integration/#helm-is-a-fallback-not-the-target-model) for when to use each tier.
+Helm chart wrappers are a fallback bridge for third-party software that does not have a native Kix package yet. Compared to native Kix packages, Helm charts use untyped `values` maps (unless wrapped with custom `options`), rely on YAML heuristics rather than `.out` references for dependency and network-policy discovery, ignore `cluster.availability` scaling by default, and often require overrides to satisfy scorecard rules. See [Trade-offs of wrapping a Helm chart](/docs/explanation/helm-integration/#trade-offs-of-wrapping-a-helm-chart) for when to use each tier.
 
 Kix provides two entry points for Helm charts:
 1. **`kix.helmChart`**: A turn-key package constructor for quick chart adoption that exposes a `values` option (`options.values`) and wraps the rendered resources automatically.

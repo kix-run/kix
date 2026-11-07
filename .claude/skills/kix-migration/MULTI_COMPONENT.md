@@ -74,7 +74,7 @@ Reference implementation: `kix/packages/harbor/`.
 
 9. **A fact Nix cannot compute is generated in the pod**. The registry checks basic auth against a bcrypt htpasswd line. Nix has no bcrypt and a SOPS value is unreadable at evaluation, so an init container (`htpasswd.image`, `docker.io/library/httpd`) writes the line from `registryPassword` into an `emptyDir` the registry reads. Do not ask the user for a derived value that nothing can check against its source.
 
-10. **One workload's ceiling, not the package's**. `availability.max` on a builder call caps that workload only: the registry (one ReadWriteOnce claim) and the exporter (a second pod doubles every Harbor-wide gauge) set `availability.max = "none"` with `replicas = 1`, while core, portal, and jobservice take `kix.availability.pick` defaults. `meta.availability.max` would cap all of them.
+10. **Per-workload availability ceilings**. `availability.max` on a builder call caps that workload only: the registry (one ReadWriteOnce claim) and the exporter (a second pod doubles every Harbor-wide gauge) set `availability.max = "none"` with `replicas = 1`, while core, portal, and jobservice take `kix.availability.pick` defaults. `meta.availability.max` would cap all of them.
 
 11. **`root` with explicit `requires`**: list what the entry point cannot reach through `self.*` references. As with a bare `root`, `resource` *aliases* a named part; never construct a resource inside `root` itself, or it renders nothing at all (see "root must alias a named part" in SKILL.md). Optional parts are `null` when disabled, so filter:
    ```nix

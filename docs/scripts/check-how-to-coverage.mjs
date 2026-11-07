@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const docsRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const contentRoot = join(docsRoot, 'src/content/docs/how-to');
+const tutorialsRoot = join(docsRoot, 'src/content/docs/tutorials');
 const ledgerPath = join(docsRoot, 'how-to-coverage.json');
 
 async function findPages(directory) {
@@ -75,6 +76,41 @@ for (const entry of entries) {
   unverifiedTotal += actual;
 }
 
+const tutorialEntries = ledger.tutorials ?? [];
+const actualTutorials = (await findPages(tutorialsRoot))
+  .map((path) => relative(tutorialsRoot, path).replace(/\.mdx$/u, ''))
+  .sort();
+const ledgerTutorials = tutorialEntries.map(({ page }) => page).sort();
+let unverifiedTutorialTotal = 0;
+
+for (const page of new Set(ledgerTutorials)) {
+  if (ledgerTutorials.filter((candidate) => candidate === page).length > 1) {
+    errors.push(`duplicate tutorial ledger entry: ${page}`);
+  }
+}
+for (const page of actualTutorials) {
+  if (!ledgerTutorials.includes(page)) errors.push(`tutorial missing from ledger: ${page}`);
+}
+for (const page of ledgerTutorials) {
+  if (!actualTutorials.includes(page)) errors.push(`ledger points to a missing tutorial: ${page}`);
+}
+
+for (const entry of tutorialEntries) {
+  const pagePath = join(tutorialsRoot, `${entry.page}.mdx`);
+  const content = await readFile(pagePath, 'utf8');
+  const declared = entry.unverifiedNixBlocks ?? 0;
+  const actual = (content.match(/^```nix\b/gmu) ?? []).length;
+  if (actual !== declared) {
+    const verb = actual > declared ? 'added' : 'removed';
+    errors.push(
+      `tutorials/${entry.page}: ${actual} hand-written \`\`\`nix block(s), ledger declares ${declared}. ` +
+      `If you ${verb} one deliberately, update unverifiedNixBlocks in how-to-coverage.json. ` +
+      `Prefer a region snippet from kix-examples, which is drift-checked against its source.`,
+    );
+  }
+  unverifiedTutorialTotal += actual;
+}
+
 if (errors.length > 0) {
   console.error(errors.join('\n'));
   process.exit(1);
@@ -82,6 +118,6 @@ if (errors.length > 0) {
 
 const implemented = entries.filter(({ status }) => status === 'implemented').length;
 console.log(
-  `how-to coverage: ${implemented}/${entries.length} implemented; ledger matches content tree; ` +
-  `${unverifiedTotal} unverified hand-written nix block(s)`,
+  `how-to coverage: ${implemented}/${entries.length} implemented, ${tutorialEntries.length} tutorials; ` +
+  `ledger matches content tree; ${unverifiedTotal} how-to + ${unverifiedTutorialTotal} tutorial unverified nix block(s)`,
 );

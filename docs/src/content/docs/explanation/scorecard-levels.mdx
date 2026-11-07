@@ -24,11 +24,11 @@ To give each rule the exact context it needs, Kix runs scorecard rules at four s
 | `namespace` | All active instances and resources in one Kubernetes namespace | Does this namespace contain a `NetworkPolicy` or `ResourceQuota`? |
 | `cluster` | Every active instance and resource across the entire cluster | Are resource names and cross-namespace policies consistent across the whole build? |
 
-The level of a rule describes *what evidence it inspects*, not how important the rule is. A `manifest` rule can be a build-stopping `error`, and a `cluster` rule can be an informational hint.
+The level of a rule describes *what evidence it inspects*, while severity is configured separately. A `manifest` rule can be a build-stopping `error`, and a `cluster` rule can be an informational hint.
 
 ## Rules score what ships
 
-Scorecard rules evaluate the final compiled cluster, not just the raw options a user typed into `cluster.nix`:
+Scorecard rules evaluate the final compiled cluster after every helper and synthesis pass has run:
 
 - **Manifest and package rules** see every resource attached to an instance, including resources created by typed builders and derived resources like generated `PodDisruptionBudget` and `CiliumNetworkPolicy` objects.
 - **Namespace and cluster rules** run after dependency resolution has determined which instances are active. Optional instances (`optional = true`) that were never pulled in by a consumer are excluded so dormant packages do not trigger false findings.

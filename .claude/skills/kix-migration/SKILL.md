@@ -761,7 +761,7 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 | Transformer on `root.out` | `clusterIssuer.out.withCert` | Adding annotations/fields the consumer would forget |
 | CRD handle on `out` | `scope.mkCR certManager.out.crds.Certificate { ... }` | Creating custom resources of a provider's kind in the consumer's namespace |
 
-**Storage DI:** Persistent storage uses first-class PVC instances, not config-based `existingClaim` strings. Short version: `storage` is a DI dep, use `kix.mount.pvc storage { mountPath = ...; }`. **Read `STORAGE.md` for the full pattern, cluster definition example, and design rationale.**
+**Storage DI:** Persistent storage uses first-class PVC instances wired through dependency injection. Short version: `storage` is a DI dep, use `kix.mount.pvc storage { mountPath = ...; }`. **Read `STORAGE.md` for the full pattern, cluster definition example, and design rationale.**
 
 **PriorityClass DI:** a workload's PriorityClass is an optional `priorityClass ? null` dependency on a `priority-class` instance, read as `priorityClass.out.name` and wired explicitly with `deps.priorityClass = ref.<ns>.<instance>`. Do not add a `priorityClassName` string option; the dependency orders the workload after its class. Built-in `system-*` classes are named literally.
 

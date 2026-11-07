@@ -6,6 +6,7 @@ description: "Split a service dependency across two namespaces and wire it expli
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
+import clusterFrame from '/src/snippets/tutorials/08-namespace-deps/cluster/clusterFrame.json';
 import crossNamespaceDep from '/src/snippets/tutorials/08-namespace-deps/cluster/crossNamespaceDep.json';
 
 In tutorial 06, `backend` and `gateway` lived in the same namespace (`tutorial-06`), so Kix resolved the `backend` dependency automatically by matching the instance name within that namespace.
@@ -50,27 +51,12 @@ Open `tutorials/08-namespace-deps/cluster.nix`. This cluster defines two namespa
 
 Notice that inside `kix.buildCluster`, the cluster module in `modules` is written as a function that accepts `ref` (while the top-level file header remains `{ kix, packages }:`):
 
-```nix title="tutorials/08-namespace-deps/cluster.nix"
-{ kix, packages }:
-
-let
-  reverseProxyPackage = import ./reverse-proxy-package.nix;
-in
-kix.buildCluster {
-  name = "08-namespace-deps";
-
-  modules = [
-    kix.flavors.kind
-
-    (
-      { ref, ... }:
-      {
-        # namespaces and instances ...
-      }
-    )
-  ];
-}
-```
+<Snippet
+  {...clusterFrame}
+  elide={{
+    namespacesAndInstances: '        # namespaces and instances ...',
+  }}
+/>
 
 `ref` is Kix's cluster-wide instance reference table, passed to cluster modules and indexed by `ref.<namespace>.<instance>`.
 
