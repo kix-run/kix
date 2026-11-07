@@ -36,10 +36,10 @@ Kix evaluates Helm charts at build time instead:
 
 Both project builders ([`kix.toml`](/docs/reference/kix-toml/)) run the same pinned Helm release (`kix/lib/helm-versions.json`) with the same `helm template` arguments, so a chart renders the same way under either builder:
 
-- **Under `builder = "kix"` (the default):** The `kix` CLI runs its bundled `helm` binaries and writes the fetched charts and rendered manifests into Kix's local store (`~/.cache/kix/store`).
+- **Under `builder = "kix"` (the default):** Kix runs the `helm` programs in the Kix runtime and writes the fetched charts and rendered manifests into Kix's local store (`~/.cache/kix/store`).
 - **Under `builder = "nix"`:** The machine's Nix fetches the chart and runs `helm template` during evaluation (`allow-import-from-derivation`).
 
-Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. If your `kix` binary and your `kixpkgs` lockfile ever disagree on the pinned Helm versions, run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with your installed `kix`.
+Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. If your installed Kix and the Kix library in `flake.lock` ever disagree on the pinned Helm versions, run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with your installed Kix.
 
 Kix supports three tiers of Helm integration depending on how much control you need:
 

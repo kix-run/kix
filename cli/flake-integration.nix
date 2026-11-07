@@ -1,4 +1,4 @@
-# Nix flake integration for the kix CLI binary.
+# Nix flake integration for Kix.
 #
 # This file shows how to add `packages.kix` and `apps.kix` outputs
 # to the kixpkgs flake. It uses Crane for building.
@@ -43,7 +43,7 @@
       craneLib = crane.mkLib pkgs;
 
       commonArgs = {
-        # runtime/programs.json is compiled into kix, so keep it beside the
+        # runtime/programs.json is compiled into Kix, so keep it beside the
         # Rust sources.
         src = lib.cleanSourceWith {
           src = ../cli;
@@ -63,7 +63,7 @@
       # Build dependencies separately for caching
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-      # Build the kix binary
+      # Build Kix
       kix = craneLib.buildPackage (
         commonArgs
         // {

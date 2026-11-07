@@ -34,8 +34,8 @@ let
 
   # Encode colons in the filename because Nix store path names cannot contain
   # them. Resource identity comes from the manifest itself.
-  # Read the Kix release from the workspace version in cli/Cargo.toml, the
-  # file a release bumps. The kix program reports the same version, so Kix
+  # Read the Kix version from the workspace version in cli/Cargo.toml, the
+  # file a release bumps. Kix reports the same version, so Kix
   # can tell a project which program matches its library. A copy of the
   # library without that file has no version.
   cargoToml = ../../cli/Cargo.toml;

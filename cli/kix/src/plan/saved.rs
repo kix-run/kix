@@ -72,8 +72,9 @@ pub struct Comparison {
 pub fn unusable(reviewed: &Plan) -> Option<String> {
     if reviewed.schema_version != super::document::SCHEMA_VERSION {
         return Some(format!(
-            "the plan has schema version {}, and this Kix reads version {}",
+            "the plan has schema version {}, and Kix {} reads version {}",
             reviewed.schema_version,
+            crate::VERSION,
             super::document::SCHEMA_VERSION
         ));
     }

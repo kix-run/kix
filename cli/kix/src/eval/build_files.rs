@@ -95,7 +95,7 @@ impl BuildFiles {
         if index.version != INDEX_VERSION {
             return Err(format!(
                 "it is a build index of version {}, and Kix reads version {INDEX_VERSION}. \
-                 Use the Kix release that matches the Kix library that made the build",
+                 Use the version of Kix that matches the Kix library that made the build",
                 index.version
             ));
         }

@@ -31,7 +31,7 @@ let
   lib = inputs.nixpkgs.lib;
 
   # The project's settings from `kix.toml` beside its flake.nix. Nix sees the
-  # file only once git tracks it, and the kix program checks that its own
+  # file only once git tracks it, and Kix checks that its own
   # reading agrees with `kixConfig.builder`.
   builders = [
     "kix"
@@ -79,7 +79,7 @@ let
       kix = import ./. {
         inherit pkgs lib self;
       };
-      # The same library with Helm run by Nix, for the nix builder. Nothing
+      # The same library with Helm run by Nix, for the `nix` builder. Nothing
       # evaluates it unless something reads its clusters.
       kixNix = import ./. {
         inherit pkgs lib self;
@@ -156,9 +156,9 @@ let
       resolvedClustersNix = resolveClusters kixNix;
 
       # The library and clusters that the packages and checks below build.
-      # Under the kix builder a cluster that uses Helm stops at its first
-      # chart there, because only the kix program renders charts. Under the
-      # nix builder, Nix renders them.
+      # Under the `kix` builder a cluster that uses Helm stops at its first
+      # chart there, because only Kix renders charts. Under the
+      # `nix` builder, Nix renders them.
       built =
         if builder == "nix" then
           {
@@ -258,15 +258,15 @@ let
       checks = clusterChecks // packageChecks;
       legacyPackages = {
         kixClusters = resolvedClusters;
-        # The same clusters with Helm charts rendered by Nix. The kix program
-        # reads these under the nix builder.
+        # The same clusters with Helm charts rendered by Nix. Kix
+        # reads these under the `nix` builder.
         kixClustersNix = resolvedClustersNix;
-        # The project's settings from kix.toml. The kix program compares
+        # The project's settings from kix.toml. Kix compares
         # `builder` with its own reading of the file.
         kixConfig = {
           inherit builder;
         };
-        # The kix program reads this to name the library release in its
+        # Kix reads this to name the library release in its
         # messages and to compare it with its own version.
         kixLibrary = {
           inherit (kix) version;

@@ -103,7 +103,8 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
-/// A Kix binary, so a plan can be checked against the Kix that deploys it.
+/// The build of Kix that made a plan, so the plan can be checked against
+/// the Kix that deploys it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KixBuild {
     /// The Kix version: the crate version, plus the CI run number as build

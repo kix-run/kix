@@ -1,11 +1,11 @@
 ---
 title: "`doctor`"
-description: "Reference for kix doctor, which verifies Kix's bundled runtime tools, file hashes, and the project's builder configuration."
+description: "Reference for kix doctor, which verifies the programs in the Kix runtime, file hashes, and the project's builder configuration."
 ---
 
 import Command from "../../../../components/Command.astro";
 
-`kix doctor` inspects the bundled runtime directory that `kix` uses to run Nix, Helm, `kubectl`, and `sops`, and checks the project's builder setting in [`kix.toml`](/docs/reference/kix-toml/). It reports how the runtime directory was located, confirms that every bundled program matches the version compiled into the `kix` binary, checks the SHA-256 hash of every file and symlink target in `manifest.json`, and, when the project uses `builder = "nix"`, verifies the machine's `nix` installation.
+`kix doctor` inspects the Kix runtime that Kix uses to run Nix, Helm, `kubectl`, and `sops`, and checks the project's builder setting in [`kix.toml`](/docs/reference/kix-toml/). It reports how the runtime directory was located, confirms that every program in the Kix runtime matches the version compiled into Kix, checks the SHA-256 hash of every file and symlink target in `manifest.json`, and, when the project uses `builder = "nix"`, verifies the machine's `nix` installation.
 
 :::note
 This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/commands/doctor.rs`, `cli/kix/src/runtime.rs`, `cli/kix/src/project.rs`, `cli/kix/src/system_nix.rs`, and `cli/runtime/programs.json`. When flag definitions or runtime behavior change in the Rust source, update this page in the same change.
@@ -24,16 +24,16 @@ kix doctor [--flake <FLAKE>]
 When `kix` starts, it resolves its runtime directory (`libexec/kix`) using the first match in this order:
 
 1. **`KIX_RUNTIME_DIR`**, when set to a non-empty value. (An empty `KIX_RUNTIME_DIR=""` is ignored.) `KIX_RUNTIME_DIR` is used even if the directory has no `manifest.json`, so you can test custom tool builds.
-2. **`../libexec/kix` beside the `kix` binary** (after resolving symlinks to the binary), when that directory contains `manifest.json`. Because Kix resolves symlinks on the `kix` executable first, symlinking `~/.local/bin/kix` to an unpacked `bin/kix` still finds the sibling `libexec/kix/`.
+2. **`../libexec/kix` next to the `kix` command** (after resolving symlinks to the binary), when that directory contains `manifest.json`. Because Kix resolves symlinks on the `kix` executable first, symlinking `~/.local/bin/kix` to an unpacked `bin/kix` still finds the sibling `libexec/kix/`.
 3. **The compiled-in runtime path** (`KIX_BUILTIN_RUNTIME_DIR`), when that directory contains `manifest.json`. This is used when `kix` is built through Nix (`nix run` or `nix profile install`).
 
 On normal commands (`kix check`, `kix diff`, `kix deploy`), `kix` reads `<runtime>/manifest.json` (when present) and verifies that the program set and version strings match what the binary expects. `kix doctor` goes further and hashes every file and symlink target listed in `manifest.json` to detect corrupted or incomplete installations.
 
-## Bundled programs
+## Programs in the Kix runtime
 
-Each `kix` binary is compiled against the exact tool versions in `cli/runtime/programs.json`:
+Each build of Kix is compiled against the exact tool versions in `cli/runtime/programs.json`:
 
-| Program | Bundled version(s) | Used by Kix for |
+| Program | Version(s) in the Kix runtime | Used by Kix for |
 | --- | --- | --- |
 | `nix` | `2.35.4` | Evaluating cluster flakes and storing rendered manifests in Kix's local store (`$XDG_CACHE_HOME/kix/store` or `~/.cache/kix/store`, overridden by `KIX_STORE_ROOT`). |
 | `helm` | `4.3.1` (default), `3.19.1` | Fetching Helm chart tarballs (`fetchHelmChart`) and rendering templates (`importChart`). |
@@ -42,14 +42,14 @@ Each `kix` binary is compiled against the exact tool versions in `cli/runtime/pr
 
 ### Version update policy
 
-- **Patch and minor updates:** A patch update of a bundled program (for example, `2.35.3` to `2.35.4`) can ship in a Kix patch release. A minor update of a bundled program ships in a Kix minor release.
-- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the `kixpkgs` library and the `kix` binary both name the exact Helm versions. When a Kix patch or minor release updates a bundled Helm version, projects that use Helm charts stop before rendering until you run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with the new Kix release. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
+- **Patch and minor updates:** A patch update of a program in the Kix runtime (for example, `2.35.3` to `2.35.4`) can ship in a Kix patch release. A minor update of a program in the Kix runtime ships in a Kix minor release.
+- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the Kix library and Kix both name the exact Helm versions. When a Kix patch or minor release updates the Helm version in the Kix runtime, projects that use Helm charts stop before rendering until you run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with your installed Kix. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
 
 ## Third-party licenses and LGPL components
 
-The release archive ships `libexec/kix/THIRD_PARTY_LICENSES` alongside the bundled binaries, and each GitHub release publishes a companion `kix-<version>-third-party-sources.tar.zst` archive containing the exact upstream source tarballs and `nixpkgs` patches for the LGPL components (`nix`, `libseccomp`, `libidn2`, `libunistring`, `acl`, `attr`, and `gettext` / `libintl`, plus the `nix-*-c` shared libraries on macOS).
+The release archive ships `libexec/kix/THIRD_PARTY_LICENSES` alongside the programs in the Kix runtime, and each GitHub release publishes a companion `kix-<version>-third-party-sources.tar.zst` archive containing the exact upstream source tarballs and `nixpkgs` patches for the LGPL components (`nix`, `libseccomp`, `libidn2`, `libunistring`, `acl`, `attr`, and `gettext` / `libintl`, plus the `nix-*-c` shared libraries on macOS).
 
-On Linux, the bundled `nix` binary is statically linked against `musl`, so the runtime contains no shared libraries. On macOS, `nix` links against private `.dylib` files in `libexec/kix/nix-<version>/lib/` via `@loader_path`.
+On Linux, the `nix` in the Kix runtime is statically linked against `musl`, so the runtime contains no shared libraries. On macOS, `nix` links against private `.dylib` files in `libexec/kix/nix-<version>/lib/` via `@loader_path`.
 
 To run `kix` with your own build of an LGPL component:
 
@@ -60,7 +60,7 @@ Normal `kix` commands check only the program names and versions in `manifest.jso
 
 ## Project builder checks
 
-After checking the bundled runtime, `kix doctor` reads [`kix.toml`](/docs/reference/kix-toml/) in the directory named by `--flake` (default `.`) and reports which builder the project uses (`kix` or `nix`) and where that setting came from.
+After checking the Kix runtime, `kix doctor` reads [`kix.toml`](/docs/reference/kix-toml/) in the directory named by `--flake` (default `.`) and reports which builder the project uses (`kix` or `nix`) and where that setting came from.
 
 If `kix.toml` cannot be read, contains invalid TOML, sets an unknown key or builder name, or sets `builder = "remote"`, `kix doctor` prints a `fail` line and exits `1`.
 
@@ -77,8 +77,8 @@ Verify a healthy installation in a project using the default `kix` builder:
 <Command commands={["kix doctor"]} />
 
 ```text
-ok    Kix runtime in /home/alice/.local/libexec/kix (beside the kix binary)
-ok    it ships the programs this kix expects: nix 2.35.4, helm 3.19.1, helm 4.3.1, kubectl 1.37.2, sops 3.12.1
+ok    Kix runtime in /home/alice/.local/libexec/kix (next to the `kix` command)
+ok    it ships the programs Kix expects: nix 2.35.4, helm 3.19.1, helm 4.3.1, kubectl 1.37.2, sops 3.12.1
 ok    all 10 files match the SHA-256 in manifest.json
 ok    builder: kix (the default, since no kix.toml sets a builder)
 ```
@@ -88,8 +88,8 @@ Verify a project that sets `builder = "nix"` in `kix.toml`:
 <Command commands={["kix doctor"]} />
 
 ```text
-ok    Kix runtime in /home/alice/.local/libexec/kix (beside the kix binary)
-ok    it ships the programs this kix expects: nix 2.35.4, helm 3.19.1, helm 4.3.1, kubectl 1.37.2, sops 3.12.1
+ok    Kix runtime in /home/alice/.local/libexec/kix (next to the `kix` command)
+ok    it ships the programs Kix expects: nix 2.35.4, helm 3.19.1, helm 4.3.1, kubectl 1.37.2, sops 3.12.1
 ok    all 10 files match the SHA-256 in manifest.json
 ok    builder: nix (set in ./kix.toml)
 ok    the machine's Nix: nix (Nix) 2.28.3
@@ -100,4 +100,4 @@ info  the Nix store does not trust this user. The nix builder does not need trus
 ## Exit status
 
 - `0` when the runtime directory and `kix.toml` are valid (including when `KIX_RUNTIME_DIR` points to a custom runtime directory with no `manifest.json`, which prints a `warn` line) and, for `builder = "nix"` projects, `nix` on `PATH` is upstream Nix `2.24` or later. Warnings (such as `allow-import-from-derivation` being off) and `info` lines do not change the exit status.
-- `1` when the runtime directory cannot be found, `manifest.json` is unreadable or disagrees with the programs this `kix` expects, any file listed in `manifest.json` is missing or fails its SHA-256 or symlink check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix.
+- `1` when the runtime directory cannot be found, `manifest.json` is unreadable or disagrees with the programs Kix expects, any file listed in `manifest.json` is missing or fails its SHA-256 or symlink check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix.

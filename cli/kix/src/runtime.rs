@@ -44,7 +44,7 @@
 //! the same version. [`verify_files`] checks the contents for `kix doctor`.
 //!
 //! Under [`NixRunner::Bundled`], [`tool`] also gives the Nix programs an
-//! environment that selects Kix's own store and ignores the machine's and the
+//! environment that selects Kix's local store and ignores the machine's and the
 //! user's Nix settings.
 
 use std::collections::BTreeMap;
@@ -122,7 +122,7 @@ pub enum Want<'a> {
 /// Why Kix could not find or prepare a program.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
-    #[error("the Kix runtime in {} has no {program}. Install bin/kix and libexec/kix from the Kix release archive, or point {RUNTIME_DIR_VAR} at a complete Kix runtime directory", dir.display())]
+    #[error("the Kix runtime in {} has no {program}. Install bin/kix and libexec/kix from the release archive, or point {RUNTIME_DIR_VAR} at a complete Kix runtime directory", dir.display())]
     Missing { program: String, dir: PathBuf },
 
     #[error(
@@ -155,10 +155,12 @@ pub enum RuntimeError {
     NotFound { searched: Vec<String> },
 
     #[error(
-        "the Kix runtime in {} ({found_by}) does not match this Kix release. It ships {found}, but Kix {} expects {expected}. Install bin/kix and libexec/kix from the same Kix release{}",
+        "the Kix runtime in {} ({found_by}) does not match Kix {}. It ships {found}, but Kix {} expects {expected}. Install bin/kix and libexec/kix from the release archive of Kix {}{}",
         dir.display(),
         crate::VERSION,
-        if *found_by == FoundBy::Env { format!(", or point {RUNTIME_DIR_VAR} at the runtime of this release") } else { String::new() }
+        crate::VERSION,
+        crate::VERSION,
+        if *found_by == FoundBy::Env { format!(", or point {RUNTIME_DIR_VAR} at the Kix runtime of that version") } else { String::new() }
     )]
     Mismatch {
         dir: PathBuf,
@@ -212,8 +214,8 @@ impl std::fmt::Display for FoundBy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             FoundBy::Env => "named by KIX_RUNTIME_DIR",
-            FoundBy::BesideBinary => "beside the kix binary",
-            FoundBy::BuiltIn => "compiled into kix",
+            FoundBy::BesideBinary => "next to the `kix` command",
+            FoundBy::BuiltIn => "compiled into Kix",
         })
     }
 }
@@ -416,7 +418,7 @@ pub fn nix_runner() -> NixRunner {
 /// Return a [`Command`] that runs `tool` in the version `want` asks for.
 ///
 /// Under [`NixRunner::Bundled`], a Nix program comes from the runtime and
-/// its command also selects Kix's store. Under [`NixRunner::System`], it is
+/// its command also selects Kix's local store. Under [`NixRunner::System`], it is
 /// the `nix` or `nix-store` on `PATH`, run with the machine's settings, and
 /// `want` does not apply to it. The first such command of a run checks that
 /// the machine's Nix is one the `nix` builder supports
@@ -638,7 +640,7 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, RuntimeError> {
         && v != MANIFEST_VERSION
     {
         return Err(invalid(format!(
-            "it has format version {v}, and Kix reads version {MANIFEST_VERSION}. Install bin/kix and libexec/kix from the same Kix release"
+            "it has format version {v}, and Kix reads version {MANIFEST_VERSION}. Install bin/kix and libexec/kix from one release archive"
         )));
     }
     for program in &manifest.programs {
@@ -1043,7 +1045,7 @@ mod tests {
         assert_eq!(find(None, None, None), None);
     }
 
-    /// The programs compiled into kix and the Helm versions the Kix library
+    /// The programs compiled into Kix and the Helm versions the Kix library
     /// renders with come from one commit, so they must agree.
     #[test]
     fn the_compiled_in_helm_versions_match_the_library() {
@@ -1084,7 +1086,7 @@ mod tests {
         assert!(matches!(err, RuntimeError::Mismatch { .. }), "{err}");
         let text = err.to_string();
         assert!(text.contains("kubectl 0.0.1"), "{text}");
-        assert!(text.contains("the same Kix release"), "{text}");
+        assert!(text.contains("the release archive of Kix"), "{text}");
         assert!(!text.contains(RUNTIME_DIR_VAR), "{text}");
 
         let err = check_manifest(&Runtime {
@@ -1269,7 +1271,7 @@ mod tests {
         );
     }
 
-    /// The bundled runner runs the runtime's Nix against Kix's store.
+    /// The bundled runner runs the runtime's Nix against Kix's local store.
     #[test]
     fn the_bundled_runner_runs_the_runtimes_nix() {
         let dir = runtime(&[("nix-2.35.4", &["nix", "nix-store"])]);

@@ -43,7 +43,7 @@ fn check_runtime() -> usize {
 }
 
 /// Report the project's builder and where the choice came from. Return 1
-/// when `kix.toml` cannot be read or names a builder this Kix cannot use.
+/// when `kix.toml` cannot be read or names a builder this version of Kix cannot use.
 fn check_builder(flake: &str) -> usize {
     let dir = super::project_dir(flake);
     let config = match ProjectConfig::read_with_env(dir.as_deref()) {
