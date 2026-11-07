@@ -304,12 +304,19 @@ tests, about 150 lines of Nix, and two CI jobs.
 
 ## Questions for Luca
 
-1. Does your project need `nix build .#cluster-<name>-activation`, or another
-   flake output, to work without `kix`? The plan assumes yes.
-2. Is the Helm release Kix pins acceptable, or does your project need the
-   Helm from its own nixpkgs?
-3. Which Nix do you run, and which version? Is any machine on Lix?
-4. Do you build on macOS?
+Answers as of 2026-11-07, through Adam:
+
+1. **Does the project need `nix build .#cluster-<name>-activation` to work
+   without `kix`?** Not known yet. The plan keeps the output for `nix`
+   projects, because it is cheap and it is what `main` offered. Drop it in
+   phase 2 if Luca does not need it.
+2. **Is the Helm release Kix pins acceptable?** Yes.
+3. **Which Nix?** Nix, not Lix. The version still needs checking against
+   the 2.24 minimum.
+4. **Which platforms?** His laptop is a Mac, and he also builds on a Linux
+   VM. So the `nix` builder must work on `aarch64-darwin` and Linux, and the
+   phase 3 CI jobs cover both. The same project builds on both machines, so
+   the route comparison in section 4 matters for him too.
 
 ## Out of scope
 
