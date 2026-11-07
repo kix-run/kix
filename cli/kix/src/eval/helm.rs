@@ -104,11 +104,21 @@ pub enum HelmError {
     },
 
     #[error(
-        "evaluation still needs {} after Kix wrote it to the local store ({}). Remove Kix's local store directory and run the command again",
+        "evaluation still needs {} after Kix wrote it to the local store{}",
         path.display(),
-        super::store::store_root().display()
+        remove_store_hint()
     )]
     Stuck { path: PathBuf },
+}
+
+fn remove_store_hint() -> String {
+    match super::store::store_root() {
+        Some(root) => format!(
+            " ({}). Remove Kix's local store directory and run the command again",
+            root.display()
+        ),
+        None => String::new(),
+    }
 }
 
 fn shipped_text(shipped: &[String]) -> String {
@@ -603,9 +613,15 @@ fn register(out: &Path, deriver: &Path, contents: &[u8]) -> Result<(), HelmError
 
 /// Hold a lock on `out` so that two Kix processes do not write it at once.
 /// The lock is released when the returned file is dropped.
+///
+/// The lock lives in the store it guards. Without a store of Kix's own, it
+/// lives in Kix's cache directory.
 fn lock(out: &Path) -> Result<std::fs::File, HelmError> {
     let path = super::store::store_root()
-        .join("nix/var/kix/locks")
+        .map_or_else(
+            || super::store::default_cache_dir().join("locks"),
+            |root| root.join("nix/var/kix/locks"),
+        )
         .join(out.file_name().unwrap_or_default());
     let io = |source| HelmError::Io {
         path: path.clone(),

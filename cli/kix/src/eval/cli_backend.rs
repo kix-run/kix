@@ -1,4 +1,4 @@
-//! Subprocess-based Nix backend using `nix` CLI commands:
+//! The builder that runs `nix` commands on this machine:
 //! - `list_clusters`, `list_packages`, and `list_cluster_packages` run
 //!   `nix eval --json` against the flake's `kixClusters` and `kixPackages`
 //!   attributes.
@@ -14,25 +14,26 @@ use std::process::Command;
 use std::collections::BTreeMap;
 
 use super::error::KixEvalError;
-use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
+use super::evaluator::{Builder, ClusterOutput, ClusterPackageInfo, PackageInfo};
 use super::nix;
 use crate::runtime::Tool;
 
-/// Nix CLI subprocess backend.
-pub struct CliNixBackend {
+/// The builder that runs `nix` on this machine. The Nix runner decides which
+/// `nix` and which store.
+pub struct LocalBuilder {
     /// Flake input overrides forwarded to every `nix` subprocess as
     /// `--override-input <name> <url>`. Populated from the CLI's
     /// repeated `--override-input` global flag.
     input_overrides: Vec<(String, String)>,
 }
 
-impl Default for CliNixBackend {
+impl Default for LocalBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CliNixBackend {
+impl LocalBuilder {
     pub(crate) fn new() -> Self {
         Self {
             input_overrides: Vec::new(),
@@ -66,7 +67,7 @@ impl CliNixBackend {
     }
 }
 
-impl NixBackend for CliNixBackend {
+impl Builder for LocalBuilder {
     fn eval_cluster(
         &mut self,
         flake_path: &Path,
@@ -408,7 +409,7 @@ mod tests {
         let dir = flake_with(&format!(
             "legacyPackages.{other}.kixClusters = {{ }}; legacyPackages.{other}.kixPackages = {{ }};"
         ));
-        let mut backend = CliNixBackend::new();
+        let mut backend = LocalBuilder::new();
         let is_system_not_provided = |err: &KixEvalError| matches!(err, KixEvalError::SystemNotProvided { provided, .. } if provided == &[other.to_string()]);
         let err = backend.list_clusters(dir.path()).unwrap_err();
         assert!(is_system_not_provided(&err), "{err}");
@@ -425,7 +426,7 @@ mod tests {
     #[test]
     fn a_flake_with_no_kix_outputs_says_so() {
         let dir = flake_with("");
-        let mut backend = CliNixBackend::new();
+        let mut backend = LocalBuilder::new();
         let err = backend.list_clusters(dir.path()).unwrap_err();
         assert!(
             matches!(&err, KixEvalError::NoKixOutputs { attr }
@@ -446,7 +447,7 @@ mod tests {
             "legacyPackages.{}.kixClusters = {{ }};",
             nix::current_system()
         ));
-        let mut backend = CliNixBackend::new();
+        let mut backend = LocalBuilder::new();
         assert_eq!(
             backend.list_clusters(dir.path()).unwrap(),
             Vec::<String>::new()

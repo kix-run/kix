@@ -145,6 +145,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "compliance",
             "pin",
             "lib",
+            "doctor",
         ],
     ),
     // Only commands that evaluate through the SQLite eval cache.
@@ -354,7 +355,8 @@ pub enum Command {
     /// Reports which runtime directory Kix runs its programs (nix, helm,
     /// kubectl, sops) from, checks that its manifest.json lists the programs
     /// this kix expects, and checks every file against its SHA-256 in the
-    /// manifest. Exits 1 when a check fails.
+    /// manifest. Also reports the project's builder and where it was chosen
+    /// (kix.toml, or the default). Exits 1 when a check fails.
     Doctor,
 
     /// Compliance exports: SBOM, SLSA attestations, audit bundles

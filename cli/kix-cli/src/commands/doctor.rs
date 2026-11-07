@@ -1,14 +1,17 @@
-//! `kix doctor`: check the installation Kix runs from.
+//! `kix doctor`: check the installation Kix runs from and the project's
+//! builder.
 
+use kix::project::{BuilderSource, ProjectConfig};
 use kix::runtime::{self, Runtime};
 use miette::miette;
 
+use crate::cli::GlobalArgs;
 use crate::output::{green, red, yellow};
 
 /// Run every check, print one line per result, and fail when any check
 /// fails.
-pub fn run() -> miette::Result<()> {
-    let failures = check_runtime();
+pub fn run(global: &GlobalArgs) -> miette::Result<()> {
+    let failures = check_runtime() + check_builder(&global.flake);
     if failures > 0 {
         return Err(miette!(
             "{failures} check{} failed",
@@ -36,6 +39,42 @@ fn check_runtime() -> usize {
         rt.found_by
     );
     verify(&rt)
+}
+
+/// Report the project's builder and where the choice came from. Return 1
+/// when `kix.toml` cannot be read or names a builder this Kix cannot use.
+fn check_builder(flake: &str) -> usize {
+    let dir = super::project_dir(flake);
+    let config = match ProjectConfig::read_with_env(dir.as_deref()) {
+        Ok(config) => config,
+        Err(e) => {
+            println!("{}  {e}", red("fail"));
+            return 1;
+        }
+    };
+    let line = builder_line(&config);
+    match config.check_supported() {
+        Ok(()) => {
+            println!("{}  {line}", green("ok  "));
+            0
+        }
+        Err(e) => {
+            println!("{}  {line}", red("fail"));
+            println!("      {e}");
+            1
+        }
+    }
+}
+
+fn builder_line(config: &ProjectConfig) -> String {
+    let from = match &config.builder_source {
+        BuilderSource::File(path) => format!("set in {}", path.display()),
+        BuilderSource::Default => "the default, since no kix.toml sets a builder".to_string(),
+        BuilderSource::TestOverride => {
+            format!("set by {}", kix::project::TEST_BUILDER_VAR)
+        }
+    };
+    format!("builder: {} ({from})", config.builder)
 }
 
 fn verify(rt: &Runtime) -> usize {

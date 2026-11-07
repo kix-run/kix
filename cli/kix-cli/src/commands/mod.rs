@@ -210,12 +210,30 @@ pub(crate) fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     }
 }
 
+/// Return the local project directory `flake` names, or `None` for a remote
+/// flake reference.
+pub(crate) fn project_dir(flake: &str) -> Option<PathBuf> {
+    if flake.contains(':') {
+        return None;
+    }
+    resolve_flake_path(flake).ok()
+}
+
+/// Read the project's `kix.toml` and choose the Nix runner its builder
+/// needs. Call it before Kix runs any Nix program.
+pub(crate) fn select_builder(global: &GlobalArgs) -> miette::Result<()> {
+    let config = kix::project::ProjectConfig::load(project_dir(&global.flake).as_deref())
+        .map_err(|e| miette::miette!("{e}"))?;
+    kix::runtime::select_builder(config.builder).map_err(|e| miette::miette!("{e}"))?;
+    Ok(())
+}
+
 fn create_evaluator(
     flake: &str,
     no_cache: bool,
     input_overrides: Vec<(String, String)>,
 ) -> miette::Result<kix::eval::KixEvaluator> {
-    let backend = kix::eval::CliNixBackend::with_overrides(input_overrides);
+    let backend = kix::eval::LocalBuilder::with_overrides(input_overrides);
     let flake_path = resolve_flake_path(flake)?;
 
     if no_cache {

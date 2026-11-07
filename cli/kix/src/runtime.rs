@@ -1,8 +1,10 @@
 //! Find the external programs Kix runs.
 //!
 //! Every program Kix starts, such as `nix`, `kubectl`, and `sops`, comes from
-//! [`tool`]. Kix looks for a runtime directory in this order and uses the
-//! first it finds:
+//! [`tool`]. Helm, kubectl, and sops always come from Kix's runtime. Nix
+//! comes from the runtime too, unless the project's builder is `nix` (see
+//! [`NixRunner`]). Kix looks for a runtime directory in this order and uses
+//! the first it finds:
 //!
 //! 1. the directory `KIX_RUNTIME_DIR` names,
 //! 2. `../libexec/kix/` beside the running `kix` binary, when it holds a
@@ -13,8 +15,9 @@
 //!
 //! Every program comes from that directory and nowhere else. Kix never runs
 //! a program from `PATH`, because a different Helm or Nix there could change
-//! what Kix produces without anyone noticing. Without a runtime directory,
-//! [`tool`] fails with [`RuntimeError::NotFound`].
+//! what Kix produces without anyone noticing. The one exception is a project
+//! that chose the machine's Nix in its `kix.toml`. Without a runtime
+//! directory, [`tool`] fails with [`RuntimeError::NotFound`].
 //!
 //! A runtime directory keeps each program in a directory of its own, named
 //! after its exact version, such as `helm-4.3.1/bin/helm`, so two versions of
@@ -40,11 +43,12 @@
 //! no file contents, so a user can swap in their own build of a program of
 //! the same version. [`verify_files`] checks the contents for `kix doctor`.
 //!
-//! [`tool`] also gives the Nix programs an environment that selects Kix's own
-//! store ([`store_root`]) and ignores the machine's and the user's Nix
-//! settings.
+//! Under [`NixRunner::Bundled`], [`tool`] also gives the Nix programs an
+//! environment that selects Kix's own store and ignores the machine's and the
+//! user's Nix settings.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -52,7 +56,8 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-use crate::eval::store::store_root;
+use crate::eval::store::{STORE_ROOT_VAR, bundled_store_root};
+use crate::project::BuilderKind;
 
 /// The environment variable that names a Kix runtime directory.
 pub const RUNTIME_DIR_VAR: &str = "KIX_RUNTIME_DIR";
@@ -174,6 +179,11 @@ pub enum RuntimeError {
 
     #[error("could not prepare Kix's local store at {}: {message}", root.display())]
     Store { root: PathBuf, message: String },
+
+    #[error(
+        "{STORE_ROOT_VAR} is set, but it does not apply to this project. The project's builder is \"nix\", which uses the machine's Nix and its store. Unset {STORE_ROOT_VAR}"
+    )]
+    StoreRootWithSystemNix,
 }
 
 fn versions(shipped: &[String]) -> String {
@@ -320,23 +330,109 @@ fn describe_versions(versions: &BTreeMap<String, Vec<String>>) -> String {
     }
 }
 
+/// Which Nix programs Kix runs, and which store they use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NixRunner {
+    /// Kix's own Nix against Kix's own store, whose files live under `root`.
+    /// The `kix` and `remote` builders use it.
+    Bundled { root: PathBuf },
+    /// The `nix` on `PATH`, with the machine's settings and its store at
+    /// `/nix/store`. The `nix` builder uses it.
+    System,
+}
+
+impl NixRunner {
+    /// Return the runner `builder` needs. `store_root_var` is the value of
+    /// `KIX_STORE_ROOT`, which only the bundled runner reads.
+    pub fn for_builder(
+        builder: BuilderKind,
+        store_root_var: Option<&OsStr>,
+    ) -> Result<Self, RuntimeError> {
+        match builder {
+            BuilderKind::Kix | BuilderKind::Remote => Ok(NixRunner::Bundled {
+                root: bundled_store_root(),
+            }),
+            BuilderKind::Nix if store_root_var.is_some_and(|v| !v.is_empty()) => {
+                Err(RuntimeError::StoreRootWithSystemNix)
+            }
+            BuilderKind::Nix => Ok(NixRunner::System),
+        }
+    }
+
+    /// Return the directory that holds the store's files, or `None` when the
+    /// store is the machine's own at `/nix/store`.
+    pub fn root(&self) -> Option<&Path> {
+        match self {
+            NixRunner::Bundled { root } => Some(root),
+            NixRunner::System => None,
+        }
+    }
+}
+
+/// The builder this run uses and the runner it needs, set once by
+/// [`select_builder`].
+static SELECTED: OnceLock<(BuilderKind, NixRunner)> = OnceLock::new();
+
+/// Choose the Nix runner for `builder` for the rest of this run.
+///
+/// Call it once, before Kix runs any Nix program. A later call keeps the
+/// first choice and returns it.
+pub fn select_builder(builder: BuilderKind) -> Result<NixRunner, RuntimeError> {
+    let runner = NixRunner::for_builder(builder, std::env::var_os(STORE_ROOT_VAR).as_deref())?;
+    Ok(SELECTED.get_or_init(|| (builder, runner)).1.clone())
+}
+
+/// Return the builder this run uses: the one [`select_builder`] chose, or
+/// `kix` when nothing chose one.
+pub fn builder() -> BuilderKind {
+    SELECTED.get().map_or(BuilderKind::Kix, |(b, _)| *b)
+}
+
+/// Return the Nix runner this run uses: the one [`select_builder`] chose, or
+/// the bundled runner when nothing chose one, such as in a command that
+/// reads no project.
+pub fn nix_runner() -> NixRunner {
+    match SELECTED.get() {
+        Some((_, runner)) => runner.clone(),
+        None => NixRunner::Bundled {
+            root: bundled_store_root(),
+        },
+    }
+}
+
 /// Return a [`Command`] that runs `tool` in the version `want` asks for.
 ///
-/// For the Nix programs, the command also selects Kix's store
-/// ([`store_root`]).
+/// Under [`NixRunner::Bundled`], a Nix program comes from the runtime and
+/// its command also selects Kix's store. Under [`NixRunner::System`], it is
+/// the `nix` or `nix-store` on `PATH`, run with the machine's settings, and
+/// `want` does not apply to it.
 pub fn tool(tool: Tool, want: Want) -> Result<Command, RuntimeError> {
-    let mut cmd = Command::new(program_path(tool, want)?);
-    if tool.program() == "nix" {
-        let root = store_root();
-        use_store(&mut cmd, &root)?;
-        init_store(&root, || {
-            let mut init = Command::new(program_path(Tool::NixStore, Want::Shipped)?);
-            use_store(&mut init, &root)?;
-            init.arg("--init");
-            Ok(init)
-        })?;
+    command_for(&nix_runner(), tool, want, program_path)
+}
+
+fn command_for(
+    runner: &NixRunner,
+    tool: Tool,
+    want: Want,
+    locate: impl Fn(Tool, Want) -> Result<PathBuf, RuntimeError>,
+) -> Result<Command, RuntimeError> {
+    if tool.program() != "nix" {
+        return Ok(Command::new(locate(tool, want)?));
     }
-    Ok(cmd)
+    match runner {
+        NixRunner::System => Ok(Command::new(tool.binary())),
+        NixRunner::Bundled { root } => {
+            let mut cmd = Command::new(locate(tool, want)?);
+            use_store(&mut cmd, root)?;
+            init_store(root, || {
+                let mut init = Command::new(locate(Tool::NixStore, Want::Shipped)?);
+                use_store(&mut init, root)?;
+                init.arg("--init");
+                Ok(init)
+            })?;
+            Ok(cmd)
+        }
+    }
 }
 
 /// Create the database of the store under `root` once, before any Nix
@@ -1125,5 +1221,88 @@ mod tests {
         assert!(conf.contains("experimental-features = nix-command flakes pipe-operators"));
 
         assert!(use_store(&mut Command::new("nix"), Path::new("/a b")).is_err());
+    }
+
+    fn envs(cmd: &Command) -> BTreeMap<String, Option<PathBuf>> {
+        cmd.get_envs()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(PathBuf::from)))
+            .collect()
+    }
+
+    /// The machine's Nix comes from PATH with no settings of Kix's, and Helm
+    /// still comes from the runtime.
+    #[test]
+    fn the_system_runner_runs_nix_from_path() {
+        let dir = runtime(&[
+            ("nix-2.35.4", &["nix", "nix-store"]),
+            ("helm-4.3.1", &["helm"]),
+        ]);
+        let locate = |tool: Tool, want: Want<'_>| locate(dir.path(), tool, want);
+
+        for (tool, program) in [(Tool::Nix, "nix"), (Tool::NixStore, "nix-store")] {
+            let cmd = command_for(&NixRunner::System, tool, Want::Shipped, locate).unwrap();
+            assert_eq!(cmd.get_program(), program);
+            assert!(envs(&cmd).is_empty(), "{:?}", envs(&cmd));
+        }
+        let helm = command_for(&NixRunner::System, Tool::Helm, Want::Shipped, locate).unwrap();
+        assert_eq!(
+            Path::new(helm.get_program()),
+            dir.path().join("helm-4.3.1/bin/helm")
+        );
+    }
+
+    /// The bundled runner runs the runtime's Nix against Kix's store.
+    #[test]
+    fn the_bundled_runner_runs_the_runtimes_nix() {
+        let dir = runtime(&[("nix-2.35.4", &["nix", "nix-store"])]);
+        let store = tempfile::tempdir().unwrap();
+        let root = store.path().join("store");
+        let db = root.join("nix/var/nix/db");
+        std::fs::create_dir_all(&db).unwrap();
+        std::fs::write(db.join("schema"), "").unwrap();
+        let runner = NixRunner::Bundled { root: root.clone() };
+
+        let cmd = command_for(
+            &runner,
+            Tool::Nix,
+            Want::Shipped,
+            |tool: Tool, want: Want<'_>| locate(dir.path(), tool, want),
+        )
+        .unwrap();
+        assert_eq!(
+            Path::new(cmd.get_program()),
+            dir.path().join("nix-2.35.4/bin/nix")
+        );
+        assert_eq!(envs(&cmd)["NIX_CONF_DIR"], Some(root.join("etc/nix")));
+        assert_eq!(envs(&cmd)["NIX_STATE_DIR"], Some(root.join("nix/var/nix")));
+    }
+
+    #[test]
+    fn each_builder_gets_its_runner() {
+        assert!(matches!(
+            NixRunner::for_builder(BuilderKind::Kix, None).unwrap(),
+            NixRunner::Bundled { .. }
+        ));
+        assert!(matches!(
+            NixRunner::for_builder(BuilderKind::Remote, None).unwrap(),
+            NixRunner::Bundled { .. }
+        ));
+        let system = NixRunner::for_builder(BuilderKind::Nix, None).unwrap();
+        assert_eq!(system, NixRunner::System);
+        assert_eq!(system.root(), None);
+        assert_eq!(
+            NixRunner::for_builder(BuilderKind::Nix, Some(OsStr::new(""))).unwrap(),
+            NixRunner::System
+        );
+    }
+
+    #[test]
+    fn a_store_root_is_refused_with_the_machines_nix() {
+        let err = NixRunner::for_builder(BuilderKind::Nix, Some(OsStr::new("/tmp/store")))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("KIX_STORE_ROOT is set"), "{err}");
+        assert!(err.contains("Unset KIX_STORE_ROOT"), "{err}");
+        assert!(NixRunner::for_builder(BuilderKind::Kix, Some(OsStr::new("/tmp/store"))).is_ok());
     }
 }

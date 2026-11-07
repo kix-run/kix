@@ -148,7 +148,7 @@ fn main() -> miette::Result<()> {
 
     // Doctor reports a broken runtime instead of stopping on it.
     if let Command::Doctor = &cli.command {
-        return commands::doctor::run();
+        return commands::doctor::run(&cli.global);
     }
 
     // `kix pin` operates directly on the pin file without evaluating the
@@ -167,6 +167,9 @@ fn main() -> miette::Result<()> {
     if let Some(name) = cli.command.cluster_name() {
         validate_cluster_name(name)?;
     }
+
+    // The project's builder decides which Nix every later step runs.
+    commands::select_builder(&cli.global)?;
 
     // Stop before any work when Kix has no runtime, or its runtime comes from
     // another release.

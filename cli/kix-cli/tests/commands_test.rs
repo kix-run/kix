@@ -313,3 +313,48 @@ fn without_a_runtime_kix_refuses_to_run_programs() {
 
     without_runtime().arg("--version").assert().success();
 }
+
+/// A project's kix.toml chooses the builder. `kix doctor` reports the choice,
+/// and a builder or setting this Kix cannot use stops a command before it
+/// runs Nix.
+#[test]
+fn kix_toml_chooses_the_builder() {
+    let project = tempfile::tempdir().unwrap();
+    let flake = project.path().display().to_string();
+    let file = project.path().join("kix.toml");
+    let run = |args: &[&str]| {
+        let mut cmd = kix();
+        cmd.env_remove("KIX_TEST_BUILDER")
+            .env_remove("KIX_STORE_ROOT")
+            .args(["--flake", &flake])
+            .args(args);
+        cmd
+    };
+
+    run(&["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("builder: kix (the default"));
+
+    std::fs::write(&file, "builder = \"remote\"\n").unwrap();
+    run(&["build", "minimal"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot use a remote builder"));
+    run(&["doctor"]).assert().failure().stdout(
+        predicate::str::contains("builder: remote (set in")
+            .and(predicate::str::contains("cannot use a remote builder")),
+    );
+
+    std::fs::write(&file, "builder = \"kix\"\nbuidler = \"nix\"\n").unwrap();
+    run(&["list", "clusters"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`buidler`"));
+
+    std::fs::write(&file, "builder = \"kix\"\n").unwrap();
+    run(&["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("builder: kix (set in"));
+}
