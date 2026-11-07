@@ -4,51 +4,69 @@ description: "Instantiate the same package multiple times with different configu
 ---
 
 import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
+import reusedInstances from '/src/snippets/tutorials/10-reuse-packages/cluster/reusedInstances.json';
+import scopedResourceName from '/src/snippets/tutorials/10-reuse-packages/reverse-proxy-package/scopedResourceName.json';
 
-Once a package uses `scope` for resource naming and `options` for configuration, you can instantiate it as many times as you need: multiple instances in the same namespace, or separate instances across `staging` and `production` namespaces.
+Once a package uses `scope` for resource naming and `options` for configuration, you can instantiate it as many times as you need: across multiple environment namespaces (`app-v1` and `app-v2`, or `staging` and `production`) or multiple times inside the same namespace.
 
-In this tutorial, you will inspect `tutorials/10-reuse-packages/cluster.nix`, which runs two separate `echo-server` backends and two separate `reverse-proxy` gateways from the exact same package definitions.
+In this tutorial, you will inspect `tutorials/10-reuse-packages/cluster.nix`, which deploys two independent `backend` + `gateway` stacks (`app-v1` and `app-v2`) from the exact same `packages.echo-server` and `reverse-proxy-package.nix` definitions.
 
 ## Prerequisites
 
 - Finish the [typed package options tutorial](/docs/tutorials/09-typed-package-options/).
 - Keep the same `kix-examples` checkout.
 
-## Why `scope` Makes Packages Reusable
+## Inspect `10-reuse-packages`
 
-In `reverse-proxy-package.nix`, look at how the package names its ConfigMap, Deployment, and Service:
+Open `tutorials/10-reuse-packages/cluster.nix`. The cluster defines two namespaces (`app-v1` and `app-v2`) and instantiates `packages.echo-server` and `reverseProxyPackage` in both `instances.app-v1` and `instances.app-v2`:
 
-```nix title="tutorials/09-typed-options/reverse-proxy-package.nix"
-let
-  name = scope.instanceName;
-in
-{
-  configmap = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    inherit name;
-    # ...
-  };
-```
+<Snippet {...reusedInstances} />
+
+Look at what stays identical and what changes between the two stacks:
+
+- Both stacks use the exact same `packages.echo-server` and `reverseProxyPackage` blueprints.
+- `app-v1` configures `message = "Response from app-v1"` and `proxyPath = "/v1/"`, and wires `deps.backend = ref.app-v1.backend`.
+- `app-v2` configures `message = "Response from app-v2"` and `proxyPath = "/v2/"`, and wires `deps.backend = ref.app-v2.backend`.
+
+Inside `reverseProxyPackage`, the `build` function still reads `backend.out.fqdn` and `backend.out.port`. For `app-v1/gateway`, `backend.out.fqdn` resolves to `backend.app-v1.svc.cluster.local`; for `app-v2/gateway`, it resolves to `backend.app-v2.svc.cluster.local`. (Because each `gateway` and `backend` pair lives in the same namespace, you could even omit `deps.backend` here and let same-namespace resolution match `backend` automatically, though writing `deps.backend = ref.app-v1.backend` keeps the wiring explicit.)
+
+## Check And Inspect The Dependency Tree
+
+Run `kix check` and `kix graph` on `10-reuse-packages`:
+
+<Command commands={["kix check 10-reuse-packages", "kix graph 10-reuse-packages --format tree"]} cwd="kix-examples/" />
+
+In the dependency tree output, verify that the two proxy chains are isolated in their respective namespaces:
+
+- Under `Namespace/app-v1`, `Service/backend@app-v1` feeds `ConfigMap/gateway@app-v1` and `Deployment/gateway@app-v1`.
+- Under `Namespace/app-v2`, `Service/backend@app-v2` feeds `ConfigMap/gateway@app-v2` and `Deployment/gateway@app-v2`.
+
+You will see this two-namespace layout again in tutorial 12 when we run cluster-wide scorecard rules across `app-v1` and `app-v2`.
+
+## Why `scope` Also Allows Multiple Instances In One Namespace
+
+What if you want two instances of the same package inside a single namespace, such as an `api-gateway` and an `admin-gateway` in `app-v1`?
+
+In `tutorials/10-reuse-packages/reverse-proxy-package.nix`, look at how the package names its ConfigMap, Deployment, and Service:
+
+<Snippet
+  {...scopedResourceName}
+  elide={{
+    configmapData: '        # ...',
+  }}
+/>
 
 Because the package derives `name` from `scope.instanceName` (instead of hardcoding `"reverse-proxy"` or `"gateway"`), every instance in a namespace gets its own distinct resource names and selector labels:
 
 - An instance key `api-gateway` receives `scope.instanceName = "api-gateway"` and `scope.selectorLabels` with `app.kubernetes.io/instance = "api-gateway"`.
 - An instance key `admin-gateway` receives `scope.instanceName = "admin-gateway"` and `scope.selectorLabels` with `app.kubernetes.io/instance = "admin-gateway"`.
 
-Neither their resource names (`ConfigMap/api-gateway` vs. `ConfigMap/admin-gateway`) nor their pod label selectors collide, even when both instances run side by side in the same namespace.
+Neither their resource names (`ConfigMap/api-gateway` vs. `ConfigMap/admin-gateway`) nor their pod label selectors collide, so both instances can run side by side in the same namespace and bind to different backends via `deps.backend`:
 
-:::note[Reference]
-See [The `scope` helper](/docs/reference/package-anatomy/#root-function-and-return-shape) for all fields and constructors on `scope`.
-:::
-
-## Inspect `10-reuse-packages`
-
-Open `tutorials/10-reuse-packages/cluster.nix`. It reuses both `packages.echo-server` and the local `reverseProxyPackage` to create two independent proxy chains:
-
-```nix title="tutorials/10-reuse-packages/cluster.nix"
-namespaces.tutorial-10.instances = {
+```nix
+instances.app-v1 = {
   api-backend = {
     package = packages.echo-server;
     config.message = "Response from API backend";
@@ -61,7 +79,7 @@ namespaces.tutorial-10.instances = {
 
   api-gateway = {
     package = reverseProxyPackage;
-    deps.backend = ref.tutorial-10.api-backend;
+    deps.backend = ref.app-v1.api-backend;
     config = {
       proxyPath = "/api/";
       maxBodySize = "10m";
@@ -70,7 +88,7 @@ namespaces.tutorial-10.instances = {
 
   admin-gateway = {
     package = reverseProxyPackage;
-    deps.backend = ref.tutorial-10.admin-backend;
+    deps.backend = ref.app-v1.admin-backend;
     config = {
       proxyPath = "/admin/";
       maxBodySize = "50m";
@@ -79,70 +97,19 @@ namespaces.tutorial-10.instances = {
 };
 ```
 
-Look at how `deps.backend` is wired on each gateway:
-
-- Neither backend is named `backend`; they are named `api-backend` and `admin-backend`.
-- `api-gateway` sets `deps.backend = ref.tutorial-10.api-backend;`.
-- `admin-gateway` sets `deps.backend = ref.tutorial-10.admin-backend;`.
-
-Inside `reverseProxyPackage`, the `build` function still just reads `backend.out.fqdn` and `backend.out.port`. For `api-gateway`, `backend` resolves to `api-backend`. For `admin-gateway`, `backend` resolves to `admin-backend`.
-
-## Check And Inspect The Dependency Tree
-
-Run `kix check` and `kix graph` on `10-reuse-packages`:
-
-<Command commands={["kix check 10-reuse-packages", "kix graph 10-reuse-packages --format tree"]} cwd="kix-examples/" />
-
-In the dependency tree output, verify that the two proxy chains are completely separate:
-
-- `Service/api-backend@tutorial-10` feeds `ConfigMap/api-gateway@tutorial-10` and `Deployment/api-gateway@tutorial-10`.
-- `Service/admin-backend@tutorial-10` feeds `ConfigMap/admin-gateway@tutorial-10` and `Deployment/admin-gateway@tutorial-10`.
-
-## Reusing Packages Across Environment Namespaces
-
-The same pattern works when you instantiate a stack across multiple namespaces (such as `app-v1` and `app-v2`, or `staging` and `prod`). When two instances live in different namespaces, they can even keep the canonical instance names `backend` and `gateway` in each namespace, allowing same-namespace dependency resolution to wire each `gateway` to its own namespace's `backend` automatically:
-
-```nix
-namespaces.app-v1.instances = {
-  backend = {
-    package = packages.echo-server;
-    config.message = "Response from app-v1";
-  };
-  gateway = {
-    package = reverseProxyPackage;
-    config = {
-      proxyPath = "/v1/";
-      maxBodySize = "10m";
-    };
-  };
-};
-
-namespaces.app-v2.instances = {
-  backend = {
-    package = packages.echo-server;
-    config.message = "Response from app-v2";
-  };
-  gateway = {
-    package = reverseProxyPackage;
-    config = {
-      proxyPath = "/v2/";
-      maxBodySize = "10m";
-    };
-  };
-};
-```
-
-You will see this two-namespace layout again in tutorial 12 when we run cluster-wide scorecard rules across `app-v1` and `app-v2`.
+:::note[Reference]
+See [The `scope` helper](/docs/reference/package-anatomy/#root-function-and-return-shape) for all fields and constructors on `scope`.
+:::
 
 ## What You Learned
 
 You reused the same package definitions across multiple instances:
 
 <Recap>
-- deriving resource names from `scope.instanceName` (or `scope.prefixedName`) prevents collisions when a package is instantiated more than once in the same namespace;
+- placing instances under `instances.<namespace>` (`instances.app-v1` and `instances.app-v2`) deploys independent copies of a stack into separate namespaces while keeping `out.fqdn` scoped to each namespace;
+- deriving resource names from `scope.instanceName` prevents collisions when a package is instantiated more than once in the same namespace;
 - `scope.mkDeployment` includes `app.kubernetes.io/instance = scope.instanceName` in `scope.selectorLabels`, so each instance's Service selects only its own pods;
-- `deps.<arg> = ref.<namespace>.<instance>` lets multiple instances of the same package bind to different providers in the same namespace;
-- placing instances in separate namespaces isolates their names and lets each namespace resolve same-namespace dependencies independently.
+- `deps.<arg> = ref.<namespace>.<instance>` lets each instance of a package bind to its intended provider.
 </Recap>
 
 In the next tutorial, you will look at how clusters declare their underlying Kubernetes environment using flavors, roles, and `kix.mkImport`.

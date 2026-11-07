@@ -12,7 +12,7 @@ soon as the resources it depends on are ready. `kix apply` is an alias for the
 same command.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
-`cli/kix-cli/src/commands/deploy.rs` when in doubt.
+`cli/kix-cli/src/commands/deploy/mod.rs` when in doubt.
 
 ## Synopsis
 
@@ -195,17 +195,17 @@ built outside the store with the same version print no note.
 <Command commands={[
   "kix deploy demo --dry-run",
   "kix deploy demo --yes --prune --timeout 10m",
-  "kix apply demo --yes --log-format json",
+  "kix deploy demo --yes --log-format json",
 ]} />
 
-`--log-format json` does not currently produce a standalone NDJSON document:
-the plan remains plain text. A consumer must separate JSON event lines from
-the surrounding text. When the run reaches the deploy engine, the last JSON
-line is the `summary` object, with `succeeded` (which matches the exit
-status), `dry_run`, and the `created`, `configured`, `unchanged`, `failed`,
-`cancelled`, and `pruned` counts. A run that stops before the engine starts,
-such as a refused plan or a failed connection, writes no `summary` line; its
-error goes to stderr and the exit status is non-zero.
+`--log-format json` writes one JSON event object per line (NDJSON) to stdout,
+while the plan, warnings, and confirmation text go to stderr. When the run
+reaches the deploy engine, the last JSON line is the `summary` object, with
+`succeeded` (which matches the exit status), `dry_run`, and the `created`,
+`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. A run
+that stops before the engine starts, such as a refused plan or a failed
+connection, writes no `summary` line; its error goes to stderr and the exit
+status is non-zero.
 
 ## Exit status
 

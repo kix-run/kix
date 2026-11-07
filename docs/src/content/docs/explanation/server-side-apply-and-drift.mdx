@@ -11,7 +11,7 @@ In a live Kubernetes cluster, your deployment tool is rarely the only thing modi
 - [Kubernetes Server-Side Apply](https://kubernetes.io/docs/reference/using-api/server-side-apply/): How the Kubernetes API server tracks per-field ownership in `metadata.managedFields`.
 :::
 
-## Ownership follows fields, not whole objects
+## Per-field ownership in Server-Side Apply
 
 When `kix deploy` applies a manifest, it uses Kubernetes Server-Side Apply with the field manager name `kix`. Instead of storing a giant "last-applied-configuration" JSON blob in an annotation, the Kubernetes API server records which manager owns each individual field inside `metadata.managedFields`.
 
@@ -36,11 +36,11 @@ Making `ownership.cede` an explicit list of field paths keeps conflicts honest: 
 
 Most diff and drift tools compare your desired YAML against the entire live object returned by the cluster, which creates constant noise whenever controllers update status fields or the API server adds default fields.
 
-Kix scopes both `kix diff` and `kix drift` to the fields owned by the `kix` field manager:
+Kix uses the `kix` field-ownership entries in `metadata.managedFields` across both `kix drift` and `kix diff`:
 
 - Right after `kix deploy` applies a resource, Kix extracts the live fields owned by `kix`, hashes them, and writes that digest to the `kix.run/applied-hash` annotation.
-- When you run `kix drift`, Kix reads the live object, selects the fields owned by `kix`, hashes their current values, and compares them to `kix.run/applied-hash`.
-- If a controller updates `status`, or if a field was cleanly ceded via `ownership.cede`, Kix ignores it. If someone changes a Kix-owned field out-of-band (even through a subresource like `kubectl scale`), `kix drift` flags the exact field that changed.
+- When you run `kix drift`, Kix reads the live object, selects the fields owned by `kix`, hashes their current values, and compares them to `kix.run/applied-hash`. If a controller updates `status`, or if a field was cleanly ceded via `ownership.cede`, Kix ignores it. If someone changes a Kix-owned field out-of-band (even through a subresource like `kubectl scale`), `kix drift` flags the exact field that changed.
+- When you run `kix diff` against a live cluster, Kix compares the desired build against the cluster's state: resources whose `kix.run/identity-hash` matches the build are treated as unchanged by the build, changed resources are compared against their `kix`-owned projection from `metadata.managedFields`, and a separate drift section checks `kix.run/applied-hash` and `metadata.managedFields` to report out-of-band edits and the field manager that made them.
 
 ## Why deploy inputs are committed
 

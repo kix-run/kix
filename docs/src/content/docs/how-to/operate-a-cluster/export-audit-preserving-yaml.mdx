@@ -24,10 +24,10 @@ resources, and preserves its `kix.run/*` annotations.
 
 ## Inspect the provenance metadata
 
-Every exported manifest preserves its `kix.run/identity-hash`,
-`kix.run/depends-on`, `kix.run/package`, and `kix.run/package-namespace`
-annotations, which record resource identity, package membership, and dependency
-edges. The export also writes `Activation` and `PackageInstance` manifests into
+Exported manifests preserve their `kix.run/identity-hash`, `kix.run/package`,
+and `kix.run/package-namespace` annotations (plus `kix.run/depends-on` on
+resources that have dependencies), which record resource identity, package
+membership, and dependency edges. The export also writes `Activation` and `PackageInstance` manifests into
 the directory tree, with the `Activation` resource under `_cluster/` serving as
 the root of the rendered deployment graph:
 

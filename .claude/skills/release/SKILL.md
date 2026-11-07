@@ -40,6 +40,11 @@ that would be empty:
    first deploy that restarts some pods once.
 4. `### Added`, `### Changed`, and `### Fixed`.
 
+`## Unreleased` may start with a **Before you upgrade** list, above the
+first heading. It is not a heading, so it stays where it is and moves with
+the release. Check that it has one bullet for each action that a Breaking
+entry asks of users, and no others.
+
 Move an entry that is under the wrong heading. Adding a field, event type,
 annotation, option, or command is not breaking. Removing or renaming one is.
 Each breaking entry says what users change when they upgrade. If an entry

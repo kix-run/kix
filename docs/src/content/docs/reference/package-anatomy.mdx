@@ -37,18 +37,22 @@ A Kix package is a reusable blueprint for an application or cluster service. It 
     };
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
-      default = availability.pick {
+      default = kix.availability.pick availability {
         none = 1;
         pod = 2;
         node = 3;
+        zone = 3;
       };
       description = "Number of echo server pods.";
     };
     resources = kix.options.resources {
-      cpu = "50m";
-      memory = "64Mi";
+      requests = {
+        cpu = "50m";
+        memory = "64Mi";
+      };
+      limits.memory = "64Mi";
     };
-    ingress = kix.options.ingress "echo";
+    ingress = kix.options.ingress;
   };
 
   build = [
@@ -94,8 +98,8 @@ When written as a function, Kix calls it with four Phase 1 arguments before eval
 | --- | --- | --- |
 | `scope` | attrset | Instance-scoped builders (`mkResource`, `mkDeployment`, `mkSecret`, `mkCRD`, `forNamespace`, `selectorLabels`, and related helpers). |
 | `lib` | attrset | Standard `nixpkgs.lib`. |
-| `kix` | attrset | Framework helpers (`kix.options`, `kix.image`, `kix.expose`, `kix.monitor`, `kix.mount`, `kix.contracts`, and related helpers). |
-| `availability` | attrset | Resolved availability helper for the instance (`availability.level`, `availability.pick`, `availability.atLeast`). |
+| `kix` | attrset | Framework helpers (`kix.options`, `kix.availability`, `kix.image`, `kix.expose`, `kix.monitor`, `kix.mount`, `kix.contracts`, and related helpers). |
+| `availability` | string | Effective availability level for the instance (`"none"`, `"pod"`, `"node"`, or `"zone"`), clamped to `meta.availability.max`. Map it to replica counts or settings with `kix.availability.pick availability { none = ...; pod = ...; node = ...; zone = ...; }` and `kix.availability.atLeast "<min>" availability`. |
 
 Include `...` in the outer function header (`{ scope, lib, kix, ... }:`) so the package accepts future framework arguments. Do not declare cross-package dependencies in the outer function header; declare them in `build` entries instead.
 
@@ -107,7 +111,7 @@ The package returns an attribute set with the following top-level keys:
 | --- | --- | --- | --- |
 | `meta` | attrset | No | Package metadata, platform role declarations, availability ceiling, compatibility bounds, and network intents. |
 | `options` | attrset | No | NixOS module option declarations (`lib.mkOption` or `kix.options.*`) exposed to `instances.<name>.config`. |
-| `config` | attrset or module function | No | Package-level default configuration merged with `options` at priority `1250` (between option defaults at `1500` and instance overrides at `1000`). |
+| `config` | attrset or module function | No | Package-level configuration module merged with `options`. Values inside `config` that the author wraps in `lib.mkDefault` are lowered from priority `1000` to `1250` (between option defaults at `1500` and instance or injected `lib.mkDefault` values at `1000`). |
 | `deps` | attrset | No | Per-dependency configuration injection (`config`), `warnings`, and `assertions` keyed by `build` argument name. |
 | `build` | function or list of functions | Yes | One or more functions returning named resource parts and a `root` entry. |
 | `warnings` | `{ config, self, deps }: [ string ]` | No | Evaluation-time warnings collected into `cluster.warnings`. |
@@ -177,13 +181,13 @@ meta = {
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `version` | string | None | Upstream software version (`[v]<digits>(.<digits>)*[_+-<tag>]`). Required by `hygiene.packageMeta`. |
-| `description` | string | None | Non-empty one-line summary of the package. Required by `hygiene.packageMeta`. |
+| `version` | string | None | Upstream software version (`[vV]?<digits>(.<digits>)*[-<suffix>][+<build>]`). Checked by `meta.compatibleWith` and recorded on the `PackageInstance`. |
+| `description` | string | None | Non-empty one-line summary of the package. Checked by the `governance.hasDescription` scorecard rule (`info` severity). |
 | `roles` | list of strings | `[ ]` | Platform capabilities provided by this package. |
 | `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
-| `availability.max` | `"none"` \| `"pod"` \| `"node"` | `"node"` | Highest availability level the package supports. |
+| `availability.max` | `"none"` \| `"pod"` \| `"node"` \| `"zone"` | None | Highest availability level the package supports. |
 | `compatibleWith` | attrset of `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version bounds for upstream dependencies keyed by dependency argument name. |
-| `k8s` | `{ minVersion?; maxVersion?; reason?; }` | None | Supported Kubernetes minor or patch version range, checked against `cluster.k8sVersion`. |
+| `k8s` | `{ minVersion?; maxVersion?; reason?; }` | None | Supported Kubernetes minor or patch version range, checked against `k8sVersion`. |
 | `conflictsWith` | list of strings | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide). |
 | `podSecurity` | `"privileged"` \| `"baseline"` \| `"restricted"` | None | Pod Security Standards enforcement level applied to the instance namespace. |
 | `unsafe` | list of strings | `[ ]` | Acknowledged security or architectural exceptions (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
@@ -196,12 +200,12 @@ meta = {
 
 ### `meta.version`
 
-Version strings must match `<digits>(.<digits>)*` with an optional leading `v` and an optional suffix separated by `-`, `+`, or `_` (for example, `"1.28.2"`, `"v2.4.0-rc1"`, or `"2024.1.0_debian-12"`).
+Version strings must match `<digits>(.<digits>)*` with an optional leading `v` or `V`, an optional `-<suffix>`, and an optional `+<build>` (for example, `"1.28.2"`, `"v2.4.0-rc1"`, `"1.31.2-gke.1209000"`, or `"1.31.2+rke2r1"`).
 
 When comparing versions in `compatibleWith` and `k8s`:
 - Numeric segments are compared as integers from left to right.
-- Suffixed tags containing `alpha`, `beta`, `rc`, `pre`, `dev`, or `preview` are treated as pre-releases and sort **before** the corresponding release (`1.0.0-rc1 < 1.0.0`).
-- All other suffixes (such as `-r0`, `-debian-12`, or `+build1`) are treated as vendor build metadata and compare **equal** to the base version (`1.0.0-debian-12 == 1.0.0`).
+- A `-<suffix>` whose first dot-separated identifier starts with `alpha`, `beta`, `rc`, `pre`, `dev`, or `preview` is treated as a pre-release and sorts **before** the corresponding release (`1.0.0-rc1 < 1.0.0`).
+- All other `-<suffix>` values (such as `-r0`, `-debian-12`, or `-gke.1209000`) and `+<build>` suffixes are treated as vendor build metadata and compare **equal** to the base version (`1.0.0-debian-12 == 1.0.0`).
 
 ### `meta.roles` and `meta.defaultAliases`
 
@@ -224,9 +228,9 @@ Each role in `meta.roles` also registers that role name as a dependency alias so
 
 ### `meta.availability`
 
-`meta.availability.max` declares the highest availability topology the package architecture supports (`"none"`, `"pod"`, or `"node"`). When a cluster requests a higher level (for example, `"zone"`), Kix clamps `availability.level` inside the package to `meta.availability.max` so replica counts and `topologySpreadConstraints` never exceed what the software can safely run.
+`meta.availability.max` declares the highest availability topology the package architecture supports (`"none"`, `"pod"`, `"node"`, or `"zone"`). When a cluster requests a higher level (for example, `"zone"`), Kix clamps `availability` inside the package to `meta.availability.max` so replica counts and `topologySpreadConstraints` never exceed what the software can safely run.
 
-Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment` or `scope.mkStatefulSet`.
+Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment`, `scope.mkStatefulSet`, `scope.mkJob`, or `scope.mkCronJob`.
 
 ### `meta.compatibleWith` and `meta.k8s`
 
@@ -240,7 +244,7 @@ meta.compatibleWith.postgres = {
 };
 ```
 
-Bounds are inclusive (`minVersion <= actual <= maxVersion`) and compare only up to the segment precision of the bound. For example, `maxVersion = "1.29"` accepts `"1.29.4"`, while `maxVersion = "1.29.0"` rejects `"1.29.4"`. `meta.k8s` uses the same comparison rules against `cluster.k8sVersion`.
+Bounds are inclusive (`minVersion <= actual <= maxVersion`) and compare only up to the segment precision of the bound. For example, `maxVersion = "1.29"` accepts `"1.29.4"`, while `maxVersion = "1.29.0"` rejects `"1.29.4"`. `meta.k8s` uses the same comparison rules against `k8sVersion`.
 
 ### `meta.conflictsWith`
 
@@ -321,8 +325,8 @@ options = {
 When Kix evaluates an instance, it merges configuration layers using the NixOS module system in the following priority order (lowest number wins):
 
 1. **Option defaults** (`options.<name>.default`): priority `1500`.
-2. **Package `config` block** (top-level `config` in the package file): wrapped with `lib.mkDefault` and rewritten to priority `1250` so package-level computed defaults override option defaults but yield to dependency injections and instance config.
-3. **Dependency config injections** (`deps.<arg>.config` from downstream consumers) and **instance `config`** (`instances.<name>.config`): priority `1000` (or `lib.mkDefault` at `1000`, `lib.mkForce` at `50`).
+2. **Package `config` defaults** (`lib.mkDefault` values inside the top-level `config` block in the package file): lowered from priority `1000` to priority `1250` so package-level computed defaults override option defaults (`1500`) while yielding to dependency injections and instance config (including instance `lib.mkDefault` at `1000`). Unwrapped definitions in the package `config` block keep normal module priority (`100`).
+3. **Dependency config injections** (`deps.<arg>.config` from downstream consumers) and **instance `config`** (`instances.<name>.config`): priority `100` (or `lib.mkDefault` at `1000`, `lib.mkForce` at `50`).
 
 Both the package `config` block and instance `config` modules can take `{ config, lib, clusterConfig, ... }:` as module arguments to compute values from sibling options or cluster settings.
 
@@ -340,18 +344,18 @@ Every package in a flake checked by `kix.mkFlake` or `kix.checkPackageOptions` m
 
 `kix.options.*` provides pre-typed option schemas that pair directly with composition helpers like `kix.expose`, `kix.monitor`, and `kix.healthCheck`.
 
-### `kix.options.*` builders
+### `kix.options.*` helpers
 
-| Helper | Signature | Generated options and types |
+| Helper | Arguments / shape | Generated options and types |
 | --- | --- | --- |
-| `kix.options.image` | `{ repository, tag, digest ? "", pullPolicy ? "IfNotPresent" }` | Submodule with `repository` (`str`), `tag` (`str`), `digest` (`str`), and `pullPolicy` (`"Always"` \| `"IfNotPresent"` \| `"Never"`). Consumed by `kix.image.ref`. |
-| `kix.options.resources` | `{ cpu, memory, limitsCpu ? null, limitsMemory ? memory }` | Submodule with `requests.cpu`, `requests.memory`, `limits.cpu` (nulls stripped), and `limits.memory`, all validated by `kix.types.quantity`. Ready to pass directly to a container's `resources` field. |
-| `kix.options.env` | `description` (string) | `lib.mkOption { type = lib.types.attrsOf (lib.types.nullOr lib.types.str); default = { }; description = ...; }`. |
-| `kix.options.ingress` | `defaultSubdomain` (string) | Submodule with `enable` (`bool`, default `true`), `subdomain` (`str`, default `defaultSubdomain`), `host` (`nullOr str`, default `null`), `tls` (`bool`, default `true`), `annotations` (`attrsOf str`, default `{ }`), and `paths` (`nullOr (listOf ...)`). Consumed by `kix.expose`. |
-| `kix.options.monitor` | `{ enabled ? true, interval ? "30s", scrapeTimeout ? null }` | Submodule with `enable` (`bool`), `interval` (`str`), `scrapeTimeout` (`nullOr str`), and `labels` (`attrsOf str`). Consumed by `kix.monitor`. |
-| `kix.options.alerts` | `{ enabled ? true }` | Submodule with `enable` (`bool`), `disabled` (`listOf str`, alert names to skip), and `overrides` (`attrsOf (submodule { expr; "for"; severity; labels; annotations; })`). Consumed by `kix.monitor` and `kix.alerts`. |
-| `kix.options.healthCheck` | `{ enabled ? true }` | Submodule with `enable` (`bool`, default `enabled`). Consumed by `kix.healthCheck`. |
-| `kix.options.oidc` | `{ scopes, autoLogin ? null }` | Submodule with `enable` (`bool`, default `true`), `scopes` (`listOf str`, default `scopes`), and optional `autoLogin` (`bool`, included only when `autoLogin != null`). |
+| `kix.options.image` | `{ repository ? null, tag ? null, digest ? null, pullPolicy ? "IfNotPresent", tagText ? null, description ? ... }` | Submodule option with `repository` (`str`), `tag` (`str`), `digest` (`nullOr str`, defaults to `digest` while `config.tag == tag`, otherwise `null`), `pullPolicy` (`nullOr str`, default `pullPolicy`), plus pin record-keeping options `sourceRev`, `promotedBy`, `resolvedAt`, and `note` (all `nullOr str`, default `null`). Consumed by `kix.image.ref`. |
+| `kix.options.resources` | `{ requests ? { }, limits ? { }, description ? ... }` | Submodule option with `requests` and `limits` (each supporting `cpu`, `memory`, and `ephemeral-storage` defaults plus freeform `hugepages-<size>` or extended `<domain>/<name>` quantities validated by `kix.types.quantity`; setting a field to `null` clears its default) and `claims` (`nullOr (listOf (submodule { name; request ? null; }))`). Cleaned via `apply` so it passes directly to a container's `resources` field. |
+| `kix.options.env` | option value (not a function) | `lib.mkOption` of type `attrsOf (nullOr envValue)` with `default = { }`, where each value is a string, a `{ valueFrom = ...; }` source, or `null` (to clear a package default). Consumed by `kix.mergeEnv`. |
+| `kix.options.ingress` | option attrset (not a function) | Attribute set of options `{ host; annotations; }` where `host` is `nullOr str` (default `null`) and `annotations` is `attrsOf str` (default `{ }`). Assign as `options.ingress = kix.options.ingress;`; read by `kix.expose` from `config.ingress`. |
+| `kix.options.monitor` | option attrset (not a function) | Attribute set of options `{ enabled; interval; }` where `enabled` is `bool` (default `true`) and `interval` is `nullOr str` (default `null`). Assign as `options.metrics = kix.options.monitor;`; read by `kix.monitor` from `config.metrics`. |
+| `kix.options.alerts` | option attrset (not a function) | Attribute set `{ enabled; }` where `enabled` is `bool` (default `true`), for packages that render alert rules without a `kix.monitor` scrape. Assign as `options.metrics = kix.options.alerts;`; read by `kix.alerts` from `config.metrics.enabled`. |
+| `kix.options.healthCheck` | option attrset (not a function) | Attribute set `{ enabled; retryFor; }` where `enabled` is `bool` (default `false`) and `retryFor` is `int` (default `90`). Assign as `options.healthCheck = kix.options.healthCheck;`; read by `kix.healthCheck` from `config.healthCheck`. |
+| `kix.options.oidc` | `{ scopes, autoLogin ? null }` | Attribute set of options `{ enabled; realm; scopes; autoLogin?; }` where `enabled` is `bool` (default `false`), `realm` is `nullOr str` (default `null`), `scopes` is `listOf str` that must include `"openid"` (default `scopes`), and `autoLogin` is `bool` (default `false`, included only when `autoLogin != null`). |
 
 ### Resource quantities (`kix.types.quantity` and `kix.parseQuantity`)
 
@@ -373,8 +377,8 @@ Packages often expose an escape hatch option (`extraSpec`, `extraEnv`, `extraArg
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.mergeGuarded` | `{ who, locked, what ? "extraSpec" } base overrides` | Recursively merges `overrides` onto `base`, but throws an evaluation error naming `who` and `what` if `overrides` sets any attribute path listed in `locked` (for example, `[ "replicas" "selector" ]` or `[ "template.spec.serviceAccountName" ]`). |
-| `kix.mergeEnv` | `{ who, owned ? [ ], defaults ? { } } userEnv` | Validates that `userEnv` does not set any environment variable name in `owned`, merges `defaults // userEnv`, and passes the result to `kix.mkEnvVars`. |
+| `kix.mergeGuarded` | `{ who, locked, what ? "extraSpec" } base overrides` | Recursively merges `overrides` onto `base`, but throws an evaluation error naming `who` and `what` if `overrides` touches any attribute path (a list of path segments, such as `[ [ "replicas" ] [ "selector" ] ]` or `[ [ "template" "spec" "serviceAccountName" ] ]`) listed in `locked`, or replaces a parent of a locked path with a non-attrset value. |
+| `kix.mergeEnv` | `{ who, owned ? [ ], defaults ? { } } userEnv` | Validates that `userEnv` does not set any environment variable claimed by `owned` (where each entry is `{ vars ? { }; names ? [ ]; from; fix; }`, even as `null`), and returns the merged attribute set `defaults // userEnv // <all owned.vars>` ready to pass to `kix.mkEnvVars`. |
 | `kix.guardArgs` | `{ who, option ? "extraArgs", owned } userArgs` | Validates CLI flags and returns `userArgs` unchanged. `userArgs` can be a list of flag strings (matching `--flag`, `--flag=value`, or a one-letter `-f` with an attached value) or an attrset keyed by flag name, like a VictoriaMetrics CR's `extraArgs` (matching each key with or without leading dashes). `owned` maps each refused flag to its reason and fix; the error reads `<who>: <option> sets "<flag>", which this package does not accept: <reason>`. |
 
 ```nix
@@ -390,11 +394,22 @@ args = [
   };
 } config.extraArgs;
 
-env = kix.mergeEnv {
-  who = "myapp";
-  owned = [ "DATABASE_URL" "PORT" ];
-  defaults = { LOG_FORMAT = "json"; };
-} config.extraEnv;
+env = kix.mkEnvVars (
+  kix.mergeEnv {
+    who = "myapp";
+    defaults = { LOG_FORMAT = "json"; };
+    owned = [
+      {
+        vars = {
+          PORT = "8080";
+          DATABASE_HOST = database.host;
+        };
+        from = "the package and its `database` dependency";
+        fix = "Wire the database with `deps.database` instead.";
+      }
+    ];
+  } config.extraEnv
+);
 ```
 
 ---
@@ -409,24 +424,24 @@ Each function in `build` is called via pattern matching on its attribute set par
 | --- | --- |
 | `self` | Lazy fixed point of the merged parts attribute set returned across all `build` entries. Use `self.<partName>` to reference sibling resources in the same package. |
 | `config` | Evaluated package options (`options` merged with package `config`, dependency injections, and `instances.<name>.config`). |
-| `clusterConfig` | Read-only cluster parameters (`domain`, `name`, `k8sVersion`, `availability`, `networkPolicyEnabled`, `podCidr`, `serviceCidr`). |
+| `clusterConfig` | Evaluated cluster module configuration (such as `clusterConfig.cluster.domain`, `clusterConfig.cluster.name`, `clusterConfig.k8sVersion`, `clusterConfig.cluster.availability`, and `clusterConfig.networkPolicy.enable`). |
 | `scope` | Instance-scoped resource builders (identical to outer `scope`). |
 | `lib` | Standard `nixpkgs.lib`. |
 | `kix` | Framework helpers. |
 | `deps` | Attribute set of all bound dependencies declared across `build` entries and `deps`. |
-| `availability` | Resolved availability helper for the instance. |
+| `availability` | Effective availability level string for the instance (`"none"`, `"pod"`, `"node"`, or `"zone"`). |
 
 ### Declaring dependencies
 
 Any argument to a `build` function outside the built-in list above requests another package instance by instance name, `aliases`, `meta.defaultAliases`, or `meta.roles`:
 
-- **Required dependency** (`{ postgres, ... }:` without `?`): Kix requires a matching instance (or auto-instantiates the package if `cluster.autoInstantiate = true`).
+- **Required dependency** (`{ postgres, ... }:` without `?`): Kix requires a matching instance (or auto-instantiates the package when it is listed in the cluster's `availablePackages`).
 - **Optional dependency** (`{ prometheus ? null, ... }:` with `? null`): Bound to the provider's output object if present in the cluster, or `null` if absent.
 
 When a dependency is bound, the argument receives the provider's consumer view:
 - `dep.out`: Full output attribute set (`dep.root.resource.out // dep.root.out`).
-- Top-level convenience fields: every key in `dep.out` (except reserved keys `out`, `manifest`, `rawManifest`, `outPath`, `requires`, `postHooks`, `resource`, and `crds`) is also promoted directly onto `dep` (for example, `postgres.fqdn` and `postgres.port`).
-- `dep.crds`: Map of `<Kind> = crdResource` for any CRDs in the provider's `crds` part folder.
+- Top-level convenience fields: every key in `dep.out` is promoted directly onto `dep` (for example, `postgres.fqdn` and `postgres.port`), alongside any top-level part folders from the provider's `build` (such as `dep.crds` and `dep.secrets`) and the view's system keys (`_type`, `_packageInstance`, `root`, `out`, `raw`, and `_meta`). A `root.out` key or part folder that collides with a system key (or a part folder other than `crds` and `secrets` that collides with a `root.out` key) throws an evaluation error.
+- `dep.crds`: Attribute set of CRD resources from the provider's `crds` part folder (unless overridden by `root.out.crds`).
 
 ### Enriching dependencies with `deps.<arg>`
 
@@ -453,26 +468,25 @@ deps.postgres = {
 
 | `deps.<arg>` field | Type | Description |
 | --- | --- | --- |
-| `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider locked the target option with `kix.mkLocked`. |
+| `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider instance's `config` in the cluster definition locked the target option with `kix.mkLocked`. |
 | `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. |
 | `warnings` | `dep: [ string ]` | Warnings evaluated only when `<arg>` is non-null. |
 
 ### Built-in dependency contract helpers (`kix.contracts.*`)
 
-Instead of writing repetitive `deps.<arg>.assertions` blocks, use `kix.contracts.*`:
+`kix.contracts.*` provides contract objects (`{ alias, fields, problems, check, assertions }` or `require`) shared between providers and consumers:
+- A provider validates its own `root.out` by calling `kix.contracts.<name>.check "my-provider" { ... }`, which checks every required and optional contract field and returns `out`.
+- A consumer validates a bound dependency in `deps.<alias>.assertions` with `kix.contracts.<name>.assertions "my-consumer"` (a function `dep: [ { assertion; message; } ]`), which checks all required contract fields and validates the shape of any present optional fields.
 
-| Contract helper | Signature | What it validates on `dep` |
+| Contract object | Default `alias` | Contract fields on `dep.out` |
 | --- | --- | --- |
-| `kix.contracts.postgresDatabase` | `{ who, database ? null }` | Checks `dep.fqdn` and `dep.port`, and (when `database != null`) checks `dep.databases.${database}.secret` and `.user`. |
-| `kix.contracts.gateway` | `{ who }` | Checks `dep.name` and `dep.namespace` for Gateway API `parentRefs`. |
-| `kix.contracts.oidcProvider` | `{ who }` | Checks `dep.issuerUrl` and `dep.internalUrl`, plus `dep.jwksUrl` and `dep.tokenUrl` when exposed. |
-| `kix.contracts.otlpEndpoint` | `{ who, protocol ? "grpc" }` | Checks `dep.grpcEndpoint` (for `"grpc"`), `dep.httpEndpoint` (for `"http"`), or `dep.fqdn` (for `"any"`). |
+| `kix.contracts.postgresDatabase` | `"database"` | Required: `host` (`str`), `port` (`str`), `database` (`str`), `credentials` (Secret instance exposing `out.keyRef` with keys `username` and `password`). Optional: `username` (`str`), `extensions` (list of strings or `{ name; version; }`), `tls` (`nullOr bool`). |
+| `kix.contracts.gateway` | `"gateway"` | Required: `gatewayRef` (`{ name; namespace; }`). Optional: `listeners` (list of `{ name; port; protocol; }`), `podSelector` (non-empty attrset of strings or `null`), `podNamespace` (`nullOr str`; must be set together with `podSelector`). Exposes `require` (`who: dep: dep`) and `claims` instead of `assertions`. |
+| `kix.contracts.oidcProvider` | `"oidcProvider"` | Required: `issuerUrl` (function `realm -> url`). Optional: `endpoints` (function `realm -> { authorizationUrl; tokenUrl; userinfoUrl; }`). Also provides `requireClient`, `clientKeys`, and `clientOptions` (`kix.options.oidc`). |
+| `kix.contracts.otlpEndpoint` | `"otlp"` | Required: `otlpGrpcUrl` (base URL `scheme://host:port` with no path), `otlpHttpUrl` (base URL `scheme://host:port` with no path). Optional: `tls` (`nullOr bool`). |
 
 ```nix
-deps.postgres = kix.contracts.postgresDatabase {
-  who = "grafana";
-  database = "grafana";
-};
+deps.database.assertions = kix.contracts.postgresDatabase.assertions "grafana";
 ```
 
 ---
@@ -482,17 +496,17 @@ deps.postgres = kix.contracts.postgresDatabase {
 `build` can be a single function or a list of functions (or file paths to functions). When `build` is a list:
 1. Kix inspects the function arguments of every entry and takes the union of all dependency requests. If any entry declares a dependency without a default (`{ redis }:`), the dependency is required for the package even if another entry declares `{ redis ? null }:`.
 2. Each entry is called with its requested arguments and returns an attribute set of named parts.
-3. Kix merges the returned attribute sets across all entries. Duplicate part names across entries (other than merging into the `crds` or `secrets` sub-attribute sets) throw an evaluation error.
+3. Kix merges the returned attribute sets across all entries with `mergeCollide`. Any duplicate part name across `build` entries throws an evaluation error.
 
 ### Parts, folders, and conditional `null` entries
 
 Each attribute in a `build` return set is one of the following:
 - **A resource** created by `scope.mkResource`, `scope.mkDeployment`, `scope.mkSecret`, `scope.mkCRD`, or a provider builder.
-- **`null`**, which Kix filters out automatically. Use `if config.metrics.enable then scope.mkResource { ... } else null` or `scope.mkOptional config.metrics.enable (scope.mkResource { ... })` for conditional resources.
-- **A nested folder** (up to 3 levels deep) grouping related resources, such as `rbac = { sa = ...; role = ...; binding = ...; };`.
-- **Reserved content-checked folders**:
-  - `secrets`: Every non-null entry inside `secrets = { ... };` must be created by `scope.mkSecret` or `scope.mkSecretRef`.
-  - `crds`: Every non-null entry inside `crds = { ... };` must be created by `scope.mkCRD` or `scope.mkCRDRef`. CRDs placed in `crds` are automatically exported to downstream consumers at `dep.crds.<Kind>`.
+- **`null`**, which Kix filters out automatically. Use `if config.metrics.enabled then scope.mkResource { ... } else null` or `scope.mkOptional config.metrics.enabled (scope.mkResource { ... })` for conditional resources.
+- **A nested folder** (up to 3 levels deep) grouping related resources, such as `rbac = { sa = ...; role = ...; binding = ...; };`. Top-level folders are also exposed on the instance's consumer view.
+- **Known folders (`secrets` and `crds`)**:
+  - Both `secrets` and `crds` must be attribute sets of resources rather than a single resource directly (assigning a resource directly to `secrets` or `crds` throws an evaluation error), and any entry inside them that is not a Kix resource (`_type = "k8s-resource"`) emits an evaluation warning.
+  - Place `scope.mkSecret` / `scope.mkSecretRef` resources under `secrets = { ... };` and `scope.mkCRD` / `scope.mkCRDRef` resources under `crds = { ... };`. CRDs placed in `crds` are exposed to downstream consumers at `dep.crds.<Kind>`.
 
 ### Composable build-entry helpers
 
@@ -511,6 +525,7 @@ build = [
   (kix.expose { service = "service"; })
   (kix.monitor { service = "service"; port = "metrics"; })
   (kix.healthCheck {
+    runtime = kix.healthCheck.runtimes.shell;
     script = ''
       curl -sf "http://$SERVICE_FQDN:8080/healthz"
     '';
@@ -533,13 +548,13 @@ Do not call `pkgs.runCommand`, `pkgs.stdenv.mkDerivation`, or `pkgs.writeText` i
 
 ### Top-level `warnings` and `assertions`
 
-A package can define top-level `warnings` and `assertions` functions. Both receive `{ config, self, deps }` after options and `build` parts are wired:
+A package can define top-level `warnings` and `assertions` functions. Both receive `{ config, self, deps }` after options and `build` parts are wired. Because `deps` only contains bound dependencies, an absent optional dependency is omitted from `deps` (test for it with `!(deps ? <name>)` or `(deps.<name> or null) == null`):
 
 ```nix
 warnings =
   { config, deps, ... }:
-  lib.optional (config.ingress.enable && deps.gateway == null && deps.ingressNginx == null)
-    "echo: ingress.enable is true, but neither gateway nor ingressNginx is present in the cluster.";
+  lib.optional (config.ingress.host != null && !(deps ? gateway) && !(deps ? ingressController))
+    "echo: ingress.host is set, but neither gateway nor ingressController is present in the cluster.";
 
 assertions =
   { config, ... }:
@@ -551,7 +566,7 @@ assertions =
   ];
 ```
 
-Failed `assertions` abort evaluation immediately with all failed messages. `warnings` are collected into `cluster.warnings` and reported by `kix validate` and `kix build`.
+Failed `assertions` abort evaluation immediately with all failed messages. `warnings` are collected into `cluster.warnings` and reported by `kix check` and `kix build`.
 
 ### Structural build-time warnings
 
@@ -562,9 +577,9 @@ During package evaluation, Kix also emits automatic structural warnings for comm
 - **Duplicate `requires`**: The same resource appears more than once in a `requires` list.
 - **Unordered `postHooks`**: A resource in `root.postHooks` does not depend on `root.resource` (either directly or transitively).
 
-### `kix.checkPackageOptions`
+### `kix.checkPackageOptions` and `kix.packageOptionViolations`
 
-`kix.checkPackageOptions` validates that a package's `options` block obeys the [option default contract](#the-option-default-contract):
+`kix.checkPackageOptions` validates that a package's `options` block obeys the [option default contract](#the-option-default-contract) across every availability level up to `meta.availability.max`:
 
 ```nix
 kix.checkPackageOptions {
@@ -573,21 +588,34 @@ kix.checkPackageOptions {
 }
 ```
 
-It returns a list of violation strings (empty when valid). `kix.mkFlake` runs this check automatically across all exported packages.
+`kix.checkPackageOptions` returns `null` when valid or throws an evaluation error listing all violations. To inspect the violations as data without throwing, call `kix.packageOptionViolations { package = ...; who = "..."; }`, which returns a list of violation attribute sets (empty when valid). `kix.mkFlake` runs `kix.checkPackageOptions` automatically across all exported packages.
 
 ### `kix.checkSecretKeys`
 
-When a package accepts an external Secret dependency (`{ credentialsSecret ? null }:`), use `kix.checkSecretKeys` inside `deps.<arg>.assertions` to verify that the passed Secret declares the expected keys in its `.out.keys` metadata:
+When a package accepts an external Secret dependency (`{ credentialsSecret ? null }:`), wrap the dependency with `kix.checkSecretKeys` before reading its keys. `kix.checkSecretKeys` verifies that `dep.out.keys` declares all required `keys` and at least one complete key group in `anyOf`, then returns `dep` (or throws an evaluation error if any required keys are missing):
 
 ```nix
-deps.credentialsSecret.assertions =
-  secret:
-  kix.checkSecretKeys {
-    who = "myapp";
-    arg = "credentialsSecret";
-    dep = secret;
-    keys = [ "username" ];
-    anyOf = [ "password" "api-token" ];
+build =
+  {
+    self,
+    config,
+    credentialsSecret ? null,
+    ...
+  }:
+  let
+    checkedSecret = kix.checkSecretKeys {
+      who = "myapp";
+      arg = "credentialsSecret";
+      dep = credentialsSecret;
+      keys = [ "username" ];
+      anyOf = [
+        [ "password" ]
+        [ "api-token" ]
+      ];
+    };
+  in
+  {
+    ...
   };
 ```
 
@@ -595,6 +623,6 @@ deps.credentialsSecret.assertions =
 | --- | --- | --- | --- |
 | `who` | string | Required | Consumer package name used in error messages. |
 | `arg` | string | Required | Dependency argument name. |
-| `dep` | resource or `null` | Required | Bound Secret dependency (returns `[]` if `null` or if `dep.keys` is not exposed). |
-| `keys` | list of strings | `[ ]` | Keys that must all be present in `dep.keys`. |
-| `anyOf` | list of strings or `null` | `null` | When non-null, at least one key in `anyOf` must be present in `dep.keys`. |
+| `dep` | resource or `null` | Required | Bound Secret dependency. Returned unchanged when `dep` is `null` or when all key requirements are satisfied (or if `dep.out.keys` is not set). |
+| `keys` | list of strings | `[ ]` | Keys that must all be present in `dep.out.keys`. |
+| `anyOf` | list of lists of strings or `null` | `null` | When non-null, every key in at least one inner list (`[ [ "a" "b" ] [ "c" ] ]`) must be present in `dep.out.keys`. |

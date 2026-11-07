@@ -7,6 +7,7 @@ import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
 import listPackages from '/src/command-output/tutorials/02-hello-world/list-packages.json';
+import clusterFrame from '/src/snippets/tutorials/02-hello-world/cluster/clusterFrame.json';
 import importExistingService from '/src/snippets/how-to/adoption/cluster/importExistingService.json';
 import consumeImportedService from '/src/snippets/how-to/adoption/client-package/consumeImportedService.json';
 
@@ -25,36 +26,31 @@ Look again at the `kix list packages` output for `02-hello-world`:
 
 <Command {...listPackages} />
 
-In `tutorials/02-hello-world/cluster.nix`, you only declared one instance (`hello-world`), yet you also imported one module at the top of the file:
+In `tutorials/02-hello-world/cluster.nix`, you only declared one instance (`hello-world`), yet you also included `kix.flavors.kind` in the cluster's `modules` list:
 
-```nix title="tutorials/02-hello-world/cluster.nix"
-{
-  kix,
-  packages,
-  ...
-}:
-{
-  imports = [ kix.flavors.kind ];
-  # ...
-}
-```
+<Snippet
+  {...clusterFrame}
+  elide={{
+    helloWorldInstance: '        # ...',
+  }}
+/>
 
-That single line (`imports = [ kix.flavors.kind ];`) added `platform-dns` and `platform-storage` in `kube-system`.
+That single entry (`kix.flavors.kind` in `modules`) added `platform-dns` and `platform-storage` in `kube-system`.
 
 ## What A Cluster Flavor Does
 
 Every Kubernetes distribution starts with a different set of pre-installed services:
 
 - **kind** ships with CoreDNS (`Deployment/coredns` and `Service/kube-dns` in `kube-system`) and Rancher local-path provisioner (`StorageClass/standard`).
-- **EKS**, **GKE**, and **k3s** ship with their own DNS services, storage classes, CNI capabilities, and cloud load balancer controllers.
-- **Bare-metal (`vanilla`)** clusters may require you to install your own storage provisioner, ingress controller, and CNI.
+- **EKS**, **GKE**, **AKS**, and **k3s** ship with their own DNS services, storage classes, CNI capabilities, and cloud load balancer controllers.
+- **Self-managed (`kubeadm`, `talos`, `rke2`)** clusters may require you to install your own storage provisioner, ingress controller, and CNI.
 
-Instead of forcing packages to guess what cluster they are running on, Kix packages declare what cluster capabilities they need, and a **cluster flavor** module (`kix.flavors.kind`, `kix.flavors.eks`, `kix.flavors.gke`, `kix.flavors.k3s`, or `kix.flavors.vanilla`) declares what the platform already provides.
+Instead of forcing packages to guess what cluster they are running on, Kix packages declare what cluster capabilities they need, and a **cluster flavor** module (`kix.flavors.kind`, `kix.flavors.eks`, `kix.flavors.gke`, `kix.flavors.k3s`, `kix.flavors.kubeadm`, `kix.flavors.talos`, and others) declares what the platform already provides.
 
 Specifically, `kix.flavors.kind` does two things:
 
 1. It registers two **imported instances** in `kube-system` (`platform-dns` and `platform-storage`) using `kix.mkImport`.
-2. It binds those imported instances to the cluster's **infrastructure roles** (`roles.dns` and `roles.storageClasses`).
+2. It binds those imported instances to the cluster's **infrastructure roles** (`roles = [ "dns" ]` and `roles = [ "storageClasses" ]`, alongside `cluster.roles.dns` and `cluster.roles.storageClasses`).
 
 :::note[Reference]
 See [Built-in flavors](/docs/reference/flavors-and-capabilities/#provider-profiles) and [Cluster roles](/docs/reference/cluster-configuration/#cluster-roles) for all built-in flavors and role bindings.
@@ -64,9 +60,9 @@ See [Built-in flavors](/docs/reference/flavors-and-capabilities/#provider-profil
 
 Why does `kix.flavors.kind` register `platform-dns` and `platform-storage` as instances in the dependency graph?
 
-1. **Readiness barriers (`requires:`)**: Every Pod that uses cluster DNS (`dnsPolicy = "ClusterFirst"`, the Kubernetes default) needs CoreDNS to be running before it starts making upstream requests. And every `PersistentVolumeClaim` needs its `StorageClass` to exist before it can bind. Because `roles.dns` points to `platform-dns` (`Deployment/coredns` in `kube-system`), Kix automatically adds a `requires:` readiness dependency from your `gateway` Deployment to `platform-dns`. During `kix deploy`, Kix verifies that CoreDNS is live and ready in `kube-system` before rolling out workloads that depend on DNS.
-2. **Default `StorageClass` resolution**: When a stateful package asks for `scope.defaultStorageClass`, Kix resolves it from `roles.storageClasses` (`"standard"` on kind) and records a dependency on `platform-storage`. If a package requests a StorageClass that is neither installed in the cluster nor imported by the flavor, evaluation fails with an `unmet-storage-class` error before deploy.
-3. **DNS egress network policy**: When a namespace enables NetworkPolicy synthesis (`networkPolicy.enable = true`), Kix reads the selector and port facts from `roles.dns` so default-deny egress policies still allow UDP/TCP port 53 traffic to CoreDNS.
+1. **Readiness barriers (`requires:`)**: Every Pod that uses cluster DNS (`dnsPolicy = "ClusterFirst"`, the Kubernetes default) needs CoreDNS to be running before it starts making upstream requests. And every `PersistentVolumeClaim` needs its `StorageClass` to exist before it can bind. Because `platform-dns` provides the `dns` role (`Deployment/coredns` in `kube-system`), Kix automatically adds a `requires:` readiness dependency from your `gateway` Deployment to `platform-dns`. During `kix deploy`, Kix verifies that CoreDNS is live and ready in `kube-system` before rolling out workloads that depend on DNS.
+2. **`StorageClass` resolution and validation**: When a stateful package asks for `storageClasses` in `build` (or sets `spec.storageClassName`), Kix resolves the `storageClasses` role to `platform-storage` (`storageClasses.out.storageClassName = "standard"` on kind) and records a dependency on `platform-storage`. If a `PersistentVolumeClaim` or `StatefulSet` `volumeClaimTemplate` requests a `StorageClass` that is neither created in the cluster nor imported via `kix.mkImport`, evaluation fails before deploy telling you that nothing in the cluster creates or imports that `StorageClass`.
+3. **DNS egress network policy**: When a cluster enables NetworkPolicy synthesis (`networkPolicy.enable = true`), Kix uses the `dns` role provider and the flavor's `platformIntents` so default-deny egress policies still allow UDP/TCP port 53 traffic to CoreDNS.
 
 You can see that `platform-dns` dependency in the `kix graph` output you ran in tutorial 08:
 
@@ -95,7 +91,7 @@ Look at what `kix.mkImport` produces:
 Later, if you migrate `legacy-api` into a native Kix package, you only replace `package = kix.mkImport { ... }` in `cluster.nix` with the real package. The consumer package (`client-package.nix`) does not change at all.
 
 :::note[Explanation]
-See [Helm integration and resource adoption](/docs/explanation/helm-integration/) for how `kix.mkImport` and `kix.helm.mkPackage` let you adopt existing cluster workloads incrementally.
+See [Helm integration and resource adoption](/docs/explanation/helm-integration/) for how `kix.mkImport`, `kix.importChart`, and `kix.helmChart` let you adopt existing cluster workloads incrementally.
 :::
 
 ## What You Learned
@@ -103,8 +99,8 @@ See [Helm integration and resource adoption](/docs/explanation/helm-integration/
 You saw how Kix connects packages to the surrounding Kubernetes cluster:
 
 <Recap>
-- `imports = [ kix.flavors.kind ];` declares the capabilities and pre-installed services of a kind cluster;
-- `roles.dns` and `roles.storageClasses` connect workloads and PVCs to the cluster's DNS provider and storage classes;
+- including `kix.flavors.kind` in `modules` declares the capabilities and pre-installed services of a kind cluster;
+- infrastructure roles (`dns` and `storageClasses`) connect workloads and PVCs to the cluster's DNS provider and storage classes;
 - `kix.mkImport` registers an existing Kubernetes resource in the dependency graph without managing its lifecycle;
 - packages consume imported services through `.out` (`.out.fqdn`, `.out.port`, `.out.name`) using the exact same syntax as Kix-managed instances.
 </Recap>

@@ -49,7 +49,7 @@ Different network facts become available at different stages of evaluation. Kix 
 | **Instance phase** (post-fixpoint processor) | All resources belonging to one package instance | API server egress (from the `ServiceAccount` to `RoleBinding` walk), `LoadBalancer` world ingress, and policies for custom resources that declare `factBehavior.endpoint = "terminate"` |
 | **Cluster phase** (whole-cluster processor) | All active instances, namespaces, and monitors | Per-namespace default-deny walls, Prometheus and VMAgent scrape policies, and `networkPolicy.platformIntents` |
 
-Running the workload phase *before* the workload resource is sealed is critical for rollout safety. Kix splices the generated policies into the workload's `requires` list before computing its store hash. As a result, `kix deploy` applies the `CiliumNetworkPolicy` resources in an earlier wave than the Deployment itself, ensuring pods never start in a window where their firewall rules are missing.
+Running the workload phase *before* the workload resource is sealed is critical for rollout safety. Kix splices the generated policies into the workload's `requires` list before computing its store hash. As a result, `kix deploy` applies the `CiliumNetworkPolicy` resources and waits for them to become ready before applying the Deployment itself, ensuring pods never start in a window where their firewall rules are missing.
 
 ## Declarative intents and operand policies
 

@@ -58,7 +58,7 @@ The annotations Kix adds to compiled manifests (`kix.run/identity-hash`, `kix.ru
 
 ### Automation over brevity
 
-Kix helpers exist to prevent classes of mistakes at evaluation time, not merely to save lines of code.
+Kix helpers exist to prevent classes of mistakes at evaluation time:
 
 For example, `scope.mkDeployment` requires `spec.selector.matchLabels` and automatically copies those labels into `spec.template.metadata.labels` (or verifies that custom template labels are a superset). It also checks that container resource limits are at least as large as requests, that named probe ports exist on the container, and that mounted ConfigMaps and Secrets live in the same namespace and carry dependency tracking.
 

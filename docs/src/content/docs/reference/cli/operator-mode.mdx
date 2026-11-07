@@ -42,8 +42,9 @@ the operator reports it.
 
 | Record phase | CLI result |
 | --- | --- |
-| `Active` or `Degraded` | Success |
-| `Failed` | Error, with the record's `status.message` |
+| `Active` | Success (exit code `0`) |
+| `Degraded` | Error (exit code `1`), after printing the failed resources or `status.failure.reason` |
+| `Failed` | Error (exit code `1`), with the record's `status.failure.reason` (or `unknown error` if unset) |
 | `Superseded` | Error: a newer activation took over |
 | No terminal phase after 600 seconds | Error: timed out |
 

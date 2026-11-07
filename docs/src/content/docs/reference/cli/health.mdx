@@ -17,12 +17,13 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix health <CLUSTER> [--context <CONTEXT>] [-v | -vv] [-q]
+kix health <CLUSTER> [--flake <FLAKE>] [--context <CONTEXT>] [-v | -vv] [-q]
 ```
 
 | Argument or flag | Meaning |
 | --- | --- |
 | `<CLUSTER>` | Cluster name, as recorded on its Activation records. |
+| `--flake <FLAKE>` | Flake reference used to evaluate the cluster name when no Activation record in the context carries `<CLUSTER>`. See [Global flags](/docs/reference/cli/global-flags/). |
 | `--context <CONTEXT>` | Kubeconfig context. |
 | `-v`, `-vv` | `-vv` prints each resource and dependency as it is checked. |
 | `-q`, `--quiet` | Omit the connection and count lines. |
@@ -67,7 +68,7 @@ themselves, so a Job that is gone is missing, whether it finished or not.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Every package is healthy, external, or completed |
+| `0` | Every package is healthy or external |
 | `1` | A resource is missing or at risk; no Active record exists for the cluster; or a cluster error |
 
 :::tip[Use it in a task]

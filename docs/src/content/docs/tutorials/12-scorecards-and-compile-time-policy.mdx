@@ -8,6 +8,8 @@ import Snippet from '/src/components/Snippet.astro';
 import Recap from '/src/components/Recap.astro';
 import checkOutput from '/src/command-output/tutorials/19-scorecards/check.json';
 import buildOutput from '/src/command-output/tutorials/19-scorecards/build.json';
+import scorecardCluster from '/src/snippets/tutorials/19-scorecards/cluster/scorecardCluster.json';
+import scorecardStructure from '/src/snippets/tutorials/19-scorecards/scorecard/scorecardStructure.json';
 import isProxy from '/src/snippets/tutorials/19-scorecards/scorecard/isProxy.json';
 import packageRule from '/src/snippets/tutorials/19-scorecards/scorecard/packageRule.json';
 import clusterRule from '/src/snippets/tutorials/19-scorecards/scorecard/clusterRule.json';
@@ -38,36 +40,34 @@ In `tutorials/19-scorecards/cluster.nix`, the cluster defines two application na
 - `app-v1.gateway` sets `proxyPath = "/v1/"` and `maxBodySize = "10m"`.
 - `app-v2.gateway` sets `proxyPath = "/v2/"` and `maxBodySize = "10m"`.
 
-At the top of `cluster.nix`, the cluster imports both `kix.flavors.kind` and `./scorecard.nix`:
+At the top of `cluster.nix`, the cluster module inside `modules` sets `scorecard` by importing `./scorecard.nix`:
 
-```nix title="tutorials/19-scorecards/cluster.nix"
-imports = [
-  kix.flavors.kind
-  ./scorecard.nix
-];
-```
+<Snippet
+  {...scorecardCluster}
+  elide={{
+    scorecardInstances: '        # ...',
+  }}
+/>
 
-Keeping scorecard policy in a separate module (`./scorecard.nix`) lets platform teams share a single policy module across multiple clusters while keeping `cluster.nix` focused on topology and instances.
+Keeping scorecard policy in a separate file (`./scorecard.nix`) lets platform teams share a single policy definition across multiple clusters while keeping `cluster.nix` focused on topology and instances.
 
-## Enable Built-In Rules And `maxSeverity`
+## Enable Built-In Rules And Severity Controls
 
-Open `tutorials/19-scorecards/scorecard.nix`. At the top of the `scorecard` block, three settings configure how the scorecard runs:
+Open `tutorials/19-scorecards/scorecard.nix`. At the top of the file, `enable`, `ruleOverrides`, and `rules` configure what the scorecard checks:
 
-```nix title="tutorials/19-scorecards/scorecard.nix"
-scorecard = {
-  enable = true;
-  maxSeverity = "error";
-  rules = kix.rules.recommended // {
-    # custom rules ...
-  };
-};
-```
+<Snippet
+  {...scorecardStructure}
+  elide={{
+    customRules: '    # custom rules ...',
+  }}
+/>
 
 Here is what each field controls:
 
-- **`enable = true`**: Turns on scorecard evaluation during `kix check`, `kix scorecard`, and `kix build`.
-- **`maxSeverity = "error"`**: Any finding with severity `"error"` becomes a build-blocking assertion failure. Findings with `"warning"` or `"info"` are still reported by `kix check` and `kix scorecard`, but they do not block `kix build`.
-- **`rules = kix.rules.recommended // { ... }`**: Starts from Kix's built-in rule catalog (`kix.rules.recommended`) and merges in custom rules for this cluster.
+- **`enable = true`**: Turns on scorecard evaluation during `kix check` and `kix build`.
+- **`ruleOverrides.byRule."reliability.hasProbes".severity = "error"`**: Overrides the severity of a single rule (`<category>.<rule>`) from `"warning"` to `"error"`.
+- **`rules = { reliability = kix.rules.reliability; ... }`**: Selects Kix's built-in `reliability` rule category (`kix.rules.reliability`, alongside `kix.rules.security`, `kix.rules.governance`, and `kix.rules.architecture`) and adds custom rules for this cluster.
+- **`maxSeverity`** (optional, defaults to `"warning"`): Caps the effective severity of every finding in the cluster to `"info"`, `"warning"`, or `"error"`. Because the default is `"warning"`, findings from error-severity rules are capped to warnings unless the cluster also sets `maxSeverity = "error"`.
 
 :::note[Reference]
 See [Cluster scorecard configuration](/docs/reference/cluster-configuration/#scorecard) and [Built-in rules catalog](/docs/reference/scorecard-and-rules/#built-in-security-rules) for all scorecard options and built-in rules.
@@ -111,13 +111,23 @@ Run `kix check 19-scorecards`:
 
 <Command {...checkOutput} />
 
-Both custom error rules pass (`0 errors`), while the built-in `kix.rules.recommended` rules report 6 warnings and 2 informational findings on the tutorial manifests. Because `maxSeverity = "error"` only blocks on errors, `kix build 19-scorecards` succeeds and renders all 14 resources:
+Both custom rules pass (`0 errors`), while the built-in `kix.rules.reliability` rules report 6 warnings and 2 informational findings across the 24 evaluated manifests. `kix build 19-scorecards` succeeds and renders all 24 resources:
 
 <Command expandable {...buildOutput} />
 
 ## Trigger The Package-Level Rule
 
-Open `tutorials/19-scorecards/cluster.nix` and comment out `maxBodySize = "10m";` on the `gateway` in `app-v1` so it falls back to the `"1m"` default:
+To make error-severity scorecard findings fail the build instead of being capped at `"warning"`, first add `maxSeverity = "error";` to `tutorials/19-scorecards/scorecard.nix`:
+
+```nix title="tutorials/19-scorecards/scorecard.nix"
+{
+  enable = true;
+  maxSeverity = "error";
+  # ...
+}
+```
+
+Next, open `tutorials/19-scorecards/cluster.nix` and comment out `maxBodySize = "10m";` on the `gateway` in `instances.app-v1` so it falls back to the `"1m"` default:
 
 ```nix title="tutorials/19-scorecards/cluster.nix"
 gateway = {
@@ -126,6 +136,7 @@ gateway = {
     proxyPath = "/v1/";
     # maxBodySize = "10m";
   };
+  deps.backend = ref.app-v1.backend;
 };
 ```
 
@@ -133,25 +144,26 @@ Now run `kix check 19-scorecards`:
 
 <Command commands={["kix check 19-scorecards"]} cwd="kix-examples/" />
 
-Because `custom.proxyMaxBodySizeMustBeExplicit` has `severity = "error"` and `scorecard.maxSeverity = "error"`, evaluation fails and prints:
+Because `custom.proxyMaxBodySizeMustBeExplicit` has `severity = "error"` and `scorecard.maxSeverity = "error"` is set, evaluation fails and prints:
 
 ```text
-[error] custom.proxyMaxBodySizeMustBeExplicit (app-v1/gateway): instance 'gateway' uses the default maxBodySize '1m'. nginx rejects larger request bodies - set this explicitly.
+[scorecard:custom.proxyMaxBodySizeMustBeExplicit] app-v1/gateway: instance 'gateway' uses the default maxBodySize '1m'. nginx rejects larger request bodies - set this explicitly.
 ```
 
-Uncomment `maxBodySize = "10m";` in `app-v1`.
+Uncomment `maxBodySize = "10m";` in `instances.app-v1.gateway`.
 
 ## Trigger The Cluster-Level Collision Rule
 
-Next, in `tutorials/19-scorecards/cluster.nix`, change `proxyPath` in `app-v2` from `"/v2/"` to `"/v1/"` so both namespaces claim `"/v1/"`:
+Next, in `tutorials/19-scorecards/cluster.nix`, change `proxyPath` in `instances.app-v2.gateway` from `"/v2/"` to `"/v1/"` so both namespaces claim `"/v1/"`:
 
 ```nix title="tutorials/19-scorecards/cluster.nix"
-namespaces.app-v2.instances.gateway = {
+instances.app-v2.gateway = {
   package = reverseProxyPackage;
   config = {
     proxyPath = "/v1/";
     maxBodySize = "10m";
   };
+  deps.backend = ref.app-v2.backend;
 };
 ```
 
@@ -162,10 +174,10 @@ Run `kix check 19-scorecards` again:
 This time, `custom.noProxyPathCollision` catches the cross-namespace conflict at build time:
 
 ```text
-[error] custom.noProxyPathCollision (cluster): 2 reverse-proxy gateways share proxyPath '/v1/': app-v1/gateway, app-v2/gateway
+[scorecard:custom.noProxyPathCollision] : 2 reverse-proxy gateways share proxyPath '/v1/': app-v1/gateway, app-v2/gateway
 ```
 
-Change `app-v2`'s `proxyPath` back to `"/v2/"` and run `kix check 19-scorecards` to verify the cluster passes again.
+Change `app-v2`'s `proxyPath` back to `"/v2/"` and remove `maxSeverity = "error";` from `tutorials/19-scorecards/scorecard.nix` so the example returns to its checked-in state, then run `kix check 19-scorecards` to verify the cluster passes again.
 
 ## What You Learned
 
@@ -173,7 +185,7 @@ You completed the 12-part Kix tutorial path:
 
 <Recap>
 - `scorecard.enable = true` runs compile-time policy checks across your cluster;
-- `scorecard.maxSeverity` controls which severity levels (`"error"`, `"warning"`, `"info"`, `"none"`) fail the build;
+- `scorecard.maxSeverity` (`"info"`, `"warning"`, or `"error"`, defaulting to `"warning"`) caps finding severity across the cluster, and setting `maxSeverity = "error"` makes error-severity rules fail evaluation;
 - `level = "package"` rules inspect an individual instance's `meta`, `config`, and resources without parsing rendered YAML strings;
 - `level = "cluster"` rules inspect `allInstances` across all namespaces to catch cross-instance collisions before deployment.
 </Recap>

@@ -108,9 +108,12 @@ passes `--prune`:
 Review stateful removals carefully. Kix requires a separate migration
 acknowledgement when a plan replaces a stateful resource in the same logical
 slot. This safeguard does not apply when a stateful resource is removed without
-a replacement. Kix treats it as an ordinary orphan, and `--prune` deletes it
-along with its PersistentVolumeClaim. The plan lists each orphan as "will be
-deleted" before asking for confirmation. The `--yes` flag skips that prompt.
+a replacement. Kix treats it as an ordinary orphan, and `--prune` deletes any
+Kix-owned resources that left the build (including a `PersistentVolumeClaim`
+declared directly as a Kix resource, though not claims that Kubernetes created
+from a StatefulSet's `volumeClaimTemplates`). The plan lists each orphan as
+"will be deleted" before asking for confirmation. The `--yes` flag skips that
+prompt.
 
 ## Choose terminal or CI output
 

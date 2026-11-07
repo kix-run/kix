@@ -43,8 +43,10 @@ Use `--format json` when you need the machine-readable list of `nodes` and
 
 ## Inspect package parts
 
-`buildCluster` exposes evaluated instances under
-`legacyPackages.<system>.kixClusters`. The instance's `raw` attribute is the
+`kix.mkFlake` exposes evaluated clusters under
+`legacyPackages.<system>.kixClusters` (flakes that call `buildCluster`
+directly without `mkFlake` do not define this output unless they export the
+evaluated cluster themselves). The instance's `raw` attribute is the
 parts attrset returned by its package build function.
 
 List the parts without forcing every resource into JSON:

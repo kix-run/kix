@@ -1,5 +1,5 @@
-# How `mkFlake` names the clusters it lists, and that `buildCluster` refuses
-# a call without a name.
+# How `mkFlake` names the clusters it lists, how the index records a name
+# taken from a key, and that `buildCluster` refuses a call without a name.
 { lib, eval, ... }:
 
 let
@@ -105,6 +105,38 @@ in
   mkflake-unknown-builder-fails =
     !(builtins.tryEval (projectFlake "unknown-builder").legacyPackages.test-system.kixConfig.builder)
     .success;
+
+  # The index marks a name that `mkFlake` took from the key, which the CLI
+  # reads to stop a cluster that Kix 0.6 named `cluster` from changing its
+  # name without an error.
+  mkflake-index-marks-key-derived-name =
+    let
+      clusters = clustersOf {
+        alpha = { kix, ... }: kix.buildCluster { modules = [ ]; };
+        beta =
+          { kix, ... }:
+          kix.buildCluster {
+            name = "beta";
+            modules = [ ];
+          };
+      };
+    in
+    (
+      clusters.alpha.packageIndexContent.nameFromFlakeKey
+      || throw "expected the index of alpha to mark its name as taken from the key"
+    )
+    && (
+      !(clusters.beta.packageIndexContent.nameFromFlakeKey or false)
+      || throw "expected the index of beta, which sets name, not to mark its name"
+    );
+
+  mkflake-index-direct-buildcluster-name-is-unmarked =
+    !((eval.buildCluster {
+      name = "gamma";
+      modules = [ ];
+    }).packageIndexContent.nameFromFlakeKey or false
+    )
+    || throw "expected a direct buildCluster call not to mark its name";
 
   mkflake-buildcluster-without-name-fails =
     !(builtins.tryEval (eval.buildCluster { modules = [ ]; }).name).success

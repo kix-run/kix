@@ -39,13 +39,15 @@ where the table shows them; elsewhere they are accepted and have no effect.
 | Command | `-o` | `--context` | `--flake` | `--no-cache` | `--override-input` |
 | --- | --- | --- | --- | --- | --- |
 | `build`, `check`, `graph`, `inspect`, `images`, `list` | yes | | yes | yes | yes |
-| `status` | yes | yes | flat view only | flat view only | flat view only |
+| `status` | yes | yes | yes | flat view only | yes |
 | `diff` | yes | yes | yes | | yes |
 | `plan` | yes | yes | yes | | yes |
 | `deploy`, `gc`, `migrate domain`, `logs`, `pf` | | yes | yes | | yes |
 | `export` | | | yes | | yes |
-| `rollback`, `drift` | yes | yes | | | |
-| `health`, `snapshot save` | | yes | | | |
+| `rollback` | yes | yes | yes | | yes |
+| `drift` | yes | yes | | | |
+| `health` | | yes | yes | | yes |
+| `snapshot save` | | yes | | | |
 | `compliance sbom` | yes | | yes | | yes |
 | `compliance attest` | yes | yes | yes | | yes |
 | `compliance audit` | | | yes | yes | yes |
@@ -56,8 +58,11 @@ where the table shows them; elsewhere they are accepted and have no effect.
 `--no-cache` applies only to commands that read the
 [eval cache](/docs/reference/cli/eval-cache-behavior/). `kix pin` uses
 `--flake` only as a place to look for `pins.json`, and `kix doctor` uses it to
-locate [`kix.toml`](/docs/reference/kix-toml/). `-o` on `rollback` applies
-only with `--list`, and on `deploy` only with `--dry-run`.
+locate [`kix.toml`](/docs/reference/kix-toml/). `rollback`, `health`, and
+`status --operator` use `--flake` and `--override-input` only to evaluate the
+cluster name when no Activation record in the current context already carries
+`<CLUSTER>` as its `kix.run/cluster` label. `-o` on `rollback` applies only
+with `--list`, and on `deploy` only with `--dry-run`.
 
 ## Environment variables
 

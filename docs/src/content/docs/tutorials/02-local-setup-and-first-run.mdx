@@ -35,10 +35,10 @@ it, and make one config edit. The point is to feel the loop:
 
 ## Start From The Example Repo
 
-The runnable examples live in the public `kix-examples` repo:
+The runnable examples live in the `kix-examples` repo:
 
 <Command commands={[
-  "git clone https://github.com/kix-ops/kix-examples.git",
+  "git clone https://github.com/kix-run/kix-examples.git",
   "cd kix-examples",
 ]} />
 
@@ -130,7 +130,7 @@ directly:
 The first example installs an `echo-server` package instance named
 `hello-world`. Use `kix pf` to port-forward to its primary workload:
 
-<Command commands={["kix pf 02-hello-world hello-world 8080:80"]} cwd="kix-examples/" />
+<Command commands={["kix pf 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
 
 Leave that command running. In another terminal, call the service:
 
@@ -168,7 +168,7 @@ Deploy again:
 
 Port-forward and curl again:
 
-<Command commands={["kix pf 02-hello-world hello-world 8080:80"]} cwd="kix-examples/" />
+<Command commands={["kix pf 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
 
 In another terminal:
 

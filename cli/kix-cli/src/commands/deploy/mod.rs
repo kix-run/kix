@@ -27,7 +27,6 @@ use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::binding;
 use kix::cluster::discovery;
-use kix::cluster::kubernetes_version;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult, NodeId};
@@ -502,9 +501,9 @@ async fn run_deploy_async(
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
-    // Reuse the pre-confirm client, which the plan checked the build's
-    // binding and Kubernetes version through, or connect now, check both,
-    // and filter orphans shared with other Kix clusters.
+    // Reuse the pre-confirm client, which the plan ran the target checks
+    // through, or connect now, run them, and filter orphans shared with
+    // other Kix clusters.
     let client = match pre_client {
         Some(c) => c,
         None => {
@@ -512,18 +511,11 @@ async fn run_deploy_async(
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
             let connection = binding::Connection::of_context(global.context.as_deref());
-            binding::check(&client, &connection, cluster_name, checked.kubernetes_uid())
+            checked
+                .target_checks()
+                .run(&client, &connection)
                 .await
                 .map_err(|e| miette!("{e}"))?;
-            kubernetes_version::check(
-                &client,
-                &connection,
-                cluster_name,
-                checked.kubernetes_version(),
-                checked.kubernetes_version_from(),
-            )
-            .await
-            .map_err(|e| miette!("{e}"))?;
             let (_, shared) =
                 kix::plan::keep_shared(&client, cluster_name, checked.orphans().to_vec())
                     .await
@@ -729,6 +721,12 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
     let cluster = p.build.graph().cluster_name.clone();
+    // A plan made from the local cache (`--current-activation`) did not
+    // connect, so the target checks run once the command connects below.
+    let target_checks = p
+        .client
+        .is_none()
+        .then(|| p.checked.target_checks().clone());
     let activation_identity_hash = p.checked.activation_identity_hash().map(str::to_string);
     let kubernetes_uid = p.build.graph().kubernetes_uid.clone();
     let package_index = p.checked.package_index().clone();
@@ -765,7 +763,15 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let source_path = result_path.display().to_string();
 
     let reconciled = ctx.runtime.block_on(async {
-        let (_, records) = super::operator::connect_and_verify(global.context.as_deref()).await?;
+        let (client, records) =
+            super::operator::connect_and_verify(global.context.as_deref()).await?;
+        if let Some(checks) = &target_checks {
+            let connection = binding::Connection::of_context(global.context.as_deref());
+            checks
+                .run(&client, &connection)
+                .await
+                .map_err(|e| miette!("{e}"))?;
+        }
 
         crate::say!(
             "Applying Activation CR '{}' (source: {})...",

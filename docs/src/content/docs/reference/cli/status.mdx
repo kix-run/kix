@@ -21,10 +21,11 @@ kix status <CLUSTER> [--operator] [-o text|json|yaml]
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `<CLUSTER>` | Cluster name. The flat view evaluates it from the flake first; `--operator` uses it to find the Active record. |
+| `<CLUSTER>` | Cluster name. The flat view evaluates it from the flake first; `--operator` uses existing Activation records when any carry `<CLUSTER>`, and otherwise evaluates the cluster name from the flake. |
 | `--operator` | Package-grouped view built from the Active Activation record. |
 | `-o`, `--output` | `text` (default), `json`, or `yaml`. `markdown` prints text. |
-| `--flake`, `--no-cache` | Select and evaluate the cluster for the flat view. Ignored with `--operator`. |
+| `--flake`, `--override-input` | Select and evaluate the cluster in the flat view, or resolve `<CLUSTER>` with `--operator` when no Activation record in the context carries `<CLUSTER>`. |
+| `--no-cache` | Bypass the eval cache in the flat view. Ignored with `--operator`. |
 | `--context` | Select the kubeconfig context in either view. |
 
 ## Flat view
@@ -58,9 +59,11 @@ but the cluster lacks shows as `NotFound`.
 The live resources are the same set the flat view shows.
 
 Package grouping needs the Active record's build in Kix's local store.
-Without it every resource is listed under "Unowned resources". The operator
-view does not evaluate the flake, so `--flake`, `--no-cache`, and
-`--override-input` have no effect.
+Without it every resource is listed under "Unowned resources". When an
+Activation record in the context already carries `<CLUSTER>` as its
+`kix.run/cluster` label, the operator view does not evaluate the flake;
+otherwise it uses `--flake` and `--override-input` to evaluate the cluster
+name. `--no-cache` has no effect with `--operator`.
 
 ## Examples
 

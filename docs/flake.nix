@@ -186,7 +186,7 @@
             cp -r --no-preserve=mode ${reference}/. src/content/docs/reference/package-catalog/
             chmod -R u+w src/content/docs/reference/package-catalog
             npm run check:local-imports
-            npm run check:doc-refs
+            KIX_REPO_ROOT=${kixpkgs} npm run check:doc-refs
           '';
 
           # `npm run build` writes the static site to ./dist.
