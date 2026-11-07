@@ -81,6 +81,7 @@ counts as breaking.
 - The JSON schemas of the `kix diff -o json` document and the `kix deploy --log-format json` log now say that later versions of Kix may add fields and new types of line. A program that reads them should skip the ones it does not know.
 - When a deploy waits more than 10 seconds on one object, the `waiting` line now also says how many objects wait on it and names up to three of the objects that depend on it directly. The `--log-format json` `waiting` line gains `holds` and `holds_total`.
 - `kix list` and commands that take a cluster name now say when the flake has no outputs for your system, and how to add it, instead of reporting the cluster as missing.
+- `valkey`'s metrics exporter sidecar now has a CPU limit of `1` instead of `250m`, because at `250m` it was throttled during scrapes and raised `CPUThrottlingHigh`. Its pods restart once. Set `metrics.resources.limits.cpu` to keep the old limit.
 
 ### Fixed
 
