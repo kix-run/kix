@@ -94,8 +94,8 @@ impl BuildFiles {
             .map_err(|e| format!("it is not a Kix build index: {e}"))?;
         if index.version != INDEX_VERSION {
             return Err(format!(
-                "it is a build index of version {}, and this kix reads version {INDEX_VERSION}. \
-                 Use the kix binary of the same release as the Kix library that made the build",
+                "it is a build index of version {}, and Kix reads version {INDEX_VERSION}. \
+                 Use the Kix release that matches the Kix library that made the build",
                 index.version
             ));
         }

@@ -224,7 +224,7 @@ pub fn eval_activation_index(
         cluster = cluster_name,
         flake_ref = %flake_ref,
         flake_path = %flake_path.display(),
-        "evaluating cluster activation index"
+        "evaluating cluster activation"
     );
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
@@ -307,7 +307,7 @@ pub fn eval_with_helm(
     }
     Err(KixEvalError::StoreGraphError {
         message: format!(
-            "`nix eval {}` still needed Helm charts after {MAX_EVALUATIONS} rounds",
+            "evaluating {} still needed Helm charts after Kix had rendered charts {MAX_EVALUATIONS} times",
             args.join(" ")
         ),
     })
@@ -488,9 +488,7 @@ fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError>
     let index = stdout.trim();
     if !index.starts_with(super::store_path::STORE_DIR) {
         return Err(KixEvalError::StoreGraphError {
-            message: format!(
-                "nix eval printed {index:?} for the activation index, not a store path"
-            ),
+            message: format!("evaluation returned {index:?} instead of a store path"),
         });
     }
 
@@ -498,7 +496,7 @@ fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError>
     tracing::info!(
         cluster = cluster_name,
         path = %path.display(),
-        "activation index evaluated"
+        "cluster activation evaluated"
     );
     Ok(path)
 }

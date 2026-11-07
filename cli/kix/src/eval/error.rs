@@ -27,7 +27,7 @@ pub enum KixEvalError {
     /// The cluster exists, but its Kix library is older than this binary
     /// and writes no `activationIndex`.
     #[error(
-        "cluster '{cluster}' uses a Kix library older than this kix binary, so Kix could not evaluate it. Run `kix lib update` to move flake.lock to this kix release, or use the kix binary of the library's release"
+        "cluster '{cluster}' uses a Kix library older than this Kix release, so Kix could not evaluate it. Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library"
     )]
     NoActivationIndex { cluster: String },
 

@@ -32,7 +32,7 @@ pub struct Output {
 
 /// A `.drv` file Kix could not read.
 #[derive(Debug, thiserror::Error)]
-#[error("could not read the derivation {}: {message}", path.display())]
+#[error("could not read {}: {message}", path.display())]
 pub struct DerivationError {
     pub path: PathBuf,
     pub message: String,

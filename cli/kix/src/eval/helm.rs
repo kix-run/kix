@@ -40,7 +40,7 @@ const SPEC_VERSION: u64 = 1;
 #[derive(Debug, thiserror::Error)]
 pub enum HelmError {
     #[error(
-        "This cluster's Kix library renders Helm charts with Helm {wanted}, but this kix binary ships {}. Run `kix lib update` to move flake.lock to this kix release, or use the kix binary of the same version as the library",
+        "This cluster's Kix library renders Helm charts with Helm {wanted}, but this Kix release ships {}. Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library",
         shipped_text(shipped)
     )]
     VersionNotShipped {
@@ -52,7 +52,7 @@ pub enum HelmError {
     LibraryMismatch(Box<crate::library::HelmMismatch>),
 
     #[error(
-        "this cluster's Kix library writes Helm specs of version {found}, and this kix binary reads version {SPEC_VERSION}. Run `kix lib update` to move flake.lock to this kix release, or use the kix binary of the same version as the library"
+        "this cluster's Kix library does not match this Kix release (Helm format {found}, expected {SPEC_VERSION}). Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library"
     )]
     SpecVersion { found: u64 },
 
@@ -87,7 +87,7 @@ pub enum HelmError {
         found: String,
     },
 
-    #[error("could not read the Helm placeholder {}: {message}", drv.display())]
+    #[error("could not prepare the Helm chart {}: {message}", drv.display())]
     Spec { drv: PathBuf, message: String },
 
     #[error(transparent)]
@@ -541,7 +541,7 @@ fn fetch(spec: &FetchSpec, algo: &str, hash_hex: &str, out: &Path) -> Result<(),
         return Err(HelmError::Spec {
             drv: out.to_path_buf(),
             message: format!(
-                "nix-store added the chart at {added}, not at {}",
+                "Kix stored the chart at {added} instead of {}",
                 out.display()
             ),
         });
@@ -607,7 +607,7 @@ fn register(out: &Path, deriver: &Path, contents: &[u8]) -> Result<(), HelmError
         }
         .into());
     }
-    tracing::info!(path = %out.display(), "registered Helm output");
+    tracing::info!(path = %out.display(), "rendered Helm chart");
     Ok(())
 }
 
@@ -781,7 +781,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "This cluster's Kix library renders Helm charts with Helm 4.3.1, but this kix binary ships Helm 4.3.2. Run `kix lib update` to move flake.lock to this kix release, or use the kix binary of the same version as the library"
+            "This cluster's Kix library renders Helm charts with Helm 4.3.1, but this Kix release ships Helm 4.3.2. Run `kix lib update` to move flake.lock to this Kix release, or use the Kix release that matches the library"
         );
     }
 }

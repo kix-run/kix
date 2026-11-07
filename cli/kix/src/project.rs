@@ -241,7 +241,7 @@ impl ProjectConfig {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProjectMismatch {
     #[error(
-        "{origin} sets builder = \"nix\", but this project's Kix library is too old for the nix builder. Run `kix lib update` to move flake.lock to this kix release"
+        "{origin} sets builder = \"nix\", but this project's Kix library is too old for the nix builder. Run `kix lib update` to move flake.lock to this Kix release"
     )]
     LibraryTooOld { origin: BuilderSource },
 

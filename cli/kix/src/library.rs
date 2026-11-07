@@ -182,18 +182,18 @@ impl fmt::Display for HelmMismatch {
         }
         write!(
             f,
-            ", but this kix program is {program} and ships {}. ",
+            ", but Kix is {program} and ships {}. ",
             self.shipped_text()
         )?;
         match (self.fix(), &self.library) {
-            (Fix::UpgradeProgram, LibraryVersion::Known(lib)) => write!(f, "Upgrade kix to {lib}."),
+            (Fix::UpgradeProgram, LibraryVersion::Known(lib)) => write!(f, "Upgrade Kix to {lib}."),
             (Fix::UpdateLibrary, _) => write!(
                 f,
                 "Run `kix lib update` to move this project to the {program} library, then commit flake.lock."
             ),
             _ => write!(
                 f,
-                "Run `kix lib update` to move this project to the {program} library and commit flake.lock, or use the kix program of the same release as the library."
+                "Run `kix lib update` to move this project to the {program} library and commit flake.lock, or use the Kix release that matches the library."
             ),
         }
     }
@@ -226,9 +226,7 @@ pub enum UpdateError {
     #[error("Kix cannot move this project's Kix library to {PROGRAM_VERSION} by itself.\n{}", .0.iter().map(|s| format!("- {s}")).collect::<Vec<_>>().join("\n"))]
     ByHand(Vec<String>),
 
-    #[error(
-        "could not move the Kix library to v{PROGRAM_VERSION}. A development build of kix may have no release of that name yet. {0}"
-    )]
+    #[error("could not move the Kix library to v{PROGRAM_VERSION}: {0}")]
     Nix(#[source] NixCommandError),
 }
 
@@ -320,7 +318,7 @@ fn classify(node: &Value, name: &str, version: &str, test_repo: Option<&str>) ->
         let from = flake_url(&original);
         return Some(Box::new(move |path| {
             Action::ByHand(format!(
-                "The input `{}` reads the Kix library from {from}, not from github:kix-run/kixpkgs, so Kix cannot move it. Point it at github:kix-run/kixpkgs/{tag}, or move that copy to the {tag} release.",
+                "The input `{}` reads the Kix library from {from} instead of github:kix-run/kixpkgs, so Kix cannot move it. Point it at github:kix-run/kixpkgs/{tag}, or move that copy to the {tag} release.",
                 path.join("/")
             ))
         }));
@@ -823,7 +821,7 @@ mod tests {
         assert_eq!(m.fix(), Fix::UpdateLibrary);
         assert_eq!(
             m.to_string(),
-            "This project's Kix library is 0.8.0 and renders Helm charts with Helm 4.3.1, but this kix program is 0.8.1 and ships Helm 4.3.2. Run `kix lib update` to move this project to the 0.8.1 library, then commit flake.lock."
+            "This project's Kix library is 0.8.0 and renders Helm charts with Helm 4.3.1, but Kix is 0.8.1 and ships Helm 4.3.2. Run `kix lib update` to move this project to the 0.8.1 library, then commit flake.lock."
         );
     }
 
@@ -836,7 +834,7 @@ mod tests {
         assert_eq!(m.fix(), Fix::UpgradeProgram);
         assert_eq!(
             m.to_string(),
-            "This project's Kix library is 0.8.1 and renders Helm charts with Helm 4.3.2, but this kix program is 0.8.0 and ships Helm 4.3.1. Upgrade kix to 0.8.1."
+            "This project's Kix library is 0.8.1 and renders Helm charts with Helm 4.3.2, but Kix is 0.8.0 and ships Helm 4.3.1. Upgrade Kix to 0.8.1."
         );
     }
 
@@ -860,7 +858,7 @@ mod tests {
             assert_eq!(m.fix(), Fix::Either);
             let text = m.to_string();
             assert!(text.contains("Run `kix lib update`"), "{text}");
-            assert!(text.contains("or use the kix program"), "{text}");
+            assert!(text.contains("or use the Kix release"), "{text}");
         }
     }
 

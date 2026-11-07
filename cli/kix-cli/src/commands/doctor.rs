@@ -137,7 +137,7 @@ fn verify(rt: &Runtime) -> usize {
         .map(|p| format!("{} {}", p.name, p.version))
         .collect();
     println!(
-        "{}  it ships the programs this kix expects: {}",
+        "{}  it ships the programs Kix expects: {}",
         green("ok  "),
         programs.join(", ")
     );
@@ -172,7 +172,7 @@ fn verify(rt: &Runtime) -> usize {
         );
     }
     println!(
-        "      Reinstall Kix from its release archive if this was not intentional. A file you replaced on purpose, such as your own build of an LGPL program, shows here too."
+        "      Reinstall Kix from its release archive unless you replaced these files yourself."
     );
     1
 }

@@ -149,13 +149,13 @@ pub enum RuntimeError {
     },
 
     #[error(
-        "Kix could not find its runtime, the directory that holds the nix, helm, kubectl, and sops programs Kix runs. Kix never runs these programs from PATH. It looked in: {}. Install Kix from its release archive, which keeps bin/kix and libexec/kix together, or set {RUNTIME_DIR_VAR} to a Kix runtime directory",
+        "Kix could not find its runtime, the directory that holds the nix, helm, kubectl, and sops programs Kix runs. It looked in: {}. Install Kix from its release archive, which keeps bin/kix and libexec/kix together, or set {RUNTIME_DIR_VAR} to a Kix runtime directory",
         searched.join(", ")
     )]
     NotFound { searched: Vec<String> },
 
     #[error(
-        "the Kix runtime in {} ({found_by}) does not belong to this kix binary. It ships {found}, but kix {} expects {expected}. Install bin/kix and libexec/kix from the same Kix release{}",
+        "the Kix runtime in {} ({found_by}) does not match this Kix release. It ships {found}, but Kix {} expects {expected}. Install bin/kix and libexec/kix from the same Kix release{}",
         dir.display(),
         crate::VERSION,
         if *found_by == FoundBy::Env { format!(", or point {RUNTIME_DIR_VAR} at the runtime of this release") } else { String::new() }
@@ -638,7 +638,7 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, RuntimeError> {
         && v != MANIFEST_VERSION
     {
         return Err(invalid(format!(
-            "it has format version {v}, and this kix reads version {MANIFEST_VERSION}. Install bin/kix and libexec/kix from the same Kix release"
+            "it has format version {v}, and Kix reads version {MANIFEST_VERSION}. Install bin/kix and libexec/kix from the same Kix release"
         )));
     }
     for program in &manifest.programs {
@@ -905,7 +905,6 @@ mod tests {
         let text = err.to_string();
         for part in [
             "KIX_RUNTIME_DIR (not set), /opt/kix/libexec/kix",
-            "never runs these programs from PATH",
             "release archive",
             "set KIX_RUNTIME_DIR",
         ] {

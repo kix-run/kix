@@ -68,7 +68,7 @@ pub enum SystemNixError {
     TooOld { version: String },
 
     #[error(
-        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), and `nix --version` reports {version}. Kix supports Nix, not Lix, for this builder. Install Nix {}.{} or later, or remove builder = \"nix\" from kix.toml to build with Kix's own Nix",
+        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), and `nix --version` reports {version}. The nix builder does not support Lix. Install Nix {}.{} or later, or remove builder = \"nix\" from kix.toml to build with Kix's own Nix",
         MIN_VERSION.0,
         MIN_VERSION.1
     )]
@@ -206,7 +206,10 @@ mod tests {
         let err = check_version("nix (Lix, like Nix) 2.91.1")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("Kix supports Nix, not Lix"), "{err}");
+        assert!(
+            err.contains("The nix builder does not support Lix"),
+            "{err}"
+        );
 
         check_version("something else").unwrap();
     }
