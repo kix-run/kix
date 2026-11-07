@@ -244,6 +244,12 @@ jobs:
             experimental-features = nix-command flakes pipe-operators
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
 
+      # The Mac image ships a damaged ~/.cache/nix (its fetcher cache
+      # database is malformed). Nix rebuilds the cache when it is missing.
+      - name: Clear the Mac image's Nix cache
+        if: runner.os == 'macOS'
+        run: rm -rf ~/.cache/nix
+
       # assemble.py prints each program it ships. On macOS it also relocates
       # the nix build's libraries and fails on any library that runtime.nix
       # does not list, so THIRD_PARTY_LICENSES covers everything shipped.
@@ -464,6 +470,12 @@ jobs:
         with:
           extra_nix_config: |
             trusted-users = root
+
+      # The Mac image ships a damaged ~/.cache/nix (its fetcher cache
+      # database is malformed). Nix rebuilds the cache when it is missing.
+      - name: Clear the Mac image's Nix cache
+        if: runner.os == 'macOS'
+        run: rm -rf ~/.cache/nix
 
       # The Mac image comes with Nix. If its daemon trusts the runner user,
       # limit trust to root, so the check runs untrusted here too.
