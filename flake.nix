@@ -351,7 +351,11 @@
         // (packageEval.${system} or { })
       ) clusterOutputs.checks;
 
-      # Preserve the forPkgs API for external consumers.
+      # Preserve the forPkgs API for external consumers. It supports only the
+      # default kix builder, because it does not read kix.toml or publish the
+      # outputs the kix program reads. A project that wires its own flake
+      # outputs should merge mkFlake's outputs instead, and take the library
+      # from `legacyPackages.<system>.kixLib`.
       #
       # `self` is the consumer's flake. Without it, Kix cannot tell a pin
       # file in that flake from one in another input, so image sources name
