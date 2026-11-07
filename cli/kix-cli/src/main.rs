@@ -128,8 +128,12 @@ fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
 }
 
 fn main() -> miette::Result<()> {
+    // Wrapping helps only a person reading a terminal. In a log or a pipe, a
+    // line break can fall inside a path or a command, which breaks searching
+    // and copying, and makes the text depend on how long its paths are.
     miette::set_hook(Box::new(|_| {
-        Box::new(miette::MietteHandlerOpts::new().build())
+        let wrap = std::io::IsTerminal::is_terminal(&std::io::stderr());
+        Box::new(miette::MietteHandlerOpts::new().wrap_lines(wrap).build())
     }))?;
 
     let mut cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());

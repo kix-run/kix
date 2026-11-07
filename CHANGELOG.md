@@ -92,6 +92,7 @@ counts as breaking.
 
 ### Changed
 
+- When `kix` writes an error to a log file or a pipe, it no longer breaks long lines. In a terminal it still wraps them to the window width. This keeps paths and commands in error messages whole, so you can search for them and copy them.
 - When several instances in other namespaces answer a dependency name, the error lists each one with a ready-to-paste `deps` line.
 - A Job that stays on the cluster after a failed run is now reported as failed on every later deploy and reconcile until it is replaced or deleted. Change an input so the Job gets a new name, or delete it with `kubectl` and deploy again. Kix does not delete a failed Job to retry it.
 - When an object fails to deploy, the error now says how many objects Kix did not deploy because they depend on it.
