@@ -71,7 +71,7 @@ with `--list`, and on `deploy` only with `--dry-run`.
 | `NO_COLOR` | Any value disables colour, as `--no-color` does. Colour is also off when `TERM=dumb` or stdout is not a terminal. Deploy and gc have the progress-line exception noted above. |
 | `KIX_LOG` | A tracing filter, such as `kix=debug` or `debug`, that replaces the level chosen by `-v` and `-q`. |
 | `KIX_NO_INTERACTIVE` | Any value makes Kix treat the terminal as non-interactive, so commands that ask for confirmation refuse to prompt and need `--yes`. Stdin that is not a terminal has the same effect. |
-| `KIX_RUNTIME_DIR` | Directory containing Kix's bundled runtime tools (`nix`, `helm`, `kubectl`, `sops`) and `manifest.json`. See [`kix doctor`](/docs/reference/cli/doctor/#how-kix-locates-its-runtime). |
+| `KIX_RUNTIME_DIR` | Directory that holds the Kix runtime (`nix`, `helm`, `kubectl`, `sops`) and `manifest.json`. See [`kix doctor`](/docs/reference/cli/doctor/#how-kix-locates-its-runtime). |
 | `KIX_STORE_ROOT` | Root directory for Kix's local store under the default `kix` builder. Defaults to `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store` when `XDG_CACHE_HOME` is unset). Setting `KIX_STORE_ROOT` on a project that sets `builder = "nix"` in [`kix.toml`](/docs/reference/kix-toml/) is an error. |
 
 The variables that tune how Kix talks to the Kubernetes API are listed in
@@ -113,6 +113,6 @@ executable; NAME may hold letters, digits, `-`, and `_`.
 ]} />
 
 :::tip[Use it in a task]
-See [Install and run the Kix CLI](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
-for setting up the CLI against a flake.
+See [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+for setting up Kix against a flake.
 :::

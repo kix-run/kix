@@ -314,7 +314,7 @@ fn without_a_runtime_kix_refuses_to_run_programs() {
 }
 
 /// A project's kix.toml chooses the builder. `kix doctor` reports the choice,
-/// and a builder or setting this Kix cannot use stops a command before it
+/// and a builder or setting this version of Kix cannot use stops a command before it
 /// runs Nix.
 #[test]
 fn kix_toml_chooses_the_builder() {

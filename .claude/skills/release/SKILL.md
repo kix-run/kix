@@ -90,7 +90,7 @@ The merge starts the CLI tests workflow on main, and its `runtime`, `release`,
 Follow the run with `gh run watch`. Then check:
 
 - `gh release view v<version> --repo kix-run/kix-releases` lists the three
-  platform tarballs (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
+  platform release archives (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
   `kix-<version>-third-party-sources.tar.zst`, and `SHA256SUMS`, and shows the
   changelog section as the notes.
 - `git ls-remote --tags origin v<version>` shows the tag.

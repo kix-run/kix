@@ -284,9 +284,9 @@ rec {
           throw "k8s-resource '${kind}/${name}': extra.* shadows managed field(s) "
           + "${builtins.concatStringsSep ", " (map (p: builtins.concatStringsSep "." p) _shadowedPaths)}. "
           + "Fields under `spec`, `data`, `stringData`, `metadata.{name,namespace,labels,annotations}` "
-          + "are set via dedicated args so kix can attach DI tracking. Move your customizations into "
+          + "are set via dedicated args so Kix can track dependencies. Move your customizations into "
           + "those args (e.g. `spec = { ... }` instead of `extra.spec = { ... }`), or use `extra` only "
-          + "for sibling fields kix doesn't manage explicitly."
+          + "for sibling fields Kix doesn't manage explicitly."
         else
           null;
 
