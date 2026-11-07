@@ -7,9 +7,10 @@
 ## Goal
 
 Doc 161 makes Kix build every project with its own Nix and its own store.
-Some projects need the machine's Nix instead. Luca's project is one: it
-uses its own store, binary caches, and remote builders, and it needs a plain
-`nix build` of a cluster to work. Doc 161 left "use the machine's Nix" out of
+Some projects need the machine's Nix instead. They use their own store,
+binary caches, and remote builders, or they join a cluster to the rest of
+their Nix setup: a plain `nix build`, `nix flake check`, or a NixOS or
+deploy-rs configuration that uses the cluster. Doc 161 left "use the machine's Nix" out of
 scope. Branch `feat/rootless-runtime` removes the route those projects use
 today, so it cannot ship as 0.8 without this plan.
 
@@ -41,6 +42,9 @@ These were settled with Adam on 2026-11-07.
   Anyone may write another, and Kix ships a reference server.
 - **The `nix` builder ships with 0.8.** Without it, 0.8 breaks every project
   that relies on the machine's Nix or on `nix build`.
+- **`nix` projects get `packages.<system>.cluster-<name>-activation` back.**
+  Joining a cluster to the rest of a Nix setup is the main reason to choose
+  the `nix` builder, and the output is a few lines in `mkFlake`.
 
 ## Findings that shaped the plan
 
@@ -302,21 +306,12 @@ tests, about 150 lines of Nix, and two CI jobs.
 - **A user's Nix setup.** Old Nix, Lix, or import from derivation turned off.
   Each gets a check and a message that names the fix.
 
-## Questions for Luca
+## Checked with a user of the `nix` builder
 
-Answers as of 2026-11-07, through Adam:
-
-1. **Does the project need `nix build .#cluster-<name>-activation` to work
-   without `kix`?** Not known yet. The plan keeps the output for `nix`
-   projects, because it is cheap and it is what `main` offered. Drop it in
-   phase 2 if Luca does not need it.
-2. **Is the Helm release Kix pins acceptable?** Yes.
-3. **Which Nix?** Nix, not Lix. The version still needs checking against
-   the 2.24 minimum.
-4. **Which platforms?** His laptop is a Mac, and he also builds on a Linux
-   VM. So the `nix` builder must work on `aarch64-darwin` and Linux, and the
-   phase 3 CI jobs cover both. The same project builds on both machines, so
-   the route comparison in section 4 matters for him too.
+A user who needs the `nix` builder confirmed on 2026-11-07 that Kix's pinned
+Helm is acceptable, that they run Nix rather than Lix, and that they build
+the same project on macOS and on Linux. CI covers both platforms for that
+reason, and the route comparison in section 4 protects such users.
 
 ## Out of scope
 
