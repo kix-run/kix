@@ -26,7 +26,10 @@ A key is trusted in three places, which must agree:
 - `RELEASE_KEYS` in `web/public/install`, one hex key per line
   (`web/scripts/install.test.mjs` checks it against this directory)
 
-Until the first key is added, Kix refuses to install another version, the
+The current key is `07c2b3e1`, created on 8 November 2026. Its private key is
+the secret `KIX_RELEASE_SIGNING_KEY`, with a backup in 1Password.
+
+Without any key in this directory, Kix refuses to install another version, the
 install script checks the SHA-256 only, and `publish` skips "Sign checksums"
 with a warning and publishes the release unsigned. kix.run does not list an
 unsigned release, so neither Kix nor the install script installs it

@@ -492,8 +492,11 @@ fn a_release_without_a_signature_is_not_installed() {
     assert!(!s.data.join("9.9.1").exists());
 }
 
+// `release::verify` tests that the test key is never trusted for a site.
+// This checks the binary sends a site source to the network and does not
+// treat it as a directory.
 #[test]
-fn the_test_key_is_ignored_for_a_site() {
+fn a_site_source_is_fetched_over_the_network() {
     let s = Setup::new("9.9");
     let signer = Signer::new();
     s.kix()
@@ -503,7 +506,7 @@ fn the_test_key_is_ignored_for_a_site() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
-            "has no release signing key built in, so it cannot verify downloads",
+            "could not reach https://127.0.0.1:9",
         ));
 }
 
