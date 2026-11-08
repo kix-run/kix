@@ -27,11 +27,28 @@ whenever Adam corrects writing style.
 
 ## AI-tell constructions
 
+- **No "X, not Y" idiom** (e.g., "References, not strings", "Fail the build,
+  not the deploy", "Agents need a compiler, not raw kubectl"). It reads as an
+  AI-generated cliché. State what Kix does directly.
+- **No "WHY THIS MATTERS" or meta-commentary eyebrows/callouts** (e.g., "WHY
+  THIS MATTERS", "THE TAKEAWAY", "PAYOFF A", "01 · AUTO-GENERATED SECURITY").
+  Never add a box or heading explaining why an output matters. Let the resource
+  (`kind: CiliumNetworkPolicy`), the code comment, or the CLI output speak for
+  itself.
+- **Never label the self-evident.** Do not put badges like `"7 lines total"`,
+  `"input"`, `"OUTPUT"`, `"WHAT YOU WRITE"`, or `"WHAT KIX GENERATES"` on top of
+  a code editor or terminal pane. If a pane shows `clusters/shop.nix` with 7
+  numbered lines, the reader can see it is 7 lines of input code. If the right
+  pane shows `$ kix build shop` and `kind: CiliumNetworkPolicy`, the reader can
+  see it is the output.
 - **No aphoristic paired-punch sentences.** Pattern: two short declaratives
   where the second "lands the twist", e.g. "The benefits are real. The problem
   has always been the price of admission." Reads as AI-generated. Cut these
   rather than rewording them; the surrounding copy usually already makes the
   point.
+- **Keep marketing and website copy as short as possible.** Readers scanning a
+  page cannot absorb dense walls of text. Use one short sentence of setup per
+  section and let the code or CLI output carry the point.
 
 ## Reader context
 

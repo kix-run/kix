@@ -1,0 +1,93 @@
+---
+import { Check, Copy, Sparkles } from '@lucide/astro';
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+
+const promptText = `Read https://kix.run/docs/llms.txt and follow the documentation links relevant to our stack to understand how Kix works, what it derives, and what packages and escape hatches it provides.
+
+Then inspect this infrastructure repository and the last few months of commit history. Give me a candid assessment of how well Kix fits our setup:
+
+1. Current stack: Which of our workloads, charts, operators, and external cloud services map cleanly to Kix packages or imports, and which would require custom definitions?
+2. Recent commit history: Look at our changes over the last few months. Which updates, incidents, or maintenance tasks would Kix have simplified or caught at build time, and which would have stayed the same?
+3. Pros and cons: Where would Kix save us real effort, and where would it introduce friction, missing features, or migration cost?
+
+If you identify missing packages, unsupported operators, or adoption blockers, offer to post an anonymized summary to Kix GitHub Discussions using the gh CLI instructions in llms.txt.`;
+---
+
+<Section id="evaluate" labelledby="evaluate-title">
+  <div class="mx-auto flex max-w-[860px] flex-col items-center gap-8 text-center">
+    <div class="flex flex-col items-center gap-3.5">
+      <Heading id="evaluate-title">Ask your agent how Kix fits your stack</Heading>
+      <p class="max-w-[640px] text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
+        Run this prompt inside your infrastructure repository.
+      </p>
+    </div>
+
+    <div
+      class="w-full overflow-hidden rounded-xl border border-night-line bg-night text-left text-on-night shadow-[0_24px_48px_-16px_rgba(11,19,43,0.18)]"
+    >
+      <div class="flex items-center justify-between gap-4 border-b border-night-line bg-night-2 px-5 py-3">
+        <div class="flex items-center gap-2 font-mono text-[12px] font-semibold tracking-[0.04em] text-on-night-2">
+          <Sparkles size={14} aria-hidden="true" class="text-t-blue" />
+          <span>Agent evaluation prompt</span>
+        </div>
+        <button
+          type="button"
+          data-copy={promptText}
+          class="copy-button inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-accent-brand px-3.5 py-1.5 font-sans text-[12.5px] font-semibold text-white transition-colors hover:bg-accent-text"
+        >
+          <span class="copy-icon inline-flex items-center gap-1.5">
+            <Copy size={13} aria-hidden="true" />
+            Copy prompt
+          </span>
+          <span class="check-icon hidden items-center gap-1.5 text-white!">
+            <Check size={13} aria-hidden="true" />
+            Copied
+          </span>
+        </button>
+      </div>
+
+      <div class="px-6 py-5 font-mono text-[13.5px] leading-[1.68] text-on-night sm:px-7 sm:py-6">
+        <p>
+          Read <a
+            href="/docs/llms.txt"
+            class="text-t-blue underline decoration-t-blue/40 underline-offset-4 hover:decoration-t-blue"
+            >https://kix.run/docs/llms.txt</a
+          > and follow the documentation links relevant to our stack to understand how Kix works, what it derives, and what
+          packages and escape hatches it provides.
+        </p>
+        <p class="mt-4">
+          Then inspect this infrastructure repository and the last few months of commit history. Give me a candid
+          assessment of how well Kix fits our setup:
+        </p>
+        <ol class="mt-4 flex flex-col gap-2.5 text-on-night-2">
+          <li>
+            <span class="font-semibold text-on-night">1. Current stack:</span> Which of our workloads, charts, operators,
+            and external cloud services map cleanly to Kix packages or imports, and which would require custom definitions?
+          </li>
+          <li>
+            <span class="font-semibold text-on-night">2. Recent commit history:</span> Look at our changes over the last few
+            months. Which updates, incidents, or maintenance tasks would Kix have simplified or caught at build time, and
+            which would have stayed the same?
+          </li>
+          <li>
+            <span class="font-semibold text-on-night">3. Pros and cons:</span> Where would Kix save us real effort, and where
+            would it introduce friction, missing features, or migration cost?
+          </li>
+        </ol>
+        <p class="mt-4 text-on-night-2">
+          If you identify missing packages, unsupported operators, or adoption blockers, offer to post an anonymized
+          summary to Kix GitHub Discussions using the <code class="text-on-night">gh</code> CLI instructions in <code
+            class="text-on-night">llms.txt</code
+          >.
+        </p>
+      </div>
+    </div>
+  </div>
+</Section>
+
+<style>
+  .copy-button.is-copied .check-icon {
+    display: inline-flex;
+  }
+</style>

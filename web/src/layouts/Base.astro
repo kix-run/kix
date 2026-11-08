@@ -8,7 +8,7 @@ interface Props {
 const {
   title = 'Kix | The Kubernetes compiler',
   // The hero's H1 and subhead.
-  description = 'Kix is a Kubernetes compiler. Compile your whole cluster from one definition. Make deploys boring.',
+  description = 'Kix is a Kubernetes compiler. Compile your whole cluster from one definition. If it compiles, it will deploy safely.',
 } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
 ---
@@ -22,7 +22,7 @@ const url = new URL(Astro.url.pathname, Astro.site);
     <link rel="canonical" href={url} />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#f2efe7" />
+    <meta name="theme-color" content="#0c1117" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Kix" />
     <meta property="og:url" content={url} />
@@ -37,7 +37,19 @@ const url = new URL(Astro.url.pathname, Astro.site);
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content="https://kix.run/og-image@2x.png" />
     <meta name="twitter:image:alt" content="Kix is a Kubernetes compiler." />
-    <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
+    <link rel="alternate" type="text/plain" href="/docs/llms.txt" title="llms.txt" />
+    <script is:inline>
+      (() => {
+        const stored = typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+        const theme =
+          stored === 'dark' || stored === 'light'
+            ? stored
+            : matchMedia('(prefers-color-scheme: light)').matches
+              ? 'light'
+              : 'dark';
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <slot name="head" />
   </head>
   <body>
@@ -64,6 +76,465 @@ const url = new URL(Astro.url.pathname, Astro.site);
         button.classList.add('is-copied');
         window.setTimeout(() => button.classList.remove('is-copied'), 1600);
       });
+
+      // Expanding proximity rainbow illumination for .architectural-well micro-dots.
+      const GRID = 18;
+      const HALF = GRID / 2;
+      const MAX_RADIUS = 108; // 25% smaller than 145px
+      const EXPAND_MS = 340; // time for the wavefront to expand from 0 to MAX_RADIUS
+      const MAX_ALPHA = 0.85; // balanced rainbow opacity
+      const DOT_RADIUS = 1.25;
+      const RIPPLE_SPEED = 0.24; // px per ms (30% slower, constant speed across the entire well)
+      const TARGET_FPS = 60;
+      const FRAME_MIN_MS = 1000 / (TARGET_FPS + 2); // ~16.1ms so 60Hz displays never skip a vblank
+
+      // Interpolate subtle rainbow RGB stops based on normalized distance t in [0, 1].
+      const STOPS: [number, [number, number, number]][] = [
+        [0.0, [244, 63, 94]],   // rose
+        [0.2, [249, 115, 22]],  // orange
+        [0.38, [234, 179, 8]],  // amber
+        [0.56, [16, 185, 129]], // emerald
+        [0.74, [6, 182, 212]],  // cyan
+        [0.88, [37, 99, 235]],  // cobalt
+        [1.0, [139, 92, 246]],  // violet
+      ];
+
+      function sampleRainbow(t: number): [number, number, number] {
+        const clamped = Math.max(0, Math.min(1, t));
+        for (let i = 0; i < STOPS.length - 1; i++) {
+          const [t0, c0] = STOPS[i]!;
+          const [t1, c1] = STOPS[i + 1]!;
+          if (clamped <= t1) {
+            const u = (clamped - t0) / (t1 - t0 || 1);
+            return [
+              Math.round(c0[0] + (c1[0] - c0[0]) * u),
+              Math.round(c0[1] + (c1[1] - c0[1]) * u),
+              Math.round(c0[2] + (c1[2] - c0[2]) * u),
+            ];
+          }
+        }
+        return STOPS[STOPS.length - 1]![1];
+      }
+
+      // Precompute 256 CSS color strings once so the render loop allocates zero strings/arrays per dot.
+      const RAINBOW_LUT: string[] = new Array(256);
+      for (let i = 0; i < 256; i++) {
+        const [r, g, b] = sampleRainbow(i / 255);
+        RAINBOW_LUT[i] = `rgb(${r}, ${g}, ${b})`;
+      }
+
+      interface Ripple {
+        cx: number;
+        cy: number;
+        startAt: number;
+        maxR: number;
+      }
+
+      interface WellState {
+        el: HTMLElement;
+        canvas: HTMLCanvasElement;
+        ctx: CanvasRenderingContext2D;
+        width: number;
+        height: number;
+        cols: number;
+        rows: number;
+        mx: number;
+        my: number;
+        active: boolean;
+        inViewport: boolean;
+        hasLitDots: boolean;
+        canvasDirty: boolean;
+        triggeredAt: Float64Array;
+        lastTouchedAt: Float64Array;
+        minDist: Float32Array;
+        alpha: Float32Array;
+        ripples: Ripple[];
+      }
+
+      const wellStates: WellState[] = [];
+      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      function resizeWell(state: WellState) {
+        const rect = state.el.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        state.width = rect.width;
+        state.height = rect.height;
+        state.canvas.width = Math.ceil(rect.width * dpr);
+        state.canvas.height = Math.ceil(rect.height * dpr);
+        state.canvas.style.width = `${rect.width}px`;
+        state.canvas.style.height = `${rect.height}px`;
+        state.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const cols = Math.ceil(rect.width / GRID) + 1;
+        const rows = Math.ceil(rect.height / GRID) + 1;
+        if (cols !== state.cols || rows !== state.rows) {
+          state.cols = cols;
+          state.rows = rows;
+          const total = cols * rows;
+          state.triggeredAt = new Float64Array(total);
+          state.lastTouchedAt = new Float64Array(total);
+          state.minDist = new Float32Array(total).fill(1);
+          state.alpha = new Float32Array(total);
+          state.hasLitDots = false;
+          state.canvasDirty = false;
+        }
+      }
+
+      if (!prefersReducedMotion) {
+        for (const el of document.querySelectorAll<HTMLElement>('.architectural-well')) {
+          const canvas = document.createElement('canvas');
+          canvas.className = 'well-dots-canvas';
+          canvas.setAttribute('aria-hidden', 'true');
+          el.prepend(canvas);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+          const state: WellState = {
+            el,
+            canvas,
+            ctx,
+            width: 0,
+            height: 0,
+            cols: 0,
+            rows: 0,
+            mx: -9999,
+            my: -9999,
+            active: false,
+            inViewport: true,
+            hasLitDots: false,
+            canvasDirty: false,
+            triggeredAt: new Float64Array(0),
+            lastTouchedAt: new Float64Array(0),
+            minDist: new Float32Array(0),
+            alpha: new Float32Array(0),
+            ripples: [],
+          };
+          resizeWell(state);
+          wellStates.push(state);
+        }
+      }
+
+      if (wellStates.length > 0) {
+        let rafId = 0;
+        let lastFrameAt = 0;
+
+        const stopLoop = () => {
+          if (rafId) {
+            window.cancelAnimationFrame(rafId);
+            rafId = 0;
+          }
+        };
+
+        const tick = (now: number) => {
+          if (document.hidden) {
+            rafId = 0;
+            return;
+          }
+
+          const elapsedFrame = now - lastFrameAt;
+          if (elapsedFrame < FRAME_MIN_MS) {
+            rafId = window.requestAnimationFrame(tick);
+            return;
+          }
+          const dtScale = lastFrameAt > 0 ? Math.min(2.5, elapsedFrame / 16.667) : 1;
+          lastFrameAt = now;
+
+          let anyNeedsNextFrame = false;
+
+          for (const s of wellStates) {
+            if (!s.inViewport) continue;
+
+            // Prune ripples once they travel past the farthest corner of the well.
+            if (s.ripples.length > 0) {
+              s.ripples = s.ripples.filter((rip) => (now - rip.startAt) * RIPPLE_SPEED < rip.maxR);
+            }
+
+            // Skip this well entirely if nothing is active, lit, or rippling.
+            if (!s.active && !s.hasLitDots && s.ripples.length === 0) {
+              if (s.canvasDirty) {
+                s.ctx.clearRect(0, 0, s.width, s.height);
+                s.canvasDirty = false;
+              }
+              continue;
+            }
+
+            s.ctx.clearRect(0, 0, s.width, s.height);
+            const { cols, rows, mx, my } = s;
+            const hasRipples = s.ripples.length > 0;
+            let wellHasLitDots = false;
+            let wellChanging = hasRipples;
+
+            for (let r = 0; r < rows; r++) {
+              const dy = r * GRID + HALF;
+              const inCursorY = s.active && Math.abs(dy - my) < MAX_RADIUS;
+              const rowOffset = r * cols;
+              for (let c = 0; c < cols; c++) {
+                const idx = rowOffset + c;
+                const dx = c * GRID + HALF;
+                const inCursorBox = inCursorY && Math.abs(dx - mx) < MAX_RADIUS;
+
+                // Fast-skip untouched dots outside the cursor bounding box when no ripples are active.
+                if (!inCursorBox && s.triggeredAt[idx] === 0 && !hasRipples) {
+                  continue;
+                }
+
+                const liveDist = Math.hypot(dx - mx, dy - my);
+                const liveNorm = liveDist / MAX_RADIUS;
+
+                if (s.active && liveDist < MAX_RADIUS) {
+                  if (s.triggeredAt[idx] === 0) {
+                    s.triggeredAt[idx] = now;
+                    s.minDist[idx] = liveNorm;
+                  } else if (liveNorm < s.minDist[idx]!) {
+                    // Closer cursor approach upgrades the dot's rainbow ring and speeds up its bloom.
+                    s.minDist[idx] = liveNorm;
+                  }
+                  s.lastTouchedAt[idx] = now;
+                }
+
+                let target = 0;
+                const trig = s.triggeredAt[idx]!;
+                if (trig > 0) {
+                  const normDist = s.minDist[idx]!;
+                  const delay = Math.pow(normDist, 1.45) * EXPAND_MS;
+                  const fadeUpDuration = 75 + normDist * 220;
+                  const elapsed = now - trig - delay;
+                  const sinceTouch = now - s.lastTouchedAt[idx]!;
+                  const holdWindow = delay + fadeUpDuration + 240;
+
+                  if (liveDist < MAX_RADIUS || sinceTouch < holdWindow) {
+                    if (elapsed > 0) {
+                      const u = Math.min(1, elapsed / fadeUpDuration);
+                      const smoothFade = u * u * (3 - 2 * u);
+                      const radialFalloff = Math.pow(1 - normDist, 0.8);
+                      target = smoothFade * radialFalloff * MAX_ALPHA;
+                      if (u < 1) {
+                        wellChanging = true;
+                      }
+                    } else {
+                      wellChanging = true;
+                    }
+                  }
+                }
+
+                const current = s.alpha[idx]!;
+                let next = current;
+                if (Math.abs(target - current) > 0.0035) {
+                  let baseRate: number;
+                  if (target > current) {
+                    const proximityBoost = Math.max(0, 1 - s.minDist[idx]!);
+                    baseRate = 0.12 + proximityBoost * 0.26;
+                  } else {
+                    const distFactor = Math.min(1, liveDist / (MAX_RADIUS * 2.2));
+                    const ringFactor = s.minDist[idx]!;
+                    baseRate = 0.016 + distFactor * 0.044 + ringFactor * 0.036;
+                  }
+                  const scaledRate = 1 - Math.pow(1 - baseRate, dtScale);
+                  next = current + (target - current) * scaledRate;
+                  if (Math.abs(target - next) <= 0.0035) {
+                    next = target;
+                  } else {
+                    wellChanging = true;
+                  }
+                } else {
+                  next = target;
+                }
+
+                let drawAlpha = next > 0.004 ? next : 0;
+                let drawColorT = s.minDist[idx]!;
+                let drawRadius = DOT_RADIUS;
+
+                if (drawAlpha > 0) {
+                  s.alpha[idx] = drawAlpha;
+                  wellHasLitDots = true;
+                  // If the cursor is no longer holding this dot, keep animating until its holdWindow expires and it fades out.
+                  if (!s.active || liveDist >= MAX_RADIUS) {
+                    wellChanging = true;
+                  }
+                } else {
+                  s.alpha[idx] = 0;
+                  if (liveDist >= MAX_RADIUS && now - s.lastTouchedAt[idx]! > 600) {
+                    s.triggeredAt[idx] = 0;
+                    s.minDist[idx] = 1;
+                  }
+                }
+
+                // Overlay non-dissipating pond ripples blown out from click positions.
+                for (const rip of s.ripples) {
+                  const ripElapsed = now - rip.startAt;
+                  const innerR = ripElapsed * RIPPLE_SPEED;
+                  const bandWidth = MAX_RADIUS;
+                  const rDist = Math.hypot(dx - rip.cx, dy - rip.cy);
+
+                  const delta = rDist - innerR;
+                  if (delta >= 0 && delta <= bandWidth) {
+                    const ringT = delta / bandWidth;
+                    const waveCrest = Math.sin(ringT * Math.PI);
+                    const ripAlpha = waveCrest * MAX_ALPHA;
+                    if (ripAlpha > drawAlpha) {
+                      drawAlpha = ripAlpha;
+                      drawColorT = ringT;
+                      drawRadius = DOT_RADIUS + waveCrest * 0.35;
+                    }
+                  } else if (delta < 0 && delta >= -bandWidth * 0.55) {
+                    const wakeT = -delta / (bandWidth * 0.55);
+                    const wakeCrest = Math.sin(wakeT * Math.PI);
+                    const wakeAlpha = wakeCrest * (MAX_ALPHA * 0.5);
+                    if (wakeAlpha > drawAlpha) {
+                      drawAlpha = wakeAlpha;
+                      drawColorT = 1 - wakeT * 0.5;
+                    }
+                  }
+                }
+
+                if (drawAlpha > 0.004) {
+                  const lutIdx = Math.max(0, Math.min(255, (drawColorT * 255) | 0));
+                  s.ctx.fillStyle = RAINBOW_LUT[lutIdx]!;
+                  s.ctx.globalAlpha = drawAlpha;
+                  s.ctx.beginPath();
+                  s.ctx.arc(dx, dy, drawRadius, 0, Math.PI * 2);
+                  s.ctx.fill();
+                }
+              }
+            }
+
+            s.ctx.globalAlpha = 1;
+            s.hasLitDots = wellHasLitDots;
+            s.canvasDirty = wellHasLitDots || s.ripples.length > 0;
+            if (wellChanging) {
+              anyNeedsNextFrame = true;
+            }
+          }
+
+          if (anyNeedsNextFrame) {
+            rafId = window.requestAnimationFrame(tick);
+          } else {
+            rafId = 0;
+          }
+        };
+
+        const ensureLoop = () => {
+          if (!rafId && !document.hidden) {
+            rafId = window.requestAnimationFrame(tick);
+          }
+        };
+
+        // Pause rendering when a well scrolls out of the viewport.
+        if ('IntersectionObserver' in window) {
+          const io = new IntersectionObserver(
+            (entries) => {
+              for (const entry of entries) {
+                const state = wellStates.find((w) => w.el === entry.target);
+                if (state) {
+                  state.inViewport = entry.isIntersecting;
+                }
+              }
+            },
+            { threshold: 0 },
+          );
+          for (const s of wellStates) io.observe(s.el);
+        }
+
+        // Immediately stop RAF when the tab goes into the background.
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden) {
+            stopLoop();
+          }
+        });
+
+        window.addEventListener(
+          'pointermove',
+          (event) => {
+            if (document.hidden) return;
+            let shouldWake = false;
+            for (const s of wellStates) {
+              if (!s.inViewport) continue;
+              const rect = s.el.getBoundingClientRect();
+              const nx = event.clientX - rect.left;
+              const ny = event.clientY - rect.top;
+              if (nx === s.mx && ny === s.my) continue;
+              s.mx = nx;
+              s.my = ny;
+              s.active =
+                nx >= -MAX_RADIUS &&
+                nx <= rect.width + MAX_RADIUS &&
+                ny >= -MAX_RADIUS &&
+                ny <= rect.height + MAX_RADIUS;
+              if (s.active || s.hasLitDots || s.ripples.length > 0) {
+                shouldWake = true;
+              }
+            }
+            if (shouldWake) {
+              ensureLoop();
+            }
+          },
+          { passive: true },
+        );
+
+        window.addEventListener(
+          'pointerdown',
+          (event) => {
+            if (document.hidden) return;
+            const target = event.target as Element | null;
+            if (!target) return;
+            // Ignore clicks on the carousel window, tab stepper, buttons, links, or code blocks sitting above the dot background.
+            if (
+              target.closest(
+                '.workbench-window, .beat-stepper, .beat-tab, button, a, input, select, textarea, pre, code',
+              )
+            ) {
+              return;
+            }
+            const now = performance.now();
+            let triggered = false;
+            for (const s of wellStates) {
+              if (!s.inViewport || !s.el.contains(target)) continue;
+              const rect = s.el.getBoundingClientRect();
+              const cx = event.clientX - rect.left;
+              const cy = event.clientY - rect.top;
+              if (cx >= 0 && cx <= rect.width && cy >= 0 && cy <= rect.height) {
+                s.mx = cx;
+                s.my = cy;
+                s.active = true;
+                triggered = true;
+                // Blow the existing dots outward as a non-dissipating pond ripple to the farthest corner.
+                const maxR =
+                  Math.hypot(Math.max(cx, rect.width - cx), Math.max(cy, rect.height - cy)) + MAX_RADIUS * 1.6;
+                s.ripples.push({ cx, cy, startAt: now, maxR });
+                // Clear local dots around the cursor so fresh dots simultaneously bloom outward from the click point.
+                const { cols, rows } = s;
+                for (let r = 0; r < rows; r++) {
+                  const dy = r * GRID + HALF;
+                  const rowOffset = r * cols;
+                  for (let c = 0; c < cols; c++) {
+                    const idx = rowOffset + c;
+                    const dx = c * GRID + HALF;
+                    if (Math.hypot(dx - cx, dy - cy) < MAX_RADIUS * 1.4) {
+                      s.alpha[idx] = 0;
+                      s.triggeredAt[idx] = now;
+                      s.lastTouchedAt[idx] = now;
+                      s.minDist[idx] = Math.hypot(dx - cx, dy - cy) / MAX_RADIUS;
+                    }
+                  }
+                }
+              }
+            }
+            if (triggered) {
+              ensureLoop();
+            }
+          },
+          { passive: true },
+        );
+
+        window.addEventListener(
+          'resize',
+          () => {
+            for (const s of wellStates) resizeWell(s);
+            if (wellStates.some((s) => s.hasLitDots || s.ripples.length > 0)) {
+              ensureLoop();
+            }
+          },
+          { passive: true },
+        );
+      }
     </script>
     <style is:global>
       .copy-button.is-copied .copy-icon {

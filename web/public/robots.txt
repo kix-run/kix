@@ -3,6 +3,6 @@ Allow: /
 
 Sitemap: https://kix.run/sitemap-index.xml
 
-# Machine-readable index of the documentation: https://kix.run/llms.txt
+# Machine-readable index of the documentation: https://kix.run/docs/llms.txt
 # Every docs page is also available as Markdown, either by appending
 # `.md` to its URL or by sending `Accept: text/markdown`.

@@ -3,48 +3,53 @@ import { ArrowUpRight } from '@lucide/astro';
 import Container from '../Container.astro';
 import Button from '../Button.astro';
 import Logo from '../Logo.astro';
-// import CommandBar from '../CommandBar.astro';
 import { DOCS_URL, INSTALL_URL } from '@/lib/links';
-
-const footerLinks = [
-  { label: 'Docs', href: '/docs/' },
-  { label: 'Packages', href: '#packages' },
-  { label: 'What it catches', href: '#check' },
-  { label: 'FAQ', href: '#faq' },
-];
+import { NAV_LINKS } from '@/lib/nav';
 ---
 
 <div class="bg-night text-on-night">
   <Container>
-    <section aria-labelledby="final-cta-title" class="flex flex-col items-center gap-7 pt-20 text-center lg:pt-[120px]">
+    <section aria-labelledby="final-cta-title" class="flex flex-col items-center gap-6 pt-16 text-center lg:pt-24">
       <h2
         id="final-cta-title"
-        class="text-[40px] leading-[1.05] font-semibold tracking-[-1.5px] text-balance md:text-[56px] lg:text-[72px] lg:tracking-[-2.5px]"
+        class="text-[38px] leading-[1.05] font-bold tracking-[-0.03em] text-balance md:text-[52px] lg:text-[60px]"
       >
         Compile your first cluster.
       </h2>
-      <p class="max-w-[620px] text-[17px] leading-normal text-on-night-2 md:text-[19px]">
+      <p class="max-w-[580px] text-[17px] leading-relaxed text-on-night-2 md:text-[18px]">
         Install the CLI, compile an example, and review the plan before deploying.
       </p>
-      {/* Shown once web/install.sh is published at kix.run/install (see web/HANDOVER.md).
-      <CommandBar command={INSTALL_COMMAND} tone="night" />
-      */}
-      <div class="flex flex-wrap justify-center gap-3">
-        <Button href={INSTALL_URL}>Install the Kix CLI</Button>
-        <Button href={DOCS_URL} variant="outline-night">Read the docs <ArrowUpRight size={18} aria-hidden="true" /></Button>
+      <div class="flex flex-wrap items-center justify-center gap-3 pt-1">
+        <div
+          class="flex items-center gap-3.5 rounded-lg border border-night-line bg-night-2 py-1.5 pr-1.5 pl-4 font-mono text-[13px]"
+        >
+          <span class="font-bold text-t-blue select-none" aria-hidden="true">$</span>
+          <code class="text-on-night">curl -fsSL https://kix.run/install.sh | sh</code>
+          <button
+            type="button"
+            data-copy="curl -fsSL https://kix.run/install.sh | sh"
+            class="copy-button inline-flex items-center gap-1.5 rounded-[5px] bg-accent-brand px-3 py-1.5 font-sans text-[12.5px] font-semibold text-white transition-colors hover:bg-accent-text"
+          >
+            <span class="copy-icon">Copy</span>
+            <span class="check-icon hidden">Copied</span>
+          </button>
+        </div>
+        <Button href={INSTALL_URL} variant="outline-night">Setup guide</Button>
+        <Button href={DOCS_URL} variant="outline-night">
+          Read the docs <ArrowUpRight size={17} aria-hidden="true" />
+        </Button>
       </div>
     </section>
     <footer
-      class="mt-16 flex flex-col gap-6 border-t border-night-line pt-7 pb-14 md:flex-row md:items-center md:justify-between lg:mt-24"
+      class="mt-16 flex flex-col gap-6 border-t border-night-line pt-7 pb-12 md:flex-row md:items-center md:justify-between lg:mt-20"
     >
-      <div class="flex flex-wrap items-center gap-x-2.5 gap-y-2">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
         <a href="/" class="rounded-md"><Logo tone="night" size="sm" /><span class="sr-only"> home</span></a>
-        <span class="text-sm text-t-dim">The Kubernetes compiler</span>
       </div>
       <nav aria-label="Footer">
         <ul class="flex flex-wrap gap-x-7 gap-y-3">
           {
-            footerLinks.map((link) => (
+            NAV_LINKS.map((link) => (
               <li>
                 <a href={link.href} class="text-sm text-on-night-2 transition-colors hover:text-on-night">
                   {link.label}

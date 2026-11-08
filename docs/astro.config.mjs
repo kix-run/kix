@@ -1,6 +1,6 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import starlightLlmsTxt from 'starlight-llms-txt';
+import kixLlmsTxt from './src/lib/llms-txt.ts';
 // Vendored locally so we can modify it for coexistence with
 // starlight-versions. See src/lib/sidebar-topics/README-VENDOR.md.
 import starlightSidebarTopics from './src/lib/sidebar-topics/index.ts';
@@ -165,7 +165,7 @@ export default defineConfig({
         starlightVersions({
           versions: [{ slug: 'v0.1' }],
         }),
-        starlightLlmsTxt(),
+        kixLlmsTxt(),
         // Fails the build on broken internal links, catching rot in the
         // dense Diátaxis cross-link graph.
         starlightLinksValidator(),

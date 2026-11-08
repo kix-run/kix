@@ -1,0 +1,112 @@
+---
+import { ArrowRight } from '@lucide/astro';
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+
+const cards = [
+  {
+    title: 'Catch cross-resource bugs offline',
+    desc: 'Kix validates selectors, Secret keys, port bindings, and workload collisions across the whole cluster definition in under a second.',
+    href: '/checks',
+    cta: 'Explore 60+ static checks',
+    cmd: '$ kix check shop',
+    lines: [
+      { mark: '✗', tone: 'text-t-red', text: 'Service shop/web selector {"app":"shop-wbe"} matches 0 pods.' },
+      { mark: '✗', tone: 'text-t-red', text: 'secret "db" does not declare key "password" (declared: pass)' },
+      { mark: '✗', tone: 'text-t-red', text: 'Job shop/migrate labels collide with Service shop/web.' },
+    ],
+  },
+  {
+    title: 'Diff live clusters & order rollouts',
+    desc: 'Preview package-grouped diffs against the live cluster, post markdown plans on pull requests, and roll out in dependency waves.',
+    href: '/workflow',
+    cta: 'See diff, deploy & receipts',
+    cmd: '$ kix diff shop',
+    lines: [
+      { mark: '~', tone: 'text-t-yellow', text: 'shop/web 1.4.2 -> 1.5.0 (1 changed, 2 dep-affected)' },
+      { mark: '+', tone: 'text-t-green', text: 'shop/valkey 8.0.2 (4 resources)' },
+      { mark: '✓', tone: 'text-t-blue', text: 'Receipt kix.run/receipt/v1 recorded on cluster' },
+    ],
+  },
+  {
+    title: 'Standard library with full escape hatches',
+    desc: 'Packages adapt from single-node kind clusters to multi-zone EKS, while letting you import external RDS or override any raw PodSpec field.',
+    href: '/packages',
+    cta: 'Browse packages & profiles',
+    cmd: 'clusters/shop.nix',
+    lines: [
+      { mark: '', tone: 'text-t-blue', text: 'db = kix.import { host = "rds.prod.internal"; /* ... credentials */ };' },
+      { mark: '', tone: 'text-on-night-2', text: '# or override any raw PodSpec field:' },
+      { mark: '', tone: 'text-t-green', text: 'podSpec.priorityClassName = "production-high";' },
+    ],
+  },
+  {
+    title: 'Pure Nix evaluation for people & agents',
+    desc: 'Built on the Nix language for string-context dependency tracking, hermetic evaluation without cluster credentials, and fast agent feedback loops.',
+    href: '/why-nix',
+    cta: 'Why the Nix language',
+    cmd: 'flake.lock · hermetic evaluation',
+    lines: [
+      { mark: '✓', tone: 'text-t-green', text: 'String context tracks every cross-resource reference' },
+      { mark: '✓', tone: 'text-t-green', text: 'Pure evaluation runs offline without cluster API access' },
+      { mark: '✓', tone: 'text-t-blue', text: 'Sub-second compiler feedback loop for coding agents' },
+    ],
+  },
+];
+---
+
+<Section labelledby="hub-title">
+  <div class="flex flex-col gap-12">
+    <div class="flex max-w-[740px] flex-col gap-4">
+      <Heading id="hub-title" size="lg">Explore how the compiler works</Heading>
+      <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
+        From static validation and live cluster diffs to standard Kubernetes YAML export, every step works from a single
+        cluster definition.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {
+        cards.map((card) => (
+          <a
+            href={card.href}
+            class="group flex flex-col justify-between gap-6 rounded-xl border border-line bg-paper-2/60 p-6 transition-all hover:border-accent-brand hover:bg-paper hover:shadow-[0_12px_32px_rgba(11,19,43,0.07)] sm:p-8"
+          >
+            <div class="flex flex-col gap-3">
+              <div class="flex items-center justify-between gap-4">
+                <h3 class="text-[22px] leading-[1.2] font-bold tracking-[-0.02em] text-ink group-hover:text-accent-brand">
+                  {card.title}
+                </h3>
+                <ArrowRight
+                  size={20}
+                  aria-hidden="true"
+                  class="shrink-0 text-ink-2 transition-transform group-hover:translate-x-1 group-hover:text-accent-brand"
+                />
+              </div>
+              <p class="text-[15.5px] leading-[1.55] text-ink-2">{card.desc}</p>
+            </div>
+
+            <div class="flex flex-col gap-4">
+              <div class="overflow-hidden rounded-lg border border-night-line bg-night font-mono text-[12.5px] leading-[1.6] text-on-night">
+                <div class="border-b border-night-line bg-[#090d13] px-4 py-2 text-[11.5px] font-semibold text-on-night-2">
+                  {card.cmd}
+                </div>
+                <div class="flex flex-col gap-1.5 px-4 py-3.5">
+                  {card.lines.map((l) => (
+                    <div class="flex gap-2 overflow-x-auto whitespace-nowrap">
+                      {l.mark && <span class:list={['shrink-0 font-bold', l.tone]}>{l.mark}</span>}
+                      <span class={l.mark ? 'text-on-night' : l.tone}>{l.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <span class="inline-flex items-center gap-1.5 text-[14px] font-semibold text-accent-brand">
+                {card.cta} <ArrowRight size={15} aria-hidden="true" />
+              </span>
+            </div>
+          </a>
+        ))
+      }
+    </div>
+  </div>
+</Section>

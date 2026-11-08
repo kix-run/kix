@@ -1,7 +1,7 @@
 ---
-// Link styled as a button. "primary" is the orange install button, "ink"
-// the small nav button, "outline" the ink-bordered secondary, and
-// "outline-night" the secondary on a night section.
+// Link styled as a button. "primary" is the Electric Cobalt CTA button,
+// "ink" is the Sovereign Navy button, "outline" is the slate-bordered secondary,
+// and "outline-night" is the secondary on a Sovereign Navy section.
 interface Props {
   href: string;
   variant?: 'primary' | 'ink' | 'outline' | 'outline-night';
@@ -16,12 +16,13 @@ const { href, variant = 'primary', size = 'lg', class: className } = Astro.props
   class:list={[
     'inline-flex items-center justify-center gap-2 rounded-lg font-semibold whitespace-nowrap transition-colors [&_svg]:shrink-0',
     {
-      'px-[22px] py-[15px] text-base': size === 'lg',
-      'px-4 py-2.5 text-sm': size === 'sm',
-      'bg-accent-button text-white hover:bg-accent-text': variant === 'primary',
-      'bg-ink text-paper hover:bg-ink/85': variant === 'ink',
-      'border-[1.5px] border-ink text-ink hover:bg-ink/5': variant === 'outline',
-      'border-[1.5px] border-on-night text-on-night hover:bg-on-night/10': variant === 'outline-night',
+      'px-5 py-3 text-[14.5px]': size === 'lg',
+      'px-3.5 py-2 text-[13px]': size === 'sm',
+      'bg-accent-button text-white hover:bg-[#1554c7]': variant === 'primary',
+      'bg-ink text-paper hover:bg-ink/90': variant === 'ink',
+      'border border-line bg-paper text-ink hover:border-accent-brand hover:text-accent-brand': variant === 'outline',
+      'border border-night-line bg-night-2 text-on-night hover:border-t-blue hover:bg-night-2/80':
+        variant === 'outline-night',
     },
     className,
   ]}

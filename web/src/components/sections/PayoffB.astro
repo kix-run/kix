@@ -56,7 +56,7 @@ const waves = [
 const notes = [
   {
     cmd: 'kix rollback',
-    desc: 'Reapplies a previous deploy from the local Nix store. kix gc keeps at least the 10 newest records.',
+    desc: 'Reapplies a previous deploy from the local build cache. kix gc keeps at least the 10 newest records.',
   },
   {
     cmd: 'kix drift',
@@ -81,8 +81,7 @@ const notes = [
           id="plan-title"
           class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance text-ink md:text-[40px] md:tracking-[-1px]"
         >
-          {/* accent-button, not the brand orange: on paper-2 the brand orange is 2.7:1. */}
-          <span class="text-accent-button">B.</span> plan a change
+          Package-grouped diffs &amp; ordered rollouts
         </h2>
         <p class="text-[17px] leading-[1.6] text-ink-2">
           Before deploying, kix diff compares the compiled definition with the live cluster and groups the changes by
