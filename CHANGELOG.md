@@ -17,6 +17,8 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+## 0.7.1 - 2026-11-08
+
 ### Changed
 
 - Errors about `kix.toml`, the `nix` builder, the Kix library version, and Helm are shorter. Each one says what is wrong and how to fix it. Scripts that match these messages word for word need updating.
