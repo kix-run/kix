@@ -27,7 +27,7 @@ pub enum KixEvalError {
     /// The cluster exists, but its Kix library is older than this binary
     /// and writes no `activationIndex`.
     #[error(
-        "cluster '{cluster}' uses a Kix library older than Kix {}, so Kix could not evaluate it. Run `kix lib update` to move flake.lock to the Kix library {}, or use the version of Kix that matches the library",
+        "cluster '{cluster}' uses a Kix library older than Kix {}. Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
         crate::VERSION,
         crate::VERSION
     )]
@@ -47,14 +47,14 @@ pub enum KixEvalError {
 
     /// The machine's Nix refused to build a Helm chart during evaluation.
     #[error(
-        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), and its setting allow-import-from-derivation is off. The nix builder needs it to render Helm charts during evaluation. Set allow-import-from-derivation = true in nix.conf, or ask the administrator of this machine's Nix to set it"
+        "cannot render Helm charts with the `nix` builder (`builder = \"nix\"` in kix.toml) because `allow-import-from-derivation` is off in this machine's Nix. Set `allow-import-from-derivation = true` in nix.conf"
     )]
     ImportFromDerivationDisabled,
 
     /// Under the nix builder, evaluation reached a chart that only the kix
     /// builder renders. The library's nix route should never produce one.
     #[error(
-        "internal error: under the nix builder, evaluation reached a Helm chart prepared for Kix's own builder ({path}). This is a bug in Kix. Please report it with the output of `kix -v`"
+        "internal error: under the `nix` builder, evaluation reached a Helm chart for the `kix` builder ({path}). This is a bug in Kix. Please report it with the output of `kix -v`"
     )]
     PlaceholderUnderNix { path: String },
 
@@ -86,7 +86,7 @@ fn system_not_provided_message(system: &str, provided: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "this flake has no Kix outputs for {system}, the system Kix runs on. \
+        "this flake has no Kix outputs for {system} (this machine's system). \
          It has them for {}. Add {system} to the systems the flake builds for: \
          pass systems = [ {systems} ] to kix.lib.mkFlake, or add {system} to the \
          systems your flake calls kix.lib.forPkgs for",

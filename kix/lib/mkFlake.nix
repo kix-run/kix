@@ -52,7 +52,7 @@ let
     if builtins.elem value builders then
       value
     else
-      throw "kix.toml sets builder = ${builtins.toJSON value}, which this Kix library does not know. It knows these builders: ${lib.concatStringsSep ", " builders}. Check the spelling, or run `kix lib update` if the project needs a newer Kix library.";
+      throw "kix.toml sets builder = ${builtins.toJSON value}, which is not a known builder (the Kix library supports: ${lib.concatStringsSep ", " builders}). Check the spelling, or run `kix lib update` if the project needs a newer Kix library.";
 
   catalogPackages =
     let

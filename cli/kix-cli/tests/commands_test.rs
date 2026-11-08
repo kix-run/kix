@@ -339,10 +339,13 @@ fn kix_toml_chooses_the_builder() {
     run(&["build", "minimal"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("cannot use a remote builder"));
+        .stderr(predicate::str::contains(
+            "remote builders are not supported yet",
+        ));
     run(&["doctor"]).assert().failure().stdout(
-        predicate::str::contains("✗ Builder: remote (set in")
-            .and(predicate::str::contains("cannot use a remote builder")),
+        predicate::str::contains("✗ Builder: remote (set in").and(predicate::str::contains(
+            "remote builders are not supported yet",
+        )),
     );
 
     std::fs::write(&file, "builder = \"kix\"\nbuidler = \"nix\"\n").unwrap();
