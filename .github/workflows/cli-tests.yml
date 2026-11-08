@@ -440,8 +440,8 @@ jobs:
     strategy:
       matrix:
         include:
-          # Spindle's image has Nix, but the check runs kix in a plain
-          # Ubuntu container, which has no /nix.
+          # Spindle's image has Nix. without-nix.sh runs Kix in a plain
+          # Ubuntu container, which has no /nix, and checks that.
           - system: x86_64-linux
             runner: [self-hosted, spindle-4c-8g]
           # Linux and macOS VMs on the Mac Studio, with no Nix in the image.
@@ -470,7 +470,6 @@ jobs:
 
       - name: Run the archive without Nix
         run: |
-          test ! -e /nix || { echo "this runner has /nix"; ls -la /nix; exit 1; }
           tar -xzf "dist/kix-${{ matrix.system }}.tar.gz" -C "$RUNNER_TEMP"
           cli/runtime/without-nix.sh "$RUNNER_TEMP/kix-$VERSION-${{ matrix.system }}" .
 
