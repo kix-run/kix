@@ -270,8 +270,15 @@ fn a_project_this_kix_meets_runs_here() {
     if running.minor_key() < kix::version::policy::FIRST_SELECTING {
         return;
     }
-    let s = Setup::new(&running.minor_text());
-    s.fake(&format!("{}.{}.999", running.major, running.minor));
+    // A minor never matches a prerelease, so a prerelease is named exactly.
+    // An installed Kix of another minor must not take over.
+    let req = if running.is_prerelease() {
+        running.release()
+    } else {
+        running.minor_text()
+    };
+    let s = Setup::new(&req);
+    s.fake(&format!("{}.{}.0", running.major, running.minor + 1));
     s.kix()
         .arg("--flake")
         .arg(&s.project)
