@@ -277,5 +277,8 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # --branch=main marks this a production deployment, so it
-          # serves on the custom domain rather than a preview URL.
-          command: pages deploy _site --project-name=kix-run --branch=main
+          # serves on the custom domain. A manual run from any other branch
+          # deploys a preview at <branch>.kix-run.pages.dev instead, which is
+          # how to check the Worker and the release files before they reach
+          # kix.run.
+          command: pages deploy _site --project-name=kix-run --branch=${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}

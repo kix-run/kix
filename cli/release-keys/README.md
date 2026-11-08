@@ -1,9 +1,11 @@
 # Release signing keys
 
 The public keys that Kix and the install script trust to sign a release's
-`SHA256SUMS`. The `publish` job in `.github/workflows/cli-tests.yml` signs
-with the private key in the repository secret `KIX_RELEASE_SIGNING_KEY` and
-uploads the signature as `SHA256SUMS.sig`. kix.run lists a release only when
+`SHA256SUMS`. The `publish` job in `.github/workflows/cli-tests.yml` runs
+`scripts/sign-release.sh`, which signs with the private key in the repository
+secret `KIX_RELEASE_SIGNING_KEY` and writes the signature as `SHA256SUMS.sig`.
+A manual run with the `rehearse` input runs the same script and installs the
+result without publishing it (`cli/README.md` § Releases). kix.run lists a release only when
 it has one (`web/scripts/release-index.mjs`). The design is
 `v2_discussions/163_cli_install_versions_and_upgrades.md` § 3.
 

@@ -24,6 +24,11 @@ You may merge the release pull request yourself once its checks pass.
   `gh pr list --search 'Release in:title'`.
 - Read `## Unreleased` in `CHANGELOG.md`. If it has no entries, there is
   nothing to release. Tell the person and stop.
+- If signing, the install script, or the release index changed since the
+  last release, rehearse first:
+  `gh workflow run cli-tests.yml --ref main -f rehearse=0.0.1`, and check
+  that the `rehearse-release` job passes. It signs with the real key and
+  installs from a local copy of the release site, publishing nothing.
 
 ## 1. Pick the version
 

@@ -35,6 +35,14 @@ on:
       - 'flake.lock'
       - '.github/workflows/cli-tests.yml'
   workflow_dispatch:
+    inputs:
+      rehearse:
+        description: >-
+          Rehearse a release: build the archives as this version (X.Y.Z, not a
+          released one), sign them with the release key, and install them from
+          a copy of the release site. Publishes nothing.
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -130,6 +138,7 @@ jobs:
       notes: ${{ steps.version.outputs.notes }}
       build: ${{ steps.build.outputs.build }}
       runtime: ${{ steps.build.outputs.runtime }}
+      rehearse: ${{ steps.version.outputs.rehearse }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -139,7 +148,28 @@ jobs:
 
       - name: Version
         id: version
+        env:
+          REHEARSE: ${{ inputs.rehearse }}
         run: |
+          # A rehearsal builds the archives as the version it names, so the
+          # release index lists them like a release.
+          if [ -n "$REHEARSE" ]; then
+            if ! printf '%s\n' "$REHEARSE" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+              echo "rehearse must be a version such as 0.0.1, not '$REHEARSE'."
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/v$REHEARSE" >/dev/null; then
+              echo "v$REHEARSE is a released version. Rehearse with one that is not, such as 0.0.1."
+              exit 1
+            fi
+            {
+              echo "version=$REHEARSE"
+              echo "release=false"
+              echo "rehearse=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           base=$(cargo metadata --manifest-path cli/Cargo.toml --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "kix-cli") | .version')
 
@@ -544,6 +574,78 @@ jobs:
   # This repository is private and so are its releases, so the binaries go
   # to the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
   # fine-grained token with Contents read/write on that repository only.
+  # A rehearsal (a manual run with the `rehearse` input) signs the archives
+  # with the real release key, builds a copy of the release site the way
+  # pages.yml does, and installs from it with the install script and with
+  # `kix self install`, so the signing secret, the committed key, the index
+  # generator, and both verifiers are checked before a real release. It
+  # publishes nothing.
+  rehearse-release:
+    needs: [version, release]
+    if: needs.version.outputs.rehearse == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Sign checksums
+        env:
+          KIX_RELEASE_SIGNING_KEY: ${{ secrets.KIX_RELEASE_SIGNING_KEY }}
+        run: |
+          scripts/sign-release.sh dist
+          test -s dist/SHA256SUMS.sig || { echo "no key is committed, so there is nothing to rehearse"; exit 1; }
+
+      - name: Build a copy of the release site
+        run: |
+          mkdir -p "release-src/v$VERSION" "site/download/$VERSION"
+          cp dist/SHA256SUMS dist/SHA256SUMS.sig "release-src/v$VERSION/"
+          node web/scripts/release-index.mjs release-src site
+          cp dist/kix-*.tar.gz "site/download/$VERSION/"
+          jq -e --arg v "$VERSION" '.latest == $v' site/releases/index.json
+
+      - name: Install with the install script
+        run: |
+          home="$RUNNER_TEMP/script-home"
+          HOME="$home" KIX_INSTALL_SOURCE="file://$PWD/site" sh web/public/install 2>&1 | tee install.log
+          grep -q "Verified SHA256SUMS for Kix $VERSION with release key" install.log
+          test "$("$home/.local/bin/kix" --version)" = "kix $VERSION"
+
+      - name: Install with kix self install
+        run: |
+          home="$RUNNER_TEMP/kix-home"
+          HOME="$home" KIX_RELEASE_SOURCE="$PWD/site" \
+            "$RUNNER_TEMP/script-home/.local/bin/kix" self install "$VERSION"
+          test "$("$home/.local/share/kix/$VERSION/bin/kix" --version)" = "kix $VERSION"
+
+      - name: A changed signature is refused
+        run: |
+          sig="site/releases/v$VERSION/SHA256SUMS.sig"
+          zeros=$(head -c 64 /dev/zero | base64 -w0)
+          sed -i "s|^signature=.*|signature=$zeros|" "$sig"
+          home="$RUNNER_TEMP/tampered-home"
+          if HOME="$home" KIX_RELEASE_SOURCE="$PWD/site" \
+            "$RUNNER_TEMP/script-home/.local/bin/kix" self install "$VERSION" 2> refused.log; then
+            echo "kix installed a release whose signature was changed"
+            exit 1
+          fi
+          cat refused.log
+          grep -q "does not verify against any key built into Kix" refused.log
+          test ! -e "$home/.local/share/kix/$VERSION"
+          if HOME="$RUNNER_TEMP/tampered-script-home" KIX_INSTALL_SOURCE="file://$PWD/site" \
+            sh web/public/install > refused-script.log 2>&1; then
+            cat refused-script.log
+            echo "the install script installed a release whose signature was changed"
+            exit 1
+          fi
+          cat refused-script.log
+
   publish:
     needs: [version, release, without-nix, nix-builder]
     if: needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -572,41 +674,7 @@ jobs:
       - name: Sign checksums
         env:
           KIX_RELEASE_SIGNING_KEY: ${{ secrets.KIX_RELEASE_SIGNING_KEY }}
-        run: |
-          # Before the first key is committed, no Kix could verify a
-          # signature, so the release goes out unsigned.
-          if ! ls cli/release-keys/*.pub >/dev/null 2>&1; then
-            echo "::warning::cli/release-keys has no key, so this release is unsigned and Kix cannot install it automatically. cli/release-keys/README.md says how to add a key."
-            exit 0
-          fi
-          if [ -z "$KIX_RELEASE_SIGNING_KEY" ]; then
-            echo "::error::The repository secret KIX_RELEASE_SIGNING_KEY is not set, so the release cannot be signed. See cli/release-keys/README.md."
-            exit 1
-          fi
-          umask 077
-          key="$RUNNER_TEMP/kix-release.pem"
-          trap 'rm -f "$key"' EXIT
-          printf '%s\n' "$KIX_RELEASE_SIGNING_KEY" > "$key"
-
-          openssl pkey -in "$key" -pubout -outform DER | tail -c 32 > "$RUNNER_TEMP/release-key.raw"
-          keyid=$(sha256sum "$RUNNER_TEMP/release-key.raw" | cut -c1-8)
-          public=$(od -An -v -tx1 "$RUNNER_TEMP/release-key.raw" | tr -d ' \n')
-          committed="cli/release-keys/$keyid.pub"
-          if [ ! -f "$committed" ] || [ "$(tr -d '[:space:]' < "$committed")" != "$public" ]; then
-            echo "::error::$committed does not hold the public half of KIX_RELEASE_SIGNING_KEY. Commit it before releasing. See cli/release-keys/README.md."
-            exit 1
-          fi
-
-          openssl pkeyutl -sign -inkey "$key" -rawin -in dist/SHA256SUMS > "$RUNNER_TEMP/SHA256SUMS.sig.bin"
-          printf 'kix-release-signature v1\nkeyid=%s\nsignature=%s\n' \
-            "$keyid" "$(base64 -w0 < "$RUNNER_TEMP/SHA256SUMS.sig.bin")" > dist/SHA256SUMS.sig
-
-          # Check the signature with the public key, which equals the
-          # committed one, as Kix will.
-          openssl pkey -in "$key" -pubout -out "$RUNNER_TEMP/release-key.pub.pem"
-          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/release-key.pub.pem" -rawin \
-            -in dist/SHA256SUMS -sigfile "$RUNNER_TEMP/SHA256SUMS.sig.bin"
-          cat dist/SHA256SUMS.sig
+        run: scripts/sign-release.sh dist
 
       # A release that already exists in kix-releases is left alone, so a
       # run that published and then failed to tag can be run again.

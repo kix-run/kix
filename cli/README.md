@@ -114,6 +114,17 @@ already exists in kix-releases and creates the tag last. A manual run
 workflow artifact, reporting `<version>+<run number>`, and publishes
 nothing.
 
+A manual run with the `rehearse` input
+(`gh workflow run cli-tests.yml --ref <branch> -f rehearse=0.0.1`) builds the
+archives as that version, and the `rehearse-release` job signs them with the
+real key through `scripts/sign-release.sh`, the script `publish` runs. It
+builds a copy of the release site with `web/scripts/release-index.mjs`,
+installs from it with the install script and with `kix self install`, and
+checks that both refuse a changed signature. It publishes nothing. To check
+the site's Worker and release files, run `pages.yml` from the branch
+(`gh workflow run pages.yml --ref <branch>`), which deploys a preview at
+`<branch>.kix-run.pages.dev` instead of kix.run.
+
 A pull request that makes a release (its version has no tag yet) runs the
 same steps, except `publish`. Another pull request that changes the runtime,
 cluster evaluation (`cli/kix/src/eval/`), or the Nix side of Helm renders
