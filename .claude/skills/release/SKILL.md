@@ -105,6 +105,12 @@ If `publish` stops at "Sign checksums", the secret `KIX_RELEASE_SIGNING_KEY`
 is missing or its public key is not committed in `cli/release-keys/`. Ask the
 person to fix it (`cli/release-keys/README.md`), then run the job again.
 
+While `cli/release-keys/` holds no `*.pub` key, "Sign checksums" passes with a
+warning and the release goes out without `SHA256SUMS.sig`. kix.run does not
+list an unsigned release, so the index and install-script checks above do not
+find it, and Kix cannot install it automatically. Tell the person the release
+is unsigned and point them at `cli/release-keys/README.md` to add a key.
+
 Give the person the release URL.
 
 If the job failed, read its log, fix the cause, and run the job again. A

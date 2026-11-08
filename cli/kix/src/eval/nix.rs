@@ -417,22 +417,29 @@ fn check_library(
     let facts = library_facts(flake_path, input_overrides)?;
     crate::project::check_agreement(runtime::builder(), &origin, facts.builder.as_deref())?;
     if let Some(library) = facts.version.as_deref().and_then(|v| v.parse().ok()) {
-        library_compatible(crate::version::running(), library)?;
+        let requirement = crate::project::kix_setting(flake_path)
+            .ok()
+            .flatten()
+            .map(|s| s.requirement);
+        library_compatible(crate::version::running(), library, requirement)?;
     }
     let _ = AGREED.set(());
     Ok(())
 }
 
-/// Check that Kix `kix` can build the Kix library `library`.
+/// Check that Kix `kix` can build the Kix library `library` of a project
+/// whose `kix` setting is `requirement`.
 fn library_compatible(
     kix: &crate::version::Version,
     library: crate::version::Version,
+    requirement: Option<crate::version::policy::Requirement>,
 ) -> Result<(), KixEvalError> {
     crate::version::policy::library_compatible(kix, &library).map_err(|reason| {
         KixEvalError::LibraryIncompatible(Box::new(crate::version::policy::LibraryIncompatible {
             kix: kix.clone(),
             library,
             reason,
+            requirement,
         }))
     })
 }

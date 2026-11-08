@@ -19,16 +19,16 @@ Each release groups changes under these headings:
 
 **Before you upgrade**, check these items in your projects and scripts. The sections below explain each change.
 
-- Projects whose `flake.lock` pins a Kix library of another minor: run `kix lib update` or install the matching Kix.
+- Projects whose `flake.lock` pins a Kix library of another minor: run `kix lib update`, or set `kix` in `kix.toml` to the Kix library's minor.
 
 ### Breaking (shows an error)
 
-- Kix now stops when the project's Kix library has a different minor version, or a newer patch version of the same minor. The error names the fix: run `kix lib update` and commit `flake.lock` to move the project to the Kix library that matches Kix, or run `kix self install <version>` to install the Kix that matches the Kix library. See [Install and run Kix](https://kix.run/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/).
+- Kix now stops when the project's Kix library has a different minor version, or a newer patch version of the same minor. The error names the fix: run `kix lib update` and commit `flake.lock` to move the project to the Kix library that matches Kix, or set `kix` in `kix.toml` so that Kix runs the version that matches the Kix library. See [Install and run Kix](https://kix.run/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/).
 
 ### Added
 
-- An install script. `curl -fsSL https://kix.run/install | sh` installs Kix to `~/.local/share/kix/<version>/` and links `~/.local/bin/kix` to it. It checks the release archive against the release's signed `SHA256SUMS`, and it never edits your shell startup files. Set `KIX_VERSION=0.8.3` to install a specific version.
-- A project can name its Kix in `kix.toml`, as a minor (`kix = "0.8"`) or an exact version (`kix = "0.8.3"`). When the running Kix does not match, it runs a matching installed Kix instead. When none is installed, it downloads the newest matching release from kix.run, verifies its signature and SHA-256, and runs it. Set `KIX_AUTO_INSTALL=0` to stop Kix from downloading versions. See [`kix.toml`](https://kix.run/docs/reference/kix-toml/#the-kix-setting).
+- An install script. `curl -fsSL https://kix.run/install | sh` installs Kix to `~/.local/share/kix/<version>/` and links `~/.local/bin/kix` to it. It checks the release archive against the release's signed `SHA256SUMS`, and it never edits your shell startup files. Set `KIX_VERSION` to an exact version, such as `KIX_VERSION=0.8.3`, to install that version.
+- A project can name its Kix in `kix.toml`, as a minor (`kix = "0.8"`) or an exact version (`kix = "0.8.3"`). The setting must name Kix 0.8 or newer. When the running Kix does not match, it runs a matching installed Kix instead. When none is installed, it downloads the newest matching release from kix.run, verifies its signature and SHA-256, and runs it. `kix --version` never downloads. Set `KIX_AUTO_INSTALL=0` to stop Kix from downloading versions. See [`kix.toml`](https://kix.run/docs/reference/kix-toml/#the-kix-setting).
 - `kix self install <version>`, `kix self list`, `kix self prune`, and `kix self update` manage the versions of Kix installed in `~/.local/share/kix`. See [`kix self`](https://kix.run/docs/reference/cli/self/).
 - Releases include `SHA256SUMS.sig`, an Ed25519 signature over `SHA256SUMS`, and `https://kix.run/releases/index.json` lists every signed release.
 

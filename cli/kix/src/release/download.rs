@@ -8,8 +8,13 @@ use sha2::{Digest, Sha256};
 use super::{InstallError, Source};
 use crate::version;
 
-/// The largest file Kix downloads. A release archive is well under this.
-const MAX_BYTES: u64 = 500 * 1024 * 1024;
+/// The largest release archive Kix downloads. A release archive is well
+/// under this.
+const MAX_ARCHIVE_BYTES: u64 = 500 * 1024 * 1024;
+
+/// The largest index, `SHA256SUMS`, or signature Kix downloads. Each is a
+/// few kilobytes, and Kix holds them in memory.
+const MAX_TEXT_BYTES: u64 = 1024 * 1024;
 
 /// Why a fetch failed.
 #[derive(Debug)]
@@ -90,10 +95,10 @@ impl Fetcher {
         Ok(self.runtime.as_ref().expect("set above"))
     }
 
-    /// Return the bytes of the file at `path`.
+    /// Return the bytes of the small text file at `path`, such as the index.
     pub fn get(&mut self, path: &str) -> Result<Vec<u8>, FetchError> {
         let mut out = Vec::new();
-        self.copy(path, &mut out)?;
+        self.copy(path, &mut out, MAX_TEXT_BYTES)?;
         Ok(out)
     }
 
@@ -104,7 +109,7 @@ impl Fetcher {
             inner: std::io::BufWriter::new(file),
             hash: Sha256::new(),
         };
-        self.copy(path, &mut writer)?;
+        self.copy(path, &mut writer, MAX_ARCHIVE_BYTES)?;
         writer
             .inner
             .flush()
@@ -112,7 +117,7 @@ impl Fetcher {
         Ok(super::verify::hex(&writer.hash.finalize()))
     }
 
-    fn copy(&mut self, path: &str, out: &mut dyn Write) -> Result<(), FetchError> {
+    fn copy(&mut self, path: &str, out: &mut dyn Write, limit: u64) -> Result<(), FetchError> {
         let location = self.locate(path)?;
         match self.source.clone() {
             Source::Dir(_) => {
@@ -128,29 +133,34 @@ impl Fetcher {
                         });
                     }
                 };
-                let copied = std::io::copy(&mut std::io::Read::take(file, MAX_BYTES + 1), out)
+                let copied = std::io::copy(&mut std::io::Read::take(file, limit + 1), out)
                     .map_err(|e| FetchError::Io(location.clone().into(), e))?;
-                if copied > MAX_BYTES {
-                    return Err(too_large(location));
+                if copied > limit {
+                    return Err(too_large(location, limit));
                 }
                 Ok(())
             }
             Source::Https(_) => {
                 let (runtime, client) = self.client()?;
-                runtime.block_on(fetch(client, &location, out))
+                runtime.block_on(fetch(client, &location, out, limit))
             }
         }
     }
 }
 
-fn too_large(url: String) -> FetchError {
+fn too_large(url: String, limit: u64) -> FetchError {
     FetchError::Failed {
         url,
-        message: format!("it is larger than {} MB", MAX_BYTES / 1024 / 1024),
+        message: format!("it is larger than {} MB", limit / 1024 / 1024),
     }
 }
 
-async fn fetch(client: &reqwest::Client, url: &str, out: &mut dyn Write) -> Result<(), FetchError> {
+async fn fetch(
+    client: &reqwest::Client,
+    url: &str,
+    out: &mut dyn Write,
+    limit: u64,
+) -> Result<(), FetchError> {
     let mut response = client
         .get(url)
         .send()
@@ -172,8 +182,8 @@ async fn fetch(client: &reqwest::Client, url: &str, out: &mut dyn Write) -> Resu
         message: error_chain(&e),
     })? {
         written += chunk.len() as u64;
-        if written > MAX_BYTES {
-            return Err(too_large(url.to_string()));
+        if written > limit {
+            return Err(too_large(url.to_string(), limit));
         }
         out.write_all(&chunk)
             .map_err(|e| FetchError::Io(PathBuf::from(url), e))?;
@@ -404,6 +414,25 @@ mod tests {
                 "{target}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn a_text_file_over_a_megabyte_is_refused() {
+        let site = tempfile::tempdir().unwrap();
+        let big = vec![b'x'; MAX_TEXT_BYTES as usize + 1];
+        std::fs::write(site.path().join("big"), &big).unwrap();
+        std::fs::write(site.path().join("fits"), &big[1..]).unwrap();
+        let mut fetcher = Fetcher::new(Source::Dir(site.path().to_path_buf()));
+        match fetcher.get("/big") {
+            Err(FetchError::Failed { message, .. }) => {
+                assert_eq!(message, "it is larger than 1 MB")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(fetcher.get("/fits").unwrap().len(), big.len() - 1);
+        let out = site.path().join("out");
+        fetcher.get_to_file("/big", &out).unwrap();
+        assert_eq!(std::fs::metadata(&out).unwrap().len(), big.len() as u64);
     }
 
     #[test]

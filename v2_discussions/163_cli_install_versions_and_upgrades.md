@@ -37,7 +37,9 @@ its SHA-256 against the signed `SHA256SUMS`, unpacks it to
 `~/.local/bin/kix` at the newest installed version, and writes a receipt
 (`~/.local/share/kix/receipt.json`, `{"installer": "script", "version": ...}`).
 It never edits a shell rc file. When `~/.local/bin` is not on `PATH`, it
-prints the line to add. `KIX_VERSION=0.8.3` installs a specific version.
+prints the line to add. `KIX_VERSION=0.8.3` installs a specific version. It
+takes an exact version only, and the receipt also records the `link` the
+script made, which `kix self update` moves.
 
 Rejected: Homebrew, apt, and rpm (each is a second release pipeline with its
 own version lag, and the auto-install in §5 covers the main reason people want
@@ -147,25 +149,33 @@ older library output.
 `kix.toml` gains `kix = "0.8"` (a minor) or `kix = "0.8.3"` (exact). Kix 0.7
 already refuses an unknown key and says to upgrade (`project.rs`,
 `UnknownKey`), which is the right outcome for a 0.7 that meets a 0.8 project.
-The library ignores keys it does not read (`mkFlake.nix` reads
+For the same reason a project cannot name Kix 0.7 or older: no such Kix could
+read the file, so `kix = "0.7"` is a `kix.toml` error (`FIRST_SELECTING` in
+`policy.rs`). The library ignores keys it does not read (`mkFlake.nix` reads
 `settings.builder or "kix"`), so the key costs nothing there.
 
 Selection runs in `main()` before clap parses, because the Kix that should run
 may have different flags. It reads `--flake` (or `KIX_FLAKE`) from the raw
-arguments, reads `kix.toml`, and decides:
+arguments, reads only the `kix` key of `kix.toml` (other keys and errors are
+left to the Kix that runs, so an older Kix can hand over to a newer one), and
+decides:
 
 | Situation | Action |
 |---|---|
 | No `kix.toml`, or no `kix` key | Run here |
-| The running Kix satisfies the requirement | Run here |
-| An installed Kix satisfies it (newest patch of the minor wins) | `exec` it |
+| The running Kix satisfies the requirement, and no newer installed Kix does | Run here |
+| An installed Kix satisfies it and is newer than the running one (newest patch of the minor wins) | `exec` it |
 | None installed, auto-install on | Install the newest patch of the minor, then `exec` it |
-| None installed, `KIX_AUTO_INSTALL=0` | Stop: `This project needs Kix 0.8 (kix.toml), and no Kix 0.8 is installed. Run kix self install 0.8` |
+| None installed, `KIX_AUTO_INSTALL=0` | Stop: `This project needs Kix 0.8 (kix.toml), and no Kix 0.8 is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run \`kix self install 0.8\`.` |
 
-`self`, `completions`, `--help`, and `init` (once it exists) skip selection.
-`--version` goes through it, so what it prints is what the project runs.
-Selection reads two files and runs no Nix and makes no network request when
-the running Kix satisfies the project.
+`self`, `completions`, `init`, `help`, and `--help` skip selection.
+`--version` goes through it, so what it prints is what the project runs, but
+it never installs: without an installed match it prints the running version
+and says the project's version is not installed. Selection reads
+`kix.toml` and lists the install directory, runs no Nix, and makes no
+network request unless it has to install. A newer installed patch of the
+minor replaces the running one, so a library that needs that patch is fixed
+with `kix self install 0.8`.
 
 The hand-over contract between any two Kix versions is permanent: the chooser
 `exec`s `<install>/bin/kix` with its own arguments unchanged, plus the
@@ -194,10 +204,10 @@ still never downloads the programs it runs; those arrive inside the signed
 archive.
 
 `kix self install <version>`, `kix self list`, and `kix self prune` manage the
-installed versions. `kix self update` installs the newest release and moves
-the symlink when the receipt says the script installed this copy; otherwise it
-prints the command for the way Kix was installed (for a Nix profile,
-`nix profile upgrade kix`). A daily notice says when a newer Kix exists, and a
+installed versions. `kix self update` installs the newest release for this
+platform and moves the link the receipt names when the receipt says the script
+installed this copy. Otherwise it prints the command for the way Kix was
+installed (for a Nix profile, `nix profile upgrade kix`) and exits 1. A daily notice says when a newer Kix exists, and a
 separate one says when the project's minor can move; both are off when `CI` is
 set or `KIX_NO_UPDATE_CHECK=1`.
 

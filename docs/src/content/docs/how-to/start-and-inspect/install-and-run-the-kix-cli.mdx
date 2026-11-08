@@ -20,13 +20,13 @@ release's signed `SHA256SUMS`. It unpacks the archive to
 edits your shell startup files. If `~/.local/bin` is not on your `PATH`, the
 script prints the line to add.
 
-To install a specific version, set `KIX_VERSION`:
+To install a specific version, set `KIX_VERSION` to an exact version:
 
 <Command commands={["curl -fsSL https://kix.run/install | KIX_VERSION=0.8.3 sh"]} />
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `KIX_VERSION` | the latest release | The version to install, such as `0.8.3`. |
+| `KIX_VERSION` | the latest release | The exact version to install, such as `0.8.3`. A minor such as `0.8` matches no release. |
 | `KIX_INSTALL_DIR` | `~/.local/bin` | The directory for the `kix` link. |
 | `XDG_DATA_HOME` | `~/.local/share` | Kix versions are installed under `$XDG_DATA_HOME/kix/`. |
 
@@ -53,9 +53,10 @@ runs a matching version of Kix:
 kix = "0.8"
 ```
 
-`kix = "0.8"` accepts any 0.8 patch release and prefers the newest one
-installed. `kix = "0.8.3"` accepts only 0.8.3. Commit `kix.toml` with
-`git add kix.toml`.
+`kix = "0.8"` accepts any 0.8 patch release, and Kix runs the newest 0.8 it
+has, the one you started or an installed one. `kix = "0.8.3"` accepts only
+0.8.3. The setting must name Kix 0.8 or newer, because Kix 0.7 and older
+refuse a `kix.toml` that sets it. Commit `kix.toml` with `git add kix.toml`.
 
 When you run `kix` in the project and the running Kix does not match, Kix
 runs a matching version from `~/.local/share/kix/` in its place, with the
@@ -71,11 +72,13 @@ To stop Kix from downloading versions, set `KIX_AUTO_INSTALL=0`. Kix then
 stops and names the command to run:
 
 ```text
-This project needs Kix 0.8 (kix.toml), and no Kix 0.8 is installed. Run kix self install 0.8
+This project needs Kix 0.8 (kix.toml), and no Kix 0.8 is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install 0.8`.
 ```
 
 `kix --version` and [`kix doctor`](/docs/reference/cli/doctor/) report which
-Kix chose the running one and for which `kix.toml`.
+Kix chose the running one and for which `kix.toml`. `kix --version` never
+downloads a version. When the project's version is not installed, it says so
+and leaves the install to the next `kix` command.
 
 ## Manage installed versions
 
@@ -84,8 +87,8 @@ of Kix:
 
 <Command commands={["kix self list", "kix self install 0.8", "kix self prune", "kix self update"]} />
 
-`kix self update` installs the latest release and moves the `~/.local/bin/kix`
-link to it, when the install script installed the running Kix.
+`kix self update` installs the latest release and moves the `kix` link the
+install script made to it, when the install script installed the running Kix.
 
 ## When Kix and the Kix library do not match
 
@@ -96,14 +99,19 @@ evaluates and names the fix. For example, when Kix is newer than the Kix
 library:
 
 ```text
-This project's Kix library is 0.7.0, but Kix is 0.8.4. Run kix lib update to move the project to the 0.8.4 library and commit flake.lock, or run kix self install 0.7 to use the Kix that matches the library.
+This project's Kix library is 0.8.0, but this is Kix 0.9.1. Run `kix lib update` to move the project to the 0.9.1 library and commit flake.lock. To keep this project on Kix 0.8 instead, set kix = "0.8" in kix.toml.
 ```
 
 Run [`kix lib update`](/docs/reference/cli/lib/) to move the project to the
-Kix library of the running Kix, or run `kix self install` with the version
-the error names to use the Kix that matches the Kix library. Setting `kix` in
-`kix.toml` to the Kix library's minor makes Kix pick that version for the
-project.
+Kix library of the running Kix. To keep the Kix library, set `kix` in
+`kix.toml` to the Kix library's minor, and Kix runs that version for the
+project. Installing a version with `kix self install` alone does not change
+which Kix runs, because Kix chooses a version only from `kix.toml`.
+
+When the Kix library is a newer patch of the running Kix's minor, such as
+library 0.8.3 and Kix 0.8.1, run `kix self install 0.8`. With `kix = "0.8"` in
+`kix.toml`, Kix then runs the new patch for this project. Without a `kix`
+setting, run `kix self update` to move the `kix` on your PATH.
 
 ## Verify the installation
 

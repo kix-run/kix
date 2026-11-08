@@ -105,6 +105,14 @@ impl Index {
             .filter(|r| satisfies(req, &r.version) && r.systems.iter().any(|s| s == system))
             .max_by(|a, b| a.version.cmp(&b.version))
     }
+
+    /// Return the newest release that has an archive for `system`.
+    pub fn latest_for(&self, system: &str) -> Option<&Release> {
+        self.releases
+            .iter()
+            .filter(|r| r.systems.iter().any(|s| s == system))
+            .max_by(|a, b| a.version.cmp(&b.version))
+    }
 }
 
 #[cfg(test)]
@@ -199,5 +207,22 @@ mod tests {
                 .is_none()
         );
         assert!(index.newest(&minor, "aarch64-linux").is_none());
+    }
+
+    #[test]
+    fn latest_for_skips_releases_without_the_system() {
+        let json = serde_json::json!({
+            "latest": "0.10.0",
+            "releases": [
+                release("0.10.0", &["x86_64-linux"]),
+                release("0.9.2", &["x86_64-linux", "aarch64-darwin"]),
+                release("0.9.1", &["aarch64-darwin"]),
+            ],
+        });
+        let index = Index::parse(json.to_string().as_bytes()).unwrap();
+        let latest = |system| index.latest_for(system).map(|r| r.version.to_string());
+        assert_eq!(latest("x86_64-linux").as_deref(), Some("0.10.0"));
+        assert_eq!(latest("aarch64-darwin").as_deref(), Some("0.9.2"));
+        assert_eq!(latest("aarch64-linux"), None);
     }
 }

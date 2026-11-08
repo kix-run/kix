@@ -3,11 +3,13 @@
 //! The install script and `kix self install` unpack each version's release
 //! archive to `<data dir>/<version>/`, which holds `bin/kix` and the Kix
 //! runtime in `libexec/kix`. The data directory also holds `receipt.json`,
-//! which records how this tree was installed so `kix self update` knows
-//! whether it may move the `~/.local/bin/kix` link. Unpacking happens in a
+//! which records how this tree was installed and which `kix` link the
+//! install script made, so `kix self update` knows whether it may move that
+//! link. Unpacking happens in a
 //! `tmp-*` directory beside the versions, so a version directory either holds
 //! a whole release or does not exist.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -21,31 +23,50 @@ pub const DATA_DIR_VAR: &str = "KIX_DATA_DIR";
 /// The name of the receipt file in the data directory.
 const RECEIPT: &str = "receipt.json";
 
+/// Why Kix has no data directory.
+pub const NO_HOME: &str =
+    "Kix cannot find a home directory to install into. Set HOME or XDG_DATA_HOME.";
+
 /// Return the directory that holds the installed versions:
-/// `$XDG_DATA_HOME/kix`, or `~/.local/share/kix`.
+/// `$XDG_DATA_HOME/kix`, or `~/.local/share/kix`. Return `None` when neither
+/// variable is set, so no two users ever share a fallback directory.
 ///
 /// macOS gets the same directory as Linux, like Kix's cache. The XDG
 /// specification ignores a relative `XDG_DATA_HOME`, and so does Kix.
-pub fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os(DATA_DIR_VAR).filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir);
+pub fn data_dir() -> Option<PathBuf> {
+    data_dir_from(
+        std::env::var_os(DATA_DIR_VAR).as_deref(),
+        std::env::var_os("XDG_DATA_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+fn data_dir_from(
+    test_dir: Option<&OsStr>,
+    xdg_data_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(dir) = test_dir.filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(dir));
     }
-    std::env::var_os("XDG_DATA_HOME")
+    xdg_data_home
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
-        .unwrap_or_else(|| home().join(".local").join("share"))
-        .join("kix")
+        .or_else(|| home_from(home).map(|home| home.join(".local").join("share")))
+        .map(|dir| dir.join("kix"))
 }
 
-/// Return the link the install script points at the version it installed.
-pub fn link_path() -> PathBuf {
-    home().join(".local").join("bin").join("kix")
+/// Return the link the install script makes by default, or `None` without a
+/// home directory.
+pub fn link_path() -> Option<PathBuf> {
+    home_from(std::env::var_os("HOME").as_deref())
+        .map(|home| home.join(".local").join("bin").join("kix"))
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
+fn home_from(home: Option<&OsStr>) -> Option<PathBuf> {
+    home.filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/kix"))
+        .filter(|dir| dir.is_absolute())
 }
 
 /// One installed version of Kix.
@@ -65,7 +86,7 @@ impl Install {
 /// Return the installed versions, newest first. A directory counts when its
 /// name is a version and it holds `bin/kix`.
 pub fn installed() -> Vec<Install> {
-    installed_in(&data_dir())
+    data_dir().map_or_else(Vec::new, |dir| installed_in(&dir))
 }
 
 fn installed_in(dir: &Path) -> Vec<Install> {
@@ -152,6 +173,9 @@ pub struct Receipt {
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_at: Option<String>,
+    /// The `kix` link the installer made, which `kix self update` moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<PathBuf>,
 }
 
 impl Receipt {
@@ -160,12 +184,12 @@ impl Receipt {
 
     /// Read the receipt, or `None` when there is none or it is unreadable.
     pub fn read() -> Option<Self> {
-        let text = std::fs::read_to_string(data_dir().join(RECEIPT)).ok()?;
+        let text = std::fs::read_to_string(data_dir()?.join(RECEIPT)).ok()?;
         serde_json::from_str(&text).ok()
     }
 
     pub fn write(&self) -> std::io::Result<()> {
-        let dir = data_dir();
+        let dir = data_dir().ok_or_else(|| std::io::Error::other(NO_HOME))?;
         std::fs::create_dir_all(&dir)?;
         let tmp = dir.join(format!("{RECEIPT}.tmp-{}", std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
@@ -230,5 +254,31 @@ mod tests {
         assert_eq!(receipt.installer, Receipt::SCRIPT);
         assert_eq!(receipt.version, "0.8.4");
         assert_eq!(receipt.installed_at, None);
+        assert_eq!(receipt.link, None);
+
+        let receipt: Receipt = serde_json::from_str(
+            r#"{"installer": "script", "version": "0.8.4", "link": "/opt/bin/kix"}"#,
+        )
+        .unwrap();
+        assert_eq!(receipt.link, Some(PathBuf::from("/opt/bin/kix")));
+    }
+
+    #[test]
+    fn without_home_or_xdg_data_home_there_is_no_data_directory() {
+        let os = |s: &'static str| Some(OsStr::new(s));
+        assert_eq!(data_dir_from(None, None, None), None);
+        assert_eq!(data_dir_from(None, os("relative"), os("")), None);
+        assert_eq!(
+            data_dir_from(None, None, os("/home/a")),
+            Some(PathBuf::from("/home/a/.local/share/kix"))
+        );
+        assert_eq!(
+            data_dir_from(None, os("/xdg"), None),
+            Some(PathBuf::from("/xdg/kix"))
+        );
+        assert_eq!(
+            data_dir_from(os("/test"), None, None),
+            Some(PathBuf::from("/test"))
+        );
     }
 }

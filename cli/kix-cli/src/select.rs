@@ -19,7 +19,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use kix::installs::{self, Install};
-use kix::project::ProjectConfig;
+use kix::project::{self, KixSetting};
 use kix::release;
 use kix::version::policy::{self, Requirement};
 use kix::version::{self, Version};
@@ -164,12 +164,13 @@ pub enum Decision {
     Refuse(String),
 }
 
-/// Decide which Kix runs a project that needs `req`.
+/// Decide which Kix runs a project that needs `req`. `auto_install` is the
+/// value of [`AUTO_INSTALL_VAR`].
 pub fn decide(
     req: Option<&Requirement>,
     running: &Version,
     installed: &[Install],
-    auto_install: bool,
+    auto_install: Option<&OsStr>,
     selected_by: Option<&OsStr>,
 ) -> Decision {
     if selected_by.is_some() {
@@ -178,41 +179,46 @@ pub fn decide(
     let Some(req) = req else {
         return Decision::RunHere;
     };
-    if policy::satisfies(req, running) {
+    let versions: Vec<Version> = installed.iter().map(|i| i.version.clone()).collect();
+    let chosen = policy::choose(req, &versions);
+    // A newer installed patch wins even when this Kix meets the requirement,
+    // so installing a patch is enough to move a project onto it.
+    if policy::satisfies(req, running) && chosen.as_ref().is_none_or(|c| c <= running) {
         return Decision::RunHere;
     }
-    let versions: Vec<Version> = installed.iter().map(|i| i.version.clone()).collect();
-    if let Some(chosen) = policy::choose(req, &versions) {
+    if let Some(chosen) = chosen {
         let install = installed
             .iter()
             .find(|i| i.version == chosen)
             .expect("choose returns one of the installed versions");
         return Decision::Exec(install.clone());
     }
-    if auto_install {
+    if auto_install_on(auto_install) {
         Decision::Install(req.clone())
     } else {
         Decision::Refuse(format!(
-            "This project needs Kix {req} (kix.toml), and no Kix {req} is installed. Run `kix self install {req}`"
+            "This project needs Kix {req} (kix.toml), and no Kix {req} is installed. Automatic installs are off ({AUTO_INSTALL_VAR}={}). Run `kix self install {req}`.",
+            auto_install.unwrap_or_default().to_string_lossy()
         ))
     }
 }
 
 /// Return whether installing a missing version is on: it is unless
 /// [`AUTO_INSTALL_VAR`] is `0`, `false`, or `no`.
-pub fn auto_install(value: Option<&OsStr>) -> bool {
+pub fn auto_install_on(value: Option<&OsStr>) -> bool {
     !value
         .map(|v| v.to_string_lossy().trim().to_ascii_lowercase())
         .is_some_and(|v| matches!(v.as_str(), "0" | "false" | "no"))
 }
 
-/// Read the project's settings for `args`, or `None` when the command reads
-/// no local project. A `kix.toml` that cannot be read is left to the command
-/// itself, which reports it with the rest of the project's settings.
-fn project(scan: &Scan) -> Option<ProjectConfig> {
+/// Read the project's `kix` setting for `args`, or `None` when the command
+/// reads no local project or the project sets none.
+fn kix_setting(scan: &Scan) -> miette::Result<Option<KixSetting>> {
     let flake = raw_flake(scan, std::env::var_os("KIX_FLAKE").as_deref());
-    let dir = crate::commands::project_dir(&flake)?;
-    ProjectConfig::read(Some(&dir), None).ok()
+    let Some(dir) = crate::commands::project_dir(&flake) else {
+        return Ok(None);
+    };
+    project::kix_setting(&dir).map_err(|e| miette!("{e}"))
 }
 
 /// Run the version of Kix the project in `args` needs, and print the version
@@ -223,27 +229,39 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
         return Ok(Outcome::RunHere);
     }
     let selected_by = std::env::var_os(SELECTED_BY_VAR).filter(|v| !v.is_empty());
-    let config = project(&scan);
-    let req = config.as_ref().and_then(|c| c.kix.as_ref());
-    // Read the installs only when they can change the decision, so a project
-    // that this Kix meets costs no more than reading kix.toml.
-    let needs_other =
-        selected_by.is_none() && req.is_some_and(|r| !policy::satisfies(r, version::running()));
-    let installed = if needs_other {
+    let setting = kix_setting(&scan)?;
+    let req = setting.as_ref().map(|s| &s.requirement);
+    // Listing the installs is one directory read, and only a project that
+    // names a Kix needs it.
+    let installed = if selected_by.is_none() && req.is_some() {
         installs::installed()
     } else {
         Vec::new()
     };
+    let auto_install = std::env::var_os(AUTO_INSTALL_VAR);
     let decision = decide(
         req,
         version::running(),
         &installed,
-        auto_install(std::env::var_os(AUTO_INSTALL_VAR).as_deref()),
+        auto_install.as_deref(),
         selected_by.as_deref(),
     );
     match decision {
         Decision::RunHere => {}
         Decision::Exec(install) => return Err(exec(&install, args)),
+        // `kix --version` reports what is installed and never downloads.
+        Decision::Install(_) | Decision::Refuse(_) if scan.version => {
+            print_version(selected_by.as_deref(), setting.as_ref());
+            if let Some(req) = req {
+                let next = if auto_install_on(auto_install.as_deref()) {
+                    "Any other kix command installs it.".to_string()
+                } else {
+                    format!("Run `kix self install {req}`.")
+                };
+                eprintln!("  this project needs Kix {req}, which is not installed. {next}");
+            }
+            return Ok(Outcome::PrintedVersion);
+        }
         Decision::Refuse(message) => return Err(miette!("{message}")),
         Decision::Install(req) => {
             let system = release::system().map_err(|e| miette!("{e}"))?;
@@ -255,7 +273,7 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
         }
     }
     if scan.version {
-        print_version(selected_by.as_deref(), config.as_ref());
+        print_version(selected_by.as_deref(), setting.as_ref());
         return Ok(Outcome::PrintedVersion);
     }
     Ok(Outcome::RunHere)
@@ -280,15 +298,16 @@ fn exec(install: &Install, args: &[OsString]) -> miette::Report {
 /// Print `kix --version`. The first line is exactly `kix <version>`, which
 /// the release job checks. The lines about who chose this Kix and which Kix
 /// is on PATH go to stderr, so scripts that read the version keep working.
-fn print_version(selected_by: Option<&OsStr>, config: Option<&ProjectConfig>) {
+fn print_version(selected_by: Option<&OsStr>, setting: Option<&KixSetting>) {
     println!("kix {}", version::running());
     if let Some(by) = selected_by {
         let by = Path::new(by).display();
-        match config.and_then(|c| Some((c.kix.as_ref()?, c.kix_source.as_ref()?))) {
-            Some((req, path)) => {
-                eprintln!("  chosen by {by} for kix = \"{req}\" in {}", path.display())
-            }
-            None => eprintln!("  chosen by {by}"),
+        match setting {
+            Some(KixSetting { requirement, path }) => eprintln!(
+                "  chosen by kix = \"{requirement}\" in {} (started from {by})",
+                path.display()
+            ),
+            None => eprintln!("  started from {by}"),
         }
     }
     let me = std::env::current_exe().and_then(|p| p.canonicalize()).ok();
@@ -413,15 +432,26 @@ mod tests {
         let minor = |m| Requirement::Minor(0, m);
 
         assert_eq!(
-            decide(None, &running, &installed, true, None),
+            decide(None, &running, &installed, None, None),
             Decision::RunHere
         );
         assert_eq!(
-            decide(Some(&minor(8)), &running, &installed, true, None),
+            decide(Some(&minor(8)), &running, &installed, None, None),
+            Decision::RunHere
+        );
+        // A newer installed patch of the same minor wins, and an older one
+        // does not.
+        let with_patches = [install("0.8.3"), install("0.8.6")];
+        assert_eq!(
+            decide(Some(&minor(8)), &running, &with_patches, None, None),
+            Decision::Exec(install("0.8.6"))
+        );
+        assert_eq!(
+            decide(Some(&minor(8)), &running, &with_patches[..1], None, None),
             Decision::RunHere
         );
         assert_eq!(
-            decide(Some(&minor(9)), &running, &installed, true, None),
+            decide(Some(&minor(9)), &running, &installed, None, None),
             Decision::Exec(install("0.9.3"))
         );
         assert_eq!(
@@ -429,19 +459,25 @@ mod tests {
                 Some(&Requirement::Exact(v("0.9.1"))),
                 &running,
                 &installed,
-                true,
+                None,
                 None
             ),
             Decision::Exec(install("0.9.1"))
         );
         assert_eq!(
-            decide(Some(&minor(10)), &running, &installed, true, None),
+            decide(Some(&minor(10)), &running, &installed, None, None),
             Decision::Install(minor(10))
         );
         assert_eq!(
-            decide(Some(&minor(10)), &running, &installed, false, None),
+            decide(
+                Some(&minor(10)),
+                &running,
+                &installed,
+                Some(OsStr::new("no")),
+                None
+            ),
             Decision::Refuse(
-                "This project needs Kix 0.10 (kix.toml), and no Kix 0.10 is installed. Run `kix self install 0.10`".into()
+                "This project needs Kix 0.10 (kix.toml), and no Kix 0.10 is installed. Automatic installs are off (KIX_AUTO_INSTALL=no). Run `kix self install 0.10`.".into()
             )
         );
         // A chosen Kix never selects again, even when it does not meet the
@@ -451,7 +487,7 @@ mod tests {
                 Some(&minor(9)),
                 &running,
                 &installed,
-                true,
+                None,
                 Some(OsStr::new("/usr/bin/kix"))
             ),
             Decision::RunHere
@@ -460,10 +496,10 @@ mod tests {
 
     #[test]
     fn auto_install_is_on_unless_turned_off() {
-        assert!(auto_install(None));
-        assert!(auto_install(Some(OsStr::new("1"))));
+        assert!(auto_install_on(None));
+        assert!(auto_install_on(Some(OsStr::new("1"))));
         for off in ["0", "false", "no", "NO", "False"] {
-            assert!(!auto_install(Some(OsStr::new(off))), "{off}");
+            assert!(!auto_install_on(Some(OsStr::new(off))), "{off}");
         }
     }
 }

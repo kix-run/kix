@@ -18,7 +18,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use crate::version::policy::Requirement;
+use crate::version::policy::{self, Requirement};
 
 /// The name of the project file.
 pub const FILE: &str = "kix.toml";
@@ -163,6 +163,20 @@ pub enum ProjectError {
         path.display()
     )]
     BadKixVersion { path: PathBuf, value: String },
+
+    #[error(
+        "{} sets kix = \"{value}\", but Kix {value} and older cannot read this setting. Name Kix {}.{} or newer, or remove the line.",
+        path.display(),
+        policy::FIRST_SELECTING.0,
+        policy::FIRST_SELECTING.1
+    )]
+    KixTooOld { path: PathBuf, value: String },
+
+    #[error(
+        "{} sets kix = {literal} as a number. Write it in quotes: kix = \"{literal}\"",
+        path.display()
+    )]
+    KixNotQuoted { path: PathBuf, literal: String },
 }
 
 fn builder_names() -> String {
@@ -232,15 +246,26 @@ impl ProjectConfig {
         }
         let kix = match table.get("kix") {
             None => None,
-            Some(value) => Some(
-                value
-                    .as_str()
-                    .and_then(|text| text.parse::<Requirement>().ok())
-                    .ok_or_else(|| ProjectError::BadKixVersion {
+            Some(toml::Value::String(text)) => Some(parse_kix(path, text)?),
+            Some(value @ (toml::Value::Integer(_) | toml::Value::Float(_))) => {
+                let literal = kix_literal(text).unwrap_or_else(|| toml_text(value));
+                if literal.parse::<Requirement>().is_ok() {
+                    return Err(ProjectError::KixNotQuoted {
                         path: path.to_path_buf(),
-                        value: toml_text(value),
-                    })?,
-            ),
+                        literal,
+                    });
+                }
+                return Err(ProjectError::BadKixVersion {
+                    path: path.to_path_buf(),
+                    value: literal,
+                });
+            }
+            Some(value) => {
+                return Err(ProjectError::BadKixVersion {
+                    path: path.to_path_buf(),
+                    value: toml_text(value),
+                });
+            }
         };
         let kix_source = kix.is_some().then(|| path.to_path_buf());
         let Some(value) = table.get("builder") else {
@@ -283,6 +308,75 @@ impl ProjectConfig {
             BuilderKind::Remote => Err(ProjectError::RemoteUnsupported { origin }),
         }
     }
+}
+
+/// The `kix` setting of a project's `kix.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KixSetting {
+    pub requirement: Requirement,
+    /// The `kix.toml` that holds it.
+    pub path: PathBuf,
+}
+
+/// Read only the `kix` setting of the `kix.toml` in `flake_dir`.
+///
+/// Kix reads this before it knows which version will run the command, and a
+/// newer version may accept keys and values this one does not know. So this
+/// ignores every other key, a missing or unreadable file, invalid TOML, and a
+/// `kix` value that is not a version, and leaves those to
+/// [`ProjectConfig::read`] in the Kix that runs. The one error is a version
+/// older than [`policy::FIRST_SELECTING`], since no Kix it names could read
+/// the file.
+pub fn kix_setting(flake_dir: &Path) -> Result<Option<KixSetting>, ProjectError> {
+    let path = flake_dir.join(FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let Ok(table) = toml::from_str::<toml::Table>(&text) else {
+        return Ok(None);
+    };
+    let Some(Ok(requirement)) = table
+        .get("kix")
+        .and_then(toml::Value::as_str)
+        .map(str::parse::<Requirement>)
+    else {
+        return Ok(None);
+    };
+    check_floor(&path, &requirement)?;
+    Ok(Some(KixSetting { requirement, path }))
+}
+
+/// Parse the text of a `kix` value from the `kix.toml` at `path`.
+fn parse_kix(path: &Path, text: &str) -> Result<Requirement, ProjectError> {
+    let requirement = text
+        .parse::<Requirement>()
+        .map_err(|_| ProjectError::BadKixVersion {
+            path: path.to_path_buf(),
+            value: format!("{text:?}"),
+        })?;
+    check_floor(path, &requirement)?;
+    Ok(requirement)
+}
+
+fn check_floor(path: &Path, requirement: &Requirement) -> Result<(), ProjectError> {
+    if requirement.reads_kix_setting() {
+        return Ok(());
+    }
+    Err(ProjectError::KixTooOld {
+        path: path.to_path_buf(),
+        value: requirement.to_string(),
+    })
+}
+
+/// Return the `kix` value as `kix.toml` spells it, such as `0.10`, which a
+/// TOML float would print as `0.1`.
+fn kix_literal(text: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Spans {
+        kix: toml::Spanned<toml::Value>,
+    }
+    let spans: Spans = toml::from_str(text).ok()?;
+    text.get(spans.kix.span()).map(|s| s.trim().to_string())
 }
 
 /// Why the builder Kix read from `kix.toml` and the one the project's Kix
@@ -542,6 +636,61 @@ mod tests {
                 "{err}"
             );
         }
+    }
+
+    #[test]
+    fn a_kix_older_than_0_8_cannot_be_named() {
+        for (text, value) in [("kix = \"0.7\"\n", "0.7"), ("kix = \"0.7.4\"\n", "0.7.4")] {
+            let dir = project(Some(text));
+            let expected = format!(
+                "{} sets kix = \"{value}\", but Kix {value} and older cannot read this setting. Name Kix 0.8 or newer, or remove the line.",
+                dir.path().join(FILE).display()
+            );
+            let err = ProjectConfig::read(Some(dir.path()), None).unwrap_err();
+            assert_eq!(err.to_string(), expected);
+            let err = kix_setting(dir.path()).unwrap_err();
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn an_unquoted_version_is_told_to_add_quotes() {
+        for (text, literal) in [("kix = 0.8\n", "0.8"), ("kix = 0.10 # next\n", "0.10")] {
+            let err = read(Some(text)).unwrap_err();
+            assert!(matches!(err, ProjectError::KixNotQuoted { .. }), "{err}");
+            assert!(
+                err.to_string().ends_with(&format!(
+                    "kix.toml sets kix = {literal} as a number. Write it in quotes: kix = \"{literal}\""
+                )),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_reads_only_the_kix_setting() {
+        let dir = project(Some("kix = \"9.9\"\nfuture = 1\nbuilder = \"someday\"\n"));
+        assert!(ProjectConfig::read(Some(dir.path()), None).is_err());
+        assert_eq!(
+            kix_setting(dir.path()).unwrap(),
+            Some(KixSetting {
+                requirement: Requirement::Minor(9, 9),
+                path: dir.path().join(FILE),
+            })
+        );
+        for text in [
+            "kix = 0.8\n",
+            "kix = \"0.8.x\"\n",
+            "builder = \"kix\"\n",
+            "kix = \n",
+        ] {
+            let dir = project(Some(text));
+            assert_eq!(kix_setting(dir.path()).unwrap(), None, "{text}");
+        }
+        assert_eq!(
+            kix_setting(Path::new("/nonexistent/project")).unwrap(),
+            None
+        );
     }
 
     #[test]

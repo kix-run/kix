@@ -27,8 +27,11 @@ A key is trusted in three places, which must agree:
   (`web/scripts/install.test.mjs` checks it against this directory)
 
 Until the first key is added, Kix refuses to install another version, the
-install script checks the SHA-256 only, and `publish` stops at "Sign
-checksums".
+install script checks the SHA-256 only, and `publish` skips "Sign checksums"
+with a warning and publishes the release unsigned. kix.run does not list an
+unsigned release, so neither Kix nor the install script installs it
+automatically. Once a key file is in this directory, "Sign checksums" fails
+when the secret `KIX_RELEASE_SIGNING_KEY` is empty.
 
 ## Add the first key
 

@@ -233,6 +233,6 @@ fn a_library_of_another_minor_is_refused_with_the_fix() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(format!(
-            "This project's Kix library is 0.1.0, but Kix is {VERSION}. Run `kix lib update` to move the project to the {VERSION} library"
+            "This project's Kix library is 0.1.0, but this is Kix {VERSION}. Run `kix lib update` to move the project to the {VERSION} library"
         )));
 }

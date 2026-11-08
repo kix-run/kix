@@ -573,6 +573,12 @@ jobs:
         env:
           KIX_RELEASE_SIGNING_KEY: ${{ secrets.KIX_RELEASE_SIGNING_KEY }}
         run: |
+          # Before the first key is committed, no Kix could verify a
+          # signature, so the release goes out unsigned.
+          if ! ls cli/release-keys/*.pub >/dev/null 2>&1; then
+            echo "::warning::cli/release-keys has no key, so this release is unsigned and Kix cannot install it automatically. cli/release-keys/README.md says how to add a key."
+            exit 0
+          fi
           if [ -z "$KIX_RELEASE_SIGNING_KEY" ]; then
             echo "::error::The repository secret KIX_RELEASE_SIGNING_KEY is not set, so the release cannot be signed. See cli/release-keys/README.md."
             exit 1

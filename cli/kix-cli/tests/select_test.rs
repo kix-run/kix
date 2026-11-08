@@ -131,9 +131,95 @@ fn a_chosen_kix_never_selects_again_and_says_who_chose_it() {
         .success()
         .stdout(format!("kix {VERSION}\n"))
         .stderr(predicate::str::contains(format!(
-            "  chosen by /opt/newer/bin/kix for kix = \"9.9\" in {}",
+            "  chosen by kix = \"9.9\" in {} (started from /opt/newer/bin/kix)",
             s.project.join("kix.toml").display()
         )));
+}
+
+#[test]
+fn selection_ignores_settings_this_kix_does_not_know() {
+    let s = Setup::new("9.9");
+    std::fs::write(s.project.join("kix.toml"), "kix = \"9.9\"\nfuture = 1\n").unwrap();
+    let fake = s.fake("9.9.1");
+    let out = stdout(
+        s.kix()
+            .arg("--flake")
+            .arg(&s.project)
+            .args(["list", "clusters"]),
+    );
+    assert!(
+        out.starts_with(&format!("FAKE {} ", fake.display())),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_kix_older_than_0_8_is_refused() {
+    let s = Setup::new("0.7");
+    s.kix()
+        .arg("--flake")
+        .arg(&s.project)
+        .args(["list", "clusters"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "sets kix = \"0.7\", but Kix 0.7 and older cannot read this setting. Name Kix 0.8 or newer, or remove the line.",
+        ));
+}
+
+#[test]
+fn version_runs_an_installed_match_and_never_installs() {
+    let s = Setup::new("9.9");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    s.kix()
+        .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
+        .arg("--flake")
+        .arg(&s.project)
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("kix {VERSION}\n"))
+        .stderr(predicate::str::contains(
+            "  this project needs Kix 9.9, which is not installed. Any other kix command installs it.",
+        ));
+    assert!(!s.data.join("9.9.1").exists());
+
+    let fake = s.fake("9.9.1");
+    let out = stdout(s.kix().arg("--flake").arg(&s.project).arg("--version"));
+    assert!(
+        out.starts_with(&format!("FAKE {} --flake", fake.display())),
+        "{out}"
+    );
+}
+
+#[test]
+fn without_a_home_directory_nothing_is_installed() {
+    let s = Setup::new("9.9");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    let message = "Kix cannot find a home directory to install into. Set HOME or XDG_DATA_HOME.";
+    let homeless = |cmd: &mut Command| {
+        cmd.env_remove("KIX_DATA_DIR")
+            .env_remove("HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env("KIX_RELEASE_TEST_KEY", signer.public_hex());
+    };
+    let mut cmd = s.kix();
+    homeless(&mut cmd);
+    cmd.args(["self", "install", "9.9"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(message));
+
+    let mut cmd = s.kix();
+    homeless(&mut cmd);
+    cmd.arg("--flake")
+        .arg(&s.project)
+        .args(["list", "clusters"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(message));
 }
 
 #[test]
@@ -147,7 +233,7 @@ fn without_auto_install_a_missing_version_is_refused() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
-            "This project needs Kix 9.9 (kix.toml), and no Kix 9.9 is installed. Run `kix self install 9.9`",
+            "This project needs Kix 9.9 (kix.toml), and no Kix 9.9 is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install 9.9`.",
         ));
 }
 
@@ -179,6 +265,11 @@ fn self_and_completions_run_in_the_kix_the_user_started() {
 #[test]
 fn a_project_this_kix_meets_runs_here() {
     let running: kix::version::Version = VERSION.parse().unwrap();
+    // A Kix older than the first one that reads the setting cannot be named
+    // in kix.toml, so a build of such a version has no project it meets.
+    if running.minor_key() < kix::version::policy::FIRST_SELECTING {
+        return;
+    }
     let s = Setup::new(&running.minor_text());
     s.fake(&format!("{}.{}.999", running.major, running.minor));
     s.kix()
@@ -189,6 +280,22 @@ fn a_project_this_kix_meets_runs_here() {
         .success()
         .stdout(format!("kix {VERSION}\n"))
         .stderr(predicate::str::contains("chosen by").not());
+}
+
+#[test]
+fn version_without_auto_install_says_how_to_install() {
+    let s = Setup::new("9.9");
+    s.kix()
+        .env("KIX_AUTO_INSTALL", "0")
+        .arg("--flake")
+        .arg(&s.project)
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("kix {VERSION}\n"))
+        .stderr(predicate::str::contains(
+            "  this project needs Kix 9.9, which is not installed. Run `kix self install 9.9`.",
+        ));
 }
 
 /// Signs releases for a fixture site.
@@ -501,4 +608,47 @@ fn self_update_installs_the_newest_release_and_moves_the_link() {
     );
     let receipt = std::fs::read_to_string(s.data.join("receipt.json")).unwrap();
     assert!(receipt.contains("\"version\": \"9.9.1\""), "{receipt}");
+}
+
+#[test]
+fn self_update_moves_the_link_the_receipt_names() {
+    let s = Setup::new("9.9");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    let bin = s.data.join(VERSION).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(real_kix(), bin.join("kix")).unwrap();
+    let root = s.data.parent().unwrap();
+    let link = root.join("opt/bin/kix");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(bin.join("kix"), &link).unwrap();
+    std::fs::write(
+        s.data.join("receipt.json"),
+        serde_json::json!({
+            "installer": "script",
+            "version": VERSION,
+            "link": link,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let home = root.join("home");
+
+    let (out, _) = stdout_of(
+        s.kix_at(&bin.join("kix"))
+            .env("HOME", &home)
+            .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
+            .args(["self", "update"]),
+    );
+    assert_eq!(out, format!("Kix {VERSION} -> 9.9.1\n"));
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        s.data.join("9.9.1/bin/kix")
+    );
+    assert!(!home.join(".local/bin/kix").exists());
+    let receipt: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(s.data.join("receipt.json")).unwrap())
+            .unwrap();
+    assert_eq!(receipt["link"], serde_json::json!(link));
+    assert_eq!(receipt["version"], "9.9.1");
 }

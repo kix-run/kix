@@ -125,6 +125,9 @@ pub enum InstallError {
     #[error("the release archive of Kix {version} cannot be installed: {reason}")]
     BadArchive { version: String, reason: String },
 
+    #[error("{}", installs::NO_HOME)]
+    NoHome,
+
     #[error("could not write {}: {source}", path.display())]
     Io {
         path: PathBuf,
@@ -199,6 +202,7 @@ pub fn install(
     if keys.is_empty() {
         return Err(InstallError::NoKeys);
     }
+    let data = installs::data_dir().ok_or(InstallError::NoHome)?;
     let mut fetcher = download::Fetcher::new(source.clone());
     let unreachable = |message: String| InstallError::Unreachable {
         site: source.to_string(),
@@ -257,7 +261,6 @@ pub fn install(
         }
     })?;
 
-    let data = installs::data_dir();
     let tmp = TempDir::create(&data.join(format!("tmp-{v}-{}", std::process::id())))?;
     let archive = tmp.0.join(&file);
     let got = fetcher
@@ -284,9 +287,7 @@ pub fn install(
         });
     }
     let dest = data.join(&v);
-    if !dest.join("bin").join("kix").is_file() {
-        std::fs::rename(&new, &dest).map_err(InstallError::io(&dest))?;
-    }
+    move_into_place(&new, &dest)?;
     Ok(Installed {
         install: Install {
             version: release.version.clone(),
@@ -296,8 +297,26 @@ pub fn install(
     })
 }
 
-/// Return the newest release the index at `source` lists.
-pub fn latest(source: &Source) -> Result<Option<Version>, InstallError> {
+/// Move the unpacked release at `new` to `dest`. Another process may install
+/// the same version at the same time and get there first, so a `dest` that
+/// already holds `bin/kix` counts as installed.
+fn move_into_place(new: &Path, dest: &Path) -> Result<(), InstallError> {
+    let installed = || dest.join("bin").join("kix").is_file();
+    if installed() {
+        return Ok(());
+    }
+    match std::fs::rename(new, dest) {
+        Ok(()) => Ok(()),
+        Err(_) if installed() => Ok(()),
+        Err(e) => Err(InstallError::Io {
+            path: dest.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
+/// Return the newest release the index at `source` lists for `system`.
+pub fn latest(source: &Source, system: &str) -> Result<Option<Version>, InstallError> {
     let mut fetcher = download::Fetcher::new(source.clone());
     let bytes = fetcher.get(index::PATH).map_err(|e| {
         e.into_install_error(&|message| InstallError::Download {
@@ -309,7 +328,7 @@ pub fn latest(source: &Source) -> Result<Option<Version>, InstallError> {
         site: source.to_string(),
         message,
     })?;
-    Ok(index.releases.into_iter().map(|r| r.version).max())
+    Ok(index.latest_for(system).map(|r| r.version.clone()))
 }
 
 /// A directory removed when dropped, including read-only trees from an
@@ -349,6 +368,39 @@ mod tests {
             "Kix has no release for macos x86_64. Supported: x86_64-linux, aarch64-linux, aarch64-darwin"
         );
         assert!(system_for("windows", "x86_64").is_err());
+    }
+
+    #[test]
+    fn a_version_another_process_installed_first_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let new = tmp.path().join("new");
+        std::fs::create_dir_all(new.join("bin")).unwrap();
+        std::fs::write(new.join("bin/kix"), "new").unwrap();
+        let dest = tmp.path().join("0.9.1");
+        std::fs::create_dir_all(dest.join("bin")).unwrap();
+        std::fs::write(dest.join("bin/kix"), "first").unwrap();
+        std::fs::write(dest.join("other"), "x").unwrap();
+        move_into_place(&new, &dest).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("bin/kix")).unwrap(),
+            "first"
+        );
+
+        // A destination that is not an install is an error.
+        let dest = tmp.path().join("0.9.2");
+        std::fs::create_dir_all(dest.join("lib")).unwrap();
+        std::fs::write(dest.join("lib/x"), "x").unwrap();
+        assert!(matches!(
+            move_into_place(&new, &dest),
+            Err(InstallError::Io { .. })
+        ));
+
+        let dest = tmp.path().join("0.9.3");
+        move_into_place(&new, &dest).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("bin/kix")).unwrap(),
+            "new"
+        );
     }
 
     #[test]

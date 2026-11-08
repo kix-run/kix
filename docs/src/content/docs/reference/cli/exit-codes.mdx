@@ -44,6 +44,8 @@ When a project's [`kix` setting](/docs/reference/kix-toml/#the-kix-setting)
 makes Kix run another installed version in its place, the exit status is that
 version's. When no matching version is installed and Kix cannot install one,
 or `KIX_AUTO_INSTALL=0` is set, Kix exits `1` before it runs the command.
+`kix --version` is the exception: it never installs, and exits `0` after it
+prints the running version and says the project's version is not installed.
 
 A `kix diff` or `kix plan` in CI cannot tell a difference from a usage error
 by the code alone. Check that the command line is valid in a step that does

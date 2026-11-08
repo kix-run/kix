@@ -93,7 +93,10 @@ pass:
 4. Once `without-nix` and `nix-builder` pass, `publish` signs `SHA256SUMS`
    with the release key in the secret `KIX_RELEASE_SIGNING_KEY` (the "Sign
    checksums" step, which also checks the public key against
-   `cli/release-keys/`), writing `SHA256SUMS.sig`. It uploads the three
+   `cli/release-keys/`), writing `SHA256SUMS.sig`. While `cli/release-keys/`
+   holds no `*.pub` key, the step warns and the release goes out unsigned,
+   which kix.run does not list, so Kix cannot install it automatically. Once
+   a key is committed, an empty secret fails the step. It uploads the three
    platform archives, the third-party sources archive, the three audit
    reports, `SHA256SUMS`, and `SHA256SUMS.sig` to the
    public [kix-run/kix-releases](https://github.com/kix-run/kix-releases) as
@@ -184,7 +187,9 @@ run, the version a project names.
   full string.
 - **Policy** (`kix/src/version/policy.rs`): the only code that compares Kix
   with a library or a requirement. `Requirement` is `Minor` (`"0.8"`) or
-  `Exact` (`"0.8.3"`). `choose` picks the newest installed patch of the minor,
+  `Exact` (`"0.8.3"`). `FIRST_SELECTING` (0.8) is the first minor that reads
+  the `kix` setting, and `Requirement::reads_kix_setting` refuses anything
+  older, since Kix 0.7 rejects the key. `choose` picks the newest installed patch of the minor,
   or the exact version. `library_compatible` requires the same minor and a Kix
   patch at least the library's, and returns `Incompatible::LibraryNewerMinor`,
   `LibraryOlderMinor`, or `LibraryNewerPatch` otherwise. The 1.0 change to
@@ -195,36 +200,49 @@ run, the version a project names.
   `kixConfig.builder` and `kixLibrary.version` (`library_facts`). The builder
   goes to `project::check_agreement`, the version to
   `policy::library_compatible`, and a mismatch is
-  `KixEvalError::LibraryIncompatible`, whose message names
-  `kix lib update` or `kix self install <minor>`. A library that publishes
-  no version is left to `NoActivationIndex` and `HelmMismatch`.
+  `KixEvalError::LibraryIncompatible`. Its message depends on the project's
+  `kix` setting (read with `project::kix_setting`), because selection
+  follows only `kix.toml`: an older library names `kix lib update` and,
+  from 0.8 on, `kix = "<library minor>"`, a newer minor names
+  `kix = "<library minor>"`, and a newer patch names the exact version,
+  since a Kix that meets `kix = "<minor>"` never looks for another patch. A
+  library that publishes no version is left to `NoActivationIndex` and
+  `HelmMismatch`.
 - **Installs** (`kix/src/installs.rs`): `data_dir()` is `$XDG_DATA_HOME/kix`,
-  or `~/.local/share/kix`. Each version is the unpacked release archive in
+  or `~/.local/share/kix`, and `None` when neither variable is set. Then
+  `installed()` is empty and an install fails with `installs::NO_HOME`. Each version is the unpacked release archive in
   `<data_dir>/<version>/` (`bin/kix` beside `libexec/kix/`). `installed()`
   lists the directories whose name is a version and that hold `bin/kix`,
   newest first, and skips `tmp-*` directories, which an install in progress
   uses. `running_install()` finds the running Kix among them.
   `<data_dir>/receipt.json` is written by the install script (`installer`,
   `version`, `installed_at`, and `link`, the path of the `kix` symlink).
+  `kix self update` moves the `link` it names, or `~/.local/bin/kix` when it
+  names none, and writes the receipt back with the same `link`.
 - **Selection** (`kix-cli/src/select.rs`): runs at the top of `main()`,
   before clap parses, because the Kix that should run may take other flags.
   It reads `--flake` (both `--flake X` and `--flake=X`) or `KIX_FLAKE` from
-  the raw arguments, reads `kix.toml` there (a remote flake reference skips
+  the raw arguments, reads only the `kix` key of `kix.toml` there
+  (`project::kix_setting`, which ignores other keys and any other error so
+  an older Kix can hand over to a newer one; a remote flake reference skips
   this), and `decide`s: run here, `exec` an installed version, install one
   and `exec` it, or stop with
-  `This project needs Kix {req} (kix.toml), and no Kix {req} is installed. Run kix self install {req}`.
-  `self`, `completions`, `init`, and `--help` skip it. When the running Kix
-  satisfies the project, selection runs no Nix and makes no network
-  request.
+  `This project needs Kix {req} (kix.toml), and no Kix {req} is installed. Automatic installs are off (KIX_AUTO_INSTALL={value}). Run \`kix self install {req}\`.`
+  A `kix` value older than 0.8 stops it with the `kix.toml` error.
+  `self`, `completions`, `init`, `help`, and `--help` skip it. When the
+  running Kix satisfies the project, selection does not list the installs,
+  runs no Nix, and makes no network request. `kix --version` (`-V`) execs an
+  installed match but never installs. Without one, it prints the version
+  and a line on stderr that names the missing version.
 - **Hand-over contract**, which every Kix version keeps: the chooser `exec`s
   `<install>/bin/kix` with its own arguments unchanged and the environment
   variable `KIX_SELECTED_BY=<path of the chooser>`. A Kix that finds the
   variable set never selects again, which ends any loop, and still runs the
   library check. `plugin.rs` clears it before it runs a plugin. The first
   line of `kix --version` is always `kix <version>`, which the release job
-  checks. A second line names the chooser and the `kix.toml` when
-  `KIX_SELECTED_BY` is set, and another names the `kix` on `PATH` when it is
-  a different version.
+  checks. When `KIX_SELECTED_BY` is set, a second line on stderr reads
+  `  chosen by kix = "{req}" in {kix.toml} (started from {chooser})`, and
+  another names the `kix` on `PATH` when it is a different version.
 - **Release client** (`kix/src/release/`): `Source` is `https://kix.run`, or
   a directory laid out the same way in tests. `index` reads
   `releases/index.json`. `verify` parses `SHA256SUMS.sig` and checks it with
@@ -234,12 +252,17 @@ run, the version a project names.
   `Installing Kix {version} (this project needs {req})`, verifies the
   signature, downloads the archive through `kix.run/download/`, checks its
   SHA-256, unpacks it into `tmp-<version>-<pid>`, and renames that to
-  `<version>` only after every check passed. It refuses archive entries with
+  `<version>` only after every check passed. When the rename fails because
+  another process installed the same version first, the install counts as
+  done. The index, `SHA256SUMS`, and the signature are capped at 1 MB, and
+  an archive at 500 MB. `latest` returns the newest release that lists this
+  system. It refuses archive entries with
   an absolute path, `..`, or a link that leaves the archive's top directory.
 - **`kix self`** (`kix-cli/src/commands/self_cmd.rs`): `install <version>`,
-  `list`, `prune` (keeps the newest two and the running one), and `update`
-  (installs the newest release and moves the symlink when the receipt says
-  the install script installed the running Kix).
+  `list`, `prune` (keeps the newest two, the running one, and the first
+  `kix` on `PATH`), and `update` (installs the newest release for this
+  system and moves the receipt's `link` when the receipt says the install
+  script installed the running Kix, and exits 1 otherwise).
 
 | Variable | Read by | Meaning |
 | --- | --- | --- |

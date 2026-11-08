@@ -2,7 +2,7 @@
 //! builder, and the version of Kix the project needs.
 
 use kix::installs;
-use kix::project::{BuilderKind, BuilderSource, ProjectConfig};
+use kix::project::{BuilderKind, BuilderSource, FILE, ProjectConfig};
 use kix::runtime;
 use kix::system_nix;
 use kix::version::{self, policy};
@@ -71,21 +71,47 @@ fn check_version(flake: &str) -> usize {
             ));
             1
         }
-        (None, _) if dir.join("flake.nix").exists() => {
-            warn(&format!(
-                "kix.toml sets no kix version. Add kix = \"{}\" so everyone runs a matching Kix",
-                running.minor_text()
-            ));
+        (None, _) => {
+            if let Some(line) =
+                missing_kix_setting(&dir.join("flake.nix"), &dir.join(FILE), running)
+            {
+                warn(&line);
+            }
             0
         }
-        (None, _) => 0,
     }
+}
+
+/// Return the warning for a project with no `kix` setting, or `None` when
+/// there is nothing to warn about: the directory is not a project, or the
+/// running Kix is older than any version the setting can name.
+fn missing_kix_setting(
+    flake_nix: &std::path::Path,
+    kix_toml: &std::path::Path,
+    running: &version::Version,
+) -> Option<String> {
+    if !flake_nix.exists() || running.minor_key() < policy::FIRST_SELECTING {
+        return None;
+    }
+    let minor = running.minor_text();
+    Some(if kix_toml.exists() {
+        format!(
+            "kix.toml sets no kix version. Add kix = \"{minor}\" so everyone runs a matching Kix"
+        )
+    } else {
+        format!(
+            "This project has no kix.toml. Add one with kix = \"{minor}\" so everyone runs a matching Kix"
+        )
+    })
 }
 
 /// Report the installed versions. This never fails a check, since Kix can
 /// run from outside the data directory, such as from a Nix profile.
 fn report_installs() {
-    let data = installs::data_dir();
+    let Some(data) = installs::data_dir() else {
+        warn(&format!("No versions installed. {}", installs::NO_HOME));
+        return;
+    };
     let all = installs::installed();
     if all.is_empty() {
         warn(&format!("No versions installed under {}", data.display()));
@@ -248,4 +274,32 @@ fn builder_line(config: &ProjectConfig) -> String {
         }
     };
     format!("Builder: {} ({from})", config.builder)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_project_without_a_kix_setting_is_told_which_file_to_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let flake = dir.path().join("flake.nix");
+        let toml = dir.path().join(FILE);
+        let v = |s: &str| s.parse::<version::Version>().unwrap();
+        assert_eq!(missing_kix_setting(&flake, &toml, &v("0.8.1")), None);
+
+        std::fs::write(&flake, "{}").unwrap();
+        assert_eq!(
+            missing_kix_setting(&flake, &toml, &v("0.8.1+3")).as_deref(),
+            Some(
+                "This project has no kix.toml. Add one with kix = \"0.8\" so everyone runs a matching Kix"
+            )
+        );
+        std::fs::write(&toml, "builder = \"kix\"\n").unwrap();
+        assert_eq!(
+            missing_kix_setting(&flake, &toml, &v("0.9.0")).as_deref(),
+            Some("kix.toml sets no kix version. Add kix = \"0.9\" so everyone runs a matching Kix")
+        );
+        assert_eq!(missing_kix_setting(&flake, &toml, &v("0.7.2")), None);
+    }
 }

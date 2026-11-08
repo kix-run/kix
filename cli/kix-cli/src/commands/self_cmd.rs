@@ -45,8 +45,11 @@ fn fetch(req: &Requirement) -> miette::Result<release::Installed> {
 }
 
 fn list() {
+    let Some(data) = installs::data_dir() else {
+        println!("No versions of Kix are installed. {}", installs::NO_HOME);
+        return;
+    };
     let all = installs::installed();
-    let data = installs::data_dir();
     if all.is_empty() {
         println!("No versions of Kix are installed in {}", data.display());
         return;
@@ -122,8 +125,8 @@ fn update() -> miette::Result<()> {
         .and_then(|p| p.canonicalize())
         .map_err(|e| miette!("could not find the running Kix: {e}"))?;
     let running = installs::running_install();
-    let by_script = Receipt::read().is_some_and(|r| r.installer == Receipt::SCRIPT);
-    let Some(current) = running.filter(|_| by_script) else {
+    let receipt = Receipt::read().filter(|r| r.installer == Receipt::SCRIPT);
+    let Some((current, receipt)) = running.zip(receipt) else {
         return Err(miette!(
             "Kix {} at {} was not installed by the install script. Upgrade it the way you installed it, for example with nix profile upgrade kix",
             version::running().release(),
@@ -131,19 +134,26 @@ fn update() -> miette::Result<()> {
         ));
     };
     let source = Source::from_env();
-    let latest = release::latest(&source)
+    let system = release::system().map_err(|e| miette!("{e}"))?;
+    let latest = release::latest(&source, &system)
         .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("{source} lists no releases of Kix yet"))?;
+        .ok_or_else(|| miette!("{source} lists no releases of Kix for {system} yet"))?;
     if latest <= current.version {
         println!("Kix {} is the newest release", current.version.release());
         return Ok(());
     }
     let installed = fetch(&Requirement::Exact(latest))?;
-    point_link(&installed.install)?;
+    let link = receipt
+        .link
+        .clone()
+        .or_else(installs::link_path)
+        .ok_or_else(|| miette!("{}", installs::NO_HOME))?;
+    point_link(&link, &installed.install)?;
     Receipt {
         installer: Receipt::SCRIPT.to_string(),
         version: installed.install.version.release(),
         installed_at: Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        link: Some(link),
     }
     .write()
     .map_err(|e| miette!("could not write the install receipt: {e}"))?;
@@ -155,11 +165,10 @@ fn update() -> miette::Result<()> {
     Ok(())
 }
 
-/// Point the install script's link (`~/.local/bin/kix`) at `install`,
-/// replacing it in one step so `kix` on PATH never goes missing.
-fn point_link(install: &Install) -> miette::Result<()> {
-    let link = installs::link_path();
-    if let Ok(meta) = std::fs::symlink_metadata(&link)
+/// Point `link`, the install script's link, at `install`, replacing it in
+/// one step so `kix` on PATH never goes missing.
+fn point_link(link: &Path, install: &Install) -> miette::Result<()> {
+    if let Ok(meta) = std::fs::symlink_metadata(link)
         && !meta.file_type().is_symlink()
     {
         return Err(miette!(
@@ -174,7 +183,7 @@ fn point_link(install: &Install) -> miette::Result<()> {
     let tmp = dir.join(format!(".kix.tmp-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     std::os::unix::fs::symlink(install.bin(), &tmp)
-        .and_then(|()| std::fs::rename(&tmp, &link))
+        .and_then(|()| std::fs::rename(&tmp, link))
         .map_err(|e| {
             miette!(
                 "could not point {} at Kix {}: {e}",

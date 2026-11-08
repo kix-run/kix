@@ -13,6 +13,11 @@ use std::str::FromStr;
 
 use super::Version;
 
+/// The first minor release of Kix that reads the `kix` setting in
+/// `kix.toml`. Kix 0.7 and older refuse a `kix.toml` that sets it, so a
+/// project cannot ask for one of them.
+pub const FIRST_SELECTING: (u64, u64) = (0, 8);
+
 /// The Kix a project asks for with `kix` in `kix.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Requirement {
@@ -48,6 +53,22 @@ impl FromStr for Requirement {
             [major, minor, patch] => Ok(Requirement::Exact(Version::new(*major, *minor, *patch))),
             _ => Err(bad()),
         }
+    }
+}
+
+impl Requirement {
+    /// Return the major and minor version this requirement names.
+    pub fn minor_key(&self) -> (u64, u64) {
+        match self {
+            Requirement::Minor(major, minor) => (*major, *minor),
+            Requirement::Exact(v) => v.minor_key(),
+        }
+    }
+
+    /// Return whether the Kix this requirement names reads the `kix` setting
+    /// ([`FIRST_SELECTING`]).
+    pub fn reads_kix_setting(&self) -> bool {
+        self.minor_key() >= FIRST_SELECTING
     }
 }
 
@@ -107,6 +128,9 @@ pub struct LibraryIncompatible {
     pub kix: Version,
     pub library: Version,
     pub reason: Incompatible,
+    /// The project's `kix` setting in `kix.toml`, if it has one. The fix
+    /// depends on it, because Kix chooses a version only from that setting.
+    pub requirement: Option<Requirement>,
 }
 
 impl fmt::Display for LibraryIncompatible {
@@ -114,21 +138,54 @@ impl fmt::Display for LibraryIncompatible {
         let lib = self.library.release();
         let kix = self.kix.release();
         let lib_minor = self.library.minor_text();
-        let kix_minor = self.kix.minor_text();
-        write!(f, "This project's Kix library is {lib}, but Kix is {kix}. ")?;
         match self.reason {
-            Incompatible::LibraryNewerMinor => write!(
-                f,
-                "Kix {kix_minor} cannot build a {lib_minor} library. Run `kix self install {lib_minor}`, or set kix = \"{lib_minor}\" in kix.toml so Kix picks that version for this project."
-            ),
-            Incompatible::LibraryOlderMinor => write!(
-                f,
-                "Run `kix lib update` to move the project to the {kix} library and commit flake.lock, or run `kix self install {lib_minor}` to use the Kix that matches the library."
-            ),
-            Incompatible::LibraryNewerPatch => write!(
-                f,
-                "A {lib_minor} library needs Kix {lib} or newer. Run `kix self install {lib_minor}`."
-            ),
+            Incompatible::LibraryOlderMinor => {
+                write!(
+                    f,
+                    "This project's Kix library is {lib}, but this is Kix {kix}. Run `kix lib update` to move the project to the {kix} library and commit flake.lock."
+                )?;
+                if self.library.minor_key() >= FIRST_SELECTING {
+                    write!(
+                        f,
+                        " To keep this project on Kix {lib_minor} instead, set kix = \"{lib_minor}\" in kix.toml."
+                    )?;
+                }
+                Ok(())
+            }
+            Incompatible::LibraryNewerMinor => {
+                if let Some(req) = &self.requirement
+                    && req.minor_key() != self.library.minor_key()
+                {
+                    write!(
+                        f,
+                        "kix.toml asks for Kix {req}, but flake.lock has the {lib} library. "
+                    )?;
+                }
+                write!(
+                    f,
+                    "This project's Kix library is {lib}, but this is Kix {kix}. Set kix = \"{lib_minor}\" in kix.toml so Kix runs {lib_minor} for this project."
+                )
+            }
+            // Selection runs the newest installed patch of the minor a
+            // project names, so installing one is enough. An exact version
+            // has to be raised, and without a setting the Kix on PATH runs.
+            Incompatible::LibraryNewerPatch => {
+                write!(
+                    f,
+                    "This project's Kix library is {lib}, which needs Kix {lib} or newer, and this is Kix {kix}. "
+                )?;
+                match &self.requirement {
+                    Some(Requirement::Minor(major, minor)) => write!(
+                        f,
+                        "Run `kix self install {major}.{minor}`, and Kix runs the new version for this project."
+                    ),
+                    Some(Requirement::Exact(_)) => write!(
+                        f,
+                        "Set kix = \"{lib}\" in kix.toml so Kix installs and runs {lib} for this project."
+                    ),
+                    None => write!(f, "Run `kix self update`."),
+                }
+            }
         }
     }
 }
@@ -220,28 +277,90 @@ mod tests {
         );
     }
 
-    fn message(kix: &str, library: &str, reason: Incompatible) -> String {
+    fn message(kix: &str, library: &str, reason: Incompatible, req: Option<&str>) -> String {
         LibraryIncompatible {
             kix: v(kix),
             library: v(library),
             reason,
+            requirement: req.map(|r| r.parse().unwrap()),
         }
         .to_string()
     }
 
     #[test]
-    fn each_incompatibility_names_its_fix() {
+    fn an_older_library_names_lib_update_and_a_selectable_minor() {
         assert_eq!(
-            message("0.7.0+12", "0.8.1", Incompatible::LibraryNewerMinor),
-            "This project's Kix library is 0.8.1, but Kix is 0.7.0. Kix 0.7 cannot build a 0.8 library. Run `kix self install 0.8`, or set kix = \"0.8\" in kix.toml so Kix picks that version for this project."
+            message("0.8.1", "0.7.0", Incompatible::LibraryOlderMinor, None),
+            "This project's Kix library is 0.7.0, but this is Kix 0.8.1. Run `kix lib update` to move the project to the 0.8.1 library and commit flake.lock."
         );
         assert_eq!(
-            message("0.8.4", "0.7.2", Incompatible::LibraryOlderMinor),
-            "This project's Kix library is 0.7.2, but Kix is 0.8.4. Run `kix lib update` to move the project to the 0.8.4 library and commit flake.lock, or run `kix self install 0.7` to use the Kix that matches the library."
+            message(
+                "0.9.1+12",
+                "0.8.0",
+                Incompatible::LibraryOlderMinor,
+                Some("0.9")
+            ),
+            "This project's Kix library is 0.8.0, but this is Kix 0.9.1. Run `kix lib update` to move the project to the 0.9.1 library and commit flake.lock. To keep this project on Kix 0.8 instead, set kix = \"0.8\" in kix.toml."
+        );
+    }
+
+    #[test]
+    fn a_newer_library_minor_names_the_kix_setting() {
+        assert_eq!(
+            message("0.8.1", "0.9.0", Incompatible::LibraryNewerMinor, None),
+            "This project's Kix library is 0.9.0, but this is Kix 0.8.1. Set kix = \"0.9\" in kix.toml so Kix runs 0.9 for this project."
         );
         assert_eq!(
-            message("0.8.4", "0.8.6", Incompatible::LibraryNewerPatch),
-            "This project's Kix library is 0.8.6, but Kix is 0.8.4. A 0.8 library needs Kix 0.8.6 or newer. Run `kix self install 0.8`."
+            message(
+                "0.8.1",
+                "0.9.0",
+                Incompatible::LibraryNewerMinor,
+                Some("0.8")
+            ),
+            "kix.toml asks for Kix 0.8, but flake.lock has the 0.9.0 library. This project's Kix library is 0.9.0, but this is Kix 0.8.1. Set kix = \"0.9\" in kix.toml so Kix runs 0.9 for this project."
         );
+        assert_eq!(
+            message(
+                "0.8.1",
+                "0.9.0",
+                Incompatible::LibraryNewerMinor,
+                Some("0.9")
+            ),
+            message("0.8.1", "0.9.0", Incompatible::LibraryNewerMinor, None)
+        );
+    }
+
+    #[test]
+    fn a_newer_library_patch_names_an_exact_version() {
+        assert_eq!(
+            message(
+                "0.8.1",
+                "0.8.3",
+                Incompatible::LibraryNewerPatch,
+                Some("0.8")
+            ),
+            "This project's Kix library is 0.8.3, which needs Kix 0.8.3 or newer, and this is Kix 0.8.1. Run `kix self install 0.8`, and Kix runs the new version for this project."
+        );
+        assert_eq!(
+            message(
+                "0.8.1",
+                "0.8.3",
+                Incompatible::LibraryNewerPatch,
+                Some("0.8.1")
+            ),
+            "This project's Kix library is 0.8.3, which needs Kix 0.8.3 or newer, and this is Kix 0.8.1. Set kix = \"0.8.3\" in kix.toml so Kix installs and runs 0.8.3 for this project."
+        );
+        assert_eq!(
+            message("0.8.1", "0.8.3", Incompatible::LibraryNewerPatch, None),
+            "This project's Kix library is 0.8.3, which needs Kix 0.8.3 or newer, and this is Kix 0.8.1. Run `kix self update`."
+        );
+    }
+
+    #[test]
+    fn only_kix_0_8_and_newer_read_the_setting() {
+        assert!(!Requirement::Minor(0, 7).reads_kix_setting());
+        assert!(!Requirement::Exact(v("0.7.9")).reads_kix_setting());
+        assert!(Requirement::Minor(0, 8).reads_kix_setting());
+        assert!(Requirement::Exact(v("1.0.0")).reads_kix_setting());
     }
 }
