@@ -1,0 +1,3 @@
+# 2026-11-08 · `.github/workflows/cli-tests.yml` · A release rehearsal fails `without-nix` and `nix-builder`, because Kix refuses its own library.
+
+A rehearsal (`gh workflow run cli-tests.yml -f rehearse=0.0.1`) builds Kix as version 0.0.1, but the repository's Kix library reports the version in `cli/Cargo.toml`, such as 0.8.0-rc.1. Since Kix checks that the two match, `cli/runtime/without-nix.sh` and `cli/runtime/nix-builder.sh` stop with "This project's Kix library is 0.8.0-rc.1, but this is Kix 0.0.1". Seen in run 42519540903. A real release is not affected, because there the binary and the library have the same version. The `release` skill still tells people to rehearse with 0.0.1.
