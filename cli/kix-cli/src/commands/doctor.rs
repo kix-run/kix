@@ -155,7 +155,9 @@ fn check_system_nix() -> usize {
         }
         None => {
             warn("Unknown whether Nix can render Helm charts");
-            detail("`nix config show` did not list allow-import-from-derivation.");
+            detail(
+                "Nix did not report allow-import-from-derivation. To be sure, add `allow-import-from-derivation = true` to nix.conf.",
+            );
         }
     }
     0

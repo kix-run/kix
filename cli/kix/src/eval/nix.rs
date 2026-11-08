@@ -307,7 +307,7 @@ pub fn eval_with_helm(
     }
     Err(KixEvalError::StoreGraphError {
         message: format!(
-            "evaluating {} still needed Helm charts after Kix had rendered charts {MAX_EVALUATIONS} times",
+            "evaluating {} still needed Helm charts after rendering charts {MAX_EVALUATIONS} times",
             args.join(" ")
         ),
     })

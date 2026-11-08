@@ -379,7 +379,7 @@ in
         else if exact != [ ] then
           builtins.head exact
         else
-          throw "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " (builtins.attrNames data.namespaces)}), so Kix does not know where to put the imports of its services. Name one: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
+          throw "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " (builtins.attrNames data.namespaces)}), with no concrete namespace for imported services. Pass `importNamespace`: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
       imports = lib.mapAttrsToList (key: svc: {
         inherit key;
         inherit (svc) instance;

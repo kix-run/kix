@@ -117,7 +117,7 @@ pub enum ProjectError {
     },
 
     #[error(
-        "{} has a setting this version of Kix does not know: `{key}`. Kix {} knows these settings: {}. Check the spelling, or upgrade Kix if the project needs a newer version",
+        "{} has an unknown setting `{key}` (Kix {} supports: {}). Check the spelling, or upgrade Kix if the project needs a newer version",
         path.display(),
         crate::VERSION,
         KNOWN_KEYS.join(", ")
@@ -125,7 +125,7 @@ pub enum ProjectError {
     UnknownKey { path: PathBuf, key: String },
 
     #[error(
-        "{origin} sets builder = {value}, which this version of Kix does not know. Kix {} knows these builders: {}. Check the spelling, or upgrade Kix if the project needs a newer version",
+        "{origin} sets builder = {value}, which is not a known builder (Kix {} supports: {}). Check the spelling, or upgrade Kix if the project needs a newer version",
         crate::VERSION,
         builder_names()
     )]
@@ -135,14 +135,14 @@ pub enum ProjectError {
     },
 
     #[error(
-        "{origin} sets builder to {kind}. Write the builder's name in quotes, such as builder = \"kix\". Kix {} knows these builders: {}",
+        "{origin} sets builder to {kind}. Write the builder's name in quotes, such as builder = \"kix\" (Kix {} supports: {})",
         crate::VERSION,
         builder_names()
     )]
     NotText { origin: BuilderSource, kind: String },
 
     #[error(
-        "{origin} sets builder = \"remote\", but this version of Kix cannot use a remote builder. Set builder = \"kix\", or remove the setting"
+        "{origin} sets builder = \"remote\", but remote builders are not supported yet. Set builder = \"kix\", or remove the setting"
     )]
     RemoteUnsupported { origin: BuilderSource },
 }
@@ -255,17 +255,15 @@ impl ProjectConfig {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProjectMismatch {
     #[error(
-        "{origin} sets builder = \"nix\", but the project's flake does not say which builder it uses. If flake.nix calls kixpkgs.lib.mkFlake, run `kix lib update` to move flake.lock to this Kix release. If flake.nix publishes its Kix outputs itself, for example with kixpkgs.lib.forPkgs, merge the outputs of kixpkgs.lib.mkFlake into it instead, as the Kix docs page \"Use mkFlake in a consuming repo\" shows"
+        "{origin} sets builder = \"nix\", which this project's flake does not support. If flake.nix calls kixpkgs.lib.mkFlake, run `kix lib update` to update the Kix library in flake.lock. If flake.nix builds Kix outputs directly (for example with kixpkgs.lib.forPkgs), switch to kixpkgs.lib.mkFlake as shown in \"Use mkFlake in a consuming repo\" in the docs"
     )]
     NoBuilderSetting { origin: BuilderSource },
 
-    #[error(
-        "kix.toml is not visible to Nix. Run `git add kix.toml`. Kix reads builder = \"nix\" from {origin}, but Nix leaves out files that git does not track, so the project's Kix library uses builder = \"kix\""
-    )]
+    #[error("{origin} is not tracked by Git, so Nix ignores it. Run `git add kix.toml`")]
     NotVisible { origin: BuilderSource },
 
     #[error(
-        "Kix and the project's Kix library disagree about the builder. Kix uses builder = \"{cli}\" ({origin}), and the library uses builder = \"{library}\". Check that git tracks kix.toml, and that flake.nix passes its `self` input to kixpkgs.lib.mkFlake"
+        "the project's builder is `{cli}` ({origin}), but the flake evaluated with builder = \"{library}\". Check that Git tracks kix.toml, and that flake.nix passes its `self` input to kixpkgs.lib.mkFlake"
     )]
     Disagree {
         origin: BuilderSource,
@@ -365,7 +363,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("`buidler`"), "{err}");
-        assert!(err.contains("knows these settings: builder"), "{err}");
+        assert!(err.contains("supports: builder"), "{err}");
         assert!(err.contains("upgrade Kix"), "{err}");
 
         let err = read(Some("[remote]\nurl = \"x\"\n"))
@@ -402,7 +400,10 @@ mod tests {
     fn remote_is_refused() {
         let config = read(Some("builder = \"remote\"\n")).unwrap();
         let err = config.check_supported().unwrap_err().to_string();
-        assert!(err.contains("cannot use a remote builder"), "{err}");
+        assert!(
+            err.contains("remote builders are not supported yet"),
+            "{err}"
+        );
         assert!(err.contains("kix.toml sets builder"), "{err}");
 
         for builder in ["kix", "nix"] {
@@ -425,7 +426,10 @@ mod tests {
         let err = check_agreement(BuilderKind::Nix, &file, None)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("does not say which builder"), "{err}");
+        assert!(
+            err.contains("this project's flake does not support"),
+            "{err}"
+        );
         assert!(err.contains("kix lib update"), "{err}");
         assert!(err.contains("mkFlake"), "{err}");
 
@@ -433,15 +437,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.starts_with("kix.toml is not visible to Nix. Run `git add kix.toml`."),
+            err.starts_with(
+                "/p/kix.toml is not tracked by Git, so Nix ignores it. Run `git add kix.toml`"
+            ),
             "{err}"
         );
 
         let err = check_agreement(BuilderKind::Kix, &BuilderSource::Default, Some("nix"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("Kix uses builder = \"kix\""), "{err}");
-        assert!(err.contains("the library uses builder = \"nix\""), "{err}");
+        assert!(err.contains("the project's builder is `kix`"), "{err}");
+        assert!(
+            err.contains("the flake evaluated with builder = \"nix\""),
+            "{err}"
+        );
 
         check_agreement(BuilderKind::Nix, &BuilderSource::TestOverride, Some("kix")).unwrap();
         check_agreement(BuilderKind::Nix, &BuilderSource::TestOverride, None).unwrap();

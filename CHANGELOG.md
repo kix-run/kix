@@ -17,6 +17,10 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+### Changed
+
+- Errors about `kix.toml`, the `nix` builder, the Kix library version, and Helm are shorter. Each one says what is wrong and how to fix it. Scripts that match these messages word for word need updating.
+
 ## 0.7.0 - 2026-11-07
 
 **Before you upgrade**, check these items in your cluster definitions, packages, and scripts. The sections below explain each change.
