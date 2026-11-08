@@ -120,8 +120,8 @@ When every check passes, merge it with a merge commit:
 
 ## 4. Confirm the release
 
-The merge starts the CLI tests workflow on main, and its `runtime`, `release`,
-`without-nix`, and `publish` jobs build, verify, and publish the release.
+The merge starts the CLI tests workflow on main, and its `runtime`, `build`,
+`release`, `without-nix`, and `publish` jobs build, verify, and publish the release.
 Follow the run with `gh run watch`. Then check:
 
 - `gh release view v<version> --repo kix-run/kix-releases` lists the three

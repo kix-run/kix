@@ -61,28 +61,35 @@ breaking.
 The workspace version in `cli/Cargo.toml` decides when Kix is released. On
 each push to main, the `version` job in `.github/workflows/cli-tests.yml`
 looks for a `v<version>` tag in this repository. With none yet, the push is
-a release, and merging a version change is what makes one. After the tests
-pass:
+a release, and merging a version change is what makes one. Three jobs then
+start at once:
 
-1. The `runtime` matrix job builds `.#kix-runtime-spec` for `x86_64-linux`,
-   `aarch64-linux`, and `aarch64-darwin`.
-2. The `release` matrix job builds `kix` for each platform (`x86_64-linux` and
-   `aarch64-linux` on Ubuntu with `cargo zigbuild` targeting `musl`, and
-   `aarch64-darwin` natively on the self-hosted Mac Studio runner
-   `kix-macos-nix`), each through `cargo auditable` so the binary carries its
-   crate list, runs `cli/runtime/assemble.py` and
-   `cli/runtime/legal.py`, and packages each self-contained release archive
-   (`kix-<system>.tar.gz`, unpacking to `kix-<version>-<system>/`) containing
-   `bin/kix` and `libexec/kix/` (`nix-2.35.4`, `helm-3.19.1`, `helm-4.3.1`,
-   `kubectl-1.37.2`, `sops-3.12.1`, `manifest.json`, and
-   `THIRD_PARTY_LICENSES`), alongside `kix-<version>-third-party-sources.tar.zst`
-   for LGPL compliance. For each binary it writes the RustSec report that
-   `cargo audit bin` reads from the binary's embedded crate list, ships it in
-   the archive as `share/kix/cargo-audit.json` and beside it as
+1. The `test` job runs the test suite, and `cargo audit` on
+   `cli/Cargo.lock`. It runs on every change, not only releases.
+2. The `runtime` matrix job builds `.#kix-runtime-spec` for `x86_64-linux`,
+   `aarch64-linux`, and `aarch64-darwin`, and runs
+   `cli/runtime/assemble.py`. The `aarch64-darwin` entry also builds the
+   macOS `kix` binary natively on the Mac Studio runner `kix-macos-nix`.
+3. The `build` job builds the `x86_64-linux` and `aarch64-linux` `kix`
+   binaries with `cargo zigbuild` targeting `musl`.
+
+Every binary is built through `cargo auditable`, so it carries its crate
+list. None of these jobs needs another, so the Mac Studio builds while the
+tests run. Then:
+
+4. The `release` job waits for all three and packages each self-contained
+   release archive (`kix-<system>.tar.gz`, unpacking to
+   `kix-<version>-<system>/`) containing `bin/kix` and `libexec/kix/`
+   (`nix-2.35.4`, `helm-3.19.1`, `helm-4.3.1`, `kubectl-1.37.2`,
+   `sops-3.12.1`, `manifest.json`, and `THIRD_PARTY_LICENSES`), alongside
+   `kix-<version>-third-party-sources.tar.zst` for LGPL compliance. For each
+   binary it writes the RustSec report that `cargo audit bin` reads from the
+   binary's embedded crate list, ships it in the archive as
+   `share/kix/cargo-audit.json` and beside it as
    `kix-<version>-<system>-cargo-audit.json`, and stops when a binary has no
-   crate list or a known vulnerability. The `test` job runs `cargo audit` on
-   `cli/Cargo.lock` for every change.
-3. The `without-nix` matrix job unpacks each archive on a runner with `/nix`
+   crate list or a known vulnerability. Because `release` waits for `test`,
+   a failing test still stops the release.
+5. The `without-nix` matrix job unpacks each archive on a runner with `/nix`
    unreachable and runs `cli/runtime/without-nix.sh` (`kix doctor`,
    `kix build minimal`, and `kix build helm`). In parallel, the `nix-builder`
    matrix job runs `cli/runtime/nix-builder.sh` on a runner with Nix installed
@@ -90,7 +97,7 @@ pass:
    under both builders, that an untracked `kix.toml` is refused with the
    `git add kix.toml` hint, and that `nix build .#cluster-helm-activation` works
    on a `builder = "nix"` project.
-4. Once `without-nix` and `nix-builder` pass, `publish` signs `SHA256SUMS`
+6. Once `without-nix` and `nix-builder` pass, `publish` signs `SHA256SUMS`
    with the release key in the secret `KIX_RELEASE_SIGNING_KEY` (the "Sign
    checksums" step, which also checks the public key against
    `cli/release-keys/`), writing `SHA256SUMS.sig`. While `cli/release-keys/`
@@ -138,14 +145,14 @@ A pull request that makes a release (its version has no tag yet) runs the
 same steps, except `publish`. Another pull request that changes the runtime,
 cluster evaluation (`cli/kix/src/eval/`), or the Nix side of Helm renders
 runs only the `runtime` job, which checks that each platform's runtime builds
-and its programs run. The `release` binaries take about ten minutes to
+and its programs run. The `build` binaries take about ten minutes to
 build, so such a pull request runs `without-nix` and `nix-builder` only
 through a manual run.
 
 Almost every job runs on self-hosted runners. The x86_64 Linux jobs run on
 Spindle. The arm64 Linux and macOS jobs run in VMs on the Mac Studio:
 `kix-linux-nix` and `kix-macos-nix` have Nix, and `kix-linux-nonix` and
-`kix-macos-nonix` do not. `version` and `release` run on `kix-linux-nonix`.
+`kix-macos-nonix` do not. `version`, `build`, and `release` run on `kix-linux-nonix`.
 Only `publish` runs on a GitHub-hosted runner, because it needs the `gh`
 CLI.
 
