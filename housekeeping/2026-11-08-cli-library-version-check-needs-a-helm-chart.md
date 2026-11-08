@@ -1,0 +1,3 @@
+# 2026-11-08 · `cli/kix/src/eval/nix.rs`, `cli/kix/src/library.rs` · Kix checks the library version against itself only when a build renders a Helm chart.
+
+The only check that ties the CLI to the library in `flake.lock` is `HelmMismatch`, raised when evaluation asks for a Helm version the runtime does not ship. A project with no Helm charts is never checked, so any CLI builds and deploys any library, including the 0.6 libraries the 0.7.0 changelog says Kix refuses. The changelog line "Kix now stops if the Kix library in flake.lock is from 0.6.0 or earlier" reads as a general check, and it is not one.
