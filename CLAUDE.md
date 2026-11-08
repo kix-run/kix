@@ -151,19 +151,17 @@ For an important new message, such as a refusal that stops a deploy, you can als
 
 ## Build
 
-Use the ludo-kind cluster as the canonical smoke-test; it wires together
-the full package set (stackgres, cilium, cert-manager, ingress, etc.) and
-catches most regressions:
+Use the homelab-kind cluster (`clusters/homelab/`) as the canonical
+smoke-test; it wires together most of the package set (stackgres, cilium,
+monitoring, ingress, etc.) and catches most regressions:
 
 ```bash
-nix run .#kix -- check ludo-kind --flake ./ludo
+nix run .#kix -- check homelab-kind
 ```
 
-Because `ludo-kind` uses Helm charts, evaluate it through `kix` (or
-`./scripts/kix-manifests.sh ./ludo ludo-kind ./result` when you need the
-manifest directory on disk) rather than plain `nix build`. Other clusters
-(e.g. `nw1`) may need capabilities the current env lacks (external cilium,
-etc.); prefer `ludo-kind` for default checks.
+Because `homelab-kind` uses Helm charts, evaluate it through `kix` (or
+`./scripts/kix-manifests.sh . homelab-kind ./result` when you need the
+manifest directory on disk) rather than plain `nix build`.
 
 ## Build caches and disk
 

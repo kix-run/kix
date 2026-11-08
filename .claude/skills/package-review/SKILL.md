@@ -395,7 +395,7 @@ checklist above:
   over tracked files (a recursive grep walks gitignored trees such as
   `docs/dist/`). Report each hit outside `v2_discussions/archive/` and
   housekeeping history.
-- Its consumers in `clusters/`, `ludo/`, and the docs examples are removed or
+- Its consumers in `clusters/` and the docs examples are removed or
   moved to a replacement; optional `<name> ? null` args in other packages are
   deleted, since they keep resolving to null and hide the dead edge.
 - `kix/package-eval.nix` keeps no `settings` or exception entry for it
@@ -413,7 +413,7 @@ checklist above:
 not `origin/main`: on a branch behind main, a plain diff shows main's newer
 commits reversed. The package's header and `default.nix`, its
 `crds/sources.txt`, its `kix/package-eval.nix` entry, and the consumers:
-`git grep -n 'packages\.<name>\|<defaultAlias>' kix/packages clusters ludo docs`.
+`git grep -n 'packages\.<name>\|<defaultAlias>' kix/packages clusters docs`.
 Open `docs/src/content/docs/reference/` pages (`package-anatomy.mdx`, `composition-helpers.mdx`, `secrets-crds-and-rbac.mdx`) only for an item you are judging. Run `git add` on new files before
 any Nix evaluation, and never use a `path:` flakeref.
 
@@ -426,7 +426,7 @@ any Nix evaluation, and never use a `path:` flakeref.
 | scorecard | part of the eval; `kix check <cluster>` | probes, resources, non-root, `latest`, placeholders, owner, description, `monitorSelectorMatchesService`, `clusterDomainLiteral`, `selectorCoherence`, `unsafeGrants`, `volumeHasSource` |
 | validate and cross-resource checks | part of the eval | SA and roleRef exist, Service selectors, unique names, CR-to-CRD declarations and served versions, declared Secret keys, managed Secret keys without values, one default class, claim and class references |
 | CRD vendoring | `nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check` | stale or orphaned vendored CRDs and roles |
-| smoke cluster | `nix run .#kix -- check ludo-kind --flake ./ludo` | regressions in the full package set |
+| smoke cluster | `nix run .#kix -- check homelab-kind` | regressions in the full package set |
 
 Check `df -BG --output=avail /` before a build. Redundant-requires and
 orphaned-part warnings are traces, not failures, and appear only when the
@@ -488,7 +488,7 @@ Na4 "(component|role|app|release|tier)" =
 Pr3 #.*(20[0-9]{2}-[0-9]{2}|kixpkgs#[0-9]|live cluster|caught live|used to|no longer|was removed|removed in)
 Pr4 \x{2014}
 EOF
-rg -n 'mkForce' clusters ludo | rg '<name>'                 # E12
+rg -n 'mkForce' clusters | rg '<name>'                      # E12
 rg -n -i -e "$SITES" "$PKG" clusters docs/src/content/docs  # L1
 ```
 

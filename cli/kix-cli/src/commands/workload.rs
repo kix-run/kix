@@ -52,7 +52,7 @@ pub fn resolve_package_workload(
 
 /// Match a package by instance name. Matches are case-sensitive and prefer
 /// the shortest `<namespace>/<instance>` key that ends with the query, so
-/// `kix logs ludo vaultwarden` works even when there are multiple namespaces.
+/// `kix logs homelab-kind vaultwarden` works even when there are multiple namespaces.
 fn find_package<'a>(graph: &'a StoreGraph, query: &str) -> Result<&'a PackageNode> {
     // Exact instance-name match first.
     let exact: Vec<_> = graph

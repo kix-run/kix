@@ -151,7 +151,7 @@ fn flake_checks_evaluate_with_helm() {
     let system = kix::eval::nix::current_system();
     let mut failed = Vec::new();
     let mut evaluated = 0;
-    for flake in [".", "clusters", "ludo"] {
+    for flake in [".", "clusters"] {
         let dir = repo.join(flake);
         let checks = format!(".#checks.{system}");
         let names = kix::eval::nix::eval_with_helm(

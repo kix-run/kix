@@ -1,10 +1,7 @@
 # kixpkgs root flake: aggregates all clusters.
 #
-# Prefer using the per-directory flakes (ludo/, clusters/) directly.
-# This root flake exists for backwards compatibility and CI.
-#
-# Build a cluster:
-#   nix build .#cluster-ludo --extra-experimental-features pipe-operators
+# The smoke test is homelab-kind:
+#   nix run .#kix -- check homelab-kind
 
 {
   description = "kixpkgs - Kubernetes packages built with Nix";
@@ -73,8 +70,10 @@
           example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
           example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
 
-          # Production clusters
-          ludo = ./ludo/cluster.nix;
+          # Smoke test: the full homelab service set on kind, and the same
+          # cluster moved to Gateway API for scripts/kix-rollback-check.sh.
+          homelab-kind = ./clusters/homelab/cluster-kind.nix;
+          homelab-kind-gateway-migrate = ./clusters/homelab/cluster-kind-gateway-migrate.nix;
         };
       };
 

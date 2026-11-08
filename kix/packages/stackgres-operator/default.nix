@@ -101,7 +101,7 @@
 # its digest (`crane digest quay.io/ongres/kubectl:v<entry>`), compare
 # kinds.nix with the chart's crds/ and the RBAC below with its
 # operator-cluster-role.yaml, then run the stackgres eval checks
-# (every-package-evaluates, ludo-kind).
+# (every-package-evaluates, homelab-kind).
 
 {
   scope,
