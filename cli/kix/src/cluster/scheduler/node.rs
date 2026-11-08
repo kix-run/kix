@@ -9,9 +9,12 @@ use serde_json::Value;
 use crate::manifest::lifecycle::never_pruned;
 use crate::manifest::types::ResourceId;
 
+use chrono::Utc;
+
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
 use super::super::graph::ResourceGraph;
+use super::super::kept::NotKeptField;
 use super::super::ops::{ResourceIo, SecretHydrator};
 use super::super::readiness::{self, ImportTarget, ReadinessResult};
 use super::super::secrets;
@@ -106,7 +109,14 @@ pub(super) fn recreate_refusal(rid: &ResourceId) -> Option<String> {
 
 /// Hydrate secrets, apply or recreate the resource, wait for readiness, and
 /// return the node's outcome.
-pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
+///
+/// `checked` says that something in this deploy depends on `entry` although
+/// the plan leaves it unchanged (`SchedulerState::is_checked`).
+pub(super) async fn execute_node(
+    ctx: &NodeCtx,
+    entry: &PlanNodeEntry,
+    checked: bool,
+) -> NodeOutcome {
     if entry.kind == TransitionKind::Wait {
         return wait_for_platform(ctx, entry).await;
     }
@@ -114,9 +124,11 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
     let mut rerun_reason: Option<&'static str> = None;
     let manifest = match (&entry.action, &entry.rerun) {
         (ChangeAction::Apply(m), _) => m.clone(),
-        (ChangeAction::Skip(rid), Some(manifest)) => {
-            // Recreate an unchanged probe if its live object failed and
-            // `rerun_failed` is enabled; otherwise report the failure.
+        (ChangeAction::Skip(rid), rerun) if super::plan::skip_reads_live(entry) => {
+            // An unchanged Job is never applied again, so its last run is
+            // read back. A failed run is recreated under `kix.run/rerun` when
+            // `rerun_failed` is enabled, and reported otherwise. A Job
+            // without the annotation is never deleted here.
             let live = ctx.resources.get_live(rid).await;
             let terminal = match &live {
                 Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
@@ -124,11 +136,15 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
             };
             match (live, terminal) {
                 (Ok(Some(_)), Some((reason, detail))) => {
-                    if !ctx.rerun_failed {
+                    let manifest = match rerun {
+                        Some(manifest) if ctx.rerun_failed => Some(manifest),
+                        _ => None,
+                    };
+                    let Some(manifest) = manifest else {
                         let message = format!(
-                            "{}: {detail}; unchanged since its last run, which failed. \
-                             Deploy with the CLI to run it again, or change an input",
-                            reason.as_str()
+                            "{}: {detail}; unchanged since its last run, which failed. {}",
+                            reason.as_str(),
+                            job_next_step(rerun.is_some()),
                         );
                         return NodeOutcome::Failed {
                             detail: NodeDetail::ReadinessFailed {
@@ -138,9 +154,23 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
                             },
                             message,
                         };
-                    }
+                    };
                     rerun_reason = Some("the last run failed");
                     manifest.clone()
+                }
+                // A run that is still going holds back what depends on it,
+                // as a Job this deploy applied would.
+                (Ok(Some(obj)), None) if checked && !readiness::check_job_ready(&obj) => {
+                    return match check_unchanged(ctx, entry, rid).await {
+                        NodeOutcome::Failed { detail, message } => NodeOutcome::Failed {
+                            message: with_sentence(
+                                &message,
+                                &format!("{}.", job_next_step(rerun.is_some())),
+                            ),
+                            detail,
+                        },
+                        other => other,
+                    };
                 }
                 (Ok(_), _) => {
                     return NodeOutcome::Ready {
@@ -156,11 +186,10 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
                 }
             }
         }
-        (ChangeAction::Skip(_), None) => {
-            return NodeOutcome::Ready {
-                apply_action: ApplyAction::Unchanged,
-            };
-        }
+        // The scheduler runs a task for any other Skip node only when
+        // something in this deploy depends on it, so the live object is
+        // checked.
+        (ChangeAction::Skip(rid), _) => return check_unchanged(ctx, entry, rid).await,
         (ChangeAction::Orphan(_), _) => {
             return NodeOutcome::Ready {
                 apply_action: ApplyAction::Skipped,
@@ -215,12 +244,17 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
     }
 
     ctx.progress.set_phase(&node, Phase::Apply);
+    // Taken before the apply so a controller's verdict written while the
+    // apply is in flight still counts as later than it.
+    let apply_started = Utc::now();
     let applied_action: ApplyAction;
+    let not_kept: Vec<NotKeptField>;
     let mut recreated_reason: Option<String> = None;
     if let Some(reason) = rerun_reason {
         match recreate(ctx, &manifest, &rid).await {
             Ok(apply_result) => {
                 applied_action = apply_result.action;
+                not_kept = apply_result.not_kept;
             }
             Err(e) => {
                 let message = format!("rerun ({reason}) failed: {e}");
@@ -234,12 +268,14 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
         match ctx.resources.apply(&manifest).await {
             Ok(result) => {
                 applied_action = result.action;
+                not_kept = result.not_kept;
             }
             Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(&rid) => {
                 let reason = source.to_string();
                 match recreate(ctx, &manifest, &rid).await {
                     Ok(apply_result) => {
                         applied_action = apply_result.action;
+                        not_kept = apply_result.not_kept;
                         recreated_reason = Some(reason);
                     }
                     Err(e) => {
@@ -265,6 +301,13 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
         verdict: Verdict::Running,
         detail: Some(NodeDetail::Applied(applied_action.clone())),
     });
+    // A dry run reports these in the plan document instead.
+    if !ctx.dry_run && !not_kept.is_empty() {
+        ctx.emit(DeployEvent::FieldsNotKept {
+            resource: rid.clone(),
+            fields: not_kept,
+        });
+    }
 
     let done = |recreated_reason: Option<String>| match (rerun_reason, recreated_reason) {
         (Some(reason), _) => NodeOutcome::Rerun {
@@ -302,11 +345,17 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
             detail: Some(NodeDetail::ReadinessProgress(msg.to_string())),
         });
     };
+    let applied_at = matches!(
+        applied_action,
+        ApplyAction::Created | ApplyAction::Configured
+    )
+    .then_some(apply_started);
     let outcome = ctx
         .resources
         .wait_ready(
             &rid,
             import_target.as_ref(),
+            applied_at,
             ctx.timeout,
             &ctx.cancel,
             &on_status,
@@ -371,15 +420,72 @@ pub(super) async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOu
 /// Wait for a resource managed by a platform Kix cluster
 /// ([`TransitionKind::Wait`]) to become ready without applying it.
 async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
+    match &entry.id {
+        NodeId::Resource(rid) if !ctx.dry_run => wait_live(ctx, entry, rid).await,
+        _ => NodeOutcome::Ready {
+            apply_action: ApplyAction::Unchanged,
+        },
+    }
+}
+
+/// Check that an unchanged resource something in this deploy depends on is
+/// ready, without applying it. A dry run and a kind whose readiness is
+/// immediate read nothing. A failure says that this deploy did not change
+/// the object, because the readiness text alone reads as if the deploy had
+/// just applied it. The scheduler adds the consequence and the next step.
+async fn check_unchanged(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> NodeOutcome {
     let unchanged = NodeOutcome::Ready {
         apply_action: ApplyAction::Unchanged,
-    };
-    let NodeId::Resource(rid) = &entry.id else {
-        return unchanged;
     };
     if ctx.dry_run {
         return unchanged;
     }
+    if entry.meta.import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
+        return unchanged;
+    }
+    match wait_live(ctx, entry, rid).await {
+        NodeOutcome::Failed { detail, message } => {
+            let message = with_sentence(
+                &message,
+                "This deploy did not change it. An earlier deploy or a change on the \
+                 cluster left it like this.",
+            );
+            NodeOutcome::Failed { detail, message }
+        }
+        other => other,
+    }
+}
+
+/// Return the next step after an unchanged Job failed. A Job cannot be
+/// changed in place, so it runs again only when it is recreated.
+fn job_next_step(rerun: bool) -> &'static str {
+    if rerun {
+        "Deploy with the CLI to run it again, or change an input"
+    } else {
+        "Change an input, or delete the Job with kubectl and deploy again"
+    }
+}
+
+/// Append `sentence` to `message`, closing the message with a full stop when
+/// it does not end in one.
+pub(super) fn with_sentence(message: &str, sentence: &str) -> String {
+    let message = message.trim_end();
+    let stop = if message.ends_with(['.', '!', '?']) {
+        ""
+    } else {
+        "."
+    };
+    format!("{message}{stop} {sentence}")
+}
+
+/// Wait through `ResourceIo::wait_ready` for a node's live object (or the
+/// import target it describes) without applying it. The node left the object
+/// as it was, so `applied_at` is `None` and a declared failure is final at
+/// once.
+async fn wait_live(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> NodeOutcome {
+    let unchanged = NodeOutcome::Ready {
+        apply_action: ApplyAction::Unchanged,
+    };
     let node = entry.id.clone();
     ctx.progress.set_phase(&node, Phase::Readiness);
     let on_status = |msg: &str| {
@@ -396,6 +502,7 @@ async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome 
         .wait_ready(
             rid,
             entry.meta.import_target.as_ref(),
+            None,
             ctx.timeout,
             &ctx.cancel,
             &on_status,

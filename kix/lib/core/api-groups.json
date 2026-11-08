@@ -1,0 +1,4 @@
+{
+  "builtinGroups": ["apps", "batch", "policy", "autoscaling"],
+  "builtinGroupSuffixes": [".k8s.io"]
+}

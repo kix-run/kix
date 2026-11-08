@@ -1,0 +1,67 @@
+---
+title: "Network policy"
+description: "Because Kix knows which workloads talk to which Services, it can generate matching ingress and egress network policies automatically."
+---
+
+Writing default-deny Kubernetes network policies by hand is tedious and fragile. To let one web service talk to one database, you normally have to write an egress rule in the caller's namespace, a matching ingress rule in the database's namespace, and a DNS rule so the caller can resolve the hostname. In Kix, when you turn on `networkPolicy.enable = true`, the compiler generates both ends of those firewall rules automatically from the service connections your packages already declare.
+
+:::note[Helpful background]
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): How Kix tracks connections between resources through `.out` attributes.
+- [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/): A practical guide to turning on network policy generation in a cluster.
+- [Cluster configuration: `networkPolicy`](/docs/reference/cluster-configuration/#network-policy): Reference for cluster-wide network policy settings.
+- [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/): How pod-level ingress and egress filtering works in Kubernetes.
+:::
+
+## Default-deny baseline and paired rules
+
+With `networkPolicy.defaultDeny = true` (the default when network policy is enabled), Kix emits a baseline default-deny policy in every Kix-managed namespace for the configured `networkPolicy.directions` (`"both"`, `"ingress"`, or `"egress"`). Nothing in those namespaces can dial out or accept traffic unless a specific rule allows it.
+
+For every service dependency in the graph, Kix opens a narrow path on both ends:
+
+- **Caller egress:** A policy in the calling workload's namespace allowing egress to the target Service's pod selector and numeric ports, plus egress to the cluster DNS provider.
+- **Callee ingress:** A paired policy in the target Service's namespace (`emit.inNamespace`) allowing ingress from the caller's pod selector and namespace on those ports.
+
+Because Kix compiles the whole cluster at once, it knows the pod labels, namespaces, and container ports of both the caller and the callee. The enforcer package (such as `packages.cilium`, which claims the `network-policy-enforcer` role) supplies the policy builder (`out.netpol.mkPolicy`). If `networkPolicy.enable = true` is set without an enforcer in the cluster, evaluation fails immediately rather than generating policies that nothing would enforce.
+
+## How Kix discovers connections from endpoint facts
+
+Kix distinguishes between naming a resource (for deploy ordering) and dialing a Service over the network.
+
+When a Service is sealed by `scope.mkResource`, its address-shaped outputs (`out.fqdn`, `out.url`, and custom `outputs`) carry an **endpoint fact** in their Nix string context alongside the Service's identity path. That fact records the Service's namespace, pod selector, and ports.
+
+- **Conducting versus terminating facts:** Non-workload resources such as ConfigMaps and Secrets conduct endpoint facts onward. If a package writes `backend.out.fqdn` into a ConfigMap and mounts that ConfigMap into a Deployment, the Deployment absorbs the endpoint fact from the ConfigMap. Workload constructors (`scope.mkDeployment`, `scope.mkStatefulSet`, `scope.mkDaemonSet`, and `scope.mkJob`) terminate the fact and turn it into a network connection.
+- **Structural references:** Reading `out.name` carries only the resource's identity path, not an endpoint fact. That orders the consumer after the target without opening a firewall hole.
+
+Beyond cross-package Service references, Kix automatically derives rules for four other structural patterns:
+
+1. **DNS egress:** Every workload with egress policy gets a rule allowing queries to the cluster's DNS pods, and any workload that dials a Service also gets a deploy-ordering dependency on the DNS provider.
+2. **Kubernetes API server egress:** During instance evaluation, Kix walks the instance's `RoleBinding` and `ClusterRoleBinding` resources. If a workload's `ServiceAccount` is bound to a role, Kix emits an egress rule allowing that workload to reach `kube-apiserver`.
+3. **External ingress and exposure:** A workload fronted by a `LoadBalancer` Service (unless served by an internal provider load-balancer class) gets an ingress rule from `world`. Similarly, `kix.expose` automatically emits an ingress rule on the backend admitting the configured Ingress or Gateway controller's pods.
+4. **StatefulSet peer traffic and metric scrapes:** `StatefulSet` workloads receive self-ingress and self-egress rules so peer replicas can form a cluster. At the cluster level, Kix joins each Prometheus or VMAgent custom resource with the `ServiceMonitor` and `PodMonitor` objects it selects, opening scrape egress from the monitoring server and scrape ingress on each target's numeric pod ports.
+
+## Three-phase policy assembly
+
+Different network facts become available at different stages of evaluation. Kix attaches its network policy plugin across three phases so each policy is built as soon as its inputs exist:
+
+| Phase | What Kix knows | Policies emitted |
+| --- | --- | --- |
+| **Workload phase** (inside `sealWorkload`, pre-seal) | One workload's pod spec, absorbed endpoint facts, and package intents | Per-connection caller egress, callee ingress, DNS egress, StatefulSet self-rules, and declarative package intents |
+| **Instance phase** (post-fixpoint processor) | All resources belonging to one package instance | API server egress (from the `ServiceAccount` to `RoleBinding` walk), `LoadBalancer` world ingress, and policies for custom resources that declare `factBehavior.endpoint = "terminate"` |
+| **Cluster phase** (whole-cluster processor) | All active instances, namespaces, and monitors | Per-namespace default-deny walls, Prometheus and VMAgent scrape policies, and `networkPolicy.platformIntents` |
+
+Running the workload phase *before* the workload resource is sealed is critical for rollout safety. Kix splices the generated policies into the workload's `requires` list before computing its store hash. As a result, `kix deploy` applies the `CiliumNetworkPolicy` resources and waits for them to become ready before applying the Deployment itself, ensuring pods never start in a window where their firewall rules are missing.
+
+## Declarative intents and operand policies
+
+A dependency graph only sees connections between resources in the build. Two kinds of traffic fall outside that graph:
+
+- **External traffic (`meta.network.intents`):** The internet, external APIs, or the Kubernetes API server dialing an admission webhook are not resources in the Kix build. A package declares these connections once under `meta.network.intents` using targets like `"world"`, `"apiserver"`, `"dns"`, or `"all-pods"`.
+- **Operator-created pods (`kix.operandPolicy` and `platformIntents`):** When an operator creates data-plane pods at runtime from a custom resource (such as database replicas or proxy pods), Kix does not build their Deployment directly. Packages that author those custom resources use `kix.operandPolicy` (or CRD `factBehavior`) to emit policies selecting the operator's pod labels, while cluster operators can use `networkPolicy.platformIntents` to open traffic for pods managed outside Kix.
+
+:::tip[Use it in a task]
+See [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/) and [Declare platform intents for non-Kix-managed pods](/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/) to configure network policy in a cluster.
+:::
+
+:::note[Reference]
+See [Cluster configuration](/docs/reference/cluster-configuration/) for `networkPolicy` options and [Package anatomy](/docs/reference/package-anatomy/) for `meta.network.intents`.
+:::

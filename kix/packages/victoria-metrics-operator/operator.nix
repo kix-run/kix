@@ -296,12 +296,28 @@ in
 
   operatorDeployment =
     let
+      # The operator parses flags with Go's flag package, which reads
+      # `-flag` and `--flag` as the same flag, so both spellings are owned.
+      ownedFlags =
+        lib.concatMapAttrs
+          (flag: reason: {
+            "-${flag}" = reason;
+            "--${flag}" = reason;
+          })
+          {
+            "zap-log-level" = "set logLevel instead.";
+            "leader-elect" = "leader election keeps one replica active when multiple replicas run; remove it.";
+            "health-probe-bind-address" = "the liveness and readiness probes use :8081; remove it.";
+          };
       args = [
         "--zap-log-level=${config.logLevel}"
         "--leader-elect"
         "--health-probe-bind-address=:8081"
       ]
-      ++ config.extraArgs;
+      ++ kix.guardArgs {
+        who = "victoria-metrics-operator ${ns}/${name}";
+        owned = ownedFlags;
+      } config.extraArgs;
 
       # The prometheus-operator converter is the compat contract for the
       # `prometheus` alias claim: every converter is pinned explicitly from
@@ -409,6 +425,9 @@ in
     {
       name = name;
       inherit labels;
+      # The operator watches every kind it ships and crashes until the API
+      # server serves them.
+      requires = builtins.attrValues self.crds;
       spec = lib.recursiveUpdate baseSpec config.extraSpec;
     }
     |> scope.mkDeployment;

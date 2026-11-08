@@ -83,6 +83,9 @@ in
       "prometheusServer"
       "vmCluster"
     ];
+    # One metrics store receives remote writes from every namespace, so
+    # consumers in any namespace find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
     # Historical metrics are expendable on storage backend swaps.
     lifecycle = "ephemeral";
@@ -178,7 +181,7 @@ in
       extraArgs = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
-        description = "Extra vmstorage flags, keyed by flag name without the leading dash. `dedup.minScrapeInterval` is refused; it follows `scrapeInterval`.";
+        description = "Extra vmstorage flags, keyed by flag name without the leading dash. The package refuses `dedup.minScrapeInterval`, `retentionPeriod`, and `replicationFactor`, which follow `scrapeInterval`, `retentionPeriod`, and `replicationFactor`.";
       };
     };
 
@@ -211,7 +214,7 @@ in
       extraArgs = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
-        description = "Extra vmselect flags, keyed by flag name without the leading dash. `dedup.minScrapeInterval` is refused; it follows `scrapeInterval`.";
+        description = "Extra vmselect flags, keyed by flag name without the leading dash. The package refuses `dedup.minScrapeInterval`, `retentionPeriod`, and `replicationFactor`, which follow `scrapeInterval`, `retentionPeriod`, and `replicationFactor`, and `httpListenAddr`, because `out.serviceUrl` names port 8481.";
       };
     };
 
@@ -244,7 +247,7 @@ in
       extraArgs = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
-        description = "Extra vminsert flags, keyed by flag name without the leading dash.";
+        description = "Extra vminsert flags, keyed by flag name without the leading dash. The package refuses `retentionPeriod` and `replicationFactor`, which follow the options of the same name, and `httpListenAddr`, because `out.remoteWriteUrl` names port 8480.";
       };
     };
 
@@ -313,15 +316,41 @@ in
         dedupArgs = {
           "dedup.minScrapeInterval" = config.scrapeInterval;
         };
+        # The operator turns spec fields into component flags, and an
+        # `extraArgs` key of the same name replaces the generated flag.
+        # Each component refuses the flags behind its spec fields, and the
+        # listen address of the two Services the package's out URLs name.
+        ownedByComponent =
+          let
+            dedup = {
+              "dedup.minScrapeInterval" =
+                "it follows scrapeInterval so that vmselect and vmstorage agree. Set scrapeInterval instead.";
+            };
+            specFields = {
+              retentionPeriod = "the operator sets it from the retentionPeriod option. Set retentionPeriod instead.";
+              replicationFactor = "it follows the replicationFactor option, which defaults from the availability level, so that vminsert, vmselect, and vmstorage agree. Set replicationFactor instead.";
+            };
+          in
+          {
+            vmstorage = dedup // specFields;
+            vmselect =
+              dedup
+              // specFields
+              // {
+                httpListenAddr = "the Service and out.serviceUrl use port 8481. Remove it.";
+              };
+            vminsert = specFields // {
+              httpListenAddr = "the Service, out.remoteWriteUrl, and out.insertBaseUrl use port 8480. Remove it.";
+            };
+          };
         componentArgs =
           component:
-          let
-            args = config.${component}.extraArgs;
-          in
-          if args ? "dedup.minScrapeInterval" then
-            throw "${who}: ${component}.extraArgs sets dedup.minScrapeInterval, which the package derives from scrapeInterval so that vmselect and vmstorage agree. Set scrapeInterval instead."
-          else
-            dedupArgs // args;
+          lib.optionalAttrs (component != "vminsert") dedupArgs
+          // kix.guardArgs {
+            inherit who;
+            option = "${component}.extraArgs";
+            owned = ownedByComponent.${component};
+          } config.${component}.extraArgs;
 
         # Explicit option > storageClasses dep > cluster default class.
         effectiveStorageClass =
@@ -368,7 +397,7 @@ in
             affinity = antiAffinity "vminsert";
           }
           // lib.optionalAttrs (config.vminsert.extraArgs != { }) {
-            extraArgs = config.vminsert.extraArgs;
+            extraArgs = componentArgs "vminsert";
           };
         };
 

@@ -67,20 +67,23 @@ saved copy.
 
 ## Compare with a previous build instead
 
-A build result works as the old side too. Build the cluster's activation
-output with Nix from the old revision, keep the result link, and pass it:
+A bundled build works as the old side too. Package the cluster from the old
+revision with `kix bundle`, build a second bundle from the current revision,
+and compare the two:
 
 <Command
   commands={[
-    "nix build .#cluster-how-to-application-activation --out-link ./result-before",
-    "kix diff how-to-application --from ./result-before",
+    "kix bundle how-to-application before.kixbundle",
+    "kix bundle how-to-application after.kixbundle",
+    "kix diff how-to-application --bundle after.kixbundle --from-bundle before.kixbundle",
   ]}
   cwd="kix-examples/"
 />
 
-Kix recognises the directory by the `kix-packages.json` file inside it. This
-compares two builds of the source and never looks at a cluster. Use it to
-check what a branch changes relative to `main`.
+You can also export the old revision with `kix export --for audit --out
+./before` and pass `--from ./before`. Both approaches compare two builds of the
+source without contacting a cluster. Use them to check what a branch changes
+relative to `main`.
 
 ## Troubleshooting
 

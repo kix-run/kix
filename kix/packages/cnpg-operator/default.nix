@@ -234,14 +234,17 @@ in
       description = "Operator image. Its major.minor must be the package's release. The operator also runs it as the init container of every PostgreSQL pod (OPERATOR_IMAGE_NAME).";
     };
 
-    # The release manifest's values.
+    # Requests and the memory limit are the release manifest's values. The
+    # manifest also caps CPU at its 100m request, which throttles the
+    # operator whenever it reconciles many objects at once, as during a
+    # rolling restart of a Cluster; the limit here lets it burst to one core.
     resources = kix.options.resources {
       requests = {
         cpu = "100m";
         memory = "100Mi";
       };
       limits = {
-        cpu = "100m";
+        cpu = "1";
         memory = "200Mi";
       };
     };
@@ -413,14 +416,32 @@ in
 
         # The operator watches every kind, so every definition is applied,
         # with or without a handle.
+        #
+        # A Cluster keeps its databases on its volumes, and a Database is one
+        # of them. The operator keeps a Database's contents when the custom
+        # resource is deleted unless `databaseReclaimPolicy` is `delete`, so
+        # it is marked as holding data. Backups live in the object store and
+        # outlive their Backup objects. The other kinds are configuration.
+        # Only a Cluster and a Pooler run pods.
         crds = {
-          backups = scope.mkCRD { spec = vendored "backups.${group}.json"; };
+          backups = scope.mkCRD {
+            spec = vendored "backups.${group}.json";
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
           # A ScheduledBackup and a Pooler report no conditions; a Pooler's
           # consumers wait on its Service's endpoints instead.
-          scheduledBackups = gate (scope.mkCRD { spec = vendored "scheduledbackups.${group}.json"; });
+          scheduledBackups = gate (
+            scope.mkCRD {
+              spec = vendored "scheduledbackups.${group}.json";
+              holdsData = false;
+              usesAtLeast = _: { };
+            }
+          );
           poolers = gate (
             scope.mkCRD {
               spec = vendored "poolers.${group}.json";
+              holdsData = false;
               # Count `spec.instances` PgBouncer pods (default 1), each with
               # every container in `spec.template`, and the one Service the
               # operator makes for the Pooler.
@@ -434,11 +455,16 @@ in
                 ];
             }
           );
-          failoverQuorums = scope.mkCRD { spec = vendored "failoverquorums.${group}.json"; };
+          failoverQuorums = scope.mkCRD {
+            spec = vendored "failoverquorums.${group}.json";
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
           clusters = gate (
             scope.mkCRD {
               spec = vendored "clusters.${group}.json";
               readiness = ready;
+              holdsData = true;
               # The instances dial the hosts a Cluster names (externalClusters).
               factBehavior = {
                 endpoint = "terminate";
@@ -496,28 +522,48 @@ in
             scope.mkCRD {
               spec = vendored "databases.${group}.json";
               readiness = applied;
+              holdsData = true;
+              usesAtLeast = _: { };
             }
           );
           databaseRoles = gate (
             scope.mkCRD {
               spec = vendored "databaseroles.${group}.json";
               readiness = applied;
+              holdsData = false;
+              usesAtLeast = _: { };
             }
           );
           publications = gate (
             scope.mkCRD {
               spec = vendored "publications.${group}.json";
               readiness = applied;
+              holdsData = false;
+              usesAtLeast = _: { };
             }
           );
           subscriptions = gate (
             scope.mkCRD {
               spec = vendored "subscriptions.${group}.json";
               readiness = applied;
+              holdsData = false;
+              usesAtLeast = _: { };
             }
           );
-          imageCatalogs = gate (scope.mkCRD { spec = vendored "imagecatalogs.${group}.json"; });
-          clusterImageCatalogs = gate (scope.mkCRD { spec = vendored "clusterimagecatalogs.${group}.json"; });
+          imageCatalogs = gate (
+            scope.mkCRD {
+              spec = vendored "imagecatalogs.${group}.json";
+              holdsData = false;
+              usesAtLeast = _: { };
+            }
+          );
+          clusterImageCatalogs = gate (
+            scope.mkCRD {
+              spec = vendored "clusterimagecatalogs.${group}.json";
+              holdsData = false;
+              usesAtLeast = _: { };
+            }
+          );
         };
 
         defaultMonitoring = scope.mkResource {

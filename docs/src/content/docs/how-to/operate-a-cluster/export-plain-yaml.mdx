@@ -6,7 +6,6 @@ description: "Export a Kix cluster as a directory of Kubernetes YAML for handoff
 import Command from '/src/components/Command.astro';
 import exportCluster from '/src/command-output/how-to/application-export-exit/export.json';
 import exportFiles from '/src/command-output/how-to/application-export-exit/files.json';
-import noAnnotations from '/src/command-output/how-to/application-export-exit/no-annotations.json';
 
 Use `kix export` when you need a directory of Kubernetes manifests without
 Kix's deployment records. The default export mode removes Kix annotations and
@@ -43,14 +42,7 @@ Compare the files with a live cluster before handing them to another system:
   cwd="kix-examples/"
 />
 
-Then confirm no Kix annotation survived the export. The search finds nothing
-and exits with status 1, which is the result you want here:
-
-<Command {...noAnnotations} />
-
-That pattern matches annotation keys, where `kix.run` is followed by a slash.
-It does not match the CRD names, where `kix.run` appears as a bare suffix.
-
+Exit mode strips all `kix.run/*` annotations from the exported manifests.
 Labels such as `app.kubernetes.io/managed-by` remain part of the resource
 metadata, so review and adjust labels if the receiving system has its own
 ownership convention.

@@ -51,10 +51,14 @@ fn rerun_m(kind: &str, name: &str, deps: &[&str]) -> Value {
 
 /// Build a live Job object in a failed or succeeded state.
 fn live_job(failed: bool) -> Value {
+    live_job_named("probe", failed)
+}
+
+fn live_job_named(name: &str, failed: bool) -> Value {
     json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": { "name": "probe", "namespace": "default" },
+        "metadata": { "name": name, "namespace": "default" },
         "spec": { "backoffLimit": 0 },
         "status": if failed { json!({ "failed": 1 }) } else { json!({ "succeeded": 1 }) },
     })
@@ -89,6 +93,8 @@ fn config(stall: StallPolicy) -> SchedulerConfig {
         concurrency: CONCURRENCY,
         stall,
         rerun_failed: true,
+        check_unchanged: true,
+        names_flags: true,
     }
 }
 
@@ -158,6 +164,24 @@ impl Recorder {
             DeployEvent::Stopped { reason } => Some(reason.clone()),
             _ => None,
         })
+    }
+
+    /// Return every `Waiting` event as `(node, holds, holds_total)`.
+    fn waits(&self) -> Vec<(NodeId, Vec<NodeId>, usize)> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                DeployEvent::Waiting {
+                    node,
+                    holds,
+                    holds_total,
+                    ..
+                } => Some((node.clone(), holds.clone(), *holds_total)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Return terminal verdicts per node in emission order.
@@ -374,6 +398,51 @@ async fn hung_apply_is_reported_then_aborted() {
     let stuck = NodeId::Resource(rid("Deployment", "stuck"));
     assert_eq!(rec.terminal_count(&stuck), 1);
     assert_eq!(partial.cancelled, 1);
+}
+
+/// A hung node's `Waiting` events name the direct dependents that have work
+/// to do and count every such node behind it. An unchanged dependent is
+/// neither named nor counted, but the nodes behind it are.
+#[tokio::test(start_paused = true)]
+async fn a_hung_node_reports_what_it_holds_up() {
+    let manifests = vec![
+        m("CustomResourceDefinition", "foos", &[]),
+        m("Deployment", "operator", &["foos"]),
+        m("Service", "operator-api", &["operator"]),
+        m("ConfigMap", "unchanged", &["foos"]),
+        m("Secret", "behind", &["unchanged"]),
+        m("ConfigMap", "cm", &[]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("CustomResourceDefinition", "foos"),
+        NodeScript::default().apply(Behaviour::Hang),
+    );
+    let rec = Arc::new(Recorder::default());
+    let cfg = config(StallPolicy {
+        warn_after: secs(30),
+        abort_after: Some(secs(60)),
+    });
+
+    let plan = plan_with_skips(&manifests, &["unchanged"]);
+    let err = run(&ops, plan, &cfg, rec.clone()).await.unwrap_err();
+    assert!(matches!(err, DeployError::Cancelled { .. }), "{err}");
+
+    let waits = rec.waits();
+    let crd = NodeId::Resource(rid("CustomResourceDefinition", "foos"));
+    assert!(
+        waits.iter().all(|(node, _, _)| *node == crd),
+        "only the hung node waits: {waits:?}"
+    );
+    assert_eq!(
+        waits.first(),
+        Some(&(
+            crd,
+            vec![NodeId::Resource(rid("Deployment", "operator"))],
+            3
+        )),
+        "{waits:?}"
+    );
 }
 
 /// A slow but healthy rollout reports progress often enough to keep the
@@ -1032,8 +1101,8 @@ async fn rerun_job_with_live_object_is_recreated() {
     assert_eq!(rerun_details(&rec), vec!["changed since the last run"]);
 }
 
-/// Nothing live (first deploy, TTL-reaped, or deleted externally): a plain
-/// apply, no delete.
+/// Nothing live (first deploy, or deleted by hand): a plain apply, no
+/// delete.
 #[tokio::test(start_paused = true)]
 async fn rerun_job_without_live_object_is_applied() {
     let manifests = vec![rerun_m("Job", "probe", &[])];
@@ -1156,6 +1225,120 @@ async fn skipped_rerun_job_is_reported_not_retried_without_rerun_failed() {
         .collect();
     assert_eq!(failed.len(), 1);
     assert!(failed[0].contains("which failed"), "{}", failed[0]);
+}
+
+fn failed_messages(rec: &Recorder) -> Vec<String> {
+    rec.0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::NodeStateChanged {
+                verdict: Verdict::Failed { message },
+                ..
+            } => Some(message.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An unchanged Job without `kix.run/rerun` whose live object failed is
+/// reported as failed and never deleted or recreated, with or without
+/// `rerun_failed`: a bootstrap Job that exhausted its backoff must not read
+/// as healthy on the next deploy or reconcile.
+#[tokio::test(start_paused = true)]
+async fn skipped_plain_job_that_failed_is_reported_never_deleted() {
+    for rerun_failed in [true, false] {
+        let manifests = vec![m("Job", "bootstrap", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Job", "bootstrap"),
+            NodeScript::default().live(Behaviour::Now(Ok(Some(live_job_named("bootstrap", true))))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.rerun_failed = rerun_failed;
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_with_skips(&manifests, &["bootstrap"]),
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.failed, 1, "rerun_failed={rerun_failed}");
+        assert_eq!(result.unchanged, 0);
+        let calls = ops.calls();
+        assert!(calls.contains(&Call::GetLive(rid("Job", "bootstrap"))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::Delete(_))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::ApplyStart(_))));
+        let failed = failed_messages(&rec);
+        assert_eq!(failed.len(), 1);
+        assert!(
+            failed[0].contains("which failed. Change an input, or delete the Job with kubectl"),
+            "{}",
+            failed[0]
+        );
+    }
+}
+
+/// An unchanged Job without `kix.run/rerun` whose live object succeeded, or
+/// is gone, counts as unchanged. A skipped non-Job is never read.
+#[tokio::test(start_paused = true)]
+async fn skipped_plain_job_that_succeeded_is_unchanged() {
+    let manifests = vec![
+        m("Job", "bootstrap", &[]),
+        m("Job", "gone", &[]),
+        m("ConfigMap", "cm", &[]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Job", "bootstrap"),
+        NodeScript::default().live(Behaviour::Now(Ok(Some(live_job_named("bootstrap", false))))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["bootstrap", "gone", "cm"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 0);
+    assert_eq!(result.unchanged, 3);
+    let calls = ops.calls();
+    assert!(calls.contains(&Call::GetLive(rid("Job", "bootstrap"))));
+    assert!(calls.contains(&Call::GetLive(rid("Job", "gone"))));
+    assert!(!calls.contains(&Call::GetLive(rid("ConfigMap", "cm"))));
+    assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+}
+
+/// The pre-check `kix deploy` runs before taking the "nothing to apply" exit
+/// names every unchanged Job whose live object failed, with or without
+/// `kix.run/rerun`, and not one that succeeded.
+#[tokio::test]
+async fn failed_skipped_jobs_names_any_failed_unchanged_job() {
+    let api = crate::cluster::fake_api::FakeApi::new([
+        live_job_named("bootstrap", true),
+        live_job_named("probe", true),
+        live_job_named("done", false),
+    ]);
+    let client = api.client();
+    let discovery = crate::cluster::discovery::discover_resources(&client)
+        .await
+        .unwrap();
+    let manifests = vec![
+        m("Job", "bootstrap", &[]),
+        rerun_m("Job", "probe", &[]),
+        m("Job", "done", &[]),
+        m("ConfigMap", "cm", &[]),
+    ];
+    let plan = plan_with_skips(&manifests, &["bootstrap", "probe", "done", "cm"]);
+    let mut failed = failed_skipped_jobs(&client, &discovery, &plan).await;
+    failed.sort();
+    assert_eq!(failed, vec![rid("Job", "bootstrap"), rid("Job", "probe")]);
 }
 
 /// Under dry run a changed rerun Job with a live object still takes the
@@ -1712,6 +1895,541 @@ async fn halt_on_first_failure_finishes_in_flight_and_cancels_the_rest() {
     assert!(rec.stopped().unwrap().starts_with("halt-on-first-failure"));
 }
 
+// Unchanged objects that something in the deploy depends on.
+
+/// Return every `Failed` verdict as `(node, message)`.
+fn failures(rec: &Recorder) -> Vec<(NodeId, String)> {
+    rec.0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::NodeStateChanged {
+                node,
+                verdict: Verdict::Failed { message },
+                ..
+            } => Some((node.clone(), message.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn ready_starts(ops: &ScriptedOps) -> Vec<ResourceId> {
+    ops.calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            Call::ReadyStart(rid) => Some(rid),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An unchanged Deployment that a changed object depends on is read before
+/// the dependent runs, and counts as unchanged when it is ready.
+#[tokio::test(start_paused = true)]
+async fn an_unchanged_predecessor_is_checked_before_its_dependent_runs() {
+    let manifests = vec![m("Deployment", "db", &[]), m("Deployment", "api", &["db"])];
+    let ops = Arc::new(ScriptedOps::new());
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["db"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unchanged, 1);
+    assert_eq!(result.created, 1);
+    assert_eq!(result.failed, 0);
+    let check = ops.time_of(|c| *c == Call::ReadyEnd(rid("Deployment", "db")));
+    let apply = ops.time_of(|c| *c == Call::ApplyStart(rid("Deployment", "api")));
+    assert!(check.is_some() && check <= apply, "{:?}", ops.calls());
+    assert!(ops.calls().contains(&Call::Stamp(rid("Deployment", "db"))));
+    assert!(failures(&rec).is_empty());
+}
+
+/// An unchanged Deployment that an earlier deploy left broken fails the
+/// deploy on itself, with its own status, and its dependents are cancelled.
+#[tokio::test(start_paused = true)]
+async fn an_unchanged_predecessor_that_failed_fails_the_deploy_on_itself() {
+    let manifests = vec![
+        m("Deployment", "db", &[]),
+        m("Deployment", "api", &["db"]),
+        m("Deployment", "web", &["api"]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Deployment", "db"),
+        NodeScript::default().ready(Behaviour::Now(Ready::Failed(
+            "CrashLoopBackOff: back-off restarting failed container".into(),
+        ))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["db"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 1);
+    assert_eq!(result.cancelled, 2);
+    assert_eq!(result.unchanged, 0);
+    assert!(!ops.calls().iter().any(|c| matches!(c, Call::ApplyStart(_))));
+    assert!(!ops.calls().contains(&Call::Stamp(rid("Deployment", "db"))));
+
+    let failed = failures(&rec);
+    assert_eq!(failed.len(), 1);
+    let (node, message) = &failed[0];
+    assert_eq!(*node, NodeId::Resource(rid("Deployment", "db")));
+    assert_eq!(
+        message,
+        "CrashLoopBackOff: back-off restarting failed container. This deploy did not \
+         change it. An earlier deploy or a change on the cluster left it like this. \
+         Kix did not deploy the 2 objects that depend on it. Fix Deployment/db@default \
+         and deploy again, or pass --on-error continue to deploy the objects that do \
+         not depend on it."
+    );
+    for name in ["api", "web"] {
+        let node = NodeId::Resource(rid("Deployment", name));
+        let verdicts: Vec<Verdict> = rec
+            .terminals()
+            .into_iter()
+            .filter(|(n, _)| *n == node)
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(
+            verdicts,
+            vec![Verdict::Cancelled {
+                because: CancelReason::PredecessorFailed(rid("Deployment", "db")),
+            }],
+            "{name}"
+        );
+    }
+    let message_of = |rec: &Recorder| failures(rec)[0].1.clone();
+
+    // Without flags to name (the operator), the next step ends at "deploy again".
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Deployment", "db"),
+        NodeScript::default().ready(Behaviour::Now(Ready::Failed("CrashLoopBackOff".into()))),
+    );
+    let mut cfg = config(quiet_watchdog());
+    cfg.names_flags = false;
+    let rec = Arc::new(Recorder::default());
+    let _ = run(
+        &ops,
+        plan_with_skips(&manifests, &["db"]),
+        &cfg,
+        rec.clone(),
+    )
+    .await;
+    assert!(
+        message_of(&rec).ends_with("Fix Deployment/db@default and deploy again."),
+        "{}",
+        message_of(&rec)
+    );
+    assert!(!message_of(&rec).contains("--on-error"));
+}
+
+/// With `check_unchanged` off (the operator repairing a running build) an
+/// unchanged predecessor is ready without a task, as before.
+#[tokio::test(start_paused = true)]
+async fn without_check_unchanged_a_predecessor_is_not_read() {
+    let manifests = vec![m("Deployment", "db", &[]), m("Deployment", "api", &["db"])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Deployment", "db"),
+        NodeScript::default().ready(Behaviour::Now(Ready::Failed("CrashLoopBackOff".into()))),
+    );
+    let mut cfg = config(quiet_watchdog());
+    cfg.check_unchanged = false;
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["db"]),
+        &cfg,
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unchanged, 1);
+    assert_eq!(result.created, 1);
+    assert_eq!(ready_starts(&ops), vec![rid("Deployment", "api")]);
+}
+
+/// The consequence counts only dependents that had work to do. Unchanged
+/// dependents were never going to be deployed, so they do not count, and
+/// with none of the others nothing is said.
+#[tokio::test(start_paused = true)]
+async fn the_consequence_counts_only_dependents_with_work() {
+    let manifests = vec![
+        m("Deployment", "operator", &[]),
+        m("Deployment", "cr1", &["operator"]),
+        m("Deployment", "cr2", &["operator"]),
+        m("Deployment", "changed", &["cr1"]),
+    ];
+    let failing = || {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Deployment", "operator"),
+            NodeScript::default().ready(Behaviour::Now(Ready::Failed("CrashLoopBackOff".into()))),
+        );
+        ops
+    };
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &failing(),
+        plan_with_skips(&manifests, &["operator", "cr1", "cr2"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.cancelled, 3);
+    let message = failures(&rec)[0].1.clone();
+    assert!(
+        message.contains("Kix did not deploy the object that depends on it."),
+        "{message}"
+    );
+
+    // A failed apply whose only dependents are unchanged says nothing about
+    // them: Kix was never going to deploy them.
+    let manifests = vec![m("ConfigMap", "bad", &[]), m("Deployment", "cr", &["bad"])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("ConfigMap", "bad"),
+        NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("nope".into())))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["cr"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.cancelled, 1);
+    let message = failures(&rec)[0].1.clone();
+    assert!(!message.contains("Kix did not deploy"), "{message}");
+}
+
+/// The next step after a failed import marker names its import target,
+/// since the marker itself is fine.
+#[tokio::test(start_paused = true)]
+async fn the_next_step_names_the_target_of_a_marker() {
+    let mut marker = m(lifecycle::PACKAGE_INSTANCE_KIND, "secret-ref-x", &[]);
+    marker["metadata"]["annotations"][keys::MODE] = json!("import");
+    marker["metadata"]["annotations"][keys::IMPORT_KIND] = json!("Secret");
+    marker["metadata"]["annotations"][keys::IMPORT_API_VERSION] = json!("v1");
+    marker["metadata"]["annotations"][keys::IMPORT_NAME] = json!("x");
+    let manifests = vec![marker, m("Deployment", "api", &["secret-ref-x"])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid(lifecycle::PACKAGE_INSTANCE_KIND, "secret-ref-x"),
+        NodeScript::default().ready(Behaviour::Now(Ready::Failed(
+            "import target Secret/x not found".into(),
+        ))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let _ = run(
+        &ops,
+        plan_with_skips(&manifests, &["secret-ref-x"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await;
+    let failed = failures(&rec);
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert!(
+        failed[0]
+            .1
+            .contains("Fix Secret/x@default, or whatever creates it, and deploy again"),
+        "{}",
+        failed[0].1
+    );
+}
+
+/// Build a live Job whose run is still in progress.
+fn running_job(name: &str) -> Value {
+    let mut job = live_job_named(name, false);
+    job["status"] = json!({ "active": 1 });
+    job
+}
+
+/// An unchanged Job still running from an earlier deploy holds back what
+/// depends on it. When the run then fails, the message gives the Job's own
+/// next step, once.
+#[tokio::test(start_paused = true)]
+async fn a_running_unchanged_job_holds_back_its_dependents() {
+    let manifests = vec![
+        m("Job", "migrate", &[]),
+        m("Deployment", "api", &["migrate"]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Job", "migrate"),
+        NodeScript::default()
+            .live(Behaviour::Now(Ok(Some(running_job("migrate")))))
+            .ready(Behaviour::After(
+                secs(5),
+                Ready::Failed("JobBackoffExceeded: 1 failed".into()),
+            )),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["migrate"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 1);
+    assert_eq!(result.cancelled, 1);
+    assert!(
+        !ops.calls()
+            .contains(&Call::ApplyStart(rid("Deployment", "api")))
+    );
+    let message = failures(&rec)[0].1.clone();
+    assert!(
+        message.contains("This deploy did not change it"),
+        "{message}"
+    );
+    assert_eq!(
+        message
+            .matches("Change an input, or delete the Job with kubectl and deploy again")
+            .count(),
+        1,
+        "{message}"
+    );
+    assert!(!message.contains("--on-error continue"), "{message}");
+}
+
+/// A running unchanged Job that nothing in the deploy depends on is not
+/// waited for, and neither is a finished one that something depends on.
+#[tokio::test(start_paused = true)]
+async fn an_unchanged_job_is_waited_for_only_while_it_runs_and_something_depends_on_it() {
+    let manifests = vec![
+        m("Job", "lone", &[]),
+        m("Job", "done", &[]),
+        m("Deployment", "api", &["done"]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Job", "lone"),
+        NodeScript::default().live(Behaviour::Now(Ok(Some(running_job("lone"))))),
+    );
+    ops.script(
+        rid("Job", "done"),
+        NodeScript::default().live(Behaviour::Now(Ok(Some(live_job_named("done", false))))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["lone", "done"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 0);
+    assert_eq!(result.unchanged, 2);
+    assert_eq!(ready_starts(&ops), vec![rid("Deployment", "api")]);
+}
+
+/// The check walks through unchanged nodes: both unchanged Deployments
+/// under a changed one are read. An unchanged object with no dependents in
+/// the deploy, and one that depends on the changed object, are not.
+#[tokio::test(start_paused = true)]
+async fn unchanged_nodes_are_checked_through_other_unchanged_nodes() {
+    let manifests = vec![
+        m("Deployment", "a", &[]),
+        m("Deployment", "b", &["a"]),
+        m("Deployment", "c", &["b"]),
+        m("Deployment", "below", &["c"]),
+        m("Deployment", "lone", &[]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["a", "b", "below", "lone"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unchanged, 4);
+    assert_eq!(result.created, 1);
+    let mut checked = ready_starts(&ops);
+    checked.retain(|r| r.name != "c");
+    checked.sort_by(|x, y| x.name.cmp(&y.name));
+    assert_eq!(
+        checked,
+        vec![rid("Deployment", "a"), rid("Deployment", "b")]
+    );
+    for name in ["a", "b", "below", "lone"] {
+        assert!(
+            ops.calls().contains(&Call::Stamp(rid("Deployment", name))),
+            "{name} is stamped"
+        );
+    }
+}
+
+/// A kind whose readiness is immediate is ready at once when unchanged, with
+/// no read of the live object.
+#[tokio::test(start_paused = true)]
+async fn an_unchanged_immediate_kind_is_not_read() {
+    let manifests = vec![m("ConfigMap", "cm", &[]), m("Deployment", "d", &["cm"])];
+    let ops = Arc::new(ScriptedOps::new());
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["cm"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unchanged, 1);
+    assert_eq!(result.created, 1);
+    let cm = rid("ConfigMap", "cm");
+    assert!(!ops.calls().contains(&Call::ReadyStart(cm.clone())));
+    assert!(!ops.calls().contains(&Call::GetLive(cm.clone())));
+    assert!(ops.calls().contains(&Call::Stamp(cm)));
+}
+
+/// An unchanged CRD is checked like any other predecessor but does not hold
+/// its dependents for a discovery refresh: its kinds were served before the
+/// run began.
+#[tokio::test(start_paused = true)]
+async fn an_unchanged_crd_does_not_trigger_rediscovery() {
+    let manifests = vec![
+        m("CustomResourceDefinition", "widgets", &[]),
+        m("Deployment", "d", &["widgets"]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["widgets"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unchanged, 1);
+    assert_eq!(result.created, 1);
+    assert_eq!(
+        ready_starts(&ops),
+        vec![
+            rid("CustomResourceDefinition", "widgets"),
+            rid("Deployment", "d")
+        ]
+    );
+    assert!(!ops.calls().contains(&Call::RediscoverStart));
+}
+
+/// A dry run reads nothing for an unchanged predecessor.
+#[tokio::test(start_paused = true)]
+async fn a_dry_run_reads_nothing_for_an_unchanged_predecessor() {
+    let manifests = vec![m("Deployment", "db", &[]), m("Deployment", "api", &["db"])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.set_dry_run(true);
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["db"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unchanged, 1);
+    assert_eq!(result.created, 1);
+    assert!(ready_starts(&ops).is_empty());
+    assert!(
+        !ops.calls()
+            .contains(&Call::GetLive(rid("Deployment", "db")))
+    );
+}
+
+/// A plan with nothing to apply waits on nothing.
+#[tokio::test(start_paused = true)]
+async fn a_plan_of_only_unchanged_nodes_waits_on_nothing() {
+    let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &["a"])];
+    let ops = Arc::new(ScriptedOps::new());
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["a", "b"]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unchanged, 2);
+    assert!(ready_starts(&ops).is_empty());
+    assert!(!ops.calls().iter().any(|c| matches!(c, Call::GetLive(_))));
+}
+
+/// Every failure says how many objects were not deployed because they
+/// depend on it, in the singular for one and with the count otherwise, and
+/// says nothing when nothing depended on it.
+#[tokio::test(start_paused = true)]
+async fn a_failure_says_how_many_dependents_were_not_deployed() {
+    async fn message_of(manifests: &[Value]) -> String {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("ConfigMap", "bad"),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("nope".into())))),
+        );
+        let rec = Arc::new(Recorder::default());
+        let _ = run(
+            &ops,
+            plan_of(manifests),
+            &config(quiet_watchdog()),
+            rec.clone(),
+        )
+        .await;
+        let failed = failures(&rec);
+        assert_eq!(failed.len(), 1);
+        failed[0].1.clone()
+    }
+
+    let none = message_of(&[m("ConfigMap", "bad", &[])]).await;
+    assert!(none.contains("'nope'"), "{none}");
+    assert!(!none.contains("Kix did not deploy"), "{none}");
+
+    let one = message_of(&[m("ConfigMap", "bad", &[]), m("ConfigMap", "x", &["bad"])]).await;
+    assert_eq!(
+        one,
+        with_sentence(&none, "Kix did not deploy the object that depends on it.")
+    );
+
+    let three = message_of(&[
+        m("ConfigMap", "bad", &[]),
+        m("ConfigMap", "x", &["bad"]),
+        m("ConfigMap", "y", &["bad"]),
+        m("ConfigMap", "z", &["x"]),
+    ])
+    .await;
+    assert_eq!(
+        three,
+        with_sentence(&none, "Kix did not deploy the 3 objects that depend on it.")
+    );
+}
+
+#[test]
+fn with_sentence_closes_the_message_first() {
+    assert_eq!(with_sentence("no progress", "Next."), "no progress. Next.");
+    assert_eq!(with_sentence("done. ", "Next."), "done. Next.");
+}
+
 // Property tests over generated DAGs and outcomes.
 
 #[derive(Debug, Clone, Copy)]
@@ -2021,4 +2739,46 @@ proptest::proptest! {
     fn random_dags_reach_terminal_verdicts_in_order(case in case_strategy()) {
         check_case(case)?;
     }
+}
+
+/// A field the server did not keep is a warning event. The node is still
+/// ready and the run succeeds.
+#[tokio::test(start_paused = true)]
+async fn fields_the_server_did_not_keep_warn_and_the_run_goes_on() {
+    use crate::cluster::kept::{NotKept, NotKeptField};
+    let manifests = vec![m("Widget", "w", &[]), m("ConfigMap", "cm", &[])];
+    let pruned = vec![NotKeptField {
+        path: "$.spec.colour".into(),
+        change: NotKept::Dropped,
+        sent: json!("red"),
+        stored: None,
+    }];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Widget", "w"),
+        NodeScript::default().not_kept(pruned.clone()),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_of(&manifests),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((result.created, result.failed), (2, 0));
+    let warned: Vec<(ResourceId, Vec<NotKeptField>)> = rec
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::FieldsNotKept { resource, fields } => {
+                Some((resource.clone(), fields.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warned, vec![(rid("Widget", "w"), pruned)]);
 }

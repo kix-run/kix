@@ -56,9 +56,9 @@ Deploy normally:
 
 On creation, Kix sends the complete field. After the controller takes
 ownership, a later deploy can receive a `409 Conflict`. If all reported paths
-are ceded, Kix logs that another manager owns the ceded fields and retries once
-with those conflicting fields removed. The controller's values remain in the
-live object.
+are ceded, Kix retries once with those conflicting fields removed (and logs
+the retry at `info` level when you pass `-v` or set `KIX_LOG=info`). The
+controller's values remain in the live object.
 
 Do not use `--force-conflicts` for this transition. That flag tells the API
 server to give the fields to Kix, so there is no conflict for the ceding logic

@@ -6,7 +6,7 @@ members = ["kix-cli", "kix", "kix-container", "kix-bundle", "kix-operator"]
 name = "kix"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.7.1"
 edition = "2024"
 license = "LicenseRef-Proprietary"
 repository = "https://github.com/kixpkgs/kixpkgs"
@@ -15,7 +15,11 @@ repository = "https://github.com/kixpkgs/kixpkgs"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-serde_yml = "0.0.12"
+# YAML read and written by Kix. Pure Rust, and the library kube itself uses.
+serde-saphyr = { version = "2", default-features = false, features = ["serialize", "deserialize"] }
+yaml-rust2 = { version = "0.13", default-features = false }
+# A project's kix.toml
+toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
 # JSON Schema of the `kix plan` and `kix diff` document
 schemars = "1"
 
@@ -31,9 +35,9 @@ clap_complete = "4.5"
 # Output formatting
 comfy-table = "7"
 owo-colors = "4"
-indicatif = "0.17"
-ratatui = "0.29"
-crossterm = "0.28"
+indicatif = "0.18"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache", "underline-color"] }
+crossterm = "0.29"
 
 # Diffing
 similar = "2"
@@ -42,8 +46,8 @@ rayon = "1"
 indexmap = { version = "2", features = ["serde"] }
 
 # K8s
-kube = { version = "2.0", features = ["runtime", "client", "unstable-runtime"] }
-k8s-openapi = { version = "0.26" }
+kube = { version = "5.0", features = ["runtime", "client", "unstable-runtime"] }
+k8s-openapi = { version = "0.29" }
 # Apiserver transport policy (cluster::client): tower stack, HTTP types,
 # body buffering for retries, connect-error detection, backoff jitter.
 tower = { version = "0.5", features = ["buffer", "util"] }
@@ -51,10 +55,10 @@ http = "1"
 http-body-util = "0.1"
 bytes = "1"
 hyper-util = { version = "0.1", features = ["client-legacy"] }
-rand = "0.8"
+fastrand = "2"
 
 # Container registry client (`kix pin`). rustls rather than the platform TLS
-# stack, so a static kix binary behaves the same everywhere; no default
+# stack, so a static build of Kix behaves the same everywhere; no default
 # features, so this does not drag in a second TLS implementation alongside
 # the one kube already uses.
 reqwest = { version = "0.12", default-features = false, features = [
@@ -88,7 +92,6 @@ blake3 = "1"
 sha2 = "0.10"
 
 # Paths
-directories = "6"
 tempfile = "3"
 walkdir = "2"
 

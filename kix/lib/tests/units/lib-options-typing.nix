@@ -352,6 +352,51 @@ in
     )
     || throw "guardArgs passed or refused the wrong arguments";
 
+  # An attrset of flags (a VictoriaMetrics CR's extraArgs) is refused on an
+  # owned key, matched exactly after its leading dashes, and comes back
+  # unchanged otherwise. The refusal names the option, the key as written,
+  # and the reason.
+  lib-options-typing-guard-args-attrset =
+    let
+      guardArgs = {
+        who = "pkg ns/inst";
+        option = "vmstorage.extraArgs";
+        owned."dedup.minScrapeInterval" = "set scrapeInterval instead.";
+      };
+      guard = kixlib.guardArgs guardArgs;
+      # compose.nix with `throw` replaced, so the message can be read.
+      caught = builtins.scopedImport { throw = message: { thrown = message; }; };
+      refusal = (caught ../../vocab/compose.nix { inherit lib; }).guardArgs guardArgs;
+      allowed = {
+        "dedup.minScrapeIntervalExtra" = "1m";
+        "search.maxQueryDuration" = "60s";
+      };
+    in
+    (
+      guard allowed == allowed
+      && guard { } == { }
+      && throws (guard {
+        "dedup.minScrapeInterval" = "1m";
+      })
+      && throws (guard {
+        "-dedup.minScrapeInterval" = "1m";
+      })
+      && throws (guard {
+        "--dedup.minScrapeInterval" = "1m";
+      })
+      &&
+        refusal {
+          "dedup.minScrapeInterval" = "1m";
+        } == {
+          thrown = "pkg ns/inst: vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
+        }
+    )
+    || throw "guardArgs attrset: ${
+      builtins.toJSON (refusal {
+        "dedup.minScrapeInterval" = "1m";
+      })
+    }";
+
   lib-options-typing-check-secret-keys =
     let
       check =
@@ -1008,14 +1053,30 @@ in
         vmselect.extraArgs."dedup.minScrapeInterval" = "1m";
       })
       && evalFails' (withConfig {
+        vmstorage.extraArgs.retentionPeriod = "1d";
+      })
+      && evalFails' (withConfig {
+        vminsert.extraArgs.replicationFactor = "1";
+      })
+      && evalFails' (withConfig {
+        vminsert.extraArgs.httpListenAddr = ":9000";
+      })
+      &&
+        (vmSpec "VMCluster" (withConfig {
+          vminsert.extraArgs."maxLabelsPerTimeseries" = "60";
+        })).vminsert.extraArgs == {
+          "maxLabelsPerTimeseries" = "60";
+        }
+      && evalFails' (withConfig {
         vmstorage.storage.storageClassName = "fast";
       })
     )
     || throw "vm-cluster owned fields: ${builtins.toJSON spec.vmstorage}";
 
   # vm-agent keeps its own flag beside an instance flag, and refuses an
-  # extraSpec that replaces the remote-write target the vmCluster
-  # dependency gives it.
+  # extraSpec or an extraArgs entry that replaces the remote-write target
+  # the vmCluster dependency gives it, or the scrape configuration the
+  # operator writes.
   lib-options-typing-vm-agent-args =
     let
       agent =
@@ -1041,8 +1102,46 @@ in
       && evalFails' (agent {
         extraSpec.scrapeInterval = "10s";
       })
+      && evalFails' (agent {
+        extraArgs."remoteWrite.url" = "http://elsewhere";
+      })
+      && evalFails' (agent {
+        extraArgs."promscrape.config" = "/tmp/other.yaml";
+      })
     )
     || throw "vm-agent extraArgs: ${builtins.toJSON spec.extraArgs}";
+
+  # vm-operator sets its log level, leader election, and probe address
+  # itself; extraArgs may not replace them in either flag spelling.
+  lib-options-typing-vm-operator-args =
+    let
+      operator =
+        extraArgs:
+        vmCluster {
+          vm-operator = {
+            package = pkg "victoria-metrics-operator";
+            config = {
+              inherit extraArgs;
+            };
+          };
+        };
+      operatorArgs =
+        ms:
+        let
+          deployment = lib.findFirst (m: m.kind == "Deployment" && m.metadata.name == "vm-operator") null ms;
+        in
+        (lib.findFirst (c: c.name == "operator") null deployment.spec.template.spec.containers).args;
+    in
+    (
+      builtins.elem "--zap-log-level=info" (operatorArgs (operator [ ]))
+      && builtins.elem "--metrics-bind-address=:8080" (
+        operatorArgs (operator [ "--metrics-bind-address=:8080" ])
+      )
+      && evalFails' (operator [ "--zap-log-level=debug" ])
+      && evalFails' (operator [ "-leader-elect=false" ])
+      && evalFails' (operator [ "--health-probe-bind-address=:9000" ])
+    )
+    || throw "vm-operator extraArgs: ${builtins.toJSON (operatorArgs (operator [ ]))}";
 
   # vm-alert renders the shared default Alertmanager settings when none are
   # set, and refuses an extraSpec that replaces its datasource.

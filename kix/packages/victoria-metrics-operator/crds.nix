@@ -338,8 +338,8 @@ let
   # status.updateStatus == "operational". Its conditions are
   # consumer-prefixed, never Ready/Available, so the generic condition check
   # would wait forever. The rule rides the typed chain into every CR as the
-  # `kix.run/readiness` annotation, which the Kix CLI evaluates at deploy
-  # time, so the CLI keeps no kind list.
+  # `kix.run/readiness` annotation, which Kix evaluates at deploy
+  # time, so Kix keeps no kind list.
   #
   # The operator reconciles operand kinds (VMCluster, VMAgent, ...) itself
   # and always writes updateStatus. It writes updateStatus on a
@@ -362,6 +362,8 @@ let
     path = "/status/updateStatus";
     notEquals = "failed";
   };
+  # The configuration kinds run no pods, so `mkVMKindCRD` declares their
+  # usage as `{ }`.
   configKinds = [
     "VMServiceScrape"
     "VMPodScrape"
@@ -373,6 +375,22 @@ let
     "VMAlertmanagerConfig"
     "VMUser"
     "VMAnomalyConfig"
+  ];
+
+  # Kinds whose operands keep stored data on their volumes: metrics, logs,
+  # traces, and Alertmanager silences. An agent's buffer, an alerting rule
+  # evaluator, and the configuration kinds hold none.
+  storageKinds = [
+    "VMCluster"
+    "VMSingle"
+    "VMDistributed"
+    "VMAlertmanager"
+    "VLCluster"
+    "VLSingle"
+    "VLDistributed"
+    "VLogs"
+    "VTCluster"
+    "VTSingle"
   ];
 
   # Read the vendored upstream spec schema for consumer-facing kinds.
@@ -425,10 +443,12 @@ let
       schemed
       // {
         readiness = if builtins.elem def.kind configKinds then vmConfigReadiness else vmReadiness;
+        holdsData = builtins.elem def.kind storageKinds;
       }
       // lib.optionalAttrs (extras ? factBehavior) {
         inherit (extras) factBehavior;
       }
+      // lib.optionalAttrs (builtins.elem def.kind configKinds) { usesAtLeast = _: { }; }
       // lib.optionalAttrs (extras ? usesAtLeast) {
         inherit (extras) usesAtLeast;
       }
@@ -456,6 +476,14 @@ let
       |> scope.crd.withVersion def.version
       |> scope.crd.withShortNames def.shortNames
       |> scope.crd.withPrinterColumns ageColumn
+      |> (
+        crd:
+        crd
+        // {
+          holdsData = false;
+          usesAtLeast = _: { };
+        }
+      )
     );
 
   # Reference an existing prometheus-operator CRD without labels,
@@ -468,6 +496,8 @@ let
     scope.mkCRDRef {
       group = promGroup;
       inherit (def) kind plural version;
+      holdsData = false;
+      usesAtLeast = _: { };
     };
 
   mkPromCompat =

@@ -9,7 +9,7 @@ import mkFlakeOutputs from '/src/snippets/flake/mkFlakeOutputs.json';
 import listClusters from '/src/command-output/how-to/application-list/list-clusters.json';
 
 Use `kixpkgs.lib.mkFlake` in the repository that owns your cluster definitions.
-It exposes the cluster outputs that the Kix CLI discovers.
+It exposes the cluster outputs that Kix discovers.
 
 ## Add the flake inputs
 
@@ -41,18 +41,36 @@ The examples repository registers each cluster by name:
 
 <Snippet {...mkFlakeOutputs} />
 
-Each value under `clusters` is a cluster function. Its attribute name becomes
-the CLI cluster name, while the file's `kix.buildCluster.name` becomes the
-cluster identity recorded in manifests and activations.
+Each value under `clusters` is a cluster function. Its attribute name is the
+cluster name you pass to the CLI, and, unless the file passes `name` to
+`kix.buildCluster`, the name Kix records in the manifests and the Activation
+record. A cluster listed here needs no `name` of its own.
 
 :::caution
-Keep the two the same. The Activation record is labelled with the
-`buildCluster` name, and every command that reads cluster state filters on the
-CLI name. If the names differ, `kix health`, `kix rollback --list`, `kix gc`
-retention, and the baseline comparison in `kix deploy` cannot find the
-Activation. These commands currently report an empty result instead of
-identifying the mismatch.
+Set `name` only when the recorded name must differ from the attribute, such as
+a cluster that was deployed under another name. Kix looks cluster state up by
+the recorded name, so renaming a deployed cluster orphans its Activation
+records. When the two differ, commands that read cluster state first evaluate
+the flake to learn the recorded name.
 :::
+
+### Keep the name of a cluster that Kix 0.6 deployed
+
+Kix 0.6 named a cluster `cluster` when its file passed no `name` to
+`kix.buildCluster`. Kix 0.7 names it after its key, so its deploy records no
+longer match. `kix deploy` and `kix plan` refuse such a cluster before they
+apply anything: its file passes no `name`, the Kubernetes cluster has no
+Activation records for the key, and it has records for a Kix cluster named
+`cluster`. Fix it in the cluster file in one of two ways:
+
+- Add `name = "cluster";` to the `kix.buildCluster` call to keep the old name
+  and its deploy history.
+- Add `name = "<key>";` to confirm the new name. The cluster then starts a
+  new deploy history. The old `cluster` records stay on the Kubernetes
+  cluster, and Kix never deletes the objects that only the old build has, so
+  remove them yourself.
+
+Either value turns the check off.
 
 For a single project, a compact registration is enough:
 
@@ -83,7 +101,7 @@ A cluster that needs a different value sets the option itself with
 ## Check the packages the repository defines
 
 Evaluating a cluster does not check the
-[option contract](/docs/reference/package-schema/options/#option-contract).
+[option contract](/docs/reference/package-anatomy/#options).
 List the packages the repository defines under `packages`, and the flake
 gets the check `option-contract-<name>` for each one:
 
@@ -99,11 +117,89 @@ outputs = inputs: inputs.kixpkgs.lib.mkFlake {
 partly discarded by an instance that sets part of the option, at any
 availability level the package can run at.
 
+## Use `mkFlake` inside a larger flake
+
+A repository whose flake also builds other things, such as NixOS machines or
+container images, can still use `mkFlake` for its Kix outputs. Call it in a
+`let` binding and merge its `packages`, `checks`, and `legacyPackages` into
+the flake's own, one system at a time:
+
+```nix title="flake.nix"
+outputs =
+  inputs:
+  let
+    systems = [ "x86_64-linux" "aarch64-darwin" ];
+    forAllSystems = inputs.nixpkgs.lib.genAttrs systems;
+    kixOutputs = inputs.kixpkgs.lib.mkFlake {
+      inherit inputs systems;
+      clusters.production =
+        { kix, packages }:
+        import ./clusters/production.nix {
+          inherit kix packages;
+          shared = import ./clusters/shared.nix { inherit kix; };
+        };
+    };
+  in
+  {
+    nixosConfigurations.web-1 = ...;
+
+    packages = forAllSystems (
+      system: kixOutputs.packages.${system} // { deploy-tool = ...; }
+    );
+    checks = forAllSystems (
+      system:
+      kixOutputs.checks.${system}
+      // {
+        policy = import ./checks/policy.nix {
+          inherit (kixOutputs.legacyPackages.${system}.kixLib) kix packages;
+        };
+      }
+    );
+    legacyPackages = forAllSystems (system: kixOutputs.legacyPackages.${system});
+  };
+```
+
+- **A cluster that needs more arguments** is given as a function. `mkFlake`
+  passes it `kix` and `packages`, and the function passes the rest to the
+  cluster file. Build anything the cluster uses, such as `shared` above, from
+  the `kix` the function receives.
+- **A check or tool outside the clusters** takes the library from
+  `legacyPackages.<system>.kixLib`. It holds `kix` and `packages`, set up
+  for the builder in [`kix.toml`](/docs/reference/kix-toml/), so it renders
+  Helm charts the same way as the clusters.
+- **Keep your own output names apart from Kix's.** `//` keeps the right-hand
+  value when two names clash, without an error. Kix's outputs start with
+  `cluster-`, `schema-cluster-`, `rules-cluster-`, `pi-wiring-cluster-`,
+  `option-contract-`, and, under `legacyPackages`, `kix`.
+
+:::caution
+Do not publish Kix's outputs yourself with `kixpkgs.lib.forPkgs`. `forPkgs`
+returns the library but none of the outputs the `kix` program reads, so a flake
+that uses it misses each output `mkFlake` adds, and cannot use
+`builder = "nix"`.
+:::
+
+## Choose a project builder (optional)
+
+By default (`builder = "kix"`), Kix evaluates your project with the Kix
+runtime and Kix's local store (`~/.cache/kix/store`). If your project needs the
+machine's Nix installation and its configured binary caches or remote builders,
+add [`kix.toml`](/docs/reference/kix-toml/) beside `flake.nix` and stage it in
+Git:
+
+```toml title="kix.toml"
+builder = "nix"
+```
+
+<Command commands={["git add kix.toml"]} cwd="infrastructure/" />
+
+See [`kix.toml`](/docs/reference/kix-toml/) for the full builder reference.
+
 ## Lock the inputs
 
-Create or update `flake.lock` after adding the inputs:
+Pin the Kix library (`kixpkgs` in `flake.lock`) to match your installed Kix:
 
-<Command commands={["nix flake lock"]} cwd="infrastructure/" />
+<Command commands={["kix lib update"]} cwd="infrastructure/" />
 
 Commit `flake.nix` and `flake.lock` together. Other machines and CI will then
 evaluate the same Kix and nixpkgs revisions.

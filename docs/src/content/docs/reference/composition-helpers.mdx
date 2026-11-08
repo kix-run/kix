@@ -1,0 +1,441 @@
+---
+title: "Composition helpers"
+description: "Helper functions on the kix argument for wiring environment variables, mounts, Services, routes, and monitoring."
+---
+
+Writing raw Kubernetes manifests often means repeating the same boilerplate in multiple places, such as declaring a volume and its mount path separately or copying container ports into a matching Service. The `kix.*` composition helpers let you write each concern once: some transform container and workload specs directly, while others drop into a package's `build` list to wire ingress routes, Prometheus scraping, and post-deploy health checks.
+
+:::note[Helpful background]
+- [07. Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/): see how `kix.withMounts`, `kix.mkEnvVars`, and `kix.service.fromWorkload` work together in a package.
+- [Package anatomy](/docs/reference/package-anatomy/): review how entries in a package's `build` list are evaluated and merged.
+- [Resources and `out`](/docs/reference/resources-and-out/): see how the resources returned by these helpers expose `.out` attributes.
+- [Service (Kubernetes docs)](https://kubernetes.io/docs/concepts/services-networking/service/): review how Kubernetes Services select pods and route traffic to container ports.
+:::
+
+## Env helpers
+
+Kubernetes expects a container's `env` field to be a list of `{ name, value }` or `{ name, valueFrom }` objects. `kix.mkEnvVars` and `kix.mkEnv` let you write concise attribute sets while supporting secret and downward-API `valueFrom` references and conditional `null` entries.
+
+### `kix.mkEnvVars` and `kix.mkEnv`
+
+| Function | Signature | Description |
+| --- | --- | --- |
+| `kix.mkEnvVars` | `attrs -> list` | Converts an attribute set `{ KEY = value; ... }` into a sorted list of Kubernetes `env` entries, dropping any key whose value is `null`. |
+| `kix.mkEnv` | `attrs -> list -> list` | Equivalent to `(kix.mkEnvVars attrs) ++ rawList`. Combines an attribute set of env vars with an explicit list of `{ name; ... }` objects. |
+
+Each value in `attrs` passed to `kix.mkEnvVars` or `kix.mkEnv` can be:
+- **A string**: becomes `{ name = KEY; value = "..."; }`.
+- **An attribute set containing `valueFrom`** (such as `self.secret.out.keyRef "password"`): becomes `{ name = KEY; valueFrom = value.valueFrom; }`. Any attribute set without `valueFrom` throws an evaluation error.
+- **`null`**: omitted from the returned list.
+
+```nix
+env = kix.mkEnv {
+  PORT = "8080";
+  LOG_LEVEL = config.logLevel;
+  DB_PASSWORD = self.dbSecret.out.keyRef "password";
+  OPTIONAL_FEATURE = if config.enableFeature then "true" else null;
+} [
+  {
+    name = "POD_IP";
+    valueFrom.fieldRef.fieldPath = "status.podIP";
+  }
+];
+```
+
+When merging user-supplied environment variables from `kix.options.env` (`config.env`), use [`kix.mergeEnv`](/docs/reference/package-anatomy/#escape-hatches-and-guard-helpers) so operators cannot overwrite environment variables owned by typed package options.
+
+---
+
+## Mount helpers
+
+In raw Kubernetes specs, mounting a volume requires updating two separate places: `spec.template.spec.volumes` and `spec.template.spec.containers[*].volumeMounts`. Kix's `kix.mount.*` constructors and `kix.withMounts` / `kix.withMountsOn` keep each volume and its mount path together in one declaration.
+
+```nix
+deployment = scope.mkDeployment (
+  kix.withMounts [
+    (kix.mount.configMap self.configMap {
+      mountPath = "/etc/myapp";
+      readOnly = true;
+    })
+    (kix.mount.secret self.tlsSecret {
+      mountPath = "/etc/tls";
+    })
+    (kix.mount.emptyDir {
+      name = "cache";
+      mountPath = "/var/cache/myapp";
+      sizeLimit = "512Mi";
+    })
+  ] {
+    name = "myapp";
+    spec = {
+      replicas = 2;
+      selector.matchLabels = scope.selectorLabels;
+      template.spec.containers = [
+        {
+          name = "myapp";
+          image = kix.image.ref config.image;
+          resources = config.resources;
+        }
+      ];
+    };
+  }
+);
+```
+
+### `kix.mount.*` constructors
+
+All resource-backed mount constructors (`kix.mount.pvc`, `kix.mount.configMap`, and `kix.mount.secret`) return `null` when their first argument (`resource`) is `null`, so optional mounts work without extra `lib.optional` wrappers. They also derive the volume name from `resource.out.name` by default (propagating the resource's Nix string context so the workload automatically depends on the mounted `ConfigMap`, `Secret`, or `PersistentVolumeClaim`) and record the resource's namespace for `checkNamespacedRefs`.
+
+| Constructor | Signature | Options in final attrset |
+| --- | --- | --- |
+| `kix.mount.pvc` | `pvc -> { mountPath, name ? pvc.out.name, readOnly ? false, subPath ? null }` | Mounts a `PersistentVolumeClaim` (`persistentVolumeClaim.claimName = pvc.out.name`). |
+| `kix.mount.configMap` | `cm -> { mountPath, name ? cm.out.name, readOnly ? false, subPath ? null, defaultMode ? null, items ? null }` | Mounts a `ConfigMap` (`configMap.name = cm.out.name`). |
+| `kix.mount.secret` | `sec -> { mountPath, name ? sec.out.name, readOnly ? false, subPath ? null, defaultMode ? null, items ? null }` | Mounts a `Secret` (`secret.secretName = sec.out.name`). |
+| `kix.mount.emptyDir` | `{ name, mountPath, medium ? null, sizeLimit ? null, readOnly ? false, subPath ? null }` | Mounts a scratch `emptyDir` volume named `name`. |
+| `kix.mount.hostPath` | `{ name, mountPath, hostPath, type ? "DirectoryOrCreate", readOnly ? false, subPath ? null }` | Mounts the node path `hostPath` as a volume named `name`. |
+
+`readOnly = true` sets `readOnly` on the container's `volumeMounts` entry. Set it on each mount record separately: a mount record carries one `readOnly` value, so a container that writes a volume and one that only reads it take two records of the same volume, which `kix.withMountsOn` declares once.
+
+### `kix.withMounts` and `kix.withMountsOn`
+
+| Function | Signature | Behavior |
+| --- | --- | --- |
+| `kix.withMounts` | `mounts -> workloadAttrs -> workloadAttrs` | Attaches all non-null `mounts` to the one container in the pod template's `containers`. Init containers do not count. Fails the build when the pod template has more than one container. |
+| `kix.withMountsOn` | `containerName -> mounts -> workloadAttrs -> workloadAttrs`, or `[ containerName ... ] -> mounts -> workloadAttrs -> workloadAttrs` | Attaches all non-null `mounts` to each named container, searching `containers` and `initContainers`. Fails the build when a name matches no container. |
+
+The pod template is `spec.jobTemplate.spec.template.spec` when the workload has a `jobTemplate` (a `CronJob`), and `spec.template.spec` otherwise.
+
+Both functions add each volume to the pod template's `volumes` once. A volume that is already there with the same name and the same source (the same claim, ConfigMap, Secret, or emptyDir settings) is not added again, so the same volume can be mounted into several containers, or at several paths, with separate calls or separate mount records. Two volumes with the same name and different sources fail the build. The error names both sources; give one of them another name with `name = "..."`.
+
+```nix
+# The init container writes the token; the main containers read it.
+{ name = "worker"; spec = { ... }; }
+|> kix.withMountsOn "write-token" [ (tokenMount false) ]
+|> kix.withMountsOn [ "app" "sidecar" ] [ (tokenMount true) ]
+|> scope.mkDeployment
+```
+
+Each call appends to the named containers' `volumeMounts`, so the order of the calls is the order of the mounts in each container.
+
+---
+
+## service.fromWorkload
+
+`kix.service.fromWorkload` derives a `v1/Service` definition from a workload resource, wiring the workload's label selector and resolving container ports automatically. Pass its result to `scope.mkResource`.
+
+```nix
+service = scope.mkResource (
+  kix.service.fromWorkload {
+    name = "echo";
+  } self.deployment
+);
+```
+
+### `kix.service.fromWorkload` arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | string | Required | `metadata.name` of the `Service`. |
+| `type` | string | `"ClusterIP"` | Kubernetes Service type (`"ClusterIP"`, `"NodePort"`, `"LoadBalancer"`). |
+| `ports` | list of `{ name?; port; targetPort?; protocol?; }` or `null` | `null` | Explicit Service ports. When `null`, Kix extracts all ports declared across the workload's containers (`port = containerPort`, `protocol = protocol or "TCP"`, and `name` when present; no `targetPort` is set). When explicit `ports` are passed, any string `targetPort` is verified against the workload's named container ports and resolved to its numeric port number. |
+| `outputs` | attrset | `{ }` | Extra fields merged onto the Service's `.out` surface (`outputs.port` defaults to the first Service port number). |
+| `...` | any | None | Any additional `scope.mkResource` arguments (`labels`, `annotations`, `requires`, `extra`, or extra `spec` fields) are forwarded to `scope.mkResource`. |
+
+### Related port helpers
+
+- **`kix.port name containerPort`**: Shorthand returning `{ name = name; containerPort = containerPort; protocol = "TCP"; }` for container `ports` lists.
+- **`kix.service.extractPorts workload`**: Returns the list of `{ port, protocol, name? }` objects extracted from `workload`'s container specs (no `targetPort` field is included).
+
+---
+
+## expose
+
+`kix.expose` is a composable `build` list entry that exposes a package `Service` outside the cluster using whichever ingress provider the cluster has deployed (`gateway` for Gateway API `HTTPRoute`, or `ingressNginx` for `networking.k8s.io/v1` `Ingress`). It pairs with `ingress = kix.options.ingress;` in `options`.
+
+```nix
+options = {
+  ingress = kix.options.ingress;
+};
+
+build = [
+  (
+    { self, config }:
+    {
+      deployment = ...;
+      service = ...;
+      root = self.service;
+    }
+  )
+  (kix.expose { service = "service"; })
+];
+```
+
+### `kix.expose` arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `service` | string or `null` | `null` | Part name in `self` (looked up as `self.${service}`) identifying a single target `Service`. Exactly one of `service` or `paths` must be set; setting both or neither throws an evaluation error. |
+| `paths` | list of `{ path; pathType ? "Prefix"; service; port?; }` or `null` | `null` | Path routing table for multi-service packages, where each entry's `service` is a part name in `self`. Cannot be combined with `service`. |
+| `port` | int, string, or `null` | `null` | Explicit Service port name or number used when `service` is set (defaults to `service.out.port`). |
+| `partName` | string | `"route"` | Part name for the generated `HTTPRoute` or `Ingress` resource. In Gateway mode, `"${partName}Crd"` holds the `HTTPRoute` CRD reference (`scope.mkCRDRef` for `gateway.networking.k8s.io/v1` `HTTPRoute`). |
+| `exposurePart` | string | `"exposure"` | Attribute name in `self` where resolved exposure metadata (`self.exposure`) is published. |
+| `defaultAnnotations` | attrset | `{ }` | Default annotations merged under `config.ingress.annotations` when generating an `Ingress`. |
+| `timeouts` | `{ request?; backendRequest?; }` or `null` | `null` | Optional Gateway API `HTTPRoute` rule timeouts (for example, `{ request = "60s"; }`). Ignored in Ingress mode. |
+| `deriveHost` | bool | `true` | When `true`, falls back to `"${scope.instanceName}.${clusterConfig.cluster.domain}"` if `config.ingress.host` is `null`. When `false`, a route is emitted only when `config.ingress.host` is explicitly set. |
+
+### `self.exposure` metadata
+
+Even before the route resource is built, `kix.expose` populates `self.${exposurePart}` (default `self.exposure`) so sibling resources in `build` can read the external URL without creating a circular dependency:
+
+| `self.exposure` field | Type | Description |
+| --- | --- | --- |
+| `via` | `"gateway"` \| `"ingress"` \| `null` | Active exposure mechanism when either `gateway` (claiming the gateway contract) or `ingressNginx` is wired and a hostname is resolved, or `null` otherwise. Having both `gateway` and `ingressNginx` present throws an evaluation error. |
+| `host` | string or `null` | Resolved external hostname (for example, `"grafana.example.com"`), or `null` when no hostname is configured or derived. |
+| `scheme` | `"https"` \| `"http"` \| `null` | In `"ingress"` mode, `"https"` when `clusterIssuer` is present and `"http"` otherwise. In `"gateway"` mode, derived from the matched listener on `gateway.out.listeners` (`"https"` for `HTTPS`, `"http"` for `HTTP`), or `null` when the gateway publishes no `out.listeners`. `null` when `via == null`. |
+| `url` | string | Full external URL (`"${scheme}://${host}"`, with `:<port>` appended when a Gateway listener uses a non-default port). Throws an evaluation error when `urlOrNull == null`. |
+| `urlOrNull` | string or `null` | Full external URL when `scheme != null` and `host != null`, or `null` when unexposed or when the gateway publishes no `out.listeners`. |
+
+In `"ingress"` mode, when a `clusterIssuer` dependency is bound, `kix.expose` applies `clusterIssuer.out.withCert` to annotate the `Ingress` and populate `spec.tls` (`secretName = "${scope.instanceName}-tls"`). In `"gateway"` mode, TLS termination is owned by the Gateway listener and no `Certificate` resource is created by `kix.expose`.
+
+### Lower-level route helpers
+
+When a package needs custom routing outside `kix.expose`, use the lower-level builders directly with `scope.mkResource` or `scope.mkCR`:
+- `kix.ingress.fromService { name, host, path ? "/", pathType ? "Prefix", port ? null, className ? null, tls ? [ ], ... } svc` (returns an `Ingress` attribute set for `scope.mkResource`; extra attributes such as `annotations` and `labels` are forwarded)
+- `kix.httpRoute.fromService { name, host, parentRef, path ? "/", pathType ? "PathPrefix", port ? null, timeouts ? null, ... } svc` (returns an `HTTPRoute` attribute set for `scope.mkCR` or `scope.mkResource`)
+- `kix.httpRoute.fromPaths { name, host, parentRef, timeouts ? null, paths }` where `paths` is a list of `{ path; pathType ? "Prefix"; svc; port ? null; }` (returns an `HTTPRoute` attribute set for `scope.mkCR` or `scope.mkResource`)
+
+---
+
+## monitor
+
+`kix.monitor` is a composable `build` list entry that creates a `monitoring.coreos.com/v1` `ServiceMonitor` (and an optional `PrometheusRule` for alerts) whenever a `prometheus` provider is bound in the cluster and `config.metrics.enabled` is `true`. It pairs with `metrics = kix.options.monitor;` in `options`.
+
+```nix
+options = {
+  metrics = kix.options.monitor;
+};
+
+build = [
+  (
+    { self, config }:
+    {
+      deployment = ...;
+      service = ...;
+      root = self.service;
+    }
+  )
+  (kix.monitor {
+    service = "service";
+    port = "metrics";
+    alerts = {
+      EchoHighErrorRate = {
+        expr = ''rate(http_requests_total{status=~"5.."}[5m]) > 0.05'';
+        "for" = "5m";
+        severity = "warning";
+        summary = "High HTTP 5xx error rate on echo";
+        description = "More than 5% of requests have failed over the last 5 minutes.";
+      };
+    };
+  })
+];
+```
+
+### `kix.monitor` arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `service` | string | Required | Target `Service` part name in `self` (looked up as `self.${service}`). |
+| `port` | string or int | `"metrics"` | Port name (sets `port` on the endpoint) or port number (sets `targetPort` on the endpoint) to scrape. Checked against the selected `Service`'s ports by the [`architecture.monitorSelectorMatchesService`](/docs/reference/scorecard-and-rules/) scorecard rule. |
+| `path` | string | `"/metrics"` | HTTP scrape path. |
+| `scheme` | string | `"http"` | Scrape scheme (`"http"` or `"https"`). |
+| `tlsConfig` | attrset or `null` | `null` | Prometheus endpoint `tlsConfig` block. |
+| `params` | attrset of `listOf str` or `null` | `null` | URL query parameters added to scrape requests. |
+| `honorLabels` | bool or `null` | `null` | Whether Prometheus preserves labels exported by the scraped target. |
+| `extraEndpoints` | list of attrsets | `[ ]` | Additional endpoint definitions appended to `spec.endpoints` on the `ServiceMonitor`. |
+| `alerts` | attrset | `{ }` | Map of `<AlertName> = { expr; "for"?; keep_firing_for?; severity?; summary?; description; runbook_url?; labels?; annotations?; }`. |
+| `extraLabels` | attrset | `{ }` | Extra `metadata.labels` merged onto generated monitoring resources. |
+| `name` | string or `null` | `null` (uses `scope.instanceName`) | Override base name of the generated `ServiceMonitor` (`name`) and `PrometheusRule` (`"${name}-alerts"`). |
+| `monitorPart` | string | `"serviceMonitor"` | Part name for the `ServiceMonitor` in the returned parts attrset. |
+| `rulesPart` | string | `"prometheusRules"` | Part name for the `PrometheusRule` in the returned parts attrset. |
+
+### Standalone alert rules (`kix.alerts`)
+
+For packages that define `PrometheusRule` alerts without a `ServiceMonitor` (for example, rules evaluated over kube-state-metrics or node-exporter series), pair `metrics = kix.options.alerts;` in `options` with `kix.alerts`:
+
+```nix
+(kix.alerts {
+  alerts = {
+    NamespacePodRestartLoop = {
+      expr = ''increase(kube_pod_container_status_restarts_total{namespace="default"}[15m]) > 5'';
+      "for" = "5m";
+      severity = "warning";
+      description = "Pod in namespace default is restarting repeatedly.";
+    };
+  };
+})
+```
+
+`kix.alerts` accepts `alerts`, `name` (defaults to `scope.instanceName`), `extraLabels`, and `rulesPart` (defaults to `"prometheusRules"`), and is gated by `config.metrics.enabled` (default `true`).
+
+---
+
+## healthCheck
+
+`kix.healthCheck` is a composable `build` list entry that returns two parts: `${partName}` (default `"healthCheck"`, a `batch/v1` `Job` named `"${scope.instanceName}-health"`) and `${partName}Script` (default `"healthCheckScript"`, a `v1/ConfigMap` mounted into the Job at `/probe`). Because the Job depends on `self.root` and nothing in the package's forward closure depends on the Job, Kix classifies it in `inverseDeps` (`kix.run/inverse-deps`) and deploys it after `self.root` is ready, re-running it automatically whenever its inputs change (`kix.run/rerun: on-change`). It pairs with `healthCheck = kix.options.healthCheck;` in `options`.
+
+```nix
+options = {
+  healthCheck = kix.options.healthCheck;
+};
+
+build = [
+  (
+    { self, config }:
+    {
+      deployment = ...;
+      service = ...;
+      root = self.service;
+    }
+  )
+  (kix.healthCheck {
+    script = ''
+      import os, urllib.request
+      url = f"http://{os.environ['SERVICE_HOST']}:{os.environ['SERVICE_PORT']}/healthz"
+      with urllib.request.urlopen(url, timeout=5) as resp:
+          assert resp.status == 200
+    '';
+    env = { self, ... }: {
+      SERVICE_HOST = self.service.out.fqdn;
+      SERVICE_PORT = toString self.service.out.port;
+    };
+  })
+];
+```
+
+### `kix.healthCheck` arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `script` | string | Required | Verification script written to the `${partName}Script` `ConfigMap` and executed inside the probe container. |
+| `env` | `({ self, config, deps }: attrset)` | `_: { }` | Function returning environment variables passed to `kix.mkEnvVars` (supports strings and Secret `keyRef` values) and merged with runtime defaults and `RETRY_FOR = toString retryFor`. |
+| `when` | `({ self, config, deps }: bool)` | `{ config, ... }: config.healthCheck.enabled or true` | Predicate function that gates the health check. Providing a custom `when` function replaces the default `config.healthCheck.enabled` check unless your function also reads `config.healthCheck.enabled`. |
+| `retryFor` | `({ self, config, deps }: positive int)` | `{ config, ... }: config.healthCheck.retryFor or 90` | Function returning the retry budget in seconds exposed to the script as `$RETRY_FOR`. |
+| `requires` | `({ self, config, deps }: list)` | `_: [ ]` | Function returning extra resources the health-check Job must wait for (when empty and `env` carries no resource context, `self.root` is wired automatically). |
+| `partName` | string | `"healthCheck"` | Part name for the `Job` in `self` (the script `ConfigMap` is placed at `"${partName}Script"`). |
+| `runtime` | `{ image, file, interpreter, env? }` | `kix.healthCheck.runtimes.python` | Probe execution runtime. Built-in runtimes: `kix.healthCheck.runtimes.python` (`docker.io/library/python:3.13-slim`, `file = "health-check.py"`, `interpreter = [ "python3" ]`) and `kix.healthCheck.runtimes.shell` (`docker.io/curlimages/curl:8.14.1`, `file = "health-check.sh"`, `interpreter = [ "/bin/sh" "-eu" ]`). |
+| `activeDeadlineSeconds` | positive int or `null` | `null` (uses `retry + 90`) | Kubernetes `Job` `spec.activeDeadlineSeconds`. Defaults to `retry + kix.healthCheck.roundBudget` (`retry + 90`), and throws an evaluation error if set lower than `retry + 90`. |
+
+Like every Job Kix builds, the finished Job stays on the cluster until a later build no longer contains it, and Kix deletes it then.
+
+---
+
+## availability
+
+Kix models cluster availability across four ordered levels: `"none"` < `"pod"` < `"node"` < `"zone"`. Inside a package, the `availability` argument is a plain string (`"none"`, `"pod"`, `"node"`, or `"zone"`) holding the effective availability level for the current instance (clamped to `meta.availability.max`). Pass that `availability` string to the helpers on `kix.availability`:
+
+| Value or helper | Signature | Description |
+| --- | --- | --- |
+| `availability` | string | Effective availability level passed to the package (`"none"`, `"pod"`, `"node"`, or `"zone"`). |
+| `kix.availability.levels` | list of strings | `[ "none" "pod" "node" "zone" ]`. |
+| `kix.availability.rank` | `level -> int` | Maps `"none" -> 0`, `"pod" -> 1`, `"node" -> 2`, `"zone" -> 3`. |
+| `kix.availability.pick` | `level -> { none, pod, node, zone } -> value` | Selects `table.${level}`. All four keys (`none`, `pod`, `node`, and `zone`) are required; omitting any key throws an evaluation error. |
+| `kix.availability.atLeast` | `min -> level -> bool` | Returns `true` when `rank level >= rank min` (for example, `kix.availability.atLeast "node" availability`). Throws an evaluation error inside a package if `min` exceeds the package's `meta.availability.max`. |
+| `kix.availability.spreadConstraints` | `{ level, selector, topology } -> list` | Synthesizes `topologySpreadConstraints` for operator custom resources (such as CloudNativePG `Cluster` or Valkey) from `topology` (`clusterConfig.cluster.topology`, which is required). Emits one constraint per key in `topology.failureDomainKeys`, setting `whenUnsatisfiable = "DoNotSchedule"` on `topology.zoneKey` when `level == "zone"` and on `topology.hostKey` when `level == "node"`, and `"ScheduleAnyway"` otherwise. |
+
+---
+
+## Image and pin helpers
+
+### `kix.image.ref` and `kix.image.isPinned`
+
+Pair `kix.options.image` in `options` with `kix.image.ref` in container specs:
+
+```nix
+image = kix.image.ref config.image;
+imagePullPolicy = config.image.pullPolicy;
+```
+
+| Function | Signature | Behavior |
+| --- | --- | --- |
+| `kix.image.ref` | `{ repository, tag, digest ? null, ... } -> string` | Formats a container image reference from an image attribute set. Both `repository` and `tag` are required and must be non-empty strings (throws an evaluation error if either is missing or `""`). Renders `"${repository}:${tag}@${digest}"` when `digest` is non-null, or `"${repository}:${tag}"` when `digest` is `null`. |
+| `kix.image.isPinned` | `{ digest ? null, ... } -> bool` | Takes an image attribute set and returns `true` when `image.digest` is non-null (`(image.digest or null) != null`). |
+
+### `kix.pins`
+
+`kix.pins` (`source -> { get, ref, keys, all, instances, file }`) loads a JSON pin file (such as `./pins.json`) or an attribute set of image pins. When a flake passes `pins = ./pins.json;` to `kix.lib.mkFlake`, cluster definitions that declare a `pins` argument receive `kix.pins ./pins.json`:
+
+| Helper | Signature | Description |
+| --- | --- | --- |
+| `(kix.pins source).get` | `key -> { repository, tag, digest, ... }` | Looks up a top-level image pin entry by `key`, throwing a descriptive error if the key does not exist. |
+| `(kix.pins source).ref` | `key -> string` | Equivalent to `kix.image.ref ((kix.pins source).get key)`. |
+| `(kix.pins source).keys` | list of strings | Attribute names of all top-level image pins. |
+| `(kix.pins source).all` | attrset | Full validated attribute set of top-level image pins. |
+| `(kix.pins source).instances` | attrset | Validated per-instance option pins from a `version = 2` pin file, keyed `"<namespace>/<instance>" = { <optionPath> = pin; }`. |
+| `(kix.pins source).file` | string or `null` | Store path string when `source` is a file path, or `null` when `source` is an attribute set. |
+
+### Image provenance (`kix-image-sources.json`)
+
+Every built cluster output includes `kix-image-sources.json`, which maps each container image string in the cluster to its `origin`:
+- `"pin"`: Supplied by the cluster pin file's `instances."<namespace>/<instance>"` map or via `kix.pins`.
+- `"package_default"`: Declared in `kix.options.image` default values inside the package.
+- `"injected"`: Injected into the instance's configuration by a consumer dependency (`deps.<arg>.config`).
+- `"nix_built"`: Carries Nix derivation string context on `repository`, `tag`, or `digest`.
+- `"code"`: Set in cluster or instance configuration (`instances.<namespace>.<name>.config`) or inline in Nix expressions without a pin or derivation context.
+
+---
+
+## Facts and untrackedRef
+
+### `kix.facts`
+
+When Kix inspects a resource manifest, it classifies every `.out` reference to determine how the reference affects deployment ordering and network policy derivation:
+
+- **Default (ambient reference)**: Counts as both a deployment dependency (`kix.run/depends-on`) and a network traffic path when pointing to a `Service` endpoint (`out.fqdn` or `out.url`).
+- **`kix.facts.refOnly s`**: Replaces `endpoint` fact tokens on string `s` with `refonly` fact tokens. The deployment dependency (`kix.run/depends-on`) is preserved, but no derived network policy ingress or egress rule is generated for this reference.
+- **`kix.facts.connect factCtx s`**: (`factCtx -> s -> string`) Attaches the endpoint fact context from `factCtx` (such as `svc.factTokens.endpoint`) onto string `s` so workloads embedding `s` receive a network policy edge to that Service.
+- **`kix.facts.structural value`**: Wraps a custom resource `outputs` value (`outputs = { replicas = kix.facts.structural "3"; };`) as structural metadata so `scope.mkResource` strips endpoint facts with `refOnly` while keeping resource ordering context.
+
+```nix
+# Referencing a Service FQDN in an operator CLI flag without opening pod-to-service data traffic
+args = [
+  "--webhook-service-host=${kix.facts.refOnly self.webhookService.out.fqdn}"
+];
+```
+
+### `kix.untrackedRef`
+
+Kix validates that every cross-resource reference in a manifest (`serviceAccountName`, volume `claimName`, `secretName`, `configMap.name`, ingress backend, etc.) points to a Kix-managed resource via `.out`. When a field intentionally references a resource created outside Kix or dynamically at runtime by a controller, wrap the reference in `kix.untrackedRef`:
+
+```nix
+# Referencing a Secret created dynamically at runtime by this workload itself
+volumes = [
+  {
+    name = "webhook-cert";
+    secret = {
+      secretName = kix.untrackedRef {
+        name = "my-operator-webhook-cert";
+        by = "self";
+      };
+      optional = true;
+    };
+  }
+];
+
+# Referencing a ConfigMap created at runtime by an operator workload
+env = kix.mkEnvVars {
+  DYNAMIC_CONFIG = kix.untrackedRef {
+    name = "operator-generated-cm";
+    kind = "ConfigMap";
+    by = deps.myOperator.root;
+  };
+};
+```
+
+`kix.untrackedRef` accepts either a plain string (`kix.untrackedRef "external-name"`) or an attribute set:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | string | Required | Name of the untracked Kubernetes resource. |
+| `kind` | string or `null` | `null` | Kubernetes kind (such as `"Secret"` or `"ConfigMap"`). Forbidden when `by = "self"`. When `kind` is set, Kix records `apiVersion\|kind\|name` in `metadata.annotations."kix.run/expects"` for pre-deploy cluster checks. |
+| `apiVersion` | string or `null` | `"v1"` when `kind` is set | API version paired with `kind` in `kix.run/expects`. Forbidden when `by = "self"`. |
+| `by` | resource, `"self"`, or `null` | `null` | Who creates the resource at runtime. Must be `"self"`, `null`, or a Kix resource with `outPath` (a workload, Job, or operator custom resource, such as `self.setupJob` or `deps.myOperator.root`; a dependency package view like `deps.myOperator` has no `outPath`). Passing a resource attaches its store context so it deploys first. Passing `by = "self"` declares that the current workload creates the resource itself (requires `optional = true` on the pod's volume or env reference, and forbids `kind` and `apiVersion`). Leaving `by = null` emits a scorecard finding under `architecture.untrackedReferences`. |

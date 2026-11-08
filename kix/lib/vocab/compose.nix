@@ -171,12 +171,20 @@ rec {
       defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
 
   # Validate that `args` does not set any CLI flag in `owned`, and return
-  # `args`.
+  # `args` unchanged.
   #
-  # `owned` maps each reserved flag to an explanation and remedy. Matches exact
-  # flags, `--flag=value`, and short flags with attached values (such as
-  # `-c/etc/x`, which also matches multi-character single-dash Go flags like
-  # `-vmodule=x` when `-v` is owned).
+  # `owned` maps each refused flag to the reason and the remedy. The message
+  # reads `<who>: <option> sets "<flag>", which this package does not accept:
+  # <reason>`, so a reason fits a flag the package sets itself and a flag it
+  # does not support.
+  #
+  # `args` is either a list of command-line words or an attrset of flags
+  # keyed by flag name, the form a VictoriaMetrics CR's `extraArgs` takes.
+  # List words match an owned flag exactly, as `--flag=value`, or as a short
+  # flag with an attached value (such as `-c/etc/x`, which also matches
+  # multi-character single-dash Go flags like `-vmodule=x` when `-v` is
+  # owned). Attrset keys match an owned name exactly once their leading
+  # dashes are removed.
   guardArgs =
     {
       who,
@@ -191,15 +199,34 @@ rec {
         lib.findFirst (
           flag: arg == flag || lib.hasPrefix "${flag}=" arg || (isShortFlag flag && lib.hasPrefix flag arg)
         ) null (builtins.attrNames owned);
-      lines = builtins.concatMap (
-        arg:
-        let
-          flag = flagOf arg;
-        in
-        lib.optional (
-          flag != null
-        ) "${who}: ${option} sets \"${arg}\", which the package owns: ${owned.${flag}}"
-      ) args;
+      # An attrset key names the flag without dashes, but a key written with
+      # them still reaches the program, so the match ignores leading dashes.
+      flagOfKey = key: builtins.head (builtins.match "-*(.*)" key);
+      # Each hit as the text the user wrote and the owned flag it matched.
+      hits =
+        if builtins.isAttrs args then
+          builtins.concatMap (
+            key:
+            lib.optional (owned ? ${flagOfKey key}) {
+              written = key;
+              flag = flagOfKey key;
+            }
+          ) (builtins.attrNames args)
+        else
+          builtins.concatMap (
+            arg:
+            let
+              flag = flagOf arg;
+            in
+            lib.optional (flag != null) {
+              written = arg;
+              inherit flag;
+            }
+          ) args;
+      lines = map (
+        { written, flag }:
+        "${who}: ${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}"
+      ) hits;
     in
     if lines != [ ] then throw (lib.concatStringsSep "\n" lines) else args;
 

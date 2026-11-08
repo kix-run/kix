@@ -42,7 +42,9 @@ consumer's namespace. Check the cluster definition for spelling changes and
 for an instance that was removed or moved.
 
 If the intended provider has another name or lives in another namespace, wire
-it explicitly:
+it explicitly. When the only match is in another namespace, the error already
+prints the line to add (`To use it, add this line to instances.<namespace>.<instance>:`),
+and when several namespaces answer the name it prints one line per instance:
 
 ```nix title="cluster.nix"
 instances.apps.gateway = {
@@ -65,12 +67,12 @@ should use. See
 for how names and aliases collide.
 
 :::note[Explanation]
-See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
+See [Dependency resolution and why explicit deps matter](/docs/explanation/the-dependency-graph/#dependency-resolution-and-explicit-deps)
 for the complete lookup order.
 :::
 
 :::note[Reference]
-See [Build entries](/docs/reference/package-schema/build-entries/) and
-[`deps`](/docs/reference/instance-schema/deps/) for the two sides of the
+See [Build entries](/docs/reference/package-anatomy/#build-entries) and
+[`deps`](/docs/reference/instances-and-composition/#deps) for the two sides of the
 wiring contract.
 :::

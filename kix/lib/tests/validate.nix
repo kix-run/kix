@@ -10,6 +10,7 @@
 {
   lib,
   k8s,
+  eval,
   validate,
   mkCluster,
   baseInstances,
@@ -300,6 +301,65 @@ let
         };
         # Same resource under a second key: collectResources sees it twice.
         alias = self.cm;
+        root = self.cm;
+      };
+  };
+
+  # A provider that exposes an import marker through `out`, and a consumer
+  # that holds that marker as a part. Both instances list the marker.
+  markerProviderPackage = {
+    build =
+      { self, scope, ... }:
+      {
+        secret = scope.mkSecretRef {
+          name = "creds";
+          keys = [ "password" ];
+        };
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "provider";
+          data.k = "v";
+        };
+        root = {
+          resource = self.cm;
+          out.secret = self.secret;
+        };
+      };
+  };
+  markerConsumerPackage = {
+    build =
+      {
+        self,
+        scope,
+        provider,
+        ...
+      }:
+      {
+        held = provider.out.secret;
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "consumer";
+          data.secret = provider.out.secret.out.name;
+        };
+        root = self.cm;
+      };
+  };
+
+  # Two packages that hold the same resource built outside any scope, so it
+  # carries no `_builtBy`.
+  holderPackage = shared: name: {
+    build =
+      { self, scope, ... }:
+      {
+        held = shared;
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          inherit name;
+          data.k = "v";
+        };
         root = self.cm;
       };
   };
@@ -1234,10 +1294,138 @@ in
     repeated == { }
     || throw "kix-packages.json repeats a path under ${toString (builtins.attrNames repeated)}";
 
+  # kix-packages.json lists an import marker that a consumer holds through
+  # the provider's `out` under the provider only, so the marker's owner does
+  # not depend on store-path order.
+  v20-package-index-lists-a-shared-marker-under-its-builder =
+    let
+      cluster = mkCluster [
+        baseInstances
+        {
+          instances.infra.provider.package = markerProviderPackage;
+          instances.infra.consumer.package = markerConsumerPackage;
+        }
+      ];
+      plain = v: builtins.unsafeDiscardStringContext (toString v);
+      packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
+      provider = cluster.clusterInstances.infra.provider;
+      consumer = cluster.clusterInstances.infra.consumer;
+      providerPi = plain provider._packageInstance.outPath;
+      consumerPi = plain consumer._packageInstance.outPath;
+      marker = plain provider.out.secret.outPath;
+      consumerCm = plain (consumer.raw or consumer).cm.outPath;
+      listedUnder =
+        path: builtins.attrNames (lib.filterAttrs (_: paths: builtins.elem path paths) packages);
+      allPaths = builtins.concatLists (builtins.attrValues packages);
+      repeated = builtins.filter (p: builtins.length (builtins.filter (q: q == p) allPaths) > 1) (
+        lib.unique allPaths
+      );
+    in
+    if repeated != [ ] then
+      throw "kix-packages.json lists ${toString repeated} under more than one package"
+    else if listedUnder marker != [ providerPi ] then
+      throw "marker is listed under ${toString (listedUnder marker)}, expected the provider"
+    else if !(builtins.elem consumerCm packages.${consumerPi}) then
+      throw "the consumer lost its own ConfigMap"
+    else
+      true;
+
+  # A resource with no `_builtBy` that two instances hold is listed under
+  # the first holder by `<namespace>/<instance>`, so its owner does not
+  # depend on store-path order either.
+  v20-package-index-lists-an-unbuilt-shared-resource-once =
+    let
+      shared = k8s.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "shared";
+        namespace = "infra";
+        labels."app.kubernetes.io/managed-by" = "kix";
+        data.k = "v";
+      };
+      cluster = mkCluster [
+        baseInstances
+        {
+          instances.infra.zeta.package = holderPackage shared "zeta";
+          instances.infra.alpha.package = holderPackage shared "alpha";
+        }
+      ];
+      plain = v: builtins.unsafeDiscardStringContext (toString v);
+      packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
+      listedUnder =
+        path: builtins.attrNames (lib.filterAttrs (_: paths: builtins.elem path paths) packages);
+      alphaPi = plain cluster.clusterInstances.infra.alpha._packageInstance.outPath;
+    in
+    listedUnder (plain shared.outPath) == [ alphaPi ]
+    || throw "shared ConfigMap is listed under ${toString (listedUnder (plain shared.outPath))}, expected infra/alpha only";
+
   # A dangling Service selector fails the cluster eval, not just a flake check.
   v21-cross-resource-failure-fails-the-build = evalFails (mkCluster [
     baseInstances
     { instances.infra.dangling.package = brokenServicePackage; }
   ]);
+
+  # --- 24. Jobs do not delete themselves ---
+
+  v24-job-with-ttl-is-refused =
+    onlyFailure
+      "Job a/once sets ttlSecondsAfterFinished, so Kubernetes would delete it after it finishes and Kix would run it again on the next deploy. Remove ttlSecondsAfterFinished. Kix deletes the Job when a later build no longer contains it."
+      (
+        base "a"
+        ++ [
+          (lib.recursiveUpdate (job "a" "once" { app = "once"; }) {
+            spec.ttlSecondsAfterFinished = 600;
+          })
+        ]
+      );
+
+  # Kubernetes, not Kix, creates a CronJob's Jobs, so their TTL is allowed.
+  v24-cronjob-template-ttl-is-fine = clean (
+    base "a"
+    ++ [
+      (lib.recursiveUpdate (cronJob "a" "nightly") {
+        spec.jobTemplate.spec.ttlSecondsAfterFinished = 600;
+      })
+    ]
+  );
+
+  # An import stands in for a Job the environment runs. Its `mkJob` builds a
+  # reference, not a manifest, so the build renders no Job and the check
+  # never sees the TTL.
+  v24-imported-job-with-ttl-is-fine =
+    let
+      external =
+        { scope, ... }:
+        {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              job = scope.mkJob {
+                name = "once";
+                spec = {
+                  ttlSecondsAfterFinished = 600;
+                  template = {
+                    metadata.labels.app = "once";
+                    spec.containers = [
+                      {
+                        name = "run";
+                        image = "img:1";
+                      }
+                    ];
+                  };
+                };
+              };
+              root = self.job;
+            };
+        };
+      cluster = mkCluster [
+        baseInstances
+        { instances.infra.once.package = eval.mkImport { from = external; }; }
+      ];
+      rendered = manifests cluster;
+    in
+    builtins.deepSeq rendered (builtins.all (r: r.kind != "Job") rendered)
+    || throw "an imported Job was rendered: ${builtins.toJSON (map (r: r.kind) rendered)}";
 
 }

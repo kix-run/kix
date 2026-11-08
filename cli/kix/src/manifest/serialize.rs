@@ -11,7 +11,7 @@ pub enum ManifestLoadError {
     #[error("failed to read file: {0}")]
     Io(#[from] std::io::Error),
     #[error("failed to parse YAML: {0}")]
-    Yaml(#[from] serde_yml::Error),
+    Yaml(#[from] crate::yaml::DeserializeError),
 }
 
 /// Recursively remove `null` values from a JSON value in place while preserving
@@ -37,11 +37,11 @@ pub fn strip_nulls(value: &mut serde_json::Value) {
 
 /// Convert a JSON value to a sorted-key YAML string.
 ///
-/// serde_yml preserves insertion order, so we sort keys by converting to
-/// a BTreeMap-based structure first.
-fn to_sorted_yaml(value: &serde_json::Value) -> Result<String, serde_yml::Error> {
+/// The YAML writer preserves insertion order, so we sort keys by converting
+/// to a BTreeMap-based structure first.
+fn to_sorted_yaml(value: &serde_json::Value) -> Result<String, crate::yaml::SerializeError> {
     let sorted = sort_keys(value);
-    serde_yml::to_string(&sorted)
+    crate::yaml::to_string(&sorted)
 }
 
 /// Recursively sort object keys by converting to BTreeMap-based serde_json::Value.
@@ -66,7 +66,9 @@ fn sort_keys(value: &serde_json::Value) -> serde_json::Value {
 /// Serialize a list of manifest JSON values to multi-document YAML.
 ///
 /// Documents are separated by `---\n`. Null values are stripped and keys are sorted.
-pub fn manifests_to_yaml(manifests: &[serde_json::Value]) -> Result<String, serde_yml::Error> {
+pub fn manifests_to_yaml(
+    manifests: &[serde_json::Value],
+) -> Result<String, crate::yaml::SerializeError> {
     let mut output = String::new();
     for (i, manifest) in manifests.iter().enumerate() {
         let mut cleaned = manifest.clone();
@@ -138,7 +140,7 @@ pub fn load_manifests_from_dir(
         }
 
         let contents = std::fs::read_to_string(entry.path())?;
-        let mut value: serde_json::Value = serde_yml::from_str(&contents)?;
+        let mut value: serde_json::Value = crate::yaml::from_str(&contents)?;
         // A snapshot is a dump of live objects, so one taken before the
         // domain move carries the retired keys. Without this, diffing it
         // against a build made now shows every Kix annotation as a paired
@@ -215,7 +217,7 @@ mod tests {
             "kind": "Service",
             "metadata": { "name": "my-svc", "namespace": "default" }
         });
-        let yaml = serde_yml::to_string(&manifest).unwrap();
+        let yaml = crate::yaml::to_string(&manifest).unwrap();
         fs::write(dir.path().join("default--my-svc-service.yaml"), &yaml).unwrap();
 
         let results = load_manifests_from_dir(dir.path()).unwrap();
@@ -235,7 +237,7 @@ mod tests {
     #[test]
     fn load_falls_back_to_the_filename_when_the_manifest_is_headless() {
         let dir = TempDir::new().unwrap();
-        let yaml = serde_yml::to_string(&json!({"data": {"a": "b"}})).unwrap();
+        let yaml = crate::yaml::to_string(&json!({"data": {"a": "b"}})).unwrap();
         fs::write(dir.path().join("default--my-svc-service.yaml"), &yaml).unwrap();
 
         let results = load_manifests_from_dir(dir.path()).unwrap();

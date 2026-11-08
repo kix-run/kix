@@ -1,7 +1,6 @@
 import { defineCollection } from 'astro:content';
 import { docsLoader, i18nLoader } from '@astrojs/starlight/loaders';
 import { docsSchema, i18nSchema } from '@astrojs/starlight/schema';
-import { docsVersionsLoader } from 'starlight-versions/loader';
 import { topicSchema } from './lib/sidebar-topics/schema';
 
 export const collections = {
@@ -9,7 +8,6 @@ export const collections = {
     loader: docsLoader(),
     schema: docsSchema({ extend: topicSchema }),
   }),
-  versions: defineCollection({ loader: docsVersionsLoader() }),
   // UI string overrides, e.g. the search placeholder.
   i18n: defineCollection({ loader: i18nLoader(), schema: i18nSchema() }),
 };

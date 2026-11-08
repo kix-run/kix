@@ -56,6 +56,9 @@ pub const GROUP: &str = domain!();
 /// `group/version` of Kix's own records.
 pub const API_VERSION: &str = concat!(domain!(), "/v1alpha1");
 
+/// The address of Kix's documentation site, which messages link to.
+pub const DOCS_URL: &str = concat!("https://", domain!(), "/docs/");
+
 /// The prefix every Kix key starts with, including the slash.
 pub(crate) const PREFIX: &str = concat!(domain!(), "/");
 
@@ -81,6 +84,10 @@ pub(crate) const RECEIPT_FIELD: &str = "receipt";
 /// the deploy that finalized it reported and did not delete. See
 /// `cluster::activation::KeptOrphanSource`.
 pub(crate) const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
+
+/// Field under an Activation's `status` that holds the build's package index.
+/// See `eval::package_index::RecordPackageIndex`.
+pub(crate) const PACKAGE_INDEX_FIELD: &str = "packageIndex";
 
 /// `activations.<domain>`, the CRD name.
 pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
@@ -127,6 +134,12 @@ pub const DEPLOYED_AT: &str = key!("deployed-at");
 /// Cluster name. A **label**, so records can be listed per cluster.
 pub const CLUSTER_LABEL: &str = key!("cluster");
 
+/// The `cluster.kubernetes.uid` of the build a record was deployed from: the
+/// UID of the target cluster's `kube-system` Namespace. A **label**, so a
+/// deploy can list the records that carry one and refuse an unbound build
+/// on a Kubernetes cluster that has any. Absent on records of unbound builds.
+pub const KUBERNETES_UID: &str = key!("kubernetes-uid");
+
 /// `import` on a PackageInstance marks it as a marker for a resource Kix
 /// references but does not own.
 pub const MODE: &str = key!("mode");
@@ -169,6 +182,13 @@ pub const DEPENDS_ON: &str = key!("depends-on");
 /// Readiness rule for a custom resource, as JSON.
 pub const READINESS: &str = key!("readiness");
 
+/// `"true"` or `"false"`: whether removing the object can lose data. The
+/// library writes it from the kind's `holdsData` declaration, or for a
+/// PersistentVolumeClaim, a PersistentVolume, or a StatefulSet with claim
+/// templates, from the object's shape. Other objects carry none. Migration
+/// pair detection reads it.
+pub const HOLDS_DATA: &str = key!("holds-data");
+
 /// Comma-separated field paths the resource cedes to another field manager
 /// after creation (`spec.versions`, `webhooks[*].rules`). On a 409 confined
 /// to these paths, apply retries without them.
@@ -181,7 +201,7 @@ pub(crate) const EXPECTS: &str = key!("expects");
 
 /// A Job carrying `rerun: on-change` is deleted and created again rather than
 /// patched. See [`RERUN_ON_CHANGE`].
-pub(crate) const RERUN: &str = key!("rerun");
+pub const RERUN: &str = key!("rerun");
 
 /// The only value [`RERUN`] honours.
 pub(crate) const RERUN_ON_CHANGE: &str = "on-change";

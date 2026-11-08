@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::apply::ApplyAction;
+use super::kept;
 use super::stream::{
     CancelReason, DeployEvent, DeployResult, NodeDetail, NodeId, Phase, TransitionKind, Verdict,
 };
@@ -23,6 +24,9 @@ use crate::manifest::types::ResourceId;
 pub const SCHEMA_VERSION: &str = "2026-10-09";
 
 /// One line of the log.
+///
+/// Later versions of Kix may add fields and new types of line. Skip the ones
+/// you do not know.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Line {
     /// Schema version (`YYYY-MM-DD`), included on every line so lines can be
@@ -111,16 +115,29 @@ pub enum Event {
     },
     /// `node` has been in `phase` for `since_ms` without a verdict. Repeated
     /// on a schedule while the wait lasts. `status` is the node's last
-    /// readiness message and `budget_ms` the readiness timeout.
+    /// readiness message and `budget_ms` the readiness timeout. `holds`
+    /// names the resources that wait on `node` directly, as the text log
+    /// names them, and `holds_total` counts every resource that waits on it
+    /// directly or through other nodes.
     Waiting {
         node: String,
         phase: Phase,
         since_ms: u64,
         status: Option<String>,
         budget_ms: Option<u64>,
+        #[serde(default)]
+        holds: Vec<String>,
+        #[serde(default)]
+        holds_total: usize,
     },
     /// A write that the next deploy redoes failed.
     BestEffortFailed { what: String, message: String },
+    /// The apply of `resource` succeeded, but Kubernetes did not store
+    /// `fields` as Kix sent them. A warning: the deploy goes on.
+    FieldsNotKept {
+        resource: String,
+        fields: Vec<FieldNotKept>,
+    },
     /// The counts the text summary line shows.
     Summary {
         dry_run: bool,
@@ -232,6 +249,28 @@ pub enum Detail {
     },
 }
 
+/// A field Kix applied that Kubernetes did not store as sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FieldNotKept {
+    pub path: String,
+    pub change: NotKept,
+    /// The value Kix sent. A Secret value reads `(secret, not shown)`.
+    pub sent: serde_json::Value,
+    /// The value Kubernetes stored. Absent when it dropped the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<serde_json::Value>,
+}
+
+/// What Kubernetes did with a field Kix applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotKept {
+    /// The stored object does not have the field.
+    Dropped,
+    /// The stored object has another value.
+    Changed,
+}
+
 /// A node in flight when the run stalled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Busy {
@@ -331,16 +370,35 @@ impl Event {
                 since,
                 status,
                 budget,
+                holds,
+                holds_total,
             } => Event::Waiting {
                 node: node.to_string(),
                 phase: *phase,
                 since_ms: since.as_millis() as u64,
                 status: status.clone(),
                 budget_ms: budget.map(|b| b.as_millis() as u64),
+                holds: holds.iter().map(ToString::to_string).collect(),
+                holds_total: *holds_total,
             },
             DeployEvent::BestEffortFailed { what, message } => Event::BestEffortFailed {
                 what: what.clone(),
                 message: message.clone(),
+            },
+            DeployEvent::FieldsNotKept { resource, fields } => Event::FieldsNotKept {
+                resource: resource.display_id(),
+                fields: fields
+                    .iter()
+                    .map(|f| FieldNotKept {
+                        path: f.path.clone(),
+                        change: match f.change {
+                            kept::NotKept::Dropped => NotKept::Dropped,
+                            kept::NotKept::Changed => NotKept::Changed,
+                        },
+                        sent: f.sent.clone(),
+                        stored: f.stored.clone(),
+                    })
+                    .collect(),
             },
         })
     }

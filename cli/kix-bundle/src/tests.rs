@@ -100,7 +100,7 @@ fn real() -> Contents {
 fn the_libs_fixture_is_this_bundles_build() {
     let mut graph = read(FIXTURE).unwrap();
     let fixture = kix::plan::fixtures::kix_enterprise_test();
-    graph.result_dir = fixture.result_dir.clone();
+    graph.built_via = fixture.built_via.clone();
     assert!(graph == fixture && graph.packages.keys().eq(fixture.packages.keys()));
 }
 
@@ -333,7 +333,7 @@ fn a_real_build_reads_and_gives_its_graph() {
     assert_eq!(bundle.cluster(), "kix-enterprise-test");
     assert_eq!(graph.cluster_name, "kix-enterprise-test");
     assert_eq!(
-        graph.result_dir,
+        graph.built_via,
         PathBuf::from(format!("bundle:sha256:{}", bundle.sha256()))
     );
     assert_eq!(graph.activation_path, PathBuf::from(bundle.record()));
@@ -365,13 +365,13 @@ fn every_fixture_reads() {
 fn writing_is_reproducible_and_round_trips() {
     let contents = real();
     let bytes = written(&contents);
-    assert_eq!(bytes, FIXTURE, "the fixture is what this kix writes");
+    assert_eq!(bytes, FIXTURE, "the fixture is what Kix writes");
     let mut open = OpenBundle::open(Cursor::new(bytes.as_slice())).unwrap();
     assert_eq!(open.contents().unwrap().files, contents.files);
     assert_eq!(open.header(), &contents.header().unwrap());
 }
 
-/// Every fixture is what this kix writes from its contents, byte for
+/// Every fixture is what Kix writes from its contents, byte for
 /// byte. A change to the writer that moves one byte changes every
 /// bundle's SHA-256, which Kix Enterprise statements name bundles by.
 /// `cnpg.kixbundle`, about 2 MB of files, was written by the kix before
@@ -812,8 +812,8 @@ fn a_large_record_is_refused_before_it_is_read() {
     ));
 }
 
-/// The record must reference the index itself; a kixpkgs lib older
-/// than this kix builds records that do not, and the error names it.
+/// The record must reference the index itself; a Kix library older
+/// than this version of Kix builds records that do not, and the error names it.
 #[test]
 fn a_record_that_does_not_reference_the_index_is_refused() {
     let mut contents = real();
@@ -831,7 +831,7 @@ fn a_record_that_does_not_reference_the_index_is_refused() {
     let record = self::record(&contents);
     let err = read_both(&contents).unwrap_err();
     assert_eq!(err, BundleError::NoIndex(record));
-    assert!(err.to_string().contains("kixpkgs lib"), "{err}");
+    assert!(err.to_string().contains("Kix library"), "{err}");
 }
 
 // The one parser.

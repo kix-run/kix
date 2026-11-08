@@ -174,7 +174,7 @@ pub struct Bundle<R>(PathsChecked<R>);
 
 impl<R: Read + Seek> Bundle<R> {
     /// Read and verify the entire bundle, returning the bundle and its
-    /// validated [`StoreGraph`] (with `result_dir` set to
+    /// validated [`StoreGraph`] (with `built_via` set to
     /// `bundle:sha256:<sha256>`).
     pub fn read(input: R) -> Result<(Self, StoreGraph), BundleError> {
         let mut manifests = HashMap::new();

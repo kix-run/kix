@@ -1,3 +1,0 @@
-# 2026-10-02 · `cli/kix/src/eval/stamp.rs` · A marker that several packages list carries the stamp of only one of them.
-
-A `secret-ref-*` or `service-ref-*` marker is one store path, listed under its provider's package and under each importer's (ludo-kind: `data/postgres` and `immich/immich-db`). `stamp_annotations` gives every resource one `kix.run/package` stamp and leaves the last package it visits. `StoreGraph::synthesize` now groups such a marker by its build path, so `kix diff` reads it unchanged. Other readers of the live stamp, such as gc, health and migrate, still see the marker as owned by one package only. Nobody has checked whether any of them depends on knowing every owner.

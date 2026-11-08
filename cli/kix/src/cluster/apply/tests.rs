@@ -216,6 +216,36 @@ fn detect_changed_resource() {
     assert!(matches!(&actions[0], ChangeAction::Apply(_)));
 }
 
+fn with_package(mut manifest: Value, package: &str) -> Value {
+    manifest["metadata"]["annotations"][keys::PACKAGE] = json!(package);
+    manifest["metadata"]["annotations"][keys::PACKAGE_NAMESPACE] = json!("data");
+    manifest
+}
+
+/// A build that names another owner for an object whose content is
+/// unchanged applies it, so the live `kix.run/package` follows the build.
+#[test]
+fn detect_changed_owner_stamp() {
+    let new = vec![with_package(
+        manifest("Deployment", "app", "default", "id1"),
+        "postgres",
+    )];
+    let same = vec![with_package(
+        manifest("Deployment", "app", "default", "id1"),
+        "postgres",
+    )];
+    let other = vec![with_package(
+        manifest("Deployment", "app", "default", "id1"),
+        "app-db",
+    )];
+
+    let actions = detect_changes(&new, &same);
+    assert!(matches!(&actions[0], ChangeAction::Skip(_)));
+    let actions = detect_changes(&new, &other);
+    assert_eq!(actions.len(), 1);
+    assert!(matches!(&actions[0], ChangeAction::Apply(_)));
+}
+
 #[test]
 fn detect_orphan() {
     let new: Vec<Value> = vec![];
@@ -352,6 +382,32 @@ fn live_detect_unchanged_resource() {
     let actions = detect_changes_live(&desired, &live);
     assert_eq!(actions.len(), 1);
     assert!(matches!(&actions[0], ChangeAction::Skip(_)));
+}
+
+/// Same as `detect_changed_owner_stamp` against live objects, the rule the
+/// operator and a plan without the old build use.
+#[test]
+fn live_detect_changed_owner_stamp() {
+    let desired = vec![with_package(
+        manifest("Deployment", "app", "default", "id1"),
+        "postgres",
+    )];
+    let stamped = |package: &str| {
+        let mut obj = live_object("Deployment", "app", "default", "id1");
+        let anns = obj
+            .metadata
+            .annotations
+            .get_or_insert_with(Default::default);
+        anns.insert(keys::PACKAGE.to_string(), package.to_string());
+        anns.insert(keys::PACKAGE_NAMESPACE.to_string(), "data".to_string());
+        obj
+    };
+
+    let actions = detect_changes_live(&desired, &[stamped("postgres")]);
+    assert!(matches!(&actions[0], ChangeAction::Skip(_)));
+    let actions = detect_changes_live(&desired, &[stamped("app-db")]);
+    assert_eq!(actions.len(), 1);
+    assert!(matches!(&actions[0], ChangeAction::Apply(_)));
 }
 
 #[test]
@@ -903,4 +959,58 @@ async fn a_namespaced_kind_without_a_namespace_is_refused() {
         super::namespaceless(&discovery, &candidates),
         vec![rid("ConfigMap", CLUSTER_SCOPED)]
     );
+}
+
+/// An apply, real or dry run, reports a field the server did not store: a
+/// custom resource's field its CRD pruned, against the manifest sent.
+#[tokio::test]
+async fn an_apply_reports_the_fields_the_server_did_not_keep() {
+    use crate::cluster::kept::{NotKept, NotKeptField};
+    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::TWO_VERSION_GROUP};
+
+    let api = FakeApi::default();
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let (ar, scope) = discovery.iter().find(|(ar, _)| ar.kind == "Gizmo").unwrap();
+    let gizmo = serde_json::json!({
+        "apiVersion": format!("{TWO_VERSION_GROUP}/v1"),
+        "kind": "Gizmo",
+        "metadata": { "name": "g", "namespace": "app" },
+        "spec": { "size": 3, "colour": "red" },
+    });
+    let pruned = vec![NotKeptField {
+        path: "$.spec.colour".into(),
+        change: NotKept::Dropped,
+        sent: json!("red"),
+        stored: None,
+    }];
+    for dry_run in [true, false] {
+        let prune = |o: &mut serde_json::Value| {
+            o["spec"].as_object_mut().unwrap().remove("colour");
+        };
+        api.on_apply("g", prune);
+        let result = super::apply_resource(
+            &client,
+            ar,
+            scope.clone(),
+            &gizmo,
+            dry_run,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.not_kept, pruned, "dry run {dry_run}");
+        if let Some(preview) = &result.preview {
+            assert_eq!(preview.not_kept, pruned);
+        }
+    }
+
+    // The same object stored as sent has nothing to report.
+    let result =
+        super::apply_resource(&client, ar, scope.clone(), &gizmo, false, None, None, false)
+            .await
+            .unwrap();
+    assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
 }

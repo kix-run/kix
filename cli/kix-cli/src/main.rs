@@ -14,7 +14,7 @@ use cli::{Cli, Command, OutputFormat};
 /// Validate cluster name format.
 ///
 /// SECURITY: This is the primary defense against Nix expression injection.
-/// The cluster name is spliced into the flake reference `nix build` gets
+/// The cluster name is spliced into the flake attribute `nix eval` reads
 /// (`kix::eval::nix`) and into the `--apply` expression of `nix eval`
 /// (`cluster_name_command`).
 /// Only alphanumeric characters, hyphens, and underscores are safe.
@@ -128,8 +128,12 @@ fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
 }
 
 fn main() -> miette::Result<()> {
+    // Wrapping helps only a person reading a terminal. In a log or a pipe, a
+    // line break can fall inside a path or a command, which breaks searching
+    // and copying, and makes the text depend on how long its paths are.
     miette::set_hook(Box::new(|_| {
-        Box::new(miette::MietteHandlerOpts::new().build())
+        let wrap = std::io::IsTerminal::is_terminal(&std::io::stderr());
+        Box::new(miette::MietteHandlerOpts::new().wrap_lines(wrap).build())
     }))?;
 
     let mut cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
@@ -144,6 +148,11 @@ fn main() -> miette::Result<()> {
     // Completions doesn't need a CommandContext (no evaluator, no runtime)
     if let Command::Completions(args) = &cli.command {
         return commands::completions::run(args, &cli.global);
+    }
+
+    // Doctor reports a broken runtime instead of stopping on it.
+    if let Command::Doctor = &cli.command {
+        return commands::doctor::run(&cli.global);
     }
 
     // `kix pin` operates directly on the pin file without evaluating the
@@ -161,6 +170,19 @@ fn main() -> miette::Result<()> {
     // Validate cluster names before initializing the Nix backend (which is slow).
     if let Some(name) = cli.command.cluster_name() {
         validate_cluster_name(name)?;
+    }
+
+    // The project's builder decides which Nix every later step runs.
+    commands::select_builder(&cli.global)?;
+
+    // Stop before any work when Kix has no runtime, or its runtime comes from
+    // another release.
+    kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
+
+    // `kix lib update` repairs flake.lock, so it needs no evaluator or eval
+    // cache.
+    if let Command::Lib(command) = &cli.command {
+        return commands::library::run(command, &cli.global);
     }
 
     let mut ctx = commands::CommandContext::new(
@@ -191,9 +213,12 @@ fn main() -> miette::Result<()> {
         Command::Images(args) => commands::images::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
-        Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
-            unreachable!()
-        }
+        Command::Completions(_)
+        | Command::Doctor
+        | Command::Drift(_)
+        | Command::Pin(_)
+        | Command::Lib(_)
+        | Command::Plugin(_) => unreachable!(),
     }
 }
 

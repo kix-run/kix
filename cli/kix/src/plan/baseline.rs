@@ -40,6 +40,7 @@ use crate::build_source::Build;
 use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
 use crate::cluster::{discovery, inventory, owned_view, tenancy};
+use crate::eval::package_index::RecordPackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -153,10 +154,32 @@ impl Baseline {
                 if manifests.is_empty() {
                     empty()
                 } else {
-                    Cow::Owned(StoreGraph::synthesize(&manifests, new))
+                    Cow::Owned(self.synthesized(&manifests, new))
                 }
             }
         }
+    }
+
+    /// Synthesize the old side of the package diff from the baseline's
+    /// manifests, for when the Active build is not on this machine.
+    pub fn synthesized_side(&self, new: &StoreGraph) -> StoreGraph {
+        self.synthesized(&self.manifests(), new)
+    }
+
+    /// Synthesize a graph of `manifests` against `new`, placing each object
+    /// first by the package index of the Active record, then by those of the
+    /// folded-in Failed records, newest first. A Failed record's index places
+    /// what that deploy applied before it stopped. Kept builds name no
+    /// record to read an index from, so their objects are placed by `new`
+    /// or by their stamps.
+    fn synthesized(&self, manifests: &[Value], new: &StoreGraph) -> StoreGraph {
+        let indexes: Vec<&RecordPackageIndex> = self
+            .active
+            .iter()
+            .filter_map(|a| a.package_index.as_ref())
+            .chain(self.failed.indexes.iter().rev())
+            .collect();
+        StoreGraph::synthesize_placed(manifests, new, &indexes)
     }
 
     /// Compute the change action for each object of `new_manifests` and each
@@ -320,12 +343,15 @@ impl Baseline {
                     identity_hash: hash,
                 });
                 match record_graph(Some(build), cluster, hash, active.built_via.as_deref()) {
-                    Ok(Some(graph)) => Baseline {
-                        active_manifests: manifests_of(&graph),
-                        source: ActiveSource::Build(Box::new(graph)),
-                        active: Some(active),
-                        ..Baseline::empty()
-                    },
+                    Ok(Some(graph)) => {
+                        note_index_disagreement(&active, &graph);
+                        Baseline {
+                            active_manifests: manifests_of(&graph),
+                            source: ActiveSource::Build(Box::new(graph)),
+                            active: Some(active),
+                            ..Baseline::empty()
+                        }
+                    }
                     // A build that will not load, or is not the record's, is
                     // not a first deploy. Fall back to the cluster rather
                     // than planning against nothing.
@@ -333,8 +359,16 @@ impl Baseline {
                         report(PlanEvent::ReadingLive {
                             error: found.err().as_deref(),
                         });
-                        let (active_manifests, closures) =
-                            of_live(client, &opened, &discovery, cluster, &active, report).await?;
+                        let (active_manifests, closures) = of_live(
+                            client,
+                            build.graph(),
+                            &opened,
+                            &discovery,
+                            cluster,
+                            &active,
+                            report,
+                        )
+                        .await?;
                         live = Some(closures);
                         Baseline {
                             active_manifests,
@@ -424,6 +458,20 @@ impl Baseline {
     }
 }
 
+/// Log at debug level when `active`'s stored package index differs from the
+/// index of its build. The build is the source, so a plan uses the build and
+/// the note only helps explain a diff made on another machine.
+fn note_index_disagreement(active: &Record, graph: &StoreGraph) {
+    if let Some(stored) = &active.package_index
+        && *stored != RecordPackageIndex::of(graph)
+    {
+        tracing::debug!(
+            activation = %active.name,
+            "the record's package index differs from its build; using the build",
+        );
+    }
+}
+
 /// Closures left behind by deploys that stopped before finalizing.
 #[derive(Debug, Default)]
 pub struct FailedBaseline {
@@ -438,6 +486,9 @@ pub struct FailedBaseline {
     pub sources: Vec<KeptOrphanSource>,
     /// Records whose closure is not in this machine's store.
     pub unresolved: Vec<Record>,
+    /// The package index of each folded-in record that has one, oldest
+    /// first.
+    pub indexes: Vec<RecordPackageIndex>,
 }
 
 impl FailedBaseline {
@@ -523,6 +574,7 @@ async fn load_failed(
         };
         report(PlanEvent::FailedFolded(&record));
         out.closures.push(closure);
+        out.indexes.extend(record.package_index.clone());
         out.consumed.push(record.name.clone());
         out.sources.push(KeptOrphanSource {
             activation: record.name.clone(),
@@ -622,17 +674,17 @@ impl LiveClosures {
     }
 }
 
-/// Return the result directory of the build matching `identity_hash` on this
+/// Return the store path of the build matching `identity_hash` on this
 /// machine, validated by [`record_graph`].
 fn checked_dir(
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
-    record_graph(None, cluster, identity_hash, built_via).map(|g| g.map(|g| g.result_dir))
+    record_graph(None, cluster, identity_hash, built_via).map(|g| g.map(|g| g.built_via))
 }
 
-/// Return the result directory of the build named by `active`, along with a
+/// Return the store path of the build named by `active`, along with a
 /// warning when the local activation cache was ignored.
 ///
 /// Because `store::load_activation_path` is keyed by cluster name alone, it
@@ -711,7 +763,7 @@ pub fn record_graph(
     }
     let built_via = built_via
         .map(PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists());
+        .filter(|p| crate::eval::build_files::BuildFiles::is_build(p));
     checked_build(
         identity_hash,
         built_via,
@@ -736,7 +788,7 @@ pub fn target_build(
     })
 }
 
-/// Load the build in a result directory with stamps applied. A record's build
+/// Load the build at `dir` with stamps applied. A record's build
 /// can predate a domain move, so it is not checked with [`Build::installable`].
 fn load_build(dir: &Path) -> Result<StoreGraph, crate::eval::KixEvalError> {
     Build::local(dir, &|_| {}).map(Build::into_graph)
@@ -843,7 +895,10 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
 /// annotations that change detection and prune ordering read, so live objects
 /// projected back to manifests can stand in for the old store graph.
 /// Activation CRs are excluded because their lifecycle is managed by
-/// superseding rather than pruning.
+/// superseding rather than pruning. An object whose identity hash names a
+/// manifest of `new` reads as that manifest (see
+/// [`owned_view::kix_owned_manifests_against`]), so the plan does not show
+/// server normalisation as a change.
 ///
 /// Includes only objects naming the Active record, a Failed record of this
 /// cluster, or a build listed under `status.orphansKeptFrom`. Objects of other
@@ -855,6 +910,7 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
 /// empty baseline when the apiserver is unhealthy.
 async fn of_live(
     client: &Client,
+    new: &StoreGraph,
     opened: &OpenedRecords,
     discovery: &[(ApiResource, kube::discovery::Scope)],
     cluster: &str,
@@ -890,7 +946,8 @@ async fn of_live(
         .into_iter()
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .collect();
-    let manifests = owned_view::kix_owned_manifests(objects.iter().cloned());
+    let manifests =
+        owned_view::kix_owned_manifests_against(objects.iter().cloned(), &new.manifests_by_hash());
     let closures = LiveClosures::of(&objects, &manifests, active.identity_hash.as_deref());
     Ok((manifests, closures))
 }
@@ -1023,6 +1080,7 @@ mod tests {
             consumed: vec!["f1".into()],
             sources: vec![source("f1")],
             unresolved: vec![],
+            indexes: vec![],
         };
         let got = baseline(
             active("v1", vec![]),
@@ -1139,6 +1197,7 @@ mod tests {
                     (keys::IDENTITY_HASH): format!("h-{name}"),
                     (keys::ACTIVATIONS): activations,
                 },
+                "managedFields": [{ "manager": "kix", "operation": "Apply" }],
             },
         })
     }
@@ -1174,9 +1233,17 @@ mod tests {
             }],
             ..Default::default()
         };
-        let (old, closures) = of_live(&client, &opened, &discovery, "a", &active, &|_| {})
-            .await
-            .unwrap();
+        let (old, closures) = of_live(
+            &client,
+            &StoreGraph::empty("c"),
+            &opened,
+            &discovery,
+            "a",
+            &active,
+            &|_| {},
+        )
+        .await
+        .unwrap();
         let mut names: Vec<&str> = old
             .iter()
             .filter_map(|m| m.pointer("/metadata/name")?.as_str())
@@ -1190,6 +1257,66 @@ mod tests {
         assert_eq!(names_of(&closures.closure_of("ak")), vec!["kept-left"]);
         assert!(closures.closure_of("a2").is_empty());
         assert!(closures.closure_of("b1").is_empty());
+    }
+
+    /// Mark `manifest` as an object of the stateful package `keeper`.
+    fn of_keeper(mut manifest: Value) -> Value {
+        let anns = manifest["metadata"]["annotations"].as_object_mut().unwrap();
+        anns.insert(keys::PACKAGE.into(), json!("keeper"));
+        anns.insert(keys::PACKAGE_NAMESPACE.into(), json!("app"));
+        anns.insert(keys::LIFECYCLE.into(), json!("stateful"));
+        manifest
+    }
+
+    /// An operator copies its custom resource's labels and annotations onto
+    /// the data volume it makes, and leaves it unowned. Read from the cluster,
+    /// the volume is not part of the previous state. So it is never an orphan
+    /// to prune, and never one side of a migration.
+    #[tokio::test]
+    async fn an_operator_copy_is_not_part_of_the_previous_state() {
+        let mut volume = of_keeper(cm("data-keeper-0", "a2"));
+        volume["metadata"]["managedFields"] = json!([
+            { "manager": "kube-controller-manager", "operation": "Update" },
+            { "manager": "clickhouse-operator", "operation": "Update" },
+        ]);
+        volume["metadata"]["annotations"][keys::IDENTITY_HASH] = json!("h-keeper");
+        let api = FakeApi::new([
+            record("a", "a2", PHASE_ACTIVE),
+            of_keeper(cm("keeper", "a2")),
+            volume,
+        ]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let opened = Records::open(&client, &discovery).unwrap();
+        let active = Record {
+            name: "rec-a2".into(),
+            identity_hash: Some("a2".into()),
+            ..Default::default()
+        };
+        let (old, _) = of_live(
+            &client,
+            &StoreGraph::empty("c"),
+            &opened,
+            &discovery,
+            "a",
+            &active,
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(names_of(&old), vec!["keeper"]);
+
+        // The next build adds a monitoring object to the same package.
+        let new = vec![
+            of_keeper(cm("keeper", "")),
+            of_keeper(cm("keeper-monitor", "")),
+        ];
+        assert!(crate::cluster::migrate::detect_migration_pairs(&new, &old).is_empty());
+        assert!(
+            !apply::detect_changes(&new, &old)
+                .iter()
+                .any(|a| matches!(a, ChangeAction::Orphan(_)))
+        );
     }
 
     fn names_of(manifests: &[Value]) -> Vec<&str> {
@@ -1436,6 +1563,7 @@ mod tests {
             consumed: vec!["f1".into()],
             sources: vec![source("f1")],
             unresolved: vec![],
+            indexes: vec![],
         };
         let new = StoreGraph::synthesize(&[m("ConfigMap", "web", "h1")], &StoreGraph::empty("c"));
         let live = baseline(
@@ -1455,5 +1583,63 @@ mod tests {
             )
         };
         assert!(unavailable.diff_side(&new).resources.is_empty());
+    }
+
+    /// Read from the cluster, the old side places objects by the Active
+    /// record's package index first and a folded-in Failed record's index
+    /// next. An object neither lists is placed as before.
+    #[test]
+    fn the_diff_side_places_live_objects_by_the_records_indexes() {
+        let index = |packages: serde_json::Value| -> RecordPackageIndex {
+            serde_json::from_value(json!({
+                "format": crate::eval::package_index::FORMAT,
+                "packages": packages,
+                "clusterLevel": [],
+            }))
+            .unwrap()
+        };
+        let mut deployed = active("v1", vec![]);
+        deployed.package_index = Some(index(json!({
+            "app/one": { "instance": "pi-one", "resources": ["ha", "hb"] },
+        })));
+        let failed = FailedBaseline {
+            closures: vec![vec![m("ConfigMap", "b", "hb"), m("ConfigMap", "c", "hc")]],
+            consumed: vec!["f1".into()],
+            sources: vec![source("f1")],
+            unresolved: vec![],
+            indexes: vec![index(json!({
+                "app/two": { "instance": "pi-two", "resources": ["hb", "hc"] },
+            }))],
+        };
+        let new = StoreGraph::synthesize(&[m("ConfigMap", "z", "hz")], &StoreGraph::empty("c"));
+        let live = baseline(
+            deployed,
+            vec![m("ConfigMap", "a", "ha"), m("ConfigMap", "d", "hd")],
+            failed,
+            KeptBaseline::default(),
+        );
+        let side = live.diff_side(&new);
+        let names_in = |key: &str| -> Vec<String> {
+            let p = side
+                .packages
+                .values()
+                .find(|p| format!("{}/{}", p.namespace, p.instance_name) == key)
+                .unwrap_or_else(|| panic!("no package {key}"));
+            let mut names: Vec<String> = p
+                .resource_paths
+                .iter()
+                .map(|r| {
+                    side.resources[r].manifest["metadata"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .into()
+                })
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names_in("app/one"), vec!["a", "b"]);
+        assert_eq!(names_in("app/two"), vec!["c"]);
+        assert_eq!(side.packages.len(), 2, "d is cluster-level");
     }
 }

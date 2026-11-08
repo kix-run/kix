@@ -14,6 +14,7 @@ use crate::client;
 use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
+use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
@@ -102,7 +103,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
                 }).collect::<Vec<_>>(),
             });
             if matches!(format, OutputFormat::Yaml) {
-                print!("{}", serde_yml::to_string(&value).into_diagnostic()?);
+                print!("{}", kix::yaml::to_string(&value).into_diagnostic()?);
             } else {
                 println!(
                     "{}",
@@ -291,7 +292,16 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         &target_hash[..8.min(target_hash.len())],
     );
 
-    let planned = plan_rollback(&client, &records, cluster, &current, selected, args.prune).await?;
+    let planned = plan_rollback(
+        &client,
+        ctx.global.context.as_deref(),
+        &records,
+        cluster,
+        &current,
+        selected,
+        args.prune,
+    )
+    .await?;
     if !output::quiet() {
         planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
     }
@@ -314,22 +324,24 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     }
 
     if total_apply == 0 && checked.orphans().is_empty() {
-        // Same rule as deploy: an unchanged probe under `kix.run/rerun`
-        // whose last run failed still runs, and only the engine does that.
-        let failed_reruns = if checked.plan().nodes().iter().any(|n| n.rerun.is_some()) {
-            scheduler::failed_rerun_nodes(&client, target.discovery(), checked.plan()).await
+        // Same rule as deploy: an unchanged Job whose last run failed is
+        // reported, and run again under `kix.run/rerun`; only the engine
+        // does that.
+        let failed_jobs = if checked.plan().has_skipped_jobs() {
+            scheduler::failed_skipped_jobs(&client, target.discovery(), checked.plan()).await
         } else {
             Vec::new()
         };
-        if failed_reruns.is_empty() {
+        if failed_jobs.is_empty() {
             crate::say!("Nothing to change. Cluster already matches target activation.");
             return Ok(());
         }
-        let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+        let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
         crate::say!(
-            "{} nothing changed, but {} failed on the last run and will run again: {}",
+            "{} nothing changed, but {} failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
             output::yellow("↻"),
-            failed_reruns.len(),
+            failed_jobs.len(),
+            kix::manifest::keys::RERUN,
             names.join(", "),
         );
     }
@@ -364,6 +376,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         rerun_failed: true,
+        check_unchanged: true,
+        // Rollback has no --on-error flag, so messages must not suggest it.
+        names_flags: false,
     };
 
     let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {
@@ -504,7 +519,16 @@ async fn run_operator_async(
 
     // The plan a direct rollback would show, with its check, though the
     // operator plans again against the live objects and always prunes.
-    let planned = plan_rollback(&client, &records, cluster, &current, selected, true).await?;
+    let planned = plan_rollback(
+        &client,
+        ctx.global.context.as_deref(),
+        &records,
+        cluster,
+        &current,
+        selected,
+        true,
+    )
+    .await?;
     if !output::quiet() {
         planned.print(cluster, &target_name, true, ctx.global.verbose > 0);
     }
@@ -548,9 +572,11 @@ async fn run_operator_async(
         cluster,
         &target_source_path,
         target_hash.as_deref(),
+        planned.checked.kubernetes_uid(),
         // A rollback re-applies a build from an earlier deploy, which wrote
         // its own receipt. See the non-operator path in this file.
         None,
+        planned.checked.package_index(),
     )
     .await?;
 
@@ -641,9 +667,20 @@ fn flags(prune: bool) -> PlanFlags {
     }
 }
 
-/// Plan a rollback of `cluster` from `current` to `selected`.
+/// Plan a rollback of `cluster` from `current` to `selected`, through the
+/// kube context `context`.
+///
+/// The target build is known only once the records have been read, so the
+/// binding check runs after that read and before anything is planned or
+/// written. The target is a build this Kix cluster deployed here before, so
+/// only a target that names another Kubernetes cluster is refused; one from
+/// before the definition set `cluster.kubernetes.uid` rolls back as usual.
+/// A target made for another Kubernetes version rolls back too, with one
+/// line that says so, since a Kubernetes upgrade must not block a rollback
+/// during an incident.
 async fn plan_rollback(
     client: &kube::Client,
+    context: Option<&str>,
     records: &Records,
     cluster: &str,
     current: &Record,
@@ -666,8 +703,28 @@ async fn plan_rollback(
         selected.built_via.as_deref(),
     )
     .map_err(|e| miette!("{e}"))?;
-    let target_result_dir = target_graph.result_dir.clone();
+    let target_result_dir = target_graph.built_via.clone();
     same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
+    if let Some(declared) = target_graph.kubernetes_uid.as_deref() {
+        binding::check_declared(
+            client,
+            &binding::Connection::of_context(context),
+            binding::Action::Deploy,
+            cluster,
+            declared,
+        )
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    }
+    if let Some(line) = kix::cluster::kubernetes_version::note(
+        client,
+        cluster,
+        target_graph.kubernetes_version.as_deref(),
+    )
+    .await
+    {
+        crate::say!("{line}");
+    }
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;

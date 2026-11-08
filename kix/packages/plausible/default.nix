@@ -550,19 +550,24 @@ in
             readOnlyRootFilesystem = true;
             capabilities.drop = [ "ALL" ];
           };
-          volumeMounts = [
-            {
-              name = "replicate";
-              mountPath = "/replicate";
-              readOnly = true;
-            }
-            {
-              name = "replica";
-              mountPath = replicaDir;
-              readOnly = true;
-            }
-          ];
         };
+
+        # The replicate script, and the file through which it tells the
+        # migrate container which replica to migrate on.
+        replicateScriptMount = kix.mount.configMap self.replicateScript {
+          name = "replicate";
+          mountPath = "/replicate";
+          readOnly = true;
+        };
+        replicaMount =
+          readOnly:
+          kix.mount.emptyDir {
+            name = "replica";
+            mountPath = replicaDir;
+            medium = "Memory";
+            sizeLimit = "1Mi";
+            inherit readOnly;
+          };
 
         httpProbe = path: {
           httpGet = {
@@ -611,28 +616,11 @@ in
                   # create the databases, and PostgreSQL refuses CREATE
                   # DATABASE to a role without CREATEDB even when the database
                   # exists.
-                  # kix.withMounts keeps volumes already in the spec.
-                  volumes = lib.optionals replicated [
-                    {
-                      name = "replicate";
-                      configMap.name = self.replicateScript.out.name;
-                    }
-                    {
-                      name = "replica";
-                      emptyDir = {
-                        medium = "Memory";
-                        sizeLimit = "1Mi";
-                      };
-                    }
-                  ];
                   initContainers = [
                     (
                       container
                       // {
                         name = "migrate";
-                        # kix.withMounts fills only `containers`; the
-                        # migrations read the same configuration and paths.
-                        volumeMounts = map (m: { inherit (m) name mountPath; }) mounts;
                       }
                       // (
                         if replicated then
@@ -643,12 +631,6 @@ in
                               chooseAndMigrate
                             ];
                             env = env ++ kix.mkEnvVars { CLICKHOUSE_REPLICA_HOSTS = lib.concatStringsSep " " ch.replicaHosts; };
-                            volumeMounts = map (m: { inherit (m) name mountPath; }) mounts ++ [
-                              {
-                                name = "replica";
-                                mountPath = replicaDir;
-                              }
-                            ];
                           }
                         else
                           {
@@ -694,7 +676,21 @@ in
                 };
               };
             }
-            |> kix.withMounts mounts
+            # migrate writes the host of the replica it migrated on to the
+            # replica volume; replicate reads that host and its script.
+            |> (
+              if replicated then
+                kix.withMountsOn "replicate" [
+                  replicateScriptMount
+                  (replicaMount true)
+                ]
+              else
+                lib.id
+            )
+            # The migrations read the same configuration and paths as the
+            # server.
+            |> kix.withMountsOn [ "migrate" "plausible" ] mounts
+            |> (if replicated then kix.withMountsOn "migrate" [ (replicaMount false) ] else lib.id)
             |> scope.mkDeployment;
 
           replicateScript =

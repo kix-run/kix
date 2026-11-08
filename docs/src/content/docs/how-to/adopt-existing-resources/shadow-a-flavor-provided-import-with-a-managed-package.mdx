@@ -64,12 +64,13 @@ Evaluate the cluster and inspect the dependency graph:
 />
 
 The generated PVC should depend on the managed StorageClass, not on the
-flavor's import marker. Render the relevant resources when you want to confirm
-the selected name:
+flavor's import marker. Render the manifests when you want to confirm that
+`spec.storageClassName` on the `PersistentVolumeClaim` matches the managed
+`StorageClass`:
 
 <Command
   commands={[
-    "kix build doc-how-tos --output json | jq '.[] | select(.kind == \"StorageClass\" or .kind == \"PersistentVolumeClaim\") | {kind, name: .metadata.name, storageClassName: .spec.storageClassName}'",
+    "kix build doc-how-tos",
   ]}
 />
 

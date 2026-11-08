@@ -1,0 +1,3 @@
+# 2026-11-04 · `cli/kix/src/manifest/types.rs` · `ResourceId` has no API group, so two kinds of one name in different groups collide.
+
+`ResourceId` is kind, namespace, and name. Two kinds called `Certificate` (cert-manager and another group) with the same namespace and name read as one object. The identity-hash match in `owned_view::kix_owned_manifests_against` and `StoreGraph::synthesize` can then swap in the wrong manifest. `synthesize`'s placement by identity guards against it by placing neither object by identity, but every other map keyed by `ResourceId` (diff, plan, apply change detection) does not.

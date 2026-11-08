@@ -24,7 +24,7 @@ You will add a new cluster to your `kix-examples` checkout, deploy one
   clone it from any parent directory:
 
 <Command commands={[
-  "git clone https://github.com/kix-ops/kix-examples.git",
+  "git clone https://github.com/kix-run/kix-examples.git",
   "cd kix-examples",
 ]} />
 
@@ -44,8 +44,6 @@ Create `tutorial-04/cluster.nix`:
 { kix, packages }:
 
 kix.buildCluster {
-  name = "04-from-scratch";
-
   modules = [
     kix.flavors.kind
 
@@ -71,7 +69,7 @@ Most of this should look familiar from the previous tutorial:
 
 - `{ kix, packages }:` says this file receives the Kix helpers and package
   catalog.
-- `kix.buildCluster` builds one named cluster.
+- `kix.buildCluster` builds one cluster.
 - `kix.flavors.kind` says the target is a local kind cluster.
 - `namespaces.tutorial-04 = { };` tells Kix to manage one namespace.
 - `instances.tutorial-04.hello-world` installs one package instance in that
@@ -91,7 +89,8 @@ clusters = {
 ```
 
 The left side, `"04-from-scratch"`, is the cluster name you will pass to the
-CLI. The right side points at the file you just created.
+CLI. Kix also records it as the cluster's name, because the file sets no
+`name` of its own. The right side points at the file you just created.
 
 Because `kix-examples` is a Git flake, Nix only sees files known to Git. Stage
 the new file and the flake edit before running Kix:
@@ -131,7 +130,7 @@ You should see one Pod and one Service for the `hello-world` instance.
 
 Port-forward to the package instance:
 
-<Command commands={["kix pf 04-from-scratch hello-world 8080:80"]} cwd="kix-examples/" />
+<Command commands={["kix pf 04-from-scratch hello-world 8080:8080"]} cwd="kix-examples/" />
 
 Leave that running. In another terminal:
 

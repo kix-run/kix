@@ -1,6 +1,6 @@
 # kix/lib architecture
 
-Internals map for editing the compiler. The tree is organized by ring: the deeper the ring, the higher the bar for changes. For authoring packages, read `guide/` instead.
+Internals map for editing the compiler. The tree is organized by ring: the deeper the ring, the higher the bar for changes. For authoring packages, read `docs/src/content/docs/reference/` and `.claude/skills/package-authoring/SKILL.md` instead.
 
 ## Layout by ring
 
@@ -13,6 +13,10 @@ plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability)
 ```
 
 Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema + hook options + plugin imports), `mkFlake.nix`, `meta.nix`, `env.nix`, `scorecard.nix`, `unsafe.nix`, `rules/`, `flavors/`, `modules/`, `helm.nix` + `helm-dag.nix`.
+
+`helm.nix` has two routes, chosen by its `helmRoute` argument, which `default.nix` passes through. Under `"placeholder"` (the `kix` builder) it does not run Helm. A chart fetch and a chart render are placeholder derivations of system `kix-helm`, whose spec (`kixHelmFetch`, `kixHelmSpec`) names the exact Helm release from `helm-versions.json`. Evaluation stops at a missing placeholder output. The CLI (`cli/kix/src/eval/helm.rs`) then pulls or renders the chart, writes the output into Kix's own store, and evaluates again. Under `"nix"` (the `nix` builder) the same specs (`fetchSpec`, `renderSpec`) become ordinary derivations: `helmPullArgs` and `helmTemplateArgs` turn a spec into the command line the CLI runs, with the official Helm build from `helm-versions.json` and `yq-go` from `pkgs`, and evaluation reads the render through import from derivation. A fetch keeps its name and fixed hash, so a chart has one store path under both routes. Bump `specVersion` in both places when a spec field or the render's JSON changes meaning, and change `helmTemplateArgs` with `render` in the CLI.
+
+`mkFlake.nix` reads `kix.toml` from `inputs.self` (`kixConfig.builder`), imports the library twice (`kix` and `kixNix`), and resolves the clusters with each (`kixClusters`, `kixClustersNix`). Only the copy a command reads is evaluated. Under `builder = "nix"`, `packages.<system>.cluster-<name>` and the checks use the nix route, and `cluster-<name>-activation` links the files of `activationFiles` (the same paths `activationIndex` lists) plus the index itself. `kixLib` hands back the library instance the builder uses (`kix` or `kixNix`) with the package catalog, for flakes that merge these outputs into their own.
 
 ## Pipeline
 
@@ -65,7 +69,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `eval/import.nix` | `mkImport`, `mkImportScope`, `evaluateImportInstance`, and `resolveExtraDep` for externally managed resources and platform imports. |
 | `eval/namespace.nix` / `view.nix` / `helpers.nix` | `mkNamespace`, `mkPackageView`, and shared traversal/merge helpers (`collectTypedAttrs`, `mergeCollide`). |
 | `scope/default.nix` | `mkScope`: assembles labels, validators, and builders into the package `scope` object, plus `forNamespace` and `forService` subscopes. |
-| `scope/builders.nix` | Resource builders and the `sealWorkload` pipeline (edge analysis, DNS dependency injection, `workloadInterceptors`, `podSpec` merging, pre-seal `requires` splicing, and `_injectedResources` attachment). |
+| `scope/builders.nix` | Resource builders and the `sealWorkload` pipeline (edge analysis, DNS dependency injection, `workloadInterceptors`, `podSpec` merging, pre-seal `requires` splicing, and `_injectedResources` attachment). Every sealed resource carries `_builtBy` (`<namespace>/<instance>`, outside the manifest); `eval/cluster.nix` `ownedResources` uses it to list a resource that several instances hold under the one that built it. |
 | `scope/validators.nix` | Spec-level validators: cross-namespace references, selector subset, ports, resources, capability/role gates (`checkLoadBalancer`, `requireMetricsApi`), `checkRawPvc`, and `checkResourceName`. |
 | `scope/labels.nix` | Standard label generation (`kix` and `helm` styles, selector labels). |
 | `plugins/netpol/module.nix` | Declares `networkPolicy.*` options and registers `workloadInterceptors`, `instanceProcessors`, and `clusterProcessors` hooks. |
@@ -110,24 +114,24 @@ Fixpoint safety: a hook may read `workloadInput` and outer-fixpoint data (DI dep
 
 - **Store-path = DAG edge.** Resources never declare dependencies explicitly; `mkResource` reads Nix string context off the manifest JSON and stamps `kix.run/depends-on`. The CLI walks the store DAG rooted at the Activation CR (`core/resource.nix`).
 - **Two context channels: identity and facts.** Identity paths record derivation lineage ("computed from X") and drive deploy ordering. Fact tokens (`core/facts.nix`) are dependency-free claims ("dialing this value's target reaches selector S on ports P") minted on address-shaped `out` fields, conducted through non-workload resources, terminated at workloads where `eval/edges.nix` projects them into network-policy edges and DNS dependencies, and stripped before `builtins.toFile`.
-- **Terminate vs. conduct.** Core Kubernetes workload kinds are hardcoded in `facts.terminatorKinds`. CRD kinds declare `factBehavior` (`terminate` or `conduct`, plus `podSelector`) and `readiness` on `scope.mkCRD` / `scope.mkCRDRef`, which thread through `mkCRDBuilders` to every CR built via `scope.mkCR`. Cluster operators can override per kind via `cluster.factBehavior."<group>/<Kind>"`.
+- **Terminate vs. conduct.** Core Kubernetes workload kinds are hardcoded in `facts.terminatorKinds`. CRD kinds declare `factBehavior` (`terminate` or `conduct`, plus `podSelector`), `readiness` (a ready rule plus an optional `failed` list of the states that end the deploy's wait early, validated by `validateReadiness` in `core/resource.nix`), `usesAtLeast`, and `holdsData` on `scope.mkCRD` / `scope.mkCRDRef`, which thread through `mkCRDBuilders` to every CR built via `scope.mkCR`. `mkResource` writes `holdsData` as `kix.run/holds-data`, deciding it for built-in kinds from the manifest's shape (`holdsDataOf`), and `buildCluster` refuses a stateful package's custom resources that carry none (`holdsDataAssertions` in `eval/cluster.nix`), naming the declaration to change. The typed builders pass the fact to `mkResource` as the internal `_crd` argument, and `scope.mkResource` refuses a `holdsData` argument. Which groups count as built-in comes from `core/api-groups.json`, which the CLI's `is_known_api` must match (a Rust test in `cluster/migrate.rs` compares them). Cluster operators can override per kind via `cluster.factBehavior."<group>/<Kind>"`.
 - **Sealing is one-way.** After `builtins.toFile`, a resource's identity is fixed. Anything that influences a workload's dependency list must run in the pre-seal pipeline.
 - **Three fixpoints.** Phase-1 pre-pass (introspection), config-only fixpoint (allows function-shaped dependency injections to read consumer config without cycling), and full instance fixpoint (`eval/cluster.nix`).
-- **DNS-like DI.** Explicit override (`ref` or list of `ref`s) → managed-over-import filter → unique same-namespace → unique other-namespace → argument default → throw (`eval/resolve.nix`).
+- **DNS-like DI.** Explicit override (`ref` or list of `ref`s, refused across namespaces when the target's package sets `meta.scope = "namespace"`) → managed-over-import filter over the instances the requester's namespace may use → unique same-namespace → unique other-namespace instance whose package serves the whole cluster, or that a demand created from `availablePackages` or switched on as an optional instance (`demanded` in the index, set by `eval/cluster.nix` from the auto-instantiation result) → argument default, with a warning naming a foreign instance a `ref` would bind → throw, naming the `deps` line to add (`eval/resolve.nix`). `meta.nix#servesCluster` decides what serves the whole cluster (`meta.scope = "cluster"`, a role, or a `cluster:` conflict; `kix.mkImport` sets `scope = "cluster"`), and `eval/auto.nix` reads the same helper for `pickOptional` and the once-per-cluster spread refusal. The resolution index carries each instance's static `scope` and `servesCluster`, so resolution never forces the target instance.
 - **Roles.** `meta.roles` (validated against `eval/roles.nix`) drives the provider index, DI aliasing, and binding-mode checks.
 - **Object names are checked during evaluation.** `scope/validators.nix#checkResourceName` enforces RFC 1035 labels for Services, DNS-1123 labels for Namespaces, and DNS-1123 subdomains for other non-RBAC resources.
 - **Capability ownership.** `meta.unsafe` (`unsafe.nix`) gates raw PVCs (`raw-pvc`) and security exemptions (`host-network`, `privileged`, `run-as-root`, `cluster-admin`). Operator packages declare `meta.annotationDomains`, which `architecture.annotationDomainOwnership` checks against resource annotations.
 - **Secrets carry provenance.** `mkSecret` stamps `kix.run/{secret-keys,secret-sources,sops-source,content-hash,...}`; `mkSecretRef` and `mkServiceRef` emit `PackageInstance` import markers (`scope/builders.nix`).
-- **Ceded fields.** `ownership.cede` on `mkResource` / `mkCRD` stamps `kix.run/cede-fields` so the CLI (`cluster/apply.rs`) preserves controller-managed fields on apply.
+- **Ceded fields.** `ownership.cede` on `mkResource` / `mkCRD` stamps `kix.run/cede-fields` so the CLI (`cli/kix/src/cluster/apply/`) preserves controller-managed fields on apply.
 - **Scorecard evaluation.** Enabled by default and capped at `scorecard.maxSeverity` (`warning` by default; `error` in this repository's flakes via `mkFlake { clusterModules }`). Manifest and package rules run over both authored parts and processor-derived resources (`eval/instance.nix`), and cluster/namespace findings feed into `collectClusterDiagnostics` (`eval/cluster.nix`).
 - **Committed pins.** Values decided outside the compilation unit live in a committed JSON pin file (`kix.pins`, applied per instance by `eval/instance-pins.nix` and provenance-tracked in `kix-image-sources.json`).
-- **`parts.root` is an alias, not a standalone resource.** `collectResources` excludes the `root` key; packages must alias `root` to a named part (`root = self.service`).
+- **`parts.root` aliases a named part.** `collectResources` excludes the `root` key; packages must alias `root` to a named part (`root = self.service`).
 
 ## When editing lib/
 
 - `core/` changes touch the CLI contract (Activation closure, `depends-on` format, and `PackageInstance` fields); coordinate with `cli/`.
 - `core/annotations.nix` and `cli/kix/src/manifest/keys.rs` move together; retiring a domain requires an entry in `cli/kix/src/legacy_domain/`.
-- Authoring-surface changes (scope builders, vocab, DI semantics) → update `guide/` and the `kix-migration` skill.
+- Authoring-surface changes (scope builders, vocab, DI semantics) → update `docs/src/content/docs/reference/` and the `kix-migration` skill.
 - New cross-cutting concerns belong in plugins registering hooks rather than inline calls in `eval/` or `scope/`.
 - Refactors must keep the manifest store path identical on `nix build ludo/#cluster-ludo-kind`; intentional output changes ship separately.
 - If a change invalidates a pattern above, update this file.

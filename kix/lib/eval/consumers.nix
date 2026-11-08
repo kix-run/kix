@@ -379,7 +379,7 @@ in
         else if exact != [ ] then
           builtins.head exact
         else
-          throw "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " (builtins.attrNames data.namespaces)}), so kix does not know where to put the imports of its services. Name one: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
+          throw "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " (builtins.attrNames data.namespaces)}), with no concrete namespace for imported services. Pass `importNamespace`: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
       imports = lib.mapAttrsToList (key: svc: {
         inherit key;
         inherit (svc) instance;
@@ -392,7 +392,7 @@ in
     if (data.version or null) != version then
       throw "kix.interface: ${where} has format version ${
         builtins.toJSON (data.version or null)
-      }; this kix reads version ${toString version}. Use a kix that reads it, or ask the platform for an interface of version ${toString version}."
+      }; Kix reads version ${toString version}. Use a version of Kix that reads it, or ask the platform for an interface of version ${toString version}."
     else if repeated != [ ] then
       throw "kix.interface: ${where} grants services ${
         builtins.concatStringsSep " and " (map (i: i.key) repeated)

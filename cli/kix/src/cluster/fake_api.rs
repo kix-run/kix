@@ -1,14 +1,21 @@
 //! An in-memory apiserver for tests of code that takes a `kube::Client`.
 //!
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
-//! ClusterRole, Kix's Activation, and two kinds of a group served at two
-//! versions), and GET, LIST (with an equality label
-//! selector), and DELETE (honoring `preconditions`) on the objects it holds.
+//! Job, ClusterRole, Kix's Activation, and two kinds of a group served at two
+//! versions), and GET, LIST (with an equality or existence label
+//! selector), PATCH (as a JSON merge patch, on the object or its `status`),
+//! DELETE (honoring `preconditions`), and server-side apply on the objects it
+//! holds. An apply stores the manifest sent as it is, and a dry-run apply
+//! (`dryRun=All`) answers without storing.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
-//! resourceVersion on every change. Anything else answers 404.
+//! resourceVersion on every change. `/version` answers once
+//! [`FakeApi::serve_version`] has set what it says. Anything else answers
+//! 404.
 //!
 //! [`FakeApi::after_get`] changes an object right after the next GET of it
 //! is answered, which models a concurrent writer between a read and a delete.
+//! [`FakeApi::on_apply`] changes what the next apply of an object stores,
+//! which models a CRD's pruning or a mutating admission webhook.
 //! [`FakeApi::fail_next`] answers the next requests for one path with a
 //! plain-text error, as the apiserver does for a path it has not registered.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
@@ -29,6 +36,7 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     ("", "v1", "ConfigMap", "configmaps", true),
     ("", "v1", "Secret", "secrets", true),
     ("", "v1", "Namespace", "namespaces", false),
+    ("batch", "v1", "Job", "jobs", true),
     (
         "rbac.authorization.k8s.io",
         "v1",
@@ -68,11 +76,14 @@ struct State {
     /// `METHOD path` of every request, in order, with `?query` when it has one.
     requests: Vec<String>,
     after_get: Vec<(String, Hook)>,
+    on_apply: Vec<(String, Hook)>,
     /// `(path, remaining, status)`: answer that many requests for `path`
     /// with `status` and a plain-text body.
     failures: Vec<(String, u32, u16)>,
     /// Discovery also serves [`RETIRED_RECORDS`].
     retired_records: bool,
+    /// What `/version` answers, once set.
+    version: Option<Value>,
 }
 
 impl State {
@@ -80,6 +91,16 @@ impl State {
         self.next_rv += 1;
         self.next_rv.to_string()
     }
+}
+
+/// The `kube-system` Namespace with `uid`, which identifies the Kubernetes
+/// cluster the fake stands for (`cluster::binding`).
+pub fn kube_system(uid: &str) -> Value {
+    json!({
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": { "name": "kube-system", "uid": uid },
+    })
 }
 
 /// See the module docs. Clones share one state.
@@ -97,12 +118,14 @@ impl FakeApi {
         api
     }
 
-    /// Add an object, assigning it a uid and a resourceVersion.
+    /// Add an object, assigning it a resourceVersion, and a uid unless it
+    /// brings one (as [`kube_system`] does).
     pub(crate) fn insert(&self, mut obj: Value) {
         let mut st = self.state.lock().unwrap();
         let rv = st.bump();
         let meta = obj["metadata"].as_object_mut().expect("metadata");
-        meta.insert("uid".into(), json!(format!("uid-{rv}")));
+        meta.entry("uid")
+            .or_insert_with(|| json!(format!("uid-{rv}")));
         meta.insert("resourceVersion".into(), json!(rv));
         st.objects.push(obj);
     }
@@ -114,6 +137,16 @@ impl FakeApi {
             .lock()
             .unwrap()
             .after_get
+            .push((name.to_string(), Box::new(f)));
+    }
+
+    /// Run `f` on what the next apply of the object named `name` stores and
+    /// answers.
+    pub fn on_apply(&self, name: &str, f: impl FnOnce(&mut Value) + Send + 'static) {
+        self.state
+            .lock()
+            .unwrap()
+            .on_apply
             .push((name.to_string(), Box::new(f)));
     }
 
@@ -133,6 +166,23 @@ impl FakeApi {
     /// the domain gate refuses.
     pub fn serve_retired_records(&self) {
         self.state.lock().unwrap().retired_records = true;
+    }
+
+    /// Answer `/version` with `git_version`, `major`, and `minor`, as the
+    /// API server reports them (`"v1.31.4+k3s1"`, `"1"`, `"31"`; EKS writes
+    /// `minor` as `"31+"`). Until this is called, `/version` answers 404.
+    pub fn serve_version(&self, git_version: &str, major: &str, minor: &str) {
+        self.state.lock().unwrap().version = Some(json!({
+            "major": major,
+            "minor": minor,
+            "gitVersion": git_version,
+            "gitCommit": "0000000000000000000000000000000000000000",
+            "gitTreeState": "clean",
+            "buildDate": "2026-01-01T00:00:00Z",
+            "goVersion": "go1.23.0",
+            "compiler": "gc",
+            "platform": "linux/amd64",
+        }));
     }
 
     /// Return the sorted names of held objects of `kind`.
@@ -162,8 +212,15 @@ impl FakeApi {
                 let method = req.method().clone();
                 let path = req.uri().path().to_string();
                 let query = req.uri().query().unwrap_or("").to_string();
+                // Kubernetes tells a server-side apply from a merge patch by
+                // the request's content type, so the fake does too.
+                let apply = req
+                    .headers()
+                    .get(http::header::CONTENT_TYPE)
+                    .is_some_and(|v| v.as_bytes().starts_with(b"application/apply-patch"));
                 let body = req.into_body().collect().await.unwrap().to_bytes();
-                let (status, content_type, body) = api.respond(&method, &path, &query, &body);
+                let (status, content_type, body) =
+                    api.respond(&method, &path, &query, &body, apply);
                 let resp = http::Response::builder()
                     .status(status)
                     .header("content-type", content_type)
@@ -181,6 +238,7 @@ impl FakeApi {
         path: &str,
         query: &str,
         body: &[u8],
+        apply: bool,
     ) -> (u16, &'static str, String) {
         {
             let mut st = self.state.lock().unwrap();
@@ -202,12 +260,25 @@ impl FakeApi {
                 return (code, "text/plain", format!("{code} page not found\n"));
             }
         }
-        let (status, value) = self.handle(method, path, query, body);
+        let (status, value) = self.handle(method, path, query, body, apply);
         (status, "application/json", value.to_string())
     }
 
-    fn handle(&self, method: &http::Method, path: &str, query: &str, body: &[u8]) -> (u16, Value) {
+    fn handle(
+        &self,
+        method: &http::Method,
+        path: &str,
+        query: &str,
+        body: &[u8],
+        apply: bool,
+    ) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
+        if path == "/version" {
+            return match &st.version {
+                Some(info) => (200, info.clone()),
+                None => not_found(path),
+            };
+        }
         let mut kinds = KINDS.to_vec();
         if st.retired_records {
             kinds.push(RETIRED_RECORDS);
@@ -221,9 +292,13 @@ impl FakeApi {
         let selector = label_selector(query);
         let matches = |o: &Value| {
             target.holds(o)
-                && selector
-                    .iter()
-                    .all(|(k, v)| o["metadata"]["labels"][k.as_str()].as_str() == Some(v.as_str()))
+                && selector.iter().all(|(k, v)| {
+                    let label = o["metadata"]["labels"][k.as_str()].as_str();
+                    match v {
+                        Some(v) => label == Some(v.as_str()),
+                        None => label.is_some(),
+                    }
+                })
         };
         match (method.as_str(), &target.name) {
             ("GET", None) => {
@@ -267,6 +342,40 @@ impl FakeApi {
                 }
                 let gone = st.objects.remove(i);
                 (200, gone)
+            }
+            ("PATCH", Some(name)) if apply => {
+                let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
+                    return status(400, "BadRequest", "the fake serves JSON bodies only");
+                };
+                let existing = st.objects.iter().position(&matches);
+                let rv = st.bump();
+                let uid = match existing {
+                    Some(i) => st.objects[i]["metadata"]["uid"].clone(),
+                    None => json!(format!("uid-{rv}")),
+                };
+                obj["metadata"]["uid"] = uid;
+                obj["metadata"]["resourceVersion"] = json!(rv);
+                if let Some(h) = st.on_apply.iter().position(|(n, _)| n == name) {
+                    let (_, hook) = st.on_apply.remove(h);
+                    hook(&mut obj);
+                }
+                if !query.split('&').any(|q| q == "dryRun=All") {
+                    match existing {
+                        Some(i) => st.objects[i] = obj.clone(),
+                        None => st.objects.push(obj.clone()),
+                    }
+                }
+                (if existing.is_some() { 200 } else { 201 }, obj)
+            }
+            ("PATCH", Some(_)) => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let patch: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                merge_patch(&mut st.objects[i], &patch);
+                let rv = st.bump();
+                st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
+                (200, st.objects[i].clone())
             }
             _ => status(405, "MethodNotAllowed", "not served by the fake"),
         }
@@ -320,6 +429,25 @@ impl Target {
                     .as_deref()
                     .is_none_or(|ns| meta["namespace"] == ns))
             && self.name.as_deref().is_none_or(|n| meta["name"] == n)
+    }
+}
+
+/// Apply `patch` to `target` as a JSON merge patch (RFC 7386).
+fn merge_patch(target: &mut Value, patch: &Value) {
+    let Value::Object(fields) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = json!({});
+    }
+    let object = target.as_object_mut().expect("an object");
+    for (key, value) in fields {
+        if value.is_null() {
+            object.remove(key);
+        } else {
+            merge_patch(object.entry(key.clone()).or_insert(Value::Null), value);
+        }
     }
 }
 
@@ -382,8 +510,9 @@ fn discovery(kinds: &[(&str, &str, &str, &str, bool)], path: &str) -> Option<Val
     }
 }
 
-/// Parse `k=v` pairs from a `labelSelector` query parameter.
-fn label_selector(query: &str) -> Vec<(String, String)> {
+/// Parse the terms of a `labelSelector` query parameter: `k=v` requires the
+/// value, a bare `k` requires the label to exist.
+fn label_selector(query: &str) -> Vec<(String, Option<String>)> {
     query
         .split('&')
         .filter_map(|kv| kv.strip_prefix("labelSelector="))
@@ -394,9 +523,10 @@ fn label_selector(query: &str) -> Vec<(String, String)> {
                 .replace("%2C", ",");
             decoded
                 .split(',')
-                .filter_map(|pair| {
-                    let (k, v) = pair.split_once('=')?;
-                    Some((k.to_string(), v.to_string()))
+                .filter(|term| !term.is_empty())
+                .map(|term| match term.split_once('=') {
+                    Some((k, v)) => (k.to_string(), Some(v.to_string())),
+                    None => (term.to_string(), None),
                 })
                 .collect::<Vec<_>>()
         })

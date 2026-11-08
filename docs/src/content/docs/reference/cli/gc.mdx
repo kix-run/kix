@@ -12,12 +12,12 @@ deletes Activation records and lets the Kix operator clean up after them.
 Every mode also retires old Superseded Activation records.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
-`cli/kix-cli/src/commands/gc.rs` when in doubt.
+`cli/kix-cli/src/commands/gc/{mod,plan,render}.rs` when in doubt.
 
 ## Synopsis
 
 ```text
-kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed]] [--operator]
+kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed] [--include-copies]] [--operator]
        [--keep <N>] [--keep-max <N>] [--keep-for <DURATION>]
        [--flake <FLAKE>] [--context <CONTEXT>]
 ```
@@ -29,6 +29,7 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed]] [-
 | `--hard` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the fresh build. |
 | `--include-unstamped` | With `--hard`, also delete resources that carry the label but no `kix.run/identity-hash`. Kix never applied these, so by default they are only listed. |
 | `--include-unattributed` | With `--hard` (required), also judge resources that name no Activation record on the cluster. When another Kix cluster has records on the same Kubernetes cluster, Kix cannot tell whose these are, so by default they are only listed. |
+| `--include-copies` | With `--hard` (required), also judge copies. A copy carries Kix's labels and annotations, but Kix never wrote it: an operator copied them from an object Kix made, such as the data volumes it makes for a database. By default copies are only listed. |
 | `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |
 | `--keep <N>` | Always keep at least the `N` newest Superseded records, whatever their age. Default `10`. `0` keeps none. |
 | `--keep-max <N>` | Never keep more than `N` Superseded records. Default `50`. A value below `--keep` is raised to it. |
@@ -39,7 +40,7 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed]] [-
 
 | Mode | Old side | What is deleted |
 | --- | --- | --- |
-| Soft | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from the local Nix store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace, and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
+| Soft | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from Kix's local store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace, and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
 | `--hard` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 

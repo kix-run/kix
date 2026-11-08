@@ -1,35 +1,26 @@
 ---
-// Advertise this page's Markdown twin to agentic tools.
+// Advertise this page's Markdown twin and the site-wide llms.txt map to
+// agentic tools.
 //
 // Codex CLI ignores the Accept header and instead fetches the HTML and
-// looks for this tag, so it is the only way Codex ever finds the
-// Markdown. Clients that do negotiate (Claude Code, Cursor, Copilot,
-// OpenCode) are served by web/public/_worker.js and never need it.
+// looks for <link rel="alternate" type="text/markdown">, so this tag is how
+// Codex discovers the Markdown twin. Clients that negotiate via
+// `Accept: text/markdown` (Claude Code, Cursor, Copilot, OpenCode) are
+// served the `.md` twin directly by `web/public/_worker.js`.
 //
-// starlight-llms-txt emits a sibling `<page>.md` for every route except
-// 404, hence the first guard below.
-//
-// The second guard covers the docs root and the Diataxis quadrant roots.
-// Those pages are frontmatter only, so their twin is a bare heading while
-// the HTML carries the sidebar listing every child page. Pointing an
-// agent at the twin would give it less than the HTML does. The same
-// routes are excluded from content negotiation in web/public/_worker.js;
-// keep the two lists in step.
+// `starlight-llms-txt` emits a sibling `<page>.md` (or `/docs/index.md` for
+// the docs root) for every route except 404.
 import Default from '@astrojs/starlight/components/Head.astro';
 
-const NAVIGATION_ONLY = ['', '/tutorials', '/how-to', '/reference', '/explanation', '/v0.1'];
-
-// `import.meta.env.BASE_URL` is the configured `base` ("/docs/"), so the
-// mapping stays correct if the docs ever move off that prefix.
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const path = Astro.url.pathname.replace(/\/+$/, '');
 
 const hasMarkdownTwin = path !== `${base}/404`;
-const isNavigationOnly = NAVIGATION_ONLY.includes(path.slice(base.length));
-
-const markdownHref =
-  hasMarkdownTwin && !isNavigationOnly ? new URL(`${path}.md`, Astro.site).href : null;
+const markdownPath = path === base ? `${base}/index.md` : `${path}.md`;
+const markdownHref = hasMarkdownTwin ? new URL(markdownPath, Astro.site).href : null;
+const llmsTxtHref = new URL(`${base}/llms.txt`, Astro.site).href;
 ---
 
 <Default><slot /></Default>
 {markdownHref && <link rel="alternate" type="text/markdown" href={markdownHref} />}
+<link rel="describedby" type="text/plain" href={llmsTxtHref} title="llms.txt" />

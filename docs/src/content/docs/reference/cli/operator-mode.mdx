@@ -5,7 +5,7 @@ description: "How `deploy`, `rollback`, `gc`, and `status` behave with `--operat
 
 In operator mode the CLI still builds and plans on your machine, but the
 Kix operator running in the cluster makes the changes. The CLI writes an
-Activation record that names the build's Nix store path, then watches the
+Activation record that names the build's store path, then watches the
 record's status until the operator finishes. The operator applies with the
 same engine as `kix deploy` and, while an activation is Active, re-applies
 resources that have drifted and deletes the record's cluster's resources that
@@ -42,8 +42,9 @@ the operator reports it.
 
 | Record phase | CLI result |
 | --- | --- |
-| `Active` or `Degraded` | Success |
-| `Failed` | Error, with the record's `status.message` |
+| `Active` | Success (exit code `0`) |
+| `Degraded` | Error (exit code `1`), after printing the failed resources or `status.failure.reason` |
+| `Failed` | Error (exit code `1`), with the record's `status.failure.reason` (or `unknown error` if unset) |
 | `Superseded` | Error: a newer activation took over |
 | No terminal phase after 600 seconds | Error: timed out |
 
@@ -57,9 +58,8 @@ A timeout ends the CLI only. The operator keeps working on the record.
   and reports no active activation when it is not installed.
 - The operator is running and watches the `kix.run` API group.
 - The operator can read the store path the CLI wrote. It loads manifests from
-  `spec.source.path` and needs `nix-store` and read access to `/nix/store`, so
-  the build must be present in the store the operator reads, not only on the
-  machine that ran the CLI.
+  `spec.source.path`, so the build must be present in the store the operator
+  reads, not only on the machine that ran the CLI.
 
 ## Exit status
 
@@ -75,6 +75,6 @@ for the operator variants of those tasks.
 :::
 
 :::note[Explanation]
-See [The DAG-driven deployment scheduler](/docs/explanation/dag-driven-deployment-scheduler/)
+See [The DAG-driven deployment scheduler](/docs/explanation/the-dependency-graph/#dag-driven-deployment-scheduler)
 for the record phases.
 :::

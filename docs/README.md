@@ -5,6 +5,13 @@ Astro Starlight site for Kix. Built as a true sibling Nix subflake.
 Deployed at **<https://kix.run/docs/>**. Cloudflare Pages serves the merged
 `web/` and `docs/` artifact. See `.github/workflows/pages.yml`.
 
+Each Kix version has its own docs, built at that version's git revision:
+`/docs` is the latest release, `/docs/main` is main, and `/docs/vX.Y` is
+each older minor release. The flake builds the docs in each of those roles:
+`site`, `site-main`, and `site-archived`. Pages link to each other as
+`/docs/...`, and a build under another path rewrites those links to its
+own (`src/lib/remark-docs-base.mjs`).
+
 ## Build
 
 ```bash
@@ -219,9 +226,7 @@ Listing real page URLs matters: agents given no index invent paths and 404.
 `/docs/`. `web/public/sitemap-index.xml` is the whole-site index that
 `robots.txt` points at: it lists `/sitemap-0.xml` (the landing page) and
 `/docs/sitemap-0.xml` (all 558 documentation URLs). Adding a page outside
-`docs/` means adding it to `web/public/sitemap-0.xml` by hand. `/alt1/` and
-`/alt2/` are omitted so they do not compete with the real landing
-page.
+`docs/` means adding it to `web/public/sitemap-0.xml` by hand.
 
 Check the whole surface against a deployed URL with:
 

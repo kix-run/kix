@@ -264,6 +264,29 @@
       ],
       "type": "object"
     },
+    "FieldNotKept": {
+      "description": "A field Kix applied that Kubernetes did not store as sent.",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/NotKept"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sent": {
+          "description": "The value Kix sent. A Secret value reads `(secret, not shown)`."
+        },
+        "stored": {
+          "description": "The value Kubernetes stored. Absent when it dropped the field."
+        }
+      },
+      "required": [
+        "path",
+        "change",
+        "sent"
+      ],
+      "type": "object"
+    },
     "Import": {
       "description": "The resource an import marker waits for.",
       "properties": {
@@ -308,6 +331,21 @@
         }
       ],
       "description": "A node: a resource, or a step that is not one (`synthetic`)."
+    },
+    "NotKept": {
+      "description": "What Kubernetes did with a field Kix applied.",
+      "oneOf": [
+        {
+          "const": "dropped",
+          "description": "The stored object does not have the field.",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "description": "The stored object has another value.",
+          "type": "string"
+        }
+      ]
     },
     "Phase": {
       "description": "What a node in flight is doing. Reported by the watchdog.",
@@ -553,7 +591,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "One line of the log.",
+  "description": "One line of the log.\n\nLater versions of Kix may add fields and new types of line. Skip the ones\nyou do not know.",
   "oneOf": [
     {
       "description": "The plan, before any node runs. `edges` say which node waits on which.",
@@ -759,7 +797,7 @@
       "type": "object"
     },
     {
-      "description": "`node` has been in `phase` for `since_ms` without a verdict. Repeated\non a schedule while the wait lasts. `status` is the node's last\nreadiness message and `budget_ms` the readiness timeout.",
+      "description": "`node` has been in `phase` for `since_ms` without a verdict. Repeated\non a schedule while the wait lasts. `status` is the node's last\nreadiness message and `budget_ms` the readiness timeout. `holds`\nnames the resources that wait on `node` directly, as the text log\nnames them, and `holds_total` counts every resource that waits on it\ndirectly or through other nodes.",
       "properties": {
         "budget_ms": {
           "format": "uint64",
@@ -768,6 +806,19 @@
             "integer",
             "null"
           ]
+        },
+        "holds": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "holds_total": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
         "node": {
           "type": "string"
@@ -817,6 +868,30 @@
         "type",
         "what",
         "message"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The apply of `resource` succeeded, but Kubernetes did not store\n`fields` as Kix sent them. A warning: the deploy goes on.",
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/FieldNotKept"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "type": {
+          "const": "fields_not_kept",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "resource",
+        "fields"
       ],
       "type": "object"
     },

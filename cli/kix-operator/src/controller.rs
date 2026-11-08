@@ -37,12 +37,15 @@ use thiserror::Error;
 
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
+use kix::cluster::binding::{self, BindingError, Connection};
 use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
+use kix::cluster::kubernetes_version;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
+use kix::eval::store_graph::{KixPackageIndex, read_index};
 use kix::manifest::lifecycle::{
     PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
 };
@@ -131,6 +134,81 @@ fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
         .collect())
 }
 
+/// What the binding check decided for a Queued record.
+enum Binding {
+    /// The build may be applied here.
+    Accepted,
+    /// The build belongs to another Kubernetes cluster, or names none where
+    /// a bound one deployed: the record fails with this message.
+    Refused(String),
+    /// The operator may not read the `kube-system` Namespace: a grant of
+    /// permission resolves it, so the record waits with this message.
+    Forbidden(String),
+}
+
+/// Read `kix-packages.json` of the build the Queued `activation` names, for
+/// the checks that run before the whole graph is loaded.
+fn index_of(activation: &DynamicObject) -> Result<KixPackageIndex, OperatorError> {
+    let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
+    read_index(&path).map_err(|e| OperatorError::StoreGraphError {
+        path: path.display().to_string(),
+        reason: e.to_string(),
+    })
+}
+
+/// Check that the build `index` describes belongs to the Kubernetes cluster
+/// the operator runs on ([`binding::check`]). An error means the check could
+/// not run, so the reconcile is retried.
+async fn check_binding(client: &Client, index: &KixPackageIndex) -> Result<Binding, OperatorError> {
+    match binding::check(
+        client,
+        &Connection::InCluster,
+        binding::Action::Deploy,
+        &index.cluster,
+        index.kubernetes.uid.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => Ok(Binding::Accepted),
+        Err(e) if e.is_forbidden() => Ok(Binding::Forbidden(e.to_string())),
+        Err(
+            e @ (BindingError::Mismatch { .. }
+            | BindingError::Unbound { .. }
+            | BindingError::UnboundRestored { .. }),
+        ) => Ok(Binding::Refused(e.to_string())),
+        Err(e) => Err(OperatorError::DiscoveryError(e.to_string())),
+    }
+}
+
+/// What the version check decided for a Queued record.
+enum VersionCheck {
+    /// The build was checked against the version this cluster runs, or
+    /// against none.
+    Accepted,
+    /// The cluster runs another version: the record fails with this message.
+    Refused(String),
+    /// The version could not be read: the record waits with this message.
+    Unread(String),
+}
+
+/// Check that the build `index` describes was checked against the
+/// Kubernetes version this cluster runs ([`kubernetes_version::check`]).
+async fn check_version(client: &Client, index: &KixPackageIndex) -> VersionCheck {
+    match kubernetes_version::check(
+        client,
+        &Connection::InCluster,
+        &index.cluster,
+        index.kubernetes.version.as_deref(),
+        index.kubernetes.version_from.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => VersionCheck::Accepted,
+        Err(e) if e.is_mismatch() => VersionCheck::Refused(e.to_string()),
+        Err(e) => VersionCheck::Unread(e.to_string()),
+    }
+}
+
 /// Map a [`LivePlanError`] to the corresponding [`OperatorError`] variant.
 fn operator_error(e: LivePlanError) -> OperatorError {
     match e {
@@ -183,6 +261,60 @@ pub async fn reconcile_activation(
                 return Ok(Action::await_change());
             }
             tracing::info!(name, cluster = %cluster, "Processing Queued activation");
+
+            // A build bound to another Kubernetes cluster, or an unbound one
+            // where a bound build has deployed, fails here, before any other
+            // record is superseded and before anything is applied. A 403 on
+            // the Namespace leaves the record Queued and retries, since a
+            // grant of permission resolves it. A build checked against a
+            // Kubernetes version this cluster does not run fails the same
+            // way. Only a Queued record gets these checks: an Active record
+            // keeps being repaired after a Kubernetes upgrade.
+            let events = || {
+                K8sEventObserver::new(
+                    ctx.client.clone(),
+                    &activation,
+                    keys::API_VERSION,
+                    Some(name.to_string()),
+                )
+            };
+            let index = index_of(&activation)?;
+            match check_binding(&ctx.client, &index).await? {
+                Binding::Accepted => {}
+                Binding::Refused(reason) => {
+                    tracing::warn!(name, %reason, "Refusing the Queued activation");
+                    ctx.records
+                        .fail_queued(name, &reason)
+                        .await
+                        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+                    events().warn_now("BindingRefused", &reason).await;
+                    return Ok(Action::await_change());
+                }
+                Binding::Forbidden(reason) => {
+                    tracing::warn!(name, %reason, "Cannot check the Queued activation's binding yet");
+                    events().warn_now("BindingUnchecked", &reason).await;
+                    return Err(OperatorError::DiscoveryError(reason));
+                }
+            }
+            match check_version(&ctx.client, &index).await {
+                VersionCheck::Accepted => {}
+                VersionCheck::Refused(reason) => {
+                    tracing::warn!(name, %reason, "Refusing the Queued activation");
+                    ctx.records
+                        .fail_queued(name, &reason)
+                        .await
+                        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+                    events().warn_now("KubernetesVersionRefused", &reason).await;
+                    return Ok(Action::await_change());
+                }
+                VersionCheck::Unread(reason) => {
+                    tracing::warn!(name, %reason, "Cannot check the Queued activation's Kubernetes version yet");
+                    events()
+                        .warn_now("KubernetesVersionUnchecked", &reason)
+                        .await;
+                    return Err(OperatorError::DiscoveryError(reason));
+                }
+            }
 
             let queued = ctx
                 .records
@@ -365,6 +497,12 @@ async fn run_reconcile(
         // Never retry a failed probe from the reconcile loop: it would
         // delete and recreate the Job every 30 s on a degraded cluster.
         rerun_failed: false,
+        // A new build is checked against the objects it leaves unchanged.
+        // Drift repair of a running build runs every requeue, and an
+        // unchanged object that never reports ready would fail the record
+        // every cycle.
+        check_unchanged: manage_lifecycle,
+        names_flags: false,
     };
 
     // Compose two observers: tracing (structured logs) + K8s Events
@@ -557,7 +695,298 @@ pub fn error_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kix::cluster::fake_api::{FakeApi, kube_system};
     use serde_json::json;
+
+    const HERE: &str = "9f8e7d6c-5b4a-4321-8765-0fedcba98765";
+    const ELSEWHERE: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+    /// A Queued record of cluster `a` whose build, in a temporary result
+    /// directory, names the Kubernetes cluster `kubernetes_uid` and was
+    /// checked against Kubernetes `k8s_version`.
+    fn queued(dir: &Path, kubernetes_uid: Option<&str>, k8s_version: Option<&str>) -> Value {
+        queued_from(dir, kubernetes_uid, k8s_version, None)
+    }
+
+    /// As [`queued`], with `k8s_version` supplied by the interface file of
+    /// the platform `version_from`.
+    fn queued_from(
+        dir: &Path,
+        kubernetes_uid: Option<&str>,
+        k8s_version: Option<&str>,
+        version_from: Option<&str>,
+    ) -> Value {
+        let index = json!({
+            "cluster": "a",
+            "kubernetes": {
+                "uid": kubernetes_uid,
+                "version": k8s_version,
+                "versionFrom": version_from,
+            },
+            "packages": {},
+        });
+        std::fs::write(dir.join("kix-packages.json"), index.to_string()).unwrap();
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-new",
+                "labels": { (keys::CLUSTER_LABEL): "a" },
+            },
+            "spec": {
+                "cluster": "a",
+                "source": { "type": "storePath", "path": dir.display().to_string() },
+            },
+        })
+    }
+
+    /// Reconcile `queued` on a fake holding `objects`, and return the record
+    /// afterwards.
+    async fn reconcile_queued(objects: Vec<Value>, queued: Value) -> (FakeApi, DynamicObject) {
+        let api = FakeApi::new(objects);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let resource = records.watch_resource().clone();
+        let ctx = Arc::new(Context { client, records });
+        let activation: DynamicObject = serde_json::from_value(queued).unwrap();
+        reconcile_activation(Arc::new(activation), ctx.clone())
+            .await
+            .unwrap();
+        let after = kube::Api::<DynamicObject>::all_with(ctx.client.clone(), &resource)
+            .get("a-new")
+            .await
+            .unwrap();
+        (api, after)
+    }
+
+    /// A Queued build bound to another Kubernetes cluster is marked Failed
+    /// with the reason, and the Active record is left alone.
+    #[tokio::test]
+    async fn a_queued_build_bound_elsewhere_fails_before_anything_is_superseded() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "a-old", "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "status": { "phase": PHASE_ACTIVE },
+        });
+        let record = queued(dir.path(), Some(ELSEWHERE), None);
+        let (api, after) =
+            reconcile_queued(vec![kube_system(HERE), active, record.clone()], record).await;
+        assert_eq!(after.data["status"]["phase"], PHASE_FAILED);
+        let reason = after.data["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains(&format!(
+                "a's definition sets cluster.kubernetes.uid = \"{ELSEWHERE}\""
+            )) && reason.contains("Nothing was applied"),
+            "{reason}"
+        );
+        let supersedes: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.contains("a-old"))
+            .collect();
+        assert!(supersedes.is_empty(), "{supersedes:?}");
+    }
+
+    /// An unbound Queued build on a Kubernetes cluster where a bound build
+    /// deployed fails the same way, naming that build's cluster.
+    #[tokio::test]
+    async fn an_unbound_queued_build_fails_where_a_bound_build_deployed() {
+        let dir = tempfile::tempdir().unwrap();
+        let bound = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "lab1-1",
+                "labels": { (keys::CLUSTER_LABEL): "lab1", (keys::KUBERNETES_UID): HERE },
+            },
+            "status": { "phase": PHASE_ACTIVE },
+        });
+        let record = queued(dir.path(), None, None);
+        let (_, after) =
+            reconcile_queued(vec![kube_system(HERE), bound, record.clone()], record).await;
+        assert_eq!(after.data["status"]["phase"], PHASE_FAILED);
+        let reason = after.data["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains(&format!(
+                "lab1 was deployed here with cluster.kubernetes.uid = \"{HERE}\""
+            )),
+            "{reason}"
+        );
+    }
+
+    /// A 403 on the Namespace leaves the Queued record as it is and retries,
+    /// since a grant to the operator's service account resolves it.
+    #[tokio::test]
+    async fn a_forbidden_namespace_read_leaves_the_record_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = queued(dir.path(), Some(HERE), None);
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        api.fail_next("/api/v1/namespaces/kube-system", 1, 403);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let resource = records.watch_resource().clone();
+        let ctx = Arc::new(Context { client, records });
+        let activation: DynamicObject = serde_json::from_value(record).unwrap();
+        let err = reconcile_activation(Arc::new(activation), ctx.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Grant the operator's service account get permission on namespaces"),
+            "{err}"
+        );
+        let after = kube::Api::<DynamicObject>::all_with(ctx.client.clone(), &resource)
+            .get("a-new")
+            .await
+            .unwrap();
+        assert!(after.data.get("status").is_none(), "{:?}", after.data);
+    }
+
+    /// Reconcile `record` on `api`, which may fail, and return the record
+    /// afterwards.
+    async fn reconcile_on(api: &FakeApi, record: Value) -> (Result<Action, OperatorError>, Value) {
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let resource = records.watch_resource().clone();
+        let ctx = Arc::new(Context { client, records });
+        let name = record["metadata"]["name"].as_str().unwrap().to_string();
+        let activation: DynamicObject = serde_json::from_value(record).unwrap();
+        let result = reconcile_activation(Arc::new(activation), ctx.clone()).await;
+        let after = kube::Api::<DynamicObject>::all_with(ctx.client.clone(), &resource)
+            .get(&name)
+            .await
+            .unwrap();
+        (result, after.data)
+    }
+
+    /// A Queued build checked against another Kubernetes version is marked
+    /// Failed with the value to set, and the Active record is left alone.
+    #[tokio::test]
+    async fn a_queued_build_for_another_kubernetes_version_fails_before_anything_is_superseded() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "a-old", "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "status": { "phase": PHASE_ACTIVE },
+        });
+        let record = queued(dir.path(), Some(HERE), Some("1.30"));
+        let api = FakeApi::new(vec![kube_system(HERE), active, record.clone()]);
+        api.serve_version("v1.31.4+k3s1", "1", "31");
+        let (result, after) = reconcile_on(&api, record).await;
+        result.unwrap();
+        assert_eq!(after["status"]["phase"], PHASE_FAILED);
+        let reason = after["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains("a's definition sets k8sVersion = \"1.30\"")
+                && reason.contains("this cluster runs v1.31.4+k3s1")
+                && reason.contains("Set k8sVersion = \"1.31\"; in a's definition")
+                && reason.contains("Nothing was applied"),
+            "{reason}"
+        );
+        let supersedes: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.contains("a-old"))
+            .collect();
+        assert!(supersedes.is_empty(), "{supersedes:?}");
+    }
+
+    /// A Queued build whose version came from a platform's interface file
+    /// fails with the message that names the platform.
+    #[tokio::test]
+    async fn a_queued_build_with_an_inherited_version_names_the_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = queued_from(dir.path(), Some(HERE), Some("1.30"), Some("prod"));
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        api.serve_version("v1.31.4+k3s1", "1", "31");
+        let (result, after) = reconcile_on(&api, record).await;
+        result.unwrap();
+        assert_eq!(after["status"]["phase"], PHASE_FAILED);
+        let reason = after["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains("a loads its interface file from prod with kix.interface")
+                && reason.contains("Export a new interface file from prod"),
+            "{reason}"
+        );
+    }
+
+    /// When `/version` cannot be read, the Queued record stays as it is, a
+    /// Warning event says why, and the reconcile is retried.
+    #[tokio::test]
+    async fn an_unreadable_version_leaves_the_record_queued_with_an_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = queued(dir.path(), Some(HERE), Some("1.31"));
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        api.fail_next("/version", 1, 503);
+        let (result, after) = reconcile_on(&api, record).await;
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("could not read the cluster's Kubernetes version (HTTP 503 "),
+            "{err}"
+        );
+        assert!(after.get("status").is_none(), "{after:?}");
+        let events: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.starts_with("POST ") && r.contains("/events"))
+            .collect();
+        assert_eq!(events.len(), 1, "{:?}", api.requests());
+    }
+
+    /// A Queued build whose definition leaves `k8sVersion` unset is not asked
+    /// about the version at all.
+    #[tokio::test]
+    async fn a_queued_build_without_a_version_is_not_compared() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = queued(dir.path(), Some(HERE), None);
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        // Past the checks, loading the build fails in the temporary
+        // directory, which is after the point under test.
+        let (result, after) = reconcile_on(&api, record).await;
+        assert!(result.is_err());
+        assert_ne!(after["status"]["phase"], PHASE_FAILED);
+        assert!(
+            !api.requests().iter().any(|r| r.ends_with("/version")),
+            "{:?}",
+            api.requests()
+        );
+    }
+
+    /// An Active record is repaired, not refused, after a Kubernetes
+    /// upgrade: the version is not even read for it.
+    #[tokio::test]
+    async fn an_active_record_is_repaired_whatever_the_kubernetes_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = queued(dir.path(), Some(HERE), Some("1.30"));
+        record["status"] = json!({ "phase": PHASE_ACTIVE });
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        api.serve_version("v1.31.4+k3s1", "1", "31");
+        // Loading the build fails in the temporary directory, which is after
+        // the point where a Queued record would have been refused.
+        let (result, after) = reconcile_on(&api, record).await;
+        let err = result.unwrap_err().to_string();
+        assert!(!err.contains("k8sVersion"), "{err}");
+        assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
+        assert!(
+            !api.requests().iter().any(|r| r.ends_with("/version")),
+            "{:?}",
+            api.requests()
+        );
+    }
 
     /// Deleting `b`'s Active record tears down `b`'s closure but leaves the
     /// ClusterRole `a`'s current build also contains.

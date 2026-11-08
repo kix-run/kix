@@ -5,41 +5,29 @@
 // not upload it as a static asset. It lives in web/public/ so Vite copies
 // it to web/dist/, which the deploy step merges into the site root.
 //
-// Every docs page already has a Markdown twin at the sibling `.md` URL,
-// emitted by starlight-llms-txt. This serves that file when the client
-// asks for Markdown, which is a large saving: the HTML for a typical
-// how-to page is ~80 KB against ~2 KB of Markdown.
+// Every docs page has a Markdown twin at the sibling `.md` URL (or
+// `/docs/index.md` for `/docs/`), emitted by starlight-llms-txt. When a
+// client sends `Accept: text/markdown` for a docs URL, this Worker serves
+// the Markdown twin; when a client sends `Accept: text/markdown` for the
+// site root (`/`), it serves `/llms.txt`.
 //
-// Two different discovery mechanisms are in play, and they cover
-// different clients:
+// Two discovery mechanisms are in play and cover different clients:
 //
 //   - Accept: text/markdown (handled here) covers Claude Code, Cursor,
-//     GitHub Copilot Chat, Copilot CLI and OpenCode.
-//   - <link rel="alternate" type="text/markdown"> (emitted by
-//     docs/src/components/Head.astro) is the only signal Codex CLI
-//     reads, since it ignores the Accept header.
+//     GitHub Copilot Chat, Copilot CLI, and OpenCode.
+//   - <link rel="alternate" type="text/markdown"> and
+//     <link rel="describedby" href="/llms.txt"> (emitted by
+//     docs/src/components/Head.astro and web/src/layouts/Base.astro)
+//     cover clients like Codex CLI that fetch HTML without negotiating.
 //
 // Browsers never send text/markdown, so they are unaffected.
 
 const DOCS_PREFIX = '/docs/';
 
-// The docs root and the Diataxis quadrant roots are navigation pages:
-// their source is frontmatter only, so the `.md` twin is a bare heading
-// (`# How-to guides`, 17 bytes) while the HTML carries the sidebar
-// listing every child page. Serving the twin for these would hand an
-// agent less than the HTML does, and an agent with no list of pages
-// invents URLs. Serve HTML here and let the sidebar do the work.
-//
-// docs/src/components/Head.astro withholds its <link rel="alternate">
-// for the same routes. Keep the two lists in step.
-const NAVIGATION_ONLY = new Set([
-  '/docs',
-  '/docs/tutorials',
-  '/docs/how-to',
-  '/docs/reference',
-  '/docs/explanation',
-  '/docs/v0.1',
-]);
+// Each Kix version's docs are a separate build with its own root: /docs for
+// the latest release, /docs/main for main, and /docs/v<major>.<minor> for
+// an older minor release (.github/workflows/pages.yml).
+const VERSION_ROOT = /^\/docs(?:\/(?:main|v\d+\.\d+))?(?=\/|$)/;
 
 /**
  * True when the client explicitly asked for Markdown.
@@ -54,15 +42,21 @@ function prefersMarkdown(accept) {
 }
 
 /**
- * Map a docs page URL to its Markdown twin.
+ * Map a request pathname to its Markdown twin.
  *
+ *   /                 -> /llms.txt
  *   /docs/            -> /docs/index.md
  *   /docs/how-to/     -> /docs/how-to.md
  *   /docs/how-to/x/   -> /docs/how-to/x.md
+ *   /docs/main/       -> /docs/main/index.md
  */
 function markdownPathFor(pathname) {
+  if (pathname === '/' || pathname === '') {
+    return '/docs/llms.txt';
+  }
   const path = pathname.replace(/\/+$/, '');
-  return path === '/docs' ? '/docs/index.md' : `${path}.md`;
+  const root = path.match(VERSION_ROOT)[0];
+  return path === root ? `${root}/index.md` : `${path}.md`;
 }
 
 /** Add `Accept` to Vary without duplicating an existing entry. */
@@ -83,12 +77,15 @@ function withVaryAccept(response) {
   });
 }
 
-/** A docs page with a Markdown twin worth serving, not the twin itself. */
+/** A route with a Markdown representation worth serving, not the `.md` asset itself. */
 function isNegotiablePage(url) {
+  if (url.pathname === '/') {
+    return true;
+  }
   if (!url.pathname.startsWith(DOCS_PREFIX) || url.pathname.endsWith('.md')) {
     return false;
   }
-  return !NAVIGATION_ONLY.has(url.pathname.replace(/\/+$/, ''));
+  return VERSION_ROOT.test(url.pathname.replace(/\/+$/, ''));
 }
 
 export default {
@@ -118,7 +115,7 @@ export default {
 
     const response = await env.ASSETS.fetch(request);
 
-    // The HTML representation of a docs page now depends on Accept, so
+    // The HTML representation of a negotiable page depends on Accept, so
     // caches must not serve one representation for the other.
     return isNegotiablePage(url) ? withVaryAccept(response) : response;
   },

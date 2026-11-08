@@ -12,8 +12,8 @@ use std::fmt::Write;
 use crate::output;
 
 use kix::plan::document::{
-    AdmissionRefusal, Checked, MadeBy, NotCheckedReason, Plan, PruneFate, RefusalReason,
-    UncheckedReason, WriteChange,
+    AdmissionRefusal, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan, PruneFate,
+    RefusalReason, UncheckedReason, WriteChange,
 };
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
@@ -34,6 +34,7 @@ pub fn label_tag(labels: &[ChangeLabel]) -> String {
 pub fn render_text(plan: &Plan) -> String {
     let mut out = String::new();
     write_stops(&mut out, plan);
+    write_not_kept(&mut out, plan);
     write_drift(&mut out, plan);
     write_prune(&mut out, plan);
     write_not_checked(&mut out, plan);
@@ -135,6 +136,56 @@ fn write_stops(out: &mut String, plan: &Plan) {
     }
 }
 
+/// Write the fields Kubernetes would not keep as the build sets them. The
+/// deploy goes on, so this is a warning, not a stop.
+fn write_not_kept(out: &mut String, plan: &Plan) {
+    if plan.not_kept.is_empty() {
+        return;
+    }
+    let n = plan.not_kept.len();
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{}",
+        output::yellow(&format!(
+            "Kubernetes would not keep {n} field{} as the build sets {}:",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "it" } else { "them" },
+        ))
+    );
+    for f in &plan.not_kept {
+        let _ = writeln!(
+            out,
+            "  {} {} {}",
+            output::yellow("!"),
+            f.resource,
+            not_kept_detail(f, false),
+        );
+    }
+    let _ = writeln!(
+        out,
+        "      {}",
+        output::dim(
+            "a CRD's schema drops a field it does not declare, and a mutating admission webhook can change a value; the deploy still applies the object"
+        )
+    );
+}
+
+/// Describe one field Kubernetes would not keep, after its resource. In
+/// Markdown, paths and values are code.
+fn not_kept_detail(f: &FieldNotKept, markdown: bool) -> String {
+    let code = |s: String| if markdown { format!("`{s}`") } else { s };
+    let path = code(f.path.trim_start_matches("$.").to_string());
+    let sent = code(compact(Some(&f.sent)));
+    match (f.change, &f.stored) {
+        (NotKept::Changed, Some(stored)) => format!(
+            "{path} changed (sent {sent}, stored {})",
+            code(compact(Some(stored)))
+        ),
+        _ => format!("{path} dropped (sent {sent})"),
+    }
+}
+
 fn refusal_title(r: &AdmissionRefusal) -> String {
     match (r.reason, &r.webhook) {
         (RefusalReason::WebhookDenied, Some(w)) => format!("denied by admission webhook {w}"),
@@ -157,6 +208,22 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
     }
 }
 
+/// Render the drift section of `plan` as text, for a comparison that found no
+/// other difference.
+pub fn render_drift_text(plan: &Plan) -> String {
+    let mut out = String::new();
+    write_drift(&mut out, plan);
+    out
+}
+
+/// Render the drift section of `plan` as Markdown, for a comparison that found
+/// no other difference.
+pub fn render_drift_markdown(plan: &Plan) -> String {
+    let mut out = String::new();
+    write_drift_markdown(&mut out, plan);
+    out
+}
+
 fn write_drift(out: &mut String, plan: &Plan) {
     match &plan.drift {
         Checked::Checked { items } if !items.is_empty() => {
@@ -172,25 +239,30 @@ fn write_drift(out: &mut String, plan: &Plan) {
                 ))
             );
             for d in items {
-                let by = if d.managers.is_empty() {
-                    String::new()
-                } else {
-                    format!(", set by {}", d.managers.join(", "))
-                };
-                let fate = if d.reverted {
-                    output::yellow("the deploy puts the deployed value back")
-                } else {
-                    output::dim("the deploy leaves this object alone; --reconcile reverts it")
-                };
                 let _ = writeln!(
                     out,
-                    "  {} {} {}: {} live, {} deployed{by}",
+                    "  {} {} {}",
                     output::yellow("↺"),
                     d.resource,
-                    d.path.trim_start_matches("$."),
-                    compact(d.live.as_ref()),
-                    compact(d.deployed.as_ref()),
+                    drift_detail(d),
                 );
+                let fate = match (d.reverted, conflict_with(plan, d)) {
+                    (true, Some(owners)) => output::yellow(&format!(
+                        "the deploy stops on an ownership conflict with {owners} unless run with --force-conflicts"
+                    ))
+                    .into_owned(),
+                    (true, None) => {
+                        output::yellow("the deploy puts the deployed value back").into_owned()
+                    }
+                    (false, Some(owners)) => output::dim(&format!(
+                        "the deploy leaves this object alone; --reconcile stops on an ownership conflict with {owners} unless run with --force-conflicts"
+                    ))
+                    .into_owned(),
+                    (false, None) => output::dim(
+                        "the deploy leaves this object alone; --reconcile reverts it",
+                    )
+                    .into_owned(),
+                };
                 let _ = writeln!(out, "      {fate}");
             }
         }
@@ -208,6 +280,114 @@ fn write_drift(out: &mut String, plan: &Plan) {
         }
         _ => {}
     }
+    if let Some(line) = drift_unchecked_line(plan) {
+        let _ = writeln!(out, "{}", output::dim(&line));
+    }
+}
+
+/// Return the managers an apply of `d`'s object would conflict with, joined
+/// for display. Server-side apply refuses to change a field another manager
+/// owns unless forced, so a deploy that sets the deployed value back stops
+/// there. A field at the deployed value is shared without a conflict.
+fn conflict_with(plan: &Plan, d: &kix::plan::document::DriftChange) -> Option<String> {
+    let forced = plan.flags.as_ref().is_some_and(|f| f.force_conflicts);
+    (!d.managers.is_empty() && d.live != d.deployed && !forced).then(|| d.managers.join(", "))
+}
+
+/// Return the note on how many live objects the drift check could not judge,
+/// or `None` when it judged them all.
+fn drift_unchecked_line(plan: &Plan) -> Option<String> {
+    match plan.drift_unchecked {
+        0 => None,
+        1 => {
+            Some("1 object not checked for drift: it has no Kix stamp or no field records.".into())
+        }
+        n => Some(format!(
+            "{n} objects not checked for drift: they have no Kix stamp or no field records."
+        )),
+    }
+}
+
+/// Describe one drift entry after its resource: the field, its live and
+/// deployed values, and who set it. The deployed value is left out when it is
+/// not known.
+fn drift_detail(d: &kix::plan::document::DriftChange) -> String {
+    if d.path == "$" {
+        return "fields Kix applied have changed; Kubernetes recorded no other tool as their owner"
+            .into();
+    }
+    let by = if d.managers.is_empty() {
+        String::new()
+    } else {
+        format!(", set by {}", d.managers.join(", "))
+    };
+    let deployed = match &d.deployed {
+        Some(v) => format!(", {} deployed", compact(Some(v))),
+        None => String::new(),
+    };
+    format!(
+        "{}: {} live{deployed}{by}",
+        d.path.trim_start_matches("$."),
+        compact(d.live.as_ref()),
+    )
+}
+
+fn write_drift_markdown(out: &mut String, plan: &Plan) {
+    if let Checked::Checked { items } = &plan.drift
+        && !items.is_empty()
+    {
+        let _ = writeln!(out, "#### Drift");
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "Fields where the live cluster differs from the deployed build:"
+        );
+        let _ = writeln!(out);
+        for d in items {
+            let fate = match (d.reverted, conflict_with(plan, d)) {
+                (true, Some(owners)) => format!(
+                    "the deploy stops on an ownership conflict with {owners} unless run with `--force-conflicts`"
+                ),
+                (true, None) => "the deploy puts the deployed value back".into(),
+                (false, Some(owners)) => format!(
+                    "the deploy leaves this object alone; `--reconcile` stops on an ownership conflict with {owners} unless run with `--force-conflicts`"
+                ),
+                (false, None) => "the deploy leaves this object alone".into(),
+            };
+            let _ = writeln!(
+                out,
+                "- `{}` {}; {fate}",
+                d.resource,
+                drift_detail_markdown(d),
+            );
+        }
+        let _ = writeln!(out);
+    }
+    if let Some(line) = drift_unchecked_line(plan) {
+        let _ = writeln!(out, "{line}");
+        let _ = writeln!(out);
+    }
+}
+
+fn drift_detail_markdown(d: &kix::plan::document::DriftChange) -> String {
+    if d.path == "$" {
+        return "fields Kix applied have changed; Kubernetes recorded no other tool as their owner"
+            .into();
+    }
+    let by = if d.managers.is_empty() {
+        String::new()
+    } else {
+        format!(", set by `{}`", d.managers.join("`, `"))
+    };
+    let deployed = match &d.deployed {
+        Some(v) => format!(", `{}` deployed", compact(Some(v))),
+        None => String::new(),
+    };
+    format!(
+        "`{}`: `{}` live{deployed}{by}",
+        d.path.trim_start_matches("$."),
+        compact(d.live.as_ref()),
+    )
 }
 
 /// Format a JSON value on a single line (truncated to 60 characters with byte
@@ -390,38 +570,20 @@ pub fn render_markdown(plan: &Plan) -> String {
         }
         let _ = writeln!(out);
     }
-    if let Checked::Checked { items } = &plan.drift
-        && !items.is_empty()
-    {
-        let _ = writeln!(out, "#### Drift");
+    if !plan.not_kept.is_empty() {
+        let _ = writeln!(out, "#### :warning: Kubernetes would not keep these fields");
         let _ = writeln!(out);
         let _ = writeln!(
             out,
-            "Fields where the live cluster differs from the deployed build:"
+            "The deploy still applies these objects, but the fields would not hold the build's values:"
         );
         let _ = writeln!(out);
-        for d in items {
-            let by = if d.managers.is_empty() {
-                String::new()
-            } else {
-                format!(", set by `{}`", d.managers.join("`, `"))
-            };
-            let fate = if d.reverted {
-                "the deploy puts the deployed value back"
-            } else {
-                "the deploy leaves this object alone"
-            };
-            let _ = writeln!(
-                out,
-                "- `{}` `{}`: `{}` live, `{}` deployed{by}; {fate}",
-                d.resource,
-                d.path.trim_start_matches("$."),
-                compact(d.live.as_ref()),
-                compact(d.deployed.as_ref()),
-            );
+        for f in &plan.not_kept {
+            let _ = writeln!(out, "- `{}` {}", f.resource, not_kept_detail(f, true));
         }
         let _ = writeln!(out);
     }
+    write_drift_markdown(&mut out, plan);
     if !plan.not_checked.is_empty() {
         let _ = writeln!(
             out,
@@ -518,4 +680,139 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str) -> String 
         let _ = writeln!(out, "Review a new plan, or deploy without --plan.");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::eval::store_graph::StoreGraph;
+    use kix::plan::document::{Build, Detail, DriftChange};
+
+    fn plan_with(drift: Vec<DriftChange>) -> Plan {
+        let graph = StoreGraph::empty("c");
+        let mut plan = Plan::new(
+            crate::plan::kix_build(),
+            MadeBy::LiveRead,
+            "c",
+            Build::of(&graph),
+            &kix::plan::diff_graphs(&graph, &graph),
+            Detail::Plain,
+            &[],
+            NotCheckedReason::ReadOnly,
+        );
+        plan.drift = Checked::found(drift);
+        plan
+    }
+
+    fn drift(managers: &[&str], reverted: bool) -> DriftChange {
+        DriftChange {
+            resource: "Deployment/web@app".into(),
+            path: "$.spec.replicas".into(),
+            deployed: Some(serde_json::json!(1)),
+            live: Some(serde_json::json!(3)),
+            managers: managers.iter().map(|m| m.to_string()).collect(),
+            reverted,
+        }
+    }
+
+    /// A field another manager owns stops the deploy on an ownership
+    /// conflict, unless the plan forces conflicts. A field Kubernetes
+    /// records no other owner for is put back.
+    #[test]
+    fn drift_another_manager_owns_says_the_deploy_stops() {
+        let owned = plan_with(vec![drift(&["kubectl-scale"], true)]);
+        let text = render_drift_text(&owned);
+        assert!(
+            text.contains(
+                "the deploy stops on an ownership conflict with kubectl-scale unless run with --force-conflicts"
+            ),
+            "{text}"
+        );
+        assert!(render_drift_markdown(&owned).contains("ownership conflict with kubectl-scale"));
+
+        let kept = render_drift_text(&plan_with(vec![drift(&["kubectl-scale"], false)]));
+        assert!(
+            kept.contains("--reconcile stops on an ownership conflict"),
+            "{kept}"
+        );
+
+        let mut forced = owned.clone();
+        forced.flags = Some(kix::plan::document::PlanFlags {
+            prune: false,
+            prune_mode: None,
+            reconcile: false,
+            force_conflicts: true,
+            accept_migrations: false,
+        });
+        let text = render_drift_text(&forced);
+        assert!(
+            text.contains("the deploy puts the deployed value back"),
+            "{text}"
+        );
+
+        let unowned = render_drift_text(&plan_with(vec![drift(&[], true)]));
+        assert!(
+            unowned.contains("the deploy puts the deployed value back"),
+            "{unowned}"
+        );
+    }
+
+    #[test]
+    fn fields_kubernetes_would_not_keep_are_a_warning() {
+        let mut plan = plan_with(Vec::new());
+        assert!(!render_text(&plan).contains("would not keep"));
+        assert!(!render_markdown(&plan).contains("would not keep"));
+        plan.not_kept = vec![
+            FieldNotKept {
+                resource: "Widget/w@app".into(),
+                path: "$.spec.colour".into(),
+                change: NotKept::Dropped,
+                sent: serde_json::json!("red"),
+                stored: None,
+            },
+            FieldNotKept {
+                resource: "Deployment/web@app".into(),
+                path: "$.spec.replicas".into(),
+                change: NotKept::Changed,
+                sent: serde_json::json!(2),
+                stored: Some(serde_json::json!(5)),
+            },
+        ];
+        let text = render_text(&plan);
+        assert!(
+            text.contains("Kubernetes would not keep 2 fields as the build sets them:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Widget/w@app spec.colour dropped (sent \"red\")"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Deployment/web@app spec.replicas changed (sent 2, stored 5)"),
+            "{text}"
+        );
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.contains("#### :warning: Kubernetes would not keep these fields"),
+            "{markdown}"
+        );
+        assert!(
+            markdown
+                .contains("- `Deployment/web@app` `spec.replicas` changed (sent `2`, stored `5`)"),
+            "{markdown}"
+        );
+        assert!(!plan.stops() && !plan.has_changes());
+    }
+
+    #[test]
+    fn objects_drift_cannot_judge_are_counted() {
+        let mut plan = plan_with(Vec::new());
+        assert!(render_drift_text(&plan).is_empty());
+        plan.drift_unchecked = 1;
+        assert!(
+            render_drift_text(&plan).contains(
+                "1 object not checked for drift: it has no Kix stamp or no field records."
+            )
+        );
+    }
 }

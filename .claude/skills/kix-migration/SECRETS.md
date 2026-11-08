@@ -21,7 +21,7 @@ creds = scope.mkSecret {
 };
 ```
 
-`mkSecret` stamps where each key's value comes from (`kix.run/secret-sources`, `username=plain,password=sops`): `inline` (in the expression), `sops`, `controller` (a controller writes it), or `plain`. `plainKeys = [ "username" ]` marks an inline value that is not a credential; a basic-auth username is plain by type. The `security.secretSource` rule compares the stamp with `cluster.secrets.accept` (HANDBOOK §21.11), so a Secret that mixes a host and a password needs `plainKeys` for the host, or the host moves to `out`.
+`mkSecret` stamps where each key's value comes from (`kix.run/secret-sources`, `username=plain,password=sops`): `inline` (in the expression), `sops`, `controller` (a controller writes it), or `plain`. `plainKeys = [ "username" ]` marks an inline value that is not a credential; a basic-auth username is plain by type. The `security.secretSource` rule compares the stamp with `cluster.secrets.accept` (`docs/src/content/docs/reference/cluster-configuration.mdx` `#clustercontainerd-clustermaintenance-and-clustersecretsaccept` and `docs/src/content/docs/reference/scorecard-and-rules.mdx` `#built-in-security-rules`), so a Secret that mixes a host and a password needs `plainKeys` for the host, or the host moves to `out`.
 
 ## `scope.mkSecretRef`: externally-managed secret
 
@@ -119,7 +119,7 @@ env = kix.mkEnvVars {
 };
 ```
 
-An operator that syncs a Secret from an external store has a builder that does this for you: `external-secrets` (`out.mkExternalSecret`, HANDBOOK §21.9) and `infisical-operator` (`out.mkInfisicalStaticSecret`, §21.8) return `out.secretRef { keys; }`, a `mkSecretRef` ordered after the custom resource. Prefer them to a hand-made `mkSecretRef` with `requires`.
+An operator that syncs a Secret from an external store has a builder that does this for you: `external-secrets` (`out.mkExternalSecret`) and `infisical-operator` (`out.mkInfisicalStaticSecret`) return `out.secretRef { keys; }`, a `mkSecretRef` ordered after the custom resource (`docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` `#scopemksecretref`). Prefer them to a hand-made `mkSecretRef` with `requires`.
 
 That is also how a `kix.healthCheck` probe gets a credential: its `env` callback returns an attrset that goes through `mkEnvVars`, so `CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password";` gives the probe Job the value, the dependency edge, and the key check. Never render a password into the probe's ConfigMap or its `out`.
 
@@ -131,7 +131,7 @@ Configuration a program reads from a Secret (Alertmanager) is rendered from opti
 
 ## Standalone packages for DI
 
-`packages/secret` and `packages/secret-ref` wrap the primitives as first-class instances:
+`kix/packages/secret` and `kix/packages/secret-ref` wrap the primitives as first-class instances:
 
 ```nix
 # Cluster definition: a standalone secret for DI. `aliases` names the

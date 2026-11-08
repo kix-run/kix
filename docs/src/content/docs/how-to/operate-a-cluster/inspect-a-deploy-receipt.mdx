@@ -19,19 +19,19 @@ active record:
 
 <Command expandable {...activeReceipt} />
 
-The label limits the result to Activations for one Kix cluster. The command
-returns a Kubernetes List. Use `jq` to select the active Activation and print
-its receipt:
+The `kix.run/cluster` label limits the result to Activations for one Kix
+cluster. List the Activations and inspect the active record's `status.receipt`
+field:
 
 <Command
   commands={[
-    "kubectl get activations -l kix.run/cluster=how-to-application -o json | jq '.items[] | select(.status.phase == \"Active\") | .status.receipt'",
+    "kubectl get activations -l kix.run/cluster=how-to-application",
+    "kubectl get activation <activation-name> -o yaml",
   ]}
 />
 
 A deployment that finishes with failures marks its Activation as `Degraded`,
-but still records a receipt. When investigating a failed deployment, change
-the `select` expression to include both `Active` and `Degraded` phases.
+but still records a receipt under `status.receipt`.
 
 If you are inspecting another Kubernetes context, add `--context` to the
 kubectl command.
@@ -62,12 +62,12 @@ reference containing `@sha256:...` identifies immutable image content; a tag
 alone records only the tag requested by the deployment.
 
 :::note[Explanation]
-See [Why deploy inputs are committed](/docs/explanation/why-deploy-inputs-are-committed/)
+See [Why deploy inputs are committed](/docs/explanation/server-side-apply-and-drift/#why-deploy-inputs-are-committed)
 for why Kix stores provenance in Activation status without storing rendered
 manifests there.
 :::
 
 :::note[Reference]
-See [Deploy receipt schema](/docs/reference/annotations-and-crds/deploy-receipt-schema/)
+See [Deploy receipt schema](/docs/reference/annotations-crds-and-receipts/#deploy-receipt-schema)
 for the complete field definitions.
 :::

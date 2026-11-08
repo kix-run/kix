@@ -650,7 +650,6 @@ in
                           drop = [ "ALL" ];
                         };
                       };
-                      volumeMounts = [ { inherit (self.libraryMount) name mountPath; } ];
                     }
                 );
                 containers = [
@@ -685,8 +684,10 @@ in
               };
             };
           }
-          |> kix.withMounts [
+          |> kix.withMountsOn ([ "immich-server" ] ++ lib.optional config.initChownData "init-chown-data") [
             self.libraryMount
+          ]
+          |> kix.withMounts [
             self.configMount
             self.tmpMount
             self.oauthMount

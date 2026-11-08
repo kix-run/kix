@@ -1,0 +1,416 @@
+---
+title: "Cluster configuration"
+description: "Cluster-wide settings passed to kix.buildCluster for availability, namespaces, networking, and policy."
+---
+
+A cluster module is where you describe your Kubernetes environment as a whole: which cloud provider or distribution it runs on, what availability target your workloads should meet, which namespaces exist, and whether Kix should generate network policies and enforce scorecard rules. You pass one or more of these modules to `kix.buildCluster` whenever you set up a new cluster or adjust cluster-wide defaults.
+
+:::note[Helpful background]
+- [04. First cluster from scratch](/docs/tutorials/04-first-cluster-from-scratch/): walk through creating a minimal cluster file and deploying it locally.
+- [Personas, packages, and clusters](/docs/explanation/packages-and-clusters/): see how Kix separates cluster-wide operator settings from individual package definitions.
+- [Availability levels and derived pod spread](/docs/explanation/availability-levels/): learn how `cluster.availability` drives replica counts, pod spread constraints, and disruption budgets.
+- [Module system (nix.dev)](https://nix.dev/tutorials/module-system/): understand the NixOS module syntax and merging rules that Kix cluster modules use.
+:::
+
+A cluster listed in `kix.lib.mkFlake` is named after its `clusters` key, so
+the file passes no `name`. See [Use `mkFlake` in a consuming repo](/docs/how-to/start-and-inspect/use-mkflake-in-a-consuming-repo/)
+for when to set one, and for the check that stops a cluster that Kix 0.6
+deployed as `cluster` from changing its name.
+
+```nix
+{ kix, packages }:
+kix.buildCluster {
+  specialArgs = { inherit kix packages; };
+  modules = [
+    kix.flavors.gke
+    {
+      k8sVersion = "1.31";
+      cluster.domain = "example.com";
+      cluster.capabilities.availabilityZones = [ "us-central1-a" "us-central1-b" "us-central1-c" ];
+      availablePackages = packages;
+      autoNamespace = "platform";
+      networkPolicy.enable = true;
+      scorecard.maxSeverity = "error";
+    }
+  ];
+}
+```
+
+### Summary of top-level options
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| [`cluster.availability`](#cluster-availability) | submodule | derived from capabilities | Cluster-wide availability target and read-only substrate ceiling. |
+| [`cluster.topology`](#cluster-topology) | submodule | zone and host keys | Node label keys used for derived pod topology spread. |
+| [`cluster.capabilities`](#cluster-capabilities-and-nodes) | submodule | `null` per field (or flavor default) | Substrate capabilities such as `multiNode`, `availabilityZones`, `daemonSets`, and `privilegedContainers`. |
+| [`cluster.nodes`](#cluster-capabilities-and-nodes) | `attrsOf submodule` | `{ }` | Optional static node inventory (`roles`, `cpu`, `memory`, `labels`, `taints`). |
+| [`cluster.provider`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` (or flavor default) | Display name of the Kubernetes distribution or cloud provider. |
+| [`k8sVersion`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` | Target Kubernetes version checked against package `meta.k8s` constraints. |
+| [`cluster.kubernetes.uid`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` | UID of the target cluster's `kube-system` Namespace. Binds the definition to that one Kubernetes cluster. |
+| [`cluster.domain`](#cluster-network) | `nullOr str` | `null` | Public base domain used by `kix.expose` when an instance omits `ingress.host`. |
+| [`clusterDomain`](#cluster-network) | `str` | `"cluster.local"` | In-cluster DNS suffix used when constructing `out.fqdn`. |
+| [`cluster.network`](#cluster-network) | submodule | `{ }` | Pod CIDR, Service CIDR, and upstream DNS resolvers. |
+| [`cluster.containerd`](#cluster-capabilities-and-nodes) | submodule | standard containerd paths | Node containerd socket, registry config path, content store path, and layer retention setting. |
+| [`cluster.maintenance`](#cluster-capabilities-and-nodes) | submodule | `{ enable = false; ... }` | Maintenance window marker exposed on `cluster.out.maintenance`. |
+| [`cluster.secrets.accept`](#cluster-capabilities-and-nodes) | `nullOr (listOf enum)` | `null` | Secret value sources permitted by the `security.secretSource` scorecard rule. |
+| [`cluster.roles`](#cluster-roles) | `attrsOf submodule` | `{ }` (or flavor default) | How the environment claims infrastructure roles such as `cni`, `dns`, and `storageClasses`. |
+| [`cluster.factBehavior`](#cluster-factbehavior) | `attrsOf anything` | `{ }` | Per-kind override for whether custom resources conduct or terminate Service endpoint facts. |
+| [`namespaces`](#namespaces) | `attrsOf submodule` | `{ }` | Per-namespace labels, annotations, ResourceQuotas, NetworkPolicies, and Pod Security levels. |
+| [`autoNamespace`](#autonamespace) | `nullOr str` | `null` | Default namespace for packages auto-instantiated from `availablePackages`. |
+| [`availablePackages`](#availablepackages) | `attrsOf raw` | `{ }` | Package catalog used to create instances automatically when required dependencies are missing. |
+| [`networkPolicy`](#network-policy) | submodule | `{ enable = false; ... }` | Automatic network policy derivation from the dependency graph. |
+| [`scorecard`](#scorecard) | submodule | `{ enable = true; ... }` | Build-time policy evaluation, rule sets, severity overrides, and maximum severity cap. |
+| `clusterLabels` | `attrsOf str` | `{ }` | Labels added to `metadata.labels` on every rendered resource. |
+| `globalPartsOverlays` | `listOf raw` | `[ ]` | Post-build overlay functions (`scope: self: base: attrset`) applied to every instance. |
+| [`instances`](/docs/reference/instances-and-composition/#instances) | `attrsOf (attrsOf submodule)` | `{ }` | Package instances and imports grouped by `<namespace>.<instanceName>`. |
+| `consumers` | `attrsOf submodule` | `{ }` | Hosted Kix consumer clusters and their granted namespaces, quotas, and shared services. |
+| `reservedNamespaces` | `listOf str` | `[ ]` | Additional namespaces owned by a platform cluster that consumer clusters may not use. |
+| `secretsRecipient` | `nullOr str` | `null` | Public key (such as an age recipient) recorded in generated consumer interface files. |
+
+## Cluster availability
+
+`cluster.availability` sets the cluster-wide availability requirement and reports the highest level that the declared cluster capabilities can support.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `cluster.availability.default` | `"none" \| "pod" \| "node" \| "zone"` | `cluster.availability.substrate` | Availability level passed to instances that do not set their own `availability`. |
+| `cluster.availability.substrate` | read-only `"none" \| "pod" \| "node" \| "zone"` | derived | Highest availability level supported by `cluster.capabilities`. |
+
+The four availability levels form an ordered scale:
+
+| Level | Failure the workload must tolerate without downtime | Derived topology spread strictness |
+| --- | --- | --- |
+| `none` | None (single pod or downtime during updates is acceptable). | `ScheduleAnyway` |
+| `pod` | Loss of a single pod or a rolling update. | `ScheduleAnyway` |
+| `node` | Loss of a single node. | `DoNotSchedule` on `hostKey` |
+| `zone` | Loss of a single availability zone. | `DoNotSchedule` on `zoneKey`, `ScheduleAnyway` on `hostKey` |
+
+Kix derives `cluster.availability.substrate` from `cluster.capabilities`:
+
+| Declared capabilities | Derived `substrate` |
+| --- | --- |
+| `multiNode = false` | `"none"` |
+| `availabilityZones` has 2 or more entries | `"zone"` |
+| Otherwise (`multiNode = true` with 0 or 1 zones, or unknown capabilities) | `"node"` |
+
+When `multiNode` or `availabilityZones` is `null` (unknown), Kix derives `"node"` and emits a cluster warning asking you to declare the capability explicitly. Requesting a `cluster.availability.default` or instance `availability` higher than a known substrate fails evaluation.
+
+```nix
+cluster.capabilities.multiNode = true;
+cluster.capabilities.availabilityZones = [ "eu-west-1a" "eu-west-1b" "eu-west-1c" ];
+cluster.availability.default = "zone";
+```
+
+Packages receive the resolved level as their `availability` argument and use [`kix.availability.pick`](/docs/reference/composition-helpers/) to choose replica counts. For every Deployment and StatefulSet with `spec.replicas > 1` (unless the workload defines its own `topologySpreadConstraints`), Kix automatically injects `topologySpreadConstraints` across `cluster.topology.failureDomainKeys` and emits a `PodDisruptionBudget` with `maxUnavailable = 1`.
+
+:::tip[Use it in a task]
+See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/) for configuring capabilities and inspecting derived replicas and PodDisruptionBudgets.
+:::
+
+:::note[Explanation]
+See [Availability levels and derived pod spread](/docs/explanation/availability-levels/) for how availability ceilings, replica counts, and spread constraints interact.
+:::
+
+## Cluster topology
+
+`cluster.topology` defines the node labels that Kix uses when generating `topologySpreadConstraints`.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `cluster.topology.zoneKey` | `str` | `"topology.kubernetes.io/zone"` | Node label key that identifies an availability zone, rack, or outer failure domain. |
+| `cluster.topology.hostKey` | `str` | `"kubernetes.io/hostname"` | Node label key that identifies an individual node or host. |
+| `cluster.topology.failureDomainKeys` | read-only `listOf str` | derived | Ordered list of topology keys (`[ ]` when `multiNode = false`, `[ zoneKey hostKey ]` with 2+ zones, `[ hostKey ]` otherwise). |
+
+Override `zoneKey` on bare-metal or on-premises clusters that label racks or hypervisor hosts instead of cloud availability zones:
+
+```nix
+cluster.topology.zoneKey = "topology.example.com/rack";
+```
+
+Packages whose pods are created by an operator rather than a Kix Deployment or StatefulSet can read `clusterConfig.cluster.topology.failureDomainKeys` or call `kix.availability.spreadConstraints` to place the same spread rules into their custom resource specs.
+
+## Cluster capabilities and nodes
+
+`cluster.capabilities` describes the underlying Kubernetes substrate. Each boolean capability uses three-valued logic:
+- `true`: the capability is present.
+- `false`: the capability is absent; packages or resources that require it fail evaluation.
+- `null`: unknown; packages or resources that rely on it evaluate with a warning.
+
+### `cluster.capabilities` fields
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `multiNode` | `nullOr bool` | `null` | Whether the cluster has more than one schedulable node. When `false`, `cluster.availability.substrate` is `"none"` and required anti-affinity or `DoNotSchedule` spread on multi-replica workloads fails evaluation. |
+| `availabilityZones` | `nullOr (listOf str)` | `null` | List of availability zone names. Use `[ ]` for a known single-zone cluster. Two or more entries enable the `"zone"` availability level. |
+| `nodeAutoscaling` | `nullOr bool` | `null` | Whether a node autoscaler (such as Karpenter, cluster-autoscaler, or GKE Autopilot) can add nodes dynamically. |
+| `managedControlPlane` | `nullOr bool` | `null` | Whether the control plane is managed by a cloud provider. |
+| `gpu` | `nullOr bool` | `null` | Whether GPU scheduling (`nvidia.com/gpu`) is available on cluster nodes. |
+| `privilegedContainers` | `nullOr bool` | `null` | Whether pods may run privileged containers or use host namespaces (`hostNetwork`, `hostPID`, `hostIPC`). Set to `false` by `gke-autopilot` and `openshift`. |
+| `podSecurityEnforcement` | `nullOr ("privileged" \| "baseline" \| "restricted")` | `null` | Cluster-wide Pod Security Admission or Security Context Constraint level enforced by the platform. |
+| `daemonSets` | `nullOr bool` | `null` | Whether DaemonSets may be deployed (`false` on `gke-autopilot`). |
+
+### `cluster.nodes`
+
+`cluster.nodes.<nodeName>` records an optional static node inventory for bare-metal or fixed-size clusters:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `roles` | `listOf str` | `[ "worker" ]` | Node roles (such as `"control-plane"`, `"worker"`, `"storage"`, or `"gpu"`). |
+| `cpu` | `nullOr int` | `null` | vCPU count on the node. |
+| `memory` | `nullOr str` | `null` | Total node memory in Kubernetes quantity notation (for example, `"32Gi"`). |
+| `labels` | `attrsOf str` | `{ }` | Node labels. |
+| `taints` | `listOf anything` | `[ ]` | Node taints. |
+
+### `cluster.provider`, `k8sVersion`, and `cluster.kubernetes.uid`
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `cluster.provider` | `nullOr str` | `null` | Informational distribution name (such as `"k3s"`, `"eks"`, or `"talos"`). Used for display and telemetry only; Kix never branches on `cluster.provider`. |
+| `k8sVersion` | `nullOr str` | `null` | Target Kubernetes version string, such as `"1.31"`. Checked against package `meta.k8s.minVersion` and `meta.k8s.maxVersion`. The build carries it, and `kix deploy`, `kix plan`, and the operator stop when the cluster runs a different version, compared as precisely as you write it: `"1.31"` matches any 1.31.x, `"1.31.4"` matches only 1.31.4. A value with a patch number stops the deploy after every patch upgrade, which managed clusters (GKE, EKS, AKS) apply on their own, so write the minor version. The error names the value to set. `kix.interface` sets `k8sVersion` from the platform's interface file unless the definition sets it; a mismatch then names the platform and offers a new interface file or an override as the fix. `kix rollback` goes ahead with one line that says the target build was made for another version; the operator keeps repairing an `Active` record; `kix diff` does not check. When unset, the build runs no version check and Kix compares nothing. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/#check-the-kubernetes-version-too). |
+| `cluster.kubernetes.uid` | `nullOr str` | `null` | The UID of the target cluster's `kube-system` Namespace, a lowercase UUID (`kix status <cluster>` or `kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'`). When set, the build carries it, each deploy labels its Activation record `kix.run/kubernetes-uid`, and `kix deploy`, `kix plan`, `kix rollback`, `kix gc`, and the operator refuse to apply the build to any other Kubernetes cluster. Once a bound build has deployed, that Kubernetes cluster also refuses definitions that leave this unset. Several Kix clusters on one Kubernetes cluster set the same UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
+
+### `cluster.containerd`, `cluster.maintenance`, and `cluster.secrets.accept`
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `cluster.containerd.socket` | `str` | `"/run/containerd/containerd.sock"` | Path to containerd's gRPC socket on each node. Overridden by `k3s` and `rke2` flavors. |
+| `cluster.containerd.registryConfigPath` | `str` | `"/etc/containerd/certs.d"` | CRI `config_path` directory where containerd reads per-registry `hosts.toml` mirror files. Overridden by `k3s`, `rke2`, `gke`, and `talos`. |
+| `cluster.containerd.contentPath` | `str` | `"/var/lib/containerd/io.containerd.content.v1.content"` | Path to containerd's content store on each node. |
+| `cluster.containerd.discardUnpackedLayers` | `nullOr bool` | `null` | Whether containerd deletes compressed image layers after unpacking (`true` on `kind`, `talos`, `eks`, and `gke`; `false` on `aks`, `scaleway`, `k3s`, and `rke2`). Read by peer-to-peer mirror packages such as `spegel`. |
+| `cluster.maintenance.enable` | `bool` | `false` | Marks the cluster as being in a maintenance window via `cluster.out.maintenance`. |
+| `cluster.maintenance.reason` | `nullOr str` | `null` | Human-readable explanation for the maintenance window. |
+| `cluster.maintenance.until` | `nullOr str` | `null` | Informational ISO 8601 timestamp when the maintenance window ends. |
+| `cluster.secrets.accept` | `nullOr (listOf ("inline" \| "sops" \| "external" \| "controller" \| "configuration"))` | `null` | Restricts which Secret value sources are allowed in the cluster. When non-null, [`security.secretSource`](/docs/reference/scorecard-and-rules/#built-in-security-rules) reports any Secret key whose source is not in this list. |
+
+## Cluster network
+
+`cluster.network` and the top-level domain options record cluster addressing facts that packages and helpers read.
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `clusterDomain` | `str` | `"cluster.local"` | Internal Kubernetes DNS suffix used to build `<name>.<namespace>.svc.<clusterDomain>` on every resource's `out.fqdn`. Change this only if your cluster's kubelet and DNS service use a custom domain. |
+| `cluster.domain` | `nullOr str` | `null` | Public base domain for ingress routes. When set, `kix.expose` derives `<instanceName>.<cluster.domain>` for instances that do not set `config.ingress.host`. |
+| `cluster.network.podCidr` | `nullOr str` | `null` | Pod network CIDR (`"10.244.0.0/16"` on `kind`; `"10.42.0.0/16"` on `k3s` and `rke2`). Read by the `cilium` package when deploying its chart with `cluster-pool` IPAM. |
+| `cluster.network.serviceCidr` | `nullOr str` | `null` | Service network CIDR (for example, `"10.96.0.0/16"`). |
+| `cluster.network.dnsUpstream` | `listOf str` | `[ ]` | Upstream DNS resolver addresses read by the `coredns` package's `forward` plugin. When empty, CoreDNS forwards to `/etc/resolv.conf`. |
+
+```nix
+cluster.domain = "apps.example.com";
+cluster.network.dnsUpstream = [ "1.1.1.1" "9.9.9.9" ];
+```
+
+Do not confuse `clusterDomain` (the internal `.svc.cluster.local` DNS suffix) with `cluster.domain` (the external base domain for Ingresses and HTTPRoutes).
+
+## Cluster roles
+
+`cluster.roles.<role>` declares whether the cluster environment already provides an infrastructure capability. Built-in [flavors](/docs/reference/flavors-and-capabilities/) set these bindings to match stock distributions, and cluster modules can override them when a cluster is configured differently.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `cluster.roles.<role>.binding` | `null \| "absent" \| "shadowable" \| "exclusive"` | `null` | How the environment claims the role. |
+| `cluster.roles.<role>.provider` | `nullOr str` | `null` | Informational display name of the environment's implementation. |
+
+### Binding modes
+
+| Binding | Meaning |
+| --- | --- |
+| `null` | Unknown. Consumers or resources that rely on the role emit a warning if no managed instance provides it. |
+| `"absent"` | The environment does not provide the role. A managed package instance must fill it; otherwise required consumers fail evaluation and optional consumers resolve to `null`. |
+| `"shadowable"` | The environment provides a default implementation (usually paired with a `kix.mkImport` platform instance). A managed instance that claims the role replaces the platform default. |
+| `"exclusive"` | The environment owns the role and cannot be replaced in-band. Declaring a managed instance that claims the role is an evaluation error. |
+
+### Registered roles
+
+Role names come from the closed registry in `kix/lib/eval/roles.nix`. Every role name also acts as a dependency-injection alias.
+
+| Role | Provider `out` contract | Packages claiming the role | How Kix checks it |
+| --- | --- | --- | --- |
+| `cni` | none | `cilium` | Prevents deploying a second CNI when the environment binds `cni` as `exclusive`. |
+| `network-policy-enforcer` | `netpol` rule builders | `cilium` | Required when `networkPolicy.enable = true`. |
+| `dns` | `fqdn` | `coredns` | Workloads with cross-instance Service dependencies are ordered after the active DNS provider. |
+| `storageClasses` | `storageClassName` | `storage-classes` | Default StorageClass provider for PVCs and StatefulSets. |
+| `loadBalancer` | none | none (environment role) | Checked by `scope.mkResource` on `Service` objects with `type: LoadBalancer` (unless `loadBalancerClass` comes from `kix.providedLoadBalancerClass`). |
+| `metricsApi` | none | `metrics-server` | Checked on `HorizontalPodAutoscaler` resources reading `metrics.k8s.io` and packages calling `scope.requireMetricsApi`. |
+| `registryMirror` | none | `spegel` | Prevents running a second node-local OCI mirror when `embedded-registry` is enabled on k3s or RKE2 (`exclusive`). |
+| `snapshotController` | `crds` (`VolumeSnapshot`, `VolumeSnapshotClass`, `VolumeSnapshotContent`) | `snapshot-controller` | Provides volume snapshot CRD handles to storage drivers and backup packages. |
+
+To replace a distribution's bundled component with a Kix-managed package, disable the component in the distribution and set the role binding to `"absent"`:
+
+```nix
+# k3s started with --flannel-backend=none --disable-network-policy
+cluster.roles.cni = {
+  binding = "absent";
+  provider = null;
+};
+instances.kube-system.cilium.package = packages.cilium;
+```
+
+## Cluster factBehavior
+
+`cluster.factBehavior` overrides how custom resources handle Service endpoint facts during network policy derivation.
+
+| Property | Value |
+| --- | --- |
+| Type | `attrsOf anything` keyed by `"<group>/<Kind>"` |
+| Default | `{ }` |
+
+When a custom resource embeds a Kix Service's `out.fqdn` or `out.url`, Kix needs to know whether the resource's controller connects to that Service directly (`"terminate"`) or passes the address along to another resource (`"conduct"`). Normally, the package that owns the CRD declares `factBehavior` on [`scope.mkCRD` or `scope.mkCRDRef`](/docs/reference/secrets-crds-and-rbac/). Use `cluster.factBehavior` when a custom resource is rendered without a typed CRD builder (for example, inside a Helm chart) or when you need to override the CRD's declaration:
+
+```nix
+cluster.factBehavior."monitoring.coreos.com/Prometheus" = {
+  endpoint = "terminate";
+  podSelector = cr: {
+    "app.kubernetes.io/name" = "prometheus";
+    "operator.prometheus.io/name" = cr.metadata.name;
+  };
+};
+```
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `endpoint` | `"conduct" \| "terminate"` | yes | `"conduct"` forwards endpoint facts through the custom resource's `out.*`; `"terminate"` generates egress policies for the operator's operand pods and ingress policies on the target Service. |
+| `podSelector` | `cr: attrsOf str` | when `endpoint = "terminate"` | Function from the rendered custom resource manifest to the pod selector labels of the pods the operator creates. |
+| `podNamespace` | `str` or `cr: str` | no | Namespace where the operand pods run, if different from the custom resource's own namespace. |
+
+## Namespaces
+
+Kix automatically creates a `Namespace` resource for every namespace that contains an active instance. Use `namespaces.<name>` to attach metadata, quotas, Kubernetes `NetworkPolicy` objects, or Pod Security Admission levels to a namespace, or to create an empty namespace.
+
+```nix
+namespaces.apps = {
+  labels.team = "checkout";
+  annotations."example.com/oncall" = "checkout@example.com";
+  podSecurity = "restricted";
+  resourceQuota = {
+    pods = "20";
+    "requests.cpu" = "8";
+    "requests.memory" = "16Gi";
+  };
+  networkPolicies.allow-DNS = {
+    podSelector = { };
+    policyTypes = [ "Egress" ];
+  };
+};
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `labels` | `attrsOf str` | `{ }` | Additional labels merged into the `Namespace` metadata alongside `kubernetes.io/metadata.name` and `app.kubernetes.io/managed-by`. |
+| `annotations` | `attrsOf str` | `{ }` | Annotations placed on the `Namespace` resource. |
+| `resourceQuota` | `nullOr anything` | `null` | When non-null, emits `ResourceQuota/<namespace>-quota` with this set as `spec.hard` and checks namespace workload usage at build time. |
+| `networkPolicies` | `attrsOf anything` | `{ }` | Emits one standard `networking.k8s.io/v1` `NetworkPolicy` per key, named `<namespace>-<key>`, with the value as `spec`. |
+| `podSecurity` | `null \| "privileged" \| "baseline" \| "restricted"` | `null` | Sets `pod-security.kubernetes.io/enforce` on the Namespace and validates all pod templates in the namespace against that Pod Security Standard at build time. |
+
+### Build-time Pod Security and ResourceQuota checks
+
+- **Pod Security Admission**: If any instance in the namespace declares `meta.podSecurity`, the namespace receives the most permissive level required by its instances. Setting `namespaces.<name>.podSecurity` to a level stricter than an instance in that namespace requires fails evaluation. When a namespace has an enforced level (from `namespaces.<name>.podSecurity`, `meta.podSecurity`, or a consumer platform interface), Kix checks every pod template in the namespace against the Kubernetes Pod Security Standards at build time and reports each container field that violates the policy.
+- **ResourceQuota**: Kix sums the minimum pod, CPU, memory, and storage usage across all workloads in the namespace (including custom resources whose CRD declares `usesAtLeast`) and compares the total against `namespaces.<name>.resourceQuota`, any unscoped `ResourceQuota` resource in the namespace, and any consumer interface quota. If the minimum usage exceeds a limit, evaluation fails with one error per limit. The error lists the objects Kix counted with their usage, and the objects it could not count: DaemonSets and CronJobs by name, and custom resources whose kind declares no `usesAtLeast` grouped by kind. See [Declaring quota usage](/docs/reference/secrets-crds-and-rbac/#declaring-quota-usage-usesatleast-and-kixusage) for how a package declares it.
+
+## autoNamespace
+
+`autoNamespace` sets the default namespace for packages that Kix instantiates automatically from `availablePackages`.
+
+| Property | Value |
+| --- | --- |
+| Type | `nullOr str` |
+| Default | `null` |
+
+When Kix auto-instantiates a catalog package, it selects the target namespace in this order:
+1. `availablePackages.<name>.namespace`, if set on the catalog entry;
+2. `autoNamespace`, if set on the cluster;
+3. the namespace of the consumer instance that requested the dependency.
+
+Setting `autoNamespace = "platform"` places shared auto-instantiated providers into a single namespace instead of duplicating them in every requesting namespace. It has no effect on instances declared explicitly under `instances`.
+
+## availablePackages
+
+`availablePackages` registers a catalog of packages that Kix can instantiate on demand when a required dependency argument is not satisfied by any declared instance.
+
+```nix
+availablePackages = packages // {
+  prometheus = {
+    package = packages.prometheus;
+    namespace = "monitoring";
+    aliases = [ "metrics" ];
+  };
+};
+```
+
+| Entry shape | Meaning |
+| --- | --- |
+| `availablePackages.<name> = <package>;` | Shorthand for `{ package = <package>; }`. |
+| `availablePackages.<name> = { package, namespace?, aliases? };` | Full catalog entry with an optional fixed `namespace` (`nullOr str`) and additional `aliases` (`listOf str`). |
+
+### Auto-instantiation rules
+
+- **Required dependencies only**: Only required build arguments (without `? null`) create demand against `availablePackages`. Optional build arguments resolve to an active instance or `null`. Explicit `deps.<arg>` overrides also bypass catalog lookup.
+- **Transitive resolution**: If an auto-instantiated package has its own required dependencies, Kix resolves them transitively using the same rules.
+- **One-per-cluster packages**: If a package claims a cluster-wide role (`meta.roles`) or lists `"cluster:<own-alias>"` in `meta.conflictsWith`, it can only be instantiated once in the cluster. If consumers in two different namespaces demand it and neither `autoNamespace` nor an entry `namespace` pins it to a single namespace, evaluation fails and asks you to declare the instance explicitly under `instances`.
+- **Ambiguous catalog claimants**: If two or more entries in `availablePackages` answer the same demanded dependency name, evaluation fails and lists the claimants. Disambiguate by declaring an instance with `optional = true` under `instances` or by removing the duplicate entry from `availablePackages`.
+
+:::tip[Use it in a task]
+See [Use auto-instantiation with `availablePackages`, `optional`, and `autoNamespace`](/docs/how-to/debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace/) for examples of demand-driven instantiation.
+:::
+
+## Network policy
+
+`networkPolicy` controls automatic network policy generation from the dependency graph. When enabled, Kix uses the cluster's `network-policy-enforcer` provider (such as `cilium`) to emit policies for service-to-service traffic, DNS, API server access, ingress controllers, Prometheus and VictoriaMetrics scraping, StatefulSet peer traffic, and package intents.
+
+```nix
+networkPolicy = {
+  enable = true;
+  defaultDeny = true;
+  directions = "both";
+};
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `networkPolicy.enable` | `bool` | `false` | Derive network policies from the dependency graph. Requires an active instance that claims `meta.roles = [ "network-policy-enforcer" ]`. |
+| `networkPolicy.defaultDeny` | `bool` | `true` | Emit a default-deny policy in every Kix-managed namespace for the enforced directions. |
+| `networkPolicy.directions` | `"ingress" \| "egress" \| "both"` | `"both"` | Which traffic directions Kix enforces in default-deny policies, derived policies, and `kix.operandPolicy`. |
+| `networkPolicy.platformIntents` | `attrsOf anything` | `{ }` | Connectivity intents for non-Kix pods (such as pre-installed `kube-system` components) or configurable workload egress targets. |
+
+Each `networkPolicy.platformIntents.<name>` entry supports:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `namespace` | `str` | Namespace for a namespaced policy. Omit when `scope = "clusterwide"`. |
+| `scope` | `"namespaced" \| "clusterwide"` | Policy scope (default `"namespaced"`). Clusterwide intents emit a `CiliumClusterwideNetworkPolicy`. |
+| `targetNamespace` | `nullOr str` | Optional `io.kubernetes.pod.namespace` filter on a clusterwide policy's endpoint selector. |
+| `podSelector` | `attrsOf str` | Pod labels selected by the policy. |
+| `ingress` | `listOf attrs` | Ingress rules (`{ from = "world" \| "all-pods" \| "apiserver"; ports?; entities?; }`). |
+| `egress` | `listOf attrs` | Egress rules (`{ to = "world" \| "all-pods" \| "apiserver" \| "dns"; ports?; entities?; }`). |
+
+:::note[Explanation]
+See [Network policy derivation from the graph](/docs/explanation/network-policy/) for how Kix discovers traffic paths and synthesizes policies.
+:::
+
+## Scorecard
+
+`scorecard` configures build-time policy evaluation over the cluster's rendered manifests, packages, namespaces, and cluster-wide state.
+
+```nix
+scorecard = {
+  enable = true;
+  maxSeverity = "error";
+  ruleOverrides = {
+    byRule."reliability.hasProbes".severity = "error";
+    byNamespace."sandbox-*"."security.*".severity = "warning";
+  };
+  knownAnnotationDomains = [ "eks.amazonaws.com" ];
+};
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `scorecard.enable` | `bool` | `true` | Run the scorecard during cluster evaluation. |
+| `scorecard.rules` | `attrsOf anything` | `kix.rules` | Nested attribute set of active rules (`{ <category>.<ruleName> = rule; }`). Assigning this replaces the default rule set unless you merge `kix.rules`. |
+| `scorecard.maxSeverity` | `"info" \| "warning" \| "error"` | `"warning"` | Caps the effective severity of every finding. Under the default `"warning"` cap, `"error"` rules are reported as warnings and do not fail the build; set `"error"` to fail evaluation on error-severity findings. |
+| `scorecard.ruleDefaults` | `attrsOf anything` | `{ }` | Fallback rule settings (`{ severity = "warning" \| "error" \| "info"; }`) for rules that omit `severity`. |
+| `scorecard.ruleOverrides` | `attrsOf anything` | `{ }` | Scoped overrides under `byRule`, `byOwner`, and `byNamespace`. |
+| `scorecard.knownAnnotationDomains` | `listOf str` | `[ ]` | External annotation domains exempted from the `architecture.annotationDomainOwnership` rule. |
+
+:::note[Reference]
+See [Scorecard and rules](/docs/reference/scorecard-and-rules/) for the complete rule schema, override precedence, and catalog of built-in rules.
+:::

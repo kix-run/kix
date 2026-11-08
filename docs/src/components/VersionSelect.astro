@@ -1,0 +1,87 @@
+---
+// The docs version picker, in the header and in the mobile menu footer.
+//
+// Each version of the docs is a separate build, so no build knows the
+// others. The page renders this build's version alone, and the script
+// fills in the rest from /docs/versions.json, which CI writes when it
+// deploys (.github/workflows/pages.yml). Choosing a version opens the same
+// page in that version's docs.
+import { Icon } from '@astrojs/starlight/components';
+import { docsVersionLabel, versionsListPath } from '../lib/docs-version';
+
+const base = import.meta.env.BASE_URL.replace(/\/*$/, '/');
+---
+
+<kix-version-select data-versions={versionsListPath} data-base={base}>
+  <label>
+    <span class="sr-only">Docs version</span>
+    <select autocomplete="off">
+      <option value={base} selected>{docsVersionLabel}</option>
+    </select>
+    <Icon name="down-caret" class="caret-icon" />
+  </label>
+</kix-version-select>
+
+<style>
+  label {
+    position: relative;
+    display: flex;
+    align-items: center;
+    color: var(--sl-color-gray-1);
+  }
+  .caret-icon {
+    position: absolute;
+    top: 50%;
+    inset-inline-end: 0;
+    transform: translateY(-50%);
+    font-size: 1.25rem;
+    pointer-events: none;
+  }
+  select {
+    appearance: none;
+    border: 0;
+    padding-block: 0.625rem;
+    padding-inline: 0 1.5rem;
+    background-color: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+  option {
+    background-color: var(--sl-color-bg-nav);
+    color: var(--sl-color-gray-1);
+  }
+</style>
+
+<script>
+  type DocsVersion = { label: string; path: string };
+
+  class KixVersionSelect extends HTMLElement {
+    connectedCallback() {
+      const select = this.querySelector('select');
+      const base = this.dataset.base;
+      const listPath = this.dataset.versions;
+      if (!select || !base || !listPath) return;
+
+      select.addEventListener('change', () => {
+        const page = location.pathname.startsWith(base) ? location.pathname.slice(base.length) : '';
+        location.assign(select.value + page + location.hash);
+      });
+
+      // Without the list (a local build, or a failed request) the picker
+      // shows only this build's version.
+      fetch(listPath)
+        .then((response) => (response.ok ? response.json() : []))
+        .then((versions: DocsVersion[]) => {
+          if (!versions.some((version) => version.path === base)) return;
+          select.replaceChildren(
+            ...versions.map((version) => new Option(version.label, version.path, false, version.path === base)),
+          );
+        })
+        .catch(() => {});
+    }
+  }
+
+  if (!customElements.get('kix-version-select')) {
+    customElements.define('kix-version-select', KixVersionSelect);
+  }
+</script>

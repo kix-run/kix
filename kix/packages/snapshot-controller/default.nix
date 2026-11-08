@@ -69,6 +69,8 @@ let
     scope.mkCRD {
       inherit (crd) spec;
       annotations."api-approved.kubernetes.io" = crd.metadata.annotations."api-approved.kubernetes.io";
+      # A snapshot, class, or content object runs no pods.
+      usesAtLeast = _: { };
     };
 
   # The CRDs come from `release`; a controller of another minor release may

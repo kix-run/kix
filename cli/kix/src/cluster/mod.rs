@@ -2,6 +2,7 @@
 
 pub mod activation;
 pub mod apply;
+pub mod binding;
 pub mod cancel;
 pub mod client;
 pub mod deploy_log;
@@ -13,6 +14,8 @@ pub mod fake_api;
 pub mod fieldsv1;
 pub mod graph;
 pub mod inventory;
+pub mod kept;
+pub mod kubernetes_version;
 pub mod migrate;
 pub(crate) mod ops;
 pub mod owned_view;
@@ -28,3 +31,15 @@ pub mod stream;
 pub mod tenancy;
 pub mod topology;
 pub mod watchdog;
+
+/// Convert a Kubernetes timestamp to the `chrono` type the rest of Kix uses.
+///
+/// Return `None` for a time that `chrono` cannot hold.
+pub fn chrono_time(
+    time: &k8s_openapi::apimachinery::pkg::apis::meta::v1::Time,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let nanos = time.0.as_nanosecond();
+    let seconds = i64::try_from(nanos.div_euclid(1_000_000_000)).ok()?;
+    let subsec = u32::try_from(nanos.rem_euclid(1_000_000_000)).ok()?;
+    chrono::DateTime::from_timestamp(seconds, subsec)
+}

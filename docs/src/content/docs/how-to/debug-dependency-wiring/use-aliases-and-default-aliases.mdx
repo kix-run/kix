@@ -12,10 +12,10 @@ one instance when the mapping belongs to a particular cluster.
 ## Declare a package default alias
 
 Add `meta.defaultAliases` when every instance of a package provides the same
-kind of dependency. A persistent-volume package can advertise itself as
+kind of dependency. A persistent-volume-claim package can advertise itself as
 `storage` even when cluster authors choose names such as `data` or `uploads`:
 
-```nix title="packages/persistent-volume/default.nix"
+```nix title="packages/persistent-volume-claim/default.nix"
 {
   meta = {
     version = "1.0.0";
@@ -41,7 +41,7 @@ The cluster can now give the provider a task-specific instance name:
 
 ```nix title="cluster.nix"
 instances.apps.data = {
-  package = packages.persistent-volume;
+  package = packages.persistent-volume-claim;
 };
 ```
 
@@ -95,12 +95,12 @@ Aliases can also make two `availablePackages` entries answer one name. See
 [Choose between catalog packages that answer one name](/docs/how-to/debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace/#choose-between-catalog-packages-that-answer-one-name).
 
 :::note[Explanation]
-See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
+See [Dependency resolution and why explicit deps matter](/docs/explanation/the-dependency-graph/#dependency-resolution-and-explicit-deps)
 for resolution order and ambiguity handling.
 :::
 
 :::note[Reference]
-See [`aliases`](/docs/reference/instance-schema/aliases/) and
-[`meta.defaultAliases`](/docs/reference/package-schema/meta/#defaultaliases) for the exact
+See [`aliases`](/docs/reference/instances-and-composition/#aliases) and
+[`meta.defaultAliases`](/docs/reference/package-anatomy/#meta) for the exact
 schemas.
 :::

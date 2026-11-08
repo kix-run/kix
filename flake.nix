@@ -12,6 +12,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     crane.url = "github:ipetkov/crane";
+    # The Nix release the Kix runtime ships (cli/runtime/runtime.nix). It
+    # keeps its own nixpkgs, whose builds of it Hydra caches, including the
+    # static Linux build.
+    nix-runtime.url = "github:NixOS/nix/2.35.4";
   };
 
   outputs =
@@ -47,6 +51,7 @@
           gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
           kind = ./clusters/test-kind.nix;
           kind-v2 = ./clusters/test-kind-v2.nix;
+          kind-port = ./clusters/test-kind-port.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
           spegel = ./clusters/test-spegel.nix;
           volsync = ./clusters/test-volsync.nix;
@@ -85,15 +90,37 @@
         system:
         let
           pkgs = inputs.nixpkgs.legacyPackages.${system};
+          hasRuntime = builtins.elem system runtimeSystems;
+          runtime = import ./cli/runtime/in-store.nix {
+            inherit pkgs;
+            nixRelease = inputs.nix-runtime;
+          };
         in
         {
+          # Kix with its runtime in libexec/kix, where it looks first.
           kix = mkKixPackage {
             inherit pkgs;
             lib = pkgs.lib;
             crane = inputs.crane;
+            runtime = if hasRuntime then runtime else null;
           };
         }
+        // lib.optionalAttrs hasRuntime {
+          # The programs a Kix release ships beside the binary
+          # (cli/runtime/default.nix).
+          kix-runtime-spec = import ./cli/runtime {
+            inherit pkgs;
+            nixRelease = inputs.nix-runtime;
+          };
+          # The same programs, run from /nix/store.
+          kix-runtime = runtime;
+        }
       );
+      runtimeSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
 
       # Run the kix/lib evaluation test matrix (kix/lib/tests) as a flake check
       # so `nix flake check` covers it. Forcing `ok` evaluates every case; a
@@ -164,6 +191,12 @@
               pkgs.openssl
             ]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus ];
+
+            # Kix runs its programs only from a Kix runtime, never from PATH.
+            # This one ships the programs a release ships, so `cargo test`
+            # and a `kix` built with cargo run the versions the library
+            # names.
+            KIX_RUNTIME_DIR = cliPackages.${system}.kix-runtime or "";
 
             # Keyed on the checkout path and kept OUT of the checkout, for
             # the reason devenv.nix spells out at length: a `path:` flakeref
@@ -318,7 +351,11 @@
         // (packageEval.${system} or { })
       ) clusterOutputs.checks;
 
-      # Preserve the forPkgs API for external consumers.
+      # Preserve the forPkgs API for external consumers. It supports only the
+      # default kix builder, because it does not read kix.toml or publish the
+      # outputs the kix program reads. A project that wires its own flake
+      # outputs should merge mkFlake's outputs instead, and take the library
+      # from `legacyPackages.<system>.kixLib`.
       #
       # `self` is the consumer's flake. Without it, Kix cannot tell a pin
       # file in that flake from one in another input, so image sources name

@@ -92,6 +92,7 @@ let
     meta = {
       version = "test";
       defaultAliases = [ "prometheusServer" ];
+      scope = "cluster";
     };
     build =
       {

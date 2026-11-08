@@ -29,14 +29,14 @@ A small Kix cluster usually has:
 - a `flake.nix` that exposes one or more named clusters;
 - a `cluster.nix` that says which packages are installed where;
 - package definitions that know how to produce Kubernetes resources;
-- the `kix` CLI, which renders, checks, diffs, deploys, and inspects the result.
+- Kix, the program you run as `kix`, which renders, checks, diffs, deploys, and inspects the result.
 
 You can think of Kix as sitting one step before YAML: it builds the YAML, keeps
 track of relationships while doing so, and gives the CLI enough structure to
 operate on the result.
 
 :::note[Explanation]
-See [Kix as a strict Kubernetes superset](/docs/explanation/kix-as-a-strict-kubernetes-superset/)
+See [Kix as a strict Kubernetes superset](/docs/explanation/packages-and-clusters/#kix-as-a-strict-kubernetes-superset)
 for the design argument behind "the output is still Kubernetes."
 :::
 
@@ -59,7 +59,7 @@ it for more of the cluster, because more of the system becomes visible to the
 same graph.
 
 :::note[Explanation]
-See [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/)
+See [The dependency graph as the model](/docs/explanation/the-dependency-graph/)
 when you want a deeper look at how the graph drives Kix.
 :::
 

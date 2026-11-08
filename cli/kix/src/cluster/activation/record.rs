@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED};
 use kube::api::DynamicObject;
@@ -16,7 +17,8 @@ pub struct Record {
     /// `kix.run/identity-hash` annotation value used to resolve the record to a
     /// closure.
     pub identity_hash: Option<String>,
-    /// Store path of the activation result directory containing `kix-packages.json`.
+    /// `kix.run/built-via`: the store path of the build, an index file or a
+    /// result directory ([`crate::eval::build_files::BuildFiles`]).
     pub built_via: Option<String>,
     /// `kix.run/deployed-at` annotation value, written only by
     /// [`super::Records::finalize_deploy`] when a deploy runs to completion.
@@ -36,6 +38,11 @@ pub struct Record {
     pub operator_driven: bool,
     /// `status.orphansKeptFrom`, listing builds whose orphans remain on the cluster.
     pub orphans_kept_from: Vec<KeptOrphanSource>,
+    /// `status.packageIndex`, which package each resource of the record's
+    /// build belongs to. `None` when the record has none, as records written
+    /// before Kix wrote it do, or when it is in a format this release does
+    /// not read.
+    pub package_index: Option<RecordPackageIndex>,
     /// `status.waves`, recording per-wave progress for commands waiting on the operator.
     pub waves: Vec<WaveRecord>,
     pub total_waves: usize,
@@ -88,9 +95,17 @@ impl Record {
             previous_activation: status("/status/previousActivation"),
             failure_reason: status("/status/failure/reason"),
             failed_at: status("/status/failure/at"),
-            created_at: obj.metadata.creation_timestamp.as_ref().map(|t| t.0),
+            created_at: obj
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .and_then(crate::cluster::chrono_time),
             operator_driven: obj.data.pointer("/spec/source").is_some(),
             orphans_kept_from: orphans_kept_from(obj),
+            package_index: obj
+                .data
+                .pointer(&format!("/status/{}", keys::PACKAGE_INDEX_FIELD))
+                .and_then(RecordPackageIndex::from_value),
             waves: obj
                 .data
                 .pointer("/status/waves")

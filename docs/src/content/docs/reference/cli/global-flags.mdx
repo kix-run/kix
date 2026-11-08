@@ -25,9 +25,9 @@ for plugins.
 | `-q`, `--quiet` | `KIX_QUIET` | Off | Suppress progress and informational output, and log errors only. Results still print. |
 | `--no-color` | `NO_COLOR`, below | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
 | `--context <CONTEXT>` | `KIX_CONTEXT` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
-| `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed to Nix as a flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
-| `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and evaluate from Nix every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
-| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL for every `nix` command Kix runs, like `nix --override-input`. Repeatable, two values each time. |
+| `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed as a remote flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
+| `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and re-evaluate the cluster every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
+| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL during evaluation. Repeatable, two values each time. |
 | `-h`, `--help` | | | Print help. `-h` prints a summary, `--help` the long form. |
 | `-V`, `--version` | | | Print the version. |
 
@@ -39,23 +39,30 @@ where the table shows them; elsewhere they are accepted and have no effect.
 | Command | `-o` | `--context` | `--flake` | `--no-cache` | `--override-input` |
 | --- | --- | --- | --- | --- | --- |
 | `build`, `check`, `graph`, `inspect`, `images`, `list` | yes | | yes | yes | yes |
-| `status` | yes | yes | flat view only | flat view only | flat view only |
+| `status` | yes | yes | yes | flat view only | yes |
 | `diff` | yes | yes | yes | | yes |
 | `plan` | yes | yes | yes | | yes |
 | `deploy`, `gc`, `migrate domain`, `logs`, `pf` | | yes | yes | | yes |
 | `export` | | | yes | | yes |
-| `rollback`, `drift` | yes | yes | | | |
-| `health`, `snapshot save` | | yes | | | |
+| `rollback` | yes | yes | yes | | yes |
+| `drift` | yes | yes | | | |
+| `health` | | yes | yes | | yes |
+| `snapshot save` | | yes | | | |
 | `compliance sbom` | yes | | yes | | yes |
 | `compliance attest` | yes | yes | yes | | yes |
 | `compliance audit` | | | yes | yes | yes |
 | `pin` | yes | | yes | | |
+| `lib`, `doctor` | | | yes | | |
 | `completions` | | | | | |
 
 `--no-cache` applies only to commands that read the
 [eval cache](/docs/reference/cli/eval-cache-behavior/). `kix pin` uses
-`--flake` only as a place to look for `pins.json`. `-o` on `rollback` applies
-only with `--list`, and on `deploy` only with `--dry-run`.
+`--flake` only as a place to look for `pins.json`, and `kix doctor` uses it to
+locate [`kix.toml`](/docs/reference/kix-toml/). `rollback`, `health`, and
+`status --operator` use `--flake` and `--override-input` only to evaluate the
+cluster name when no Activation record in the current context already carries
+`<CLUSTER>` as its `kix.run/cluster` label. `-o` on `rollback` applies only
+with `--list`, and on `deploy` only with `--dry-run`.
 
 ## Environment variables
 
@@ -64,6 +71,8 @@ only with `--list`, and on `deploy` only with `--dry-run`.
 | `NO_COLOR` | Any value disables colour, as `--no-color` does. Colour is also off when `TERM=dumb` or stdout is not a terminal. Deploy and gc have the progress-line exception noted above. |
 | `KIX_LOG` | A tracing filter, such as `kix=debug` or `debug`, that replaces the level chosen by `-v` and `-q`. |
 | `KIX_NO_INTERACTIVE` | Any value makes Kix treat the terminal as non-interactive, so commands that ask for confirmation refuse to prompt and need `--yes`. Stdin that is not a terminal has the same effect. |
+| `KIX_RUNTIME_DIR` | Directory that holds the Kix runtime (`nix`, `helm`, `kubectl`, `sops`) and `manifest.json`. See [`kix doctor`](/docs/reference/cli/doctor/#how-kix-locates-its-runtime). |
+| `KIX_STORE_ROOT` | Root directory for Kix's local store under the default `kix` builder. Defaults to `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store` when `XDG_CACHE_HOME` is unset). Setting `KIX_STORE_ROOT` on a project that sets `builder = "nix"` in [`kix.toml`](/docs/reference/kix-toml/) is an error. |
 
 The variables that tune how Kix talks to the Kubernetes API are listed in
 [API server retries and request limits](/docs/reference/cli/api-server-transport/).
@@ -104,6 +113,6 @@ executable; NAME may hold letters, digits, `-`, and `_`.
 ]} />
 
 :::tip[Use it in a task]
-See [Install and run the Kix CLI](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
-for setting up the CLI against a flake.
+See [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+for setting up Kix against a flake.
 :::

@@ -70,8 +70,8 @@ Replace `example-cluster-backups` and the region with values for your bucket.
 The location's `config` is the plugin's settings map. For an S3-compatible
 service with a custom endpoint, set `s3Url` and `s3ForcePathStyle`. For one
 that rejects the AWS SDK's checksums, set `checksumAlgorithm = ""`. To trust a
-private certificate authority, set `objectStorage.caCertRef` to a Secret key in
-the same namespace.
+private certificate authority, set `backupStorageLocation.objectStorage.caCertRef`
+to a Secret key in the same namespace.
 
 When the object store runs in the same cluster, wire it as the
 `objectStorage` dependency. The package then sets `s3Url` to that Service and
@@ -88,8 +88,8 @@ The `daily` schedule backs up the `applications` namespace at 02:00 UTC,
 retains each backup for 30 days, and uses the node agent for volume data.
 Change the namespace selection, schedule, and retention period to match your
 recovery policy. A schedule accepts five cron fields, a descriptor such as
-`@every 6h`, and an optional `CRON_TZ=<zone>` prefix; anything else fails
-evaluation.
+`@every 6h`, and an optional `CRON_TZ=<zone>` or `TZ=<zone>` prefix; anything
+else fails evaluation.
 
 ### Volume policies
 
@@ -186,7 +186,7 @@ backup = velero.out.mkBackup scope {
 `velero.out.mkSchedule` takes the same arguments. List at least one resource
 of the calling instance in `requires`, such as the workload it backs up. The
 location the builder waits for belongs to the velero instance, and
-`nix flake check` refuses a resource that references nothing in its own
+`kix check` refuses a resource that references nothing in its own
 instance. For another kind, such as
 a Restore or a second backup location, build the resource in Velero's
 namespace with `(scope.forService velero).mkCR velero.out.crds.Restore { ... }`.
@@ -209,7 +209,7 @@ afterwards.
 - **Permissions.** The server reads every kind for a backup and recreates any
   kind on a restore, including custom resources installed later, so its
   ServiceAccount is bound to `cluster-admin`. The package declares the
-  [`cluster-admin`](/docs/reference/package-schema/meta/#unsafe) grant, which the scorecard
+  [`cluster-admin`](/docs/reference/package-anatomy/#meta) grant, which the scorecard
   lists.
 - **Pod security.** The node agent reads pod volumes from the host as root, so
   the namespace gets the `privileged` Pod Security level.
@@ -225,9 +225,14 @@ afterwards.
 - **Metrics.** With a `prometheus` dependency, the package adds metrics
   Services for the server and the node agent, a ServiceMonitor for each, and
   three alerts: a failed or partially failed backup, a schedule with no
-  successful backup within `metrics.maxBackupAge` (default `26h`; raise it
-  above your longest schedule interval), and a server Prometheus cannot
-  scrape.
+  successful backup within its threshold, and a server Prometheus cannot
+  scrape. The missing-backup threshold comes from
+  `metrics.maxBackupAge.<schedule>` (default `{ }`); unlisted schedules in
+  `schedules` derive their threshold from `kix.schedules.staleAfter` (two
+  periods plus two hours, such as `50h` for a daily schedule and `338h` for a
+  weekly schedule, failing evaluation if the cron period cannot be read), and
+  schedules created with `out.mkSchedule` use `metrics.otherSchedulesMaxAge`
+  (default `50h`).
 
 ## Cloud identity instead of keys
 

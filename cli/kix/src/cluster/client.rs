@@ -49,8 +49,8 @@ pub struct ResiliencePolicy {
     /// Total wall-clock budget across all attempts of one request. Once
     /// spent, the last outcome is returned.
     pub budget: Duration,
-    /// Per-attempt deadline for requests that are not watches. `None`
-    /// leaves only kube's own idle read timeout.
+    /// Per-attempt deadline for requests that are not watches, measured until
+    /// the response headers arrive. `None` means no deadline.
     pub request_timeout: Option<Duration>,
     /// TCP connect timeout, applied on kube's connector.
     pub connect_timeout: Duration,
@@ -142,6 +142,14 @@ pub async fn build_client(
     policy: ResiliencePolicy,
 ) -> Result<Client, kube::Error> {
     config.connect_timeout = Some(policy.connect_timeout);
+    // A read that stalls this long means a dead connection. The server ends
+    // a watch after 290 s, so a live watch always reads something before
+    // this. The operator's watch reconnects instead of waiting forever.
+    config.read_timeout = Some(std::time::Duration::from_secs(295));
+    // kube's own retry layer would sit beneath this one and repeat each
+    // attempt up to 15 times, so the attempt cap and budget here would no
+    // longer bound a request.
+    config.default_retry = false;
     let builder = ClientBuilder::try_from(config)?;
     Ok(builder.with_layer(&ResilienceLayer::new(policy)).build())
 }
@@ -372,7 +380,7 @@ pub fn backoff(policy: &ResiliencePolicy, attempt: usize) -> Duration {
     let jitter_ms = if half.is_zero() {
         0
     } else {
-        rand::Rng::gen_range(&mut rand::thread_rng(), 0..=half.as_millis() as u64)
+        fastrand::u64(0..=half.as_millis() as u64)
     };
     half + Duration::from_millis(jitter_ms)
 }
@@ -1177,7 +1185,7 @@ mod tests {
     /// writes back, testing the case where the TCP handshake succeeds and the
     /// server then hangs.
     async fn fake_apiserver(reply: Option<&'static [u8]>) -> String {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1186,6 +1194,16 @@ mod tests {
             let mut held = Vec::new();
             while let Ok((mut sock, _)) = listener.accept().await {
                 if let Some(bytes) = reply {
+                    // Reply only once the request head has arrived. hyper
+                    // refuses a response that comes before its request.
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
                     let _ = sock.write_all(bytes).await;
                     let _ = sock.flush().await;
                 }
@@ -1228,7 +1246,7 @@ mod tests {
     async fn probe_passes_when_the_endpoint_answers_at_all() {
         // A 403 on /version still proves the API server is reachable.
         let endpoint = fake_apiserver(Some(
-            b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: 61\r\n\r\n\
+            b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: 62\r\n\r\n\
               {\"kind\":\"Status\",\"status\":\"Failure\",\"code\":403,\"message\":\"no\"}",
         ))
         .await;

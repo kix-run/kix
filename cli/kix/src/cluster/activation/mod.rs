@@ -26,6 +26,7 @@ mod tests;
 
 use std::collections::HashSet;
 
+use crate::eval::package_index::{self, RecordPackageIndex};
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -125,32 +126,93 @@ fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&ApiResource> {
         .map(|(ar, _)| ar)
 }
 
-/// Return `true` if any Activation record under the current API group carries
-/// `cluster` in its `kix.run/cluster` label, or `false` if none exists or the
-/// Activation CRD is not installed.
-///
-/// Used for CLI argument disambiguation before full discovery runs.
-pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, RecordsError> {
+/// Return the Activation `ApiResource` under the current API group, spelled
+/// from Kix's own constants rather than discovery, for the listings that run
+/// before discovery.
+fn record_resource() -> ApiResource {
     let version = keys::API_VERSION
         .rsplit_once('/')
         .map_or(keys::API_VERSION, |(_, v)| v);
-    let ar = ApiResource::from_gvk_with_plural(
+    ApiResource::from_gvk_with_plural(
         &kube::api::GroupVersionKind::gvk(
             keys::GROUP,
             version,
             crate::manifest::lifecycle::RECORD_KIND,
         ),
         "activations",
-    );
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
-    let lp = ListParams::default()
-        .labels(&cluster_selector(cluster))
-        .limit(1);
+    )
+}
+
+/// List the Activation records under the current API group that match
+/// `selector`, up to `limit` when given, or none when the Activation CRD is
+/// not installed.
+async fn list_undiscovered(
+    client: &Client,
+    selector: &str,
+    limit: Option<u32>,
+) -> Result<Vec<DynamicObject>, RecordsError> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), &record_resource());
+    let mut lp = ListParams::default().labels(selector);
+    if let Some(limit) = limit {
+        lp = lp.limit(limit);
+    }
     match api.list(&lp).await {
-        Ok(list) => Ok(!list.items.is_empty()),
-        Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
+        Ok(list) => Ok(list.items),
+        Err(kube::Error::Api(e)) if e.code == 404 => Ok(Vec::new()),
         Err(e) => Err(RecordsError::list(e)),
     }
+}
+
+/// Return `true` if any Activation record under the current API group carries
+/// `cluster` in its `kix.run/cluster` label, or `false` if none exists or the
+/// Activation CRD is not installed.
+///
+/// Used for CLI argument disambiguation before full discovery runs.
+pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, RecordsError> {
+    Ok(
+        !list_undiscovered(client, &cluster_selector(cluster), Some(1))
+            .await?
+            .is_empty(),
+    )
+}
+
+/// An Activation record that carries the `kix.run/kubernetes-uid` label: the
+/// Kix cluster that deployed it, and the UID its build named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundRecord {
+    pub cluster: String,
+    pub uid: String,
+}
+
+/// Return one Activation record on the Kubernetes cluster, of any Kix
+/// cluster, whose build named a `cluster.kubernetes.uid` and finished a
+/// deploy ([`has_deployed`]), or `None` when no such record exists or the
+/// Activation CRD is not installed. A record that never finished a deploy,
+/// such as one the operator failed because its build named another
+/// Kubernetes cluster, does not lock the cluster. Runs before discovery.
+pub async fn bound_record(client: &Client) -> Result<Option<BoundRecord>, RecordsError> {
+    let found = list_undiscovered(client, keys::KUBERNETES_UID, None).await?;
+    Ok(found.iter().find(|item| has_deployed(item)).map(|item| {
+        let label = |key: &str| {
+            item.metadata
+                .labels
+                .as_ref()
+                .and_then(|l| l.get(key))
+                .cloned()
+                .unwrap_or_default()
+        };
+        BoundRecord {
+            cluster: label(keys::CLUSTER_LABEL),
+            uid: label(keys::KUBERNETES_UID),
+        }
+    }))
+}
+
+/// Return whether the deploy of `item` finished: it is current (`Active` or
+/// `Degraded`), or it carries `kix.run/deployed-at`, which finalizing a
+/// deploy writes and later phases keep.
+fn has_deployed(item: &DynamicObject) -> bool {
+    is_current_phase(read_phase(item)) || Record::of(item).was_ever_current()
 }
 
 /// Build the label selector matching all Activation records for `cluster`.
@@ -492,13 +554,16 @@ impl Records {
     /// `source_path` on `cluster`.
     ///
     /// Leaves `status.phase` unset so the operator treats the record as `Queued`
-    /// and advances it through `Deploying` to `Active`.
+    /// and advances it through `Deploying` to `Active`. `kubernetes_uid` is
+    /// the build's `cluster.kubernetes.uid`, written as the
+    /// `kix.run/kubernetes-uid` label when the build names one.
     pub async fn submit(
         &self,
         name: &str,
         cluster: &str,
         source_path: &str,
         identity_hash: Option<&str>,
+        kubernetes_uid: Option<&str>,
     ) -> Result<(), RecordsError> {
         let mut annotations = serde_json::Map::new();
         if let Some(hash) = identity_hash {
@@ -511,16 +576,28 @@ impl Records {
             keys::BUILT_VIA.to_string(),
             Value::String(source_path.to_string()),
         );
+        let mut labels = serde_json::Map::new();
+        labels.insert(
+            "app.kubernetes.io/managed-by".to_string(),
+            Value::String("kix".to_string()),
+        );
+        labels.insert(
+            keys::CLUSTER_LABEL.to_string(),
+            Value::String(cluster.to_string()),
+        );
+        if let Some(uid) = kubernetes_uid {
+            labels.insert(
+                keys::KUBERNETES_UID.to_string(),
+                Value::String(uid.to_string()),
+            );
+        }
 
         let patch = json!({
             "apiVersion": keys::API_VERSION,
             "kind": crate::manifest::lifecycle::RECORD_KIND,
             "metadata": {
                 "name": name,
-                "labels": {
-                    "app.kubernetes.io/managed-by": "kix",
-                    keys::CLUSTER_LABEL: cluster,
-                },
+                "labels": labels,
                 "annotations": annotations,
             },
             "spec": {
@@ -673,16 +750,24 @@ impl Records {
         Ok(read_phase(&item).to_string())
     }
 
-    /// Set the Activation phase to `Deploying` and initialize wave counters.
+    /// Set the Activation phase to `Deploying`, initialize wave counters, and
+    /// write the build's package index.
     ///
     /// Called at the start of the apply loop after the record is created. Sets
     /// `status.phase = Deploying` and `status.totalWaves = total_waves`, unless
     /// the record is already current (see [`phase_on_begin`]), in which case
     /// only the wave counters and failure field are reset.
+    ///
+    /// Then writes `package_index` to `status.packageIndex` with a patch of
+    /// its own. The index only helps a later diff group objects, so a failure
+    /// to write it, or an index over [`package_index::MAX_BYTES`], logs a
+    /// warning and the deploy goes on. Writing it separately keeps such a
+    /// failure from losing the phase.
     pub(crate) async fn begin_deploy(
         &self,
         activation_name: &str,
         total_waves: usize,
+        package_index: Option<&RecordPackageIndex>,
     ) -> Result<(), RecordsError> {
         let current = self.phase_of(activation_name).await?;
 
@@ -696,7 +781,68 @@ impl Records {
         status.insert("failure".to_string(), Value::Null);
 
         self.patch_status(activation_name, &json!({ "status": status }))
-            .await
+            .await?;
+
+        if let Some(index) = package_index {
+            self.write_package_index(activation_name, index).await;
+        }
+        Ok(())
+    }
+
+    /// Write `index` to the record's `status.packageIndex`, warning instead
+    /// of failing. The index only helps a later diff group objects, so a
+    /// failure must not stop a deploy. See [`Records::begin_deploy`].
+    pub async fn write_package_index(&self, activation_name: &str, index: &RecordPackageIndex) {
+        let value = index.to_value();
+        let bytes = value.to_string().len();
+        if bytes > package_index::MAX_BYTES {
+            tracing::warn!(
+                activation = %activation_name,
+                bytes,
+                limit = package_index::MAX_BYTES,
+                "the build's package index is too large to store on its record; \
+                 a diff on a machine without this build will show an object that \
+                 moved between packages only under its new package",
+            );
+            return;
+        }
+        let patch = json!({ "status": { (keys::PACKAGE_INDEX_FIELD): value } });
+        if let Err(e) = self.patch_status(activation_name, &patch).await {
+            tracing::warn!(
+                activation = %activation_name,
+                error = %e,
+                "could not store the build's package index on its record; \
+                 a diff on a machine without this build will show an object that \
+                 moved between packages only under its new package",
+            );
+        }
+    }
+
+    /// Mark a `Queued` record `Failed` with `reason` before the operator
+    /// applies anything from it, such as when its build is bound to another
+    /// Kubernetes cluster. Leaves a record that has already left `Queued`
+    /// alone.
+    pub async fn fail_queued(&self, name: &str, reason: &str) -> Result<(), RecordsError> {
+        let current = self.phase_of(name).await?;
+        if !(current.is_empty() || current == PHASE_QUEUED) {
+            tracing::debug!(activation = %name, phase = %current, "not Queued; left as is");
+            return Ok(());
+        }
+        self.patch_status(
+            name,
+            &json!({
+                "status": {
+                    "phase": PHASE_FAILED,
+                    "failure": {
+                        "reason": reason,
+                        "at": chrono::Utc::now().to_rfc3339(),
+                    },
+                },
+            }),
+        )
+        .await?;
+        tracing::info!(activation = %name, reason, "marked as Failed before applying");
+        Ok(())
     }
 
     /// Mark a record `Failed` when its deploy stops before finalizing.

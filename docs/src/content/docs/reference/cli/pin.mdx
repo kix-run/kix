@@ -51,11 +51,11 @@ kix pin set <KEY> [--option <PATH>] [--tag <TAG>] [--repository <REPO>]
 | `--option <PATH>` | For an instance pin, the image option it sets, as a path in the instance's config such as `sidecar.image`. Default: `image`. |
 | `--tag <TAG>` | Tag to promote to. Required for a new pin; otherwise the existing tag is kept. |
 | `--repository <REPO>` | Repository including the registry host. Required for a new pin; otherwise the existing repository is kept. |
-| `--digest <DIGEST>` | Record this digest instead of asking the registry, for example in an air-gapped promotion. Use `sha256:` followed by 64 lowercase hexadecimal characters. Conflicts with `--no-resolve`. |
+| `--digest <DIGEST>` | Record this digest instead of asking the registry, for example in an air-gapped promotion. Use `sha256:` followed by 64 hexadecimal characters (lowercase or uppercase). Conflicts with `--no-resolve`. |
 | `--no-resolve` | Write the pin without a digest. Kix then never checks that the tag exists, and prints a warning. |
 | `--source-rev <REV>` | Source revision the image was built from. `kix pin check --source-rev` compares against it. Kept from the existing pin when omitted. |
 | `--promoted-by <WHO>` | Who promoted it. Defaults to the CI run (`ci:<workflow>#<run>` on GitHub Actions, or the job URL on GitLab, Jenkins, and Buildkite), otherwise `user@host`. |
-| `--note <TEXT>` | A note for readers of the file. Kix never reads it and a later promotion keeps it. `--note ""` clears it. |
+| `--note <TEXT>` | A note for readers of the file. Kix never reads it. Re-pinning the same image keeps an existing note, while promoting to a different image drops the old note unless `--note` supplies a new one. `--note ""` clears it. |
 | `--init` | Create the pin file, or add a pin name that is not in it yet. Without it, an unknown pin name or a missing file is an error. A new instance pin needs no `--init`, because evaluation refuses a pin for an instance the cluster does not have. A new file is created next to the flake. |
 | `--force` | Rewrite a pin file that `kix pin` did not write, discarding its comments and layout. |
 | `--pins-file <PATH>` | Pin file to use. See [Finding the pin file](#finding-the-pin-file). |
@@ -111,7 +111,7 @@ Each pin gets one verdict:
 repository or tag outside the OCI reference grammar. It writes keys in sorted order, so a diff shows only what moved. A
 file with no instance pins is written as version 1 and without `instances`,
 which a Kix that reads only version 1 still reads. Each pin has the fields
-listed under [`kix.pins`](/docs/reference/kix-helpers/image-and-pin-helpers/#kixpins).
+listed under [`kix.pins`](/docs/reference/composition-helpers/#image-and-pin-helpers).
 
 ## `kix pin list`
 
@@ -125,10 +125,11 @@ when, and its note.
 ## Output
 
 `-o json` prints a JSON document for all three subcommands: for `set`, the
-pin file path, key, option (null for an image pin), resulting pin, and
-whether it changed; for `check`, each pin's key, option, result, and message,
-the stale pins, and `ok`; for `list`, an object with `images` and
-`instances`, shaped as in the file. Any other `-o` value prints text.
+pin file path, key, option (null for an image pin), resulting pin, whether
+it changed, and any dropped note (`droppedNote`); for `check`, each pin's
+key, option, result, and message, the stale pins, and `ok`; for `list`, an
+object with `images` and `instances`, shaped as in the file. Any other `-o`
+value prints text.
 
 ## Exit status
 
@@ -152,6 +153,6 @@ for the CI workflow.
 :::
 
 :::note[Explanation]
-See [Why deploy inputs are committed](/docs/explanation/why-deploy-inputs-are-committed/)
+See [Why deploy inputs are committed](/docs/explanation/server-side-apply-and-drift/#why-deploy-inputs-are-committed)
 for why the digest lives in the repository.
 :::

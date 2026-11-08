@@ -204,6 +204,7 @@ fn manifest_index<'a>(
             DryRunOutcome::Recreated {
                 live,
                 result: Some(result),
+                ..
             } => (live.as_ref(), Some(result)),
             _ => continue,
         };
@@ -259,6 +260,8 @@ pub(crate) fn dry_run(
             concurrency: scheduler::CONCURRENCY,
             stall: StallPolicy::from_env(),
             rerun_failed: true,
+            check_unchanged: true,
+            names_flags: true,
         };
         let cancel = config.cancel.clone();
         cancel.cancel_on_interrupt();
@@ -411,7 +414,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         let old = match p.baseline.active_graph() {
             Some(old) => old,
             None => {
-                rebuilt = StoreGraph::synthesize(&p.baseline.manifests(), p.build.graph());
+                rebuilt = p.baseline.synthesized_side(p.build.graph());
                 &rebuilt
             }
         };
@@ -608,6 +611,14 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
     };
     doc.prune = Checked::found(prune_entries(p, &prune_answers));
+    // A custom resource whose CRD this deploy changes was checked against the
+    // CRD on the cluster now, which prunes the fields the new CRD adds.
+    doc.not_kept = kix::plan::server::not_kept(answers, |rid| {
+        manifests
+            .get(rid)
+            .and_then(|m| crd_key(m))
+            .is_some_and(|k| changed_crds.contains(&k))
+    });
     doc
 }
 
@@ -881,6 +892,7 @@ mod tests {
             outcome: DryRunOutcome::Applied(Box::new(ApplyPreview {
                 live,
                 result: manifest.clone(),
+                not_kept: Vec::new(),
             })),
         }
     }

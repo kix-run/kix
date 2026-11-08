@@ -434,9 +434,12 @@ in
         leaderElectionRoleBinding = namespaceRbac."${name}-leader-election-binding";
 
         # The controller watches all four kinds at start and crash-loops with
-        # `no matches for kind` while one is missing.
+        # `no matches for kind` while one is missing. Runners keep no data.
         crds = {
-          autoscalingListeners = scope.mkCRD { spec = vendored "autoscalinglisteners"; };
+          autoscalingListeners = scope.mkCRD {
+            spec = vendored "autoscalinglisteners";
+            holdsData = false;
+          };
           # The controller writes `Pending` when it first sees the runner set
           # and again after every spec or label change, and `Running` once
           # the scale set is registered with GitHub, its EphemeralRunnerSet
@@ -444,9 +447,13 @@ in
           # URL keep it at `Pending`, so the deploy fails. The rule compares
           # no observedGeneration, so a deploy can read a stale `Running`
           # right after an apply. `Outdated` (a runner image GitHub no longer
-          # accepts) fails until the runner spec changes.
+          # accepts) fails until the runner spec changes, but is not declared
+          # as a failed state: the status carries no observedGeneration and no
+          # timestamp, so an old `Outdated` cannot be told from a new one
+          # while a new controller waits for its leader lease.
           autoscalingRunnerSets = scope.mkCRD {
             spec = vendored "autoscalingrunnersets";
+            holdsData = false;
             readiness = {
               path = "/status/phase";
               equals = "Running";
@@ -468,8 +475,14 @@ in
                 cr.spec.maxRunners or (cr.spec.minRunners or 0)
               )) (kix.usage.ofPod (cr.spec.template.spec.containers or [ ]));
           };
-          ephemeralRunnerSets = scope.mkCRD { spec = vendored "ephemeralrunnersets"; };
-          ephemeralRunners = scope.mkCRD { spec = vendored "ephemeralrunners"; };
+          ephemeralRunnerSets = scope.mkCRD {
+            spec = vendored "ephemeralrunnersets";
+            holdsData = false;
+          };
+          ephemeralRunners = scope.mkCRD {
+            spec = vendored "ephemeralrunners";
+            holdsData = false;
+          };
         };
 
         deployment = scope.mkDeployment {

@@ -167,6 +167,19 @@ impl SqliteCache {
 
         hasher.update(source_fingerprint.as_bytes());
         hasher.update(attr.as_bytes());
+        // A result from one builder or store says nothing about what another
+        // holds.
+        hasher.update(b"\0builder:");
+        hasher.update(crate::runtime::builder().name().as_bytes());
+        match crate::runtime::nix_runner().root() {
+            Some(root) => {
+                hasher.update(b"\0store-root:");
+                hasher.update(root.as_os_str().as_encoded_bytes());
+            }
+            None => {
+                hasher.update(b"\0system-nix");
+            }
+        }
         Ok(hasher.finalize().to_hex().to_string())
     }
 }

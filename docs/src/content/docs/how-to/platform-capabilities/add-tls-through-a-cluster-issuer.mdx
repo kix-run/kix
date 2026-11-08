@@ -61,14 +61,18 @@ host explicitly when DNS or certificate policy requires a particular name.
 
 ## Verify the generated Ingress
 
-Check the cluster, then inspect the Ingress before deployment:
+Check the cluster and render the manifests before deployment:
 
 <Command
   commands={[
     "kix check doc-how-tos",
-    "kix build doc-how-tos --output json | jq '.[] | select(.kind == \"Ingress\") | {name: .metadata.name, annotations: .metadata.annotations, tls: .spec.tls}'",
+    "kix build doc-how-tos",
   ]}
 />
+
+In the rendered `Ingress`, confirm that `metadata.annotations` includes
+`cert-manager.io/cluster-issuer` and that `spec.tls` sets your hostname and
+`<instance>-tls` Secret name.
 
 After deployment, verify the Certificate and Secret created by cert-manager:
 

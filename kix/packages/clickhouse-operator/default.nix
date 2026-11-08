@@ -83,6 +83,9 @@ in
     version = release;
     description = "Altinity ClickHouse operator: ClickHouseInstallation and ClickHouseKeeperInstallation controller";
     defaultAliases = [ "clickhouseOperator" ];
+    # One operator watches every namespace, so consumers in any namespace
+    # find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
   };
 
@@ -214,8 +217,7 @@ in
       {
         root = {
           resource = self.operatorDeployment;
-          # Every shipped CRD, derived, so a new kinds.nix entry is included.
-          requires = builtins.attrValues self.crds ++ [ self.operatorService ];
+          requires = [ self.operatorService ];
 
           out = {
             mkClickHouseInstallation = mkOperand "clickHouseInstallations";

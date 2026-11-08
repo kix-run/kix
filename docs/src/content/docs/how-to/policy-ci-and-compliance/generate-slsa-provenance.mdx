@@ -30,18 +30,6 @@ The Activation identity hash is the statement's subject. The build definition
 also records the cluster name, flake reference, lock-file digest, Git source,
 locked flake inputs, and rendered container images.
 
-## Verify the statement
-
-Check the statement and predicate types before passing the file to a signing
-or evidence-upload step:
-
-<Command
-  commands={[
-    "jq -e '._type == \"https://in-toto.io/Statement/v1\" and .predicateType == \"https://slsa.dev/provenance/v1\"' provenance.json",
-  ]}
-  cwd="kix-examples/"
-/>
-
 If the working tree is dirty, Kix records that state and prints a warning. The
 statement remains an honest description of the build, but its Git commit does
 not contain every input that was evaluated.
@@ -52,6 +40,6 @@ when the evidence must describe what is already running.
 :::
 
 :::note[Explanation]
-See [Why deploy inputs are committed](/docs/explanation/why-deploy-inputs-are-committed/)
+See [Why deploy inputs are committed](/docs/explanation/server-side-apply-and-drift/#why-deploy-inputs-are-committed)
 for how Kix derives evidence from the same graph it deploys.
 :::

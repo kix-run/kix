@@ -209,6 +209,8 @@ impl DeployObserver for OperatorObserver {
                 since,
                 status,
                 budget,
+                holds,
+                holds_total,
             } => {
                 let waiting = kix::cluster::watchdog::describe_wait(
                     node,
@@ -216,6 +218,8 @@ impl DeployObserver for OperatorObserver {
                     *since,
                     status.as_deref(),
                     *budget,
+                    holds,
+                    *holds_total,
                 );
                 tracing::info!(activation, %waiting, "Deploy waiting");
             }
@@ -225,6 +229,14 @@ impl DeployObserver for OperatorObserver {
                     what = what.as_str(),
                     message = message.as_str(),
                     "Best-effort write failed"
+                );
+            }
+            DeployEvent::FieldsNotKept { resource, fields } => {
+                tracing::warn!(
+                    activation,
+                    resource = %resource,
+                    "{}",
+                    kix::cluster::kept::describe(&resource.display_id(), fields)
                 );
             }
         }

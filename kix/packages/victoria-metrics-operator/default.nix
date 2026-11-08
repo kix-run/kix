@@ -51,6 +51,9 @@ in
       "prometheus"
       "vmOperator"
     ];
+    # One operator watches every namespace, so consumers in any namespace
+    # find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
     # This package owns the operator.victoriametrics.com annotation domain
     # (it stamps its CRDs with it); declared for the
@@ -175,7 +178,7 @@ in
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Extra arguments appended to the operator container's args.";
+      description = "Extra arguments appended to the operator container's args. The package refuses `--zap-log-level`, which `logLevel` sets, and `--leader-elect` and `--health-probe-bind-address`, which it sets itself.";
     };
     env = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
@@ -251,16 +254,11 @@ in
       {
         root = {
           resource = self.operatorDeployment;
-          requires =
-            # Every shipped CRD (deployed in early waves before the operator
-            # starts), derived so a new kinds.nix entry is auto-included.
-            builtins.attrValues self.crds
-            # Operator resources
-            ++ [
-              self.operatorServiceAccount
-              self.operatorService
-            ]
-            ++ lib.optional config.metrics.enabled self.operatorServiceScrape;
+          requires = [
+            self.operatorServiceAccount
+            self.operatorService
+          ]
+          ++ lib.optional config.metrics.enabled self.operatorServiceScrape;
 
           # Expose CRD builders; packages depend on these via DI
           # Usage: prometheus.out.mkServiceMonitor scope { ... }

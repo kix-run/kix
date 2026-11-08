@@ -1,4 +1,106 @@
 ---
 title: "How-to guides"
-description: "Task-oriented recipes for building, operating, and maintaining Kix clusters."
+description: "Task-oriented recipes for operating clusters, authoring packages, wiring dependencies, adopting existing resources, and enforcing policy."
 ---
+
+How-to guides provide direct recipes for specific tasks. They assume you already know the basic Kix workflow from the [Tutorials](/docs/tutorials/). Pick the section that matches the job you want to finish.
+
+## Start and inspect a Kix project
+
+Set up a repository, choose a target environment profile, and inspect what a cluster builds.
+
+- [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+- [Use `mkFlake` in a consuming repo](/docs/how-to/start-and-inspect/use-mkflake-in-a-consuming-repo/)
+- [Select and configure a cluster flavor](/docs/how-to/start-and-inspect/select-and-configure-a-cluster-flavor/)
+- [List clusters and packages](/docs/how-to/start-and-inspect/list-clusters-and-packages/)
+- [Render manifests](/docs/how-to/start-and-inspect/render-manifests/)
+- [Deploy to kind](/docs/how-to/start-and-inspect/deploy-to-kind/)
+
+## Operate a cluster
+
+Preview changes, apply activations, check health and drift, roll back, and export YAML.
+
+- [Preview changes with `kix plan` and `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+- [Deploy with dry-run, timeouts, pruning, and log or TUI output modes](/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/)
+- [Check resource status](/docs/how-to/operate-a-cluster/check-resource-status/) and [check cluster health](/docs/how-to/operate-a-cluster/check-cluster-health/)
+- [Check live resources for drift](/docs/how-to/operate-a-cluster/check-live-resources-for-drift/) and [reconcile drift](/docs/how-to/operate-a-cluster/reconcile-drift/)
+- [Roll back an activation](/docs/how-to/operate-a-cluster/roll-back-an-activation/) and [garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)
+- [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/)
+- [Export plain YAML](/docs/how-to/operate-a-cluster/export-plain-yaml/) and [export audit-preserving YAML](/docs/how-to/operate-a-cluster/export-audit-preserving-yaml/)
+
+## Promote images
+
+Manage committed container image digests and promote builds in CI with `kix pin`.
+
+- [Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)
+- [Promote and verify an image pin](/docs/how-to/promote-images/promote-and-verify-an-image-pin/)
+- [Pin an instance image without code](/docs/how-to/promote-images/pin-an-instance-image-without-code/)
+- [Build, promote, and deploy an image in CI](/docs/how-to/promote-images/build-promote-and-deploy-an-image-in-ci/)
+
+## Debug dependency wiring
+
+Connect instances across namespaces, use aliases and auto-instantiation, and inspect the dependency graph.
+
+- [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/)
+- [Use aliases and default aliases](/docs/how-to/debug-dependency-wiring/use-aliases-and-default-aliases/)
+- [Use auto-instantiation with `availablePackages`, `optional`, and `autoNamespace`](/docs/how-to/debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace/)
+- [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/)
+- [Visualize the dependency graph with `kix graph`](/docs/how-to/debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph/)
+- [Inspect an instance's `deps`, `parts`, and `out`](/docs/how-to/debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out/)
+
+## Author packages and clusters
+
+Build reusable packages, declare typed options, mount volumes, and compose multi-environment or multi-team clusters.
+
+- [Create a local package](/docs/how-to/author-packages-and-clusters/create-a-local-package/)
+- [Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/)
+- [Add env vars and mounts](/docs/how-to/author-packages-and-clusters/add-env-vars-and-mounts/)
+- [Reuse one package for multiple instances](/docs/how-to/author-packages-and-clusters/reuse-one-package-for-multiple-instances/)
+- [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/)
+- [Add a post-deploy health check](/docs/how-to/author-packages-and-clusters/add-a-post-deploy-health-check/)
+- [Stamp multi-environment clusters with `mkEnv`](/docs/how-to/author-packages-and-clusters/stamp-multi-environment-clusters-with-mkenv/)
+- [Compose multi-team clusters with `mergeFragments`](/docs/how-to/author-packages-and-clusters/compose-multi-team-clusters-with-mergefragments/)
+
+## Adopt existing resources
+
+Reference external services, wrap Helm charts, take ownership of existing workloads, and resolve field-manager conflicts.
+
+- [Import an existing service with `kix.mkImport`](/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/)
+- [Use Helm charts through the Kix Helm bridge](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/)
+- [Take ownership of Helm-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/) and [kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/)
+- [Handle server-side-apply conflicts safely](/docs/how-to/adopt-existing-resources/handle-server-side-apply-conflicts-safely/) and [cede fields to a controller](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/)
+- [Preserve existing selectors](/docs/how-to/adopt-existing-resources/preserve-existing-selectors/) and [patch package output with overlays](/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/)
+
+## Platform capabilities
+
+Configure cluster-wide ingress, Gateway API routes, TLS certificates, default-deny network policies, storage, secrets, and monitoring.
+
+- [Expose a service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/) or [Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/)
+- [Add TLS through a cluster issuer](/docs/how-to/platform-capabilities/add-tls-through-a-cluster-issuer/)
+- [Enable generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/)
+- [Configure storage classes and PVCs](/docs/how-to/platform-capabilities/configure-storage-classes-and-pvcs/)
+- [Use Kix-managed secrets](/docs/how-to/platform-capabilities/use-kix-managed-secrets/), [SOPS-backed secrets](/docs/how-to/platform-capabilities/use-sops-backed-secrets-if-production-ready/), or [externally managed secrets](/docs/how-to/platform-capabilities/use-externally-managed-secrets/)
+- [Auto-monitor a service](/docs/how-to/platform-capabilities/auto-monitor-a-service/)
+- [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/)
+
+## Policy, CI, and compliance
+
+Enforce scorecard rules at evaluation time and generate SARIF reports, CycloneDX SBOMs, SLSA provenance, and audit bundles.
+
+- [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/) and [override scorecard severity](/docs/how-to/policy-ci-and-compliance/override-scorecard-severity/)
+- [Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/)
+- [Run `kix check --sarif` in CI](/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/)
+- [Generate a CycloneDX SBOM](/docs/how-to/policy-ci-and-compliance/generate-a-cyclonedx-sbom/) and [SLSA provenance](/docs/how-to/policy-ci-and-compliance/generate-slsa-provenance/)
+- [Attest a deployment from its cluster receipt](/docs/how-to/policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt/)
+- [Generate an audit bundle](/docs/how-to/policy-ci-and-compliance/generate-an-audit-bundle/)
+
+## Package task guides
+
+Deploy and configure key infrastructure packages from the `kixpkgs` catalog.
+
+- [Install Cilium network policy support](/docs/how-to/package-task-guides/install-cilium-network-policy-support/)
+- [Install ingress-nginx](/docs/how-to/package-task-guides/install-ingress-nginx/) or [Envoy Gateway](/docs/how-to/package-task-guides/install-envoy-gateway/)
+- [Configure cert-manager issuers](/docs/how-to/package-task-guides/configure-cert-manager-issuers/)
+- [Deploy StackGres](/docs/how-to/package-task-guides/deploy-stackgres/) and [Valkey / Redis](/docs/how-to/package-task-guides/deploy-valkey-redis/)
+- [Install the monitoring stack](/docs/how-to/package-task-guides/install-the-monitoring-stack/) or [VictoriaMetrics HA](/docs/how-to/package-task-guides/install-the-victoriametrics-ha-monitoring-stack/)
+- [Provision persistent storage](/docs/how-to/package-task-guides/provision-persistent-storage/) and [deploy Velero](/docs/how-to/package-task-guides/deploy-velero/)

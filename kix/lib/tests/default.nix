@@ -47,8 +47,8 @@ let
   # The rest of this matrix imports subtrees directly, which is how
   # `mergeFragments` managed to be implemented, documented and unreachable
   # all at once: no test ever looked at what `kix/lib/default.nix` exports.
-  # `pkgs` is forced only by the helm and manifest-writing attributes, so a
-  # stub keeps this eval-only like the rest of the file.
+  # `pkgs` is forced only by the manifest-writing attributes, so a stub
+  # keeps this eval-only like the rest of the file.
   publicKix = import ../default.nix {
     inherit lib;
     pkgs = { };
@@ -133,7 +133,11 @@ let
   # (collectResources excludes the `root` key). See the latent-quirk note
   # in architecture.md.
   dnsPackage = {
-    meta.version = "test";
+    meta = {
+      version = "test";
+      # Every namespace resolves the implicit `dns` dependency to it.
+      scope = "cluster";
+    };
     build =
       { self, scope, ... }:
       {
@@ -147,7 +151,12 @@ let
   };
 
   dbPackage = {
-    meta.version = "test";
+    meta = {
+      version = "test";
+      # baseInstances consumes it from another namespace by name, so the
+      # cross-namespace edge tests need no `ref` module.
+      scope = "cluster";
+    };
     build =
       { self, scope, ... }:
       {
@@ -611,6 +620,8 @@ let
       meta = {
         version = "test";
         defaultAliases = [ "testOperator" ];
+        # Like a real operator, one instance serves every namespace.
+        scope = "cluster";
       };
       build =
         { self, scope, ... }:
@@ -769,22 +780,14 @@ let
           kind = "CiliumNetworkPolicy";
           plural = "ciliumnetworkpolicies";
           version = "v2";
+          holdsData = false;
         };
 
         rule = kind: extra: { stubRule = kind; } // extra;
 
         netpolApi = {
           policyKinds = [ "CiliumNetworkPolicy" ];
-          mkPolicy =
-            { mkResource, extraArgs }:
-            mkResource (
-              extraArgs
-              // {
-                apiVersion = "cilium.io/v2";
-                kind = "CiliumNetworkPolicy";
-                requires = (extraArgs.requires or [ ]) ++ [ crdRef ];
-              }
-            );
+          mkPolicy = { mkResource, extraArgs }: mkResource (crdRef.out.cr extraArgs);
           mkDefaultDenySpec =
             { denyIngress, denyEgress }:
             {
@@ -881,6 +884,8 @@ let
     meta = {
       version = "test";
       defaultAliases = [ "prometheus" ];
+      # Like prometheus-operator, one instance serves every namespace.
+      scope = "cluster";
     };
     build =
       { self, scope, ... }:
@@ -891,6 +896,7 @@ let
             group = "monitoring.coreos.com";
             inherit kind plural;
             version = "v1";
+            holdsData = false;
           };
         as =
           crd: consumerScope: args:
@@ -1947,7 +1953,10 @@ let
             instances.infra.operator.package = mkAnnotatedCmPackage {
               key = "example.io/managed";
               name = "operator-cm";
-              metaExtra.annotationDomains = [ "example.io" ];
+              metaExtra = {
+                annotationDomains = [ "example.io" ];
+                scope = "cluster";
+              };
             };
             # The consumer links the operator via DI; must not warn.
             instances.appns.writer.package = mkAnnotatedCmPackage {
@@ -2824,9 +2833,13 @@ let
     # the rule follows the chain rather than the first edge only.
     t91-annotation-domain-transitive-dep-satisfies =
       let
-        # Depends on `operator` and writes nothing under the domain.
+        # Depends on `operator` and writes nothing under the domain. Serves
+        # the whole cluster, as an issuer does, so `writer` finds it by name.
         intermediary = {
-          meta.version = "test";
+          meta = {
+            version = "test";
+            scope = "cluster";
+          };
           build =
             {
               self,
@@ -2869,7 +2882,10 @@ let
           {
             instances.infra.operator.package = mkCmPackage {
               name = "operator-cm";
-              metaExtra.annotationDomains = [ "example.io" ];
+              metaExtra = {
+                annotationDomains = [ "example.io" ];
+                scope = "cluster";
+              };
             };
             instances.mid.issuer.package = intermediary;
             instances.appns.writer.package = writer;
@@ -6237,6 +6253,7 @@ let
     inherit
       lib
       k8s
+      eval
       mkCluster
       baseInstances
       manifests

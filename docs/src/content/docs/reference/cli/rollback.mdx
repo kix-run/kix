@@ -1,12 +1,12 @@
 ---
 title: "`rollback`"
-description: "Re-apply a previous activation of a cluster from the local Nix store, or list the activations available to roll back to."
+description: "Re-apply a previous activation of a cluster from Kix's local store, or list the activations available to roll back to."
 ---
 
 import Command from '/src/components/Command.astro';
 
 `kix rollback` switches a cluster back to one of its Superseded activations.
-It does not build: it finds the target activation's build in the local Nix
+It does not build: it finds the target activation's build in Kix's local
 store and applies it through the same engine as `kix deploy`. With `--list`
 it prints the activation history and changes nothing.
 
@@ -16,8 +16,8 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix rollback <CLUSTER> [--list [-o text|json|yaml]]
-kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--operator] [--context <CONTEXT>]
+kix rollback <CLUSTER> [--list [-o text|json|yaml]] [--flake <FLAKE>] [--context <CONTEXT>]
+kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--operator] [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
@@ -28,6 +28,7 @@ kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--operator] [--context <CONTE
 | `--dry-run` | Print the plan and stop. |
 | `--prune` | Delete resources the current activation has and the target does not, and orphans earlier deploys kept. Without it they are listed and kept, and the target Activation records where they came from, as a deploy does. |
 | `--operator` | Point the Activation record at the target build and let the Kix operator apply it. See [Operator mode](/docs/reference/cli/operator-mode/). |
+| `--flake <FLAKE>` | Flake reference used to evaluate the cluster name when no Activation record in the context carries `<CLUSTER>`. See [Global flags](/docs/reference/cli/global-flags/). |
 | `--context <CONTEXT>` | Kubeconfig context. See [Global flags](/docs/reference/cli/global-flags/). |
 
 ## Choosing the target
@@ -39,9 +40,9 @@ On a terminal without `--yes`, Kix lists the candidates, newest first, and
 asks for a number; Enter picks the newest. Without a terminal it picks the
 newest and then stops at the confirmation unless `--yes` is set.
 
-The target's build must be in the local Nix store, found through the record's
+The target's build must be in Kix's local store, found through the record's
 source path or the local activation cache. A build made on another machine or
-removed by `nix-collect-garbage` cannot be rolled back to from here. How many
+removed from the local store cannot be rolled back to from here. How many
 records exist depends on `kix gc` retention.
 
 A build from a Kix library before 2026-10-02 cannot be rolled back to if it
@@ -74,6 +75,6 @@ for the workflow, including operator-managed clusters.
 :::
 
 :::note[Explanation]
-See [The DAG-driven deployment scheduler](/docs/explanation/dag-driven-deployment-scheduler/)
+See [The DAG-driven deployment scheduler](/docs/explanation/the-dependency-graph/#dag-driven-deployment-scheduler)
 for how records become Superseded.
 :::

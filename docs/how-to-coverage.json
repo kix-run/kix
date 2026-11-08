@@ -265,7 +265,7 @@
       "offlineCaptures": [
         "how-to/application-custom-resource-readiness/widget"
       ],
-      "unverifiedNixBlocks": 1
+      "unverifiedNixBlocks": 3
     },
     {
       "page": "author-packages-and-clusters/keep-intentionally-empty-values",
@@ -367,6 +367,12 @@
         "how-to/dependency-cross-namespace/check"
       ],
       "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster",
+      "scenario": "operations",
+      "status": "implemented",
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "operate-a-cluster/check-cluster-health",
@@ -993,7 +999,55 @@
       "offlineCaptures": [
         "how-to/application-list/list-clusters"
       ],
-      "unverifiedNixBlocks": 4
+      "unverifiedNixBlocks": 5
+    }
+  ],
+  "tutorials": [
+    {
+      "page": "01-orientation"
+    },
+    {
+      "page": "02-local-setup-and-first-run",
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "03-project-skeleton-and-flake-shape",
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "04-first-cluster-from-scratch",
+      "unverifiedNixBlocks": 3
+    },
+    {
+      "page": "05-basic-graph-and-deploy-loop",
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "06-first-local-package-and-service-to-service-dependency",
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "07-package-anatomy-and-safe-resource-composition",
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "08-basic-dependency-resolution-and-namespace-boundaries",
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "09-typed-package-options",
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "10-reusing-packages",
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "11-flavors-roles-and-imports"
+    },
+    {
+      "page": "12-scorecards-and-compile-time-policy",
+      "unverifiedNixBlocks": 3
     }
   ]
 }

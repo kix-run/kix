@@ -60,9 +60,12 @@ let
     # `<nix/<file>>`; newer Nix prints `«github:owner/repo/rev?…»/<path>` and
     # `«nix-internal»/<file>`. Both become `«source»/<path>`, so a capture's
     # drift does not depend on the Nix version of the machine that made it.
+    # A path in Kix's local store also starts with that store's folder, which
+    # differs between machines, so the folder is dropped too.
     # Run before redact-identity-hash, which would rewrite the store hash.
     normalize-nix-source-paths = ''
       s|/nix/store/[a-z0-9]{32}-source/|«source»/|g
+      s|/[^ «]*/kix/store«|«|g
       s|«[^»]*»/|«source»/|g
       s|<nix/([^>]*)>|«source»/\1|g
     '';

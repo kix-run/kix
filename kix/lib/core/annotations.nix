@@ -42,6 +42,10 @@ rec {
     deployedAt = key "deployed-at";
     # A label, not an annotation, so records list per cluster.
     clusterLabel = key "cluster";
+    # Label on the Activation record of a build whose definition sets
+    # `cluster.kubernetes.uid`: the UID of the target cluster's kube-system
+    # Namespace. A label so deploys can list the records that carry one.
+    kubernetesUidLabel = key "kubernetes-uid";
     # Label on each namespace rendered by a consumer cluster so platform
     # ingress rules can select the consumer's namespaces.
     consumerLabel = key "consumer";
@@ -63,6 +67,12 @@ rec {
     serviceSelector = key "service-selector";
     servicePorts = key "service-ports";
     serviceLabels = key "service-labels";
+
+    # "true" or "false": whether the object holds data that removing it can
+    # lose. `mkResource` writes it from the kind's `holdsData` declaration on
+    # `scope.mkCRD` or `scope.mkCRDRef`, or from the shape of a built-in kind
+    # (`holdsDataOf`). Migration pair detection reads it.
+    holdsData = key "holds-data";
 
     # Graph and deploy behaviour.
     dependsOn = key "depends-on";

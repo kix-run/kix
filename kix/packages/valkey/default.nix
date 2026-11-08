@@ -231,8 +231,10 @@ in
           cpu = "50m";
           memory = "64Mi";
         };
+        # A scrape needs a short burst of CPU. At 250m the exporter spent
+        # 30% of its periods throttled, which raised CPUThrottlingHigh.
         limits = {
-          cpu = "250m";
+          cpu = "1";
           memory = "128Mi";
         };
       };

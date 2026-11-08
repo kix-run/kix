@@ -216,16 +216,16 @@ in
         "requests.memory" = "100Mi";
         "count/deployments.apps" = "5";
       } [ (deployment 3) ];
-      message = builtins.head over;
+      message = builtins.concatStringsSep "\n---\n" over;
     in
     (
-      builtins.length over == 1
-      && lib.hasInfix "namespace app" message
-      && lib.hasInfix "pods: at least 3, quota 2" message
-      && lib.hasInfix "requests.memory: at least 192Mi, quota 100Mi" message
-      && lib.hasInfix "ResourceQuota app-quota" message
-      && lib.hasInfix "Counted: Deployment/w." message
+      builtins.length over == 2
+      && lib.hasInfix "namespace \"app\" exceeds ResourceQuota \"app-quota\" for pods (uses at least 3, limit is 2)" message
+      && lib.hasInfix "for requests.memory (uses at least 192Mi, limit is 100Mi)" message
+      && lib.hasInfix "  Counted (3 pods):\n    Deployment/w: 3 pods" message
+      && lib.hasInfix "  Counted (192Mi requests.memory):\n    Deployment/w: 192Mi requests.memory" message
       && !(lib.hasInfix "count/" message)
+      && !(lib.hasInfix "Not counted" message)
       &&
         refusalsFor {
           pods = "3";
@@ -311,10 +311,13 @@ in
     in
     (
       builtins.length storage == 1
-      && lib.hasInfix "requests.storage: at least 30Gi, quota 20Gi" (builtins.head storage)
+      && lib.hasInfix "for requests.storage (uses at least 30Gi, limit is 20Gi)" (builtins.head storage)
       && !(lib.hasInfix "persistentvolumeclaims" (builtins.head storage))
-      && lib.hasInfix "Counted: Deployment/w, Database/db." (builtins.head storage)
-      && lib.hasInfix "services: at least 2, quota 1" (builtins.head services)
+      && lib.hasInfix "  Counted (30Gi requests.storage):\n    Database/db: 30Gi requests.storage\n" (
+        builtins.head storage
+      )
+      && !(lib.hasInfix "Deployment/w" (builtins.head storage))
+      && lib.hasInfix "for services (uses at least 2, limit is 1)" (builtins.head services)
       &&
         refused {
           "requests.storage" = "30Gi";
@@ -356,14 +359,19 @@ in
     || throw "the HPA's minReplicas was not counted";
 
   # List uncounted resources in the refusal message without failing the check
-  # on their own.
+  # on their own: built-in kinds by name, custom kinds grouped with counts,
+  # largest group first. A kind whose `usesAtLeast` returns `{ }` runs
+  # nothing and appears nowhere.
   quota-use-names-what-it-cannot-count =
     let
       daemonSet = workload "DaemonSet" { template.spec = podSpec; };
-      widget = {
-        apiVersion = "example.com/v1";
-        kind = "Widget";
-        metadata.name = "w1";
+      custom = kind: name: usesAtLeast: {
+        manifest = {
+          apiVersion = "example.com/v1";
+          inherit kind;
+          metadata.name = name;
+        };
+        inherit usesAtLeast;
       };
       refused = q.refusals {
         namespace = "app";
@@ -378,18 +386,27 @@ in
           daemonSet
         ];
         customResources = [
-          {
-            manifest = widget;
-            usesAtLeast = null;
-          }
+          (custom "Widget" "w1" null)
+          (custom "PrometheusRule" "r1" null)
+          (custom "PrometheusRule" "r2" null)
+          (custom "Gadget" "g1" (_: { }))
         ];
       };
+      expected = ''
+        namespace "app" exceeds ResourceQuota "app-quota" for pods (uses at least 2, limit is 1)
+          Kubernetes will reject pods over this limit at deploy time.
+
+          Counted (2 pods):
+            Deployment/w: 2 pods
+
+          Not counted (actual usage may be higher):
+            DaemonSet/w: 1 pod per matching node (Kix does not know how many nodes the cluster has)
+            2 PrometheusRule, 1 Widget: pod usage is not declared by their packages (most custom resources create no pods, but Kix cannot verify this)
+
+          To fix this, raise the pods limit in "app-quota" or run fewer pods in namespace "app".'';
     in
-    (
-      lib.hasInfix "Not counted: DaemonSet/w, Widget/w1." (builtins.head refused)
-      && refusalsFor { pods = "0"; } [ daemonSet ] == [ ]
-    )
-    || throw "uncounted objects were not named, or caused a refusal: ${builtins.toJSON refused}";
+    (refused == [ expected ] && refusalsFor { pods = "0"; } [ daemonSet ] == [ ])
+    || throw "uncounted objects were not named as expected, or caused a refusal: ${builtins.toJSON refused}";
 
   # Check both `namespaces.<ns>.resourceQuota` and unscoped ResourceQuotas
   # rendered by instances, while skipping scoped quotas.
@@ -433,6 +450,82 @@ in
       ])
     )
     || throw "a build over its namespace's quota was not refused, or one within it was";
+
+  # A plain custom resource (no CRD declaration) in a namespace over its
+  # quota reaches the check without breaking it and adds nothing to the
+  # total, and a kind in a `*.k8s.io` group is counted when it declares
+  # `usesAtLeast`. A failed cluster assertion throws, so the message text
+  # is checked in `quota-use-names-what-it-cannot-count` instead.
+  quota-use-cluster-passes-custom-resources =
+    let
+      withWidget = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            deployment = scope.mkDeployment {
+              name = "web";
+              spec = {
+                replicas = 3;
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.labels = scope.selectorLabels;
+                  spec = podSpec;
+                };
+              };
+            };
+            crd = scope.mkCRDRef {
+              group = "example.com";
+              kind = "Widget";
+              plural = "widgets";
+              version = "v1";
+            };
+            widget = scope.mkCR self.crd {
+              name = "w1";
+              spec = { };
+            };
+            root = {
+              resource = self.deployment;
+              requires = [ self.widget ];
+            };
+          };
+      };
+      withSnapshot = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            crd = scope.mkCRDRef {
+              group = "snapshot.storage.k8s.io";
+              kind = "VolumeSnapshot";
+              plural = "volumesnapshots";
+              version = "v1";
+              usesAtLeast = _: { pods = 5; };
+            };
+            snapshot = scope.mkCR self.crd {
+              name = "s1";
+              spec = { };
+            };
+            root = self.snapshot;
+          };
+      };
+      cluster =
+        package: pods:
+        mkCluster [
+          {
+            instances.app.web.package = package;
+            namespaces.app.resourceQuota.pods = pods;
+          }
+        ];
+      builds = cluster: builtins.deepSeq (manifests cluster) true;
+    in
+    (
+      builds (cluster withWidget "3")
+      && evalFails (cluster withWidget "2")
+      && evalFails (cluster withSnapshot "4")
+      && builds (cluster withSnapshot "5")
+    )
+    || throw "a plain custom resource changed the quota outcome, or a *.k8s.io kind with usesAtLeast was not counted";
 
   # Count custom resources via the CRD's `usesAtLeast` declaration
   # (`cnpg-operator` Cluster: `spec.instances` * `spec.resources`).

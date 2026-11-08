@@ -1,0 +1,3 @@
+# 2026-11-06 · `kix/packages/snapshot-controller` · Kix does not count a VolumeSnapshot as holding data.
+
+Kix treats every `*.k8s.io` group as built-in and decides from an object's shape whether a built-in object holds data. A VolumeSnapshot has no storage fields, so it gets no `kix.run/holds-data` mark. Its group, `snapshot.storage.k8s.io`, is also refused a `holdsData` declaration. So `kix diff` and `kix deploy` do not pair a removed VolumeSnapshot or VolumeSnapshotContent with its replacement as a data migration, even though deleting one with `deletionPolicy: Delete` deletes the snapshot. The shape rule is `holds_data` in `cli/kix/src/cluster/migrate.rs` and `holdsDataOf` in `kix/lib/core/resource.nix`.

@@ -27,6 +27,11 @@ in
       # scopeObj is the enclosing mkScope fixpoint. Access it only from lazy
       # interceptor and mkCR paths to avoid recursion while building the scope.
       scopeObj,
+      # `<namespace>/<instance>` of the instance this scope builds for. Every
+      # sealed resource carries it as `_builtBy`, outside the manifest, so the
+      # cluster can list a resource that several instances hold under the one
+      # that built it.
+      builtBy,
     }:
     rec {
       # Workload kinds must use their typed builders so pod validation, edge
@@ -63,6 +68,19 @@ in
 
       scopeMkResource = args: builtins.seq (checkNotRawWorkload args) (sealResource args);
 
+      # `holdsData` is a fact about a kind, so it is declared once on the
+      # kind's mkCRD or mkCRDRef and reaches each custom resource through mkCR.
+      checkNoHoldsData =
+        args:
+        if args ? holdsData then
+          throw (
+            "[${instanceName}] ${args.kind or "?"} '${args.name or "?"}' sets holdsData on one object. "
+            + "holdsData is declared once per kind: set it on the scope.mkCRD or scope.mkCRDRef of the kind and build the resource with scope.mkCR. "
+            + "Kix decides whether a built-in object holds data from its shape."
+          )
+        else
+          null;
+
       sealResource =
         {
           labels ? { },
@@ -76,23 +94,26 @@ in
             behavior != null && behavior.endpoint == "terminate" && edgeAnalysis.dnsRoot != null
           ) edgeAnalysis.dnsRoot;
         in
-        builtins.seq (validators.checkResourceName args) (
-          builtins.seq (validators.checkRawPvc args) (
-            builtins.seq (validators.checkLoadBalancer args) (
-              builtins.seq (validators.checkHorizontalPodAutoscaler args) (
-                k8s.mkResource (
-                  removeAttrs args [ "labels" ]
+        builtins.seq (checkNoHoldsData args) (
+          builtins.seq (validators.checkResourceName args) (
+            builtins.seq (validators.checkRawPvc args) (
+              builtins.seq (validators.checkLoadBalancer args) (
+                builtins.seq (validators.checkHorizontalPodAutoscaler args) (
+                  k8s.mkResource (
+                    removeAttrs args [ "labels" ]
+                    // {
+                      namespace = namespaceResource;
+                      inherit clusterDomain;
+                      labels = clusterLabels // instanceLabels // labels;
+                      factBehavior = behavior;
+                      requires = (args.requires or [ ]) ++ dnsRequires;
+                    }
+                  )
                   // {
-                    namespace = namespaceResource;
-                    inherit clusterDomain;
-                    labels = clusterLabels // instanceLabels // labels;
-                    factBehavior = behavior;
-                    requires = (args.requires or [ ]) ++ dnsRequires;
+                    packageLabels = labels;
+                    _builtBy = builtBy;
                   }
                 )
-                // {
-                  packageLabels = labels;
-                }
               )
             )
           )
@@ -114,17 +135,20 @@ in
           labels ? { },
           ...
         }@args:
-        k8s.mkResource (
-          removeAttrs args [ "labels" ]
-          // {
-            namespace = clusterScoped;
-            inherit clusterDomain;
-            labels = clusterLabels // instanceLabels // labels;
-            factBehavior = resolveFactBehavior args;
-          }
+        builtins.seq (checkNoHoldsData args) (
+          k8s.mkResource (
+            removeAttrs args [ "labels" ]
+            // {
+              namespace = clusterScoped;
+              inherit clusterDomain;
+              labels = clusterLabels // instanceLabels // labels;
+              factBehavior = resolveFactBehavior args;
+            }
+          )
         )
         // {
           packageLabels = labels;
+          _builtBy = builtBy;
         };
 
       _expandServiceAccount =
@@ -783,6 +807,7 @@ in
               readiness
               ;
             usesAtLeast = attrs.usesAtLeast or null;
+            holdsData = attrs.holdsData or null;
           };
         in
         crdResource

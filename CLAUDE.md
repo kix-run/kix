@@ -18,7 +18,23 @@ When implementing new features or completing existing ones, check `ROADMAP.md` a
 
 If you want to understand internals of `kix/lib`, read `kix/lib/architecture.md`. If you edit anything in `kix/lib`, you may or may not need to update `architecture.md`.
 
-The user-facing reference docs are `docs-legacy/BEST-PRACTICES.md` (durable, principles-first) and `docs-legacy/HANDBOOK.md` (dense, low-level mechanics). When you change user-visible API surface or durable guidance, update them. The breadth-first inventory in `docs-legacy/FEATURE-CATALOG.md` is the third sibling: keep it in sync when adding new APIs. Do not create additional top-level docs; extend these.
+The user-facing documentation lives in `docs/src/content/docs/` (deployed to `https://kix.run/docs/`). When you change user-visible API surface, package-authoring helpers, cluster options, or durable conceptual guidance, update the corresponding pages in `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`. Follow `docs/CLAUDE.md` and `CLAUDE.prose.md` when editing docs. Do not create separate top-level documentation folders outside `docs/`.
+
+| Topic | Documentation file |
+|---|---|
+| Package function, `meta`, `options`, `build`, diagnostics | `docs/src/content/docs/reference/package-anatomy.mdx` |
+| `scope.mk*` resource/workload builders, `.out` surface, `kix.keep` | `docs/src/content/docs/reference/resources-and-out.mdx` |
+| `kix.*` helpers (mounts, env, expose, monitor, healthCheck, pins, availability) | `docs/src/content/docs/reference/composition-helpers.mdx` |
+| Secrets (`mkSecret`), CRDs (`mkCRD`), RBAC (`scope.rbac.*`) | `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
+| Helm (`importChart`, `helmChart`) and external imports (`mkImport`) | `docs/src/content/docs/reference/helm-and-imports.mdx` |
+| Project configuration (`kix.toml`) and builders (`kix`, `nix`, `remote`) | `docs/src/content/docs/reference/kix-toml.mdx` |
+| Top-level cluster options (`cluster.*`, `namespaces`, `networkPolicy`, `scorecard`) | `docs/src/content/docs/reference/cluster-configuration.mdx` |
+| Instance schema (`deps`, `ref`, `aliases`, `partsOverlays`), `mkEnv`, `mergeFragments` | `docs/src/content/docs/reference/instances-and-composition.mdx` |
+| Built-in flavors (`kix.flavors.*`), capability matrix, platform imports | `docs/src/content/docs/reference/flavors-and-capabilities.mdx` |
+| Scorecard schemas and built-in rules | `docs/src/content/docs/reference/scorecard-and-rules.mdx` |
+| Always-on cross-resource validation checks | `docs/src/content/docs/reference/validation-checks.mdx` |
+| `kix.run/*` annotations/labels, `Activation`, `PackageInstance`, deploy receipts | `docs/src/content/docs/reference/annotations-crds-and-receipts.mdx` |
+| Core architecture & mental model explanations | `docs/src/content/docs/explanation/the-dependency-graph.mdx`, `docs/src/content/docs/explanation/packages-and-clusters.mdx`, `docs/src/content/docs/explanation/network-policy.mdx`, `docs/src/content/docs/explanation/helm-integration.mdx` |
 
 ## Housekeeping: log what you notice
 
@@ -90,9 +106,40 @@ belongs above the fold), read `CLAUDE.hero-design.md` for the researched
 consensus on dev-tool hero anatomy.
 
 
-## Breaking changes
+## Versioning and breaking changes
 
-The Kix API is in active development. Breaking changes are fine: none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
+Kix uses semantic versioning and is still below 1.0. A breaking change may go in a minor release (0.5 to 0.6), never in a patch release. Prefer a clean design to keeping old behavior. Do not count a change as breaking just to be safe.
+
+A change is breaking when a user who upgrades must change something, or gets a different result from the same definition. These are breaking:
+
+- removing or renaming a CLI command, flag, or package option, or changing an exit code
+- removing or renaming a field or event in JSON output (`-o json`, `--log-format json`), or changing what a value means. This also moves the `SCHEMA_VERSION` of the plan document or the deploy log.
+- a change to the `kix` Nix library or to the package shape `{ scope, lib }: { meta, options, build }` that makes an existing package or cluster definition fail or work differently
+- a change to the state Kix writes into a cluster (Activation records, `kix.run/*` annotations, PackageInstance, and Kix's CRDs) that makes existing state read differently
+- a change to what a package deploys that the user has to act on, such as moving where it keeps its data
+
+Adding something is not breaking. That covers a new command, flag, option, field, event type, annotation, or field in cluster state. Programs that read Kix's JSON output or cluster state must skip fields and event types they do not know, and the JSON schemas say so. The Rust crates are not a public API.
+
+There are two kinds of breaking change, and `CHANGELOG.md` lists each under its own heading:
+
+- `### Breaking (shows an error)`: Kix stops with an error that says what to change. For example, a build fails until a package sets a new value. A user cannot miss this kind.
+- `### Breaking (no error)`: nothing fails, but the result is different. For example, a package now looks for its files in another folder. A user can miss this kind, so it is the more serious one.
+
+Where you can, turn a breaking change with no error into one that shows an error. For example, make the build refuse the old setting and name the new one. This is a goal, not a rule: do it when the cost is reasonable.
+
+Each breaking change gets a line that says what users change when they upgrade. A change that needs no action, but that users should know about, goes under `### Upgrade notes`. For example, the first deploy after an upgrade applies many objects again, or restarts some pods once.
+
+One rule holds even before 1.0: a Kix release reads the cluster state the previous minor release wrote. Cluster state outlives the binary that wrote it, so a change to that state keeps a way to read the old form for at least one minor release.
+
+Every pull request that changes something a Kix user sees adds a line under `## Unreleased` in `CHANGELOG.md`, and the Changelog workflow checks pull requests that change `cli/` or `kix/` for one. Label a pull request `no-changelog` when nothing a user sees changes, such as tests, CI, or an internal refactor. To cut a release, use the `release` skill (`.claude/skills/release/SKILL.md`).
+
+## User-facing text: Argon copy pass
+
+Antigravity, running the Gemini 4 Argon model, writes clearer user-facing text than Claude does. Before you open a pull request that adds or changes text a person reads, run `scripts/argon-copy-pass` on the branch. That text includes errors, warnings, and log lines in `cli/` and `kix/`, docs pages, the skills, and `CHANGELOG.md`. The script hands the changed text to Argon with `CLAUDE.prose.md` as its rules, and Argon edits the files in place. Review its edits, run the tests again (some check message text word for word), and commit.
+
+Then tick `- [x] Argon copy pass` in the pull request description. The Argon copy pass workflow fails a pull request that changes such text without it. If `agy` is not installed (exit 2), leave `- [ ] Argon copy pass` unticked, so someone who has it can run the pass. Never tick it unless the script ran and exited 0.
+
+For an important new message, such as a refusal that stops a deploy, you can also give Argon the facts and ask it to write the message: `agy --model "Gemini 4 Argon (Medium)" --print "<facts and request>"`.
 
 ## DSL design principles
 
@@ -107,11 +154,14 @@ the full package set (stackgres, cilium, cert-manager, ingress, etc.) and
 catches most regressions:
 
 ```bash
-nix build ludo/#cluster-ludo-kind --extra-experimental-features pipe-operators
+nix run .#kix -- check ludo-kind --flake ./ludo
 ```
 
-Other clusters (e.g. `.#cluster-nw1`) may need capabilities the current
-env lacks (external cilium, etc.); prefer ludo-kind for default checks.
+Because `ludo-kind` uses Helm charts, evaluate it through `kix` (or
+`./scripts/kix-manifests.sh ./ludo ludo-kind ./result` when you need the
+manifest directory on disk) rather than plain `nix build`. Other clusters
+(e.g. `nw1`) may need capabilities the current env lacks (external cilium,
+etc.); prefer `ludo-kind` for default checks.
 
 ## Build caches and disk
 

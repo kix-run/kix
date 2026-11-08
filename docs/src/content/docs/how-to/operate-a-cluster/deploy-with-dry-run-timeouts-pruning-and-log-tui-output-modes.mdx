@@ -46,6 +46,27 @@ accepts minutes, seconds, or a bare number of seconds:
 The default is three minutes. Increase it for resources whose normal startup
 takes longer, such as a database restore or a large image pull.
 
+Some failures do not wait for the timeout. A pod in `ImagePullBackOff` or
+`CrashLoopBackOff`, a Job that has used up its retries, or a custom resource
+whose controller rejects it (a Cilium policy with `Valid=False`) fails the
+resource as soon as Kix sees the state, with the controller's message. The
+owning package declares which states mean that; see
+[Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/#declare-the-states-that-mean-failure).
+
+Kix also checks objects it does not change. Before it deploys an object, it
+reads every unchanged object that the object depends on, directly or through
+other unchanged objects, and waits for it to be ready under the same timeout.
+An unchanged Deployment that is restarting is waited for like a changed one.
+An unchanged object that an earlier deploy or a change on the cluster left
+broken fails the deploy on that object, with its own status, and the error
+says that nothing in this deploy changed it. Fix the object and deploy again,
+or deploy with `--on-error continue` to deploy the objects that do not depend
+on it. Unchanged objects that nothing in the deploy depends on are not read,
+and a deploy with no changes reads nothing.
+
+Every failure also says how many objects Kix did not deploy because they
+depend on the failed one.
+
 Kix also stops a deploy after ten minutes with no progress. To change that
 stall limit for one run, set `KIX_STALL_TIMEOUT` in seconds:
 
@@ -87,9 +108,12 @@ passes `--prune`:
 Review stateful removals carefully. Kix requires a separate migration
 acknowledgement when a plan replaces a stateful resource in the same logical
 slot. This safeguard does not apply when a stateful resource is removed without
-a replacement. Kix treats it as an ordinary orphan, and `--prune` deletes it
-along with its PersistentVolumeClaim. The plan lists each orphan as "will be
-deleted" before asking for confirmation. The `--yes` flag skips that prompt.
+a replacement. Kix treats it as an ordinary orphan, and `--prune` deletes any
+Kix-owned resources that left the build (including a `PersistentVolumeClaim`
+declared directly as a Kix resource, though not claims that Kubernetes created
+from a StatefulSet's `volumeClaimTemplates`). The plan lists each orphan as
+"will be deleted" before asking for confirmation. The `--yes` flag skips that
+prompt.
 
 ## Choose terminal or CI output
 

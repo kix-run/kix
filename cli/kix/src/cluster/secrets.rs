@@ -15,8 +15,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::build_source::{CarriedSources, SopsSources};
+use crate::eval::store::disk_path;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
+use crate::runtime::{self, RuntimeError, Tool, Want};
 
 #[derive(Error, Debug)]
 pub(crate) enum SecretError {
@@ -251,9 +253,12 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
             let mut de = serde_json::Deserializer::from_str(&text);
             seed.deserialize(&mut de).and_then(|()| de.end()).is_ok()
         }
-        _ => seed
-            .deserialize(serde_yml::Deserializer::from_str(&text))
-            .is_ok(),
+        _ => serde_saphyr::with_deserializer_from_str_with_options(
+            &text,
+            sops_read_options(),
+            |de| seed.deserialize(de),
+        )
+        .is_ok(),
     };
     if !checked {
         return Err(refuse(
@@ -264,7 +269,8 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
     }
     let doc: Value = match input_type {
         "json" => serde_json::from_str(&text).map_err(|e| e.to_string()),
-        _ => serde_yml::from_str(&text).map_err(|e| e.to_string()),
+        _ => serde_saphyr::from_str_with_options(&text, sops_read_options())
+            .map_err(|e| e.to_string()),
     }
     .map_err(|_| refuse("only YAML or JSON SOPS files can come with a build"))?;
     // Go's `encoding/json` matches `"sops"` case-insensitively.
@@ -323,6 +329,18 @@ fn folds_to_sops(key: &str) -> bool {
 /// value plus key and string lengths, with YAML aliases counted each time they
 /// are expanded.
 const MAX_SOPS_TEXT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Return the YAML reader options for a carried SOPS file.
+///
+/// [`UniqueKeys`] counts every value an alias expands to and refuses past
+/// [`MAX_SOPS_TEXT_BYTES`] with a message that says so. The YAML reader's own
+/// cap on replayed alias events is raised above what that count admits, so the
+/// count refuses first. Each counted value is at most two events.
+fn sops_read_options() -> serde_saphyr::Options {
+    let mut options = crate::yaml::read_options();
+    options.alias_limits.max_total_replayed_events = 2 * MAX_SOPS_TEXT_BYTES + 1024;
+    options
+}
 
 /// Deserializer seed that rejects duplicate map keys and documents exceeding
 /// [`MAX_SOPS_TEXT_BYTES`] without allocating a value tree.
@@ -473,8 +491,10 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
 fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
     let path = PathBuf::from(source);
 
-    if path.exists() {
-        return Ok(path);
+    if let Ok(on_disk) = disk_path(&path)
+        && on_disk.exists()
+    {
+        return Ok(on_disk);
     }
 
     if let Ok(cwd) = std::env::current_dir() {
@@ -491,13 +511,14 @@ fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
 
 /// Decrypt a SOPS file using the `sops` CLI.
 fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretError> {
-    let output =
-        decrypt_command(path, input_type)
-            .output()
-            .map_err(|e| SecretError::DecryptionFailed {
-                path: path.display().to_string(),
-                message: format!("failed to run sops: {e}"),
-            })?;
+    let failed = |message: String| SecretError::DecryptionFailed {
+        path: path.display().to_string(),
+        message,
+    };
+    let output = decrypt_command(path, input_type)
+        .map_err(|e| failed(e.to_string()))?
+        .output()
+        .map_err(|e| failed(format!("failed to run sops: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -515,14 +536,14 @@ fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretE
 
 /// Build the `sops` command that decrypts `path` to JSON, passing
 /// `--input-type` when `input_type` is `Some`.
-fn decrypt_command(path: &Path, input_type: Option<&str>) -> Command {
-    let mut command = Command::new("sops");
+fn decrypt_command(path: &Path, input_type: Option<&str>) -> Result<Command, RuntimeError> {
+    let mut command = runtime::tool(Tool::Sops, Want::Shipped)?;
     command.arg("--decrypt");
     if let Some(input_type) = input_type {
         command.args(["--input-type", input_type]);
     }
     command.args(["--output-type", "json"]).arg(path);
-    command
+    Ok(command)
 }
 
 /// Parse decrypted SOPS output into a flat key-value map.
@@ -833,7 +854,7 @@ mod tests {
             let path = dir.path().join(name);
             std::fs::write(&path, text).unwrap();
             let (_, input_type) = age_only_keys(&path).unwrap();
-            let command = decrypt_command(&path, Some(input_type));
+            let command = decrypt_command(&path, Some(input_type)).unwrap();
             let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
             assert!(
                 args.windows(2).any(|w| w == ["--input-type", format]),
@@ -880,7 +901,7 @@ mod tests {
     }
 
     /// sops reads YAML with yaml.v3, which refuses a repeated key and matches
-    /// `sops` exactly. serde_yml refuses a repeated key too.
+    /// `sops` exactly. Kix's YAML reader refuses a repeated key too.
     #[test]
     fn a_yaml_sops_file_with_a_repeated_key_is_refused() {
         let text = format!("sops:\n  kms:\n    - arn: arn:aws:kms:x\n{AGE_ONLY}");

@@ -34,7 +34,17 @@
 {
   buildCluster =
     {
-      name ? "cluster",
+      # The cluster's name. Kix writes it into the Activation record and the
+      # package index, and every later deploy looks the cluster's state up
+      # by it, so it must stay the same for the life of the cluster.
+      # `mkFlake` supplies the cluster's `clusters` key when the definition
+      # sets none.
+      name ? throw "kix.buildCluster needs a name. Kix stores it in the cluster's deploy records, so it must stay the same for the life of the cluster. Set name = \"...\"; or list the cluster in kix.lib.mkFlake, which names it after its key.",
+      # Set by `mkFlake` when it supplies `name` from the cluster's
+      # `clusters` key. The index records it so that `kix deploy` and
+      # `kix plan` can refuse to deploy a cluster that Kix 0.6 named
+      # `cluster` under its new name.
+      _nameFromFlakeKey ? false,
       modules,
       specialArgs ? { },
       # The cluster's pin file from `kix.pins`. `buildCluster` applies its
@@ -268,8 +278,22 @@
                 inherit packageMeta;
               };
               isImport = (instCfg.package._type or "") == "kix-import";
-              scope = packageMeta.scope or "cluster";
+              scope = meta.scopeOf {
+                inherit packageMeta;
+                context = "${nsName}/${instName}";
+              };
+              servesCluster = meta.servesCluster {
+                inherit packageMeta;
+                context = "${nsName}/${instName}";
+              };
               autoInstantiatedFor = instCfg._autoInstantiatedFor or null;
+              # A dependency demand created this instance from
+              # availablePackages or switched on this optional instance. The
+              # cluster author chose where it lives, so it binds from any
+              # namespace.
+              demanded =
+                (instCfg._autoInstantiatedFor or null) != null
+                || ((instCfg.optional or false) && autoResult.activatedOptionals ? "${nsName}/${instName}");
             };
           }
         ) nsInsts
@@ -419,6 +443,7 @@
                 inherit resolutionIndex;
                 namespace = nsName;
                 requester = describeRequester nsName instName instCfg;
+                requesterName = instName;
                 explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
               };
             in
@@ -529,6 +554,44 @@
         helpers.instancePartResources inst
         ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ])
         ++ (inst._hookResources or [ ]);
+
+      # Return the `<namespace>/<instance>` key of an instance, the form a
+      # resource's `_builtBy` uses.
+      instanceKey = inst: "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+
+      # Instance keys that hold each store path, sorted, keyed by path.
+      holdersOf = builtins.mapAttrs (_: keys: builtins.sort builtins.lessThan (lib.unique keys)) (
+        builtins.zipAttrsWith (_: keys: keys) (
+          map (
+            inst:
+            builtins.listToAttrs (
+              map (r: {
+                name = outPathKey r;
+                value = instanceKey inst;
+              }) (collectResources inst)
+            )
+          ) allInstancesList
+        )
+      );
+
+      # Return the resources the package index and the owner map list under
+      # an instance, so that every store path is listed under exactly one
+      # instance. A resource that several instances hold, such as an import
+      # marker a provider exposes through `out`, belongs to the instance whose
+      # scope built it when that instance is active and holds it. Otherwise it
+      # belongs to the first holder by instance key, which keeps its
+      # `kix.run/package` stable across unrelated hash changes.
+      ownedResources =
+        inst:
+        builtins.filter (
+          r:
+          let
+            holders = holdersOf.${outPathKey r} or [ ];
+            builder = r._builtBy or null;
+            owner = if builder != null && builtins.elem builder holders then builder else builtins.head holders;
+          in
+          holders == [ ] || owner == instanceKey inst
+        ) (collectResources inst);
 
       # `resources` holds the sealed resources of every active instance,
       # including the policies instance hooks derived.
@@ -766,6 +829,7 @@
           ) activeClusterInstances;
           index = packageIndex;
           extraDeps = clusterHookResources;
+          kubernetesUid = cfg.cluster.kubernetes.uid;
         }
         // lib.optionalAttrs (platformSide != null) {
           consumers = platformSide.recordConsumers;
@@ -783,15 +847,72 @@
       # PackageInstance marker.
       packageIndex = builtins.toFile "kix-packages.json" (builtins.toJSON packageIndexContent);
 
+      # List the store paths the CLI reads for this build. Each path keeps its
+      # string context, so the index references every file it names and its
+      # closure holds the whole build. Every listed file is a `builtins.toFile`
+      # path, so evaluating the index builds nothing. Kix records this file's
+      # store path as `kix.run/built-via`.
+      activationIndex = builtins.toFile "kix-activation-${name}.json" (
+        builtins.toJSON ({ version = 1; } // activationFiles)
+      );
+
+      # The store paths of the build's files, keyed as the activation index
+      # names them. `mkFlake` links the same files into the
+      # `cluster-<name>-activation` output of a project that uses the nix
+      # builder.
+      activationFiles =
+        let
+          jsonFile = fileName: value: builtins.toFile fileName (builtins.toJSON value);
+        in
+        {
+          activation = "${activation}";
+          packages = packageIndex;
+          scorecard = if scorecardReport == null then null else jsonFile "kix-scorecard.json" scorecardReport;
+          extraImages = if extraImages == null then null else jsonFile "kix-extra-images.json" extraImages;
+          imageSources = jsonFile "kix-image-sources.json" imageSources;
+          interfaces = if platformSide == null then { } else platformSide.interfaces;
+        };
+
+      # The platform whose interface file supplied `k8sVersion`, or null when
+      # the definition writes it or nothing sets it. `kix.interface` sets the
+      # value with `mkDefault` (priority 1000), so a definition's own value
+      # outranks it and the option's priority tells the two apart. The CLI's
+      # refusal then names the platform and offers a new interface file as
+      # the fix.
+      k8sVersionFrom =
+        let
+          supplying = lib.filterAttrs (
+            _: i: cfg.k8sVersion != null && (i.facts.k8sVersion or null) == cfg.k8sVersion
+          ) cfg.interfaces;
+        in
+        if evaluated.options.k8sVersion.highestPrio == 1000 && supplying != { } then
+          builtins.head (builtins.attrNames supplying)
+        else
+          null;
+
       packageIndexContent = {
         cluster = name;
+        # The Kubernetes cluster the build is bound to and the version its
+        # package checks ran against, read by the CLI before it writes
+        # anything. `uid = null` means unbound; `version = null` means
+        # `k8sVersion` is unset and the CLI does not compare versions.
+        kubernetes = {
+          uid = cfg.cluster.kubernetes.uid;
+          version = cfg.k8sVersion;
+          versionFrom = k8sVersionFrom;
+        };
         packages = builtins.listToAttrs (
           map (inst: {
             name = builtins.unsafeDiscardStringContext (toString inst._packageInstance.outPath);
-            value = map (r: toString r.outPath) (dedupeByOutPath (collectResources inst));
+            value = map (r: toString r.outPath) (dedupeByOutPath (ownedResources inst));
           }) allInstancesList
         );
-      };
+      }
+      # `nameFromFlakeKey = true` says that `mkFlake` named the cluster after
+      # its `clusters` key because the definition set no `name`. The CLI
+      # reads a missing field as `false`. Other builds leave the field out,
+      # so their index and Activation record stay as they were.
+      // lib.optionalAttrs _nameFromFlakeKey { nameFromFlakeKey = true; };
 
       # Surface namespace and cluster scorecard findings here because no
       # instance owns them. Warnings trace during evaluation; error findings
@@ -902,8 +1023,9 @@
               quotaCheck.refusals {
                 namespace = nsName;
                 inherit quotas resources;
-                # Include custom resources that declare `usesAtLeast` or
-                # terminate endpoints in operator-managed pods (`factBehavior.endpoint == "terminate"`).
+                # Pass every custom resource, so the refusal can list the
+                # ones whose kind declares no `usesAtLeast`. A kind in a
+                # built-in group (`*.k8s.io`) still counts when it declares one.
                 customResources =
                   map
                     (r: {
@@ -912,7 +1034,11 @@
                     })
                     (
                       builtins.filter (
-                        r: (r.usesAtLeast or null) != null || ((r.factBehavior or null).endpoint or null) == "terminate"
+                        r:
+                        r ? rawManifest
+                        && (
+                          (r.usesAtLeast or null) != null || k8s.facts.isForeignGroup (plain (r.rawManifest.apiVersion or ""))
+                        )
                       ) sealed
                     );
               }
@@ -922,6 +1048,57 @@
           assertion = false;
           message = "kix: ${message}";
         }) (builtins.concatMap ofNamespace realNsNames);
+
+      # Fail the build when a stateful package renders a custom resource
+      # whose kind does not declare `holdsData`. Deploy reads the resulting
+      # `kix.run/holds-data` mark to decide which removals are data
+      # migrations, and a stateful package is where a wrong guess costs data.
+      # Only the package's own parts count: policies that hooks derive and
+      # the PackageInstance record hold no data.
+      holdsDataAssertions =
+        let
+          plain = v: builtins.unsafeDiscardStringContext (toString v);
+          isStateful = inst: ((inst._meta.packageMeta or { }).lifecycle or null) == "stateful";
+          ofInstance =
+            inst:
+            let
+              owner = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+              undeclared = builtins.filter (
+                r:
+                r ? rawManifest
+                && (r.declaredHoldsData or null) == null
+                && k8s.facts.isForeignGroup (plain r.apiVersion)
+              ) (helpers.instancePartResources inst);
+              byKind = builtins.groupBy (
+                r: "${builtins.head (lib.splitString "/" (plain r.apiVersion))}/${plain r.kind}"
+              ) undeclared;
+            in
+            lib.mapAttrsToList (
+              groupKind: rs:
+              let
+                kind = plain (builtins.head rs).kind;
+                names = builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) rs);
+                declarations = lib.unique (builtins.filter (d: d != null) (map (r: r.crdDeclaredBy or null) rs));
+                raw = builtins.filter (r: (r.crdDeclaredBy or null) == null) rs;
+                answer = "true when deleting a ${kind} loses data (a database, a storage pool), false when it does not (monitoring, certificates, policy, configuration)";
+              in
+              {
+                assertion = false;
+                message =
+                  "kix: instance ${owner} has lifecycle = \"stateful\" and renders ${kind} ${names}, "
+                  + "but Kix does not know whether ${groupKind} objects hold data. "
+                  + lib.optionalString (declarations != [ ]) (
+                    "Set holdsData on ${builtins.concatStringsSep " and " declarations}, which declares the kind: ${answer}. "
+                  )
+                  + lib.optionalString (raw != [ ]) (
+                    "${builtins.concatStringsSep ", " (map (r: plain r.rawManifest.metadata.name) raw)} "
+                    + "is built with scope.mkResource, which carries no declaration. "
+                    + "Build it with scope.mkCR from the scope.mkCRD or scope.mkCRDRef of ${groupKind}, and set holdsData there: ${answer}."
+                  );
+              }
+            ) byKind;
+        in
+        builtins.concatMap ofInstance (builtins.filter isStateful allInstancesList);
 
       # Reject cluster-scoped objects rendered with the same API group, kind,
       # and name by multiple active instances. Identical copies would otherwise
@@ -987,16 +1164,16 @@
           }
         ) shared;
 
-      # Map each resource's store path to the `<ns>/<instance>` that produced
-      # it. Namespace resources, cluster hook outputs, and the Activation
-      # record have no instance owner.
+      # Map each resource's store path to the `<ns>/<instance>` that owns it
+      # (`ownedResources`). Namespace resources, cluster hook outputs, and the
+      # Activation record have no instance owner.
       resourceOwners = builtins.listToAttrs (
         builtins.concatMap (
           inst:
           map (r: {
             name = outPathKey r;
-            value = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
-          }) (collectResources inst)
+            value = instanceKey inst;
+          }) (ownedResources inst)
         ) allInstancesList
       );
 
@@ -1096,6 +1273,7 @@
           ++ sharedClusterObjectAssertions
           ++ podSecurityAssertions
           ++ quotaAssertions
+          ++ holdsDataAssertions
           ++ crossResourceAssertions
           ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };
@@ -1182,6 +1360,8 @@
 
                       inherit
                         activation
+                        activationIndex
+                        activationFiles
                         packageIndex
                         packageIndexContent
                         info

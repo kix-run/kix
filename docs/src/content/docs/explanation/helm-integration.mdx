@@ -1,4 +1,89 @@
 ---
 title: "Helm integration"
-description: "TODO"
+description: "Use upstream Helm charts and existing cluster services inside Kix as a migration bridge, and understand what guarantees you trade away compared to native Kix packages."
 ---
+
+You do not need to rewrite every third-party operator from scratch or migrate an entire cluster in a single weekend to use Kix. Kix can render upstream Helm charts at build time when a native Kix package is not available yet, and it can link to existing cluster services, Secrets, and CRDs that are still managed outside Kix.
+
+:::note[Helpful background]
+- [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): Learn how `kix.mkImport` represents pre-installed cluster services like CoreDNS or cloud storage classes.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): Why Kix turns resource references into explicit deploy-ordering edges.
+- [Helm and imports](/docs/reference/helm-and-imports/): Reference tables for `kix.helmChart`, `scope.helm.importChart`, and `kix.mkImport`.
+- [Helm Charts](https://helm.sh/docs/topics/charts/): How upstream Helm charts package templated Kubernetes YAML.
+:::
+
+## Trade-offs of wrapping a Helm chart
+
+Helm support in Kix is a migration bridge and a fallback for third-party software that does not have a native Kix package yet. Wrapping a Helm chart brings its rendered YAML into Kix's deployment workflow, but a Helm chart is still templated YAML under the hood. When you deploy a Helm chart instead of a native Kix package, you give up several guarantees that Kix normally provides:
+
+- **Untyped `values` instead of validated options:** With `kix.helmChart`, configuration goes through an untyped `values` map. A misspelled key or wrong value type in `values` is silently ignored by the chart's Go templates or produces broken YAML, whereas a native Kix package validates every option with `lib.types` and enforces the option-default contract before anything renders.
+- **Heuristic dependency and network discovery instead of exact `out` wiring:** Native Kix packages wire resources together through `.out` attributes (`self.configmap.out.name`, `postgres.out.fqdn`), which guarantees that Kix knows every deploy-ordering edge and network connection. Inside a rendered Helm chart, references are plain strings in YAML. Kix reconstructs intra-chart ordering with heuristics (matching selectors, volume mounts, and `serviceAccountName`), and cannot automatically see cross-package network connections unless you wire `deps` and `networkDeps` yourself.
+- **No automatic `availability` scaling:** Native Kix packages scale replicas, inject `topologySpreadConstraints`, and synthesize `PodDisruptionBudget` objects automatically from the cluster's `availability` setting (`none`, `pod`, `node`, or `zone`). A Helm chart ignores `cluster.availability` unless you translate it into chart-specific `values` by hand.
+- **Upstream defaults often fail Kix scorecard rules:** Many upstream charts omit resource limits, run containers as root, use mutable image tags, or grant broad RBAC. Bringing a chart into a cluster with strict scorecard policies often requires patching resources (`patchResources`), stripping hooks (`strip`), or adding policy exemptions.
+- **Opaque upgrades and template sprawl:** When a chart upgrade changes dozens of templated manifests at once, you still have to audit the resulting diff and work around upstream template quirks through `values` or `patchResources`.
+
+Use `kix.helmChart` or `scope.helm.importChart` when it unblocks a migration or wraps a complex third-party operator. When authoring a long-term package for an operator, prefer writing native Kix workloads and using `scope.helm.importChartCrds` only to extract the upstream CRD schemas.
+
+## Evaluating Helm charts at build time
+
+When you use Helm directly in a cluster, `helm upgrade` renders Go templates at deploy time and stores release state in cluster Secrets. That makes it hard to validate cross-chart dependencies, derive network policies, or preview exact diffs before touching the cluster.
+
+Kix evaluates Helm charts at build time instead:
+
+1. **Content-addressed chart fetching (`scope.helm.fetchHelmChart`):** Kix fetches the upstream chart tarball from an HTTP or OCI registry and verifies it against the cryptographic SRI `hash` pinned in your package or `cluster.nix`. The chart version and SRI hash are committed in version control alongside your cluster code, locking the exact tarball contents that evaluation fetches. Kix caches the verified tarball in its local store (`~/.cache/kix/store` by default; see [`kix.toml`](/docs/reference/kix-toml/)), so later runs reuse the cached bytes.
+2. **Deterministic template rendering (`scope.helm.importChart`):** When evaluation reaches a chart, Kix runs `helm template` (`4.3.1` by default, or `3.19.1` when `helmVersion = "3"`) with your merged `values`, parses the rendered YAML documents, stores the rendered output in Kix's local store, and continues evaluating the cluster. Kix strips Helm-specific release bookkeeping (`helm.sh/chart`, `meta.helm.sh/*`, `app.kubernetes.io/managed-by: Helm`, and test hooks) so the manifests match what the Kubernetes API server stores.
+3. **Sealing into the Kix graph:** Every rendered object is wrapped through `scope.mkResource` or `scope.mkHelmWorkload`, giving each resource a content hash (`identityHash`) and an `out` surface.
+
+Both project builders ([`kix.toml`](/docs/reference/kix-toml/)) run the same pinned Helm release (`kix/lib/helm-versions.json`) with the same `helm template` arguments, so a chart renders the same way under either builder:
+
+- **Under `builder = "kix"` (the default):** Kix runs the `helm` programs in the Kix runtime and writes the fetched charts and rendered manifests into Kix's local store (`~/.cache/kix/store`).
+- **Under `builder = "nix"`:** The machine's Nix fetches the chart and runs `helm template` during evaluation (`allow-import-from-derivation`).
+
+Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. If your installed Kix and the Kix library in `flake.lock` ever disagree on the pinned Helm versions, run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with your installed Kix.
+
+Kix supports three tiers of Helm integration depending on how much control you need:
+
+| Tier | Entry point | Best for |
+| --- | --- | --- |
+| **Tier 1: Inline chart** | `kix.helmChart { repo; name; version; hash; ... }` in `cluster.nix` | Quick one-off charts that only need `config.values` and an automatic root resource (`autoRoot`). |
+| **Tier 2: Package-wrapped chart** | `scope.helm.importChart` + `resources.mkParts` inside a package's `build` | Full Kix packages that wrap an upstream chart, expose typed options, wire cross-package dependencies (`deps` and `networkDeps`), or replace chart resources (`replaceResource`). |
+| **Tier 3: Native package with chart CRDs** | `scope.helm.importChartCrds` (or vendored CRD JSON) + native builders | Packages where Kix authors the Deployments, Services, and RBAC directly for full safety and clarity while borrowing the upstream operator's CRD schemas verbatim. |
+
+## Reconstructing the intra-chart dependency graph
+
+Inside a native Kix package, resources reference each other through `self.<part>.out.*`, which automatically populates `kix.run/depends-on`. Inside a rendered Helm chart, however, references are plain strings in YAML (`serviceAccountName: "my-sa"` or a Service `selector` matching pod labels) that carry no Nix string context.
+
+Before wrapping the rendered chart resources, `kix/lib/helm-dag.nix` analyzes the raw JSON documents and reconstructs the internal dependencies automatically:
+
+- **Workloads to ServiceAccounts, ConfigMaps, and Secrets:** Discovered from `serviceAccountName`, volume mounts, projected volumes, `envFrom`, and `secretKeyRef` / `configMapKeyRef`.
+- **RBAC bindings to ServiceAccounts:** Discovered from `subjects` in `RoleBinding` and `ClusterRoleBinding` objects.
+- **Services, PodDisruptionBudgets, and HPAs to workloads:** Discovered by matching label selectors against workload pod templates and reading `scaleTargetRef`.
+- **Routes and monitors to Services:** Discovered from `Ingress` and `HTTPRoute` backend references and `ServiceMonitor` label selectors.
+- **Custom resources to CRDs:** Every custom resource in the chart is linked to the chart's own `CustomResourceDefinition` for that group and kind, and any CRD builders exposed on `out.crds.<Kind>` automatically wait for both CRD establishment and the chart's controller workloads (which may serve admission or conversion webhooks).
+
+Kix turns these inferred relationships into real `requires` dependencies before sealing each resource. If a chart contains an implicit runtime dependency that does not appear in manifest fields (for example, a proxy Deployment whose startup script dials a sibling StatefulSet by a hardcoded name), package authors can add it with `extraEdges`. For cross-package connections into a Helm chart, passing resolved dependencies in `importChart`'s `deps = [ ... ]` argument collects their `out` string contexts so Kix can still derive network policy egress rules.
+
+## Resource adoption and external imports
+
+Real clusters rarely start empty. Cloud providers pre-install CoreDNS and default StorageClasses, security teams run external secret stores, and migrations from Helm or `kubectl` happen one service at a time.
+
+Kix models existing resources without taking ownership of their lifecycle through **import markers**:
+
+- **Cluster-level imports (`kix.mkImport`):** Used in `cluster.nix` or cluster flavors for existing Services, StorageClasses, or infrastructure roles. An import renders no Kubernetes Service or Deployment; instead, it emits a lightweight `PackageInstance` marker annotated with `kix.run/mode: import` and exposes the same `out` attributes (`name`, `fqdn`, `port`, or `crds`) that a managed package would.
+- **Secret and CRD references (`scope.mkSecretRef` and `scope.mkCRDRef`):** Used inside packages when a Secret is populated out-of-band (by External Secrets Operator, Vault, or an administrator) or when an operator installs its own CRDs at runtime.
+
+Imports participate in both compile-time validation and deploy-time scheduling:
+
+1. **Compile-time contracts:** Consuming packages read `legacyApi.out.fqdn` or `creds.out.keyRef "password"` identically whether the provider is managed by Kix or imported. Cross-resource checks verify that referenced StorageClasses, CRDs, and Secret keys are declared.
+2. **Deploy-time readiness barriers:** Before `kix deploy` applies any workload that depends on an import marker, the scheduler queries the live cluster to confirm that the imported object exists, that a referenced CRD is `Established` and serving the expected versions, or that a referenced Secret contains every declared key in `data`.
+3. **Shadowing weak defaults:** In dependency resolution, a managed package instance always takes precedence over an import on the same alias or infrastructure role. A cluster can start with flavor-provided imports (such as `platform-dns` or `platform-storage`) or imported legacy services, and later replace them with Kix-managed packages without changing consumer wiring.
+
+When you are ready to bring an existing Helm or `kubectl` workload under full Kix management rather than merely importing its address, instance settings like `labelStyle = "helm"` and `selectorLabels` let Kix match immutable live pod selectors so the transition can happen in place via server-side apply.
+
+:::tip[Use it in a task]
+See [Use Helm charts through the Kix Helm bridge](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/), [Import an existing service with `kix.mkImport`](/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/), and [Take ownership of Helm-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/).
+:::
+
+:::note[Reference]
+See [Helm and imports](/docs/reference/helm-and-imports/) and [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/) for exact builder arguments and marker schemas.
+:::

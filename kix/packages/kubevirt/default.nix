@@ -439,7 +439,14 @@ in
 
       deployment = scope.mkDeployment {
         name = "${name}-operator";
-        requires = builtins.attrValues self.clusterRbac ++ builtins.attrValues self.operatorRbac;
+        # virt-operator watches KubeVirt objects from the start, so it waits
+        # for the one definition the package ships. The definitions the
+        # operator installs itself cannot be waited on here.
+        requires = [
+          self.crds.kubeVirts
+        ]
+        ++ builtins.attrValues self.clusterRbac
+        ++ builtins.attrValues self.operatorRbac;
         spec = {
           # virt-operator holds a leader election lease, so a replacement pod
           # covers "pod" and a standby on another node covers "node".
@@ -596,6 +603,7 @@ in
         # operator installs the rest with full schemas.
         kubeVirts = scope.mkCRD {
           spec = (readJSON ./crds/kubevirts.kubevirt.io.json).spec;
+          holdsData = false;
           readiness = {
             path = "/status/phase";
             equals = "Deployed";
@@ -611,6 +619,9 @@ in
           plural = "virtualmachines";
           version = "v1";
           installedBy = self.kubevirtCR;
+          # Deleting a VirtualMachine deletes the disks its
+          # `spec.dataVolumeTemplates` made.
+          holdsData = true;
           # Count one `virt-launcher` pod when the VM is configured to run
           # (`spec.runStrategy` is `Always` or `RerunOnFailure`, or
           # `spec.running` is `true`). Only the pod count is reported because

@@ -25,6 +25,7 @@ use crate::output;
 use crate::plan;
 use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::ChangeAction;
+use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
@@ -162,26 +163,27 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let active_hash = p.baseline.active_hash().map(str::to_string);
 
     if total_apply == 0 && p.checked.orphans().is_empty() {
-        // Even when no resources changed, a probe Job with `kix.run/rerun`
-        // whose previous run failed must run again. Because the failed deploy
-        // did not advance the active activation, the next deploy sees identical
-        // hashes and relies on the scheduler's `Skip` path to recreate the Job.
-        let has_reruns = p.checked.plan().nodes().iter().any(|n| n.rerun.is_some());
-        let failed_reruns = match &p.client {
-            Some(client) if has_reruns => ctx.runtime.block_on(async {
+        // Even when no resources changed, an unchanged Job whose previous run
+        // failed must be reported, and run again under `kix.run/rerun`.
+        // Because the failed deploy did not advance the active activation,
+        // the next deploy sees identical hashes and relies on the scheduler's
+        // `Skip` path to read the live Job.
+        let has_skipped_jobs = p.checked.plan().has_skipped_jobs();
+        let failed_jobs = match &p.client {
+            Some(client) if has_skipped_jobs => ctx.runtime.block_on(async {
                 let discovery = discovery::discover_resources(client)
                     .await
                     .map_err(|e| miette!("{e}"))?;
                 Ok::<_, miette::Report>(
-                    scheduler::failed_rerun_nodes(client, &discovery, p.checked.plan()).await,
+                    scheduler::failed_skipped_jobs(client, &discovery, p.checked.plan()).await,
                 )
             })?,
             _ => Vec::new(),
         };
         // Under `--current-activation` there is no pre-confirm client, so let
-        // the scheduler inspect live probe Jobs during execution.
-        let engine_decides = p.client.is_none() && has_reruns;
-        if failed_reruns.is_empty() && !engine_decides {
+        // the scheduler inspect the live Jobs during execution.
+        let engine_decides = p.client.is_none() && has_skipped_jobs;
+        if failed_jobs.is_empty() && !engine_decides {
             // Supersede folded-in failed records even when their resources
             // need no changes or pruning, because the scheduler will not run
             // `finalize_deploy` on this early-return path.
@@ -200,16 +202,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
         if engine_decides {
             crate::say!(
-                "{} nothing changed; the engine reads the live probe Jobs to see whether one must run again",
+                "{} nothing changed; Kix checks the live Jobs on the cluster to see whether one failed",
                 output::yellow("↻"),
             );
         }
-        if !failed_reruns.is_empty() {
-            let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+        if !failed_jobs.is_empty() {
+            let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
             crate::say!(
-                "{} nothing changed, but {} failed on the last run and will run again: {}",
+                "{} nothing changed, but {} failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
                 output::yellow("↻"),
-                failed_reruns.len(),
+                failed_jobs.len(),
+                kix::manifest::keys::RERUN,
                 names.join(", "),
             );
         }
@@ -272,8 +275,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // `--current-activation` plan to skip unapplied nodes.
     if end.current
         && p.build.is_local()
-        && let Err(e) =
-            kix::eval::store::save_activation_path(&cluster, &p.build.graph().result_dir)
+        && let Err(e) = kix::eval::store::save_activation_path(&cluster, &p.build.graph().built_via)
     {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
@@ -499,14 +501,21 @@ async fn run_deploy_async(
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
-    // Reuse the pre-confirm client when available, or connect now and filter
-    // orphans shared with other Kix clusters.
+    // Reuse the pre-confirm client, which the plan ran the target checks
+    // through, or connect now, run them, and filter orphans shared with
+    // other Kix clusters.
     let client = match pre_client {
         Some(c) => c,
         None => {
             let client = client::make_client(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+            let connection = binding::Connection::of_context(global.context.as_deref());
+            checked
+                .target_checks()
+                .run(&client, &connection)
+                .await
+                .map_err(|e| miette!("{e}"))?;
             let (_, shared) =
                 kix::plan::keep_shared(&client, cluster_name, checked.orphans().to_vec())
                     .await
@@ -548,6 +557,8 @@ async fn run_deploy_async(
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         rerun_failed: true,
+        check_unchanged: true,
+        names_flags: true,
     };
     // Forward SIGINT and SIGTERM to the scheduler so an interrupted run aborts
     // its Activation record instead of leaving it in `Deploying`.
@@ -710,9 +721,17 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
     let cluster = p.build.graph().cluster_name.clone();
+    // A plan made from the local cache (`--current-activation`) did not
+    // connect, so the target checks run once the command connects below.
+    let target_checks = p
+        .client
+        .is_none()
+        .then(|| p.checked.target_checks().clone());
     let activation_identity_hash = p.checked.activation_identity_hash().map(str::to_string);
+    let kubernetes_uid = p.build.graph().kubernetes_uid.clone();
+    let package_index = p.checked.package_index().clone();
     let build = p.build;
-    let result_path = build.graph().result_dir.clone();
+    let result_path = build.graph().built_via.clone();
 
     // Compute provenance on the CLI because the operator has no access to the
     // source repository.
@@ -744,7 +763,15 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let source_path = result_path.display().to_string();
 
     let reconciled = ctx.runtime.block_on(async {
-        let (_, records) = super::operator::connect_and_verify(global.context.as_deref()).await?;
+        let (client, records) =
+            super::operator::connect_and_verify(global.context.as_deref()).await?;
+        if let Some(checks) = &target_checks {
+            let connection = binding::Connection::of_context(global.context.as_deref());
+            checks
+                .run(&client, &connection)
+                .await
+                .map_err(|e| miette!("{e}"))?;
+        }
 
         crate::say!(
             "Applying Activation CR '{}' (source: {})...",
@@ -758,7 +785,9 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             &cluster,
             &source_path,
             activation_identity_hash.as_deref(),
+            kubernetes_uid.as_deref(),
             Some(&receipt),
+            &package_index,
         )
         .await?;
 

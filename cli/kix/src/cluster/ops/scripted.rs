@@ -17,6 +17,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::time::Instant;
@@ -27,6 +29,7 @@ use crate::manifest::types::ResourceId;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::errors::FetchError;
+use super::super::kept::NotKeptField;
 use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
@@ -114,6 +117,8 @@ pub struct NodeScript {
     pub ready: Behaviour<Ready>,
     /// What [`ResourceIo::get_live`] answers. Defaults to `Ok(None)`.
     pub live: Behaviour<Result<Option<Value>, String>>,
+    /// The fields a successful apply reports the server did not keep.
+    pub not_kept: Vec<NotKeptField>,
 }
 
 /// Apply failures the engine distinguishes.
@@ -134,6 +139,7 @@ impl Default for NodeScript {
             recreate: Behaviour::Now(Ok(ApplyAction::Configured)),
             ready: Behaviour::Now(Ready::Ready),
             live: Behaviour::Now(Ok(None)),
+            not_kept: Vec::new(),
         }
     }
 }
@@ -157,6 +163,10 @@ impl NodeScript {
     }
     pub fn live(mut self, b: Behaviour<Result<Option<Value>, String>>) -> Self {
         self.live = b;
+        self
+    }
+    pub fn not_kept(mut self, fields: Vec<NotKeptField>) -> Self {
+        self.not_kept = fields;
         self
     }
 }
@@ -411,6 +421,7 @@ impl ResourceIo for ScriptedOps {
             Ok(action) => Ok(ApplyResult {
                 action,
                 preview: None,
+                not_kept: script.not_kept.clone(),
             }),
             Err(ApplyFailure::Other(msg)) => Err(ApplyError::UnknownKind { kind: msg }),
             Err(ApplyFailure::ImmutableConflict) => Err(ApplyError::ImmutableConflict {
@@ -439,6 +450,7 @@ impl ResourceIo for ScriptedOps {
             .map(|action| ApplyResult {
                 action,
                 preview: None,
+                not_kept: Vec::new(),
             })
             .map_err(RecreateError::Scripted)
     }
@@ -447,6 +459,7 @@ impl ResourceIo for ScriptedOps {
         &self,
         rid: &ResourceId,
         _import_target: Option<&ImportTarget>,
+        _applied_at: Option<DateTime<Utc>>,
         _timeout: Duration,
         cancel: &CancelToken,
         on_status: OnStatus<'_>,

@@ -212,11 +212,15 @@ let
         crd
         // {
           factBehavior = factBehaviorFor def;
+          # The installations keep their tables on their volumes. Templates
+          # and the operator configuration are settings.
+          holdsData = def.operand;
         }
         // lib.optionalAttrs def.operand {
           readiness = operandReadiness;
           usesAtLeast = usesAtLeastFor;
         }
+        // lib.optionalAttrs (!def.operand) { usesAtLeast = _: { }; }
       )
     );
 in

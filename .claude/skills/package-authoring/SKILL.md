@@ -15,10 +15,10 @@ makes keeping this file current part of changing the package conventions.
 
 | Need | Read |
 |---|---|
-| The values a package is judged against | `PRINCIPLES.md`; `docs-legacy/BEST-PRACTICES.md` §6.1 (availability, line 215), §7.4 (one alias, one contract, line 491), §9.6 (alerts, line 773) |
-| The package file contract and option contract | `docs-legacy/HANDBOOK.md` §5 (line 251); `.claude/skills/kix-migration/SKILL.md` "Package Anatomy" (line 78) and "Package Meta" (line 704) |
-| Second implementation of an alias, facades, operator stacks | kix-migration "Two Implementations, One Alias" (line 794) and "Operator-Managed Stacks" (line 742); `.claude/skills/kix-migration/MULTI_COMPONENT.md`, `STORAGE.md`, and `SECRETS.md` |
-| CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md` |
+| The values a package is judged against | `PRINCIPLES.md`; `docs/src/content/docs/explanation/packages-and-clusters.mdx`; `docs/src/content/docs/explanation/availability-levels.mdx` |
+| The package file contract and option contract | `docs/src/content/docs/reference/package-anatomy.mdx`; `docs/src/content/docs/reference/resources-and-out.mdx`; `.claude/skills/kix-migration/SKILL.md` "Package Anatomy" (line 78) and "Package Meta" (line 778) |
+| Second implementation of an alias, facades, operator stacks | kix-migration "Two Implementations, One Alias" (line 868) and "Operator-Managed Stacks" (line 816); `.claude/skills/kix-migration/MULTI_COMPONENT.md`, `STORAGE.md`, and `SECRETS.md` |
+| CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md`; `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
 | Any prose, including comments and the header | `CLAUDE.prose.md`, `CLAUDE.md` "Code comments" |
 | Logging what you notice and do not fix | `CLAUDE.housekeeping.md` |
 
@@ -31,9 +31,7 @@ plausible; a server with a per-consumer facade, clickhouse and
 clickhouse-database; an operator and its kinds, cnpg-operator and
 cnpg-cluster.
 
-The HANDBOOK and BEST-PRACTICES sections on builders, workloads, selectors,
-and scorecard rules predate the lib rewrite of August and September 2026
-(BEST-PRACTICES.md:1135). Where they disagree with `kix/lib/` or a reference
+Where reference documentation disagrees with `kix/lib/` or a reference
 package in the pattern table below, the code wins.
 
 ## Setup
@@ -68,13 +66,13 @@ rewrites the later ones.
 
 ### 1. Shape and boundary
 
-- Tier (HANDBOOK §12, line 1030): a package with consumers is native (tier 3).
+- Tier (`docs/src/content/docs/explanation/helm-integration.mdx` `#evaluating-helm-charts-at-build-time`, `docs/src/content/docs/reference/helm-and-imports.mdx`): a package with consumers is native (tier 3).
   `importChart` (tier 2) is for a chart whose values you only lock and pass
   through; once the package reads or computes a field inside the chart, go
   native. A chart's singleton default, hooks, and release-name prefixing are
   not evidence of anything (L6, E11, W22).
 - One package per upstream unit. A multi-component application stays one
-  package (BEST-PRACTICES §12.5, line 989). A component other packages would
+  package (`docs/src/content/docs/explanation/packages-and-clusters.mdx` `#packages-versus-instances`). A component other packages would
   reuse becomes a dependency instead.
 - An operator and the kinds it serves are separate packages (`cnpg-operator`,
   `cnpg-cluster`). A server that hands consumers their own database or user
@@ -85,7 +83,10 @@ rewrites the later ones.
   (`v2_discussions/148_clickhouse_packages_plan.md:39`).
 - CRDs: vendor or `mkCRDRef` markers (crd-vendoring skill §1). An operator
   with admission webhooks gets a gate Job on every handle on either route
-  (C21).
+  (C21). Every declaration sets `holdsData`: `true` when deleting a custom
+  resource of the kind loses data (a database, a storage pool, a backup),
+  `false` otherwise (C24). A stateful package that renders a custom resource
+  of a kind without it fails to build.
 
 ### 2. Upstream research
 
@@ -104,7 +105,7 @@ named decision; record the fact and its upstream path in the pull request.
 | Metrics | port, whether on the public port, auth, the flag that enables them | `kix.monitor` wiring (Mo11, Mo12) |
 | Clustering and HA, in source | in-memory state, sessions, caches, job queues, leader election, peer discovery, cron singletons | the `pick` table and any ceiling (step 3) |
 | Monitoring material and failure reports | shipped rules or mixins, outage threads | alerts (step 9) |
-| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types | `crds/sources.txt`, readiness (C5) |
+| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types and which of them the controller sets for a spec it rejects and does not revisit, what the operator deletes with each custom resource (its volumes, its backup files) | `crds/sources.txt`, readiness (C5) and its `failed` list (C6a), `holdsData` (C24) |
 | Kubernetes client calls, for a program that calls the API with RBAC not vendored from upstream (crd-vendoring covers vendored roles) | every call (list, get, watch, create, update, patch, delete, deletecollection) on every resource and subresource (`pods/log`, `<kind>/status`), at startup and in every code path | the Role: one rule per call, nothing extra (C10, C23) |
 
 "Does it run replicated, and what does it need for that?" is a mandatory
@@ -163,7 +164,7 @@ is a finding from the upstream source, not a default.
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,
    header 74-81).
 4. A ceiling needs evidence from upstream source, in the comment beside it
-   and in the header's `Limits:` line (grafana:119-121, tempo:101). A
+   and in the header's `Limits:` line (grafana:67, 424; tempo:36). A
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
    builder (pattern table, "Ceilings"). W4 and W5 cover the singleton form:
@@ -172,7 +173,7 @@ is a finding from the upstream source, not a default.
    "`pick`" row). Strategy: W8.
 6. Operator-placed operands map the level into the CR (`instances`,
    `podDistribution`) and use `kix.availability.spreadConstraints` where the
-   CR takes a spread list (cnpg-cluster:512); never raw anti-affinity (W2).
+   CR takes a spread list (cnpg-cluster:281); never raw anti-affinity (W2).
 7. Dependencies resolve their own level from the cluster default
    (`kix/lib/eval/instance.nix:74-85`); no consumer channel raises a
    provider's level. So check the mapping of each provider the package can
@@ -181,12 +182,12 @@ is a finding from the upstream source, not a default.
    package refuses goes to housekeeping instead. A consumer whose
    availability depends on the provider's says so in its header.
 
-Lib: levels and `pick` in `kix/lib/core/availability.nix:24-74`; `resolve`
-caps at the package ceiling with a warning (`:188-219`); builder ceilings in
-`kix/lib/scope/builders.nix:197-199, 341-346`; the plugin derives spread and
+Lib: levels and `pick` in `kix/lib/core/availability.nix:15, 55`; `resolve`
+caps at the package ceiling with a warning (`:184-218`); builder ceilings in
+`kix/lib/scope/builders.nix:226-280`; the plugin derives spread and
 PDB from `replicas > 1`, warns on a one-replica root workload at `node` and
 above, and throws on `replicas > 1` under an effective `none`
-(`kix/lib/plugins/availability/module.nix:255-282`). `every-package-evaluates`
+(`kix/lib/plugins/availability/module.nix:255-282, 292-323`). `every-package-evaluates`
 runs each package's defaults at `none` and `zone`, so a level-dependent bug in
 the defaults fails there.
 
@@ -205,7 +206,7 @@ the defaults fails there.
   (keycloak's `KC_DB_URL_PROPERTIES`, plausible's `sslmode=require`).
 - A facade with no contract file (clickhouse-database) is held through
   `deps.<x>.assertions` on the `out` fields the consumer needs
-  (clickhouse-logs:103-114, plausible:210-245).
+  (clickhouse-logs:103-114, plausible:212-252).
 - Config the consumer injects (`deps.<x>.config`) is ignored by a
   `kix.mkImport` stand-in, so the consumer also asserts on the `out` field
   that reports the injected value (plausible checks `out.grants`).
@@ -237,9 +238,13 @@ the defaults fails there.
   selectors, `crds.<Kind>` handles, and builders only where they gate,
   default, or refuse (D9, D13). Every value that names a resource derives
   from `self.<part>.out.*` so it carries string context (D24).
-- `meta.defaultAliases` when others consume it (M8); `meta.scope = "namespace"`
+- `meta.defaultAliases` when others consume it (M8); `meta.scope = "cluster"`
+  when consumers in every namespace should find its one instance by name
+  (an operator, an ingress controller, or an issuer) and it claims no role and
+  no `cluster:` conflict (M16); `meta.scope = "namespace"`
   when it hands consumers a Secret (S9); `meta.lifecycle = "stateful"` when it
-  provides state others depend on (M6); `meta.conflictsWith` only for a
+  provides state others depend on (M6), and then every custom resource it
+  renders is built with `scope.mkCR` from a declaration with `holdsData`; `meta.conflictsWith` only for a
   genuine one-per-cluster package (M9).
 - Publish every `out` field at every toggle, null when off (D25).
 
@@ -249,7 +254,7 @@ One purpose-named dep per credential, bound once through
 `kix.checkSecretKeys` (S3, S4; `SECRETS.md`). Never a string or path option
 for a credential: the dependency is what lets the site choose between a
 value in the build, a SOPS file, and a Secret an operator writes, and what
-`cluster.secrets.accept` checks (S1, S16; HANDBOOK §21.11). Configuration
+`cluster.secrets.accept` checks (S1, S16; `docs/src/content/docs/reference/cluster-configuration.mdx` `#clustercontainerd-clustermaintenance-and-clustersecretsaccept`). Configuration
 the program reads from a Secret gets a non-Secret route or a dependency
 beside the rendered Secret, which is classified `configuration` (S15;
 alertmanager, victoria-metrics-alert). Discrete variables take
@@ -283,7 +288,7 @@ to that cluster override, never to the package default.
 
 ### 9. Monitoring and alerts
 
-Follow package-review "Writing a package's alerts" and BEST-PRACTICES §9.6.
+Follow package-review "Writing a package's alerts" and `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`).
 The pattern table gives the `kix.monitor`, `kix.alerts`, and metrics-toggle
 references.
 
@@ -299,21 +304,21 @@ The header is the package's contract for a reader who will not open the code
 2. `Dependencies:`, one per line, `(required)` or `(optional)`, what each
    brings.
 3. A minimal instance that the test cluster evaluates (T5).
-4. One paragraph per operational fact, with network policy last (metabase:48-71
+4. One paragraph per operational fact, with network policy last (metabase:48-74
    is the model).
 5. `` `out`: `` the fields consumers read.
 6. `Escape hatches:` the hatches and their locked paths.
 7. `Limits:` ceilings with the upstream reason and where each is declared,
-   what a restart loses, untested paths, host prerequisites (tempo:101,
+   what a restart loses, untested paths, host prerequisites (tempo:36,
    falco:45).
 
 A comment that states an upstream fact names the upstream path, and copies
 numbers from the source rather than memory (a reviewer found "65536
 matches compose" where compose says 65535). A behaviour observed only on a
 deploy says where it was observed. Operators add
-   `Replicas:` and `Moving to another release:` (cnpg-operator:46, 76).
+   `Replicas:` and `Moving to another release:` (cnpg-operator:49, 98).
    A version that existing installs cannot take with a plain deploy adds
-   `Upgrades:`, saying what an operator does first (clickhouse-cluster:30).
+   `Upgrades:`, saying what an operator does first (clickhouse-cluster:28).
 
 ### Pattern to reference package
 
@@ -322,40 +327,47 @@ The only place in this skill with package line numbers. `pkg:N` is
 
 | Pattern | Reference |
 |---|---|
-| Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:85-96 |
-| Shared release file for a release group | `immich/release.nix`, immich:93 |
+| Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:88-96 |
+| Shared release file for a release group | `immich/release.nix`, immich:94 |
 | Follower image tag with `tagText` and `mkDefault` | n8n:265-272, 305 |
-| `checkSecretKeys`, read through the binding | metabase:154-159, 258 |
-| `mergeEnv` defaults and owned groups | metabase:164-215 |
-| Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:183-198 |
+| `checkSecretKeys`, read through the binding | metabase:157-162, 207, 263 |
+| `mergeEnv` defaults and owned groups | metabase:167-231 |
+| Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:186-202 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:141-145, 210-231 |
-| `guardArgs`, owned flags from owned env groups | keycloak:350-368 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:683; cnpg-cluster:548 |
-| Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:90-93, 248-252, 280-300 |
-| Config injection into a dependency | metabase:105-108; stackgres-database:97-102; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:108; stackgres-database:486; keycloak:528; tempo:957 |
-| `pick` as an option default with `defaultText` | cnpg-cluster:300-314 |
-| `pick` inline, header names the instance override (O19) | keycloak:219-224, header 74-76 |
+| `guardArgs`, owned flags from owned env groups | keycloak:376 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:385; cnpg-cluster:328, 435, 519 |
+| Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:93-96, 251-255, 283-303 |
+| Config injection into a dependency | metabase:108-111; stackgres-database:97-102; cnpg-database:94-115 |
+| Contracts: consumer `assertions`, provider `check` | metabase:111; stackgres-database:488; keycloak:537; tempo:630 |
+| `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
+| `pick` inline, header names the instance override (O19) | keycloak:234, header 74-76 |
 | `atLeast` | valkey:108 |
-| Ceilings: package-wide, per builder | tempo:416-418; valkey:545, harbor:1543-1545 |
-| `kix.expose`, `exposure.urlOrNull` | metabase:168-171, 360 |
-| Metrics toggle that does not restart the workload | metabase:148-153; keycloak header 30-36 |
-| `kix.monitor` with alerts | openbao:1241-1262; clickhouse:602-628 and `alerts.nix` |
-| `kix.alerts` over a PodMonitor | cnpg-cluster:841-850 |
-| `kix.healthCheck` with a script file | victoria-metrics-agent:324-343 |
-| Checksum annotations, `enableServiceLinks = false` | metabase:253-267 |
+| Ceilings: package-wide, per builder | tempo:275; valkey:545, `harbor/registry.nix`:244, `harbor/jobservice.nix`:340 |
+| `kix.expose`, `exposure.urlOrNull` | metabase:171-174, 363 |
+| Metrics toggle that does not restart the workload | metabase:151-156; keycloak header 30-35 |
+| `kix.monitor` with alerts | openbao:392; clickhouse:602-621 and `alerts.nix` |
+| `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
+| `kix.healthCheck` with a script file | victoria-metrics-agent:355-372 |
+| Checksum annotations, `enableServiceLinks = false` | metabase:257-270 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-40; stackgres-database |
-| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:265 (`serverSideName`) |
-| Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:180-192, 210-245 |
-| Migrations in an init container sharing the server's env and mounts (`kix.withMounts` fills `containers` only) | plausible:598-614; vaultwarden:178-200 |
-| Literal credentials refused in `env` | plausible:334-354 |
-| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:664-692; cnpg-cluster:727-745 |
-| A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:503-544, 651-660; `plausible/replicate.py` |
+| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:270 (`serverSideName`) |
+| Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:182-194, 212-252 |
+| Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:619-625, 692; vaultwarden:178-200, 275 |
+| One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:497-511, 677-678 |
+| Literal credentials refused in `env` | plausible:337-357 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:711-736; cnpg-cluster:596-661 |
+| A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:517-560, 604-605; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `clickhouse/contract.nix`; clickhouse, clickhouse-cluster |
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
 (`clickhouse/health-check.py`, shared with clickhouse-cluster).
+
+Kix evaluates Nix expressions in its local store and writes files with `builtins.toFile`
+(and renders Helm charts through `scope.helm.*`), but it cannot run Nix
+derivation builds (`pkgs.runCommand`, `pkgs.stdenv.mkDerivation`,
+`pkgs.writeText`). Never use a derivation builder inside a package or cluster
+definition.
 
 ## The files a complete change touches
 
@@ -363,7 +375,7 @@ Mandatory:
 
 1. `kix/packages/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
-   config to evaluate at `none` and `zone` (`:105`; keycloak at `:268-285`).
+   config to evaluate at `none` and `zone` (`:105`; keycloak at `:290-308`).
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
    present at least once, a `cilium` instance and `networkPolicy.enable = true`
    so the kind deploy runs under default deny, and the bring-up, build, and
@@ -384,11 +396,11 @@ Mandatory:
 Conditional:
 
 8. `clusters/test-<pkg>.rules-test.yaml` when the package ships alerts
-   (auto-discovered, `kix/lib/mkFlake.nix:120-138`).
+   (auto-discovered, `kix/lib/mkFlake.nix:152-170`).
 9. `kix/lib/vocab/<contract>.nix`, `vocab/default.nix`, `units/<contract>.nix`,
    and `kix/lib/architecture.md` for a new contract. A new field on any
    contract, package-local ones included: `git grep -n` an existing field
-   name to find every list of fields (FEATURE-CATALOG, the kix-migration
+   name to find every list of fields (`docs/src/content/docs/reference/`, the kix-migration
    skill) and add it there.
 10. Provider packages the consumer exposed gaps in, with their tests (step 4).
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
@@ -396,7 +408,7 @@ Conditional:
     `alerts.nix`.
 12. `clusters/test-<contract>-swap/` for a second implementation of an alias,
     registered in `clusters/flake.nix` and the root `flake.nix`.
-13. `docs-legacy/HANDBOOK.md`, `FEATURE-CATALOG.md`, and `BEST-PRACTICES.md`,
+13. `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`,
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
 14. `kix/lib/eval/roles.nix` and `kix/lib/flavors/*.nix` only for a new role.
@@ -408,17 +420,17 @@ Cheap first. Each step assumes the earlier ones pass.
 ```bash
 F=--extra-experimental-features; P=pipe-operators
 git add -A kix/packages/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
-nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on; read its traces
+nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh ./clusters <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls
-nix build ./clusters#checks.x86_64-linux.rules-cluster-<cluster> $F $P   # 4. promtool check and the .rules-test.yaml (alerts only)
+nix build ./clusters#checks.x86_64-linux.rules-cluster-<cluster> $F $P   # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)
 nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CRDs only
-nix build ludo/#cluster-ludo-kind $F $P                                  # 7. smoke over the full package set
+nix run .#kix -- check ludo-kind --flake ./ludo                          # 7. smoke over the full package set
 ```
 
 `<cluster>` is the key in `clusters/flake.nix`. When `every-package-evaluates`
-fails, `evaluate level name` (`kix/package-eval.nix:696`) evaluates one
+fails, `evaluate level name` (`kix/package-eval.nix:742`) evaluates one
 package at one level. From the worktree root, with `$PWD` absolute:
 
 ```bash
@@ -440,7 +452,7 @@ deploy is the slowest and most informative step.
 1. **Self-check.** Run the `package-review` skill as written ("How to run a
    review"). Fix every blocker and should-fix.
 2. **Red team.** A fresh agent, given the code and not your conclusions, runs
-   package-review and BEST-PRACTICES against the change. Past passes found
+   package-review and `docs/src/content/docs/explanation/packages-and-clusters.mdx` against the change. Past passes found
    Keeper ACLs, a silently dropped config injection, and a dangerous upstream
    default (`v2_discussions/148_clickhouse_packages_plan.md:150-157, 179-188`).
    Take every finding, or record in housekeeping why not.
@@ -504,9 +516,10 @@ deploy is the slowest and most informative step.
    `--force-conflicts`, or any other the fresh install did not need) and
    reaches ready. An object its plan deletes or keeps as an orphan is one
    existing installs lose. This catches a new required input that existing
-   installs lack (a Secret the new version reads), a change of kinds in a
-   stateful package that Kix treats as a data migration, renamed or removed
-   objects, and an immutable field that needs the object recreated. A
+   installs lack (a Secret the new version reads), a data migration in a
+   stateful package (an object renamed, or replaced by one of another kind
+   when both hold data by their `kix.run/holds-data` annotation), renamed or
+   removed objects, and an immutable field that needs the object recreated. A
    deliberate breaking change that cannot pass says in the header's
    `Upgrades:` paragraph what an operator does. A new package has nothing
    on main; skip this deploy.

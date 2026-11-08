@@ -12,7 +12,7 @@
 //!   is absent from the new build are garbage (or, for resources stamped before
 //!   the domain move, resources whose Kubernetes identity is absent). Unstamped
 //!   label carriers, unattributed resources on multi-cluster targets, and
-//!   controller-created copies are reported and only deleted when
+//!   copies other programs made of Kix objects are reported and only deleted when
 //!   `--include-unstamped`, `--include-unattributed`, or `--include-copies` is
 //!   passed.
 //! - **Operator (`--operator`):** Delete retired Superseded Activation records
@@ -45,6 +45,7 @@ use crate::plan::{
 };
 use kix::build_source::{Build, FlakeBuildError};
 use kix::cluster::activation::Records;
+use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::inventory;
@@ -215,6 +216,15 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .runtime
         .block_on(client::make_client(global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+    ctx.runtime
+        .block_on(binding::check(
+            &client,
+            &binding::Connection::of_context(global.context.as_deref()),
+            binding::Action::GarbageCollect,
+            &new_graph.cluster_name,
+            new_graph.kubernetes_uid.as_deref(),
+        ))
+        .map_err(|e| miette!("{e}"))?;
     let (ordered_rids, shared) = ctx
         .runtime
         .block_on(kix::plan::keep_shared(
@@ -354,16 +364,19 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &expected_hashes,
         &expected_ids,
         &cluster_name,
+        graph.kubernetes_uid.as_deref(),
         build_hash.as_deref(),
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_hard_async(
     args: &GcArgs,
     global: &crate::cli::GlobalArgs,
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
     cluster_name: &str,
+    kubernetes_uid: Option<&str>,
     build_hash: Option<&str>,
 ) -> Result<()> {
     crate::say!("Fetching live cluster state...");
@@ -371,6 +384,15 @@ async fn run_hard_async(
     let client = client::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+    binding::check(
+        &client,
+        &binding::Connection::of_context(global.context.as_deref()),
+        binding::Action::GarbageCollect,
+        cluster_name,
+        kubernetes_uid,
+    )
+    .await
+    .map_err(|e| miette!("{e}"))?;
     let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;

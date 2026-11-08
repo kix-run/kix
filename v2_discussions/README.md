@@ -32,7 +32,7 @@ Core language, evaluation model, wiring primitives.
 |---|----------|--------|-----------|---------|
 | 29 | [Compiler design](29_compiler-design.md) | Reference | **Reference** | Conceptual anchor: kix compiles K8s wiring, Nix store as IR. Implementation sketches are stale but the core framing is the single best starting point for any technical topic. |
 | 31 | [Port fanout DSL](31_port_fanout_dsl.md) | Design | Near-term | Port registry to eliminate repeated port declarations across K8s resources. |
-| 32 | [Volume mount DSL](32_volume_mount_dsl.md) | Partial | Active | Mount `.path` exposure, `.mountAt` on resources, volume dedup. Read alongside `63a` for the cluster-side story. |
+| 32 | [Volume mount DSL](32_volume_mount_dsl.md) | Partial | Active | Mount `.path` exposure and `.mountAt` on resources; volume dedup and multi-container `withMountsOn` shipped. Read alongside `63a` for the cluster-side story. |
 | 35 | [CRD-derived RBAC & webhooks](35_crd_derived_rbac_webhooks.md) | Proposal | Near-term | Auto-derive RBAC rules and webhooks from CRD definitions. |
 | 40 | [Composite packages](40_composite_packages.md) | RFC | Near-term | Decompose Helm bundles (kube-prometheus-stack etc.) into single-package abstractions. *Use case is still fuzzy — open question which real bundle validates this.* |
 | 65 | [Passthrough instances](65_passthrough_instances.md) | Draft | Near-term | Instances that participate in DI but produce zero K8s resources (S3, databases, DNS). *Use case is still fuzzy — waiting on a concrete driver.* |
@@ -195,6 +195,11 @@ These are archived because they are implemented or deprecated, but they remain t
 - **`28_gitops_deploy.md`** — GitOps deploy reconciliation / drift / health design. Superseded operationally by `62` + `88b` but still the best single-file explanation of the deploy philosophy.
 - **`60_scorecard_rules_design.md`** — Multi-level policy framework with configurable severity and structured reporting. Built. Read when changing scorecard rules.
 - **`61_compliance_exports.md`** — Export formats (SARIF, SBOM, SLSA, OSCAL). Built. Read when adding a new compliance output.
+
+### Recently archived (November 2026)
+
+- **161** Rootless evaluation with a bundled runtime → implemented (kixpkgs#319, 2026-11-07). Kix ships Nix, Helm 3 and 4, `kubectl` and `sops` in `libexec/kix/`, evaluates into its own store, and renders Helm charts itself. Air-gapped evaluation stays out of scope (`interesting_thoughts/47_air_gapped_deploys.md`).
+- **162** Project builders → implemented (kixpkgs#319, 2026-11-07). `kix.toml` chooses the `kix` or `nix` builder, and `mkFlake` publishes `kixLib` for flakes that merge its outputs. The `remote` builder and its open API are in `ROADMAP.md § Open design questions`, with the outline in the archived doc's section 5.
 
 ### Recently archived (October 2026)
 

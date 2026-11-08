@@ -66,13 +66,13 @@ pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included:
     println!("  {}", output::dim(note));
 }
 
-/// Print controller-created copies of Kix objects, and state whether
-/// `--include-copies` includes them.
+/// Print the copies of Kix objects that other programs made, and state
+/// whether `--include-copies` includes them.
 pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
-        "{} {} objects carry Kix's annotations and an owner reference but no Kix \
-         apply record, so a controller copied them from Kix objects:",
+        "{} {} objects carry Kix's labels, but Kix never wrote them. Another \
+         program, usually an operator, copied the labels from an object Kix made:",
         output::bold("Copies:"),
         objects.len(),
     );
@@ -85,9 +85,9 @@ pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool)
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        "--include-copies: judged against this build like this cluster's own objects."
+        "--include-copies: checked against this build like Kix's own objects."
     } else {
-        "Kept. Kix did not apply these. Pass --include-copies to judge them against this build."
+        "Kept, because Kix did not make them. Pass --include-copies to check them against this build too."
     };
     println!("  {}", output::dim(note));
 }

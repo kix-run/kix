@@ -1,0 +1,470 @@
+---
+title: "Resources and out"
+description: "How scope builders create Kubernetes resources and expose .out fields that track dependencies automatically."
+---
+
+Inside a package's `build` block, you use `scope` functions (`scope.mkDeployment`, `scope.mkResource`, and others) to create Kubernetes objects. In addition to validating your YAML fields and stamping standard labels, every `scope` builder returns an object with an `.out` attribute (such as `.out.name` or `.out.fqdn`). Whenever one resource reads another resource's `.out` field, Kix automatically records that dependency so everything deploys in the right order.
+
+:::note[Helpful background]
+- [07. Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/): see how `scope` builders and `.out` references wire a Deployment, ConfigMap, and Service together.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): learn how Nix string context turns `.out` references into a cluster-wide dependency graph.
+- [Availability levels and derived pod spread](/docs/explanation/availability-levels/): see how workload builders automatically configure pod anti-affinity and topology spread from your cluster's availability target.
+- [Objects In Kubernetes (Kubernetes docs)](https://kubernetes.io/docs/concepts/overview/working-with-objects/): review the standard `apiVersion`, `kind`, `metadata`, and `spec` fields of Kubernetes manifests.
+:::
+
+## mkResource
+
+`scope.mkResource` constructs a namespaced Kubernetes resource (setting `metadata.namespace = scope.namespaceName`), while `scope.mkClusterResource` constructs a cluster-scoped resource (where `metadata.namespace` is omitted). `scope.mkResource` always sets a namespace regardless of `kind`; only `scope.helm.importChart` automatically dispatches between cluster-scoped and namespaced builders based on its built-in cluster-scoped kind list (`APIService`, `CertificateSigningRequest`, `ClusterRole`, `ClusterRoleBinding`, `CSIDriver`, `CSINode`, `CustomResourceDefinition`, `IngressClass`, `MutatingWebhookConfiguration`, `Namespace`, `Node`, `PersistentVolume`, `PriorityClass`, `RuntimeClass`, `StorageClass`, `ValidatingAdmissionPolicy`, `ValidatingAdmissionPolicyBinding`, `ValidatingWebhookConfiguration`, and `VolumeAttachment`).
+
+:::note[Workload, Secret, and CRD builders]
+`scope.mkResource` refuses workload kinds (`Deployment`, `StatefulSet`, `DaemonSet`, `Job`, and `CronJob`); use the dedicated [workload builders](#workloads) so Kix runs pod validation and availability spread synthesis. Similarly, use [`scope.mkSecret`](/docs/reference/secrets-crds-and-rbac/#secrets-and-secret-refs) for `v1/Secret` and [`scope.mkCRD`](/docs/reference/secrets-crds-and-rbac/#crds-and-crd-refs) for `CustomResourceDefinition`.
+:::
+
+```nix
+configMap = scope.mkResource {
+  apiVersion = "v1";
+  kind = "ConfigMap";
+  name = "echo-config";
+  data = {
+    "config.yaml" = builtins.toJSON {
+      listenPort = 8080;
+    };
+  };
+};
+```
+
+### `scope.mkResource` and `scope.mkClusterResource` arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `apiVersion` | string | Required | Kubernetes API group and version (for example, `"v1"` or `"networking.k8s.io/v1"`). |
+| `kind` | string | Required | Kubernetes resource kind (for example, `"ConfigMap"` or `"Service"`). |
+| `name` | string | Required | Resource `metadata.name`. Must be a valid lowercase RFC 1123 name (or RBAC colon-separated name for Roles and ClusterRoles). |
+| `spec` | attrset | `{ }` | Resource `.spec` body. Omitted from the rendered YAML when empty (`{ }`). |
+| `data` | attrset | `{ }` | Resource `.data` body (for `ConfigMap`). Omitted when empty. |
+| `stringData` | attrset | `{ }` | Resource `.stringData` body. Omitted when empty. |
+| `labels` | attrset | `{ }` | Additional labels merged onto the cluster and instance labels (`clusterLabels // instanceLabels // labels`). |
+| `annotations` | attrset | `{ }` | Additional `metadata.annotations` merged with Kix system annotations. |
+| `outputs` | attrset | `{ }` | Custom fields merged onto the returned resource's `.out` surface. Setting a key to `null` suppresses an auto-derived `.out` field. |
+| `requires` | list of resources | `[ ]` | Explicit deployment dependencies that are not already referenced via `.out` string interpolation inside the manifest. |
+| `extraDeps` | list of resources | `[ ]` | Escape-hatch dependencies used when a dependency does not appear in the manifest and `requires` is not applicable. |
+| `extra` | attrset | `{ }` | Top-level manifest fields for kinds that place configuration outside `spec` (such as `rules`, `roleRef`, `subjects`, `webhooks`, or `provisioner`). |
+| `ownership.cede` | list of strings | `[ ]` | Dot-separated field paths (with optional `[*]`, `[<index>]`, or `[<key>="<value>"]` list selectors) ceded to in-cluster controllers for Server-Side Apply (`kix.run/cede-fields`). |
+| `factBehavior` | `{ endpoint?: "conduct" \| "terminate" }` | `{ }` | Overrides how the network-policy engine treats endpoints on custom resources (`"conduct"` forwards traffic to backing pods; `"terminate"` stops at the resource). |
+
+### Rules on `extra`
+
+`extra` merges top-level fields onto the manifest, subject to strict shadowing checks:
+- `extra` cannot set `apiVersion` or `kind`.
+- `extra.metadata` cannot set `name` or `namespace` (`labels` and `annotations` inside `extra.metadata` merge additively with the top-level `labels` and `annotations` arguments).
+- `extra` cannot set `spec`, `data`, or `stringData` when the corresponding top-level argument is also non-empty.
+
+### `ownership.cede`, `factBehavior`, and custom resource `readiness`
+
+- **`ownership.cede`**: Lists manifest field paths (such as `[ "spec.replicas" ]`, `[ "webhooks[*].clientConfig.caBundle" ]`, or `[ ".webhooks[name=\"x\"].rules" ]`) that an in-cluster controller mutates at runtime. Paths use dot-separated field names with `[*]`, `[<index>]`, or `[<key>="<value>"]` bracket selectors for list elements (`.*` is treated as a literal field named `*`, not a wildcard). Kix records these paths in `metadata.annotations."kix.run/cede-fields"` so drift detection and Server-Side Apply do not fight the controller. See [Server-Side Apply, field ownership, and drift](/docs/explanation/server-side-apply-and-drift/).
+- **`factBehavior`**: Controls how Kix's network-policy engine propagates endpoint facts across custom resources. Set `factBehavior.endpoint = "conduct"` when a resource acts like a `Service` or proxy in front of backing pods, or `"terminate"` when the resource is the final destination.
+- **`readiness` (on CRDs and CRs)**: Custom resource readiness predicates are declared once on [`scope.mkCRD` or `scope.mkCRDRef`](/docs/reference/secrets-crds-and-rbac/#crds-and-crd-refs) and automatically stamped onto custom resources built with `scope.mkCR` or `crd.out.mkCR` as `metadata.annotations."kix.run/readiness"` (`path` must be a JSON pointer string starting with `/`):
+  - Condition check: `{ condition = { type = "Ready"; status = "True"; }; }`
+  - Field equality: `{ path = "/status/phase"; equals = "Running"; }`
+  - Field non-equality: `{ path = "/status/currentRevision"; notEquals = ""; }`
+
+---
+
+## Workloads
+
+Kix provides five workload builders on `scope`:
+
+| Builder | `apiVersion` and `kind` | Supports `availability.max` |
+| --- | --- | --- |
+| `scope.mkDeployment` | `apps/v1` `Deployment` | Yes (`"none"`, `"pod"`, `"node"`) |
+| `scope.mkStatefulSet` | `apps/v1` `StatefulSet` | Yes (`"none"`, `"pod"`, `"node"`) |
+| `scope.mkDaemonSet` | `apps/v1` `DaemonSet` | No (runs one pod per matching node) |
+| `scope.mkJob` | `batch/v1` `Job` | Yes (`"none"`, `"pod"`, `"node"`) |
+| `scope.mkCronJob` | `batch/v1` `CronJob` | Yes (`"none"`, `"pod"`, `"node"`) |
+
+Use `scope.mkOptional cond resource` (or `if cond then ... else null`) when a workload or resource is enabled conditionally.
+
+A Job built with `scope.mkJob` may not set `spec.ttlSecondsAfterFinished`; the build refuses it. Kubernetes would delete the finished Job, every comparison with the live cluster would then see it as missing, and Kix would run it again. A finished Job stays until a later build no longer contains it, and Kix deletes it then. Give a Job whose content may change either a name that changes with it (a hash of its inputs) or the `kix.run/rerun: on-change` annotation, because a Job's pod template is immutable. A CronJob's `jobTemplate` may still set `ttlSecondsAfterFinished`, because Kubernetes creates those Jobs.
+
+```nix
+deployment = scope.mkDeployment {
+  name = "api";
+  availability.max = "node";
+  spec = {
+    replicas = kix.availability.pick availability {
+      none = 1;
+      pod = 2;
+      node = 3;
+      zone = 3;
+    };
+    selector.matchLabels = scope.selectorLabels;
+    template.spec = {
+      serviceAccount = self.serviceAccount;
+      containers = [
+        {
+          name = "api";
+          image = kix.image.ref config.image;
+          ports = [ (kix.port "http" 8080) ];
+          resources = config.resources;
+        }
+      ];
+    };
+  };
+};
+```
+
+### Automatic workload processing
+
+When you call a workload builder, Kix performs the following steps before sealing the resource:
+
+1. **Selector propagation**: On `Deployment`, `StatefulSet`, and `DaemonSet`, `spec.selector.matchLabels` is required and is automatically merged into `spec.template.metadata.labels` when `spec.template.metadata.labels` is omitted. On `Job`, either `spec.selector.matchLabels` or `spec.template.metadata.labels` is required (`spec.template.metadata.labels` defaults to `spec.selector.matchLabels` when omitted); on `CronJob`, `spec.jobTemplate.spec.template.metadata.labels` is required. Both `mkJob` and `mkCronJob` throw an error if neither selector nor pod template labels are provided.
+2. **`serviceAccount` shorthand**: Setting `spec.template.spec.serviceAccount = self.serviceAccount` (passing the `ServiceAccount` resource directly) sets `serviceAccountName = self.serviceAccount.out.name` (creating a deployment dependency) and clears the shorthand key.
+3. **StatefulSet `headlessService` shorthand**: On `scope.mkStatefulSet`, passing `spec.headlessService = self.headlessSvc` checks that `self.headlessSvc` is a `Service` resource in the same namespace and sets `spec.serviceName = self.headlessSvc.name` (without a string-context dependency, avoiding a cycle with the headless Service's selector). Cluster validation then verifies that `spec.serviceName` matches a headless `Service` (`clusterIP = "None"`) in the same namespace.
+4. **Availability spread and PDB derivation**: For `Deployment` and `StatefulSet` workloads with `replicas > 1` on a cluster with non-empty `cluster.topology.failureDomainKeys` (`cluster.capabilities.multiNode` is not `false`) and without custom `spec.template.spec.topologySpreadConstraints`, Kix injects `topologySpreadConstraints` across the cluster's failure-domain keys (`DoNotSchedule` for the zone key at `"zone"` and for the host key at `"node"`, and `ScheduleAnyway` otherwise) and generates a companion `PodDisruptionBudget` (`maxUnavailable = 1`) unless an existing `PodDisruptionBudget` in the instance already selects the workload's pods. See [Availability levels and derived pod spread](/docs/explanation/availability-levels/).
+5. **Network policy and DNS wiring**: When the cluster has a `"dns"` role provider, workloads that use default cluster DNS (`ClusterFirst`) automatically depend on the DNS service and receive egress permission to UDP/TCP port 53. If `cluster.networkPolicy.enable = true`, Kix also synthesizes a `CiliumNetworkPolicy` from the workload's resource references and `meta.network.intents`.
+
+### Build-time pod validators
+
+`scope.mkDeployment`, `scope.mkStatefulSet`, and `scope.mkDaemonSet` run all nine static checks below at Nix evaluation time, while `scope.mkJob` and `scope.mkCronJob` run the five pod-template checks (`checkPrivileged`, `checkNamespacedRefs`, `checkContainerResources`, `checkDuplicateNames`, and `checkFieldRefs`):
+
+| Validator | Builders | What it enforces |
+| --- | --- | --- |
+| `checkSelectorSubset` | `mkDeployment`, `mkStatefulSet`, `mkDaemonSet` | When `spec.template.metadata.labels` is explicitly set, every key-value pair in `spec.selector.matchLabels` must be present with the same value in `spec.template.metadata.labels`. |
+| `checkNamespacedRefs` | All five | Every `ConfigMap`, `Secret`, `PersistentVolumeClaim`, and `ServiceAccount` mounted or referenced by the pod must carry string context (from `.out` or `kix.untrackedRef`) and belong to the same `metadata.namespace` as the workload (unless reflected via `mkSecretRef { reflect = true; }`). |
+| `checkNamedPorts` | `mkDeployment`, `mkStatefulSet`, `mkDaemonSet` | Any string port name referenced by a container's `livenessProbe`, `readinessProbe`, or `startupProbe` (`httpGet.port`, `tcpSocket.port`, or `grpc.port`) must be declared in that container's `ports` list. |
+| `checkContainerResources` | All five | When a container sets both `requests` and `limits` for `cpu` or `memory`, both quantities must fit in a 64-bit integer and `limits` must be `>= requests`. |
+| `checkDuplicateNames` | All five | Container names (across `containers` and `initContainers`), volume names, named ports within a container, and environment variable names within a container must not contain duplicates. |
+| `checkFieldRefs` | All five | Downward API `env[].valueFrom.fieldRef.fieldPath` values must be in the supported Kubernetes pod field path set (`metadata.name`, `metadata.namespace`, `metadata.uid`, `metadata.labels`, `metadata.annotations`, `metadata.labels['<key>']`, `metadata.annotations['<key>']`, `spec.nodeName`, `spec.serviceAccountName`, `status.hostIP`, `status.hostIPs`, `status.podIP`, `status.podIPs`). |
+| `checkPrivileged` | All five | Pods using `hostNetwork = true`, `hostPID = true`, a `hostPath` volume, or `securityContext.privileged = true` are checked against `cluster.capabilities.privilegedContainers` (rejected when `false`, warned when `null`). |
+| `checkDaemonSet` | `mkDaemonSet` | Checks `cluster.capabilities.daemonSets` (rejected when `false`, warned when `null`). |
+| `checkSpreadFeasible` | `mkDeployment`, `mkStatefulSet`, `mkDaemonSet` | Multi-replica workloads (`spec.replicas > 1`) with required pod anti-affinity or a `DoNotSchedule` topology spread constraint are checked against `cluster.capabilities.multiNode` (rejected when `false`, warned when `null`). |
+
+---
+
+## Services and service refs
+
+### Building Services
+
+To create a `Service` targeting a Kix workload, pair [`kix.service.fromWorkload`](/docs/reference/composition-helpers/#servicefromworkload) with `scope.mkResource`:
+
+```nix
+service = scope.mkResource (
+  kix.service.fromWorkload {
+    name = "api";
+    ports = [
+      {
+        name = "http";
+        port = 80;
+        targetPort = "http";
+      }
+    ];
+  } self.deployment
+);
+```
+
+When a `Service` has `spec.type = "LoadBalancer"`, Kix verifies that the cluster includes a package providing the `"loadBalancer"` role, or that `spec.loadBalancerClass` is wrapped with `kix.providedLoadBalancerClass { class = "..."; by = providerDep; }`.
+
+### `scope.mkServiceRef`
+
+When an operator creates a `Service` at runtime (for example, CloudNativePG creating `<cluster>-rw` after reconciling a `Cluster` custom resource), the `Service` manifest does not exist in Nix. Use `scope.mkServiceRef` to create a typed handle for that runtime Service:
+
+```nix
+rwService = scope.mkServiceRef {
+  name = "${self.pgCluster.out.name}-rw";
+  selector = {
+    "cnpg.io/cluster" = self.pgCluster.out.name;
+    "cnpg.io/instanceRole" = "primary";
+  };
+  ports = [
+    {
+      name = "postgres";
+      port = 5432;
+    }
+  ];
+  requires = [ self.pgCluster ];
+};
+```
+
+| `scope.mkServiceRef` argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | string | Required | Runtime `Service` name in `scope.namespaceName`. |
+| `selector` | attrset of strings | Required | Non-empty pod label selector of the operator-managed pods backing this Service. Used to synthesize network policies. |
+| `ports` | list of `{ name?; port; protocol?; }` | Required | Non-empty list of ports exposed by the runtime Service. |
+| `labels` | attrset | `{ }` | Additional metadata labels on the runtime Service (`out.labels`). |
+| `requires` | list of resources | `[ ]` | Resources (typically the operator custom resource) that must be applied before the runtime Service will exist. |
+
+`scope.mkServiceRef` emits a synthetic `PackageInstance` import marker (`service-ref-<instance>-<name>`), registers endpoint facts for network-policy derivation, and returns an object with the same `.out` fields as a standard Service (`name`, `fqdn`, `port`, `ports`, `selector`, and `labels`).
+
+### `scope.mkWebhookService`
+
+Operators that expose admission webhooks can build the webhook `Service` alongside any `ValidatingWebhookConfiguration` and `MutatingWebhookConfiguration` resources in one call with `scope.mkWebhookService`:
+
+```nix
+webhook = scope.mkWebhookService {
+  name = "cert-manager-webhook";
+  selector = self.webhookDeployment.out.selector;
+  port = 443;
+  targetPort = "https";
+  validating = [
+    {
+      name = "webhook.cert-manager.io";
+      path = "/validate";
+      rules = [
+        {
+          apiGroups = [ "cert-manager.io" ];
+          apiVersions = [ "v1" ];
+          operations = [ "CREATE" "UPDATE" ];
+          resources = [ "*/*" ];
+        }
+      ];
+    }
+  ];
+};
+```
+
+It returns `{ service; validatingConfiguration?; mutatingConfiguration?; }` (`validatingConfiguration` and `mutatingConfiguration` are omitted when their input lists are empty) and automatically wires `clientConfig.service` (`name`, `namespace`, `path`, and `port`) on each webhook entry to point to the generated `Service`.
+
+---
+
+## forNamespace and labels
+
+### Scope attributes and namespace helpers
+
+Every package receives a `scope` configured for its target `instances.<name>.namespace`. The table below lists the context attributes and namespace helpers on `scope`:
+
+| Attribute or function | Type | Description |
+| --- | --- | --- |
+| `scope.instanceName` | string | Name of the current package instance (`instances.<name>`). |
+| `scope.namespaceName` | string | Target Kubernetes namespace name string. |
+| `scope.namespace` | resource | Auto-generated `v1/Namespace` resource for `scope.namespaceName`. |
+| `scope.namespaces` | attrset of resources | Map of all `v1/Namespace` resources in the cluster (keyed by namespace name). |
+| `scope.forNamespace` | `string -> scope` | Returns a child `scope` targeting the given namespace name. Resources built with the child scope automatically depend on its `v1/Namespace` resource. |
+| `scope.forService` | `dep -> scope` | Returns a child `scope` targeting the namespace of an upstream dependency `dep` (reads `dep._meta.namespaceName`, throwing an error if missing). Used when creating resources like `RoleBinding` or `Certificate` that must live in a provider's namespace. |
+| `scope.requireMetricsApi` | `string -> null` | Verifies that the cluster serves `metrics.k8s.io` for the named `subject` string (returning `null` when provided, emitting a warning when `"unknown"`, or throwing when `"absent"`). `HorizontalPodAutoscaler` resources run this check automatically in `scope.mkResource`. |
+| `scope.augmentEdge` | `[ resources ] -> string -> string` | Attaches the ordering and endpoint-fact string context of the `passengers` resource list to the given string value. |
+| `scope.augmentAllEdges` | `[ resources ] -> attrset -> attrset` | Applies `scope.augmentEdge passengers` to every string attribute in `outAttrs` (leaving non-string attributes unchanged). |
+| `scope.forwardEdges` | `dep -> [ resources ] -> attrset` | Re-exports `dep.out` with `passengers`' string context attached to every string value, and merges in any `ServiceRef` markers from `dep.raw`. |
+
+```nix
+# Deploying a RoleBinding into kube-system while the main package runs in its own namespace
+kubeSystemScope = scope.forNamespace "kube-system";
+
+leaderElectionBinding = kubeSystemScope.mkResource {
+  apiVersion = "rbac.authorization.k8s.io/v1";
+  kind = "RoleBinding";
+  name = "${scope.instanceName}-leader-election";
+  ...
+};
+```
+
+### Label helpers
+
+Every resource built with `scope.mkResource` or `scope.mkClusterResource` receives `clusterLabels // instanceLabels // labels` on `metadata.labels` (where `instanceLabels` is `{ "app.kubernetes.io/instance" = instanceName; "app.kubernetes.io/managed-by" = "kix"; }` under `labelStyle = "kix"`, or `{ release = instanceName; "app.kubernetes.io/managed-by" = "kix"; }` under `labelStyle = "helm"`). Workload builders also merge the workload's selector labels (and `"app.kubernetes.io/name" = instanceName` on `Deployment`, `StatefulSet`, and `DaemonSet`) into `labels`.
+
+`scope` also exposes pre-populated label sets for use in workload selectors and custom resource templates:
+
+| Helper | Keys included | When to use |
+| --- | --- | --- |
+| `scope.selectorLabels` | `app.kubernetes.io/name`, `app.kubernetes.io/instance` (or `app`, `release` when `scope.labelStyle == "helm"`, or `instances.<ns>.<name>.selectorLabels` when overridden) | Default workload `spec.selector.matchLabels`. |
+| `scope.labels.selector` | Alias for `scope.selectorLabels` | Same as `scope.selectorLabels`. |
+| `scope.labels.common` | `scope.selectorLabels // instanceLabels` (`app.kubernetes.io/name`, `app.kubernetes.io/instance`, and `app.kubernetes.io/managed-by = "kix"`, or `app`, `release`, and `app.kubernetes.io/managed-by = "kix"` when `scope.labelStyle == "helm"`) | Standard combined selector and instance labels for sub-resources or operator templates. |
+| `scope.labels.clusterScoped` | `app.kubernetes.io/name = scope.instanceName` and `app.kubernetes.io/managed-by = "kix"` | Minimal instance identification labels without selector overrides. |
+
+To switch an instance's `scope.selectorLabels` and `instanceLabels` to Helm's legacy label keys (`app` and `release`), set `labelStyle = "helm"` on the instance in the cluster definition (`instances.<ns>.<name>.labelStyle = "helm"`).
+
+---
+
+## Common resource fields
+
+Every resource returned by a `scope` builder is a resource object with the following top-level attributes and `.out` fields:
+
+### Top-level resource attributes
+
+| Attribute | Description |
+| --- | --- |
+| `out` | Attribute set of string-context-carrying output fields for downstream consumers (detailed below). |
+| `manifest` | Stamped manifest attribute set (`rawManifest`) with the resource's identity and forwarded fact string context attached to every string value. |
+| `rawManifest` | Manifest attribute set with `kix.keep` markers resolved and Kix annotations (`kix.run/depends-on`, `kix.run/expects`, `kix.run/holds-data`) stamped, before the resource's own string context is attached. |
+| `outPath` | Path to the resource's JSON identity file (`k8s-<kind>-<ns>-<name>`) in Kix's local store, produced by `builtins.toFile`. |
+| `rawSelector` | (Workloads only) Plain attribute set of `spec.selector.matchLabels` **without** string context. See [String-context dependency behavior](#string-context-dependency-behavior). |
+
+### Auto-derived `.out` fields by resource kind
+
+All string values inside `resource.out` carry the store-path context of `resource`, so referencing any `resource.out.*` value inside another resource's manifest automatically records a deployment dependency (`kix.run/depends-on`).
+
+| Resource kind | `.out` field | Type | Description |
+| --- | --- | --- | --- |
+| **All resources** | `out.name` | string | `metadata.name` with store-path context attached. |
+| **All resources** | `out.fqdn` | string | `"${name}.${namespace}.svc.${clusterDomain}"` for namespaced resources (or `name` for cluster-scoped resources), with connect context attached. |
+| **All resources** | `out.identityHash` | string | 32-character store hash of the resource's JSON identity file (`outPath`), with store-path context attached. |
+| **All resources** | `out.selector` | attrset of strings | Derived from `spec.selector.matchLabels` when present, otherwise `metadata.labels`, with the resource's store-path context attached to every label value. |
+| **`v1/Service`** | `out.ports` | list of attrsets | Raw `spec.ports` list (`[ { name?; port; targetPort?; protocol?; } ]`) when `spec.ports` is present. |
+| **`v1/Service`** | `out.port` | string | First port number in `spec.ports` as a string (with connect context attached), added automatically when built via `kix.service.fromWorkload` or `scope.mkServiceRef`. |
+| **`v1/Service`** | `out.url` | `{ scheme ? "http", port ? null } -> string` | Builds `"${scheme}://${name}.${namespace}.svc.${clusterDomain}:${toString effectivePort}"` (with connect context attached), using `port` when passed or the first port's `.port` in `spec.ports` when `port == null`. |
+| **`v1/Secret`** (`mkSecret` / `mkSecretRef`) | `out.keys`, `out.type`, `out.keyRef`, `out.mkEnv`, `out.envFrom`, `out.volume` | various | Secret consumption helpers. See [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/#secrets-and-secret-refs). |
+| **`CustomResourceDefinition`** (`mkCRD` / `mkCRDRef`) | `out.cr`, `out.mkCR` | functions | Custom resource constructors bound to the CRD's `apiVersion`, `kind`, and `readiness`. See [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/#crds-and-crd-refs). |
+
+### Triggering rollouts on ConfigMap changes with `out.identityHash`
+
+Kubernetes does not automatically restart pods when a mounted `ConfigMap` changes. Interpolating `self.configMap.out.identityHash` into `spec.template.metadata.annotations` both triggers a rolling update whenever the `ConfigMap` data changes and creates the deployment dependency from the workload to the `ConfigMap`:
+
+```nix
+spec.template.metadata.annotations = {
+  "checksum/config" = self.configMap.out.identityHash;
+};
+```
+
+### Customizing `.out` with `outputs`
+
+Pass `outputs = { ... };` to any `scope.mk*` builder to add domain-specific fields to `.out`. Any string in `outputs` automatically receives the resource's store-path context. To suppress an auto-derived field (such as `fqdn` on a headless Service that should not be addressed directly), set that key to `null` in `outputs`:
+
+```nix
+outputs = {
+  fqdn = null; # Suppresses out.fqdn
+  grpcEndpoint = "${name}.${scope.namespaceName}.svc.cluster.local:9090";
+};
+```
+
+---
+
+## Package-level out surfaces
+
+When package `B` depends on package `A` (`build = { packageA }: ...`), `packageA` resolves to the consumer view built from `A`'s `root` entry:
+
+1. Kix starts with `root.resource.out`.
+2. If `root` is an attribute set with `root.out`, Kix merges `root.resource.out // root.out` (`root.out` values keep whatever string context they already carry; Kix does not automatically attach `root.resource`'s context to plain strings in `root.out`).
+3. Every key in the merged `out` set is promoted to the top level of the dependency object (alongside any top-level part folders and the system keys `_type`, `_packageInstance`, `root`, `out`, `raw`, and `_meta`), so consumers can write either `packageA.fqdn` or `packageA.out.fqdn`.
+4. Any CRD resources in `A`'s `crds = { ... };` part folder are attached at the top level of the view as `packageA.crds.<Kind>` (not under `packageA.out`, unless explicitly added to `root.out`).
+
+### Exporting functions and builders on `root.out`
+
+`root.out` can export strings (using `.out` interpolation or `scope.augmentEdge` when they should carry dependency context), attribute sets, workload transformers, or resource builders:
+
+```nix
+root = {
+  resource = self.deployment;
+  out = {
+    # Carries self.service's store and endpoint context through interpolation
+    internalUrl = "http://${self.service.out.fqdn}:8080";
+
+    # Workload spec transformer (for example, injecting annotations)
+    withReloadOn = configMaps: workloadSpec:
+      lib.recursiveUpdate workloadSpec {
+         metadata.annotations."reloader.stakater.com/auto" = "true";
+      };
+
+    # Scoped custom resource builder
+    mkServiceMonitor = consumerScope: args:
+      self.crds.ServiceMonitor.out.mkCR consumerScope args;
+  };
+};
+```
+
+---
+
+## String-context dependency behavior
+
+### How `.out` references become `kix.run/depends-on` annotations
+
+In Nix, strings derived from a built resource carry hidden metadata called **string context** listing the store paths needed to produce that string. Kix uses this mechanism to construct the deployment dependency graph:
+
+1. Each `scope.mk*` resource writes its sealed JSON identity file to Kix's local store (`outPath`) and attaches that store path's context to every string in `resource.out`.
+2. When resource `B` interpolates `resourceA.out.name`, `resourceA.out.fqdn`, or `resourceA.out.selector` anywhere inside `B`'s manifest, `resourceA`'s store-path context propagates into `B`'s serialized manifest JSON.
+3. `scope.mkResource` calls `builtins.getContext` on `B`'s serialized manifest JSON, extracts the 32-character store hash of every referenced resource (plus `"requires:<hash>"` for entries in `requires` and `"extra:<hash>"` for entries in `extraDeps`), and writes the comma-separated list to `metadata.annotations."kix.run/depends-on"`.
+
+:::caution[Use `self.x.out.name`, never `"${self.x}"`]
+Interpolating a resource object directly (`"${self.configMap}"`) evaluates to its JSON identity file path in Kix's local store, not its Kubernetes resource name. Always reference `.out` fields such as `self.configMap.out.name` or `self.service.out.fqdn`.
+:::
+
+### The three ways to record a dependency
+
+| Mechanism | How it is written | When to use it |
+| --- | --- | --- |
+| **Implicit (`.out` reference)** | Use `other.out.name`, `other.out.fqdn`, `other.out.selector`, `other.out.keyRef`, etc. inside `spec`, `data`, `labels`, or `annotations`. | Default for all resources where the consumer's manifest naturally mentions the provider. |
+| **Explicit (`requires`)** | `requires = [ self.migrationJob ];` | When resource `B` must wait for resource `A` at deploy time, even though `B`'s YAML manifest does not contain any string from `A`. |
+| **Escape hatch (`extraDeps`)** | `extraDeps = [ ... ];` | Rare cases where a dependency must be recorded outside normal manifest references and `requires`. |
+
+If you list a resource in `requires` that is **already** referenced via `.out` in the manifest, Kix emits a redundant-`requires` warning so you can remove the duplicate entry.
+
+### Breaking selector cycles with `rawSelector`
+
+Normally, a `Service` sets `spec.selector = self.deployment.out.selector;`, which makes the `Service` depend on the `Deployment` (`Deployment` deploys first, then `Service`).
+
+Occasionally, a workload's pod spec needs to interpolate the `Service`'s DNS name (`self.service.out.fqdn`) in an environment variable or startup flag. If the `Service` also uses `self.deployment.out.selector`, Nix evaluation enters an infinite recursion (`deployment` -> `service` -> `deployment`).
+
+To break the cycle:
+1. Point the `Service` at `self.deployment.rawSelector` (which contains the exact same label key-value pairs, but **without** Nix string context).
+2. Because `rawSelector` omits the dependency from `Service` to `Deployment`, the dependency now flows `Service` -> `Deployment` (via `self.service.out.fqdn` in the pod spec).
+
+```nix
+deployment = scope.mkDeployment {
+  name = "cluster-node";
+  spec = {
+    selector.matchLabels = scope.selectorLabels;
+    template.spec.containers = [
+      {
+        name = "node";
+        env = kix.mkEnvVars {
+          PEER_DISCOVERY_HOST = self.headlessService.out.fqdn;
+        };
+        ...
+      }
+    ];
+  };
+};
+
+headlessService = scope.mkResource {
+  apiVersion = "v1";
+  kind = "Service";
+  name = "cluster-node-headless";
+  spec = {
+    clusterIP = "None";
+    selector = self.deployment.rawSelector; # Breaks the Nix evaluation cycle
+    ports = [ { name = "peer"; port = 7946; } ];
+  };
+};
+```
+
+For `StatefulSet` headless Services, prefer the built-in `spec.headlessService = self.headlessService;` shorthand on `scope.mkStatefulSet`, which wires `serviceName` without creating a cycle so the `Service` can keep `self.statefulSet.out.selector`.
+
+---
+
+## keep
+
+Before serializing a resource manifest to YAML, Kix normalizes the attribute set by stripping `null` fields bottom-up:
+
+1. Any attribute whose value is `null` is removed from its parent attribute set.
+2. Any `null` element in a list is removed.
+3. **Collapse rule**: If an attribute set or list had at least one element and **all** of its elements were removed because they evaluated to `null`, the now-empty container itself collapses to `null` (and is removed from its parent).
+4. **Literal empty rule**: An attribute set or list that was **already empty** (`{ }` or `[ ]`) in the input is preserved as `{ }` or `[ ]` in the rendered YAML.
+
+### Why `kix.keep` exists
+
+In Kubernetes YAML, an empty object `{}` often carries semantic meaning (for example, `emptyDir = {};` on a volume, or `securityContext = {};`). If you construct an attribute set with optional subfields that might all default to `null`, the collapse rule will remove the entire attribute set when all subfields are `null`.
+
+Wrapping the attribute set in `kix.keep` marks it so Kix preserves `{ }` even when all of its child attributes evaluate to `null`:
+
+```nix
+volumes = [
+  {
+    name = "scratch";
+    # Preserved as `emptyDir: {}` even when both sizeLimit and medium are null
+    emptyDir = kix.keep {
+      sizeLimit = config.scratchSizeLimit; # null by default
+      medium = config.scratchMedium;       # null by default
+    };
+  }
+];
+```
+
+### `kix.keep` behavior
+
+| Input | Result after manifest normalization |
+| --- | --- |
+| `{ a = null; b = null; }` (without `kix.keep`) | Collapses to `null` and is omitted from the parent object. |
+| `kix.keep { a = null; b = null; }` | Preserved as `{ }`. |
+| `kix.keep { a = 1; b = null; }` | Normalized to `{ a = 1; }`. |
+| `{ }` (literal empty attrset) | Preserved as `{ }` automatically (`kix.keep` is not needed for literal `{ }`). |
+| `[ ]` (literal empty list) | Preserved as `[ ]` automatically. |
+
+`kix.keep` attaches an internal marker attribute (`_kixKeep = true;`) to an attribute set (or immediately normalizes a list to `[ ]` when all of its elements normalize to `null`). Because `_kixKeep` is an attribute, it survives both `lib.recursiveUpdate` and attribute set merge (`//`), and is resolved when `rawManifest` is constructed so `_kixKeep` never appears in `rawManifest` or the rendered YAML.

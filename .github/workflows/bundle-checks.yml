@@ -3,17 +3,23 @@ name: Bundle checks
 # The bundle checks too slow for every `cargo test` (cli/README.md,
 # "Bundle acceptance checks"):
 #
-# - each libFuzzer target in cli/fuzz (20s per target on PRs and pushes, two
+# - each libFuzzer target in cli/fuzz (20s per target on pull requests, two
 #   minutes on the weekly schedule and manual runs), seeded from the honest
 #   bundles in cli/kix-bundle/tests/fixtures and the plan file in
 #   cli/kix/tests/fixtures, under the README's 4 GiB RSS cap;
 # - `every_test_cluster_bundles`, which builds and bundles every test
-#   cluster.
+#   cluster;
+# - `flake_checks_evaluate_with_helm`, which evaluates every cluster's
+#   PackageInstance wiring check and `every-package-evaluates` through kix.
 #
 # A short run catches a reader change that breaks on the seeds' first
 # mutations without holding a Spot VM long enough to be preempted. The weekly
 # run is where a slower finding turns up. A crash leaves its input under
 # cli/fuzz/artifacts/, uploaded with the run.
+#
+# Pull requests and the weekly run only. A push to main would repeat the
+# pull request's run, and every release pull request runs these checks
+# because it changes cli/Cargo.toml and cli/Cargo.lock.
 #
 # Same Nix setup as cli-tests.yml, on a Spindle VM whose image ships Nix.
 
@@ -24,19 +30,7 @@ on:
       - 'cli/kix-container/**'
       - 'cli/kix/src/plan/file.rs'
       - 'cli/kix/src/eval/**'
-      - 'cli/kix-cli/src/commands/bundle.rs'
-      - 'cli/kix-cli/tests/commands_test.rs'
-      - 'cli/fuzz/**'
-      - 'cli/Cargo.toml'
-      - 'cli/Cargo.lock'
-      - '.github/workflows/bundle-checks.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'cli/kix-bundle/**'
-      - 'cli/kix-container/**'
-      - 'cli/kix/src/plan/file.rs'
-      - 'cli/kix/src/eval/**'
+      - 'kix/lib/helm.nix'
       - 'cli/kix-cli/src/commands/bundle.rs'
       - 'cli/kix-cli/tests/commands_test.rs'
       - 'cli/fuzz/**'
@@ -98,6 +92,13 @@ jobs:
         run: |
           nix develop --command bash -c \
             'cd cli && cargo test -p kix-cli --test commands_test -- --ignored every_test_cluster_bundles'
+
+      # Plain `nix flake check` cannot render Helm charts, so the
+      # evaluation-only flake checks run through kix here.
+      - name: Flake checks evaluate with Helm
+        run: |
+          nix develop --command bash -c \
+            'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'
 
       - name: Upload crashing inputs
         if: failure()

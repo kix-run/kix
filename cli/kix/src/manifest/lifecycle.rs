@@ -132,34 +132,6 @@ pub(crate) fn is_marker(manifest: &Value) -> bool {
     lifecycle_of(manifest) == Lifecycle::Marker
 }
 
-/// Annotations that carry a Helm hook delete policy. Charts imported into a
-/// package keep them.
-pub(crate) const HOOK_DELETE_POLICY: [&str; 1] = ["helm.sh/hook-delete-policy"];
-
-/// Return whether `manifest` declares that it deletes itself after completion.
-///
-/// Checks two independent declarations:
-///   * `helm.sh/hook-delete-policy` containing `hook-succeeded` on a manifest
-///     rendered from a Helm chart.
-///   * A `Job` with `spec.ttlSecondsAfterFinished`, which Kubernetes' TTL
-///     controller deletes after completion.
-pub fn declares_own_deletion(manifest: &serde_json::Value) -> bool {
-    let annotations = manifest.pointer("/metadata/annotations");
-    let deletes_on_success = HOOK_DELETE_POLICY.iter().any(|key| {
-        annotations
-            .and_then(|a| a.get(*key))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|p| p.split(',').any(|s| s.trim() == "hook-succeeded"))
-    });
-
-    let ttl_reaped = manifest.get("kind").and_then(serde_json::Value::as_str) == Some("Job")
-        && manifest
-            .pointer("/spec/ttlSecondsAfterFinished")
-            .is_some_and(serde_json::Value::is_number);
-
-    deletes_on_success || ttl_reaped
-}
-
 /// Return the deploy record in `manifests`, if present.
 pub fn record_of(manifests: &[Value]) -> Option<&Value> {
     manifests.iter().find(|m| is_record(m))
@@ -285,65 +257,6 @@ mod never_pruned_tests {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn ttl_job_declares_own_deletion() {
-        assert!(declares_own_deletion(&json!({
-            "kind": "Job",
-            "metadata": { "name": "postgres-reflect" },
-            "spec": { "ttlSecondsAfterFinished": 600 },
-        })));
-    }
-
-    #[test]
-    fn zero_ttl_still_counts() {
-        assert!(declares_own_deletion(&json!({
-            "kind": "Job",
-            "spec": { "ttlSecondsAfterFinished": 0 },
-        })));
-    }
-
-    #[test]
-    fn hook_succeeded_policy_declares_own_deletion() {
-        for key in HOOK_DELETE_POLICY {
-            assert!(
-                declares_own_deletion(&json!({
-                    "kind": "Job",
-                    "metadata": { "annotations": { key: "before-hook-creation,hook-succeeded" } },
-                })),
-                "{key} should be honored"
-            );
-        }
-    }
-
-    #[test]
-    fn before_hook_creation_alone_does_not() {
-        // Deletion before the next run does not prove that this run succeeded; a job that is
-        // absent now is still a job that never ran.
-        assert!(!declares_own_deletion(&json!({
-            "kind": "Job",
-            "metadata": { "annotations": { "helm.sh/hook-delete-policy": "before-hook-creation" } },
-        })));
-    }
-
-    #[test]
-    fn plain_workload_does_not_declare_own_deletion() {
-        assert!(!declares_own_deletion(&json!({
-            "kind": "Deployment",
-            "metadata": { "name": "immich-server" },
-            "spec": { "replicas": 1 },
-        })));
-    }
-
-    #[test]
-    fn non_job_with_ttl_field_does_not() {
-        // ttlSecondsAfterFinished is a Job field; anything else carrying it
-        // is not making the same promise.
-        assert!(!declares_own_deletion(&json!({
-            "kind": "ConfigMap",
-            "spec": { "ttlSecondsAfterFinished": 600 },
-        })));
-    }
 
     fn m(kind: &str, mode: Option<&str>) -> Value {
         let mut v = json!({ "apiVersion": "v1", "kind": kind, "metadata": { "name": "x" } });

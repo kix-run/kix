@@ -1,41 +1,86 @@
 ---
-title: "Install and run the Kix CLI"
-description: "Install Kix with Nix and verify that the CLI is available."
+title: "Install and run Kix"
+description: "Install Kix from a release archive and verify that it can discover and evaluate your clusters."
 ---
 
 import Command from '/src/components/Command.astro';
 import version from '/src/command-output/how-to/application-install/version.json';
 
-This guide assumes that [Nix](https://nixos.org/download/) is installed with
-flakes enabled.
+Install Kix from a pre-built release archive and verify that it can
+discover and evaluate your clusters.
 
-## Install Kix
+## Install from a release archive
 
-Install the `kix` package from the public `kixpkgs` flake:
+Download the archive for your platform (`x86_64-linux`, `aarch64-linux`, or
+`aarch64-darwin`) from
+[`kix-run/kix-releases`](https://github.com/kix-run/kix-releases/releases) and
+unpack it into `~/.local`:
 
-<Command commands={["nix profile install github:kix-run/kixpkgs#kix"]} />
+<Command
+  commands={[
+    "mkdir -p ~/.local",
+    "curl -fsSL https://github.com/kix-run/kix-releases/releases/latest/download/kix-x86_64-linux.tar.gz | tar -xz --strip-components=1 -C ~/.local",
+  ]}
+/>
 
-Nix adds the executable to your user profile. Open a new shell if the current
-one does not find it immediately.
+Replace `kix-x86_64-linux.tar.gz` with `kix-aarch64-linux.tar.gz` on ARM64
+Linux or `kix-aarch64-darwin.tar.gz` on Apple Silicon macOS, and make sure
+`~/.local/bin` is on your `PATH`.
+
+:::note
+The archive unpacks `bin/kix` alongside its runtime tools in `libexec/kix/`.
+Keep both directories in the same parent directory (or symlink
+`~/.local/bin/kix` to the unpacked `bin/kix`). If you move `libexec/kix/`
+somewhere else, set `KIX_RUNTIME_DIR` to its path.
+:::
 
 ## Verify the installation
 
-Ask Kix for its version:
+Check the installed version:
 
 <Command {...version} />
 
-Then confirm that the command list is available:
+Verify that Kix and its runtime tools are healthy:
+
+<Command commands={["kix doctor"]} />
+
+Confirm that the command list is available:
 
 <Command commands={["kix --help"]} />
 
-Kix evaluates the flake in the current directory unless you pass `--flake`.
-From a Kix project, a useful first command is:
+## Run your first command
+
+Kix evaluates the project in the current directory unless you pass `--flake`.
+From a Kix project, list the clusters it defines:
 
 <Command commands={["kix list clusters"]} cwd="kix-examples/" />
 
-If the project is elsewhere, point Kix at it explicitly:
+If the project is in another directory, pass `--flake`:
 
 <Command commands={["kix --flake /path/to/project list clusters"]} />
+
+By default (`builder = "kix"`), Kix evaluates with the Kix runtime and
+downloads the project's locked inputs into Kix's local store
+(`~/.cache/kix/store`, or `$XDG_CACHE_HOME/kix/store`). Later commands reuse
+the cached inputs. Set `KIX_STORE_ROOT` if you want Kix to keep its local store
+in a different directory.
+A project can instead use the Nix already installed on the machine. See
+[`kix.toml`](/docs/reference/kix-toml/).
+
+### Install with Nix
+
+If you already manage tools with Nix flakes, you can also install `kix` from
+the `kixpkgs` flake:
+
+<Command commands={["nix profile install github:kix-run/kixpkgs#kix"]} />
+
+:::note[Reference]
+See [`kix doctor`](/docs/reference/cli/doctor/) for how Kix verifies its
+runtime directory and project builder, [`kix.toml`](/docs/reference/kix-toml/)
+for choosing between the Kix runtime and the machine's Nix, and
+[Global flags](/docs/reference/cli/global-flags/) for shared CLI flags and
+environment variables.
+:::
 
 :::tip[Try it as a tutorial]
 Work through [local setup and your first Kix deployment](/docs/tutorials/02-local-setup-and-first-run/)

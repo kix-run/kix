@@ -99,16 +99,19 @@ reported with the final lines from the script:
 
 <Command {...failingHealthFixture} />
 
-The Job carries `kix.run/rerun: on-change`. A later deploy recreates it when
-its identity changes or its previous run failed. A deploy with no relevant
-change skips a successful probe.
+The Job carries `kix.run/rerun: on-change`. When the Job's identity hash
+changes, Kix deletes the existing Job in the foreground and recreates it. When
+the Job is unchanged, `kix deploy` and `kix rollback` inspect the live Job: they
+skip it if its previous run succeeded and recreate it if its previous run
+failed (the in-cluster operator reports an unchanged failed Job without
+recreating it so a failing probe does not retry in a loop).
 
 :::note[Explanation]
-See [The DAG-driven deployment scheduler](/docs/explanation/dag-driven-deployment-scheduler/)
+See [The DAG-driven deployment scheduler](/docs/explanation/the-dependency-graph/#dag-driven-deployment-scheduler)
 for how workload readiness and end-to-end probes fit together.
 :::
 
 :::note[Reference]
-See [`healthCheck`](/docs/reference/kix-helpers/healthcheck/) for the complete
+See [`healthCheck`](/docs/reference/composition-helpers/#healthcheck) for the complete
 callback, runtime, deadline, and retention interface.
 :::

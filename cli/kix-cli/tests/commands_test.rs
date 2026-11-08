@@ -1,5 +1,6 @@
 //! Consolidated CLI smoke tests: one test per command to verify basic functionality.
-//! These invoke the real binary with `assert_cmd`, so they require `nix`.
+//! These invoke the real binary with `assert_cmd`, so they need a Kix runtime.
+//! The development shell names one in `KIX_RUNTIME_DIR`.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -132,6 +133,53 @@ fn every_test_cluster_bundles() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
+/// Verify that the evaluation-only flake checks of every flake in the
+/// repository pass when Kix renders their Helm charts: the
+/// `pi-wiring-cluster-<name>` check of each cluster and
+/// `every-package-evaluates`. Plain `nix flake check` stops at the first
+/// chart, because only `kix` renders charts. Evaluates every cluster, so it
+/// runs only when asked: `cargo test -p kix-cli --test commands_test --
+/// --ignored flake_checks_evaluate_with_helm`.
+#[test]
+#[ignore]
+fn flake_checks_evaluate_with_helm() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let system = kix::eval::nix::current_system();
+    let mut failed = Vec::new();
+    let mut evaluated = 0;
+    for flake in [".", "clusters", "ludo"] {
+        let dir = repo.join(flake);
+        let checks = format!(".#checks.{system}");
+        let names = kix::eval::nix::eval_with_helm(
+            &dir,
+            &[
+                &checks,
+                "--apply",
+                "c: builtins.concatStringsSep \" \" (builtins.attrNames c)",
+            ],
+            &[],
+            &|_| {},
+        )
+        .unwrap();
+        for name in names
+            .split_whitespace()
+            .filter(|n| n.starts_with("pi-wiring-cluster-") || *n == "every-package-evaluates")
+        {
+            evaluated += 1;
+            let attr = format!("{checks}.{name}.drvPath");
+            if let Err(e) = kix::eval::nix::eval_with_helm(&dir, &[&attr], &[], &|_| {}) {
+                failed.push(format!("{flake}#{name}: {e}"));
+            }
+        }
+    }
+    assert!(evaluated > 0);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// Verify that an instance naming one resource under two parts still produces
 /// a bundle `kix bundle` reads back.
 #[test]
@@ -226,4 +274,89 @@ fn pin_rm_removes_package_and_instance_pins_and_errors_when_missing() {
         .stderr(
             predicate::str::contains("has no pin named").and(predicate::str::contains("'nginx'")),
         );
+}
+
+/// Without a runtime, a command that runs Nix stops with the error that says
+/// where Kix looked, and never runs `nix` from `PATH`. `kix doctor` reports
+/// the same problem, and `kix --version` still works.
+#[test]
+fn without_a_runtime_kix_refuses_to_run_programs() {
+    // A `nix` on PATH that would succeed if Kix ran it.
+    let bin = tempfile::tempdir().unwrap();
+    let fake = bin.path().join("nix");
+    std::fs::write(&fake, "#!/bin/sh\necho 'fake nix ran' >&2\nexit 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.path().display());
+
+    let without_runtime = || {
+        let mut cmd = kix();
+        cmd.env_remove("KIX_RUNTIME_DIR").env("PATH", &path);
+        cmd
+    };
+
+    without_runtime()
+        .args(["build", "minimal"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("Kix could not find its runtime")
+                .and(predicate::str::contains("KIX_RUNTIME_DIR (not set)"))
+                .and(predicate::str::contains("fake nix ran").not()),
+        );
+
+    without_runtime().arg("doctor").assert().failure().stdout(
+        predicate::str::contains("✗ Kix runtime not found")
+            .and(predicate::str::contains("Kix could not find its runtime")),
+    );
+
+    without_runtime().arg("--version").assert().success();
+}
+
+/// A project's kix.toml chooses the builder. `kix doctor` reports the choice,
+/// and a builder or setting this version of Kix cannot use stops a command before it
+/// runs Nix.
+#[test]
+fn kix_toml_chooses_the_builder() {
+    let project = tempfile::tempdir().unwrap();
+    let flake = project.path().display().to_string();
+    let file = project.path().join("kix.toml");
+    let run = |args: &[&str]| {
+        let mut cmd = kix();
+        cmd.env_remove("KIX_TEST_BUILDER")
+            .env_remove("KIX_STORE_ROOT")
+            .args(["--flake", &flake])
+            .args(args);
+        cmd
+    };
+
+    run(&["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ Builder: kix (default)"));
+
+    std::fs::write(&file, "builder = \"remote\"\n").unwrap();
+    run(&["build", "minimal"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "remote builders are not supported yet",
+        ));
+    run(&["doctor"]).assert().failure().stdout(
+        predicate::str::contains("✗ Builder: remote (set in").and(predicate::str::contains(
+            "remote builders are not supported yet",
+        )),
+    );
+
+    std::fs::write(&file, "builder = \"kix\"\nbuidler = \"nix\"\n").unwrap();
+    run(&["list", "clusters"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`buidler`"));
+
+    std::fs::write(&file, "builder = \"kix\"\n").unwrap();
+    run(&["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ Builder: kix (set in"));
 }

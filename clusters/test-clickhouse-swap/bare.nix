@@ -7,20 +7,24 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (import ./consumer.nix { inherit packages; })
-    {
-      instances.db = {
-        ch.package = packages.clickhouse;
-        ch-data = {
-          package = packages.persistent-volume-claim;
-          aliases = [ "storage" ];
-          config.size = "5Gi";
+    (
+      { ref, ... }:
+      {
+        instances.app.events-db.deps.clickhouse = ref.db.ch;
+        instances.db = {
+          ch.package = packages.clickhouse;
+          ch-data = {
+            package = packages.persistent-volume-claim;
+            aliases = [ "storage" ];
+            config.size = "5Gi";
+          };
+          ch-credentials = {
+            package = packages.secret;
+            aliases = [ "credentials" ];
+            config.stringData.password = "swap-fixture-admin";
+          };
         };
-        ch-credentials = {
-          package = packages.secret;
-          aliases = [ "credentials" ];
-          config.stringData.password = "swap-fixture-admin";
-        };
-      };
-    }
+      }
+    )
   ];
 }

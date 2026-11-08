@@ -22,13 +22,6 @@ in
       extraAnnotations ? { },
       lifecycle ? null,
     }:
-    let
-      resolvedVersion =
-        if version == null then
-          builtins.trace "warning: package ${instanceName} has no version set" "<undefined>"
-        else
-          version;
-    in
     mkResource {
       apiVersion = kixAnnotations.apiVersion;
       kind = "PackageInstance";
@@ -54,8 +47,8 @@ in
       // extraAnnotations;
       extra.spec = {
         inherit instanceName namespaceName;
-        version = resolvedVersion;
       }
+      // lib.optionalAttrs (version != null) { inherit version; }
       // lib.optionalAttrs (lifecycle != null) {
         inherit lifecycle;
       };
@@ -84,6 +77,9 @@ in
       interfaceFiles ? [ ],
       # Platform interfaces this cluster builds against (`platform -> { consumer; path; sha256; }`).
       interfaces ? { },
+      # `cluster.kubernetes.uid`: the kube-system Namespace UID of the one
+      # Kubernetes cluster this build may deploy to, or null when unbound.
+      kubernetesUid ? null,
     }:
     mkResource {
       apiVersion = kixAnnotations.apiVersion;
@@ -92,6 +88,9 @@ in
       labels = {
         "app.kubernetes.io/managed-by" = "kix";
         ${kixKeys.clusterLabel} = name;
+      }
+      // lib.optionalAttrs (kubernetesUid != null) {
+        ${kixKeys.kubernetesUidLabel} = kubernetesUid;
       };
       requires = [ kixCRDs.activation ];
       extraDeps = extraDeps;

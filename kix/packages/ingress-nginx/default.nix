@@ -101,6 +101,9 @@ in
     description = "NGINX Ingress controller (legacy: upstream retired after v1.15.1; prefer envoy-gateway)";
     owner = "platform";
     defaultAliases = [ "ingressNginx" ];
+    # One controller serves Ingress objects in every namespace, so consumers
+    # in any namespace find it by name.
+    scope = "cluster";
     k8s.minVersion = "1.25";
     network.intents = {
       # Ingress objects name their backends at runtime, on any port, so the
@@ -566,17 +569,17 @@ in
           };
         };
 
+        # The Jobs keep the chart's fixed names and a Job's pod template is
+        # immutable, so the deploy engine replaces one when its content or
+        # anything upstream changes instead of failing on the patch.
         certgenJob =
           jobName: container: requires:
           scope.mkJob {
             name = jobName;
             labels = admissionLabels;
             inherit requires;
+            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             spec = {
-              # Long enough for the deploy's readiness check to see the
-              # finished Job. At 0 the API server deletes it the moment it
-              # completes and the check fails with NotFound.
-              ttlSecondsAfterFinished = 600;
               template = {
                 metadata.labels = admissionLabels;
                 spec = {
@@ -770,8 +773,8 @@ in
           };
         };
 
-        # certgen keeps an existing Secret, so a rerun after the TTL removes
-        # the Job, or after its spec changes, leaves the certificate as is.
+        # certgen keeps an existing Secret, so a rerun after the Job changes
+        # leaves the certificate as is.
         admissionCreate =
           certgenJob "${name}-admission-create"
             (certgenContainer "create" [

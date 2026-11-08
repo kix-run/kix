@@ -22,6 +22,7 @@
 {"activation":"act-1","elapsed_ms":7,"previous":null,"schema_version":"2026-10-09","type":"finalized"}
 {"elapsed_ms":7,"reason":"halted on first failure","schema_version":"2026-10-09","type":"stopped"}
 {"aborting":true,"elapsed_ms":7,"idle_ms":90000,"in_flight":[{"node":"Deployment/web@app","phase":"readiness","since_ms":30000},{"node":"⟦pause-1⟧","phase":"discovery","since_ms":250},{"node":"Secret/creds@app","phase":"hydrate","since_ms":40},{"node":"Service/web@app","phase":"apply","since_ms":2000}],"schema_version":"2026-10-09","type":"stalled"}
-{"budget_ms":180000,"elapsed_ms":7,"node":"Deployment/web@app","phase":"readiness","schema_version":"2026-10-09","since_ms":30000,"status":"import target Service/web not found yet","type":"waiting"}
+{"budget_ms":180000,"elapsed_ms":7,"holds":["Deployment/api@app","Job/migrate@app"],"holds_total":3,"node":"Deployment/web@app","phase":"readiness","schema_version":"2026-10-09","since_ms":30000,"status":"import target Service/web not found yet","type":"waiting"}
 {"elapsed_ms":7,"message":"conflict","schema_version":"2026-10-09","type":"best_effort_failed","what":"checkpoint"}
+{"elapsed_ms":7,"fields":[{"change":"dropped","path":"$.spec.colour","sent":"red"},{"change":"changed","path":"$.spec.size","sent":2,"stored":5}],"resource":"Widget/w@app","schema_version":"2026-10-09","type":"fields_not_kept"}
 {"cancelled":5,"configured":2,"created":1,"dry_run":true,"elapsed_ms":7,"failed":4,"pruned":6,"schema_version":"2026-10-09","succeeded":false,"type":"summary","unchanged":3}

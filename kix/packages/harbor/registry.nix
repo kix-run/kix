@@ -212,12 +212,15 @@ in
 
   registryDeployment =
     let
-      # Shared volumes are injected once, on the registry container;
-      # registryctl and the init container mount them by name.
       configMount = kix.mount.configMap self.registryConfigMap {
         name = "registry-config";
         mountPath = "/etc/registry/config.yml";
         subPath = "config.yml";
+      };
+      ctlConfigMount = kix.mount.configMap self.registryConfigMap {
+        name = "registry-config";
+        mountPath = "/etc/registryctl/config.yml";
+        subPath = "ctl-config.yml";
       };
       dataMount = kix.mount.pvc storage {
         name = "registry-data";
@@ -271,12 +274,6 @@ in
                 ''printf '%s' "$REGISTRY_PASSWORD" | htpasswd -niB ${registryUser} > /etc/registry-auth/passwd''
               ];
               env = secrets.out.mkEnv { REGISTRY_PASSWORD = "registryPassword"; };
-              volumeMounts = [
-                {
-                  name = authMount.name;
-                  mountPath = "/etc/registry-auth";
-                }
-              ];
               resources = {
                 requests = {
                   cpu = "10m";
@@ -333,27 +330,6 @@ in
                   CORE_SECRET = "coreSecret";
                   JOBSERVICE_SECRET = "jobserviceSecret";
                 };
-              volumeMounts = [
-                {
-                  name = configMount.name;
-                  mountPath = "/etc/registry/config.yml";
-                  subPath = "config.yml";
-                }
-                {
-                  name = configMount.name;
-                  mountPath = "/etc/registryctl/config.yml";
-                  subPath = "ctl-config.yml";
-                }
-                {
-                  name = dataMount.name;
-                  mountPath = "/storage";
-                }
-              ]
-              # The registry container's withMountsOn below adds the
-              # volume itself.
-              ++ lib.optional (caBundleMount != null) {
-                inherit (caBundleMount) name mountPath subPath;
-              };
               resources = config.registryctl.resources;
               securityContext = containerSecurityContext;
             }
@@ -361,14 +337,21 @@ in
         };
       };
     }
+    # Each call appends to the named containers' volumeMounts, so the order
+    # of the calls is the order of the mounts in each container. Changing
+    # it restarts the pod.
+    |> kix.withMountsOn [ "registry" "registryctl" ] [ configMount ]
+    |> kix.withMountsOn "registryctl" [ ctlConfigMount ]
+    |> kix.withMountsOn [ "htpasswd" "registry" ] [ authMount ]
+    |> kix.withMountsOn [ "registry" "registryctl" ] [ dataMount ]
     |> kix.withMountsOn "registry" [
-      configMount
-      authMount
-      dataMount
       (tmpMount "registry-tmp")
       caBundleMount
     ]
-    |> kix.withMountsOn "registryctl" [ (tmpMount "registryctl-tmp") ]
+    |> kix.withMountsOn "registryctl" [
+      caBundleMount
+      (tmpMount "registryctl-tmp")
+    ]
     |> reloadOn [
       secrets
       ca

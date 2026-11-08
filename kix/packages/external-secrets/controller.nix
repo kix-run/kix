@@ -223,6 +223,9 @@ in
             {
               inherit (doc) spec;
               labels = doc.metadata.labels or { };
+              # Stores, secrets, and generators are reconciled by the
+              # controller pods; none of them runs pods of its own.
+              usesAtLeast = _: { };
             }
             // lib.optionalAttrs (builtins.elem (kindOf doc.spec) readyKinds) {
               readiness.condition = {

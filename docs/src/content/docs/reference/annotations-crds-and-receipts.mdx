@@ -1,0 +1,246 @@
+---
+title: "Annotations, CRDs, and receipts"
+description: "How Kix records resource dependencies, field ownership, and deployment history using annotations and custom resources."
+---
+
+When Kix compiles and deploys a cluster, it attaches `kix.run/*` labels and annotations to your manifests and writes lightweight tracking records into the cluster. You rarely need to set these annotations by hand because `scope` builders and the `kix` CLI manage them automatically, but this page is helpful when you are inspecting rendered YAML, debugging rollout order, or reading a deploy receipt from CI.
+
+:::note[Helpful background]
+- [05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): see how `kix plan` and `kix deploy` use dependency metadata to apply resources in waves.
+- [The dependency graph as the model](/docs/explanation/the-dependency-graph/): understand how `kix.run/depends-on` annotations are derived from Nix string context.
+- [Server-side apply, field ownership, and drift](/docs/explanation/server-side-apply-and-drift/): learn how Kix tracks field ownership, cedes controller-managed fields, and detects drift.
+- [Server-Side Apply (Kubernetes docs)](https://kubernetes.io/docs/reference/using-api/server-side-apply/): review how Kubernetes manages field ownership across multiple controllers and tools.
+:::
+
+This page is maintained alongside `kix/lib/core/annotations.nix`, `kix/lib/core/activation.nix`, and `cli/kix/src/manifest/keys.rs`.
+
+## Annotation and label catalog
+
+Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.mkResource`, `scope.mkSecret`, `scope.mkCRD`, `scope.mkCRDRef`) or by the `kix` CLI during load and apply. Package authors should use the corresponding builder arguments (`ownership.cede`, `readiness`, `holdsData`, `kix.untrackedRef`) rather than writing `kix.run/*` annotations directly.
+
+### Labels
+
+| Label | Placed on | Meaning |
+| --- | --- | --- |
+| `app.kubernetes.io/managed-by: kix` | Every Kix-rendered resource and CRD record | Identifies objects managed by Kix (required by [validation check 8](/docs/reference/validation-checks/)). Ownership for pruning and garbage collection is determined by `kix.run/identity-hash` and `kix.run/activations`. |
+| `kix.run/cluster` | `Activation` resources | Names the Kix cluster that owns the `Activation` record so multiple Kix clusters can share a single Kubernetes cluster. |
+| `kix.run/kubernetes-uid` | `Activation` resources of a definition that sets `cluster.kubernetes.uid` | The UID of the Kubernetes cluster's `kube-system` Namespace the build was bound to. While any record carries it, the Kubernetes cluster refuses definitions that do not set the UID. See [Bind a cluster definition to its Kubernetes cluster](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/). |
+| `kix.run/consumer` | `Namespace` resources in consumer clusters | Names the consumer cluster (built with `kix.interface`) that owns the namespace, allowing platform network policies to select consumer pods. |
+| `kix.run/derived` | Derived network policies | `"true"` on network policy resources synthesized by Kix's network policy plugin. (Derived `PodDisruptionBudget` objects do not carry this label.) |
+| `kix.run/policy-type` | Derived network policies | Rule category that produced a derived network policy (`"default-deny"`, `"caller-ingress"`, `"scrape"`, `"cr-operand"`, `"apiserver-supplement"`, `"external-ingress-supplement"`, `"gateway"`, `"ingress-controller"`, or `"operator-managed-workload"`). Basic per-workload egress and ingress policies carry `kix.run/derived: "true"` without `kix.run/policy-type`. |
+| `kix.run/db-cluster` | `stackgres-database` and `cnpg-database` resources | Name of the target PostgreSQL cluster resource that the database belongs to. |
+| `pod-security.kubernetes.io/enforce` | `Namespace` resources | Pod Security Admission level (`privileged`, `baseline`, or `restricted`) set from `namespaces.<name>.podSecurity`, package `meta.podSecurity`, or a platform interface. |
+
+### Build identity and live ownership annotations
+
+| Annotation | Written by | Meaning |
+| --- | --- | --- |
+| `kix.run/identity-hash` | CLI on load | 32-character store hash of the sealed manifest. Changes whenever the manifest content or any dependency in its store context changes. |
+| `kix.run/package` | CLI on load | Name of the owning package instance. |
+| `kix.run/package-namespace` | CLI on load | Namespace of the owning package instance. |
+| `kix.run/lifecycle` | CLI on load | Lifecycle classification from `meta.lifecycle` (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes Kix behavior (requiring `holdsData` on custom resources in the instance and marking resources as stateful during migration checks); other values are informational. |
+| `kix.run/holds-data` | `scope.mkResource` / `scope.mkCR` | `"true"` or `"false"`. Indicates whether deleting the resource loses persistent data. Derived automatically for `PersistentVolumeClaim`, `PersistentVolume`, and `StatefulSet` resources with `volumeClaimTemplates`, and required via CRD `holdsData` for custom resources in stateful packages. |
+| `kix.run/built-via` | CLI on `Activation` | Store path of the cluster activation index (`kix-activation-<cluster>.json`), a JSON file that names the store paths of `kix-packages.json`, `kix-image-sources.json`, and related build metadata. Records written by Kix 0.6 and earlier name the activation output directory (`k8s-activation-<cluster>`) instead, and Kix still reads them. |
+| `kix.run/activations` | CLI after apply | Comma-separated `Activation` identity hashes that reference the live object. Used by `kix deploy --prune` and `kix gc`. |
+| `kix.run/applied-hash` | CLI after apply | Hash of the fields owned by the `kix` field manager after apply. Compared against live state by `kix drift` and `kix health`. |
+
+### Deployment graph and apply behavior annotations
+
+| Annotation | Set via | Meaning |
+| --- | --- | --- |
+| `kix.run/depends-on` | Nix string context, `requires`, `extraDeps` | Comma-separated dependency entries (`<hash>`, `requires:<hash>`, `extra:<hash>`) that define the deployment dependency graph. |
+| `kix.run/readiness` | `readiness` on `scope.mkCRD` / `scope.mkCRDRef` | JSON readiness rule evaluated by `kix deploy` for custom resources. See [`kix.run/readiness`](#kixrunreadiness). |
+| `kix.run/rerun` | `kix.healthCheck` or `kix.keyValues.rerunOnChange` | `"on-change"` on a `Job` resource. Instructs `kix deploy` and `kix rollback` to delete and recreate the Job when its identity hash changes or its previous run failed. |
+| `kix.run/cede-fields` | `ownership.cede` on `scope.mkResource` / `scope.mkCRD` | Comma-separated field paths another controller may take over after creation. See [`kix.run/cede-fields`](#kixruncede-fields). |
+| `kix.run/expects` | `kix.untrackedRef { kind; name; by?; }` | Comma-separated `apiVersion\|Kind\|name` entries that `kix deploy` waits to exist before applying the resource. See [`kix.run/expects`](#kixrunexpects). |
+
+#### `kix.run/readiness`
+
+Stamped on custom resources built via `scope.mkCR` when the CRD or CRD reference declares `readiness`:
+
+| CRD `readiness` declaration | Stamped JSON value | When `kix deploy` considers the resource ready |
+| --- | --- | --- |
+| `{ path = "/status/phase"; equals = "Ready"; }` | `{"equals":"Ready","path":"/status/phase"}` | The JSON pointer `path` equals `"Ready"` (booleans and numbers are compared as their JSON text, such as `"true"`). |
+| `{ path = "/status/updateStatus"; notEquals = "failed"; }` | `{"notEquals":"failed","path":"/status/updateStatus"}` | The JSON pointer `path` is absent or holds any value other than `"failed"`. |
+| `{ condition = { type = "Programmed"; status = "True"; }; }` | `{"condition":{"status":"True","type":"Programmed"}}` | `status.conditions` contains an entry with matching `type` and `status`. |
+| `{ condition = { type = "Valid"; status = "True"; }; failed = [ { condition = { type = "Valid"; status = "False"; }; } ]; }` | `{"condition":{"status":"True","type":"Valid"},"failed":[{"condition":{"status":"False","type":"Valid"}}]}` | Ready as in the row above. When a `failed` entry matches instead, `kix deploy` stops waiting and fails the resource with the controller's message. |
+
+A `failed` entry is `{ condition = { type; status; reason ? ...; }; }` (the reason is matched only when declared) or `{ path; equals; rejected ? false; hint ? ...; message ? ...; }`, where `rejected = true` makes the message say to change the object (the default for conditions), `hint` is the next step for a runtime outcome, and `message` is a JSON pointer, or a list of them, whose values the message quotes (stamped as a list). A match counts once the condition's `observedGeneration`, or `status.observedGeneration`, has reached `metadata.generation`; without a generation, once the condition's `lastTransitionTime` is later than this deploy's apply of the object (an earlier one is not reported); and with neither field, once the match has held for ten seconds of polling. A version of Kix that predates `failed` ignores the key and waits as before.
+
+:::tip[Use it in a task]
+See [Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/) for examples of custom resource readiness rules.
+:::
+
+#### `kix.run/cede-fields`
+
+Generated from `ownership.cede = [ "spec.versions" "webhooks[*].rules" ];` on `scope.mkResource` or `scope.mkCRD`. Paths use server-side apply field notation without a leading dot, where `[*]` matches any list element. When an apply receives `409 Conflict` from the API server and every conflicting path falls under a declared `kix.run/cede-fields` prefix, `kix deploy` retries the apply once with the ceded fields omitted so the external controller retains ownership of those fields.
+
+:::tip[Use it in a task]
+See [Cede fields to a controller](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/) and [Server-side apply, field ownership, and drift](/docs/explanation/server-side-apply-and-drift/).
+:::
+
+#### `kix.run/expects`
+
+Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs/reference/composition-helpers/#facts-and-untrackedref) when `kind` is specified (`kix.untrackedRef { apiVersion = "v1"; kind = "Secret"; name = "webhook-cert"; by = self.certJob; }`). Before applying the resource, `kix deploy` waits up to 180 seconds for each `apiVersion|Kind|name` target to exist.
+
+### Secret annotations
+
+| Annotation | Set via | Meaning |
+| --- | --- | --- |
+| `kix.run/secret-keys` | `scope.mkSecret` | Comma-separated list of keys declared on the Secret. |
+| `kix.run/secret-sources` | `scope.mkSecret` | Comma-separated `<key>=<source>` pairs (`inline`, `plain`, `sops`, `controller`, or `*=controller`) read by the `security.secretSource` scorecard rule. |
+| `kix.run/sops-source` | `scope.mkSecret` (`source`) | Store path of the encrypted SOPS file decrypted at deploy time. |
+| `kix.run/content-hash` | `scope.mkSecret` (`hash`) | Content hash of the SOPS file used for change detection. |
+| `kix.run/secret-type` | `scope.mkSecret` (`type`) | Kubernetes Secret type (defaults to `"Opaque"`). |
+| `kix.run/classification` | `scope.mkSecret` (`meta.classification`) | Data classification (such as `"configuration"`). |
+| `kix.run/rotation-policy` | `scope.mkSecret` (`meta.rotationPolicy`) | Rotation policy metadata. |
+
+### Package marker annotations
+
+| Annotation | Meaning |
+| --- | --- |
+| `kix.run/operand-of` | `"<group>/<Kind>/<name>"` of the operator custom resource whose runtime pods a `Service` or `PodDisruptionBudget` selects. |
+| `kix.run/monitors-external-service` | `"true"` on a `ServiceMonitor` or `VMServiceScrape` that intentionally targets a Service outside the Kix build. |
+| `kix.run/role` | Reserved key (`kix.keys.role`); not currently stamped by built-in builders or packages. |
+
+## Activation
+
+`Activation` (`activations.kix.run`, API version `kix.run/v1alpha1`) is the cluster-scoped custom resource that serves as the root of a Kix cluster's deployment graph and records deployment state on the Kubernetes cluster. When the CLI loads a build, it names the `Activation` `<cluster>-<12-char identity-hash prefix>` so each distinct build gets its own historical record on the cluster.
+
+```yaml
+apiVersion: kix.run/v1alpha1
+kind: Activation
+metadata:
+  name: production-jak8b4glx8fn
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kix.run/cluster: production
+  annotations:
+    kix.run/identity-hash: jak8b4glx8fnbq2c3hkb0khyyvigb96i
+    kix.run/built-via: /nix/store/...-kix-activation-production.json
+    kix.run/depends-on: ...
+spec:
+  instances:
+    apps:
+      web: web
+    data:
+      postgres: postgres
+```
+
+### `Activation` spec and status fields
+
+| Path | Type | Meaning |
+| --- | --- | --- |
+| `spec.instances` | `object` (`{ <namespace>: { <instance>: string } }`) | Nested map from namespace and instance name to the `PackageInstance` resource name for every active instance in the build. |
+| `spec.consumers` | `object` (optional) | Hosted consumer clusters (`{ <consumer>: { interface, sha256 } }`) declared by a platform cluster. |
+| `spec.interfaces` | `object` (optional) | Platform interfaces (`{ <platform>: { consumer, path, sha256 } }`) that a consumer cluster was built against. |
+| `status.phase` | `string` | Lifecycle state: `Queued`, `Deploying`, `Active`, `Degraded`, `Failed`, or `Superseded`. |
+| `status.receipt` | `object` | Provenance record written by `kix deploy` (see [Deploy receipt schema](#deploy-receipt-schema)). |
+| `status.packageIndex` | `object` (optional) | Map of package instances and cluster-level resources to their manifest identity hashes (`format` + per-package hash lists), written when a deploy begins (skipped if larger than 150 KiB). |
+| `status.orphansKeptFrom` | `array of string` (optional) | Previous activation build paths whose orphaned resources were kept because `--prune` was not passed, preserved so a later `kix deploy --prune` or `kix gc` can clean them up. |
+
+### Activation lifecycle and operator finalizer
+
+- **`Queued` -> `Deploying` -> `Active` | `Degraded` | `Failed` -> `Superseded`**: `kix deploy` creates or updates the `Activation` record before applying the first wave. `Active` means every resource applied and became ready. `Degraded` means the deploy completed but one or more resources failed readiness; it remains the cluster's current activation. `Failed` means the deploy aborted before completion; the next deploy uses the previous `Active` or `Degraded` activation as its primary diff baseline while also sweeping changes from the `Failed` run.
+- **In-cluster operator (`--operator`)**: When managed by `kix-operator`, the record carries the finalizer `kix.run/operator-gc`. Deleting an `Active`, `Deploying`, or `Degraded` `Activation` causes the operator to delete all resources owned by that activation except `Namespace` and `CustomResourceDefinition` objects. Deleting a `Superseded` record (for example, during `kix gc --operator`) simply removes the finalizer.
+
+## PackageInstance
+
+`PackageInstance` (`packageinstances.kix.run`, API version `kix.run/v1alpha1`) is a namespaced custom resource emitted for each active package instance, external import (`kix.mkImport`), Secret reference (`scope.mkSecretRef`), Service reference (`scope.mkServiceRef`), and CRD reference (`scope.mkCRDRef`).
+
+```yaml
+apiVersion: kix.run/v1alpha1
+kind: PackageInstance
+metadata:
+  name: web
+  namespace: apps
+  labels:
+    app.kubernetes.io/managed-by: kix
+  annotations:
+    kix.run/root: web-server
+    kix.run/depends-on: ...
+spec:
+  instanceName: web
+  namespaceName: apps
+  version: "1.2.0"
+  lifecycle: stateless
+```
+
+### `PackageInstance` spec and annotations
+
+| Field or annotation | Present on | Meaning |
+| --- | --- | --- |
+| `spec.instanceName` | Managed and import instances | Name of the instance within its namespace. |
+| `spec.namespaceName` | Managed and import instances | Namespace of the instance. |
+| `spec.version` | Managed and import instances | The instance's `version` override, else the package's `meta.version`, else the `out.version` the package builds. Left out when none is set. |
+| `spec.lifecycle` | When `meta.lifecycle` is set | Workload lifecycle (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes build validation and deploy behavior; other values are informational. |
+| `kix.run/root` | Managed instances | Name of the package's `root` resource. |
+| `kix.run/package-requires` | When non-empty | Comma-separated `<Kind>/<name>` entries that the package's `root` resource transitively depends on. |
+| `kix.run/post-hooks` | When non-empty | Comma-separated `<Kind>/<name>` entries declared in `root.postHooks`. |
+| `kix.run/inverse-deps` | When non-empty | Comma-separated `<Kind>/<name>` entries outside the instance that depend on it. |
+| `kix.run/auto-instantiated` | Auto-instantiated instances | `"true"` when created on demand from `availablePackages`. |
+| `kix.run/optional-activated` | Activated optional instances | `"true"` when an `optional = true` instance was activated by dependency demand. |
+| `kix.run/mode` | Import and ref markers | `"import"` on markers created by `kix.mkImport`, `scope.mkSecretRef`, `scope.mkServiceRef`, and `scope.mkCRDRef`. |
+| `kix.run/import-kind`, `kix.run/import-apiversion`, `kix.run/import-name` | Import, SecretRef, ServiceRef markers | Target Kubernetes object identity verified by `kix deploy` before dependent waves run. |
+| `kix.run/import-secret-keys` | `scope.mkSecretRef` markers | Comma-separated keys that must exist in the external `Secret`'s `data`. |
+| `kix.run/import-fqdn`, `kix.run/service-selector`, `kix.run/service-ports`, `kix.run/service-labels` | `scope.mkServiceRef` and Service imports | Service address, JSON-encoded selector, ports, and metadata labels used by network policy derivation and scorecard rules. |
+| `kix.run/crd-kind`, `kix.run/crd-version`, `kix.run/crd-served-versions`, `kix.run/crd-scope` | `scope.mkCRDRef` and `kix.mkImport { crds }` markers | CRD kind, default version, comma-separated served versions, and scope (`Namespaced` or `Cluster`) verified against the live CRD during `kix deploy`. |
+
+## Deploy receipt schema
+
+Every `kix deploy` writes a provenance receipt to `status.receipt` on the `Activation` resource (`schema: "kix.run/receipt/v1"`). Storing the receipt in `status` rather than `spec` ensures that re-applying or rolling back an `Activation` spec never overwrites the historical record of what was deployed.
+
+Inspect the live receipt with `kubectl` or generate a SLSA provenance attestation from it with [`kix compliance attest`](/docs/reference/cli/compliance-commands/):
+
+```json
+{
+  "schema": "kix.run/receipt/v1",
+  "cluster": "production",
+  "activationHash": "jak8b4glx8fnbq2c3hkb0khyyvigb96i",
+  "deployedAt": "2026-09-09T10:47:55Z",
+  "source": {
+    "flakeRef": "./clusters",
+    "gitCommit": "c1b8d5ede22b680fa172991b9edd6e78ae513b70",
+    "dirty": false,
+    "revision": "c1b8d5ede22b680fa172991b9edd6e78ae513b70",
+    "flakeLock": "blake3:1d2417994d31f798..."
+  },
+  "builder": {
+    "kixVersion": "0.1.0",
+    "nixVersion": "nix (Nix) 2.28.5",
+    "arch": "x86_64",
+    "os": "linux"
+  },
+  "inputs": [
+    {
+      "name": "nixpkgs",
+      "rev": "8d8c1fa...",
+      "narHash": "sha256-J0dZU4a..."
+    }
+  ],
+  "images": [
+    "docker.io/nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a..."
+  ]
+}
+```
+
+### Receipt fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schema` | `string` | Receipt format identifier (`"kix.run/receipt/v1"`). |
+| `cluster` | `string` | Name of the Kix cluster. |
+| `activationHash` | `string` | 32-character store hash of the deployed `Activation`. |
+| `deployedAt` | `string` | RFC 3339 UTC timestamp when the deployment finalized. |
+| `source.flakeRef` | `string` | Flake reference passed to `kix deploy` (or `kix bundle` when deployed from a bundle). |
+| `source.gitCommit` | `string` (optional) | Git commit SHA of the source repository. Omitted when the source directory is not a Git repository. |
+| `source.dirty` | `boolean` (optional) | `true` when tracked files in the Git working tree had uncommitted changes at build time (untracked files are ignored by Nix flake evaluation). Omitted when `source.gitCommit` is absent. |
+| `source.revision` | `string` (optional) | Commit SHA, suffixed with `-dirty` when `source.dirty` is `true`. Omitted when `source.gitCommit` is absent. |
+| `source.flakeLock` | `string` (optional) | `blake3:<hex>` digest of `flake.lock`. Omitted when no `flake.lock` is present. |
+| `source.bundle` | `{ sha256, kixRev? }` (optional) | Present only when deploying from a `.kixbundle` archive. Records the `sha256` hex digest of the bundle archive verified by `kix deploy` and the optional `kixRev` recorded in the bundle. |
+| `builder` | `{ kixVersion, nixVersion?, arch, os }` | Versions and platform of the machine that built the activation (for bundle deploys, the machine that ran `kix bundle`). `nixVersion` is omitted when Nix is unavailable. |
+| `deployer` | `{ kixVersion, arch, os }` (optional) | Present only when deploying from a `.kixbundle` archive. Records the `kix` version and platform of the machine that ran `kix deploy`. |
+| `inputs` | `array of object` | Flake inputs from `flake.lock`. Locked inputs record `{ name, rev, narHash }`; unlocked local `path:` inputs record `{ name, type, path?, url?, locked: false }`. |
+| `images` | `array of string` | Container image references collected across all workloads in the activation. |
+
+Rendered manifests are intentionally excluded from `status.receipt` so inline Secret values never appear in cluster-wide status objects.

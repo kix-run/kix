@@ -89,7 +89,7 @@ webhooks:
     - key: cert-manager.io/disable-validation
       operator: NotIn
       values:
-      - 'true'
+      - "true"
   rules:
   - apiGroups:
     - cert-manager.io
@@ -100,7 +100,7 @@ webhooks:
     - CREATE
     - UPDATE
     resources:
-    - '*/*'
+    - "*/*"
   sideEffects: None
   timeoutSeconds: 30
 ---
@@ -108,7 +108,7 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
   annotations:
-    kix.run/identity-hash: '2x5vwc8jz0p3lpx1ky9hnkvh1f8sxaki'
+    kix.run/identity-hash: 2x5vwc8jz0p3lpx1ky9hnkvh1f8sxaki
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -187,27 +187,27 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: '.status.conditions[?(@.type == "Approved")].status'
+    - jsonPath: .status.conditions[?(@.type == "Approved")].status
       name: Approved
       type: string
-    - jsonPath: '.status.conditions[?(@.type == "Denied")].status'
+    - jsonPath: .status.conditions[?(@.type == "Denied")].status
       name: Denied
       type: string
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].status'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].status
       name: Ready
       type: string
-    - jsonPath: '.spec.issuerRef.name'
+    - jsonPath: .spec.issuerRef.name
       name: Issuer
       type: string
-    - jsonPath: '.spec.username'
+    - jsonPath: .spec.username
       name: Requester
       type: string
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].message'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].message
       name: Status
       priority: 1
       type: string
     - description: CreationTimestamp is a timestamp representing the server time when this object was created. It is not guaranteed to be set in happens-before order across separate operations. Clients may not set this value. It is represented in RFC3339 form and is in UTC.
-      jsonPath: '.metadata.creationTimestamp'
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
@@ -450,8 +450,8 @@ spec:
                     status:
                       description: Status of the condition, one of (`True`, `False`, `Unknown`).
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       - Unknown
                       type: string
                     type:
@@ -476,9 +476,9 @@ spec:
             type: object
         type: object
     selectableFields:
-    - jsonPath: '.spec.issuerRef.group'
-    - jsonPath: '.spec.issuerRef.kind'
-    - jsonPath: '.spec.issuerRef.name'
+    - jsonPath: .spec.issuerRef.group
+    - jsonPath: .spec.issuerRef.kind
+    - jsonPath: .spec.issuerRef.name
     served: true
     storage: true
     subresources:
@@ -512,22 +512,22 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].status'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].status
       name: Ready
       type: string
-    - jsonPath: '.spec.secretName'
+    - jsonPath: .spec.secretName
       name: Secret
       type: string
-    - jsonPath: '.spec.issuerRef.name'
+    - jsonPath: .spec.issuerRef.name
       name: Issuer
       priority: 1
       type: string
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].message'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].message
       name: Status
       priority: 1
       type: string
     - description: CreationTimestamp is a timestamp representing the server time when this object was created. It is not guaranteed to be set in happens-before order across separate operations. Clients may not set this value. It is represented in RFC3339 form and is in UTC.
-      jsonPath: '.metadata.creationTimestamp'
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
@@ -1002,13 +1002,13 @@ spec:
                   `RenewBefore` then the controller respects `renewBefore` and `renewBeforePercentage`.
                 properties:
                   policy:
-                    description: '`policy` must be one of `Disabled`, `RenewBefore`.'
+                    description: "`policy` must be one of `Disabled`, `RenewBefore`."
                     enum:
                     - RenewBefore
                     - Disabled
                     type: string
                   windows:
-                    description: '`windows` mentions the behavior of when the renewal must happen.'
+                    description: "`windows` mentions the behavior of when the renewal must happen."
                     items:
                       description: CertificateRenewalWindows is the definition for renewal windows
                       properties:
@@ -1309,8 +1309,8 @@ spec:
                     status:
                       description: Status of the condition, one of (`True`, `False`, `Unknown`).
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       - Unknown
                       type: string
                     type:
@@ -1389,9 +1389,9 @@ spec:
             type: object
         type: object
     selectableFields:
-    - jsonPath: '.spec.issuerRef.group'
-    - jsonPath: '.spec.issuerRef.kind'
-    - jsonPath: '.spec.issuerRef.name'
+    - jsonPath: .spec.issuerRef.group
+    - jsonPath: .spec.issuerRef.kind
+    - jsonPath: .spec.issuerRef.name
     served: true
     storage: true
     subresources:
@@ -1423,18 +1423,18 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: '.status.state'
+    - jsonPath: .status.state
       name: State
       type: string
-    - jsonPath: '.spec.dnsName'
+    - jsonPath: .spec.dnsName
       name: Domain
       type: string
-    - jsonPath: '.status.reason'
+    - jsonPath: .status.reason
       name: Reason
       priority: 1
       type: string
     - description: CreationTimestamp is a timestamp representing the server time when this object was created. It is not guaranteed to be set in happens-before order across separate operations. Clients may not set this value. It is represented in RFC3339 form and is in UTC.
-      jsonPath: '.metadata.creationTimestamp'
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
@@ -3111,7 +3111,7 @@ spec:
                                         referenced object inside the same namespace.
                                       properties:
                                         name:
-                                          default: ''
+                                          default: ""
                                           description: |-
                                             Name of the referent.
                                             This field is effectively required, but due to backwards compatibility is
@@ -4323,7 +4323,7 @@ spec:
                                         referenced object inside the same namespace.
                                       properties:
                                         name:
-                                          default: ''
+                                          default: ""
                                           description: |-
                                             Name of the referent.
                                             This field is effectively required, but due to backwards compatibility is
@@ -4720,9 +4720,9 @@ spec:
         - spec
         type: object
     selectableFields:
-    - jsonPath: '.spec.issuerRef.group'
-    - jsonPath: '.spec.issuerRef.kind'
-    - jsonPath: '.spec.issuerRef.name'
+    - jsonPath: .spec.issuerRef.group
+    - jsonPath: .spec.issuerRef.kind
+    - jsonPath: .spec.issuerRef.name
     served: true
     storage: true
     subresources:
@@ -4755,15 +4755,15 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].status'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].status
       name: Ready
       type: string
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].message'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].message
       name: Status
       priority: 1
       type: string
     - description: CreationTimestamp is a timestamp representing the server time when this object was created. It is not guaranteed to be set in happens-before order across separate operations. Clients may not set this value. It is represented in RFC3339 form and is in UTC.
-      jsonPath: '.metadata.creationTimestamp'
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
@@ -6555,7 +6555,7 @@ spec:
                                               referenced object inside the same namespace.
                                             properties:
                                               name:
-                                                default: ''
+                                                default: ""
                                                 description: |-
                                                   Name of the referent.
                                                   This field is effectively required, but due to backwards compatibility is
@@ -7767,7 +7767,7 @@ spec:
                                               referenced object inside the same namespace.
                                             properties:
                                               name:
-                                                default: ''
+                                                default: ""
                                                 description: |-
                                                   Name of the referent.
                                                   This field is effectively required, but due to backwards compatibility is
@@ -8435,7 +8435,7 @@ spec:
                       "my_pki_mount/sign/my-role-name".
                     type: string
                   server:
-                    description: 'Server is the connection address for the Vault server, e.g: "https://vault.example.com:8200".'
+                    description: "Server is the connection address for the Vault server, e.g: \"https://vault.example.com:8200\"."
                     type: string
                   serverName:
                     description: |-
@@ -8592,7 +8592,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: exactly one of tpp, cloud, or ngts must be configured
-                  rule: '(has(self.tpp) ? 1 : 0) + (has(self.cloud) ? 1 : 0) + (has(self.ngts) ? 1 : 0) == 1'
+                  rule: "(has(self.tpp) ? 1 : 0) + (has(self.cloud) ? 1 : 0) + (has(self.ngts) ? 1 : 0) == 1"
             type: object
           status:
             description: Status of the ClusterIssuer. This is set and managed automatically.
@@ -8656,8 +8656,8 @@ spec:
                     status:
                       description: Status of the condition, one of (`True`, `False`, `Unknown`).
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       - Unknown
                       type: string
                     type:
@@ -8684,7 +8684,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    kix.run/identity-hash: '2nz855nqhwfaj3b2361l339wgxxf7ypz'
+    kix.run/identity-hash: 2nz855nqhwfaj3b2361l339wgxxf7ypz
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -8707,15 +8707,15 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].status'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].status
       name: Ready
       type: string
-    - jsonPath: '.status.conditions[?(@.type == "Ready")].message'
+    - jsonPath: .status.conditions[?(@.type == "Ready")].message
       name: Status
       priority: 1
       type: string
     - description: CreationTimestamp is a timestamp representing the server time when this object was created. It is not guaranteed to be set in happens-before order across separate operations. Clients may not set this value. It is represented in RFC3339 form and is in UTC.
-      jsonPath: '.metadata.creationTimestamp'
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
@@ -10506,7 +10506,7 @@ spec:
                                               referenced object inside the same namespace.
                                             properties:
                                               name:
-                                                default: ''
+                                                default: ""
                                                 description: |-
                                                   Name of the referent.
                                                   This field is effectively required, but due to backwards compatibility is
@@ -11718,7 +11718,7 @@ spec:
                                               referenced object inside the same namespace.
                                             properties:
                                               name:
-                                                default: ''
+                                                default: ""
                                                 description: |-
                                                   Name of the referent.
                                                   This field is effectively required, but due to backwards compatibility is
@@ -12386,7 +12386,7 @@ spec:
                       "my_pki_mount/sign/my-role-name".
                     type: string
                   server:
-                    description: 'Server is the connection address for the Vault server, e.g: "https://vault.example.com:8200".'
+                    description: "Server is the connection address for the Vault server, e.g: \"https://vault.example.com:8200\"."
                     type: string
                   serverName:
                     description: |-
@@ -12543,7 +12543,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: exactly one of tpp, cloud, or ngts must be configured
-                  rule: '(has(self.tpp) ? 1 : 0) + (has(self.cloud) ? 1 : 0) + (has(self.ngts) ? 1 : 0) == 1'
+                  rule: "(has(self.tpp) ? 1 : 0) + (has(self.cloud) ? 1 : 0) + (has(self.ngts) ? 1 : 0) == 1"
             type: object
           status:
             description: Status of the Issuer. This is set and managed automatically.
@@ -12607,8 +12607,8 @@ spec:
                     status:
                       description: Status of the condition, one of (`True`, `False`, `Unknown`).
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       - Unknown
                       type: string
                     type:
@@ -12657,19 +12657,19 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: '.status.state'
+    - jsonPath: .status.state
       name: State
       type: string
-    - jsonPath: '.spec.issuerRef.name'
+    - jsonPath: .spec.issuerRef.name
       name: Issuer
       priority: 1
       type: string
-    - jsonPath: '.status.reason'
+    - jsonPath: .status.reason
       name: Reason
       priority: 1
       type: string
     - description: CreationTimestamp is a timestamp representing the server time when this object was created. It is not guaranteed to be set in happens-before order across separate operations. Clients may not set this value. It is represented in RFC3339 form and is in UTC.
-      jsonPath: '.metadata.creationTimestamp'
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
@@ -12912,9 +12912,9 @@ spec:
         - spec
         type: object
     selectableFields:
-    - jsonPath: '.spec.issuerRef.group'
-    - jsonPath: '.spec.issuerRef.kind'
-    - jsonPath: '.spec.issuerRef.name'
+    - jsonPath: .spec.issuerRef.group
+    - jsonPath: .spec.issuerRef.kind
+    - jsonPath: .spec.issuerRef.name
     served: true
     storage: true
     subresources:
@@ -12965,8 +12965,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: nxmwb9c04vrqlc9ry6is95js51yjybi9,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: h4nb6cj3nli3jadx14g5pibk58xp12yq
+    kix.run/depends-on: nxmwb9c04vrqlc9ry6is95js51yjybi9,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:c5n1pr980d3w6gnpshlh4l9clhm47fhk,requires:p9y9n504yzmp5nf9jjxdkmh7vcpl1y9m,requires:jrpnr27i0kaglvx8cl5gl2af9p3rish6,requires:2nz855nqhwfaj3b2361l339wgxxf7ypz,requires:wrchlkih5739rkw3z2pavqs4nyll9fp4
+    kix.run/identity-hash: ymp48ax32997b9l8w3bbr6c277hyzsg6
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -12994,10 +12994,10 @@ spec:
     spec:
       containers:
       - args:
-        - '--v=2'
-        - '--cluster-resource-namespace=$(POD_NAMESPACE)'
-        - '--leader-election-namespace=cert-manager'
-        - '--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.2@sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503'
+        - --v=2
+        - --cluster-resource-namespace=$(POD_NAMESPACE)
+        - --leader-election-namespace=cert-manager
+        - --acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.2@sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -13025,11 +13025,11 @@ spec:
           protocol: TCP
         resources:
           limits:
-            cpu: '500m'
-            memory: '512Mi'
+            cpu: 500m
+            memory: 512Mi
           requests:
-            cpu: '10m'
-            memory: '64Mi'
+            cpu: 10m
+            memory: 64Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13062,8 +13062,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: '5qjn03cp7kvgl59d3glbk72m5lp1vrp9'
+    kix.run/depends-on: nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:c5n1pr980d3w6gnpshlh4l9clhm47fhk,requires:p9y9n504yzmp5nf9jjxdkmh7vcpl1y9m,requires:jrpnr27i0kaglvx8cl5gl2af9p3rish6,requires:2nz855nqhwfaj3b2361l339wgxxf7ypz,requires:wrchlkih5739rkw3z2pavqs4nyll9fp4
+    kix.run/identity-hash: la13yl63d4bm8nrmyrnygiq88bh53zdg
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -13091,8 +13091,8 @@ spec:
     spec:
       containers:
       - args:
-        - '--v=2'
-        - '--leader-election-namespace=cert-manager'
+        - --v=2
+        - --leader-election-namespace=cert-manager
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -13107,11 +13107,11 @@ spec:
           protocol: TCP
         resources:
           limits:
-            cpu: '500m'
-            memory: '512Mi'
+            cpu: 500m
+            memory: 512Mi
           requests:
-            cpu: '10m'
-            memory: '64Mi'
+            cpu: 10m
+            memory: 64Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13145,7 +13145,7 @@ kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: rn40hbw8756809l5h5bwh65g8klv5bg3,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l
-    kix.run/identity-hash: '80pbxqcgz1j3w410hxpz3dp0f8iwy7z4'
+    kix.run/identity-hash: 80pbxqcgz1j3w410hxpz3dp0f8iwy7z4
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -13173,13 +13173,13 @@ spec:
     spec:
       containers:
       - args:
-        - '--v=2'
-        - '--secure-port=10250'
-        - '--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)'
-        - '--dynamic-serving-ca-secret-name=cert-manager-webhook-ca'
-        - '--dynamic-serving-dns-names=cert-manager-webhook'
-        - '--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE)'
-        - '--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc'
+        - --v=2
+        - --secure-port=10250
+        - --dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)
+        - --dynamic-serving-ca-secret-name=cert-manager-webhook-ca
+        - --dynamic-serving-dns-names=cert-manager-webhook
+        - --dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE)
+        - --dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -13220,11 +13220,11 @@ spec:
           timeoutSeconds: 1
         resources:
           limits:
-            cpu: '200m'
-            memory: '128Mi'
+            cpu: 200m
+            memory: 128Mi
           requests:
-            cpu: '10m'
-            memory: '32Mi'
+            cpu: 10m
+            memory: 32Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13257,8 +13257,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: '0hhmwz20qshqx15hyf7shvck2vh232l1,21936i9vikhm1v89pmwhfk6yk9306bv7,3l9jmh34sh7jrl8s2yrfarv5wad9lgf1,9vnmmjiysnmb8fjphb0fp0hs47fp16y5,awzwpm53w1kb4ysngrwmj47whaddgkih,bxbg9n5s07wzh6rxv068r81fds6zms6i,k7x17sc733q2jxarkgk3x95hi9il1m2l,z5m7565d2cip9r93cb7q723f4vcxl2pw,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z'
-    kix.run/identity-hash: yfsv84lvm2jp42h77ga9ghqf6d1x7p5m
+    kix.run/depends-on: 87an52f6lmn5vyb0vbg2bljg94107cib,awzwpm53w1kb4ysngrwmj47whaddgkih,c073szfvlp53msl934m074dhgy8issg3,h6xwcfkgqzqcdwffc7qdnxr8cplsb317,jz6qk0nram14zrj2iwrvg1ff73542j8h,k7x17sc733q2jxarkgk3x95hi9il1m2l,l0i4jhq0fafvzzgsak5lsmkvzppzw5ny,x0i1407l4qpzq5k6gx4d5iicd8vb81np,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
+    kix.run/identity-hash: xp0kvkp9s4w5i073hx86z6a16hqmgb0w
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -13280,7 +13280,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/database: '21936i9vikhm1v89pmwhfk6yk9306bv7'
+        checksum/database: h6xwcfkgqzqcdwffc7qdnxr8cplsb317
         checksum/valkey-password: k7x17sc733q2jxarkgk3x95hi9il1m2l
       labels:
         app.kubernetes.io/instance: immich
@@ -13305,7 +13305,7 @@ spec:
               key: password
               name: immich-db-credentials
         - name: DB_PORT
-          value: '5432'
+          value: "5432"
         - name: DB_USERNAME
           valueFrom:
             secretKeyRef:
@@ -13323,8 +13323,8 @@ spec:
               key: password
               name: valkey-password
         - name: REDIS_SENTINEL_OPTIONS
-          value: '{"name":"primary","sentinels":[{"host":"valkey.immich.svc.cluster.local","port":"26379"}]}'
-        image: ghcr.io/immich-app/immich-server:v3.0.3@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
+          value: "{\"name\":\"primary\",\"sentinels\":[{\"host\":\"valkey.immich.svc.cluster.local\",\"port\":\"26379\"}]}"
+        image: ghcr.io/immich-app/immich-server:v3.3.5@sha256:485d546a2e31d6a8b4db8423fcba5c109de8c218d93410af115fd1ccfc4352a6
         imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 3
@@ -13347,11 +13347,11 @@ spec:
           timeoutSeconds: 1
         resources:
           limits:
-            cpu: '4'
-            memory: '4Gi'
+            cpu: "4"
+            memory: 4Gi
           requests:
-            cpu: '250m'
-            memory: '1Gi'
+            cpu: 250m
+            memory: 1Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13384,15 +13384,15 @@ spec:
         persistentVolumeClaim:
           claimName: storage
       - emptyDir:
-          sizeLimit: '1Gi'
+          sizeLimit: 1Gi
         name: tmp
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,fz71crbhgpvq0pbdylmb9yspljjrgvn8
-    kix.run/identity-hash: '4zszknqdaxbsc9ipfbm77b4mh02q6syc'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,p373dax0536w87269ia6827mrx0sics1
+    kix.run/identity-hash: bnff0jb7ik90zvwf8a4gz7fczw6h7m29
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:
@@ -13424,7 +13424,7 @@ spec:
           value: /cache/huggingface-xet
         - name: MPLCONFIGDIR
           value: /cache/matplotlib-config
-        image: ghcr.io/immich-app/immich-machine-learning:v3.0.3@sha256:d76fe88b69282c09a97eac4f82dafa82cfd77bce274bc742591cde974f87dacb
+        image: ghcr.io/immich-app/immich-machine-learning:v3.3.5@sha256:5b28c9352c8374b8a1ed96fbdd8d6755fea6e43510ec43fdf6538aa02ea40f56
         imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 3
@@ -13447,11 +13447,11 @@ spec:
           timeoutSeconds: 1
         resources:
           limits:
-            cpu: '4'
-            memory: '4Gi'
+            cpu: "4"
+            memory: 4Gi
           requests:
-            cpu: '250m'
-            memory: '1Gi'
+            cpu: 250m
+            memory: 1Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13484,7 +13484,7 @@ spec:
         persistentVolumeClaim:
           claimName: ml-cache
       - emptyDir:
-          sizeLimit: '1Gi'
+          sizeLimit: 1Gi
         name: tmp
 ---
 apiVersion: apps/v1
@@ -13520,7 +13520,7 @@ spec:
     spec:
       containers:
       - args:
-        - '-conf'
+        - -conf
         - /etc/coredns/Corefile
         image: docker.io/coredns/coredns:1.13.1@sha256:9b9128672209474da07c91439bf15ed704ae05ad918dd6454e5b6ae14e35fee6
         imagePullPolicy: IfNotPresent
@@ -13550,10 +13550,10 @@ spec:
           periodSeconds: 10
         resources:
           limits:
-            memory: '170Mi'
+            memory: 170Mi
           requests:
-            cpu: '100m'
-            memory: '70Mi'
+            cpu: 100m
+            memory: 70Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13630,27 +13630,27 @@ spec:
       containers:
       - env:
         - name: CLUSTER_ROLE_DISABLED
-          value: 'false'
+          value: "false"
         - name: DISABLE_RECONCILIATION
-          value: 'false'
+          value: "false"
         - name: INSTALL_CERTS
-          value: 'true'
+          value: "true"
         - name: INSTALL_CONFIG
-          value: 'true'
+          value: "true"
         - name: INSTALL_CONVERSION_WEBHOOKS
-          value: 'false'
+          value: "false"
         - name: INSTALL_CRDS
-          value: 'true'
+          value: "true"
         - name: INSTALL_WEBHOOKS
-          value: 'true'
+          value: "true"
         - name: OPERATOR_IMAGE_VERSION
-          value: '1.19.2'
+          value: "1.19.2"
         - name: OPERATOR_IP
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
         - name: OPERATOR_JVM_IMAGE_VERSION
-          value: '1.19.2-jvm'
+          value: 1.19.2-jvm
         - name: OPERATOR_NAME
           value: stackgres-operator
         - name: OPERATOR_NAMESPACE
@@ -13658,7 +13658,7 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         - name: OPERATOR_NATIVE_IMAGE_VERSION
-          value: '1.19.2'
+          value: "1.19.2"
         - name: OPERATOR_POD_NAME
           valueFrom:
             fieldRef:
@@ -13668,9 +13668,9 @@ spec:
             fieldRef:
               fieldPath: spec.serviceAccountName
         - name: PROMETHEUS_AUTOBIND
-          value: 'false'
+          value: "false"
         - name: SGCONFIG
-          value: '{"apiVersion":"stackgres.io/v1","kind":"SGConfig","metadata":{"name":"stackgres-operator","namespace":"stackgres-system"},"spec":{"collector":{"prometheusOperator":{"allowDiscovery":false}},"containerRegistry":"quay.io","deploy":{"collector":false,"restapi":false},"imagePullPolicy":"IfNotPresent"}}'
+          value: "{\"apiVersion\":\"stackgres.io/v1\",\"kind\":\"SGConfig\",\"metadata\":{\"name\":\"stackgres-operator\",\"namespace\":\"stackgres-system\"},\"spec\":{\"collector\":{\"prometheusOperator\":{\"allowDiscovery\":false}},\"containerRegistry\":\"quay.io\",\"deploy\":{\"collector\":false,\"restapi\":false},\"imagePullPolicy\":\"IfNotPresent\"}}"
         - name: SGCONFIG_NAMESPACE
           value: stackgres-system
         - name: SG_CONTAINER_REGISTRY
@@ -13678,7 +13678,7 @@ spec:
         - name: SG_IMAGE_PULL_POLICY
           value: IfNotPresent
         - name: WAIT_CRDS_UPGRADE
-          value: 'false'
+          value: "false"
         image: quay.io/stackgres/operator:1.19.2@sha256:82f33ab3fb1e30e6c076411ccb349be7335e6a25af5161d7bcecffbc44d42336
         imagePullPolicy: IfNotPresent
         livenessProbe:
@@ -13704,11 +13704,11 @@ spec:
           timeoutSeconds: 1
         resources:
           limits:
-            cpu: '1'
-            memory: '512Mi'
+            cpu: "1"
+            memory: 512Mi
           requests:
-            cpu: '10m'
-            memory: '128Mi'
+            cpu: 10m
+            memory: 128Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13742,8 +13742,9 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   annotations:
-    kix.run/depends-on: '1sv4x4cz02dks21gy0706xp90pbpcff1,6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,k7x17sc733q2jxarkgk3x95hi9il1m2l,pnp59yfhnv6byw601crmpvk6sippsnyr,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z'
-    kix.run/identity-hash: '1nsgpk0m07qni2xichimkg9ivhzpwl14'
+    kix.run/depends-on: 1sv4x4cz02dks21gy0706xp90pbpcff1,6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,k7x17sc733q2jxarkgk3x95hi9il1m2l,pnp59yfhnv6byw601crmpvk6sippsnyr,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
+    kix.run/holds-data: "true"
+    kix.run/identity-hash: jzvbd0gd2sdkq4cbcgqldxhfzaqrbdfm
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: immich
@@ -13766,7 +13767,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/configMap: '1sv4x4cz02dks21gy0706xp90pbpcff1'
+        checksum/configMap: 1sv4x4cz02dks21gy0706xp90pbpcff1
         checksum/valkeyPassword: k7x17sc733q2jxarkgk3x95hi9il1m2l
       labels:
         app.kubernetes.io/instance: valkey
@@ -13791,13 +13792,13 @@ spec:
               key: password
               name: valkey-password
         - name: SENTINEL_ENABLED
-          value: 'yes'
+          value: "yes"
         - name: SENTINEL_PORT
-          value: '26379'
+          value: "26379"
         - name: VALKEY_PORT
-          value: '6379'
+          value: "6379"
         - name: VALKEY_REPLICAS
-          value: '3'
+          value: "3"
         image: docker.io/valkey/valkey:8.1.10@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
         imagePullPolicy: IfNotPresent
         lifecycle:
@@ -13829,11 +13830,11 @@ spec:
           timeoutSeconds: 3
         resources:
           limits:
-            cpu: '1'
-            memory: '512Mi'
+            cpu: "1"
+            memory: 512Mi
           requests:
-            cpu: '250m'
-            memory: '512Mi'
+            cpu: 250m
+            memory: 512Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13860,18 +13861,18 @@ spec:
         - name: PRIMARY_SET
           value: primary
         - name: SENTINEL_PORT
-          value: '26379'
+          value: "26379"
         - name: SENTINEL_QUORUM
-          value: '2'
+          value: "2"
         - name: VALKEY_PASSWORD
           valueFrom:
             secretKeyRef:
               key: password
               name: valkey-password
         - name: VALKEY_PORT
-          value: '6379'
+          value: "6379"
         - name: VALKEY_REPLICAS
-          value: '3'
+          value: "3"
         image: docker.io/valkey/valkey:8.1.10@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
         imagePullPolicy: IfNotPresent
         lifecycle:
@@ -13903,13 +13904,13 @@ spec:
           timeoutSeconds: 3
         resources:
           limits:
-            cpu: '150m'
-            ephemeral-storage: '2Gi'
-            memory: '192Mi'
+            cpu: 150m
+            ephemeral-storage: 2Gi
+            memory: 192Mi
           requests:
-            cpu: '100m'
-            ephemeral-storage: '50Mi'
-            memory: '128Mi'
+            cpu: 100m
+            ephemeral-storage: 50Mi
+            memory: 128Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -13948,11 +13949,11 @@ spec:
         name: config
       - emptyDir:
           medium: Memory
-          sizeLimit: '1Mi'
+          sizeLimit: 1Mi
         name: run
       - emptyDir:
           medium: Memory
-          sizeLimit: '1Mi'
+          sizeLimit: 1Mi
         name: sentinel
   updateStrategy:
     type: RollingUpdate
@@ -13964,15 +13965,15 @@ spec:
       - ReadWriteOnce
       resources:
         requests:
-          storage: '8Gi'
+          storage: 8Gi
       storageClassName: local-path
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
-    kix.run/depends-on: i2fj9hh0swwix01w08lqxb5j1q0c5ik7,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,requires:5qjn03cp7kvgl59d3glbk72m5lp1vrp9,requires:vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,requires:j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:b6r7c6rhqc44nyyhfsqg8ahqvdps777q,requires:xvc91687xzi8lvlgm9l9mpk8s74z5zwm
-    kix.run/identity-hash: '5xsy1i6lnjs655x1xvbw4hfsiss64sy7'
+    kix.run/depends-on: i2fj9hh0swwix01w08lqxb5j1q0c5ik7,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,requires:la13yl63d4bm8nrmyrnygiq88bh53zdg,requires:vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,requires:j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,requires:jpf4wd0821xzk1gsccm3ycq98gsacn3w,requires:b6r7c6rhqc44nyyhfsqg8ahqvdps777q,requires:xvc91687xzi8lvlgm9l9mpk8s74z5zwm
+    kix.run/identity-hash: 2whrwyc5wyvg221blz0iq713snf7mj2q
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
     kix.run/rerun: on-change
@@ -13998,8 +13999,8 @@ spec:
       - args:
         - check
         - api
-        - '--wait=1m'
-        - '-v'
+        - --wait=1m
+        - -v
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -14010,11 +14011,11 @@ spec:
         name: cert-manager-startupapicheck
         resources:
           limits:
-            cpu: '100m'
-            memory: '128Mi'
+            cpu: 100m
+            memory: 128Mi
           requests:
-            cpu: '10m'
-            memory: '32Mi'
+            cpu: 10m
+            memory: 32Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -14035,8 +14036,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
-    kix.run/depends-on: '93571zxl905gar5cyf9nckrb4x0s6g61,9vnmmjiysnmb8fjphb0fp0hs47fp16y5,awzwpm53w1kb4ysngrwmj47whaddgkih,m35ic47ighagpmbxibj03c5c7zg819qz'
-    kix.run/identity-hash: bxbg9n5s07wzh6rxv068r81fds6zms6i
+    kix.run/depends-on: 4a879dsyxajbc7ghjajakpa6z0r4vjc3,7vbv1m75c3v9v12560ap82vikz33f80s,awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np
+    kix.run/identity-hash: jz6qk0nram14zrj2iwrvg1ff73542j8h
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -14112,12 +14113,12 @@ spec:
           echo "stackgres-database bootstrap complete for immich@immich"
         command:
         - /bin/sh
-        - '-c'
+        - -c
         env:
         - name: PGHOST
           value: postgres.immich.svc.cluster.local
         - name: PGPORT
-          value: '5432'
+          value: "5432"
         - name: PGDATABASE
           value: postgres
         - name: PGPASSWORD
@@ -14139,11 +14140,11 @@ spec:
         name: bootstrap
         resources:
           limits:
-            cpu: '500m'
-            memory: '128Mi'
+            cpu: 500m
+            memory: 128Mi
           requests:
-            cpu: '10m'
-            memory: '32Mi'
+            cpu: 10m
+            memory: 32Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -14163,14 +14164,13 @@ spec:
       volumes:
       - emptyDir: {}
         name: tmp
-  ttlSecondsAfterFinished: 86400
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx,vj02x4vxyqf0xy0834sc3siril473nmn,requires:gpgc770viyqvwsxca5k1pppb26m1rimb,requires:x3xpgrgzpsjg4s9niffqijssjfhwchzs,requires:2x5vwc8jz0p3lpx1ky9hnkvh1f8sxaki,requires:yf45xwxqrvkxjj9qa8i62i9cxyw62gqp,requires:pn55pw3pvihnd2wa7s33fcd01grnxj8k,requires:pgiw1h58mm2dmc4ydr2jh8f1qz4kkwkz,requires:lk9kdi4lwn9wbjngvq9gp4n9fwjzxkph,requires:5kd6wirwlqsnz73rw163g301xb4jhqaw,requires:4yay32l4ir5vlpf6hx2sj68lnysnj1hb
-    kix.run/identity-hash: '6bjx4rplzad4w6g6ni10iwsxyc6gz3lg'
+    kix.run/identity-hash: 6bjx4rplzad4w6g6ni10iwsxyc6gz3lg
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
     kix.run/rerun: on-change
@@ -14192,7 +14192,7 @@ spec:
       containers:
       - command:
         - /bin/bash
-        - '-c'
+        - -c
         - |
           set -u
           check() {
@@ -14226,11 +14226,11 @@ spec:
         name: webhook-check
         resources:
           limits:
-            cpu: '200m'
-            memory: '128Mi'
+            cpu: 200m
+            memory: 128Mi
           requests:
-            cpu: '10m'
-            memory: '32Mi'
+            cpu: 10m
+            memory: 32Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -14257,15 +14257,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/ag5x6k7834j3nyann7nhs4cdyh1qiqkc-k8s-activation-example
-    kix.run/depends-on: '2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij,35i8mjh56ys8dz6yd89269yy5k86abin,3ylliw0rpywgm4lb948fywl1g7wvmv6g,4l42y305cgxwy3wbr0mrasihca5zczix,590al7hbiz804ha7f7q5ivm49ds9fxcg,5mv940cjcfv2zf1cm9zjfi61b117n128,5n47j74lzrsijy4r2z12cj7w81mgsnsh,6zygbc7qclphhhdfc56q310fncqhfwrs,cmc1p3p89byv00rfq647jm40cys8h0hz,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,w4jfxii3b0w1bl78pjanhkxinzl0kiys,zb275haixrx646n0736cjgmffpvsal2f,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: nws8yk0051g65djk16n8l6ksxi3j3rcx
+    kix.run/built-via: /nix/store/askhq8inkwql2zd8vbanwblkdwxxmjz4-kix-activation-example.json
+    kix.run/depends-on: 0x9r939vb7jd9ywk36x8vx16x66j5g00,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,m83fgwn05ffcbvi57482v2kak0qzh4y0,mqw67saz0rk6fvjs2ypxvrqar85av6hh,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
+    kix.run/identity-hash: 3n4s6103siqsx7ppdv37sl4gk602v2bq
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-nws8yk0051g6
+  name: example-3n4s6103siqs
 spec:
   instances:
     cert-manager:
@@ -14289,12 +14289,12 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '1v1rljz257vz44ssjhmi09p6zclyy4yh,1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b,2nz855nqhwfaj3b2361l339wgxxf7ypz,58c399fcph1y90b7jjb7igrmamqid6s5,5g06mjghl1f5bnzcbhphd3g47p1img5a,5qjn03cp7kvgl59d3glbk72m5lp1vrp9,5xsy1i6lnjs655x1xvbw4hfsiss64sy7,7dxbym3zymk6rjcygmvycz5bf7psqdvn,80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,93c70jfy3wb5mhw2cb3c843gpkkjds33,994cw2jrj49k7yd1bcscq82p0crzffyc,apirskai5ryrgsxxa9y71c1856qryflh,c5n1pr980d3w6gnpshlh4l9clhm47fhk,cszy78ybis945fhdi5040gs1lzj6gbxl,d2c2s43n4cs1qyz08rnnnviwjfd67sdp,h4nb6cj3nli3jadx14g5pibk58xp12yq,iarlrbcqhf08j8k9qdq70n7c1v9ndfr0,j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,jpf4wd0821xzk1gsccm3ycq98gsacn3w,jrpnr27i0kaglvx8cl5gl2af9p3rish6,n9c8fsq1l3x86ak3nwalrs594k5rgw6p,njmlyc3iqyqj4984qklxxjp7xqjbrm0q,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,nxmwb9c04vrqlc9ry6is95js51yjybi9,p9y9n504yzmp5nf9jjxdkmh7vcpl1y9m,pd95bcz6nk42rh5z8mp4rdqvcwx3aix6,ph7p720s1s7jlmghh944dn23brpkv09a,pkxjy11rizcf97w0m6gjqvhmvb00117z,rn40hbw8756809l5h5bwh65g8klv5bg3,v4fwdrj1684aii6rsjzb7qa2xhxql9kw,vhsclsf63hxyf8m5j6wgpb60gli2n6ya,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l,vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,wizcll2p6n5dnvlqc8q4p2683fp8rp6j,wrchlkih5739rkw3z2pavqs4nyll9fp4,zwrbxl73zgh1kqmsz4pl1gv9cyg1f27y,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '590al7hbiz804ha7f7q5ivm49ds9fxcg'
+    kix.run/depends-on: 1v1rljz257vz44ssjhmi09p6zclyy4yh,1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b,2whrwyc5wyvg221blz0iq713snf7mj2q,58c399fcph1y90b7jjb7igrmamqid6s5,5g06mjghl1f5bnzcbhphd3g47p1img5a,7dxbym3zymk6rjcygmvycz5bf7psqdvn,80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,93c70jfy3wb5mhw2cb3c843gpkkjds33,994cw2jrj49k7yd1bcscq82p0crzffyc,apirskai5ryrgsxxa9y71c1856qryflh,cszy78ybis945fhdi5040gs1lzj6gbxl,d2c2s43n4cs1qyz08rnnnviwjfd67sdp,iarlrbcqhf08j8k9qdq70n7c1v9ndfr0,j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,la13yl63d4bm8nrmyrnygiq88bh53zdg,n9c8fsq1l3x86ak3nwalrs594k5rgw6p,njmlyc3iqyqj4984qklxxjp7xqjbrm0q,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,nxmwb9c04vrqlc9ry6is95js51yjybi9,pd95bcz6nk42rh5z8mp4rdqvcwx3aix6,ph7p720s1s7jlmghh944dn23brpkv09a,pkxjy11rizcf97w0m6gjqvhmvb00117z,rn40hbw8756809l5h5bwh65g8klv5bg3,v4fwdrj1684aii6rsjzb7qa2xhxql9kw,vhsclsf63hxyf8m5j6wgpb60gli2n6ya,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l,vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,wizcll2p6n5dnvlqc8q4p2683fp8rp6j,ymp48ax32997b9l8w3bbr6c277hyzsg6,zwrbxl73zgh1kqmsz4pl1gv9cyg1f27y,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: 3b11q1i641ygddq559h5ww077bqqvj20
     kix.run/inverse-deps: ClusterRoleBinding/cert-manager-cainjector,RoleBinding/cert-manager-cainjector:leaderelection,ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io,ClusterRoleBinding/cert-manager-controller-certificates,ClusterRoleBinding/cert-manager-controller-certificatesigningrequests,ClusterRoleBinding/cert-manager-controller-challenges,ClusterRoleBinding/cert-manager-controller-clusterissuers,ClusterRoleBinding/cert-manager-controller-ingress-shim,ClusterRoleBinding/cert-manager-controller-issuers,ClusterRoleBinding/cert-manager-controller-orders,RoleBinding/cert-manager-webhook:dynamic-serving,ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews,RoleBinding/cert-manager:leaderelection,PodDisruptionBudget/cert-manager-cainjector,PodDisruptionBudget/cert-manager,PodDisruptionBudget/cert-manager-webhook
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
-    kix.run/package-requires: CustomResourceDefinition/certificaterequests.cert-manager.io,CustomResourceDefinition/certificates.cert-manager.io,CustomResourceDefinition/challenges.acme.cert-manager.io,CustomResourceDefinition/clusterissuers.cert-manager.io,CustomResourceDefinition/issuers.cert-manager.io,CustomResourceDefinition/orders.acme.cert-manager.io,ServiceAccount/cert-manager,ClusterRole/cert-manager-cluster-view,ClusterRole/cert-manager-view,ClusterRole/cert-manager-edit,ServiceAccount/cert-manager-webhook,Service/cert-manager-webhook,Deployment/cert-manager-webhook,MutatingWebhookConfiguration/cert-manager-webhook,ValidatingWebhookConfiguration/cert-manager-webhook,ServiceAccount/cert-manager-cainjector,Deployment/cert-manager-cainjector
+    kix.run/package-requires: ServiceAccount/cert-manager,ClusterRole/cert-manager-cluster-view,ClusterRole/cert-manager-view,ClusterRole/cert-manager-edit,ServiceAccount/cert-manager-webhook,Service/cert-manager-webhook,Deployment/cert-manager-webhook,MutatingWebhookConfiguration/cert-manager-webhook,ValidatingWebhookConfiguration/cert-manager-webhook,ServiceAccount/cert-manager-cainjector,Deployment/cert-manager-cainjector
     kix.run/post-hooks: Job/cert-manager-startupapicheck
     kix.run/root: cert-manager
   labels:
@@ -14313,8 +14313,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '698dl58jzkdrq41warpxr5z04i0zz3xn,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '6zygbc7qclphhhdfc56q310fncqhfwrs'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,vfsvmvwwcbvly0lr6zvxsdgffl1azaqy,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: mqw67saz0rk6fvjs2ypxvrqar85av6hh
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: immich-server
@@ -14328,14 +14328,14 @@ metadata:
 spec:
   instanceName: immich
   namespaceName: immich
-  version: '3.0.3'
+  version: "3.3.5"
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '21936i9vikhm1v89pmwhfk6yk9306bv7,awzwpm53w1kb4ysngrwmj47whaddgkih,bxbg9n5s07wzh6rxv068r81fds6zms6i,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '3ylliw0rpywgm4lb948fywl1g7wvmv6g'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,h6xwcfkgqzqcdwffc7qdnxr8cplsb317,jz6qk0nram14zrj2iwrvg1ff73542j8h,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: m83fgwn05ffcbvi57482v2kak0qzh4y0
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/post-hooks: Job/immich-db-immich-bootstrap-f2457d27ce
@@ -14351,14 +14351,13 @@ spec:
   instanceName: immich-db
   lifecycle: stateful
   namespaceName: immich
-  version: <undefined>
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '3l9jmh34sh7jrl8s2yrfarv5wad9lgf1,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '35i8mjh56ys8dz6yd89269yy5k86abin'
+    kix.run/depends-on: 87an52f6lmn5vyb0vbg2bljg94107cib,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: cwqn9k5f52rwg6w2fzks9i3w773196cy
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: machine-learning
@@ -14372,14 +14371,14 @@ metadata:
 spec:
   instanceName: machine-learning
   namespaceName: immich
-  version: '3.0.3'
+  version: "3.3.5"
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,fz71crbhgpvq0pbdylmb9yspljjrgvn8,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: '5n47j74lzrsijy4r2z12cj7w81mgsnsh'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,p373dax0536w87269ia6827mrx0sics1,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: kxp256xpy6sfk61m1c61g58a82niijxk
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: ml-cache
@@ -14394,14 +14393,13 @@ spec:
   instanceName: ml-cache
   lifecycle: stateful
   namespaceName: immich
-  version: <undefined>
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '696izll7ackgb1ih5hza9j6v23891rpp,93571zxl905gar5cyf9nckrb4x0s6g61,9vnmmjiysnmb8fjphb0fp0hs47fp16y5,awzwpm53w1kb4ysngrwmj47whaddgkih,xcjdvrmbn8g1wyqrb4drn9h694ajjnak,ypmpbf9hxr3z6jif4clq0sdrvxjxgyh5,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: zb275haixrx646n0736cjgmffpvsal2f
+    kix.run/depends-on: 514wqwqxzddrv440fpkwp8486fs3bdfc,7vbv1m75c3v9v12560ap82vikz33f80s,awzwpm53w1kb4ysngrwmj47whaddgkih,lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw,w8a823n086xidlsr1ydcdfp9230hd5jm,x0i1407l4qpzq5k6gx4d5iicd8vb81np,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: 9nvkd56qfxsb4b2ir0jylv49n9aga7ql
     kix.run/inverse-deps: PackageInstance/postgres
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -14418,14 +14416,14 @@ spec:
   instanceName: postgres
   lifecycle: stateful
   namespaceName: immich
-  version: <undefined>
+  version: "17"
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:696izll7ackgb1ih5hza9j6v23891rpp
-    kix.run/identity-hash: '93571zxl905gar5cyf9nckrb4x0s6g61'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:514wqwqxzddrv440fpkwp8486fs3bdfc
+    kix.run/identity-hash: 7vbv1m75c3v9v12560ap82vikz33f80s
     kix.run/import-apiversion: v1
     kix.run/import-kind: Secret
     kix.run/import-name: postgres
@@ -14451,8 +14449,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:696izll7ackgb1ih5hza9j6v23891rpp
-    kix.run/identity-hash: '9vnmmjiysnmb8fjphb0fp0hs47fp16y5'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:514wqwqxzddrv440fpkwp8486fs3bdfc
+    kix.run/identity-hash: x0i1407l4qpzq5k6gx4d5iicd8vb81np
     kix.run/import-apiversion: v1
     kix.run/import-kind: Service
     kix.run/import-name: postgres
@@ -14460,8 +14458,8 @@ metadata:
     kix.run/mode: import
     kix.run/package: postgres
     kix.run/package-namespace: immich
-    kix.run/service-ports: '[{"port":5432,"protocol":"TCP"}]'
-    kix.run/service-selector: '{"app":"StackGresCluster","stackgres.io/cluster-name":"postgres"}'
+    kix.run/service-ports: "[{\"port\":5432,\"protocol\":\"TCP\"}]"
+    kix.run/service-selector: "{\"app\":\"StackGresCluster\",\"stackgres.io/cluster-name\":\"postgres\"}"
   labels:
     app.kubernetes.io/instance: postgres
     app.kubernetes.io/managed-by: kix
@@ -14478,8 +14476,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '0hhmwz20qshqx15hyf7shvck2vh232l1,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,l0i4jhq0fafvzzgsak5lsmkvzppzw5ny,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: a57sgndwibybw8ff9v6q7s08qh1dbm6m
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: storage
@@ -14494,14 +14492,13 @@ spec:
   instanceName: storage
   lifecycle: stateful
   namespaceName: immich
-  version: <undefined>
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,b1x8mbkx4kvwpz8wp0rmnqc175z0kayc,z5m7565d2cip9r93cb7q723f4vcxl2pw,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: cmc1p3p89byv00rfq647jm40cys8h0hz
+    kix.run/depends-on: 6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,b1x8mbkx4kvwpz8wp0rmnqc175z0kayc,c073szfvlp53msl934m074dhgy8issg3,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: 0x9r939vb7jd9ywk36x8vx16x66j5g00
     kix.run/inverse-deps: PodDisruptionBudget/valkey
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -14518,7 +14515,7 @@ spec:
   instanceName: valkey
   lifecycle: stateful
   namespaceName: immich
-  version: '8.1.10'
+  version: "8.1.10"
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
@@ -14540,7 +14537,7 @@ spec:
   instanceName: valkey-password
   lifecycle: stateful
   namespaceName: immich
-  version: '1.0.0'
+  version: "1.0.0"
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
@@ -14562,14 +14559,14 @@ metadata:
 spec:
   instanceName: coredns
   namespaceName: kube-system
-  version: '1.13.1'
+  version: "1.13.1"
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
     kix.run/depends-on: pnp59yfhnv6byw601crmpvk6sippsnyr,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: '5mv940cjcfv2zf1cm9zjfi61b117n128'
+    kix.run/identity-hash: ha8v9xi9sl460c1vi0i85g2f6wp86xdq
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/package-requires: StorageClass/local-path
@@ -14584,7 +14581,6 @@ metadata:
 spec:
   instanceName: storage-classes
   namespaceName: kube-system
-  version: <undefined>
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
@@ -14595,7 +14591,7 @@ metadata:
     kix.run/crd-served-versions: v1
     kix.run/crd-version: v1
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:gpgc770viyqvwsxca5k1pppb26m1rimb
-    kix.run/identity-hash: '8ki7f0q4y87wklk18j8f7f066gcaik9d'
+    kix.run/identity-hash: 8ki7f0q4y87wklk18j8f7f066gcaik9d
     kix.run/import-apiversion: apiextensions.k8s.io/v1
     kix.run/import-kind: CustomResourceDefinition
     kix.run/import-name: sgbackups.stackgres.io
@@ -14763,7 +14759,7 @@ metadata:
     kix.run/crd-served-versions: v1
     kix.run/crd-version: v1
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:gpgc770viyqvwsxca5k1pppb26m1rimb
-    kix.run/identity-hash: '9z3fy2binsbx6gyvjnci2qg9n7f0vy0g'
+    kix.run/identity-hash: 9z3fy2binsbx6gyvjnci2qg9n7f0vy0g
     kix.run/import-apiversion: apiextensions.k8s.io/v1
     kix.run/import-kind: CustomResourceDefinition
     kix.run/import-name: sgpgconfigs.stackgres.io
@@ -14819,7 +14815,7 @@ metadata:
     kix.run/crd-served-versions: v1
     kix.run/crd-version: v1
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:gpgc770viyqvwsxca5k1pppb26m1rimb
-    kix.run/identity-hash: '1n8ia7scy0a4rzz3m9p47z0gfkzg8smj'
+    kix.run/identity-hash: 1n8ia7scy0a4rzz3m9p47z0gfkzg8smj
     kix.run/import-apiversion: apiextensions.k8s.io/v1
     kix.run/import-kind: CustomResourceDefinition
     kix.run/import-name: sgscripts.stackgres.io
@@ -14875,7 +14871,7 @@ metadata:
     kix.run/crd-served-versions: v1beta1,v1alpha1
     kix.run/crd-version: v1beta1
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:gpgc770viyqvwsxca5k1pppb26m1rimb
-    kix.run/identity-hash: '0wk0cmy51wy5gdhqslk8m49mknrmy3n7'
+    kix.run/identity-hash: 0wk0cmy51wy5gdhqslk8m49mknrmy3n7
     kix.run/import-apiversion: apiextensions.k8s.io/v1
     kix.run/import-kind: CustomResourceDefinition
     kix.run/import-name: sgshardedclusters.stackgres.io
@@ -14903,7 +14899,7 @@ metadata:
     kix.run/crd-served-versions: v1
     kix.run/crd-version: v1
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:gpgc770viyqvwsxca5k1pppb26m1rimb
-    kix.run/identity-hash: '7n063lns38s3fc2wybmm14abn4xrfbgb'
+    kix.run/identity-hash: 7n063lns38s3fc2wybmm14abn4xrfbgb
     kix.run/import-apiversion: apiextensions.k8s.io/v1
     kix.run/import-kind: CustomResourceDefinition
     kix.run/import-name: sgshardeddbops.stackgres.io
@@ -14954,8 +14950,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '0wk0cmy51wy5gdhqslk8m49mknrmy3n7,1n8ia7scy0a4rzz3m9p47z0gfkzg8smj,3qqzj38yhh1piv9k496s55mw12ysf9dq,6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,7n063lns38s3fc2wybmm14abn4xrfbgb,8ki7f0q4y87wklk18j8f7f066gcaik9d,9z3fy2binsbx6gyvjnci2qg9n7f0vy0g,ax0ravwlg79b6irbwpdl9mm7gq5an367,cr08crkdyylyzxis5lllmnvf7lcnlvs4,gpgc770viyqvwsxca5k1pppb26m1rimb,ivs0hbb24vk30d6xpgrr6j9d2797k152,j15f21nnz1jym0mj52yncbcphp4wyyj7,j61qwj7ljsrf7ayhfa13hzjpwmg84s3p,mm65yrp340h4r5hkffcskpnagv1fngrx,rcmss1ds0vg6dcy07pk5bl9wqsb4mh1n,rzr1w3ra0a5ljm6m9hkypgar4psqniqi,svxgr6j56axrbq69071bx56vysl6gf7j,x3xpgrgzpsjg4s9niffqijssjfhwchzs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '4l42y305cgxwy3wbr0mrasihca5zczix'
+    kix.run/depends-on: 0wk0cmy51wy5gdhqslk8m49mknrmy3n7,1n8ia7scy0a4rzz3m9p47z0gfkzg8smj,3qqzj38yhh1piv9k496s55mw12ysf9dq,6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,7n063lns38s3fc2wybmm14abn4xrfbgb,8ki7f0q4y87wklk18j8f7f066gcaik9d,9z3fy2binsbx6gyvjnci2qg9n7f0vy0g,ax0ravwlg79b6irbwpdl9mm7gq5an367,cr08crkdyylyzxis5lllmnvf7lcnlvs4,gpgc770viyqvwsxca5k1pppb26m1rimb,ivs0hbb24vk30d6xpgrr6j9d2797k152,j15f21nnz1jym0mj52yncbcphp4wyyj7,j61qwj7ljsrf7ayhfa13hzjpwmg84s3p,mm65yrp340h4r5hkffcskpnagv1fngrx,rcmss1ds0vg6dcy07pk5bl9wqsb4mh1n,rzr1w3ra0a5ljm6m9hkypgar4psqniqi,svxgr6j56axrbq69071bx56vysl6gf7j,x3xpgrgzpsjg4s9niffqijssjfhwchzs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: 4l42y305cgxwy3wbr0mrasihca5zczix
     kix.run/inverse-deps: PackageInstance/crd-ref-stackgres-operator-sgbackups-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgclusters-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgdbops-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgdistributedlogs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgobjectstorages-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgpoolconfigs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgpgconfigs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgscripts-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardedbackups-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardedclusters-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardeddbops-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgstreams-stackgres-io
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -14972,7 +14968,7 @@ metadata:
 spec:
   instanceName: stackgres-operator
   namespaceName: stackgres-system
-  version: '1.19.2'
+  version: "1.19.2"
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -15105,7 +15101,7 @@ metadata:
   name: cert-manager-cainjector
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - events
   verbs:
@@ -15114,7 +15110,7 @@ rules:
   - update
   - patch
 - apiGroups:
-  - ''
+  - ""
   resources:
   - secrets
   verbs:
@@ -15165,7 +15161,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    kix.run/identity-hash: '5g06mjghl1f5bnzcbhphd3g47p1img5a'
+    kix.run/identity-hash: 5g06mjghl1f5bnzcbhphd3g47p1img5a
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -15174,7 +15170,7 @@ metadata:
     app.kubernetes.io/managed-by: kix
     app.kubernetes.io/name: cert-manager
     app.kubernetes.io/part-of: kix-example
-    rbac.authorization.k8s.io/aggregate-to-cluster-reader: 'true'
+    rbac.authorization.k8s.io/aggregate-to-cluster-reader: "true"
     team: platform
   name: cert-manager-cluster-view
 rules:
@@ -15191,7 +15187,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    kix.run/identity-hash: '95akrk1k8j60imdsswg59q04fmvn50p0'
+    kix.run/identity-hash: 95akrk1k8j60imdsswg59q04fmvn50p0
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -15230,14 +15226,14 @@ metadata:
   name: cert-manager-controller-certificates
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - events
   verbs:
   - create
   - patch
 - apiGroups:
-  - ''
+  - ""
   resources:
   - secrets
   verbs:
@@ -15352,14 +15348,14 @@ metadata:
   name: cert-manager-controller-challenges
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - events
   verbs:
   - create
   - patch
 - apiGroups:
-  - ''
+  - ""
   resources:
   - pods
   - services
@@ -15370,7 +15366,7 @@ rules:
   - create
   - delete
 - apiGroups:
-  - ''
+  - ""
   resources:
   - secrets
   verbs:
@@ -15454,14 +15450,14 @@ metadata:
   name: cert-manager-controller-clusterissuers
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - events
   verbs:
   - create
   - patch
 - apiGroups:
-  - ''
+  - ""
   resources:
   - secrets
   verbs:
@@ -15505,7 +15501,7 @@ metadata:
   name: cert-manager-controller-ingress-shim
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - events
   verbs:
@@ -15581,14 +15577,14 @@ metadata:
   name: cert-manager-controller-issuers
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - events
   verbs:
   - create
   - patch
 - apiGroups:
-  - ''
+  - ""
   resources:
   - secrets
   verbs:
@@ -15632,14 +15628,14 @@ metadata:
   name: cert-manager-controller-orders
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - events
   verbs:
   - create
   - patch
 - apiGroups:
-  - ''
+  - ""
   resources:
   - secrets
   verbs:
@@ -15697,7 +15693,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    kix.run/identity-hash: '1v1rljz257vz44ssjhmi09p6zclyy4yh'
+    kix.run/identity-hash: 1v1rljz257vz44ssjhmi09p6zclyy4yh
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -15706,8 +15702,8 @@ metadata:
     app.kubernetes.io/managed-by: kix
     app.kubernetes.io/name: cert-manager
     app.kubernetes.io/part-of: kix-example
-    rbac.authorization.k8s.io/aggregate-to-admin: 'true'
-    rbac.authorization.k8s.io/aggregate-to-edit: 'true'
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
     team: platform
   name: cert-manager-edit
 rules:
@@ -15750,7 +15746,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    kix.run/identity-hash: '58c399fcph1y90b7jjb7igrmamqid6s5'
+    kix.run/identity-hash: 58c399fcph1y90b7jjb7igrmamqid6s5
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -15759,10 +15755,10 @@ metadata:
     app.kubernetes.io/managed-by: kix
     app.kubernetes.io/name: cert-manager
     app.kubernetes.io/part-of: kix-example
-    rbac.authorization.k8s.io/aggregate-to-admin: 'true'
-    rbac.authorization.k8s.io/aggregate-to-cluster-reader: 'true'
-    rbac.authorization.k8s.io/aggregate-to-edit: 'true'
-    rbac.authorization.k8s.io/aggregate-to-view: 'true'
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-cluster-reader: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
     team: platform
   name: cert-manager-view
 rules:
@@ -15824,7 +15820,7 @@ metadata:
   name: coredns
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - endpoints
   - services
@@ -15845,7 +15841,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    kix.run/identity-hash: '3qqzj38yhh1piv9k496s55mw12ysf9dq'
+    kix.run/identity-hash: 3qqzj38yhh1piv9k496s55mw12ysf9dq
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -15856,7 +15852,7 @@ metadata:
   name: stackgres-operator
 rules:
 - apiGroups:
-  - ''
+  - ""
   resources:
   - pods
   - pods/exec
@@ -15880,7 +15876,7 @@ rules:
   - delete
   - deletecollection
 - apiGroups:
-  - ''
+  - ""
   resources:
   - persistentvolumeclaims/finalizers
   - services/finalizers
@@ -16140,7 +16136,7 @@ kind: ClusterRoleBinding
 metadata:
   annotations:
     kix.run/depends-on: gg2xfj2538h4qknb6567f3a970cdsh23,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk
-    kix.run/identity-hash: '1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b'
+    kix.run/identity-hash: 1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -16164,7 +16160,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   annotations:
-    kix.run/depends-on: '95akrk1k8j60imdsswg59q04fmvn50p0,nxmwb9c04vrqlc9ry6is95js51yjybi9'
+    kix.run/depends-on: 95akrk1k8j60imdsswg59q04fmvn50p0,nxmwb9c04vrqlc9ry6is95js51yjybi9
     kix.run/identity-hash: wizcll2p6n5dnvlqc8q4p2683fp8rp6j
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
@@ -16265,7 +16261,7 @@ kind: ClusterRoleBinding
 metadata:
   annotations:
     kix.run/depends-on: n2a0xlnkc963jd8192ip1w8kclrf3n58,nxmwb9c04vrqlc9ry6is95js51yjybi9
-    kix.run/identity-hash: '93c70jfy3wb5mhw2cb3c843gpkkjds33'
+    kix.run/identity-hash: 93c70jfy3wb5mhw2cb3c843gpkkjds33
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -16365,7 +16361,7 @@ kind: ClusterRoleBinding
 metadata:
   annotations:
     kix.run/depends-on: aclnzym4gw0cfxv0apkawyw762v6y9ba,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l
-    kix.run/identity-hash: '7dxbym3zymk6rjcygmvycz5bf7psqdvn'
+    kix.run/identity-hash: 7dxbym3zymk6rjcygmvycz5bf7psqdvn
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -16412,7 +16408,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   annotations:
-    kix.run/depends-on: '3qqzj38yhh1piv9k496s55mw12ysf9dq,pyaviy7kfg7prykamwzr0dwhm0g8qhh4'
+    kix.run/depends-on: 3qqzj38yhh1piv9k496s55mw12ysf9dq,pyaviy7kfg7prykamwzr0dwhm0g8qhh4
     kix.run/identity-hash: rcmss1ds0vg6dcy07pk5bl9wqsb4mh1n
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
@@ -16535,7 +16531,7 @@ metadata:
   namespace: cert-manager
 rules:
 - apiGroups:
-  - ''
+  - ""
   resourceNames:
   - cert-manager-webhook-ca
   resources:
@@ -16546,7 +16542,7 @@ rules:
   - watch
   - update
 - apiGroups:
-  - ''
+  - ""
   resources:
   - secrets
   verbs:
@@ -16592,7 +16588,7 @@ kind: Role
 metadata:
   annotations:
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx
-    kix.run/identity-hash: '5kd6wirwlqsnz73rw163g301xb4jhqaw'
+    kix.run/identity-hash: 5kd6wirwlqsnz73rw163g301xb4jhqaw
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -16616,7 +16612,7 @@ kind: RoleBinding
 metadata:
   annotations:
     kix.run/depends-on: fspccwskfq0p3sam12ysw47mflcbx6s1,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: '994cw2jrj49k7yd1bcscq82p0crzffyc'
+    kix.run/identity-hash: 994cw2jrj49k7yd1bcscq82p0crzffyc
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -16719,8 +16715,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   annotations:
-    kix.run/depends-on: '5kd6wirwlqsnz73rw163g301xb4jhqaw,mm65yrp340h4r5hkffcskpnagv1fngrx,vj02x4vxyqf0xy0834sc3siril473nmn'
-    kix.run/identity-hash: '4yay32l4ir5vlpf6hx2sj68lnysnj1hb'
+    kix.run/depends-on: 5kd6wirwlqsnz73rw163g301xb4jhqaw,mm65yrp340h4r5hkffcskpnagv1fngrx,vj02x4vxyqf0xy0834sc3siril473nmn
+    kix.run/identity-hash: 4yay32l4ir5vlpf6hx2sj68lnysnj1hb
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -16744,12 +16740,13 @@ apiVersion: stackgres.io/v1
 kind: SGCluster
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,pnp59yfhnv6byw601crmpvk6sippsnyr,xcjdvrmbn8g1wyqrb4drn9h694ajjnak,ypmpbf9hxr3z6jif4clq0sdrvxjxgyh5,requires:6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,requires:ax0ravwlg79b6irbwpdl9mm7gq5an367,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
-    kix.run/identity-hash: '696izll7ackgb1ih5hza9j6v23891rpp'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw,pnp59yfhnv6byw601crmpvk6sippsnyr,w8a823n086xidlsr1ydcdfp9230hd5jm,requires:6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,requires:ax0ravwlg79b6irbwpdl9mm7gq5an367,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
+    kix.run/holds-data: "true"
+    kix.run/identity-hash: 514wqwqxzddrv440fpkwp8486fs3bdfc
     kix.run/lifecycle: stateful
     kix.run/package: postgres
     kix.run/package-namespace: immich
-    kix.run/readiness: '{"condition":{"status":"True","type":"Bootstrapped"}}'
+    kix.run/readiness: "{\"condition\":{\"status\":\"True\",\"type\":\"Bootstrapped\"}}"
   labels:
     app.kubernetes.io/instance: postgres
     app.kubernetes.io/managed-by: kix
@@ -16764,7 +16761,7 @@ spec:
   pods:
     disableConnectionPooling: true
     persistentVolume:
-      size: '20Gi'
+      size: 20Gi
       storageClass: local-path
     scheduling:
       topologySpreadConstraints:
@@ -16779,14 +16776,14 @@ spec:
   postgres:
     extensions:
     - name: vchord
-      version: '0.5.3'
+      version: "0.5.3"
     - name: uuid-ossp
     - name: cube
     - name: earthdistance
     - name: unaccent
     - name: pg_trgm
     - name: vector
-    version: '17'
+    version: "17"
   sgInstanceProfile: postgres-profile
 ---
 apiVersion: stackgres.io/v1
@@ -16794,7 +16791,8 @@ kind: SGInstanceProfile
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,requires:pn55pw3pvihnd2wa7s33fcd01grnxj8k
-    kix.run/identity-hash: ypmpbf9hxr3z6jif4clq0sdrvxjxgyh5
+    kix.run/holds-data: "false"
+    kix.run/identity-hash: w8a823n086xidlsr1ydcdfp9230hd5jm
     kix.run/lifecycle: stateful
     kix.run/package: postgres
     kix.run/package-namespace: immich
@@ -16806,15 +16804,16 @@ metadata:
   name: postgres-profile
   namespace: immich
 spec:
-  cpu: '1'
-  memory: '2Gi'
+  cpu: "1"
+  memory: 2Gi
 ---
 apiVersion: stackgres.io/v1
 kind: SGPostgresConfig
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,requires:9z3fy2binsbx6gyvjnci2qg9n7f0vy0g
-    kix.run/identity-hash: xcjdvrmbn8g1wyqrb4drn9h694ajjnak
+    kix.run/holds-data: "false"
+    kix.run/identity-hash: lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw
     kix.run/lifecycle: stateful
     kix.run/package: postgres
     kix.run/package-namespace: immich
@@ -16826,7 +16825,7 @@ metadata:
   name: postgres-pg17-config
   namespace: immich
 spec:
-  postgresVersion: '17'
+  postgresVersion: "17"
   postgresql.conf:
     shared_preload_libraries: pg_stat_statements, auto_explain, vchord
 ---
@@ -17091,7 +17090,7 @@ kind: ConfigMap
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih
-    kix.run/identity-hash: '1sv4x4cz02dks21gy0706xp90pbpcff1'
+    kix.run/identity-hash: 1sv4x4cz02dks21gy0706xp90pbpcff1
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: immich
@@ -17197,7 +17196,8 @@ kind: PersistentVolumeClaim
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,pnp59yfhnv6byw601crmpvk6sippsnyr
-    kix.run/identity-hash: fz71crbhgpvq0pbdylmb9yspljjrgvn8
+    kix.run/holds-data: "true"
+    kix.run/identity-hash: p373dax0536w87269ia6827mrx0sics1
     kix.run/lifecycle: stateful
     kix.run/package: ml-cache
     kix.run/package-namespace: immich
@@ -17213,7 +17213,7 @@ spec:
   - ReadWriteOnce
   resources:
     requests:
-      storage: '10Gi'
+      storage: 10Gi
   storageClassName: local-path
 ---
 apiVersion: v1
@@ -17221,7 +17221,8 @@ kind: PersistentVolumeClaim
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,pnp59yfhnv6byw601crmpvk6sippsnyr
-    kix.run/identity-hash: '0hhmwz20qshqx15hyf7shvck2vh232l1'
+    kix.run/holds-data: "true"
+    kix.run/identity-hash: l0i4jhq0fafvzzgsak5lsmkvzppzw5ny
     kix.run/lifecycle: stateful
     kix.run/package: storage
     kix.run/package-namespace: immich
@@ -17237,7 +17238,7 @@ spec:
   - ReadWriteOnce
   resources:
     requests:
-      storage: '500Gi'
+      storage: 500Gi
   storageClassName: local-path
 ---
 apiVersion: v1
@@ -17245,8 +17246,8 @@ kind: Secret
 metadata:
   annotations:
     kix.run/classification: credential
-    kix.run/depends-on: '9vnmmjiysnmb8fjphb0fp0hs47fp16y5,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.run/identity-hash: '21936i9vikhm1v89pmwhfk6yk9306bv7'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np
+    kix.run/identity-hash: h6xwcfkgqzqcdwffc7qdnxr8cplsb317
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -17266,7 +17267,7 @@ stringData:
   database: immich
   host: postgres.immich.svc.cluster.local
   password: immich-dev-password
-  port: '5432'
+  port: "5432"
   username: immich
 type: Opaque
 ---
@@ -17275,8 +17276,8 @@ kind: Secret
 metadata:
   annotations:
     kix.run/classification: credential
-    kix.run/depends-on: '9vnmmjiysnmb8fjphb0fp0hs47fp16y5,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.run/identity-hash: m35ic47ighagpmbxibj03c5c7zg819qz
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np
+    kix.run/identity-hash: 4a879dsyxajbc7ghjajakpa6z0r4vjc3
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -17322,7 +17323,7 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,rn40hbw8756809l5h5bwh65g8klv5bg3'
+    kix.run/depends-on: 80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,rn40hbw8756809l5h5bwh65g8klv5bg3
     kix.run/identity-hash: zwrbxl73zgh1kqmsz4pl1gv9cyg1f27y
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
@@ -17351,8 +17352,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,yfsv84lvm2jp42h77ga9ghqf6d1x7p5m
-    kix.run/identity-hash: '698dl58jzkdrq41warpxr5z04i0zz3xn'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,xp0kvkp9s4w5i073hx86z6a16hqmgb0w
+    kix.run/identity-hash: vfsvmvwwcbvly0lr6zvxsdgffl1azaqy
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -17376,8 +17377,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '4zszknqdaxbsc9ipfbm77b4mh02q6syc,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.run/identity-hash: '3l9jmh34sh7jrl8s2yrfarv5wad9lgf1'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,bnff0jb7ik90zvwf8a4gz7fczw6h7m29
+    kix.run/identity-hash: 87an52f6lmn5vyb0vbg2bljg94107cib
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:
@@ -17401,8 +17402,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '1nsgpk0m07qni2xichimkg9ivhzpwl14,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.run/identity-hash: z5m7565d2cip9r93cb7q723f4vcxl2pw
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,jzvbd0gd2sdkq4cbcgqldxhfzaqrbdfm
+    kix.run/identity-hash: c073szfvlp53msl934m074dhgy8issg3
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: immich
@@ -17434,7 +17435,7 @@ kind: Service
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih
-    kix.run/identity-hash: '6mg77slij034mw8das74wy6pvmf2bflk'
+    kix.run/identity-hash: 6mg77slij034mw8das74wy6pvmf2bflk
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: immich
@@ -17475,13 +17476,13 @@ metadata:
     app.kubernetes.io/managed-by: kix
     app.kubernetes.io/part-of: kix-example
     k8s-app: kube-dns
-    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/cluster-service: "true"
     kubernetes.io/name: CoreDNS
     team: platform
   name: coredns
   namespace: kube-system
 spec:
-  clusterIP: '10.96.0.10'
+  clusterIP: "10.96.0.10"
   ports:
   - name: dns
     port: 53

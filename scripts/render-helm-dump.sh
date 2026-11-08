@@ -13,17 +13,22 @@ HELM_DIR="${REPO_ROOT}/nw1/migration/helm"
 OUT="${REPO_ROOT}/nw1/migration/helm-rendered"
 REPOS="${REPO_ROOT}/nw1/migration/helm_repos.yaml"
 
-# Re-exec under `nix shell` if helm/yq aren't on PATH. Avoids forcing a
-# devshell on every consumer.
-if ! command -v helm >/dev/null || ! command -v yq >/dev/null; then
+# Re-exec under `nix shell` if yq isn't on PATH. Avoids forcing a devshell
+# on every consumer.
+if ! command -v yq >/dev/null; then
   if [[ "${KIX_HELM_NIX_SHELL:-0}" == "1" ]]; then
-    echo "render-helm-dump: helm/yq still missing inside nix shell — aborting" >&2
+    echo "render-helm-dump: yq still missing inside nix shell — aborting" >&2
     exit 1
   fi
-  exec env KIX_HELM_NIX_SHELL=1 nix shell \
-    nixpkgs#kubernetes-helm nixpkgs#yq-go \
+  exec env KIX_HELM_NIX_SHELL=1 nix shell nixpkgs#yq-go \
     --command bash "${BASH_SOURCE[0]}" "$@"
 fi
+
+# Render with the Helm release Kix renders charts with by default: the newest
+# in kix/lib/helm-versions.json, from the Kix runtime.
+runtime="$(nix build --no-link --print-out-paths "${REPO_ROOT}#kix-runtime")"
+helm_version="$(yq -p=json -o=tsv '.[] | .version' "${REPO_ROOT}/kix/lib/helm-versions.json" | sort -V | tail -n1)"
+helm() { "${runtime}/helm-${helm_version}/bin/helm" "$@"; }
 
 mkdir -p "$OUT"
 

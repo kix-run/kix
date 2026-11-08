@@ -144,6 +144,13 @@ impl DeployPlan {
     }
 
     /// Return the nodes of the plan in graph order.
+    /// Return whether any `Skip` node reads its live object before it counts
+    /// as unchanged (see [`skip_reads_live`]). A caller that would exit on
+    /// "nothing to apply" asks [`failed_skipped_jobs`] first when this holds.
+    pub fn has_skipped_jobs(&self) -> bool {
+        self.nodes.iter().any(skip_reads_live)
+    }
+
     pub fn nodes(&self) -> &[PlanNodeEntry] {
         &self.nodes
     }
@@ -181,10 +188,18 @@ pub(super) struct SchedulerState {
     enqueued: HashSet<NodeId>,
     /// Terminal nodes.
     terminal: HashSet<NodeId>,
+    /// Unchanged nodes that a node with work to do depends on, directly or
+    /// through other unchanged nodes. The scheduler reads their live object
+    /// before their dependents run; every other unchanged node is ready
+    /// without a task.
+    checked: HashSet<NodeId>,
 }
 
 impl SchedulerState {
-    pub(super) fn new(plan: &DeployPlan) -> Self {
+    /// `check_unchanged` says whether unchanged nodes that a node with work
+    /// depends on are read before their dependents run (`is_checked`). With
+    /// it off every unchanged node is ready without a task.
+    pub(super) fn new(plan: &DeployPlan, check_unchanged: bool) -> Self {
         let mut entries = HashMap::with_capacity(plan.nodes.len());
         for e in &plan.nodes {
             entries.insert(e.id.clone(), e.clone());
@@ -192,6 +207,7 @@ impl SchedulerState {
         let mut pending_preds: HashMap<NodeId, usize> =
             entries.keys().map(|id| (id.clone(), 0)).collect();
         let mut dependents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        let mut predecessors: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         for (dep, pred) in &plan.edges {
             if !entries.contains_key(dep) || !entries.contains_key(pred) {
                 continue;
@@ -201,7 +217,16 @@ impl SchedulerState {
                 .entry(pred.clone())
                 .or_default()
                 .push(dep.clone());
+            predecessors
+                .entry(dep.clone())
+                .or_default()
+                .push(pred.clone());
         }
+        let checked = if check_unchanged {
+            checked_unchanged(&entries, &predecessors)
+        } else {
+            HashSet::new()
+        };
         Self {
             entries,
             pending_preds,
@@ -209,7 +234,14 @@ impl SchedulerState {
             ready: VecDeque::new(),
             enqueued: HashSet::new(),
             terminal: HashSet::new(),
+            checked,
         }
+    }
+
+    /// Return whether the plan leaves `id` unchanged and a node with a task
+    /// depends on it, so the scheduler checks its live object first.
+    pub(super) fn is_checked(&self, id: &NodeId) -> bool {
+        self.checked.contains(id)
     }
 
     pub(super) fn seed_ready(&mut self) {
@@ -222,7 +254,7 @@ impl SchedulerState {
         // Sort resource nodes by `(kind, namespace, name)` for deterministic
         // execution in tests.
         let mut zero_pred = zero_pred;
-        zero_pred.sort_by_key(node_sort_key);
+        zero_pred.sort_by_key(NodeId::sort_key);
         for id in zero_pred {
             if self.enqueued.insert(id.clone()) {
                 self.ready.push_back(id);
@@ -247,7 +279,7 @@ impl SchedulerState {
             .filter(|id| !self.terminal.contains(*id))
             .cloned()
             .collect();
-        out.sort_by_key(node_sort_key);
+        out.sort_by_key(NodeId::sort_key);
         out
     }
 
@@ -314,27 +346,75 @@ impl SchedulerState {
     }
 }
 
-fn node_sort_key(id: &NodeId) -> (String, String, String) {
-    match id {
-        NodeId::Resource(rid) => (rid.kind.clone(), rid.namespace.clone(), rid.name.clone()),
-        NodeId::Synthetic(s) => (String::new(), String::new(), s.clone()),
+/// Return whether a `Skip` node still reads its live object before it counts
+/// as unchanged. Every Job does: an unchanged Job is never applied again, so
+/// a run that failed would otherwise read as healthy on every later deploy
+/// and reconcile. A Job carrying `kix.run/rerun` can then be recreated; any
+/// other Job is reported.
+pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
+    match (&entry.action, &entry.rerun) {
+        (ChangeAction::Skip(_), Some(_)) => true,
+        (ChangeAction::Skip(rid), None) => rid.kind == "Job",
+        _ => false,
     }
 }
 
-/// Return rerun-annotated `Skip` nodes whose live object is in a terminal
-/// failed state.
+/// Return whether the scheduler runs a task for `entry` because of the plan
+/// alone: it applies, recreates, or waits for the object, or it is an
+/// unchanged probe Job the rerun rule may create again.
+pub(super) fn runs_task(entry: &PlanNodeEntry) -> bool {
+    entry.kind != TransitionKind::Skip || entry.rerun.is_some()
+}
+
+/// Return the unchanged nodes that a node with a task depends on, directly
+/// or through other unchanged nodes. An unchanged object that nothing in the
+/// deploy depends on cannot mislead anything, so it is not read. An
+/// unchanged Job under `kix.run/rerun` runs a task of its own, so the walk
+/// does not go past it, but it is in the set so that what depends on it
+/// waits for a run still in progress.
+fn checked_unchanged(
+    entries: &HashMap<NodeId, PlanNodeEntry>,
+    predecessors: &HashMap<NodeId, Vec<NodeId>>,
+) -> HashSet<NodeId> {
+    let mut checked = HashSet::new();
+    let mut queue: VecDeque<&NodeId> = entries
+        .values()
+        .filter(|e| runs_task(e))
+        .map(|e| &e.id)
+        .collect();
+    while let Some(id) = queue.pop_front() {
+        for pred in predecessors.get(id).into_iter().flatten() {
+            let Some(entry) = entries.get(pred) else {
+                continue;
+            };
+            if entry.kind == TransitionKind::Skip
+                && checked.insert(pred.clone())
+                && !runs_task(entry)
+            {
+                queue.push_back(pred);
+            }
+        }
+    }
+    checked
+}
+
+/// Return the `Skip` Jobs whose live object is in a terminal failed state.
 ///
 /// `kix deploy` and `kix rollback` short-circuit before invoking the scheduler
 /// when a plan has no changes to apply. They call this function first so an
-/// unchanged probe whose previous run failed still triggers a scheduler run.
-pub async fn failed_rerun_nodes(
+/// unchanged Job whose previous run failed is still reported, or recreated
+/// when it carries `kix.run/rerun`, by a scheduler run.
+pub async fn failed_skipped_jobs(
     client: &kube::Client,
     discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
     plan: &DeployPlan,
 ) -> Vec<ResourceId> {
     let mut failed = Vec::new();
     for entry in &plan.nodes {
-        let (ChangeAction::Skip(rid), Some(_)) = (&entry.action, &entry.rerun) else {
+        if !skip_reads_live(entry) {
+            continue;
+        }
+        let ChangeAction::Skip(rid) = &entry.action else {
             continue;
         };
         let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
@@ -349,7 +429,7 @@ pub async fn failed_rerun_nodes(
             }
             Ok(_) => {}
             Err(e) => {
-                tracing::debug!(resource = %rid, error = %e, "could not read a rerun node's live object");
+                tracing::debug!(resource = %rid, error = %e, "could not read a skipped Job's live object");
             }
         }
     }

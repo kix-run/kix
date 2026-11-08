@@ -11,7 +11,8 @@ use super::{DiffConfig, Difference};
 ///
 /// Walks both trees in parallel, reporting differences by JSON path.
 /// Dict key ordering does not matter. Lists use keyed matching for
-/// known K8s fields, content-based matching otherwise. With
+/// known K8s fields and lists of named objects, content-based matching
+/// otherwise (see [`diff_content_arrays`]). With
 /// [`DiffConfig::ordered`], a list whose shared items sit in another order
 /// is also a difference, at the list's path. Spellings the API server
 /// treats as equal are not differences: see [`super::equivalence`].
@@ -107,8 +108,8 @@ pub(crate) fn structural_diff(
     }
 }
 
-/// Diff two arrays, using keyed matching for known K8s fields,
-/// content-based matching otherwise.
+/// Diff two arrays, using keyed matching for known K8s fields and lists of
+/// named objects, content-based matching otherwise.
 fn diff_arrays(a: &[Value], b: &[Value], path: &str, config: &DiffConfig) -> Vec<Difference> {
     let parent_field = path_leaf(path);
 
@@ -195,84 +196,84 @@ fn diff_keyed_arrays(
     diffs
 }
 
-/// Diff two arrays by normalizing and matching on content. Unordered, the
-/// lists inside each item are sorted first; ordered, an item whose inner
+/// Diff two lists that have no key, matching items by content. Unordered,
+/// the lists inside each item are sorted first. Ordered, an item whose inner
 /// list moved is a different item.
+///
+/// Items with equal content pair up wherever they sit. If the items left over
+/// sit at the same positions in both lists, each one that [`same_item`]
+/// accepts was changed in place. It is diffed against the item at its
+/// position, so one changed field reads as one change. Every other leftover
+/// is reported as removed at its index in `a` and added at its index in `b`. Pairing by position only when the
+/// positions agree keeps an insertion or a removal from shifting every later
+/// item into a false change.
 fn diff_content_arrays(
     a: &[Value],
     b: &[Value],
     path: &str,
     config: &DiffConfig,
 ) -> Vec<Difference> {
-    let mut diffs = Vec::new();
-
-    let normed = |items: &[Value]| -> Vec<Value> {
+    let item_path = format!("{path}[]");
+    let content = |item: &Value| -> String {
+        let item = drop_unset(&item_path, item);
         if config.ordered {
-            items.to_vec()
+            sort_key_string(&item)
         } else {
-            items.iter().map(normalize_for_compare).collect()
+            sort_key_string(&normalize_for_compare(&item))
         }
     };
-    let a_normed = normed(a);
-    let b_normed = normed(b);
+    let a_keys: Vec<String> = a.iter().map(content).collect();
+    let b_keys: Vec<String> = b.iter().map(content).collect();
 
-    let a_keyed: Vec<(String, &Value)> = a_normed.iter().map(|v| (sort_key_string(v), v)).collect();
-    let b_keyed: Vec<(String, &Value)> = b_normed.iter().map(|v| (sort_key_string(v), v)).collect();
-
-    // Group by canonical key
-    let mut a_by_key: indexmap::IndexMap<String, Vec<&Value>> = indexmap::IndexMap::new();
-    for (k, v) in &a_keyed {
-        a_by_key.entry(k.clone()).or_default().push(v);
+    let mut unpaired_a: std::collections::HashMap<&str, std::collections::VecDeque<usize>> =
+        std::collections::HashMap::new();
+    for (i, k) in a_keys.iter().enumerate() {
+        unpaired_a.entry(k.as_str()).or_default().push_back(i);
     }
-    let mut b_by_key: indexmap::IndexMap<String, Vec<&Value>> = indexmap::IndexMap::new();
-    for (k, v) in &b_keyed {
-        b_by_key.entry(k.clone()).or_default().push(v);
+    let mut left_b = Vec::new();
+    for (j, k) in b_keys.iter().enumerate() {
+        if unpaired_a
+            .get_mut(k.as_str())
+            .and_then(|q| q.pop_front())
+            .is_none()
+        {
+            left_b.push(j);
+        }
     }
+    let mut left_a: Vec<usize> = unpaired_a.into_values().flatten().collect();
+    left_a.sort_unstable();
 
-    // Merge all keys preserving sorted order
-    let mut all_keys: Vec<String> = Vec::new();
-    {
-        let mut seen = std::collections::HashSet::new();
-        let mut sorted_a: Vec<&str> = a_keyed.iter().map(|(k, _)| k.as_str()).collect();
-        sorted_a.sort();
-        let mut sorted_b: Vec<&str> = b_keyed.iter().map(|(k, _)| k.as_str()).collect();
-        sorted_b.sort();
-        for k in sorted_a.iter().chain(sorted_b.iter()) {
-            if seen.insert(*k) {
-                all_keys.push(k.to_string());
-            }
+    let (in_place, left_a, left_b): (Vec<usize>, Vec<usize>, Vec<usize>) = if left_a == left_b {
+        let (same, other): (Vec<usize>, Vec<usize>) =
+            left_a.into_iter().partition(|&i| same_item(&a[i], &b[i]));
+        (same, other.clone(), other)
+    } else {
+        (Vec::new(), left_a, left_b)
+    };
+
+    let mut diffs = Vec::new();
+    for &i in &in_place {
+        let child_path = format!("{path}[{i}]");
+        if !path_ignored(&child_path, &config.ignore_paths) {
+            diffs.extend(structural_diff(&a[i], &b[i], &child_path, config));
+        }
+    }
+    for &i in &left_a {
+        let child_path = format!("{path}[{i}]");
+        if !path_ignored(&child_path, &config.ignore_paths) {
+            diffs.push(Difference::missing_in_b(child_path, a[i].clone()));
+        }
+    }
+    for &j in &left_b {
+        let child_path = format!("{path}[{j}]");
+        if !path_ignored(&child_path, &config.ignore_paths) {
+            diffs.push(Difference::extra_in_b(child_path, b[j].clone()));
         }
     }
 
-    let mut idx = 0usize;
-    for key in &all_keys {
-        let a_items = a_by_key.get(key).map(|v| v.as_slice()).unwrap_or(&[]);
-        let b_items = b_by_key.get(key).map(|v| v.as_slice()).unwrap_or(&[]);
-        let paired = a_items.len().min(b_items.len());
-
-        for j in 0..paired {
-            let child_path = format!("{path}[{idx}]");
-            if !path_ignored(&child_path, &config.ignore_paths) {
-                diffs.extend(structural_diff(a_items[j], b_items[j], &child_path, config));
-            }
-            idx += 1;
-            let _ = j;
-        }
-        for item in &a_items[paired..] {
-            let child_path = format!("{path}[{idx}]");
-            diffs.push(Difference::missing_in_b(child_path, (*item).clone()));
-            idx += 1;
-        }
-        for item in &b_items[paired..] {
-            let child_path = format!("{path}[{idx}]");
-            diffs.push(Difference::extra_in_b(child_path, (*item).clone()));
-            idx += 1;
-        }
-    }
-
-    let a_keys: Vec<&String> = a_keyed.iter().map(|(k, _)| k).collect();
-    let b_keys: Vec<&String> = b_keyed.iter().map(|(k, _)| k).collect();
-    if config.ordered && reordered(&a_keys, &b_keys) {
+    let a_refs: Vec<&String> = a_keys.iter().collect();
+    let b_refs: Vec<&String> = b_keys.iter().collect();
+    if config.ordered && reordered(&a_refs, &b_refs) {
         diffs.push(Difference::value_mismatch(
             path.to_string(),
             Value::Array(a.to_vec()),
@@ -281,6 +282,41 @@ fn diff_content_arrays(
     }
 
     diffs
+}
+
+/// Check whether two unkeyed items at the same position can be one item
+/// changed in place. Two objects qualify when they share a top-level member
+/// with the same scalar value, so `[A, B]` turning into `[B', A']` does not
+/// read as A turning into B. Two values that are not objects always qualify.
+fn same_item(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Object(a), Value::Object(b)) => a.iter().any(|(k, av)| {
+            !av.is_object() && !av.is_array() && !av.is_null() && b.get(k) == Some(av)
+        }),
+        (Value::Object(_), _) | (_, Value::Object(_)) => false,
+        _ => true,
+    }
+}
+
+/// Return `value` without the members that mean the same as an absent field,
+/// such as `creationTimestamp: null`, so they do not make two items' content
+/// differ. `path` is the value's diff path, used to find server defaults.
+fn drop_unset(path: &str, value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter_map(|(k, v)| {
+                    let child = format!("{path}.{k}");
+                    (!equivalent_to_unset(&child, v)).then(|| (k.clone(), drop_unset(&child, v)))
+                })
+                .collect(),
+        ),
+        Value::Array(items) => {
+            let child = format!("{path}[]");
+            Value::Array(items.iter().map(|v| drop_unset(&child, v)).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// Deep-sort all arrays within a value so order doesn't affect comparison.
@@ -532,6 +568,135 @@ mod tests {
             [
                 "$.extensions[cube].publisher",
                 "$.extensions[vector].publisher"
+            ]
+        );
+    }
+
+    fn kinds(diffs: &[Difference]) -> Vec<(&str, DiffKind)> {
+        diffs
+            .iter()
+            .map(|d| (d.path.as_str(), d.kind.clone()))
+            .collect()
+    }
+
+    fn disk(id: &str, size: &str) -> Value {
+        json!({"source": {"blank": {}}, "id": id, "storage": size})
+    }
+
+    #[test]
+    fn one_changed_item_in_an_unkeyed_list_is_one_change_at_its_index() {
+        let a = json!({"disks": [disk("root", "100Gi"), disk("scratch", "10Gi")]});
+        let b = json!({"disks": [disk("root", "200Gi"), disk("scratch", "10Gi")]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [("$.disks[0].storage", DiffKind::ValueMismatch)]
+        );
+
+        let b = json!({"disks": [disk("root", "100Gi"), disk("scratch", "20Gi")]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [("$.disks[1].storage", DiffKind::ValueMismatch)]
+        );
+    }
+
+    #[test]
+    fn every_item_changed_in_an_unkeyed_list_reads_per_item() {
+        let a = json!({"disks": [disk("root", "100Gi"), disk("scratch", "10Gi")]});
+        let b = json!({"disks": [disk("root", "200Gi"), disk("scratch", "20Gi")]});
+        assert_eq!(
+            paths(&structural_diff(&a, &b, "$", &cfg())),
+            ["$.disks[0].storage", "$.disks[1].storage"]
+        );
+    }
+
+    #[test]
+    fn a_null_only_difference_inside_list_items_is_not_a_difference() {
+        let item = |id: &str, stamp: bool| {
+            let mut v = json!({"metadata": {"labels": {"id": id}}, "spec": {"size": 1}});
+            if stamp {
+                v["metadata"]["creationTimestamp"] = Value::Null;
+            }
+            v
+        };
+        let live = json!({"templates": [item("a", true), item("b", true)]});
+        let built = json!({"templates": [item("b", false), item("a", false)]});
+        assert!(structural_diff(&live, &built, "$", &cfg()).is_empty());
+        assert!(structural_diff(&built, &live, "$", &cfg()).is_empty());
+    }
+
+    #[test]
+    fn data_volume_templates_match_by_metadata_name() {
+        let template = |name: &str, size: &str, stamp: bool| {
+            let mut v = json!({"metadata": {"name": name},
+                "spec": {"storage": {"resources": {"requests": {"storage": size}}}}});
+            if stamp {
+                v["metadata"]["creationTimestamp"] = Value::Null;
+            }
+            v
+        };
+        let live = json!({"dataVolumeTemplates": [
+            template("root", "100Gi", true), template("scratch", "10Gi", true)
+        ]});
+        let reordered = json!({"dataVolumeTemplates": [
+            template("scratch", "10Gi", false), template("root", "200Gi", false)
+        ]});
+        assert_eq!(
+            kinds(&structural_diff(&live, &reordered, "$", &cfg())),
+            [(
+                "$.dataVolumeTemplates[root].spec.storage.resources.requests.storage",
+                DiffKind::ValueMismatch
+            )]
+        );
+    }
+
+    #[test]
+    fn an_insertion_or_removal_reports_the_real_indexes() {
+        let a = json!({"disks": [disk("a", "1Gi"), disk("b", "1Gi")]});
+        let b = json!({"disks": [disk("a", "1Gi"), disk("x", "1Gi"), disk("b", "1Gi")]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [("$.disks[1]", DiffKind::ExtraInB)]
+        );
+        assert_eq!(
+            kinds(&structural_diff(&b, &a, "$", &cfg())),
+            [("$.disks[1]", DiffKind::MissingInB)]
+        );
+
+        // A removal and an append in a list of the same length are not
+        // mistaken for two items changed in place.
+        let a = json!({"disks": [disk("a", "1Gi"), disk("b", "1Gi"), disk("c", "1Gi")]});
+        let b = json!({"disks": [disk("a", "1Gi"), disk("c", "1Gi"), disk("d", "1Gi")]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [
+                ("$.disks[1]", DiffKind::MissingInB),
+                ("$.disks[2]", DiffKind::ExtraInB)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_changed_scalar_in_an_unkeyed_list_is_one_value_change() {
+        let a = json!({"args": ["--port", "80", "--verbose"]});
+        let b = json!({"args": ["--port", "8080", "--verbose"]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [("$.args[1]", DiffKind::ValueMismatch)]
+        );
+    }
+
+    #[test]
+    fn unrelated_items_at_the_same_position_are_not_paired() {
+        let item = |id: &str, size: &str| json!({"id": id, "storage": size});
+        let a = json!({"disks": [item("a", "1Gi"), item("b", "2Gi")]});
+        let b = json!({"disks": [item("b", "3Gi"), item("a", "4Gi")]});
+        assert_eq!(
+            kinds(&structural_diff(&a, &b, "$", &cfg())),
+            [
+                ("$.disks[0]", DiffKind::MissingInB),
+                ("$.disks[1]", DiffKind::MissingInB),
+                ("$.disks[0]", DiffKind::ExtraInB),
+                ("$.disks[1]", DiffKind::ExtraInB)
             ]
         );
     }

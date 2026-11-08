@@ -34,6 +34,7 @@ let
   certManagerPackage = import ../../../packages/cert-manager;
   ciliumPackage = import ../../../packages/cilium;
   secretPackage = import ../../../packages/secret;
+  serviceRefPackage = import ../../../packages/service-ref;
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read
@@ -106,6 +107,70 @@ let
   clusterSpec = cluster: (byName "postgres" (ofKind "Cluster" (ms cluster))).spec;
   dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
   hashOf = r: builtins.unsafeDiscardStringContext r.out.identityHash;
+
+  # The operator and a cluster `postgres` that imports from `old-db`, a
+  # service-ref in `legacy` for a Service Kix does not manage, with the
+  # password in the secret `old-db-password`. `deps` replaces the wiring,
+  # `extra` adds instances to `data`, and `modules` are added to the
+  # cluster.
+  imported =
+    {
+      importConfig ? {
+        databases = [ "registry" ];
+        user = "postgres";
+        sslMode = "require";
+      },
+      extraSpec ? {
+        bootstrap.initdb = {
+          database = "registry";
+          owner = "harbor";
+        };
+      },
+      deps ? ref: {
+        importSource = ref.legacy.old-db;
+        importPassword = ref.data.old-db-password;
+      },
+      extra ? { },
+      modules ? [ ],
+    }:
+    mkCluster (
+      [
+        (
+          { ref, ... }:
+          {
+            instances.cnpg-system.cnpg-operator.package = operatorPackage;
+            instances.legacy.old-db = {
+              package = serviceRefPackage;
+              config = {
+                selector."app.example.com/cluster" = "old-db";
+                ports = [
+                  {
+                    port = 5433;
+                    targetPort = 5432;
+                  }
+                ];
+              };
+            };
+            instances.data = {
+              old-db-password = {
+                package = secretPackage;
+                config.stringData.password = "password";
+              };
+              postgres = {
+                package = clusterPackage;
+                deps = deps ref;
+                config = {
+                  import = importConfig;
+                  inherit extraSpec;
+                };
+              };
+            }
+            // extra;
+          }
+        )
+      ]
+      ++ modules
+    );
 
   # The operator, cert-manager, the plugin, S3 credentials, and a cluster
   # `postgres` with `backup` set. `modules` are added to the cluster.
@@ -388,6 +453,70 @@ in
     )
     || throw "Cluster spec: ${builtins.toJSON { inherit one two; }}";
 
+  # The operator requests 100m CPU and may burst to one core.
+  cnpg-operator-cpu-bursts =
+    let
+      container =
+        builtins.head
+          (byName "cnpg-operator" (
+            ofKind "Deployment" (
+              ms (cnpg {
+                database = null;
+              })
+            )
+          )).spec.template.spec.containers;
+    in
+    (container.resources.requests.cpu == "100m" && container.resources.limits.cpu == "1")
+    || throw "cnpg-operator resources: ${builtins.toJSON container.resources}";
+
+  # At `node`, two or more instances get required anti-affinity on the
+  # instance labels per host, which CloudNativePG also gives its join job.
+  # One instance, and the `pod` and `zone` levels, get none.
+  cnpg-cluster-node-level-separates-instances =
+    let
+      at =
+        level: instances:
+        (clusterSpec (cnpg {
+          database = null;
+          clusterConfig.instances = instances;
+          extra = {
+            cluster.capabilities.multiNode = true;
+            cluster.capabilities.availabilityZones = [
+              "a"
+              "b"
+            ];
+            instances.data.postgres.availability = level;
+          };
+        })).affinity;
+      node = at "node" 3;
+      required = node.additionalPodAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution or [ ];
+      none = a: !(a ? additionalPodAntiAffinity);
+    in
+    (
+      node.enablePodAntiAffinity == false
+      &&
+        required == [
+          {
+            labelSelector.matchLabels = {
+              "cnpg.io/cluster" = "postgres";
+              "cnpg.io/podRole" = "instance";
+            };
+            topologyKey = "kubernetes.io/hostname";
+          }
+        ]
+      && none (at "node" 1)
+      && none (at "pod" 3)
+      && none (at "zone" 3)
+    )
+    || throw "cnpg-cluster node-level anti-affinity: ${
+      builtins.toJSON {
+        inherit node;
+        one = at "node" 1;
+        pod = at "pod" 3;
+        zone = at "zone" 3;
+      }
+    }";
+
   # cnpg-cluster's assertions, one message each, and none for the defaults.
   cnpg-cluster-refusals =
     let
@@ -430,6 +559,27 @@ in
     }";
 
   # extraSpec cannot set a path the package sets; another path passes.
+  # The record carries the PostgreSQL major from the image tag. A tag
+  # without one fails the build through the assertion on the tag, which
+  # tryEval catches; a type error from reading the major out of such a tag
+  # would abort the whole test run instead.
+  cnpg-cluster-reports-postgres-major =
+    let
+      record = byName "postgres" (
+        ofKind "PackageInstance" (
+          ms (cnpg {
+            database = null;
+          })
+        )
+      );
+      latest = cnpg {
+        database = null;
+        clusterConfig.image.tag = "latest";
+      };
+    in
+    ((record.spec.version or null) == "18" && evalFails latest)
+    || throw "record version: ${builtins.toJSON (record.spec.version or null)}";
+
   cnpg-cluster-extra-spec-locks =
     (
       evalFails (cnpg {
@@ -1368,4 +1518,385 @@ in
       && rulesOf { operatorConfig.metrics.enabled = false; } == null
     )
     || throw "cnpg-operator alerts: ${builtins.toJSON (builtins.attrNames rules)}";
+
+  # An import names the source in externalClusters, by the service-ref's
+  # DNS name and port and the password Secret's key, and copies the one
+  # database into the application database extraSpec names. The service-ref
+  # renders its import marker with the selector and ports.
+  cnpg-cluster-import-renders =
+    let
+      cluster = imported { };
+      all = ms cluster;
+      spec = clusterSpec cluster;
+      source = builtins.head spec.externalClusters;
+      marker = byName "service-ref-old-db-old-db" (ofKind "PackageInstance" all);
+    in
+    (
+      spec.bootstrap.initdb == {
+        database = "registry";
+        owner = "harbor";
+        import = {
+          type = "microservice";
+          databases = [ "registry" ];
+          source.externalCluster = "import-source";
+        };
+      }
+      && builtins.length spec.externalClusters == 1
+      && source.name == "import-source"
+      &&
+        source.connectionParameters == {
+          host = "old-db.legacy.svc.cluster.local";
+          port = "5433";
+          user = "postgres";
+          dbname = "postgres";
+          sslmode = "require";
+        }
+      &&
+        source.password == {
+          name = "old-db-password";
+          key = "password";
+        }
+      && !(source ? sslRootCert)
+      && marker != null
+      && marker.metadata.namespace == "legacy"
+      && marker.metadata.annotations.${kixKeys.importKind} == "Service"
+      && marker.metadata.annotations.${kixKeys.importName} == "old-db"
+      &&
+        marker.metadata.annotations.${kixKeys.servicePorts}
+        == ''[{"port":5433,"protocol":"TCP","targetPort":5432}]''
+    )
+    || throw "import: ${
+      builtins.toJSON {
+        bootstrap = spec.bootstrap or null;
+        externalClusters = spec.externalClusters or null;
+        marker = marker.metadata or null;
+      }
+    }";
+
+  # Under default deny, the Cluster's pods, the import Job's among them, get
+  # egress to the source's pods on the port they listen on, and the source's
+  # pods admit them. Without import, no policy names the source.
+  cnpg-cluster-import-network-policy =
+    let
+      policies = c: ofKind "CiliumNetworkPolicy" (ms c);
+      withImport = policies (imported {
+        modules = [ netpolOn ];
+      });
+      egress = byName "postgres-cluster-postgres-egress" withImport;
+      ingress = byName "postgres-cluster-postgres-to-old-db-ingress" withImport;
+      toSource = builtins.filter (r: (r.stubRule or "") == "service-egress") egress.spec.egress;
+      plain = policies (cnpg {
+        database = null;
+        extra = netpolOn;
+      });
+    in
+    (
+      egress != null
+      && egress.metadata.namespace == "data"
+      && egress.spec.endpointSelector.matchLabels == { "cnpg.io/cluster" = "postgres"; }
+      &&
+        toSource == [
+          {
+            stubRule = "service-egress";
+            namespace = "legacy";
+            selector."app.example.com/cluster" = "old-db";
+            ports = [
+              {
+                port = 5433;
+                targetPort = 5432;
+                protocol = "TCP";
+              }
+            ];
+          }
+        ]
+      && ingress != null
+      && ingress.metadata.namespace == "legacy"
+      && ingress.spec.endpointSelector.matchLabels == { "app.example.com/cluster" = "old-db"; }
+      && lib.hasInfix ''"cnpg.io/cluster":"postgres"'' (builtins.toJSON ingress.spec.ingress)
+      && !(lib.hasInfix "old-db" (builtins.toJSON plain))
+    )
+    || throw "import policies: ${builtins.toJSON (map (p: p.metadata.name) withImport)} egress: ${
+      builtins.toJSON (egress.spec or null)
+    } ingress: ${builtins.toJSON (ingress.spec or null)}";
+
+  # A managed cnpg-cluster can be the source, through its out.fqdn and
+  # out.port. A monolith import copies roles too, and takes `*`. import's
+  # extraSpec merges into bootstrap.initdb.import.
+  cnpg-cluster-import-from-cnpg-cluster =
+    let
+      cluster = imported {
+        importConfig = {
+          type = "monolith";
+          databases = [ "*" ];
+          roles = [ "*" ];
+          user = "postgres";
+          sslMode = "require";
+          extraSpec.pgDumpExtraOptions = [ "--jobs=2" ];
+        };
+        extraSpec = { };
+        deps = ref: {
+          importSource = ref.data.old-pg;
+          importPassword = ref.data.old-db-password;
+        };
+        extra.old-pg = {
+          package = clusterPackage;
+          config.instances = 1;
+        };
+      };
+      spec = clusterSpec cluster;
+      source = builtins.head spec.externalClusters;
+    in
+    (
+      spec.bootstrap.initdb.import == {
+        type = "monolith";
+        databases = [ "*" ];
+        roles = [ "*" ];
+        source.externalCluster = "import-source";
+        pgDumpExtraOptions = [ "--jobs=2" ];
+      }
+      && source.connectionParameters.host == "old-pg-rw.data.svc.cluster.local"
+      && source.connectionParameters.port == "5432"
+    )
+    || throw "monolith import: ${builtins.toJSON (spec.bootstrap or null)} ${
+      builtins.toJSON (spec.externalClusters or null)
+    }";
+
+  # verify-full checks the source's certificate against importCa's ca.crt.
+  cnpg-cluster-import-verifies-with-ca =
+    let
+      cluster = imported {
+        importConfig = {
+          databases = [ "registry" ];
+          user = "postgres";
+        };
+        deps = ref: {
+          importSource = ref.legacy.old-db;
+          importPassword = ref.data.old-db-password;
+          importCa = ref.data.old-db-ca;
+        };
+        extra.old-db-ca = {
+          package = secretPackage;
+          config.stringData."ca.crt" = "not a real certificate";
+        };
+      };
+      source = builtins.head (clusterSpec cluster).externalClusters;
+    in
+    (
+      source.connectionParameters.sslmode == "verify-full"
+      &&
+        source.sslRootCert == {
+          name = "old-db-ca";
+          key = "ca.crt";
+        }
+    )
+    || throw "verify-full: ${builtins.toJSON source}";
+
+  # The import's refusals, each beside a configuration that builds: no
+  # source, no password, a source without an address, a password Secret
+  # without the key, verify-full without a CA, a CA nothing checks, and
+  # extraSpec or import.extraSpec setting what the package owns.
+  cnpg-cluster-import-refusals =
+    let
+      wired = ref: {
+        importSource = ref.legacy.old-db;
+        importPassword = ref.data.old-db-password;
+      };
+      require = {
+        databases = [ "registry" ];
+        user = "postgres";
+        sslMode = "require";
+      };
+      plainSource = eval.mkImport {
+        out = {
+          fqdn = "plain-db.data.svc.cluster.local";
+          port = "5432";
+          tls = false;
+        };
+      };
+    in
+    (
+      !(evalFails (imported { }))
+      && evalFails (imported {
+        deps = ref: { importPassword = ref.data.old-db-password; };
+      })
+      && evalFails (imported {
+        deps = ref: { importSource = ref.legacy.old-db; };
+      })
+      && evalFails (imported {
+        deps = ref: wired ref // { importSource = ref.data.old-db-password; };
+      })
+      && evalFails (imported {
+        importConfig = require // {
+          passwordKey = "secret";
+        };
+      })
+      && evalFails (imported {
+        importConfig = removeAttrs require [ "sslMode" ];
+      })
+      && evalFails (imported {
+        deps = ref: wired ref // { importCa = ref.data.old-db-password; };
+      })
+      && evalFails (imported {
+        extraSpec.externalClusters = [ { name = "other"; } ];
+      })
+      && evalFails (imported {
+        extraSpec.bootstrap.initdb.import.type = "monolith";
+      })
+      && evalFails (imported {
+        importConfig = require // {
+          extraSpec.source.externalCluster = "other";
+        };
+      })
+      && evalFails (imported {
+        importConfig = require // {
+          extraSpec.databases = [ "other" ];
+        };
+      })
+      && !(evalFails (imported {
+        importConfig = require // {
+          extraSpec.schemaOnly = true;
+        };
+      }))
+      # A source that serves no TLS, with a mode that needs it, and with one that does not.
+      && evalFails (imported {
+        deps = ref: wired ref // { importSource = ref.data.plain-db; };
+        extra.plain-db.package = plainSource;
+      })
+      && !(evalFails (imported {
+        importConfig = require // {
+          sslMode = "disable";
+        };
+        deps = ref: wired ref // { importSource = ref.data.plain-db; };
+        extra.plain-db.package = plainSource;
+      }))
+      # Import dependencies wired while import is null.
+      && evalFails (imported {
+        importConfig = null;
+      })
+      && evalFails (imported {
+        importConfig = null;
+        extraSpec = { };
+        deps = ref: { importPassword = ref.data.old-db-password; };
+      })
+      && !(evalFails (imported {
+        importConfig = null;
+        extraSpec = { };
+        deps = _: { };
+      }))
+      # bootstrap.initdb.import through extraSpec, with import null.
+      && evalFails (cnpg {
+        database = null;
+        clusterConfig.extraSpec.bootstrap.initdb.import = {
+          type = "microservice";
+          databases = [ "app" ];
+          source.externalCluster = "other";
+        };
+      })
+      && !(evalFails (cnpg {
+        database = null;
+        clusterConfig.extraSpec.externalClusters = [ { name = "other"; } ];
+      }))
+    )
+    || throw "an import refusal did not hold, or its control failed";
+
+  # The import's assertions: a microservice import takes exactly one named
+  # database and no roles, and a Cluster bootstraps one way. Each has a
+  # control that passes.
+  cnpg-cluster-import-assertions =
+    let
+      messages =
+        config:
+        failedMessages {
+          package = clusterPackage;
+          instanceName = "postgres";
+          inherit config;
+        };
+      base = {
+        databases = [ "registry" ];
+        user = "postgres";
+      };
+    in
+    (
+      messages { import = base; } == [ ]
+      && says "exactly one named database" (messages {
+        import = base // {
+          databases = [
+            "a"
+            "b"
+          ];
+        };
+      })
+      && says "exactly one named database" (messages {
+        import = base // {
+          databases = [ "*" ];
+        };
+      })
+      && says "exactly one named database" (messages {
+        import = base // {
+          databases = [ "app*" ];
+        };
+      })
+      && says "beside names" (messages {
+        import = base // {
+          type = "monolith";
+          databases = [
+            "*"
+            "a"
+          ];
+        };
+      })
+      && says "beside names" (messages {
+        import = base // {
+          type = "monolith";
+          roles = [
+            "*"
+            "r"
+          ];
+        };
+      })
+      && says "microservice import only" (messages {
+        import = base // {
+          type = "monolith";
+          extraSpec.postImportApplicationSQL = [ "ANALYZE" ];
+        };
+      })
+      &&
+        messages {
+          import = base // {
+            extraSpec.postImportApplicationSQL = [ "ANALYZE" ];
+          };
+        } == [ ]
+      &&
+        messages {
+          import = base // {
+            type = "monolith";
+            databases = [
+              "a"
+              "b"
+            ];
+            roles = [ "*" ];
+          };
+        } == [ ]
+      && says "copies no roles" (messages {
+        import = base // {
+          roles = [ "app" ];
+        };
+      })
+      && says "bootstraps one way" (messages {
+        import = base;
+        extraSpec.bootstrap.recovery.source = "backup";
+      })
+      && says "bootstraps one way" (messages {
+        import = base;
+        extraSpec.bootstrap.pg_basebackup.source = "other";
+      })
+      && messages { extraSpec.bootstrap.recovery.source = "backup"; } == [ ]
+    )
+    || throw "import assertions: ${
+      builtins.toJSON (messages {
+        import = base // {
+          roles = [ "app" ];
+        };
+      })
+    }";
 }

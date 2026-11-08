@@ -5,8 +5,9 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use kix::build_source::Provenance;
+use kix::eval::build_files::BuildFiles;
 use kix::eval::error::KixEvalError;
-use kix::eval::store_path;
+use kix::eval::{store, store_path};
 
 use crate::{FORMAT, FileEntry, Header, MAX_FRAME_BYTES, VERSION, stream_order};
 
@@ -93,23 +94,20 @@ impl Contents {
     }
 }
 
-/// Load bundle [`Contents`] from a Nix build result directory using
-/// `nix path-info`.
-pub fn from_result_dir(
-    result_dir: &Path,
+/// Load bundle [`Contents`] from the build at `built_via` in the local Nix
+/// store using `nix path-info`.
+pub fn from_local(
+    built_via: &Path,
     kix_rev: &str,
     receipt: Option<Provenance>,
 ) -> Result<Contents, KixEvalError> {
     let err = |message: String| KixEvalError::StoreGraphError { message };
-    let activation = std::fs::canonicalize(result_dir.join("activation")).map_err(|e| {
-        err(format!(
-            "failed to resolve activation in {}: {e}",
-            result_dir.display()
-        ))
-    })?;
+    let activation = BuildFiles::read(built_via)?.activation;
     let mut files = BTreeMap::new();
     for (path, references) in kix::eval::nix::path_info(&activation)? {
-        let bytes = std::fs::read(&path).map_err(|e| err(format!("failed to read {path}: {e}")))?;
+        let bytes = store::disk_path(Path::new(&path))
+            .and_then(std::fs::read)
+            .map_err(|e| err(format!("failed to read {path}: {e}")))?;
         files.insert(path, BundleFile { bytes, references });
     }
     Ok(Contents {

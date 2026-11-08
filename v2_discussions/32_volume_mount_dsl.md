@@ -1,6 +1,6 @@
 # 32 — Volume Mount DSL Redesign
 
-**Status:** Active. The base constructors and injection helpers exist in `lib/compose.nix`. The proposed improvements (`.path` exposure, `.mountAt` on resources, volume deduplication, volume/mount-point split) are not yet implemented.
+**Status:** Active. The base constructors and injection helpers exist in `kix/lib/vocab/mounts.nix`. Volume deduplication (Phase 3) shipped in 0.7: `withMountsOn` takes a list of container names, searches init containers, and declares a volume once when its name and source match. The proposed `.path` exposure, `.mountAt` on resources, and the volume/mount-point split are not implemented.
 
 ## Status quo
 

@@ -4,10 +4,12 @@
 const { siteTitleHref } = Astro.locals.starlightRoute;
 ---
 
-<a href={siteTitleHref} class="site-title" aria-label="Kix docs home">
-  <span class="badge" translate="no">kix</span>
-  <span class="suffix" translate="no">/docs</span>
-</a>
+<div class="site-title">
+  <a href="/" class="home-link" aria-label="Kix home">
+    <span class="badge" translate="no">kix</span>
+  </a>
+  <a href={siteTitleHref} class="suffix" aria-label="Kix docs home" translate="no">/docs</a>
+</div>
 
 <style>
   .site-title {
@@ -15,8 +17,12 @@ const { siteTitleHref } = Astro.locals.starlightRoute;
     align-items: center;
     gap: 0.5rem;
     min-width: 0;
-    text-decoration: none;
     white-space: nowrap;
+  }
+  .home-link {
+    display: flex;
+    align-items: center;
+    text-decoration: none;
   }
   .badge {
     display: inline-flex;
@@ -42,5 +48,9 @@ const { siteTitleHref } = Astro.locals.starlightRoute;
     font-family: var(--__sl-font-mono);
     font-size: 0.9375rem;
     font-weight: 500;
+    text-decoration: none;
+  }
+  .suffix:hover {
+    color: var(--kix-ink);
   }
 </style>

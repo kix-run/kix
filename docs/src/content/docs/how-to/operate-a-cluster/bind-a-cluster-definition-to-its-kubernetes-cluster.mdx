@@ -1,0 +1,176 @@
+---
+title: "Bind a cluster definition to its Kubernetes cluster"
+description: "Name the one Kubernetes cluster a definition may deploy to, so a wrong --context or default context cannot apply it anywhere else."
+---
+
+`kix deploy <cluster> --context <ctx>` applies the build to whatever API
+server the context points at. Two commands run one after the other, or a
+default context that still points at the last cluster you worked on, are
+enough to deploy an example or test definition onto a live cluster.
+
+Binding a definition closes that gap. The definition names the Kubernetes
+cluster it belongs to, and Kix refuses to apply it anywhere else. Bind every
+definition that deploys to a live cluster.
+
+## Find the Kubernetes cluster's ID
+
+Kix identifies a Kubernetes cluster by the UID of its `kube-system` Namespace.
+That Namespace is created when the cluster is bootstrapped and cannot be
+deleted, so its UID stays the same for the life of the cluster, and every
+cluster has its own: a kind cluster, a k3s cluster, an EKS cluster, and a
+vCluster all differ.
+
+`kix status` prints it in its header:
+
+```
+$ kix status production --context prod
+Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
+...
+```
+
+`kubectl` gives the same value:
+
+```
+$ kubectl --context prod get namespace kube-system -o jsonpath='{.metadata.uid}'
+4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
+```
+
+The UID is known as soon as the cluster exists, so you can bind a definition
+before its first deploy.
+
+## Name it in the definition
+
+Set `cluster.kubernetes.uid` in a cluster module:
+
+```nix
+{ kix, packages }:
+kix.buildCluster {
+  name = "production";
+  modules = [
+    kix.flavors.gke
+    {
+      cluster.kubernetes.uid = "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c";
+      # ...
+    }
+  ];
+}
+```
+
+The value must be a lowercase UUID; anything else fails evaluation. Several
+Kix clusters on one Kubernetes cluster all set the same UID.
+
+## What happens after
+
+The build carries the UID, and the Activation record of each deploy of a
+bound build carries it as the label `kix.run/kubernetes-uid`.
+
+Every command that applies a build of the definition checks the binding after
+it connects and before it reads or writes anything else: `kix deploy` in all
+its modes (including `--plan`, `--bundle`, `--current-activation`, and
+`--operator`), `kix plan`, `kix gc` (soft and `--hard`), and the operator when
+it picks up a Queued record.
+
+- **The definition names another Kubernetes cluster.** The command stops and
+  names both IDs and the context. Nothing is applied.
+- **The definition names none, but a bound definition has deployed here.**
+  Once an Activation record that carries the label has finished a deploy on
+  the Kubernetes cluster, that cluster accepts only definitions that name it.
+  A record whose deploy never finished, such as one the operator refused
+  because its build names another Kubernetes cluster, does not lock it. The command stops and tells
+  you which Kix cluster bound it and which UID to add. This is what keeps an
+  unbound example from landing on a live cluster. If the records carry a UID
+  that is not this cluster's (they were restored from another cluster), the
+  message says so and names the live UID instead.
+- **The definition names none and nothing on the cluster is bound.** The
+  command runs as before.
+
+`kix rollback` applies a build this Kix cluster deployed here before, so it
+refuses only a target that names another Kubernetes cluster. A target built
+before the definition set `cluster.kubernetes.uid` rolls back as usual.
+
+Read-only commands such as `kix diff` and `kix status` do not check the
+binding. The operator marks a refused record `Failed` with the message and
+emits a Warning event on it.
+
+The check reads the `kube-system` Namespace. An account that may not `get`
+namespaces stops with a message that names that permission. The operator
+leaves such a record Queued, emits a Warning event, and retries once its
+service account is granted `get` on namespaces.
+
+## Check the Kubernetes version too
+
+A definition may also set `k8sVersion`, the Kubernetes version the build
+checks every package's `meta.k8s.minVersion` and `maxVersion` against. The
+build carries the value, and `kix deploy`, `kix plan`, and the operator
+compare it with the version the API server reports, right after the binding
+check and before anything is read or written. The comparison is as precise as
+you write the value:
+`k8sVersion = "1.31"` matches any 1.31.x, and `"1.31.4"` matches only
+1.31.4. A vendor suffix such as `+k3s1` or `-gke.1209000` on either side is
+ignored. Write the minor version. A value with a patch number stops the
+deploy after every patch upgrade, and managed clusters (GKE, EKS, AKS) apply
+those on their own.
+
+`kix status` prints the live version under the cluster ID:
+
+```
+$ kix status production --context prod
+Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
+Kubernetes version: v1.31.4+k3s1
+...
+```
+
+When the cluster runs another version, `kix deploy` and `kix plan` stop, and
+the operator marks a Queued record `Failed` with a Warning event. The message
+names both versions and the value to set, written as precisely as the
+definition writes it:
+
+```
+Kix refused to deploy production to context prod (https://prod.example:6443).
+Nothing was applied. production's definition sets k8sVersion = "1.30", but this
+cluster runs v1.31.4+k3s1. Package version checks used 1.30, so some packages
+in this build may not work on this cluster. Set k8sVersion = "1.31"; in
+production's definition, build again, and deploy again. If you are upgrading
+Kubernetes, make this change after the upgrade finishes.
+```
+
+After a Kubernetes upgrade, update `k8sVersion`, build again, and deploy. The
+new build runs the package checks against the version the cluster now runs.
+
+A consumer cluster built with `kix.interface` gets `k8sVersion` from the
+platform's interface file unless its own definition sets one. The build
+records where the value came from, and the message then names the platform
+and gives both fixes: export a new interface file from the platform after its
+upgrade and build against it, or set `k8sVersion` in the consumer's definition,
+which overrides the file.
+
+Two things go ahead on a mismatch, so that a Kubernetes upgrade never blocks
+them: `kix rollback` prints one line saying the target build was made for
+another version and rolls back anyway, and the operator keeps repairing an
+`Active` record. `kix diff` does not check. A definition that leaves
+`k8sVersion` unset is not compared, and nothing is printed.
+
+## Move a definition to a rebuilt cluster
+
+When a Kubernetes cluster is recreated, its `kube-system` UID changes. Read
+the new ID as above and update `cluster.kubernetes.uid` in the definition. The
+commit records the move.
+
+## Lift a binding
+
+The lock on a Kubernetes cluster lives in the `kix.run/kubernetes-uid` label
+of its Activation records, so it outlives the Kix cluster that set it. When a
+bound Kix cluster is removed and its records stay behind, an unbound
+definition is still refused. To let unbound definitions deploy again, remove
+the label from every record that carries it:
+
+```
+kubectl label activations.kix.run -l kix.run/kubernetes-uid kix.run/kubernetes-uid-
+```
+
+Deleting the dead Kix cluster's records also lifts the lock. Do not delete an
+`Active` or `Degraded` record while the operator runs: its finalizer tears
+down everything that record deployed.
+
+A later deploy of a bound definition writes the label again and locks the
+cluster again.

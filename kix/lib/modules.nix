@@ -289,14 +289,18 @@ in
       type = lib.types.nullOr (
         lib.types.addCheck lib.types.str versions.isVersion
         // {
-          description = "Kubernetes version such as \"1.31\" or \"v1.31.2-gke.1209000\"";
+          description = "Kubernetes version such as \"1.31\"";
         }
       );
       default = null;
       description = ''
-        Target Kubernetes version (e.g. "1.30"). Used by package meta
+        Target Kubernetes version (e.g. "1.31"). Used by package meta
         compatibility checks (meta.k8s.minVersion / maxVersion). A version
         less precise than a package's constraint is reported as a warning.
+        Deploy, plan, and the operator stop when the cluster runs a different
+        version, compared as precisely as written: "1.31" matches any 1.31.x.
+        A value with a patch number, such as "1.31.4", stops the deploy after
+        every patch upgrade, which managed clusters apply on their own.
       '';
     };
 
@@ -308,6 +312,30 @@ in
         "eks", "talos"). The vendor field: carried for display/telemetry only.
         Nothing in the compiler may branch on it. Branch on cluster.roles,
         cluster.capabilities, or resolved role providers instead.
+      '';
+    };
+
+    cluster.kubernetes.uid = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.addCheck lib.types.str (
+          s: builtins.match "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" s != null
+        )
+        // {
+          description = "lowercase UUID such as \"4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c\"";
+        }
+      );
+      default = null;
+      description = ''
+        The Kubernetes cluster this definition belongs to, named by the UID
+        of its `kube-system` Namespace (`kubectl get namespace kube-system
+        -o jsonpath='{.metadata.uid}'` or `kix status <cluster>`). That UID
+        is set when the cluster is created and never changes. When set, the
+        build carries it, and deploy, plan, rollback, hard gc, and the
+        operator refuse to run the build against any other Kubernetes
+        cluster. Once a bound build has deployed, that Kubernetes cluster
+        also refuses builds that do not name it. Several Kix clusters on one
+        Kubernetes cluster all set the same UID. null leaves the definition
+        unbound.
       '';
     };
 

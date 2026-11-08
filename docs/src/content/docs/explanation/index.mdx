@@ -1,4 +1,43 @@
 ---
 title: "Explanation"
-description: "The design decisions and mental models behind Kix."
+description: "Background guides on why Kix works the way it does and how its main pieces fit together."
 ---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Explanation pages cover the ideas and tradeoffs behind Kix. Read these when you want a clear mental model of how a feature works under the hood, rather than step-by-step instructions for a specific task.
+
+## Core architecture and mental models
+
+<CardGrid>
+  <Card title="The dependency graph">
+    [The dependency graph](/docs/explanation/the-dependency-graph/): When one resource references another in Kix, that reference also records a dependency. This single graph drives deploy order, network policies, and change detection.
+  </Card>
+  <Card title="Packages and clusters">
+    [Packages and clusters](/docs/explanation/packages-and-clusters/): Why Kix separates reusable application packages from cluster configuration and environment flavors, and why Kix stays close to standard Kubernetes schemas.
+  </Card>
+  <Card title="Availability levels">
+    [Availability levels](/docs/explanation/availability-levels/): Instead of tuning replica counts and pod anti-affinity on every Deployment by hand, you tell Kix what kind of failure a cluster should survive (`none`, `pod`, `node`, or `zone`).
+  </Card>
+</CardGrid>
+
+## Compilation, policy, and operations
+
+<CardGrid>
+  <Card title="Network policy">
+    [Network policy](/docs/explanation/network-policy/): Because Kix already knows which workloads talk to which Services, it can generate matching ingress and egress firewall rules automatically.
+  </Card>
+  <Card title="Helm integration">
+    [Helm integration](/docs/explanation/helm-integration/): You do not need to rewrite existing Helm charts or migrate a whole cluster at once. Kix can render Helm charts at build time and link to services managed outside Kix.
+  </Card>
+  <Card title="Scorecard levels">
+    [Scorecard levels](/docs/explanation/scorecard-levels/): Kix separates always-on structural validation from configurable policy scorecards, and runs scorecard checks at four different scopes.
+  </Card>
+  <Card title="Server-side apply and drift">
+    [Server-side apply and drift](/docs/explanation/server-side-apply-and-drift/): How Kix shares Kubernetes objects safely with in-cluster controllers like HorizontalPodAutoscalers, and why image digests live in committed files.
+  </Card>
+</CardGrid>
+
+:::tip[Looking for practical steps?]
+Start with the [Tutorials](/docs/tutorials/) to learn Kix from scratch, or browse the [How-to guides](/docs/how-to/) for task-focused recipes.
+:::

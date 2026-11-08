@@ -37,11 +37,9 @@ kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>]
 
 When `eval` fails, the `scorecard` step does not run.
 
-`kix check` does not validate the rendered manifests against Kubernetes
-schemas or check them for deprecated API versions. Schema validation runs in
-`nix flake check`: a flake built with `mkFlake` exports a
-`schema-cluster-<name>` check per cluster that runs `kubeconform -strict` over
-the rendered manifests and skips kinds with no published schema.
+`kix check` runs constructor validators, cross-resource checks, and scorecard
+rules. It does not validate rendered manifests against external Kubernetes
+OpenAPI schemas or check for deprecated API versions.
 
 ## SARIF output
 
@@ -67,10 +65,10 @@ Kix then writes the evaluation failure as one error result. Its rule ID is
 | Code | Meaning |
 | --- | --- |
 | `0` | No step reported `fail` |
-| `1` | A step reported `fail`, or the cluster was not found. The same with `--sarif`, after the SARIF document is printed. |
+| `1` | A step reported `fail`, or the cluster was not found. With `--sarif`, a failed step exits `1` after printing the SARIF document, whereas an unknown cluster errors on stderr before printing any SARIF. |
 
 :::note[Reference]
-See [Finding schema](/docs/reference/scorecard/finding-schema/) for the
+See [Finding schema](/docs/reference/scorecard-and-rules/#finding-schema) for the
 fields each scorecard finding carries.
 :::
 

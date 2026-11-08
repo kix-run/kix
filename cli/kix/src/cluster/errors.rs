@@ -59,6 +59,11 @@ pub(crate) fn classify_status(code: u16) -> FailureClass {
     }
 }
 
+/// Return `true` if the API server refused the request with HTTP 403.
+pub fn forbidden(err: &kube::Error) -> bool {
+    classify(err) == FailureClass::Forbidden
+}
+
 /// Classify a `kube::Error`.
 pub(crate) fn classify(err: &kube::Error) -> FailureClass {
     match err {
@@ -78,6 +83,15 @@ pub(crate) fn classify_service_error(err: &(dyn StdError + 'static)) -> FailureC
         FailureClass::Timeout
     } else {
         FailureClass::Transport
+    }
+}
+
+/// Render an API server refusal as `HTTP <code> <reason>: <message>`, and
+/// any other `kube::Error` as it displays itself.
+pub fn api_error(err: &kube::Error) -> String {
+    match err {
+        kube::Error::Api(e) => format!("HTTP {} {}: {}", e.code, e.reason, e.message),
+        other => other.to_string(),
     }
 }
 
@@ -234,12 +248,11 @@ mod tests {
 
     #[test]
     fn classify_api_error_uses_status() {
-        let err = kube::Error::Api(kube::error::ErrorResponse {
-            status: "Failure".into(),
-            message: "storage is (re)initializing".into(),
-            reason: "TooManyRequests".into(),
-            code: 429,
-        });
+        let err = kube::Error::Api(
+            kube::core::Status::failure("storage is (re)initializing", "TooManyRequests")
+                .with_code(429)
+                .boxed(),
+        );
         assert_eq!(classify(&err), FailureClass::RateLimited);
     }
 

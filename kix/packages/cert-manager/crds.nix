@@ -31,33 +31,54 @@ let
       };
     };
 in
+# A certificate can be issued again, so no cert-manager kind holds data.
+# No kind but Challenge runs pods; an HTTP01 Challenge runs a solver pod.
 {
   crds = {
     certificates = gate (
       scope.mkCRD {
         spec = vendored "certificates.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
+        usesAtLeast = _: { };
       }
     );
     certificateRequests = gate (
       scope.mkCRD {
         spec = vendored "certificaterequests.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
+        usesAtLeast = _: { };
       }
     );
-    challenges = gate (scope.mkCRD { spec = vendored "challenges.acme.cert-manager.io.json"; });
+    challenges = gate (
+      scope.mkCRD {
+        spec = vendored "challenges.acme.cert-manager.io.json";
+        holdsData = false;
+      }
+    );
     clusterIssuers = gate (
       scope.mkCRD {
         spec = vendored "clusterissuers.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
+        usesAtLeast = _: { };
       }
     );
     issuers = gate (
       scope.mkCRD {
         spec = vendored "issuers.cert-manager.io.json";
         readiness = ready;
+        holdsData = false;
+        usesAtLeast = _: { };
       }
     );
-    orders = gate (scope.mkCRD { spec = vendored "orders.acme.cert-manager.io.json"; });
+    orders = gate (
+      scope.mkCRD {
+        spec = vendored "orders.acme.cert-manager.io.json";
+        holdsData = false;
+        usesAtLeast = _: { };
+      }
+    );
   };
 }

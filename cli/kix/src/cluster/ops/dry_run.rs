@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use async_trait::async_trait;
 use kube::Client;
 use kube::discovery::{ApiResource, Scope};
@@ -116,10 +118,12 @@ impl ResourceIo for DryRun {
             Ok(result) => DryRunOutcome::Recreated {
                 live: existing,
                 result: result.preview.as_ref().map(|p| p.result.clone()),
+                not_kept: result.not_kept.clone(),
             },
             Err(ApplyError::ImmutableConflict { .. }) => DryRunOutcome::Recreated {
                 live: existing,
                 result: None,
+                not_kept: Vec::new(),
             },
             Err(e) => DryRunOutcome::Refused(Refusal::of_apply(e)),
         };
@@ -129,6 +133,7 @@ impl ResourceIo for DryRun {
             Err(ApplyError::ImmutableConflict { .. }) => Ok(ApplyResult {
                 action: ApplyAction::Created,
                 preview: None,
+                not_kept: Vec::new(),
             }),
             Err(e) => Err(RecreateError::DryRunReapply(e)),
         }
@@ -138,12 +143,13 @@ impl ResourceIo for DryRun {
         &self,
         rid: &ResourceId,
         import_target: Option<&ImportTarget>,
+        applied_at: Option<DateTime<Utc>>,
         timeout: Duration,
         cancel: &CancelToken,
         on_status: OnStatus<'_>,
     ) -> Result<ReadinessResult, ReadinessError> {
         self.resources
-            .wait_ready(rid, import_target, timeout, cancel, on_status)
+            .wait_ready(rid, import_target, applied_at, timeout, cancel, on_status)
             .await
     }
 

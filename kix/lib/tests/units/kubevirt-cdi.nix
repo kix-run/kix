@@ -413,6 +413,13 @@ in
         got.${kixKeys.readiness} or null == builtins.toJSON {
           path = "/status/phase";
           equals = "Succeeded";
+          failed = [
+            {
+              path = "/status/phase";
+              equals = "Failed";
+              hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
+            }
+          ];
         }
       && got.note or null == "kept"
     )

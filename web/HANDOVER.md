@@ -22,8 +22,7 @@ every section to static HTML, and the page ships three small inline scripts
   marketing page, and the docs project's `base: '/docs'` cannot serve `/`.
 - `web/` stays separate from `docs/`. `.github/workflows/pages.yml` is
   unchanged apart from comments (`npm run build` now runs Astro and still
-  writes `web/dist/`). `/alt1/` and `/alt2/` build from pinned refs that
-  predate the change, so they still build with Vite.
+  writes `web/dist/`).
 - `vite@7` is a direct dev dependency so `@tailwindcss/vite` and Astro share
   one Vite; without it npm installs Vite 8 for the plugin and `astro check`
   fails on mismatched plugin types.

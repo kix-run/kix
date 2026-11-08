@@ -22,7 +22,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix diff <CLUSTER> [--bundle <FILE>] [--from <DIR> | --from-bundle <FILE>]
+kix diff <CLUSTER> [--bundle <FILE>] [--from <PATH> | --from-bundle <FILE>]
          [-o text|json|yaml|markdown]
          [--detail plain|fields|manifests] [--save <FILE>]
          [--flake <FLAKE>] [--context <CONTEXT>]
@@ -32,7 +32,7 @@ kix diff <CLUSTER> [--bundle <FILE>] [--from <DIR> | --from-bundle <FILE>]
 | --- | --- |
 | `<CLUSTER>` | Cluster name to evaluate and build from the flake. This is the new side of the comparison. |
 | `--bundle <FILE>` | Read the new side from a bundle written by `kix bundle` instead of building from the flake. Without `--from` or `--from-bundle`, the old side is an empty build. |
-| `--from <DIR>` | Use a directory as the old side instead of the live cluster. See [Old side](#old-side). |
+| `--from <PATH>` | Use a local build or manifest directory as the old side instead of the live cluster. See [Old side](#old-side). |
 | `--from-bundle <FILE>` | Use a bundle as the old side. Needs `--bundle`. |
 | `-o`, `--output` | `text` (default), `json`, `yaml` (the JSON document as YAML), or `markdown` for pull request comments. |
 | `--detail <LEVEL>` | How much `json` and `yaml` say about each change: `plain` (default) names each changed resource and counts its changed fields, `fields` also lists each field change, and `manifests` also includes the old and new manifest of each changed, added, or removed resource. Text and Markdown are the same at every level. |
@@ -45,9 +45,9 @@ kix diff <CLUSTER> [--bundle <FILE>] [--from <DIR> | --from-bundle <FILE>]
 | Old side | How to select it | Needs cluster access |
 | --- | --- | --- |
 | Live cluster | Omit `--from` | Yes |
-| Previous build | `--from <DIR>` where `<DIR>` contains `kix-packages.json`, such as the result of `nix build .#cluster-<name>-activation` | No |
-| Saved manifests | `--from <DIR>` where `<DIR>` holds YAML written by `kix snapshot save` or `kix export --for audit` | No |
 | Bundled build | `--from-bundle <FILE>`, with `--bundle` for the new side | No |
+| Saved manifests | `--from <DIR>` where `<DIR>` holds YAML written by `kix snapshot save` or `kix export --for audit` | No |
+| Previous build | `--from <PATH>` where `<PATH>` is the activation index path (`kix.run/built-via`) of a build in Kix's local store, or a directory containing `kix-packages.json` whose referenced store paths exist in Kix's local store | No |
 | Nothing | `--bundle <FILE>` alone: every package is added | No |
 
 Each bundle is checked against its content as it is read, and must be a build

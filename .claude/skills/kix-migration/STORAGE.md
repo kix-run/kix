@@ -1,6 +1,6 @@
 # Storage DI
 
-Persistent storage uses first-class PVC instances, not config-based `existingClaim` strings.
+Persistent storage uses first-class PVC instances wired through dependency injection.
 
 ## The dependency chain
 
@@ -60,9 +60,9 @@ volumes = [{ name = "data"; persistentVolumeClaim.claimName = storage.out.name; 
 containers = [{ volumeMounts = [{ name = "data"; mountPath = "/data"; }]; }];
 ```
 
-## Why PVCs are instances, not internal resources
+## Why PVCs are top-level instances
 
-- The cluster operator owns storage (size, class, backup), not the app.
+- The cluster operator configures storage (size, class, backup) at the cluster level.
 - PVCs outlive apps: removing or upgrading the app doesn't touch storage.
 - Cross-namespace safety: the claim package declares `meta.scope = "namespace"`, so resolution never binds a claim in another namespace, and an explicit `deps.storage = ref.<ns>.<claim>` across namespaces fails the build.
 - Visible in the cluster definition, so there is no hidden state.

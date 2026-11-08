@@ -80,29 +80,11 @@ fn kubectl_apply_stdin(context: &str, yaml: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
-/// Build the `kind` cluster activation and return the result directory path.
+/// Evaluate the `kind` cluster and return the store path of its activation
+/// index.
 fn build_activation() -> PathBuf {
-    let output = Command::new("nix")
-        .args([
-            "build",
-            ".#cluster-kind-activation",
-            "--extra-experimental-features",
-            "pipe-operators",
-            "--no-link",
-            "--print-out-paths",
-        ])
-        .current_dir(repo_root())
-        .output()
-        .expect("nix build should run");
-
-    assert!(
-        output.status.success(),
-        "nix build should succeed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    PathBuf::from(path)
+    kix::eval::nix::eval_activation_index(repo_root(), "kind", &[], &|_| {})
+        .expect("the kind cluster should evaluate")
 }
 
 /// Start the operator as a background subprocess.

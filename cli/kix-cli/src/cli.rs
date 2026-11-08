@@ -144,6 +144,8 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "images",
             "compliance",
             "pin",
+            "lib",
+            "doctor",
         ],
     ),
     // Only commands that evaluate through the SQLite eval cache.
@@ -348,12 +350,25 @@ pub enum Command {
     /// Generate shell completions
     Completions(CompletionsArgs),
 
+    /// Check the Kix installation
+    ///
+    /// Reports where Kix found the Kix runtime (nix, helm, kubectl, sops),
+    /// checks that its manifest.json lists the programs Kix expects, and
+    /// checks every file against its SHA-256 in the
+    /// manifest. Also reports the project's builder and where it was chosen
+    /// (kix.toml, or the default). Exits 1 when a check fails.
+    Doctor,
+
     /// Compliance exports: SBOM, SLSA attestations, audit bundles
     Compliance(ComplianceArgs),
 
     /// Resolve image references and record them in a committed pin file
     #[command(subcommand)]
     Pin(PinCommand),
+
+    /// Manage the Kix library this project pins in flake.lock
+    #[command(subcommand)]
+    Lib(LibCommand),
 
     /// Run an external `kix-<NAME>` plugin from `PATH`
     #[command(external_subcommand)]
@@ -393,11 +408,33 @@ impl Command {
             Command::Snapshot(a) => match &a.command {
                 SnapshotCommand::Save(s) => Some(&s.cluster),
             },
-            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
-                None
-            }
+            Command::Completions(_)
+            | Command::Doctor
+            | Command::Drift(_)
+            | Command::Pin(_)
+            | Command::Lib(_)
+            | Command::Plugin(_) => None,
         }
     }
+}
+
+/// Manage the Kix library this project pins in flake.lock.
+#[derive(Subcommand)]
+pub enum LibCommand {
+    /// Move this project's Kix library to the version of the installed Kix
+    ///
+    /// Locks the project's Kix library input (github:kix-run/kixpkgs) to the
+    /// tag `v<version>` of the installed Kix and writes flake.lock. It
+    /// does not change flake.nix. When flake.nix pins another release, or the
+    /// input is a local path or a fork, it says what to change by hand.
+    Update(LibUpdateArgs),
+}
+
+#[derive(clap::Args)]
+pub struct LibUpdateArgs {
+    /// Show what would change without writing flake.lock
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// Resolve container image tags to digests and record them in a committed pin file.
@@ -619,10 +656,11 @@ pub struct DiffArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Compare against a local directory instead of the live cluster: either a
-    /// previous build result (containing `kix-packages.json`) or a manifest
+    /// Compare against a local build or directory instead of the live
+    /// cluster: a previous build (its `kix.run/built-via` store path, or a
+    /// result directory containing `kix-packages.json`) or a manifest
     /// directory from `kix snapshot save` or `kix export`
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "PATH")]
     pub from: Option<String>,
 
     /// Read the target build from a `.kixbundle` file instead of evaluating.
@@ -904,9 +942,10 @@ pub struct GcArgs {
     #[arg(long, requires = "hard")]
     pub include_unattributed: bool,
 
-    /// With `--hard`, also evaluate controller-created copies of Kix resources
-    /// (objects with Kix annotations and an `ownerReferences` entry, but no
-    /// Kix apply stamp). By default `--hard` only reports them.
+    /// With `--hard`, also check copies against the build. A copy carries
+    /// Kix's labels and annotations, but Kix never wrote it: another program,
+    /// usually an operator, copied them from an object Kix made. By default
+    /// `--hard` only lists copies.
     #[arg(long, requires = "hard")]
     pub include_copies: bool,
 
@@ -1307,5 +1346,135 @@ mod tests {
         ] {
             assert!(parse_record_annotation(&refused).is_err(), "{refused}");
         }
+    }
+
+    #[test]
+    fn documented_commands_parse_with_clap() {
+        fn walk_mdx(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            let mut paths: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+            paths.sort();
+            for path in paths {
+                if path.is_dir() {
+                    walk_mdx(&path, out);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("mdx") {
+                    out.push(path);
+                }
+            }
+        }
+
+        fn extract_command_strings(mdx: &str) -> Vec<String> {
+            let mut commands = Vec::new();
+            let mut rest = mdx;
+            while let Some(start) = rest.find("<Command") {
+                let after = &rest[start..];
+                let Some(end) = after.find("/>") else {
+                    break;
+                };
+                let block = &after[..end];
+                let mut scan = block;
+                while let Some(q_start) = scan.find("\"kix ") {
+                    let after_q = &scan[q_start + 1..];
+                    let Some(q_end) = after_q.find('"') else {
+                        break;
+                    };
+                    commands.push(after_q[..q_end].to_string());
+                    scan = &after_q[q_end + 1..];
+                }
+                rest = &after[end + 2..];
+            }
+
+            for fence in ["```sh\n", "```bash\n", "```shell\n"] {
+                let mut scan = mdx;
+                while let Some(start) = scan.find(fence) {
+                    let after = &scan[start + fence.len()..];
+                    let Some(end) = after.find("```") else {
+                        break;
+                    };
+                    let body = after[..end].replace("\\\n", " ");
+                    for line in body.lines() {
+                        let trimmed = line.trim().trim_start_matches("$ ");
+                        if trimmed.starts_with("kix ") {
+                            commands.push(trimmed.to_string());
+                        }
+                    }
+                    scan = &after[end + 3..];
+                }
+            }
+            commands
+        }
+
+        fn normalize_command(raw: &str) -> Vec<String> {
+            let mut s = raw.replace("\\\n", " ");
+            for sep in [" | ", " > ", " || ", " #"] {
+                if let Some(idx) = s.find(sep) {
+                    s.truncate(idx);
+                }
+            }
+            let s = s
+                .replace(
+                    "<64-hex-characters>",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .replace("<CLUSTER>", "demo")
+                .replace("<DIR>", "/tmp/dir");
+            s.split_whitespace().map(str::to_string).collect()
+        }
+
+        let docs_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src/content/docs");
+        if !docs_root.exists() {
+            return;
+        }
+
+        let mut mdx_files = Vec::new();
+        walk_mdx(&docs_root, &mut mdx_files);
+        assert!(!mdx_files.is_empty(), "expected .mdx files in docs");
+
+        let mut checked = 0usize;
+        for file in mdx_files {
+            let content = std::fs::read_to_string(&file).expect("read mdx file");
+            for raw_cmd in extract_command_strings(&content) {
+                let argv = normalize_command(&raw_cmd);
+                assert!(
+                    !argv.iter().any(|arg| arg == "apply"),
+                    "{}: use `kix deploy` instead of `kix apply` in `{raw_cmd}`",
+                    file.display()
+                );
+                match command().try_get_matches_from(&argv) {
+                    Ok(matches) => {
+                        let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| {
+                            panic!("{}: `{raw_cmd}` failed FromArgMatches: {e}", file.display())
+                        });
+                        if let Command::Plugin(args) = &cli.command {
+                            let plugin_name = args.first().and_then(|a| a.to_str()).unwrap_or("");
+                            assert_eq!(
+                                plugin_name,
+                                "enterprise",
+                                "{}: `{raw_cmd}` fell back to external subcommand `{plugin_name}` (unknown subcommand?)",
+                                file.display()
+                            );
+                        }
+                    }
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            clap::error::ErrorKind::DisplayHelp
+                                | clap::error::ErrorKind::DisplayVersion
+                        ) => {}
+                    Err(err) => panic!(
+                        "{}: documented command `{raw_cmd}` (argv: {argv:?}) failed clap parse:\n{err}",
+                        file.display()
+                    ),
+                }
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 100,
+            "expected at least 100 documented kix commands, found {checked}"
+        );
     }
 }

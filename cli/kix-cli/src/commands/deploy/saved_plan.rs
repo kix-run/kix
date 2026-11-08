@@ -69,7 +69,7 @@ pub(super) fn check_saved_plan(
             serde_json::to_string_pretty(&comparison).into_diagnostic()?
         ),
         crate::cli::OutputFormat::Yaml => {
-            print!("{}", serde_yml::to_string(&comparison).into_diagnostic()?)
+            print!("{}", kix::yaml::to_string(&comparison).into_diagnostic()?)
         }
         _ => print!(
             "{}",

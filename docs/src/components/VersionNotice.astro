@@ -1,0 +1,37 @@
+---
+// Below the lead on every page of docs that are not the latest release:
+// main's docs, and an older minor release's.
+import { docsChannel, docsVersionLabel, latestDocsPath } from '../lib/docs-version';
+---
+
+{
+  docsChannel === 'main' && (
+    <p class="kix-version-notice">
+      These docs describe Kix's main branch, which can include changes not yet released.{' '}
+      <a href={latestDocsPath}>Read the docs for the latest release</a>.
+    </p>
+  )
+}
+{
+  docsChannel === 'archived' && (
+    <p class="kix-version-notice">
+      These docs describe Kix {docsVersionLabel}, an older release.{' '}
+      <a href={latestDocsPath}>Read the docs for the latest release</a>.
+    </p>
+  )
+}
+
+<style>
+  .kix-version-notice {
+    margin: 1.25rem 0 0;
+    border: 1px solid var(--kix-line);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    background-color: var(--kix-paper-2);
+    color: var(--kix-ink);
+    font-size: 0.875rem;
+  }
+  .kix-version-notice a {
+    color: var(--kix-accent-text);
+  }
+</style>

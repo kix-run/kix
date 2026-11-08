@@ -49,9 +49,24 @@ whenever Adam corrects writing style.
 - **Keep marketing and website copy as short as possible.** Readers scanning a
   page cannot absorb dense walls of text. Use one short sentence of setup per
   section and let the code or CLI output carry the point.
+- **No "X is A, not B" antithesis.** Avoid headings and declarative sentences
+  built around the rhetorical contrast "X is A, not B" (e.g. "Helm is a
+  fallback, not the target model", "Ownership follows fields, not whole
+  objects"). State what the thing is directly.
 
 ## Reader context
 
+- **Assume 95% of readers are unfamiliar with Nix.** Write about Kix in Kix
+  terms, not Nix internals:
+  - `kix` is the only CLI users run. Never contrast `kix` commands with raw
+    `nix` commands (do not write "evaluate with `kix check` rather than
+    `nix build` or `nix flake check`").
+  - Say "Kix's local store" instead of "the local Nix store" or `/nix/store`.
+  - Say "resource", "built manifest", or "content-addressed manifest" instead
+    of "Nix store derivation" or "derivation".
+  - Teach the small subset of Nix expression syntax users write in `.nix`
+    files, and keep Nix internal mechanisms (such as string context) confined
+    to deep-dive architecture sections where that mechanism is the topic.
 - **Do not introduce rejected, nonexistent, or internal alternatives merely to
   contrast them with the shipped design.** Describe the current model directly.
   For example, "Kix reads the committed value during evaluation" gives the
@@ -71,6 +86,26 @@ whenever Adam corrects writing style.
   contexts: terminal commands (`$ kix check`), code snippets
   (`kix.packages.postgres`), file names (`stack.kix`), event names/storage
   keys, and the mono-font logo wordmark.
+
+## Names for the parts of Kix
+
+Use one name for each part, everywhere: errors, warnings, log lines, `kix
+doctor` output, help text, docs, skills, and the changelog. Errors that
+compare versions name both sides with these nouns and their versions.
+
+| Part | Name | Not |
+|---|---|---|
+| The product, and the installed tool when you mean the tool | **Kix** ("Kix 0.8.1", "Upgrade Kix to 0.8.1") | "the kix binary", "the kix program", "this kix", "the Kix CLI", "the Kix release" for the installed tool |
+| What a person types | `kix`, in code font, only for a command line or a command name (`kix lib update`, "run `kix build`") | bare lowercase kix in prose |
+| The Nix code a project pins in `flake.lock` | **the Kix library** ("This project's Kix library is 0.8.0") | "kixpkgs" in user-facing text, except as the flake input or repository name |
+| The programs that ship with Kix in `libexec/kix` (Nix, Helm, kubectl, sops) | **the Kix runtime**; one program in it is "the Helm in the Kix runtime" | "bundled programs", "bundled runtime", "Kix's programs", "runtime directory" except where the folder itself is meant |
+| Where Kix keeps fetched and built files (`~/.cache/kix/store`) | **Kix's local store** | "Kix's store", "the local build cache", "the evaluation store", "the Kix store" |
+| The file a person downloads | **the release archive** | "the Kix download", "the tarball" |
+| How a project is built (`builder` in `kix.toml`) | **builder**, named by its value in code font: "the `nix` builder", "the default builder (`kix`)" | "mode", "backend" |
+
+A version is a property of the thing: "Kix 0.8.1", "the Kix library 0.8.0",
+"Helm 4.3.1 in the Kix runtime". Say "a matching version" or "the same
+version" rather than "the same release" when two parts must agree.
 
 ## Messaging constraints (kix startup positioning)
 

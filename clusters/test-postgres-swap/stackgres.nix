@@ -7,14 +7,18 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (import ./consumer.nix { inherit packages; })
-    {
-      instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
-      instances.db.pg.package = packages.stackgres-cluster;
-      instances.app.metabase-db = {
-        package = packages.stackgres-database;
-        # Test values only.
-        config.password = "swap-fixture-password";
-      };
-    }
+    (
+      { ref, ... }:
+      {
+        instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+        instances.db.pg.package = packages.stackgres-cluster;
+        instances.app.metabase-db = {
+          package = packages.stackgres-database;
+          deps.postgres = ref.db.pg;
+          # Test values only.
+          config.password = "swap-fixture-password";
+        };
+      }
+    )
   ];
 }

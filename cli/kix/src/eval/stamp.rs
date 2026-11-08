@@ -10,6 +10,7 @@
 //! - `kix.run/activations`: activation identity hashes, set during apply
 //!
 //! Note: `kix.run/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
+//! So is `kix.run/holds-data`, because it comes from the kind's declaration.
 
 use std::path::PathBuf;
 
@@ -85,8 +86,8 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
         // For Activation CRs:
         // - Rename to include identity hash so each deploy creates a distinct CR
         //   (enabling supersede/rollback lifecycle).
-        // - Add kix.run/built-via annotation with the activation result dir path
-        //   so rollback can find manifests without a nix build.
+        // - Add kix.run/built-via annotation with the build's store path so
+        //   rollback can find manifests without evaluating the flake.
         let is_record = crate::manifest::lifecycle::is_record(&res.manifest);
         if is_record {
             let hash_prefix = &entry.identity_hash[..12.min(entry.identity_hash.len())];
@@ -110,11 +111,9 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
         let mut new_anns = serde_json::Map::new();
 
         if is_record {
-            // Store the activation result dir path so rollback/deploy can
-            // load manifests directly from the nix store without rebuilding.
             new_anns.insert(
                 keys::BUILT_VIA.to_string(),
-                serde_json::Value::String(graph.result_dir.to_string_lossy().to_string()),
+                serde_json::Value::String(graph.built_via.to_string_lossy().to_string()),
             );
         }
         new_anns.insert(

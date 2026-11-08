@@ -22,7 +22,7 @@ let
   ciliumPackage = import ../../../packages/cilium;
   rke2 = import ../../flavors/rke2.nix;
 
-  # Stands in for kix/lib/helm.nix, which needs nixpkgs to render a chart.
+  # Stands in for kix/lib/helm.nix, whose renders only `kix` can produce.
   # The chart delivery's root and parts are kept; the chart's own resources
   # are replaced by the ConfigMap `cilium-values`.
   stubHelm = {

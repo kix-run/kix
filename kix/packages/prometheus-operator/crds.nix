@@ -94,23 +94,37 @@ let
     defaults.requests.memory = "200Mi";
   };
 
+  # Kinds that configure the operator's workloads. Deleting one loses no
+  # data, and none of them runs pods.
+  settings =
+    file:
+    vendored file
+    // {
+      holdsData = false;
+      usesAtLeast = _: { };
+    };
+
 in
 {
   crds = {
-    alertmanagerConfigs = scope.mkCRD (vendored "alertmanagerconfigs.monitoring.coreos.com.json");
+    alertmanagerConfigs = scope.mkCRD (settings "alertmanagerconfigs.monitoring.coreos.com.json");
     alertmanagers = scope.mkCRD (
       vendored "alertmanagers.monitoring.coreos.com.json"
       // {
         readiness = available;
+        # Silences and the notification log live on the Alertmanager volumes.
+        holdsData = true;
         usesAtLeast = usesAtLeastFor (singleSet "alertmanager");
       }
     );
-    podMonitors = scope.mkCRD (vendored "podmonitors.monitoring.coreos.com.json");
-    probes = scope.mkCRD (vendored "probes.monitoring.coreos.com.json");
+    podMonitors = scope.mkCRD (settings "podmonitors.monitoring.coreos.com.json");
+    probes = scope.mkCRD (settings "probes.monitoring.coreos.com.json");
     prometheusAgents = scope.mkCRD (
       vendored "prometheusagents.monitoring.coreos.com.json"
       // {
         readiness = available;
+        # An agent forwards samples and keeps only a write-ahead log.
+        holdsData = false;
         # Skip DaemonSet mode because the pod count depends on cluster nodes.
         usesAtLeast =
           cr:
@@ -127,6 +141,8 @@ in
       vendored "prometheuses.monitoring.coreos.com.json"
       // {
         readiness = available;
+        # The time series database lives on the Prometheus volumes.
+        holdsData = true;
         usesAtLeast = usesAtLeastFor {
           container = "prometheus";
           pods = replicasTimesShards;
@@ -141,13 +157,15 @@ in
         };
       }
     );
-    prometheusRules = scope.mkCRD (vendored "prometheusrules.monitoring.coreos.com.json");
-    scrapeConfigs = scope.mkCRD (vendored "scrapeconfigs.monitoring.coreos.com.json");
-    serviceMonitors = scope.mkCRD (vendored "servicemonitors.monitoring.coreos.com.json");
+    prometheusRules = scope.mkCRD (settings "prometheusrules.monitoring.coreos.com.json");
+    scrapeConfigs = scope.mkCRD (settings "scrapeconfigs.monitoring.coreos.com.json");
+    serviceMonitors = scope.mkCRD (settings "servicemonitors.monitoring.coreos.com.json");
     thanosRulers = scope.mkCRD (
       vendored "thanosrulers.monitoring.coreos.com.json"
       // {
         readiness = available;
+        # Recorded rule results live on the ruler volumes.
+        holdsData = true;
         usesAtLeast = usesAtLeastFor (singleSet "thanos-ruler");
       }
     );

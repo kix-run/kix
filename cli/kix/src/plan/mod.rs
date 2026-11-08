@@ -29,7 +29,7 @@ mod tests;
 use diff::is_propagation_path;
 pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
-pub use planner::{CheckedPlan, OldSide, Planned, Planner, Target, keep_shared};
+pub use planner::{CheckedPlan, OldSide, Planned, Planner, Target, TargetChecks, keep_shared};
 #[cfg(test)]
 use redact::LAST_APPLIED;
 pub use redact::{
@@ -121,6 +121,15 @@ pub enum PlanEvent<'a> {
 pub enum PlanError {
     #[error("failed to connect to cluster: {0}")]
     Connect(Box<FetchError>),
+    /// The build is bound to another Kubernetes cluster, names none while
+    /// this one accepts only builds that name it, or would deploy a cluster
+    /// that Kix 0.6 named `cluster` under a new name.
+    #[error("{0}")]
+    Binding(Box<crate::cluster::binding::BindingError>),
+    /// The build was checked against a Kubernetes version this cluster
+    /// does not run.
+    #[error("{0}")]
+    KubernetesVersion(Box<crate::cluster::kubernetes_version::VersionError>),
     #[error("{0}")]
     Discovery(Box<FetchError>),
     #[error("{0}")]

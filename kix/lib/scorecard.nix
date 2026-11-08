@@ -267,6 +267,9 @@ rec {
       ruleOverrides ? { },
       maxSeverity ? "error",
       owner ? null,
+      # The resource objects behind `resources`, for rules that need a
+      # resource's identity path or its declared dependencies.
+      resourceObjects ? [ ],
       # Inputs for the architecture.annotationDomainOwnership rule.
       annotationDomainIndex ? { },
       resolvedDepTargets ? [ ],
@@ -292,6 +295,7 @@ rec {
         ctx = {
           inherit
             resources
+            resourceObjects
             parts
             config
             meta

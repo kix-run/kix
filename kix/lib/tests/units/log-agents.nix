@@ -304,16 +304,17 @@ in
         })).args;
     in
     (
-      lokiLogsRefuses [ "${lokiWho}extraArgs sets \"--config-dir\", which the package owns" ] {
-        extraArgs = [
-          "--config-dir"
-          "/x"
-        ];
-      }
-      && lokiLogsRefuses [ "${lokiWho}extraArgs sets \"-c=/x\", which the package owns" ] {
+      lokiLogsRefuses [ "${lokiWho}extraArgs sets \"--config-dir\", which this package does not accept" ]
+        {
+          extraArgs = [
+            "--config-dir"
+            "/x"
+          ];
+        }
+      && lokiLogsRefuses [ "${lokiWho}extraArgs sets \"-c=/x\", which this package does not accept" ] {
         extraArgs = [ "-c=/x" ];
       }
-      && lokiLogsRefuses [ "${lokiWho}extraArgs sets \"-c/x\", which the package owns" ] {
+      && lokiLogsRefuses [ "${lokiWho}extraArgs sets \"-c/x\", which this package does not accept" ] {
         extraArgs = [ "-c/x" ];
       }
       &&
@@ -568,7 +569,7 @@ in
     in
     (
       guard [ "-c/etc/x" ] == {
-        thrown = "pkg ns/inst: extraArgs sets \"-c/etc/x\", which the package owns: remove it.";
+        thrown = "pkg ns/inst: extraArgs sets \"-c/etc/x\", which this package does not accept: remove it.";
       }
       && builtins.isAttrs (guard [ "-c" ])
       && builtins.isAttrs (guard [ "-c=/x" ])

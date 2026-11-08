@@ -46,7 +46,7 @@ pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> 
     };
 
     let text = match output::format() {
-        OutputFormat::Yaml => serde_yml::to_string(&statement).into_diagnostic()?,
+        OutputFormat::Yaml => kix::yaml::to_string(&statement).into_diagnostic()?,
         _ => serde_json::to_string_pretty(&statement).into_diagnostic()?,
     };
     println!("{text}");

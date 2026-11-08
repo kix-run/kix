@@ -65,6 +65,22 @@ impl K8sEventObserver {
         }
     }
 
+    /// Publish one Warning Event with `reason` and `note` on the record,
+    /// waiting for the apiserver's answer. A failure to publish is logged,
+    /// since the record's status already carries the note.
+    pub async fn warn_now(&self, reason: &str, note: &str) {
+        let ev = KEvent {
+            type_: EventType::Warning,
+            reason: reason.to_string(),
+            note: Some(note.to_string()),
+            action: reason.to_string(),
+            secondary: None,
+        };
+        if let Err(e) = self.recorder.publish(&ev, &self.reference).await {
+            tracing::debug!(error = %e, reason, "failed to publish K8s Event");
+        }
+    }
+
     fn spawn_publish(&self, ev: KEvent) {
         let recorder = self.recorder.clone();
         let reference = self.reference.clone();
@@ -176,6 +192,13 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
             reason: "BestEffortFailed".into(),
             note: Some(format!("{what} failed: {message}")),
             action: "Degraded".into(),
+            secondary: None,
+        }),
+        DeployEvent::FieldsNotKept { resource, fields } => Some(KEvent {
+            type_: EventType::Warning,
+            reason: "FieldsNotKept".into(),
+            note: Some(kix::cluster::kept::describe(&resource.display_id(), fields)),
+            action: "Applied".into(),
             secondary: None,
         }),
     }

@@ -737,7 +737,10 @@ in
     let
       ms = activationCluster [
         {
-          instances.infra.provider.package = xProvider { who = "managed"; };
+          instances.infra.provider.package = xProvider {
+            who = "managed";
+            scope = "cluster";
+          };
           instances.appns.consumer.package = xConsumer { optional = true; };
         }
       ];

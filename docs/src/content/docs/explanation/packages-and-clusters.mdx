@@ -1,0 +1,77 @@
+---
+title: "Packages and clusters"
+description: "Why Kix splits reusable application packages from cluster configuration and environment flavors, while keeping standard Kubernetes resource schemas."
+---
+
+In many Kubernetes repositories, application flags, cloud storage classes, ingress annotations, and node-sizing rules end up tangled together in the same Helm `values.yaml` or Kustomize overlay. Moving an application from a laptop cluster to production then requires editing the application's own files. Kix avoids this by splitting configuration into three layers: reusable **packages**, **cluster** composition files, and environment **flavors**.
+
+:::note[Helpful background]
+- [03. Project skeleton and flake shape](/docs/tutorials/03-project-skeleton-and-flake-shape/): See how a `cluster.nix` file places packages into namespaces.
+- [07. Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/): Build a small Kix package from scratch and inspect the resources it produces.
+- [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): Switch a cluster between local and production environments using flavors.
+- [Kubernetes Objects](https://kubernetes.io/docs/concepts/overview/working-with-objects/): Standard Kubernetes `apiVersion`, `kind`, `metadata`, and `spec` structure, which Kix preserves directly.
+:::
+
+## The three personas
+
+Even on a small team where one engineer wears every hat, Kix organizes APIs around three distinct responsibilities:
+
+| Persona | Owns | Focus |
+| --- | --- | --- |
+| **Application maintainer** | Package definitions (`kix/packages/` or local package files) | What the workload needs to run: container images, ports, health probes, configuration options, and abstract dependencies such as a Postgres database or persistent volume. |
+| **Platform team** | Cluster composition and shared modules (`cluster.nix`, `platform.nix`) | Which implementations satisfy those dependencies across the cluster: which database operator runs, which ingress controller handles public routes, and which scorecard policies apply. |
+| **Cluster operator** | Cluster environment settings, flavors, and day-2 workflows (`kix.flavors.*`, `cluster.capabilities`) | What the underlying cluster provides: single-node kind versus multi-zone cloud, CNI enforcement, availability levels, drift detection, and rollbacks. |
+
+When a concern leaks into the wrong layer, reuse breaks down. For example:
+
+- If an application package hardcodes `storageClassName = "gp3"`, that package can no longer run on a local kind cluster or a bare-metal cluster without edits. Instead, the package asks for a `storage` dependency, and the cluster decides how to provision it.
+- If a cluster file defines raw Deployments and ConfigMaps inline, those resources cannot be instantiated twice for preview and production environments or tested in isolation. Putting resource construction in a package keeps the cluster file focused on topology and configuration.
+- If a cluster flavor sets per-application options, switching a cluster from `kix.flavors.kind` to `kix.flavors.eks` changes application behavior in surprising ways. Flavors only describe cluster capabilities, infrastructure role bindings, and platform-provided imports.
+
+## Packages versus instances
+
+A **package** is a reusable function that takes a per-instance `scope`, library helpers, and resolved dependencies, and returns a set of Kubernetes resources. An **instance** is one configured placement of a package inside a namespace in a cluster.
+
+This boundary works because packages declare *what* they need while clusters decide *which* instance provides it:
+
+1. **Packages request dependencies by role or service name.** A package's `build` function asks for `{ database, storage, ingressNginx ? null, ... }`. It does not know whether `database` is an in-cluster CloudNativePG cluster, a StackGres database, or an external RDS instance declared with `kix.mkImport`.
+2. **`out` is the public contract.** A consuming package never reaches into another package's internal Deployments or ConfigMaps. Instead, it reads the provider's `out` surface (`database.out.host`, `database.out.port`, `database.out.credentials.out.keyRef "password"`). Any provider that exposes the same `out` attributes can satisfy the dependency.
+3. **`scope` isolates instances.** When a cluster instantiates the same package twice (even in the same namespace), Kix evaluates the package function separately for each instance. Each evaluation receives its own `scope.instanceName`, `scope.namespaceName`, and `scope.selectorLabels`, so generated resource names and pod selectors do not collide.
+
+Because the contract between packages is typed data and builders on `out`, platform teams can swap an underlying provider or run the same application stack in local kind and multi-node production without editing package code.
+
+:::tip[Try it as a tutorial]
+Work through [Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/) and [Reusing packages](/docs/tutorials/10-reusing-packages/) to see how `scope`, `options`, and `out` work in practice.
+:::
+
+## Kix as a strict Kubernetes superset
+
+Kix sits one step before YAML: it compiles high-level Nix definitions into standard Kubernetes manifests. A core rule of the Kix DSL is to remain a **strict superset of Kubernetes**, never a proprietary substitute.
+
+In practice, that rule governs three design choices:
+
+### Standard Kubernetes vocabulary over invented fields
+
+Whenever a standard Kubernetes field expresses an intent, Kix uses the Kubernetes field name and structure rather than inventing a parallel schema. `scope.mkResource` and `scope.mkDeployment` accept real `apiVersion`, `kind`, and `spec` trees. Composition helpers such as `kix.port` and `kix.mkEnvVars` return standard Kubernetes container fragments that you can inspect or merge with ordinary Nix operators.
+
+The annotations Kix adds to compiled manifests (`kix.run/identity-hash`, `kix.run/depends-on`, `kix.run/package`) exist strictly for dependency tracking, change detection, and ownership bookkeeping. If you stop using Kix and export your cluster with `kix export --for=exit`, you are left with ordinary Kubernetes manifests that `kubectl` and standard controllers already understand.
+
+### Automation over brevity
+
+Kix helpers exist to prevent classes of mistakes at evaluation time:
+
+For example, `scope.mkDeployment` requires `spec.selector.matchLabels` and automatically copies those labels into `spec.template.metadata.labels` (or verifies that custom template labels are a superset). It also checks that container resource limits are at least as large as requests, that named probe ports exist on the container, and that mounted ConfigMaps and Secrets live in the same namespace and carry dependency tracking.
+
+Similarly, `kix.service.fromWorkload` reads container ports and selector labels directly from a built workload resource so a Service does not drift out of sync with the pods it fronts.
+
+### What the DSL refuses to invent
+
+To keep compilation predictable, the Kix DSL enforces three limits on itself:
+
+- **No hidden inference on resources.** Convenience helpers derive values from explicit declarations, but Kix never guesses which of five container ports should be exposed publicly or which Secret holds a database password.
+- **Ambiguity fails evaluation.** If two instances in a cluster could satisfy a dependency, or if a Service fronts a multi-port workload without naming which port to expose, Kix stops and asks you to disambiguate rather than picking one arbitrarily.
+- **Escape hatches are always open.** When you need a Kubernetes field or resource kind that Kix's helpers do not model, you never have to wait for upstream support. At the resource level, `extra = { ... }` passes unmodeled top-level fields straight through (while refusing to shadow managed fields like `spec`), and `scope.mkResource` builds any Kubernetes object. At the package and instance level, options like `extraSpec`, `settings`, `extraArgs`, `env`, and `partsOverlays` let cluster authors customize upstream behavior while keeping dependency-owned settings guarded.
+
+:::note[Reference]
+See [Package anatomy](/docs/reference/package-anatomy/) and [Composition helpers](/docs/reference/composition-helpers/) for the builders and escape hatches available to package and cluster authors.
+:::

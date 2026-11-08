@@ -15,9 +15,19 @@ through a system that is powerful but unfamiliar. Be direct, concrete, and
 friendly. A little informal tone is fine; cleverness is not worth it if it
 makes the idea harder to grasp.
 
-The reader is expected to know Kubernetes basics, but may have little or no
-Nix experience. Nix syntax, Kix dependency wiring, and package/instance
-boundaries are the biggest places to slow down and teach deliberately.
+The reader is expected to know Kubernetes basics, but 95% of readers will have
+little or no Nix experience:
+
+- Teach the small subset of Nix expression syntax that users write in `.nix`
+  files, and slow down at Kix dependency wiring and package/instance boundaries.
+- Treat `kix` as the only CLI the reader runs. Do not contrast `kix` commands
+  with `nix build`, `nix flake check`, or `nix eval` in normal guides, and do
+  not assume the reader has Nix installed separately.
+- Explain Kix behavior in Kix terms ("Kix's local store", "content-addressed
+  manifest", "resource") rather than Nix implementation terms ("the local Nix
+  store", `/nix/store`, "Nix store derivation", "the Nix sandbox"). Keep Nix
+  internal mechanics (such as string context) in the specific Explanation or
+  Reference sections that explain how Kix works under the hood.
 
 ## Source of Truth
 
@@ -86,8 +96,6 @@ boundaries are the biggest places to slow down and teach deliberately.
   capture pipelines cannot produce, such as the deterministic response from
   `curl` against an example echo server. Add a docs comment explaining why it
   is maintained separately so future maintainers know it can drift.
-- `CommandCwd.astro` is retained only so the frozen `v0.1/` snapshot keeps
-  building. Do not import it in new pages.
 - Fenced code blocks (```` ```nix ````, ```` ```text ````, ```` ```yaml ````)
   remain the right tool for *file contents* (the snippet the reader edits or
   pastes into a file). `Command` is for *executions* (what the reader runs in
@@ -110,8 +118,47 @@ boundaries are the biggest places to slow down and teach deliberately.
   check CLI facts against `cli/kix-cli/src/cli.rs` and command behavior against
   `cli/kix-cli/src/commands/`.
 - Treat older broad docs as source material, not truth. Verify before importing
-  from `docs-legacy/`, `docs-legacy/HANDBOOK.md`, `docs-legacy/FEATURE-CATALOG.md`,
-  `kix/lib/architecture.md`, `ROADMAP.md`, `MAJOR_FEATURES.md`, or raw `v2_discussions/` notes.
+  from `kix/lib/architecture.md`, `ROADMAP.md`, or raw `v2_discussions/` notes.
+
+## Page Openings, Titles, and `Helpful background`
+
+- **Keep page titles and filenames short and scannable.** Prefer concise noun
+  phrases for Explanation and Reference chapters (`Availability levels` in
+  `availability-levels.mdx`, `Helm integration` in `helm-integration.mdx`,
+  `Network policy` in `network-policy.mdx`). Rename the `.mdx` file whenever a
+  page title changes so the URL slug matches the title.
+- **Frontmatter `description` is metadata only.** `PageTitle.astro` does not
+  render `description` under the `<h1>`. Keep `description` accurate in
+  frontmatter for `<head>` metadata and `llms.txt`, and never write dense
+  "How X drives Y, Z, and W" taglines at the top of a page.
+- **Start Reference and Explanation pages with a plain-English warm-up
+  paragraph.** Ease a non-expert into the page in 2 to 4 sentences: explain
+  what problem or part of the workflow the page covers and when to reach for
+  it before introducing internal vocabulary or code.
+- **Follow the warm-up with a `:::note[Helpful background]` box.** List 3 to 4
+  bullet links to prerequisite material so readers can get up to speed before
+  diving in. Link to Kix Tutorials, Explanation pages, Reference pages, or
+  authoritative external documentation (such as official Kubernetes or Nix
+  docs), with a short description after each link explaining why to read it:
+
+  ```md
+  :::note[Helpful background]
+  - [07. Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/): walk through a complete Kix package from top to bottom.
+  - [Packages and clusters](/docs/explanation/packages-and-clusters/): see how packages separate application authoring from cluster-specific configuration.
+  - [Module system (nix.dev)](https://nix.dev/tutorials/module-system/): review the NixOS `lib.mkOption` and `lib.types` system that Kix packages use for option declarations.
+  :::
+  ```
+
+- **Build-time link badges, tooltips, and external icons are automatic.**
+  `src/lib/rehype-link-types.mjs` inspects every Markdown link at build time:
+  - Inside `:::note[Helpful background]`, internal links automatically render a
+    monospace pill badge (`TUTORIAL`, `HOW-TO`, `EXPLANATION`, `REFERENCE`).
+  - External links (`http://`, `https://`) everywhere automatically render a
+    Wikipedia-style external link icon.
+  - Internal links in body prose and tables automatically get a hover tooltip
+    showing `<Quadrant> · <Page Title>` (plus `· #<Section>` for anchor links).
+  Write ordinary Markdown links; do not hand-code badge spans or external-link
+  arrows in `.mdx` files.
 
 ## Diátaxis Mode
 
@@ -193,11 +240,11 @@ when you already know the model and just need the steps.
 :::
 
 :::note[Reference]
-See [`deps`](/docs/reference/instance-schema/deps/) for the exact instance schema.
+See [`deps`](/docs/reference/instances-and-composition/#deps) for the exact instance schema.
 :::
 
 :::note[Explanation]
-See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
+See [Dependency resolution and why explicit deps matter](/docs/explanation/the-dependency-graph/#dependency-resolution-and-explicit-deps)
 for the design reasoning behind this rule.
 :::
 ```
@@ -344,25 +391,24 @@ scenario that can exercise a group of related guides.
   Kubernetes behavior such as deployment, readiness, drift, rollback, or
   ownership transitions.
 - Reader-facing commands must be commands a developer would reasonably run
-  to complete the task. Do not expose capture setup, fixture selection, or a
-  long `jq` projection as though it were part of the workflow.
-- Use `stdoutJq` only as capture-time plumbing when a command's full JSON
-  output would obscure the object being discussed. The generated sidecar
-  keeps the original command and labels the rendered result "Output excerpt".
-  Prefer the command's normal text output for introductory `diff`, `drift`,
-  `status`, and similar workflows. Show a `jq` pipeline only when JSON
-  processing is itself part of the reader's task, and keep it short.
+  to complete the task. **Never put `jq` commands (`| jq ...`, `jq -e ...`) or
+  `grep` test-assertion commands in documentation pages.** Instead, show the
+  `kix` or `kubectl` command directly and state in a sentence which fields to
+  check in the output.
+- Use `stdoutJq` only as capture-time plumbing in `docs/nix/captures.nix` when
+  a command's full JSON output would obscure the object being discussed. The
+  generated sidecar keeps the original `kix` command (without `| jq`) and
+  labels the rendered result "Output excerpt". Prefer the command's normal text
+  or YAML output where possible.
 - Prefer a `shell` step when the command the reader types is a command
-  *line* rather than a single binary with arguments: a pipe, a redirect, or a
-  second tool such as `find`, `grep`, `sort`, or `jq`. `kix` (and `kubectl`,
-  live) are already on PATH carrying the driver's flags, so write the command
-  exactly as the page shows it.
-- Use a string `prepare` for a documented command whose output teaches
-  nothing but whose flags must keep working: `kix build demo > manifests.yaml`,
-  a `jq -e` assertion on a generated file, an `--output yaml` variant. It runs
-  on every regeneration and writes no sidecar, so a page can never keep
-  showing a flag the CLI has dropped. This is the main way a page's commands
-  stay honest without adding noise to the page.
+  *line* rather than a single binary with arguments, such as a shell redirect
+  (`kix build demo > demo.yaml`). `kix` (and `kubectl`, live) are already on
+  PATH carrying the driver's flags, so write the command exactly as the page
+  shows it.
+- Use a string `prepare` in `docs/nix/captures.nix` for a capture-only check
+  that must not appear on the page (such as verifying a generated file in the
+  capture harness). It runs on every regeneration and writes no sidecar. Do not
+  copy `prepare` assertions into `.mdx` files.
 - Every step is bounded by `timeout` (default 600s). A step that stops making
   progress fails the run by name. Raise it for a genuinely slow command; do
   not raise it to hide one that stopped terminating.

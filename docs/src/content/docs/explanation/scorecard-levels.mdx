@@ -1,0 +1,67 @@
+---
+title: "Scorecard levels"
+description: "Why Kix splits compile-time checks into always-on structural validation and configurable scorecard rules across four scopes."
+---
+
+Catching a misconfigured resource before `kubectl apply` is much cheaper than debugging a broken rollout in production. Kix runs two kinds of checks when you build a cluster: **always-on validation checks** that stop the build if manifests have broken references or mismatched selectors, and **scorecard rules** that grade your cluster against security, reliability, and operational best practices.
+
+:::note[Helpful background]
+- [12. Scorecards and compile-time policy](/docs/tutorials/12-scorecards-and-compile-time-policy/): A hands-on walkthrough of running the scorecard, capping severities, and fixing findings.
+- [Scorecard and rules](/docs/reference/scorecard-and-rules/): Reference tables for all 30 built-in scorecard rules and the custom rule schema.
+- [Validation checks](/docs/reference/validation-checks/): Reference tables for the always-on structural checks that run on every cluster build.
+:::
+
+## The four scorecard levels
+
+Not every policy question can be answered by looking at a single YAML document in isolation. Checking whether a container drops Linux capabilities only requires inspecting one Deployment, whereas checking whether a namespace has a default-deny NetworkPolicy requires seeing every resource in that namespace at once.
+
+To give each rule the exact context it needs, Kix runs scorecard rules at four scopes:
+
+| Level | What the rule sees | Example questions |
+| --- | --- | --- |
+| `manifest` | One rendered Kubernetes resource | Does every container set CPU and memory requests? Does this pod run as a non-root user? |
+| `package` | One active package instance and all resources it produces | Does the package declare a team owner in `meta.owner`? Are its third-party annotations backed by a dependency? |
+| `namespace` | All active instances and resources in one Kubernetes namespace | Does this namespace contain a `NetworkPolicy` or `ResourceQuota`? |
+| `cluster` | Every active instance and resource across the entire cluster | Are resource names and cross-namespace policies consistent across the whole build? |
+
+The level of a rule describes *what evidence it inspects*, while severity is configured separately. A `manifest` rule can be a build-stopping `error`, and a `cluster` rule can be an informational hint.
+
+## Rules score what ships
+
+Scorecard rules evaluate the final compiled cluster after every helper and synthesis pass has run:
+
+- **Manifest and package rules** see every resource attached to an instance, including resources created by typed builders and derived resources like generated `PodDisruptionBudget` and `CiliumNetworkPolicy` objects.
+- **Namespace and cluster rules** run after dependency resolution has determined which instances are active. Optional instances (`optional = true`) that were never pulled in by a consumer are excluded so dormant packages do not trigger false findings.
+
+Because rules inspect the finished manifests, a policy check tests what Kix will actually apply to Kubernetes after defaults, overlays, and automatic derivations have run.
+
+## Findings and enforcement are separate decisions
+
+When adopting a policy tool on an existing cluster, turning on all 30 built-in rules at once can produce a wall of errors that blocks every deployment until the whole backlog is cleaned up. Kix avoids that trap by separating a rule's **severity** from the cluster's **enforcement cap** (`scorecard.maxSeverity`):
+
+1. Each rule declares its own severity (`error`, `warning`, or `info`), and `scorecard.ruleOverrides` (`byRule`, `byOwner`, and `byNamespace`) can adjust that severity for specific rules, package owners, or namespaces.
+2. `scorecard.maxSeverity` then caps the effective severity across the cluster. Because `maxSeverity` defaults to `"warning"`, even rules that declare `severity = "error"` report as warnings on a new cluster rather than failing the build.
+3. When your team is ready to enforce policy in CI, setting `scorecard.maxSeverity = "error"` turns those error-severity findings into hard build failures without changing a single rule definition.
+
+Capping a rule is different from disabling it (`scorecard.ruleOverrides.byRule."<rule>".enabled = false`). A capped rule still runs and appears in `kix check` (and `kix check --sarif`) output so you can track cleanup progress; a disabled rule is skipped entirely.
+
+## Cross-resource validation at cluster evaluation time
+
+Scorecards are designed for organizational standards and best practices where teams may want to phase in enforcement gradually or exempt a legacy namespace. Structural errors are different: if a Deployment mounts a ConfigMap that does not exist, or if a Service selector matches zero pods in its namespace, the manifest is broken and will fail in Kubernetes.
+
+For that reason, Kix runs a separate suite of **always-on cross-resource validation checks** over the finished manifest set on every evaluation. These compiler checks are never capped by `scorecard.maxSeverity` and cannot be turned off with scorecard overrides:
+
+- **Target existence:** Every workload `serviceAccountName`, ConfigMap volume, PVC `claimName`, `PriorityClass`, HPA `scaleTargetRef`, `RoleBinding` `roleRef`, and Ingress backend `Service` must exist in the build (or be explicitly marked external with `kix.untrackedRef` or an import marker).
+- **Selector and port coherence:** Every `Service`, `NetworkPolicy`, and `PodDisruptionBudget` pod selector must match at least one workload pod template in its namespace, every named `targetPort` on a Service must exist on a selected container, and no `Job` pod template may match a `Service` selector.
+- **StorageClasses, CRDs, and single defaults:** Every PVC or volume claim template `storageClassName` must match a rendered or imported `StorageClass` (or `PersistentVolume`). Every custom resource outside Kubernetes' built-in API groups must depend through `kix.run/depends-on` on a CRD, CRD reference marker, or `APIService` that serves its API version. At most one default `StorageClass`, `IngressClass`, or global-default `PriorityClass` may exist in the cluster.
+- **Secret and ConfigMap key verification:** When a container reads a specific key by name (`secretKeyRef`, `configMapKeyRef`, volume `items`, or `subPath`), Kix verifies that the target ConfigMap data or Secret key declaration (`kix.run/secret-keys` or `kix.run/import-secret-keys`) actually includes that key.
+
+Keeping structural validation separate from the scorecard means you can relax scorecard enforcement on a development cluster while still knowing that Kix will catch broken references and mismatched selectors before you deploy.
+
+:::tip[Apply this to a cluster]
+See [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/) to select and extend rules, then [Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/) when your cluster is ready to enforce findings in CI.
+:::
+
+:::note[Reference]
+See [Scorecard and rules: rule schema](/docs/reference/scorecard-and-rules/#rule-schema) for the exact context passed at each level, [Scorecard and rules: severity override schema](/docs/reference/scorecard-and-rules/#severity-override-schema) for override precedence, and [Validation checks](/docs/reference/validation-checks/) for the full list of always-on compiler checks.
+:::

@@ -38,10 +38,11 @@ rule. Using one as an address can therefore pass `kix check` and still produce
 a blocked connection at runtime.
 
 When a workload references a Service without using one of its addresses, Kix
-emits a `no netpol edge derived` trace with the Service name and a suggestion
-to use `out.fqdn` or `out.url`. This is a warning, not a check failure. If the
-reference is intentionally structural, such as a label or display value, mark
-it with `facts.refOnly` to suppress the warning.
+emits a warning that `workload references Service '<namespace>/<name>' without
+using its address. Kix has not generated a network policy for this connection`,
+along with a suggestion to use `out.fqdn` or `out.url`. This is a warning, not
+a check failure. If the reference is intentionally structural, such as a label
+or display value, mark it with `facts.refOnly` to suppress the warning.
 
 ## Enable policy generation
 

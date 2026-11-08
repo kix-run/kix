@@ -112,10 +112,9 @@ and Kix Enterprise read. It holds:
   so only a build manifest the cluster would refuse is replaced by a size note.
 
 The file is a seekable zstd file, the container a bundle uses. Any zstd tool
-reads it: `zstd -dc plan.kixplan` gives the header, JSON, followed by each
-manifest, so `zstd -dc plan.kixplan | jq -s '.[0].plan'` prints the `Plan`
-document. The same plan gives the same bytes from the same Kix. The
-header's JSON Schema is `cli/kix-cli/schema/kixplan.schema.json`.
+reads it: `zstd -dc plan.kixplan` prints the JSON header object followed by
+each manifest JSON document. The same plan gives the same bytes from the same
+Kix. The header's JSON Schema is `cli/kix-cli/schema/kixplan.schema.json`.
 
 | Header key | Content |
 | --- | --- |
@@ -139,7 +138,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | --- | --- |
 | `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-10-07"`. It changes only when the document changes in a way that is not backward compatible. |
 | `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --current-activation` or `kix diff --from <build>`; `live_read` from `kix diff` against the cluster or a snapshot. |
-| `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the Nix store path of the binary, `null` for a binary built outside the store. |
+| `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the store path of the binary, or `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--current-activation`). `null` on a first deploy. |
@@ -267,7 +266,10 @@ case "$status" in
 esac
 ```
 
-A build with no resources prints no plan, writes no file, and exits `0`.
+A build with no resources prints `Nothing to deploy.` and exits `0` when
+`--save` is not set. With `--save`, it fails with
+`the build has no resources, so there is no plan to save`, writes no file, and
+exits `1`.
 
 To deploy exactly what a reviewer approved, pass the plan file to
 [`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan),

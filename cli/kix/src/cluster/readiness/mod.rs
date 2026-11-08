@@ -18,6 +18,7 @@ mod tests;
 
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use kube::{
     api::{Api, DynamicObject},
     client::Client,
@@ -28,28 +29,27 @@ use thiserror::Error;
 
 use super::cancel::CancelToken;
 use super::discovery;
-use super::errors::{FailureClass, classify};
 use crate::manifest::types::ResourceId;
 
 pub use declared::{check_readiness, is_immediate_kind};
 pub use imports::{ImportTarget, MalformedMarker, import_target_from_manifest};
 pub use terminal::{TerminalReason, classify_pod_terminal, classify_workload_terminal};
 
-pub(crate) use declared::daemonset_pending_restart;
+pub(crate) use declared::{check_job_ready, daemonset_pending_restart};
 pub(crate) use imports::{wait_for_expectations, wait_for_import_target};
 pub(crate) use terminal::termination_output;
 
 #[cfg(test)]
 use declared::{
-    DeclaredReadiness, check_job_ready, declared_readiness, served_crd_versions,
-    unserved_crd_versions,
+    DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, ReadyRule, declared_readiness,
+    served_crd_versions, unserved_crd_versions,
 };
 #[cfg(test)]
 use imports::{check_secret_keys, expectations, split_api_version};
 #[cfg(test)]
 use terminal::{TERMINATION_OUTPUT_LINES, workload_label_selector};
 
-use declared::{is_wait_for_first_consumer, readiness_message};
+use declared::{FailureWatch, declared_failure, is_wait_for_first_consumer, readiness_message};
 use terminal::{progress_fingerprint, scan_terminal};
 
 /// After a CRD reaches `Established=True`, the API server's discovery endpoint
@@ -160,7 +160,14 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// Before each poll iteration, scans for terminal failure signals
 /// (`ImagePullBackOff`, `CrashLoopBackOff` past threshold,
 /// `ProgressDeadlineExceeded`, or Job backoff exhausted) and returns `Failed`
-/// immediately on a match.
+/// immediately on a match. A custom resource whose `kix.run/readiness`
+/// annotation lists `failed` states ends the same way when the controller
+/// reports one of them for the current spec ([`declared_failure`]). A match
+/// counts as current when its `observedGeneration` has reached
+/// `metadata.generation`, or its condition's `lastTransitionTime` is later
+/// than `applied_at`, the time this deploy changed the object (`None` when it
+/// left the object unchanged); with neither field, the state must hold for
+/// [`DECLARED_FAILURE_GRACE`] first.
 ///
 /// Returns `Ready` on success, `Failed` on a terminal signal, `TimedOut` when
 /// either timeout budget elapses, or `Cancelled` if `cancel` is triggered.
@@ -170,6 +177,7 @@ pub(crate) async fn wait_for_ready(
     ar: &ApiResource,
     scope: &Scope,
     rid: &ResourceId,
+    applied_at: Option<DateTime<Utc>>,
     timeout: Duration,
     cancel: &CancelToken,
     on_status: impl Fn(&str),
@@ -187,6 +195,7 @@ pub(crate) async fn wait_for_ready(
     let start = Instant::now();
     let mut last_progress_at = start;
     let mut last_fingerprint = String::new();
+    let mut failure_watch = FailureWatch::default();
 
     loop {
         if cancel.is_cancelled() {
@@ -194,13 +203,6 @@ pub(crate) async fn wait_for_ready(
         }
         let obj = match api.get(name).await {
             Ok(obj) => obj,
-            // The TTL controller deletes only finished Jobs. If a Job applied
-            // by this deploy disappears while readiness is polling it, treat
-            // the deletion as successful completion.
-            Err(e) if kind == "Job" && classify(&e) == FailureClass::NotFound => {
-                on_status("Job finished and was removed by its ttlSecondsAfterFinished");
-                return Ok(ReadinessResult::Ready);
-            }
             Err(e) => return Err(ReadinessError::FetchError(e)),
         };
 
@@ -232,6 +234,15 @@ pub(crate) async fn wait_for_ready(
             return Ok(ReadinessResult::Failed {
                 message: format!("{}: {detail}", reason.as_str()),
                 output: termination_output(&scan.pods),
+            });
+        }
+
+        if let Some(message) =
+            failure_watch.observe(declared_failure(&obj, kind, applied_at), Instant::now())
+        {
+            return Ok(ReadinessResult::Failed {
+                message,
+                output: Vec::new(),
             });
         }
 

@@ -70,7 +70,6 @@ Put everything the environments share in a module they both import:
 { kix, packages }:
 
 kix.buildCluster {
-  name = "dev";
   # Modules receive `ref` and a minimal `kix` by default. Forward the full
   # `kix` and the package catalogue so shared modules can use them.
   specialArgs = { inherit kix packages; };
@@ -85,7 +84,6 @@ kix.buildCluster {
 { kix, packages }:
 
 kix.buildCluster {
-  name = "prod";
   specialArgs = { inherit kix packages; };
   modules = [
     kix.flavors.eks
@@ -113,14 +111,13 @@ Run `check` after selecting or changing a flavor:
 
 <Command {...check} />
 
-Inspect the package list to see platform imports contributed by the flavor.
-The two `import` rows come from the kind flavor, not from the cluster body:
+Inspect the package list to see platform imports contributed by the flavor (`platform-dns` and `platform-storage` come from the kind flavor):
 
 <Command {...listPackages} />
 
 :::note[Reference]
-See [Provider profiles](/docs/reference/flavors/provider-profiles/),
-[platform imports](/docs/reference/flavors/platform-imports/), and the
-[flavor capability matrix](/docs/reference/flavors/capability-matrix/) for the
+See [Provider profiles](/docs/reference/flavors-and-capabilities/#provider-profiles),
+[platform imports](/docs/reference/flavors-and-capabilities/#platform-imports), and the
+[flavor capability matrix](/docs/reference/flavors-and-capabilities/#capability-matrix) for the
 settings supplied by each flavor.
 :::

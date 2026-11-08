@@ -29,17 +29,16 @@ it, and make one config edit. The point is to feel the loop:
 ## Prerequisites
 
 - Read [Orientation: what Kix is and why it exists](/docs/tutorials/01-orientation/).
-- Install Nix with flakes enabled.
 - Have Docker, Colima, or OrbStack running.
-- Have `kind`, `kubectl`, and the `kix` CLI available. The next section shows
-  one way to get them.
+- Have `kind`, `kubectl`, and Kix available. The next section shows
+  how to install `kix`.
 
 ## Start From The Example Repo
 
-The runnable examples live in the public `kix-examples` repo:
+The runnable examples live in the `kix-examples` repo:
 
 <Command commands={[
-  "git clone https://github.com/kix-ops/kix-examples.git",
+  "git clone https://github.com/kix-run/kix-examples.git",
   "cd kix-examples",
 ]} />
 
@@ -64,10 +63,9 @@ You do not need to understand all of them yet. For now:
 ## Enter A Shell With The Tools
 
 If your machine already has `kix`, `kind`, and `kubectl` on `PATH`, you can use
-your normal shell. If you need the Kix CLI, install it from the public
-`kixpkgs` flake:
-
-<Command commands={["nix profile install github:kix-run/kixpkgs#kix"]} />
+your normal shell. If you have not installed `kix` yet, follow
+[Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+to download and unpack the release archive into `~/.local`.
 
 Keep Docker, Colima, or OrbStack running separately. kind needs a
 Docker-compatible daemon to create the local cluster.
@@ -132,7 +130,7 @@ directly:
 The first example installs an `echo-server` package instance named
 `hello-world`. Use `kix pf` to port-forward to its primary workload:
 
-<Command commands={["kix pf 02-hello-world hello-world 8080:80"]} cwd="kix-examples/" />
+<Command commands={["kix pf 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
 
 Leave that command running. In another terminal, call the service:
 
@@ -170,7 +168,7 @@ Deploy again:
 
 Port-forward and curl again:
 
-<Command commands={["kix pf 02-hello-world hello-world 8080:80"]} cwd="kix-examples/" />
+<Command commands={["kix pf 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
 
 In another terminal:
 

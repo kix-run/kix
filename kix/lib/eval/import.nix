@@ -37,6 +37,11 @@ rec {
       # `out.crds.<kind>` for `scope.mkCR` consumers and emits a CRD marker
       # while the import is active.
       crds ? [ ],
+      # Whether dependency resolution offers this import to consumers in
+      # every namespace ("cluster") or in its own namespace only
+      # ("namespace"). An environment-provided service is normally shared,
+      # so the default is "cluster".
+      scope ? "cluster",
     }:
     {
       _type = "kix-import";
@@ -48,7 +53,7 @@ rec {
         crds
         ;
       meta = {
-        inherit roles;
+        inherit roles scope;
       };
     };
 
@@ -393,6 +398,7 @@ rec {
         "factBehavior"
         "readiness"
         "usesAtLeast"
+        "holdsData"
       ];
       who = "Import instance '${namespaceName}/${instanceName}'";
       checkCrdEntry =

@@ -9,11 +9,12 @@
 // (src/lib/sidebar-topics/overrides/Sidebar.astro).
 import Search from 'virtual:starlight/components/Search';
 import SiteTitle from 'virtual:starlight/components/SiteTitle';
-import VersionSelect from 'starlight-versions/components/VersionSelect.astro';
+import VersionSelect from './VersionSelect.astro';
 import ThemeToggle from './ThemeToggle.astro';
 
 const topics = Astro.locals.starlightSidebarTopics?.topics ?? [];
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+const pathname = Astro.url.pathname.replace(/\/+$/, '') || '/';
 const installHref = `${base}/tutorials/02-local-setup-and-first-run/`;
 ---
 
@@ -39,7 +40,14 @@ const installHref = `${base}/tutorials/02-local-setup-and-first-run/`;
     topics.length > 0 && (
       <nav class="topic-tabs sl-hidden md:sl-flex print:hidden" aria-label="Documentation sections">
         {topics.map((topic) => (
-          <a href={topic.link} aria-current={topic.isCurrent ? 'true' : undefined}>
+          <a
+            href={topic.link}
+            aria-current={
+              topic.isCurrent || (topic.link.replace(/\/+$/, '') || '/') === pathname
+                ? 'true'
+                : undefined
+            }
+          >
             {topic.label}
           </a>
         ))}
@@ -93,7 +101,7 @@ const installHref = `${base}/tutorials/02-local-setup-and-first-run/`;
     opacity: 0.88;
   }
 
-  /* starlight-versions' picker, restyled to the bordered mono control. */
+  /* The version picker, restyled to the bordered mono control. */
   .version :global(label) {
     border: 1px solid var(--kix-line);
     border-radius: 6px;

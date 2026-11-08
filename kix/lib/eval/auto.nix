@@ -201,7 +201,10 @@ rec {
             ${key} = {
               inherit ns instName;
               isImport = (instCfg.package._type or "") == "kix-import";
-              scope = packageMeta.scope or "cluster";
+              scope = meta.scopeOf {
+                inherit packageMeta;
+                context = "instances.${ns}.${instName}";
+              };
             };
           }) keys
         ) (builtins.attrNames (optional.${ns} or { }))
@@ -210,31 +213,28 @@ rec {
       optionalByKey = builtins.zipAttrsWith (_: opts: opts) optionalByKeyList;
 
       # Return the reason an availablePackages entry runs once per cluster, or
-      # null. A package runs once per cluster when `meta.conflictsWith` lists
-      # `cluster:<key>` for a key it answers, or when it declares a role (which
-      # hooks.findRoleProvider restricts to one managed provider). Exclude
-      # packages with `meta.scope = "namespace"` because requesters in other
-      # namespaces cannot resolve to them.
+      # null. A package runs once per cluster when it serves the whole
+      # cluster (meta.servesCluster): dependency resolution then binds
+      # consumers in every namespace to the one declared instance.
       onePerClusterReason =
         name:
         let
+          context = "availablePackages.${name}";
           packageMeta = meta.peekPackageMeta {
             package = normalizedAvail.${name}.package;
             inherit kixlib;
           };
-          conflictKeys = builtins.filter (
-            k: builtins.elem "cluster:${k}" (packageMeta.conflictsWith or [ ])
-          ) (shelfKeys name);
+          clusterConflicts = builtins.filter (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ]);
           quoted = xs: builtins.concatStringsSep ", " (map builtins.toJSON xs);
         in
-        if (packageMeta.scope or "cluster") == "namespace" then
+        if !(meta.servesCluster { inherit packageMeta context; }) then
           null
-        else if conflictKeys != [ ] then
-          "meta.conflictsWith ${quoted (map (k: "cluster:${k}") conflictKeys)}"
-        else if (packageMeta.roles or [ ]) != [ ] then
-          "meta.roles ${quoted packageMeta.roles}"
+        else if (packageMeta.scope or null) == "cluster" then
+          "meta.scope \"cluster\""
+        else if clusterConflicts != [ ] then
+          "meta.conflictsWith ${quoted clusterConflicts}"
         else
-          null;
+          "meta.roles ${quoted packageMeta.roles}";
 
       # Build a demand item keyed for genericClosure deduplication. Key role
       # dependencies by role name so consumers across namespaces share one
@@ -282,11 +282,14 @@ rec {
         else
           "dependency '${item.depName}' of ${item.requester} has no instance";
 
-      # Select the optional instance matching a demand using the same precedence
-      # as resolveArg. Skip instances in other namespaces with
-      # `meta.scope = "namespace"`, prefer managed instances over imports, and
-      # prefer the requester's namespace over other namespaces. Throw if multiple
-      # candidates remain at the deciding tier, or return null if none match.
+      # Select the optional instance matching a demand. A demand from any
+      # namespace switches on an optional instance, because the cluster
+      # author chose where it lives; the activated instance then binds from
+      # every namespace (`demanded` in the resolution index). Skip instances
+      # in other namespaces with `meta.scope = "namespace"`, prefer managed
+      # instances over imports, and prefer the requester's namespace over
+      # other namespaces. Throw if multiple candidates remain at the deciding
+      # tier, or return null if none match.
       pickOptional =
         item:
         let

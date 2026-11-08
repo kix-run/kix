@@ -21,16 +21,8 @@ const HOW_TO_GROUPS: SectionGroup[] = [
 ];
 
 const REFERENCE_GROUPS: SectionGroup[] = [
-  { slug: 'cluster-module', label: 'Cluster module' },
-  { slug: 'package-schema', label: 'Package schema' },
-  { slug: 'instance-schema', label: 'Instance schema' },
-  { slug: 'scope-helpers', label: 'scope helpers' },
-  { slug: 'kix-helpers', label: 'kix helpers' },
-  { slug: 'out', label: 'out' },
-  { slug: 'flavors', label: 'Flavors' },
-  { slug: 'scorecard', label: 'Scorecard' },
+  { slug: '_root', label: 'Core reference' },
   { slug: 'cli', label: 'CLI' },
-  { slug: 'annotations-and-crds', label: 'Annotations and CRDs' },
   { slug: 'package-catalog', label: 'Package catalog' },
 ];
 
@@ -65,20 +57,17 @@ function formatFallbackGroupLabel(slug: string): string {
 }
 
 const KEEP_DESCRIPTION_GROUPS = new Set([
-  'cluster-module',
-  'package-schema',
-  'instance-schema',
-  'scope-helpers',
-  'kix-helpers',
+  '_root',
 ]);
 
 export const GET: APIRoute = async (context) => {
   const entries = (await getCollection('docs')).filter(isImplementedEntry);
   const siteOrigin = context.site ? context.site.origin : 'https://kix.run';
+  const basePrefix = import.meta.env.BASE_URL.replace(/\/+$/u, '') || '/docs';
 
   const formatEntryLine = (entry: (typeof entries)[number], includeDescription = false): string => {
     const id = normalizeId(entry.id);
-    const url = `${siteOrigin}/docs/${id}/`;
+    const url = `${siteOrigin}${basePrefix}/${id}/`;
     const title = entry.data.title.trim();
     if (!includeDescription) {
       return `- [${title}](${url})`;

@@ -5,8 +5,8 @@ Compare Kix-generated manifests against a live Kubernetes cluster.
 ## Quick Start
 
 ```bash
-# 1. Build Kix manifests
-nix build .#cluster-nw1 --extra-experimental-features pipe-operators
+# 1. Build Kix manifests into ./result (works for all clusters, including Helm charts)
+./scripts/kix-manifests.sh . nw1 ./result
 
 # 2. Dump the live cluster (matching only what Kix declares)
 ./scripts/kix-dump.py --match-kix ./result --context nw1-prod cluster-dump/
@@ -20,6 +20,13 @@ Or use the devenv shortcut:
 ```bash
 kix-check nw1 nw1-prod
 ```
+
+## kix-manifests.sh and cluster-checks.sh
+
+Because Helm chart fetching and rendering (`fetchHelmChart` and `importChart`) are fulfilled by Kix rather than plain `nix build`, clusters that use Helm cannot be built directly with `nix build .#cluster-<name>`.
+
+- `scripts/kix-manifests.sh <flake-dir> <cluster> <out-link>` evaluates the cluster through `kix build -o json` and writes the standard `<namespace>/<name>-<kind>.yaml` directory tree using `kix.mkManifests`.
+- `scripts/cluster-checks.sh <flake-dir> <cluster> [<rules-test.yaml>]` builds the manifest directory with `kix-manifests.sh` and runs both `kixChecks.schemaCheck` (`kubeconform`) and `kixChecks.rulesCheck` (`promtool`) against it.
 
 ## vendor-crds.py
 

@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+pub use crate::cluster::kept::NotKept;
 use crate::cluster::migrate::MigrationPair;
 use crate::cluster::scheduler::PrunePolicy;
 use crate::eval::store_graph::StoreGraph;
@@ -34,6 +35,8 @@ use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 pub const SCHEMA_VERSION: &str = "2026-10-07";
 
 /// What a deploy of a build would change, or how two things differ.
+///
+/// Later versions of Kix may add fields. Skip the ones you do not know.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Plan {
     /// The date, `YYYY-MM-DD`, of the document shape's last change that was
@@ -71,9 +74,20 @@ pub struct Plan {
     /// Writes the apiserver, an admission webhook, or the deploy itself would
     /// refuse, other than ownership conflicts.
     pub admission: Checked<AdmissionRefusal>,
-    /// Fields where the live cluster differs from the deployed build and
-    /// that this change touches.
+    /// Fields where the live cluster differs from the deployed build. From
+    /// `kix plan`, the fields this change touches. From `kix diff` against
+    /// the cluster, every field of a drifted object that the new build sets.
     pub drift: Checked<DriftChange>,
+    /// How many live objects `kix diff` could not check for drift, because
+    /// they have no applied-hash stamp or no Kix field records in
+    /// `managedFields`. Left out when there are none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub drift_unchecked: usize,
+    /// Fields the build sets that Kubernetes would not store as sent, from
+    /// the dry run of `kix plan`: a field a CRD's schema prunes, or a value
+    /// a mutating admission webhook changes. Left out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_kept: Vec<FieldNotKept>,
     /// Resources that leave the build, and what the deploy does with each.
     pub prune: Checked<PruneEntry>,
     /// Objects the dry run could not check, and why. Their entries in
@@ -85,7 +99,12 @@ pub struct Plan {
     pub readiness: Checked<String>,
 }
 
-/// A Kix binary, so a plan can be checked against the Kix that deploys it.
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// The build of Kix that made a plan, so the plan can be checked against
+/// the Kix that deploys it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KixBuild {
     /// The Kix version: the crate version, plus the CI run number as build
@@ -124,7 +143,7 @@ fn store_path_of(path: &str) -> Option<String> {
 /// A cluster build.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Build {
-    /// The build's result directory, the path a deploy records in the
+    /// The build's store path, the path a deploy records in the
     /// Activation record's `built-via` annotation. It locates the build. It does not identify the
     /// content: two machines can build the same manifests at different
     /// paths.
@@ -144,7 +163,7 @@ impl Build {
             .map(|node| &node.manifest)
             .find(|m| lifecycle::is_record(m));
         Build {
-            store_path: graph.result_dir.to_string_lossy().into_owned(),
+            store_path: graph.built_via.to_string_lossy().into_owned(),
             identity_hash: record
                 .and_then(|r| keys::get(r, keys::IDENTITY_HASH))
                 .map(str::to_string),
@@ -502,7 +521,11 @@ pub enum RefusalReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DriftChange {
     pub resource: String,
+    /// The field, or `$` for an object whose fields Kix applied changed
+    /// although Kubernetes recorded no other owner for any of them.
     pub path: String,
+    /// The deployed value. Absent when the deployed manifest does not set
+    /// the field or is not on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployed: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -514,6 +537,20 @@ pub struct DriftChange {
     /// False when it leaves the object alone (its identity hash did not
     /// change).
     pub reverted: bool,
+}
+
+/// A field the build sets that Kubernetes would not store as sent. A Secret
+/// value reads [`super::SECRET_NOT_SHOWN`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FieldNotKept {
+    pub resource: String,
+    pub path: String,
+    pub change: NotKept,
+    /// The value the build sets.
+    pub sent: Value,
+    /// The value Kubernetes would store. Absent when it drops the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -609,6 +646,8 @@ impl Plan {
             conflicts: Checked::not_checked(reason),
             admission: Checked::not_checked(reason),
             drift: Checked::not_checked(reason),
+            drift_unchecked: 0,
+            not_kept: Vec::new(),
             prune: Checked::not_checked(reason),
             not_checked: Vec::new(),
             readiness: Checked::not_checked(NotCheckedReason::NotPreviewable),
@@ -650,8 +689,8 @@ impl Plan {
         serde_json::to_string_pretty(self).expect("a Plan serializes")
     }
 
-    pub fn to_yaml(&self) -> Result<String, serde_yml::Error> {
-        serde_yml::to_string(self)
+    pub fn to_yaml(&self) -> Result<String, crate::yaml::SerializeError> {
+        crate::yaml::to_string(self)
     }
 }
 
@@ -866,7 +905,7 @@ mod tests {
     }
 
     /// The build and the deployed record are named by their Activation
-    /// record's identity hash and result directory.
+    /// record's identity hash and store path.
     #[test]
     fn a_plan_names_its_build_and_the_deployed_record() {
         let record = serde_json::json!({

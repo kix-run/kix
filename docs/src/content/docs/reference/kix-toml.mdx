@@ -1,0 +1,170 @@
+---
+title: "kix.toml"
+description: "Project configuration file that chooses whether Kix evaluates a repository with the Kix runtime or the machine's Nix installation."
+---
+
+import Command from '../../../components/Command.astro';
+
+`kix.toml` is an optional configuration file placed beside `flake.nix` at the root of a Kix project. It chooses the project's **builder**: whether Kix evaluates clusters with the Nix in the Kix runtime and Kix's local store (`builder = "kix"`, the default) or with the machine's installed Nix and `/nix/store` (`builder = "nix"`). Because `kix.toml` lives in the repository, every contributor and CI job uses the same builder without passing extra flags or environment variables.
+
+:::note[Helpful background]
+- [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/): see how the release archive ships the Kix runtime and how to verify your setup with `kix doctor`.
+- [Use `mkFlake` in a consuming repo](/docs/how-to/start-and-inspect/use-mkflake-in-a-consuming-repo/): set up `flake.nix` in your own repository so `kix.lib.mkFlake` reads `kix.toml` and wires cluster outputs.
+- [Helm integration](/docs/explanation/helm-integration/): understand how each builder fetches and renders Helm charts.
+- [Nix command reference (nix.dev)](https://nix.dev/manual/nix/latest/command-ref/new-cli/nix): reference for the `nix` CLI, `nix.conf` settings, binary caches, and remote builders used when `builder = "nix"`.
+:::
+
+## Location and format
+
+Kix looks for `kix.toml` in the directory named by [`--flake`](/docs/reference/cli/global-flags/) (by default `.`, the current working directory). When `--flake` is a remote flake reference such as `github:org/repo` rather than a local directory, Kix uses the default builder (`"kix"`).
+
+```toml
+# kix.toml
+builder = "nix"
+```
+
+Both the file and the `builder` key are optional. An absent `kix.toml` or an empty `kix.toml` is equivalent to:
+
+```toml
+builder = "kix"
+```
+
+`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, `builder` is the only valid setting. Unknown keys, unknown builder names, and TOML syntax errors stop the command before evaluation starts.
+
+## The `builder` setting
+
+| Value | Status | Nix binary and store | How Helm charts are rendered |
+| --- | --- | --- | --- |
+| `"kix"` | Default | The `nix` in the Kix runtime (`2.35.4`), with Kix's local store at `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store`, overridden by `KIX_STORE_ROOT`) | Kix runs the `helm` programs in the Kix runtime outside Nix and writes chart tarballs and rendered JSON into Kix's local store |
+| `"nix"` | Supported | `nix` and `nix-store` from `PATH`, using `/nix/store` and the machine's `nix.conf` | Nix fetches charts as fixed-output derivations and runs `helm template` inside ordinary Nix builds during evaluation |
+| `"remote"` | Reserved | Remote build service (not yet implemented) | Refused by this version of Kix |
+
+### `builder = "kix"` (default)
+
+When `builder` is `"kix"` (or when `kix.toml` is omitted), Kix runs the `nix`, `nix-store`, `helm`, `kubectl`, and `sops` binaries from the Kix runtime in `libexec/kix/`. It writes evaluated manifests and rendered Helm charts into Kix's local store at `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store` when `XDG_CACHE_HOME` is unset).
+
+This mode requires no Nix installation on the machine, no Nix daemon, no `/nix` directory, no root access, and no Linux user namespaces.
+
+### `builder = "nix"`
+
+When `kix.toml` sets `builder = "nix"`, Kix runs `nix` and `nix-store` from `PATH` against the machine's `/nix/store`. It inherits the machine's and user's Nix configuration (`nix.conf`), including binary caches (`substituters`), remote build machines (`builders`), and `access-tokens`.
+
+Use `builder = "nix"` when your project needs any of the following:
+
+- Shared Nix binary caches or remote builders configured in `nix.conf`.
+- Plain `nix build` or `nix flake check` on clusters that include Helm charts.
+- The `packages.<system>.cluster-<name>-activation` flake output for scripts or CI pipelines that build activations directly with `nix build`.
+
+Under `builder = "nix"`, both `kix` and plain `nix` commands render Helm charts inside ordinary Nix derivations using the official Helm release binary pinned in `kix/lib/helm-versions.json` (`4.3.1` for `helmVersion = "4"` and `3.19.1` for `helmVersion = "3"`, matching the binaries shipped in `libexec/kix/`). Both builders pass the same `helm template` flags, so a chart renders the same way under either builder. For the Helm clusters in the Kix repository, both builders give identical manifests.
+
+Even when `builder = "nix"`, Kix still runs `kubectl`, `sops`, and any direct CLI `helm` invocations from the Kix runtime in `libexec/kix/` rather than `PATH`.
+
+### `builder = "remote"` (reserved)
+
+`builder = "remote"` is reserved for a build service that builds the project on another machine. This version of Kix refuses it:
+
+```text
+<path>/kix.toml sets builder = "remote", but remote builders are not supported yet. Set builder = "kix", or remove the setting
+```
+
+## Tracking `kix.toml` in Git
+
+Nix flakes only see files that Git tracks. When `kix.lib.mkFlake` evaluates your flake, it reads `${inputs.self}/kix.toml` inside Nix and exposes the chosen builder at `legacyPackages.<system>.kixConfig.builder`.
+
+Before evaluating a cluster, `kix` compares the `kix.toml` file on disk with `legacyPackages.<system>.kixConfig.builder`. If you create `kix.toml` with `builder = "nix"` and do not stage it in Git, Nix does not copy `kix.toml` into the flake source tree, the Kix library falls back to `"kix"`, and `kix` stops with an error:
+
+```text
+./kix.toml is not tracked by Git, so Nix ignores it. Run `git add kix.toml`
+```
+
+Stage `kix.toml` whenever you add or change it:
+
+<Command commands={[
+  'git add kix.toml',
+]} />
+
+Two other conditions must hold for the CLI and the flake library to agree:
+
+1. `flake.nix` must pass `inputs` (which includes `self`) to `kix.lib.mkFlake { inherit inputs; ... }`, so `mkFlake` can locate `${inputs.self}/kix.toml`.
+2. The `kix` flake input locked in `flake.lock` must be new enough to expose `kixConfig`. If the locked library predates `kix.toml` support, `kix` prompts you to run [`kix lib update`](/docs/reference/cli/lib/).
+
+## Requirements for `builder = "nix"`
+
+When a project sets `builder = "nix"`, the machine running `kix` must meet these requirements:
+
+- **Nix 2.24 or later on `PATH`.** The Kix library uses the `|>` pipe operator (`pipe-operators`), which Nix added in 2.24.
+- **Upstream Nix, not Lix.** Lix reports `(Lix, like Nix)` in `nix --version` and is refused because this builder relies on upstream Nix's flake and pipe-operator behavior.
+- **`allow-import-from-derivation` enabled (`true`).** This is the default in Nix. When `builder = "nix"`, [`scope.helm.importChart` and `kix.helmChart`](/docs/reference/helm-and-imports/) build a derivation that runs `helm template` and import the rendered JSON during evaluation (Import From Derivation, or IFD). If `allow-import-from-derivation` is set to `false` in `nix.conf`, evaluating a cluster that uses Helm charts fails.
+- **No `trusted-users` requirement.** The `nix` builder uses ordinary fixed-output derivations for chart downloads and standard derivations for chart rendering. Your user account does **not** need to be listed in `trusted-users` on the Nix daemon.
+- **`KIX_STORE_ROOT` must be unset.** `KIX_STORE_ROOT` only redirects the local store of the `kix` builder. If `KIX_STORE_ROOT` is set in the environment for a project with `builder = "nix"`, `kix` stops and asks you to unset `KIX_STORE_ROOT`.
+
+Run [`kix doctor`](/docs/reference/cli/doctor/) in the project directory to check `kix.toml`, the machine's `nix` binary, `allow-import-from-derivation`, and whether the Nix store trusts your user:
+
+<Command commands={[
+  'kix doctor',
+]} />
+
+:::tip[Common tasks]
+- [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/): verify your Kix installation and inspect `kix doctor` output.
+- [`kix doctor` CLI reference](/docs/reference/cli/doctor/): see every check `kix doctor` runs for `"kix"` and `"nix"` projects.
+:::
+
+## Flake outputs when `builder = "nix"`
+
+Setting `builder = "nix"` in `kix.toml` changes what `kix.lib.mkFlake` exports in your flake:
+
+- **`packages.<system>.cluster-<name>-activation` is exported.** This output creates a directory linking `activation` (the `Activation` resource manifest), `kix-packages.json`, `kix-scorecard.json`, `kix-extra-images.json`, `kix-image-sources.json`, `kix-interface-*.json`, and `kix-activation-index.json`. You can build it with `nix build` and pass the result to [`kix diff --from`](/docs/reference/cli/diff/). Projects using the default `kix` builder omit this output because they evaluate into `~/.cache/kix/store` without building derivations in `/nix/store`.
+- **`packages.<system>.cluster-<name>` and `checks.<system>.*` support Helm charts.** Under the default `kix` builder, Kix renders Helm charts outside Nix, so plain `nix build` and `nix flake check` cannot build clusters that use Helm charts. Under `builder = "nix"`, `mkFlake` renders Helm charts through Nix, so `packages.<system>.cluster-<name>` and the cluster checks (`schema-cluster-<name>`, `rules-cluster-<name>`, and `pi-wiring-cluster-<name>`) work with plain `nix build` and `nix flake check`.
+- **`legacyPackages.<system>.kixClustersNix.<name>` is used by `kix`.** Alongside `legacyPackages.<system>.kixClusters.<name>`, `mkFlake` exposes `kixClustersNix.<name>` evaluated with the Nix Helm route. When `builder = "nix"`, the `kix` CLI evaluates `kixClustersNix.<name>` so `kix build`, `kix plan`, and `kix deploy` share the exact derivations that `nix build` produces.
+
+- **`legacyPackages.<system>.kixLib` holds the library for the builder.** It has `kix` and `packages`, as a cluster function receives them, with Helm charts rendered by Nix under `builder = "nix"`. A flake that [merges `mkFlake` into a larger flake](/docs/how-to/start-and-inspect/use-mkflake-in-a-consuming-repo/#use-mkflake-inside-a-larger-flake) uses it for its own checks.
+
+### Running `nix` directly on a `nix` project
+
+When you invoke `kix`, it automatically passes `--extra-experimental-features "nix-command flakes pipe-operators"` to `nix`. When you run `nix build` or `nix flake check` directly from your shell, enable those three experimental features on the command line or in `nix.conf`:
+
+<Command commands={[
+  'nix build --extra-experimental-features "nix-command flakes pipe-operators" .#cluster-prod-activation',
+]} />
+
+### Restricting `systems` for `nix flake check`
+
+By default, `kix.lib.mkFlake` generates outputs for four platforms: `x86_64-linux`, `aarch64-linux`, `aarch64-darwin`, and `x86_64-darwin`. `nix flake check` checks only the machine's own platform unless you pass `--all-systems`.
+
+If a cluster uses Helm charts under `builder = "nix"`, evaluating that cluster imports the output of a chart-rendering derivation (`import-from-derivation`). With `--all-systems`, Nix must build those derivations for every platform the flake lists. On a machine without remote builders for the other platforms, `nix flake check --all-systems` fails when it tries to build a chart derivation for another platform.
+
+To avoid needing builders for platforms you do not use, pass `systems` to `kix.lib.mkFlake` with only the systems your team and CI build on:
+
+```nix
+# flake.nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    kixpkgs.url = "github:kix-run/kixpkgs";
+    kixpkgs.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = inputs:
+    inputs.kixpkgs.lib.mkFlake {
+      inherit inputs;
+      systems = [ "x86_64-linux" ];
+      clusters.prod = ./clusters/prod.nix;
+    };
+}
+```
+
+## Validation and error messages
+
+| Condition | Error message |
+| --- | --- |
+| Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
+| Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder). Check the spelling, or upgrade Kix if the project needs a newer version `` |
+| Unknown `builder` value | `<path> sets builder = "<value>", which is not a known builder (Kix <version> supports: kix, nix, remote). Check the spelling, or upgrade Kix if the project needs a newer version` |
+| `builder` without quotes, such as `builder = 3` | `<path> sets builder to a number. Write the builder's name in quotes, such as builder = "kix" (Kix <version> supports: kix, nix, remote)` |
+| `builder = "remote"` | `<path> sets builder = "remote", but remote builders are not supported yet. Set builder = "kix", or remove the setting` |
+| `builder = "nix"` in `kix.toml`, but `kix.toml` is not tracked by Git | `` <path> is not tracked by Git, so Nix ignores it. Run `git add kix.toml` `` |
+| `builder = "nix"` in `kix.toml`, but the flake publishes no `legacyPackages.<system>.kixConfig` | `` <path> sets builder = "nix", which this project's flake does not support. If flake.nix calls kixpkgs.lib.mkFlake, run `kix lib update` to update the Kix library in flake.lock. If flake.nix builds Kix outputs directly (for example with kixpkgs.lib.forPkgs), switch to kixpkgs.lib.mkFlake as shown in "Use mkFlake in a consuming repo" in the docs `` |
+| `KIX_STORE_ROOT` set when `builder = "nix"` | `KIX_STORE_ROOT is set, but it does not apply to this project. The project's builder is "nix", which uses the machine's Nix and its store. Unset KIX_STORE_ROOT` |
+| `nix` not found on `PATH` when `builder = "nix"` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), but `nix` is not on PATH. Install Nix 2.24 or later, or remove `builder = "nix"` from kix.toml `` |
+| Nix older than 2.24 on `PATH` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), which requires Nix 2.24 or later, but `nix --version` reported <version>. Upgrade Nix, or remove `builder = "nix"` from kix.toml `` |
+| Lix on `PATH` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), which does not support Lix (`nix --version` reported <version>). Install Nix 2.24 or later, or remove `builder = "nix"` from kix.toml `` |

@@ -39,7 +39,7 @@ everything in the directory.
 
 4. **Read the reference for each group** before proposing anything in
    that area: `kix/lib/architecture.md` for the lib,
-   `docs-legacy/BEST-PRACTICES.md` and `docs-legacy/HANDBOOK.md` for
+   `docs/src/content/docs/explanation/` and `docs/src/content/docs/reference/` for
    the user-facing contract, `.claude/skills/kix-migration/SKILL.md`
    for package conventions, `cli/README.md` for the CLI. They record
    why some of this is the way it is.

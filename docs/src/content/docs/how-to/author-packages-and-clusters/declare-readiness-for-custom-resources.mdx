@@ -39,6 +39,77 @@ Keep this declaration in the package that owns or imports the CRD. Every custom
 resource created through `widgetCrd.out.mkCR` then receives the same readiness
 rule, along with its dependency on the CRD.
 
+## Declare the states that mean failure
+
+Some controllers report that they reject a resource: Cilium sets `Valid=False`
+on a network policy whose rules it cannot apply. Such a resource never becomes
+ready until its spec changes, so waiting for it only delays the failure. List
+those states in `failed` beside the ready rule, and `kix deploy` stops waiting
+as soon as the controller reports one:
+
+```nix
+readiness = {
+  condition = {
+    type = "Valid";
+    status = "True";
+  };
+  failed = [
+    {
+      condition = {
+        type = "Valid";
+        status = "False";
+      };
+    }
+  ];
+};
+```
+
+A `failed` entry is a condition (`type`, `status`, and an optional `reason`
+that narrows the match) or a status field (`path` and `equals`, for a
+controller that reports a phase such as `Failed`). Declare only states the
+controller does not leave on its own. A `Ready=False` that the controller
+retries, or a `Pending` while it waits for something else, is not one of
+them: declaring it would fail deploys that would have succeeded.
+
+A condition entry is read as the controller's verdict on the spec, and the
+failure message says to change the object. A `path` entry is read as a
+runtime outcome, such as a backup that failed or a storage claim that was
+lost, unless it sets `rejected = true`. Give a runtime outcome a `hint` that
+says what to do next, and name in `message` the status fields to quote (one
+JSON pointer or a list):
+
+```nix
+failed = [
+  {
+    path = "/status/phase";
+    equals = "FailedValidation";
+    rejected = true;
+    message = "/status/validationErrors";
+  }
+  {
+    path = "/status/phase";
+    equals = "Failed";
+    message = "/status/failureReason";
+    hint = "Velero does not run a failed backup again. Fix the cause shown in its status, then create the backup again under a new name.";
+  }
+];
+```
+
+Kix trusts such a state once it knows the controller has seen the current
+spec. It checks, in this order: the condition's `observedGeneration` (or
+`status.observedGeneration`) has reached `metadata.generation`; or, when the
+controller reports no generation, the condition's `lastTransitionTime` is
+later than the moment this deploy applied the object (a state that changed
+before the apply is the verdict on the previous spec, and Kix keeps waiting
+for a new one); or, when the status carries neither field (a phase such as
+`status.phase = "Failed"`), the state has held for ten seconds of polling. An
+object the deploy left unchanged needs no such check. One case falls through
+these checks: an object edited from one invalid spec to another may keep its
+old transition time, because the condition did not change. Kix then waits
+until the readiness timeout, and the timeout message still shows the current
+reason. The failure message quotes the controller's condition, reason, and
+message, or the status fields the entry names, and ends with what to do next.
+
 ## Check the generated custom resource
 
 Build the cluster as JSON and inspect the custom resource. The output excerpt
@@ -55,7 +126,7 @@ the expected value. Make the path match the status field written by the
 controller, including its exact capitalization.
 
 :::note[Explanation]
-See [The DAG-driven deployment scheduler](/docs/explanation/dag-driven-deployment-scheduler/)
+See [The DAG-driven deployment scheduler](/docs/explanation/the-dependency-graph/#dag-driven-deployment-scheduler)
 for when resource readiness is sufficient and when to add an end-to-end health
 check.
 :::

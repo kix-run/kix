@@ -15,6 +15,11 @@
 # `scope.mkCRDRef`): a function from the custom resource to its usage, keyed
 # as above. Values may be integers or quantity strings (`"20Gi"`, `"500m"`).
 # Packages build that usage with `kix.usage` (`ofPod`, `times`, `add`).
+#
+# A refusal also lists what it could not count, so the reader knows the real
+# usage may be higher: DaemonSets and CronJobs by name, and custom resources
+# without `usesAtLeast` grouped by kind. A kind whose `usesAtLeast` returns
+# `{ }` runs nothing and is left out of the message.
 { lib }:
 
 let
@@ -188,32 +193,35 @@ rec {
     else
       null;
 
+  # Return the usage key a quota key charges. Kubernetes accepts `cpu`,
+  # `memory`, and `ephemeral-storage` as shorthand for `requests.<resource>`.
+  chargedKey =
+    key:
+    if
+      builtins.elem key [
+        "cpu"
+        "memory"
+        "ephemeral-storage"
+      ]
+    then
+      "requests.${key}"
+    else
+      key;
+
   # Match a quota key and hard limit against `use`, returning `{ used; limit; }`
-  # or null when the limit does not parse. Kubernetes accepts `cpu`, `memory`,
-  # and `ephemeral-storage` as shorthand for `requests.<resource>`. A key no
-  # workload reports, such as `services` when no custom resource declares
-  # any, is used 0, so it never refuses a build.
+  # or null when the limit does not parse. A key no workload reports, such as
+  # `services` when no custom resource declares any, is used 0, so it never
+  # refuses a build.
   compare =
     use: key: hard:
     let
-      charged =
-        if
-          builtins.elem key [
-            "cpu"
-            "memory"
-            "ephemeral-storage"
-          ]
-        then
-          "requests.${key}"
-        else
-          key;
       limit = parse key hard;
     in
     if limit == null then
       null
     else
       {
-        used = use.${charged} or 0;
+        used = use.${chargedKey key} or 0;
         inherit limit;
       };
 
@@ -236,9 +244,43 @@ rec {
     else
       toString n;
 
-  # Return one error message per ResourceQuota in `quotas` (`{ name; hard; }`)
+  # Describe an amount of `key` with its unit, such as "2 pods" or
+  # "30Gi requests.storage".
+  amount =
+    key: n:
+    if key == "pods" then
+      "${toString n} ${if n == 1 then "pod" else "pods"}"
+    else
+      "${format key n} ${key}";
+
+  # Name the objects Kubernetes rejects once `key` is at its limit.
+  rejectedBy =
+    key:
+    if lib.hasPrefix "services" key then
+      "Services"
+    else if key == "persistentvolumeclaims" || lib.hasSuffix ".storage" key then
+      "PersistentVolumeClaims"
+    else if
+      key == "pods" || isCpu key || lib.hasSuffix "memory" key || lib.hasSuffix "ephemeral-storage" key
+    then
+      "pods"
+    else
+      "objects";
+
+  # Explain why `useOf` returns null for a built-in kind.
+  uncountedReason =
+    kind:
+    if kind == "DaemonSet" then
+      "1 pod per matching node (Kix does not know how many nodes the cluster has)"
+    else if kind == "CronJob" then
+      "pods start on a schedule (Kix does not know how many run at once)"
+    else
+      "usage is only known at deploy time";
+
+  # Return one error message per quota key in `quotas` (`{ name; hard; }`)
   # that the minimum usage of `resources` and `customResources`
-  # (`{ manifest; usesAtLeast; }`) exceeds.
+  # (`{ manifest; usesAtLeast; }`) exceeds. Each message lists the objects
+  # that make up the total and the objects Kix could not count.
   refusals =
     {
       namespace,
@@ -267,6 +309,8 @@ rec {
       found =
         map (m: {
           name = nameOf m;
+          kind = plain m.kind;
+          custom = false;
           use = useOf {
             manifest = m;
             minReplicas = minReplicas.${nameOf m} or null;
@@ -274,15 +318,83 @@ rec {
         }) (builtins.filter (m: builtins.elem (m.kind or "") podKinds) resources)
         ++ map (c: {
           name = nameOf c.manifest;
+          kind = plain c.manifest.kind;
+          custom = true;
           use = useOf {
             inherit (c) manifest;
             declared = c.usesAtLeast;
           };
         }) customResources;
 
-      counted = builtins.filter (f: f.use != null) found;
+      # A declared usage of `{ }` says the kind runs nothing, so its objects
+      # appear in neither list.
+      counted = builtins.filter (f: f.use != null && f.use != { }) found;
       notCounted = builtins.filter (f: f.use == null) found;
+      notCountedBuiltin = builtins.filter (f: !f.custom) notCounted;
+      notCountedCustom = builtins.filter (f: f.custom) notCounted;
       total = sum (map (f: f.use) counted);
+
+      # Group uncounted custom resources by kind, largest group first.
+      customGroups = lib.sort (a: b: a.count > b.count || (a.count == b.count && a.kind < b.kind)) (
+        lib.mapAttrsToList (kind: fs: {
+          inherit kind;
+          count = builtins.length fs;
+        }) (builtins.groupBy (f: f.kind) notCountedCustom)
+      );
+
+      customGroupNames = builtins.concatStringsSep ", " (
+        map (g: "${toString g.count} ${g.kind}") customGroups
+      );
+
+      # The built-in kinds Kix cannot count only use what their pods use, so
+      # they are left out of the list for a key that counts something else
+      # (storage, services, object counts).
+      notCountedLinesFor =
+        key:
+        lib.optionals (rejectedBy key == "pods") (
+          map (f: "    ${f.name}: ${uncountedReason f.kind}") notCountedBuiltin
+        )
+        ++ lib.optional (customGroups != [ ]) (
+          if rejectedBy key == "pods" then
+            "    ${customGroupNames}: pod usage is not declared by their packages (most custom resources create no pods, but Kix cannot verify this)"
+          else
+            "    ${customGroupNames}: usage is not declared by their packages (Kix cannot verify what they use)"
+        );
+
+      messageFor =
+        quota: key: hard: used:
+        let
+          charged = chargedKey key;
+          contributing = builtins.filter (f: (f.use.${charged} or 0) > 0) counted;
+          notCountedLines = notCountedLinesFor key;
+          fix =
+            if key == "pods" then
+              "run fewer pods"
+            else if isCount key then
+              "create fewer ${key}"
+            else
+              "use less ${key}";
+        in
+        builtins.concatStringsSep "\n" (
+          [
+            "namespace \"${namespace}\" exceeds ResourceQuota \"${quota.name}\" for ${key} (uses at least ${format key used}, limit is ${plain hard})"
+            "  Kubernetes will reject ${rejectedBy key} over this limit at deploy time."
+            ""
+            "  Counted (${amount key used}):"
+          ]
+          ++ map (f: "    ${f.name}: ${amount key f.use.${charged}}") contributing
+          ++ lib.optionals (notCountedLines != [ ]) (
+            [
+              ""
+              "  Not counted (actual usage may be higher):"
+            ]
+            ++ notCountedLines
+          )
+          ++ [
+            ""
+            "  To fix this, raise the ${key} limit in \"${quota.name}\" or ${fix} in namespace \"${namespace}\"."
+          ]
+        );
 
       overOf =
         quota:
@@ -292,25 +404,9 @@ rec {
             let
               c = compare total key hard;
             in
-            if c != null && c.used > c.limit then
-              "${key}: at least ${format key c.used}, quota ${plain hard}"
-            else
-              null
+            if c != null && c.used > c.limit then messageFor quota key hard c.used else null
           ) quota.hard
         );
-
-      names = fs: builtins.concatStringsSep ", " (map (f: f.name) fs);
     in
-    lib.concatMap (
-      quota:
-      let
-        over = overOf quota;
-      in
-      lib.optional (over != [ ]) (
-        "namespace ${namespace} needs more than ResourceQuota ${quota.name} allows (${builtins.concatStringsSep "; " over}), "
-        + "so Kubernetes would refuse some of its objects. Counted: ${names counted}."
-        + lib.optionalString (notCounted != [ ]) " Not counted: ${names notCounted}."
-        + " Raise the quota or run less in the namespace."
-      )
-    ) quotas;
+    lib.concatMap overOf quotas;
 }

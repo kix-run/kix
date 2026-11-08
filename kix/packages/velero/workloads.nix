@@ -208,23 +208,66 @@ let
     ++ lib.optional (self.externalStoreEgress != null) self.externalStoreEgress;
 
   crdFile = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
-  phaseReadiness = phase: {
+  phase = equals: {
     path = "/status/phase";
-    equals = phase;
+    inherit equals;
+  };
+  # A Backup or Restore runs once. Its controller processes only the
+  # ReadyToStart phase (pkg/controller/backup_controller.go and
+  # restore_controller.go, the switch on status.phase in Reconcile), so an
+  # object that ends in FailedValidation, Failed, or PartiallyFailed stays
+  # there, and editing it does not run it again. A Schedule's
+  # FailedValidation comes from parsing spec.schedule, which only a spec
+  # change alters.
+  failedValidation = phase "FailedValidation" // {
+    rejected = true;
+    message = "/status/validationErrors";
+  };
+  oneShotReadiness =
+    what:
+    phase "Completed"
+    // {
+      failed = [
+        failedValidation
+      ]
+      ++
+        map
+          (
+            value:
+            phase value
+            // {
+              message = "/status/failureReason";
+              hint = "Velero does not run a failed ${what} again. Fix the cause shown in its status, then create the ${what} again under a new name.";
+            }
+          )
+          [
+            "Failed"
+            "PartiallyFailed"
+          ];
+    };
+  scheduleReadiness = phase "Enabled" // {
+    failed = [ failedValidation ];
   };
 in
 {
+  # Locations, schedules, repositories, and requests run no pods. A Backup,
+  # Restore, DataUpload, DataDownload, PodVolumeBackup, or PodVolumeRestore
+  # may run a data mover pod, so those stay undeclared.
   crds = {
-    backupRepositories = scope.mkCRD { spec = crdFile "backuprepositories.velero.io.json"; };
+    backupRepositories = scope.mkCRD {
+      spec = crdFile "backuprepositories.velero.io.json";
+      usesAtLeast = _: { };
+    };
     backups = scope.mkCRD {
       spec = crdFile "backups.velero.io.json";
-      readiness = phaseReadiness "Completed";
+      readiness = oneShotReadiness "backup";
     };
     # Velero's pods dial the store named in the location's config
     # (`s3Url`), not whoever creates the location.
     backupStorageLocations = scope.mkCRD {
       spec = crdFile "backupstoragelocations.velero.io.json";
-      readiness = phaseReadiness "Available";
+      readiness = phase "Available";
+      usesAtLeast = _: { };
       factBehavior = {
         endpoint = "terminate";
         podSelector = scope.selectorLabels;
@@ -232,20 +275,33 @@ in
     };
     dataDownloads = scope.mkCRD { spec = crdFile "datadownloads.velero.io.json"; };
     dataUploads = scope.mkCRD { spec = crdFile "datauploads.velero.io.json"; };
-    deleteBackupRequests = scope.mkCRD { spec = crdFile "deletebackuprequests.velero.io.json"; };
-    downloadRequests = scope.mkCRD { spec = crdFile "downloadrequests.velero.io.json"; };
+    deleteBackupRequests = scope.mkCRD {
+      spec = crdFile "deletebackuprequests.velero.io.json";
+      usesAtLeast = _: { };
+    };
+    downloadRequests = scope.mkCRD {
+      spec = crdFile "downloadrequests.velero.io.json";
+      usesAtLeast = _: { };
+    };
     podVolumeBackups = scope.mkCRD { spec = crdFile "podvolumebackups.velero.io.json"; };
     podVolumeRestores = scope.mkCRD { spec = crdFile "podvolumerestores.velero.io.json"; };
     restores = scope.mkCRD {
       spec = crdFile "restores.velero.io.json";
-      readiness = phaseReadiness "Completed";
+      readiness = oneShotReadiness "restore";
     };
     schedules = scope.mkCRD {
       spec = crdFile "schedules.velero.io.json";
-      readiness = phaseReadiness "Enabled";
+      readiness = scheduleReadiness;
+      usesAtLeast = _: { };
     };
-    serverStatusRequests = scope.mkCRD { spec = crdFile "serverstatusrequests.velero.io.json"; };
-    volumeSnapshotLocations = scope.mkCRD { spec = crdFile "volumesnapshotlocations.velero.io.json"; };
+    serverStatusRequests = scope.mkCRD {
+      spec = crdFile "serverstatusrequests.velero.io.json";
+      usesAtLeast = _: { };
+    };
+    volumeSnapshotLocations = scope.mkCRD {
+      spec = crdFile "volumesnapshotlocations.velero.io.json";
+      usesAtLeast = _: { };
+    };
   };
 
   # Nothing in the pod specs names the repository Secret, because
