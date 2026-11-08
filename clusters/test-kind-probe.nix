@@ -20,7 +20,7 @@ kix.buildCluster {
       { lib, ... }:
       {
         # kind runs with the default CNI disabled; the managed cilium
-        # instance fills the cni role, as ludo-kind does.
+        # instance fills the cni role, as homelab-kind does.
         cluster.roles.cni = {
           binding = "absent";
           provider = null;

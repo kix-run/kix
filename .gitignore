@@ -33,8 +33,6 @@ __pycache__/
 # insta snapshot pending review files
 *.snap.new
 
-# Local symlink to the ludo node NixOS config (machine-specific)
-ludo/node
 
 # Per-developer Claude Code settings and worktrees
 .claude/settings.local.json

@@ -5,7 +5,7 @@
 # self-signed ClusterIssuer (TLS on the Ingress), and the prometheus
 # operator (ServiceMonitors and a PrometheusRule).
 # Network policy and the full scorecard rule set are on so the package is
-# held to the same bar ludo holds its packages to.
+# held to the same bar homelab-kind holds its packages to.
 #
 # Build:  nix build .#cluster-harbor --extra-experimental-features pipe-operators
 
@@ -35,9 +35,8 @@ kix.buildCluster {
         # produce fails this build. cilium's host network and privileged
         # mount are declared in its own meta.unsafe, not downgraded here.
 
-        # kind runs with the default CNI disabled (see the deploy scripts
-        # under demo/), so the managed cilium instance fills the cni role,
-        # the same way the ludo kind variants do.
+        # kind runs with the default CNI disabled, so the managed cilium
+        # instance fills the cni role, the same way homelab-kind does.
         cluster.roles.cni = {
           binding = "absent";
           provider = null;

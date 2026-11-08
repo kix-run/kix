@@ -16,19 +16,19 @@
 #   - File-tree hash equality before/after a detour
 #
 # Strategy: use two existing flake outputs:
-#   A = cluster-ludo-kind                   (baseline)
-#   B = cluster-ludo-kind-gateway-migrate   (distinct desired state,
-#                                            shared activation identity
-#                                            "ludo-kind")
+#   A = cluster-homelab-kind                   (baseline)
+#   B = cluster-homelab-kind-gateway-migrate   (distinct desired state,
+#                                               shared activation identity
+#                                               "homelab-kind")
 # Build A -> B -> A. Assert A and A' are bit-identical and differ from B.
 #
 # Usage:  ./scripts/kix-rollback-check.sh [--flake <flake>] [--variant-a <a>] [--variant-b <b>]
 
 set -euo pipefail
 
-FLAKE="./ludo"
-VARIANT_A="cluster-ludo-kind"
-VARIANT_B="cluster-ludo-kind-gateway-migrate"
+FLAKE="."
+VARIANT_A="cluster-homelab-kind"
+VARIANT_B="cluster-homelab-kind-gateway-migrate"
 
 while [ $# -gt 0 ]; do
     case "$1" in

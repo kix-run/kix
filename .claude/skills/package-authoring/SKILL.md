@@ -426,7 +426,7 @@ nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. un
 nix build ./clusters#checks.x86_64-linux.rules-cluster-<cluster> $F $P   # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)
 nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CRDs only
-nix run .#kix -- check ludo-kind --flake ./ludo                          # 7. smoke over the full package set
+nix run .#kix -- check homelab-kind                                       # 7. smoke over the full package set
 ```
 
 `<cluster>` is the key in `clusters/flake.nix`. When `every-package-evaluates`

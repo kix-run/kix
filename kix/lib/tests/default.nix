@@ -1,9 +1,9 @@
 # Evaluation-only regression matrix for kix/lib.
 #
-# ludo-kind is the golden *build* check, but it pins one topology (netpol
+# homelab-kind is the golden *build* check, but it pins one topology (netpol
 # enabled, cilium enforcer present, no sentinel instances, no hostNetwork
 # apps). This matrix evaluates tiny synthetic clusters across the
-# configurations ludo-kind does NOT exercise: netpol off, missing enforcer,
+# configurations homelab-kind does NOT exercise: netpol off, missing enforcer,
 # hostNetwork workloads, direction-limited policies, sentinel namespaces,
 # hook priorities, hook contract violations, and the emit facade.
 #
@@ -19,11 +19,11 @@
 # feature there as `units/<topic>.nix`, with test names `<topic>-<what>`.
 
 {
-  # Default: the exact nixpkgs the ludo flake pins (read from its lock file,
-  # fetched by narHash: pure, no registry/channel needed).
+  # Default: the exact nixpkgs the clusters flake pins (read from its lock
+  # file, fetched by narHash: pure, no registry/channel needed).
   lib ? (
     let
-      lock = builtins.fromJSON (builtins.readFile ../../../ludo/flake.lock);
+      lock = builtins.fromJSON (builtins.readFile ../../../clusters/flake.lock);
     in
     import (builtins.fetchTree lock.nodes.nixpkgs.locked + "/lib")
   ),
@@ -1723,7 +1723,7 @@ let
 
     # An optional dependency on a role resolves to a platform import that
     # provides it, as the kind flavour's platform-storage import does for
-    # ludo-kind, and the shelf provider is not pulled. An optional import
+    # homelab-kind, and the shelf provider is not pulled. An optional import
     # that nothing demands stays inactive and answers nothing.
     t22-optional-role-dep-resolves-import =
       let

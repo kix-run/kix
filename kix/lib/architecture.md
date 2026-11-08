@@ -133,5 +133,5 @@ Fixpoint safety: a hook may read `workloadInput` and outer-fixpoint data (DI dep
 - `core/annotations.nix` and `cli/kix/src/manifest/keys.rs` move together; retiring a domain requires an entry in `cli/kix/src/legacy_domain/`.
 - Authoring-surface changes (scope builders, vocab, DI semantics) → update `docs/src/content/docs/reference/` and the `kix-migration` skill.
 - New cross-cutting concerns belong in plugins registering hooks rather than inline calls in `eval/` or `scope/`.
-- Refactors must keep the manifest store path identical on `nix build ludo/#cluster-ludo-kind`; intentional output changes ship separately.
+- Refactors must keep the manifest store path identical on `./scripts/kix-manifests.sh . homelab-kind`; intentional output changes ship separately.
 - If a change invalidates a pattern above, update this file.
