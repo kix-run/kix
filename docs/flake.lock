@@ -91,11 +91,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1794035198,
-        "narHash": "sha256-KTLn87KBsXHTLS5aEGTQ4fj2b0p6aDkXHo/iNDwxoPY=",
+        "lastModified": 1794176434,
+        "narHash": "sha256-OqJXIh6QKf03hxSPFLXOP6xS4ngikdEE8GzPhHcJTaw=",
         "owner": "kix-run",
         "repo": "kix-examples",
-        "rev": "797c5be2f5e13b6c6e415722709630c9db2ed11e",
+        "rev": "52b18cad7197ffedf64a1465edb770e93a55e745",
         "type": "github"
       },
       "original": {
