@@ -111,12 +111,16 @@ A pull request that makes a release (its version has no tag yet) runs the
 same steps, except `publish`. Another pull request that changes the runtime,
 cluster evaluation (`cli/kix/src/eval/`), or the Nix side of Helm renders
 runs only the `runtime` job, which checks that each platform's runtime builds
-and its programs run. The `release` binaries take about ten minutes on a
-GitHub-hosted runner, so such a pull request runs `without-nix` and
-`nix-builder` only through a manual run. The x86_64 Linux runtime builds on
-Spindle, the macOS jobs run on the self-hosted Mac Studio runners
-(`kix-macos-nix`, and `kix-macos-nonix` for `without-nix`), and the rest on
-GitHub-hosted runners.
+and its programs run. The `release` binaries take about ten minutes to
+build, so such a pull request runs `without-nix` and `nix-builder` only
+through a manual run.
+
+Almost every job runs on self-hosted runners. The x86_64 Linux jobs run on
+Spindle. The arm64 Linux and macOS jobs run in VMs on the Mac Studio:
+`kix-linux-nix` and `kix-macos-nix` have Nix, and `kix-linux-nonix` and
+`kix-macos-nonix` do not. `version` and `release` run on `kix-linux-nonix`.
+Only `publish` runs on a GitHub-hosted runner, because it needs the `gh`
+CLI.
 
 The version reaches the build as `KIX_VERSION`. `kix::VERSION` reads it at
 compile time and falls back to the crate version, and everything that
