@@ -59,6 +59,9 @@ concurrency:
 jobs:
   test:
     runs-on: [self-hosted, spindle-8c-16g]
+    # A normal run takes under 10 minutes. Without a limit, a hung runner
+    # holds a release until someone notices.
+    timeout-minutes: 30
     env:
       # The image ships Nix, so there is no installer step to carry this
       # into /etc/nix/nix.conf. `extra-` matters: the bare
@@ -277,7 +280,9 @@ jobs:
   # tar files, because workflow artifacts drop file modes and symbolic
   # links.
   runtime:
-    needs: [test, version]
+    # Runs alongside `test`. Nothing here depends on the tests, and
+    # `publish` still waits for them through `release`.
+    needs: [version]
     if: needs.version.outputs.runtime == 'true'
     strategy:
       # Each platform's result is worth seeing, even when another fails.
@@ -370,25 +375,21 @@ jobs:
             kix-aarch64-darwin.tar
           if-no-files-found: error
 
-  # Builds the kix binary for a release, after the tests pass, and packs it
-  # with the runtime into one archive per platform. Pushes to main that are
-  # not releases build nothing. The `publish` job publishes the archives
-  # once `without-nix` has run them.
-  #
-  # A workflow_dispatch run builds and uploads the archives as a workflow
-  # artifact but publishes nothing, which is how to try a change to these
-  # jobs from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
-  release:
-    needs: [test, version, runtime]
+  # Builds the Linux kix binaries for a release. It needs only `version`,
+  # so it runs alongside `test` and `runtime`. The macOS binary is built by
+  # the macOS `runtime` job. Pushes to main that are not releases build
+  # nothing.
+  build:
+    needs: [version]
     if: needs.version.outputs.build == 'true'
     # A Linux VM on the Mac Studio (arm64 Ubuntu), not Spindle. The binaries
     # are static musl, and nixpkgs has no musl standard library for its
     # rustc in the binary cache, while rustup's toolchains do not run on
     # Spindle's NixOS image.
     runs-on: kix-linux-nonix
+    timeout-minutes: 45
     env:
       TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -399,12 +400,14 @@ jobs:
 
       # cargo-zigbuild uses zig as the C compiler and linker, which builds
       # ring and the bundled SQLite for both architectures from one runner.
+      # Release builds start clean, so saving zig's cache only costs time.
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.14.1
+          use-cache: false
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild,cargo-audit@0.22.0,cargo-auditable@0.7.2
+          tool: cargo-zigbuild,cargo-auditable@0.7.2
 
       # kix::VERSION reads KIX_VERSION at compile time, so `kix --version`,
       # plan documents and compliance receipts carry the version.
@@ -419,12 +422,46 @@ jobs:
             cargo auditable zigbuild --manifest-path cli/Cargo.toml --locked --release \
               -p kix-cli --target "$target"
           done
+          # tar keeps the executable bit, which upload-artifact drops.
+          tar -cf kix-linux.tar -C cli/target \
+            x86_64-unknown-linux-musl/release/kix aarch64-unknown-linux-musl/release/kix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kix-linux
+          path: kix-linux.tar
+          if-no-files-found: error
+
+  # Packs each platform's kix binary with its runtime into one archive per
+  # platform, once the tests pass. The `publish` job publishes the archives
+  # once `without-nix` and `nix-builder` have run them.
+  #
+  # A workflow_dispatch run builds and uploads the archives as a workflow
+  # artifact but publishes nothing, which is how to try a change to these
+  # jobs from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
+  release:
+    needs: [test, version, runtime, build]
+    if: needs.version.outputs.build == 'true'
+    runs-on: kix-linux-nonix
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      # `cargo audit` reads each binary's crate list and needs cargo to run.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.0
 
       - uses: actions/download-artifact@v4
         with:
           pattern: runtime-*
           path: runtime
           merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-linux
 
       # Each archive holds kix-<version>-<system>/bin/kix beside
       # libexec/kix/, where kix looks for its runtime. Asset names carry no
@@ -434,7 +471,9 @@ jobs:
         run: |
           # The binary for this runner's architecture is the one that runs here.
           host=$(uname -m)
-          bin=cli/target/$host-unknown-linux-musl/release/kix
+          mkdir linux
+          tar -xf kix-linux.tar -C linux
+          bin=linux/$host-unknown-linux-musl/release/kix
           file "$bin" | grep -Eq 'statically linked|static-pie linked' || { file "$bin"; exit 1; }
           test "$("$bin" --version)" = "kix $VERSION" || { "$bin" --version; exit 1; }
 
@@ -442,7 +481,7 @@ jobs:
           tar -xf runtime/kix-aarch64-darwin.tar -C darwin
           for system in x86_64-linux aarch64-linux aarch64-darwin; do
             case $system in
-              *-linux) kix="cli/target/${system%%-*}-unknown-linux-musl/release/kix" ;;
+              *-linux) kix="linux/${system%%-*}-unknown-linux-musl/release/kix" ;;
               *-darwin) kix=darwin/kix ;;
             esac
             dir="kix-$VERSION-$system"
