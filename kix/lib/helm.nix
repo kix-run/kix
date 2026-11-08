@@ -63,7 +63,7 @@ let
   helmRelease =
     helmVersion:
     helmReleases.${toString helmVersion}
-    or (throw "This chart asks for Helm ${toString helmVersion}, but Kix renders charts with Helm ${lib.concatStringsSep " or " helmMajors}. Set `helmVersion` to one of them.");
+    or (throw "Helm ${toString helmVersion} is not supported. Set `helmVersion` to ${lib.concatStringsSep " or " helmMajors}.");
 
   nixPkgs =
     if pkgs == null then
@@ -89,7 +89,7 @@ let
       system = nixPkgs.stdenv.hostPlatform.system;
       platform =
         helmPlatforms.${system}
-          or (throw "Kix can run Helm on ${lib.concatStringsSep ", " (builtins.attrNames helmPlatforms)}, but this system is ${system}. Build this project on one of those systems.");
+          or (throw "Helm is supported on ${lib.concatStringsSep ", " (builtins.attrNames helmPlatforms)}, not ${system}. Build this project on one of those systems.");
       tarball = nixPkgs.fetchurl {
         url = "https://get.helm.sh/helm-v${release.version}-${platform}.tar.gz";
         sha256 =

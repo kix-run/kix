@@ -40,7 +40,7 @@ const SPEC_VERSION: u64 = 1;
 #[derive(Debug, thiserror::Error)]
 pub enum HelmError {
     #[error(
-        "This cluster's Kix library renders Helm charts with Helm {wanted}, but Kix {} ships {}. Run `kix lib update` to move flake.lock to the Kix library {}, or use the version of Kix that matches the library",
+        "Helm {wanted} is not in the Kix runtime (Kix {} has {}). Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
         crate::VERSION,
         shipped_text(shipped),
         crate::VERSION
@@ -54,7 +54,7 @@ pub enum HelmError {
     LibraryMismatch(Box<crate::library::HelmMismatch>),
 
     #[error(
-        "this cluster's Kix library does not match Kix {} (Helm format {found}, expected {SPEC_VERSION}). Run `kix lib update` to move flake.lock to the Kix library {}, or use the version of Kix that matches the library",
+        "this cluster's Kix library does not match Kix {} (Helm format {found}, expected {SPEC_VERSION}). Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
         crate::VERSION,
         crate::VERSION
     )]
@@ -108,7 +108,7 @@ pub enum HelmError {
     },
 
     #[error(
-        "evaluation still needs {} after Kix wrote it to the local store{}",
+        "evaluation still could not read {} after writing it to Kix's local store{}",
         path.display(),
         remove_store_hint()
     )]
@@ -271,7 +271,7 @@ fn derivers(outputs: &[PathBuf]) -> Vec<PathBuf> {
             .map(PathBuf::from)
             .collect(),
         Err(error) => {
-            tracing::warn!(%error, "could not look up the Helm charts behind paths in an evaluation error; Kix will report the evaluation error as-is");
+            tracing::warn!(%error, "could not check whether the evaluation error was caused by an unrendered Helm chart; reporting the evaluation error as-is");
             Vec::new()
         }
     }
@@ -545,7 +545,7 @@ fn fetch(spec: &FetchSpec, algo: &str, hash_hex: &str, out: &Path) -> Result<(),
         return Err(HelmError::Spec {
             drv: out.to_path_buf(),
             message: format!(
-                "Kix stored the chart at {added} instead of {}",
+                "the chart was stored at {added} instead of {}",
                 out.display()
             ),
         });
@@ -787,7 +787,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!(
-                "This cluster's Kix library renders Helm charts with Helm 4.3.1, but Kix {v} ships Helm 4.3.2. Run `kix lib update` to move flake.lock to the Kix library {v}, or use the version of Kix that matches the library"
+                "Helm 4.3.1 is not in the Kix runtime (Kix {v} has Helm 4.3.2). Run `kix lib update` to update the Kix library in flake.lock to {v}, or use the version of Kix that matches the library"
             )
         );
     }

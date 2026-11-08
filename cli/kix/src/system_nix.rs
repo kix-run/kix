@@ -49,26 +49,26 @@ pub fn parse_version(line: &str) -> NixKind {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SystemNixError {
     #[error(
-        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), but Kix found no `nix` program on PATH. Install Nix {}.{} or later, or remove builder = \"nix\" from kix.toml to build with Kix's own Nix",
+        "this project uses the `nix` builder (`builder = \"nix\"` in kix.toml), but `nix` is not on PATH. Install Nix {}.{} or later, or remove `builder = \"nix\"` from kix.toml",
         MIN_VERSION.0,
         MIN_VERSION.1
     )]
     NotInstalled,
 
     #[error(
-        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), but `nix --version` failed: {0}"
+        "this project uses the `nix` builder (`builder = \"nix\"` in kix.toml), but `nix --version` failed: {0}"
     )]
     Failed(String),
 
     #[error(
-        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), which must be Nix {}.{} or later, and `nix --version` reports {version}. Upgrade Nix",
+        "this project uses the `nix` builder (`builder = \"nix\"` in kix.toml), which requires Nix {}.{} or later, but `nix --version` reported {version}. Upgrade Nix, or remove `builder = \"nix\"` from kix.toml",
         MIN_VERSION.0,
         MIN_VERSION.1
     )]
     TooOld { version: String },
 
     #[error(
-        "this project uses the machine's Nix (builder = \"nix\" in kix.toml), and `nix --version` reports {version}. The nix builder does not support Lix. Install Nix {}.{} or later, or remove builder = \"nix\" from kix.toml to build with Kix's own Nix",
+        "this project uses the `nix` builder (`builder = \"nix\"` in kix.toml), which does not support Lix (`nix --version` reported {version}). Install Nix {}.{} or later, or remove `builder = \"nix\"` from kix.toml",
         MIN_VERSION.0,
         MIN_VERSION.1
     )]
@@ -90,7 +90,7 @@ pub fn check_version(line: &str) -> Result<(), SystemNixError> {
         NixKind::Unknown => {
             tracing::warn!(
                 version = line,
-                "Kix could not read the version of the machine's Nix, so it does not check that it is Nix 2.24 or later"
+                "could not read the Nix version from `nix --version`; continuing without checking for Nix 2.24 or later"
             );
             Ok(())
         }
@@ -190,16 +190,13 @@ mod tests {
         check_version("nix (Nix) 3.0.1").unwrap();
 
         let err = check_version("nix (Nix) 2.18.1").unwrap_err().to_string();
-        assert!(err.contains("must be Nix 2.24 or later"), "{err}");
-        assert!(err.contains("reports nix (Nix) 2.18.1"), "{err}");
+        assert!(err.contains("requires Nix 2.24 or later"), "{err}");
+        assert!(err.contains("reported nix (Nix) 2.18.1"), "{err}");
 
         let err = check_version("nix (Lix, like Nix) 2.91.1")
             .unwrap_err()
             .to_string();
-        assert!(
-            err.contains("The nix builder does not support Lix"),
-            "{err}"
-        );
+        assert!(err.contains("does not support Lix"), "{err}");
 
         check_version("something else").unwrap();
     }
@@ -207,7 +204,7 @@ mod tests {
     #[test]
     fn a_missing_nix_names_the_fix() {
         let err = SystemNixError::NotInstalled.to_string();
-        assert!(err.contains("no `nix` program on PATH"), "{err}");
+        assert!(err.contains("`nix` is not on PATH"), "{err}");
         assert!(err.contains("Install Nix 2.24 or later"), "{err}");
     }
 }
