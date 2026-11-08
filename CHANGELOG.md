@@ -34,9 +34,18 @@ Each release groups changes under these headings:
 
 ### Changed
 
-- Errors about `kix.toml`, the `nix` builder, the Kix library version, and Helm are shorter. Each one says what is wrong and how to fix it. Scripts that match these messages word for word need updating.
 - `kix --version` and `kix doctor` say which Kix chose the running one, and for which `kix.toml`. `kix --version` also shows the `kix` on `PATH` when it is a different version. `kix doctor` reports the project's `kix` setting and the installed versions of Kix.
 - The install script that installed Kix through a Nix profile (`web/install.sh`, never published) is removed.
+
+## 0.7.1 - 2026-11-08
+
+### Changed
+
+- Errors about `kix.toml`, the `nix` builder, the Kix library version, and Helm are shorter. Each one says what is wrong and how to fix it. Scripts that match these messages word for word need updating.
+
+### Fixed
+
+- The `kix.toml` reference page shows its error messages correctly. In 0.7.0 that page stopped the docs site from building.
 
 ## 0.7.0 - 2026-11-07
 
