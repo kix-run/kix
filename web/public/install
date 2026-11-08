@@ -1,0 +1,310 @@
+#!/bin/sh
+# Install Kix.
+#
+#   curl -fsSL https://kix.run/install | sh
+#
+# The script downloads the release archive for this machine from kix.run,
+# checks it against the release's signed SHA256SUMS, unpacks it to
+# ~/.local/share/kix/<version>/, links ~/.local/bin/kix to it, and writes
+# ~/.local/share/kix/receipt.json, which `kix self update` reads. It never
+# edits a shell startup file.
+#
+# Environment:
+#   KIX_VERSION      the version to install, such as 0.8.3 or the prerelease
+#                    0.9.0-rc.1 (default: the latest release)
+#   KIX_INSTALL_DIR  the directory for the kix link (default: ~/.local/bin)
+#   XDG_DATA_HOME    installs go to $XDG_DATA_HOME/kix when it is set
+#
+# web/scripts/test-install.sh tests this script against a release on disk.
+# Everything runs from main on the last line, so a download cut short runs
+# nothing.
+
+set -eu
+
+# The release signing keys, one per line: the raw Ed25519 public key in hex,
+# as in cli/release-keys/<keyid>.pub. web/scripts/install.test.mjs checks that
+# this list matches that directory.
+RELEASE_KEYS='33e0a9bbc5a5d97b5f72a361214ee95add83f1e58dab9ceed61058b1cce52549'
+
+# The DER header of an Ed25519 public key, which OpenSSL reads in front of
+# the raw key.
+ED25519_DER_PREFIX='302a300506032b6570032100'
+
+SUPPORTED='x86_64-linux, aarch64-linux, aarch64-darwin'
+
+say() { printf '%s\n' "$*"; }
+note() { printf 'install: %s\n' "$*" >&2; }
+fail() {
+  printf 'install: %s\n' "$*" >&2
+  exit 1
+}
+
+# Print a path with $HOME shown as ~.
+tilde() {
+  case $1 in
+    "$HOME"/*) printf '~%s\n' "${1#"$HOME"}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+# Print this machine's system name in the form release archives use.
+detect_system() {
+  os=$(uname -s)
+  arch=$(uname -m)
+  case $arch in
+    x86_64 | amd64) cpu=x86_64 ;;
+    aarch64 | arm64) cpu=aarch64 ;;
+    *) cpu='' ;;
+  esac
+  # A shell running under Rosetta reports x86_64 on an Apple silicon Mac.
+  if [ "$os" = Darwin ] && [ "$cpu" = x86_64 ] &&
+    [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
+    cpu=aarch64
+  fi
+  case "$cpu-$os" in
+    x86_64-Linux) echo x86_64-linux ;;
+    aarch64-Linux) echo aarch64-linux ;;
+    aarch64-Darwin) echo aarch64-darwin ;;
+    *) fail "Kix has no release for $os $arch. Supported: $SUPPORTED" ;;
+  esac
+}
+
+# Print the SHA-256 of a file, or of stdin when no file is given.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$@" | cut -d' ' -f1
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r "$@" | cut -d' ' -f1
+  else
+    fail "found none of sha256sum, shasum, or openssl, so the download cannot be checked"
+  fi
+}
+
+# Write the bytes that a string of hex digits spells.
+hex_bytes() {
+  octal=$(printf '%s\n' "$1" | awk '{
+    digits = "0123456789abcdef"
+    s = tolower($0)
+    out = ""
+    for (i = 1; i < length(s); i += 2) {
+      hi = index(digits, substr(s, i, 1)) - 1
+      lo = index(digits, substr(s, i + 1, 1)) - 1
+      out = out sprintf("\\%03o", hi * 16 + lo)
+    }
+    print out
+  }')
+  # shellcheck disable=SC2059 # The format is the octal escapes built above.
+  printf "$octal"
+}
+
+# Fetch a path below the release source into a file. Over https, curl
+# refuses to follow a redirect to plain http.
+fetch() {
+  case $source in
+    https://*) curl --proto '=https' --tlsv1.2 -fsSL "$source$1" -o "$2" ;;
+    *) curl -fsSL "$source$1" -o "$2" ;;
+  esac || fail "could not download $source$1"
+}
+
+# Print the field of an index.json line, or nothing.
+field() {
+  printf '%s\n' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"
+}
+
+# Check SHA256SUMS against SHA256SUMS.sig with the release keys, or say why
+# the check is skipped. A signature that is checked and does not verify stops
+# the install.
+verify_sums() {
+  sums=$1
+  sig=$2
+  keys=$RELEASE_KEYS
+  if [ -n "${KIX_INSTALL_TEST_PUBKEY:-}" ]; then
+    case $source in
+      file://*) keys="$keys $KIX_INSTALL_TEST_PUBKEY" ;;
+      *) note "ignoring KIX_INSTALL_TEST_PUBKEY, which only applies to a file:// KIX_INSTALL_SOURCE" ;;
+    esac
+  fi
+
+  if [ "$(sed -n 1p "$sig")" != 'kix-release-signature v1' ]; then
+    fail "SHA256SUMS.sig for Kix $version is not a kix-release-signature v1 file. Do not install it; report this at https://kix.run"
+  fi
+  keyid=$(sed -n 's/^keyid=\([0-9a-f]\{8\}\)$/\1/p' "$sig")
+  signature=$(sed -n 's/^signature=\([A-Za-z0-9+/=]*\)$/\1/p' "$sig")
+  if [ -z "$keyid" ] || [ -z "$signature" ]; then
+    fail "SHA256SUMS.sig for Kix $version has no keyid or signature line. Do not install it; report this at https://kix.run"
+  fi
+
+  if [ -z "$(printf '%s' "$keys" | tr -d '[:space:]')" ]; then
+    note "this install script has no release signing key yet, so it checked the SHA-256 only"
+    return 0
+  fi
+  if ! command -v openssl >/dev/null 2>&1 ||
+    ! openssl pkeyutl -help 2>&1 | grep -q -- '-rawin'; then
+    note "this machine's openssl cannot check Ed25519 signatures; checked the SHA-256 only"
+    return 0
+  fi
+
+  key=''
+  for candidate in $keys; do
+    if [ "$(hex_bytes "$candidate" | sha256 | cut -c1-8)" = "$keyid" ]; then
+      key=$candidate
+    fi
+  done
+  if [ -z "$key" ]; then
+    fail "the release signature for Kix $version names key $keyid, which this install script does not know. Do not install it; report this at https://kix.run"
+  fi
+
+  hex_bytes "$ED25519_DER_PREFIX$key" >"$work/key.der"
+  printf '%s' "$signature" | openssl base64 -d -A >"$work/sig.bin"
+  if ! openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/key.der" -rawin \
+    -in "$sums" -sigfile "$work/sig.bin" >/dev/null 2>&1; then
+    fail "the release signature for Kix $version does not verify. Do not install it; report this at https://kix.run"
+  fi
+  say "Verified SHA256SUMS for Kix $version with release key $keyid"
+}
+
+# Point the kix link at the installed version, unless something else owns
+# that path.
+link_kix() {
+  target=$1
+  link=$2
+  if [ -e "$link" ] || [ -L "$link" ]; then
+    current=''
+    if [ -L "$link" ]; then
+      current=$(readlink "$link")
+    fi
+    case $current in
+      "$data"/*) ;;
+      *) fail "$(tilde "$link") exists and was not installed by this script. Remove it, or install elsewhere with KIX_INSTALL_DIR" ;;
+    esac
+  fi
+  mkdir -p "$(dirname "$link")"
+  ln -s "$target" "$link.tmp.$$"
+  mv -f "$link.tmp.$$" "$link"
+}
+
+# Print a string as a JSON string literal.
+json_string() {
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+main() {
+  command -v curl >/dev/null 2>&1 || fail "curl is not installed. Install curl and run this script again"
+
+  source=${KIX_INSTALL_SOURCE:-https://kix.run}
+  source=${source%/}
+  case $source in
+    https://* | file://*) ;;
+    *) fail "KIX_INSTALL_SOURCE must be an https:// or file:// URL, not $source" ;;
+  esac
+
+  case ${XDG_DATA_HOME:-} in
+    /*) data=$XDG_DATA_HOME/kix ;;
+    *) data=$HOME/.local/share/kix ;;
+  esac
+  bindir=${KIX_INSTALL_DIR:-$HOME/.local/bin}
+  bindir=${bindir%/}
+  case $bindir in
+    /*) ;;
+    *) fail "KIX_INSTALL_DIR must be an absolute path, not $bindir" ;;
+  esac
+  system=$(detect_system)
+
+  mkdir -p "$data"
+  work=$(mktemp -d "$data/tmp-install-XXXXXX")
+  trap 'rm -rf "$work"' EXIT
+  trap 'exit 1' HUP INT TERM
+
+  # index.json is pretty-printed JSON with no spaces inside its values, so
+  # dropping whitespace and splitting at braces puts the header on the first
+  # line and each release on a line of its own.
+  fetch /releases/index.json "$work/index.json"
+  tr -d ' \t\r\n' <"$work/index.json" | tr '{' '\n' | tr '}' '\n' | sed '/^,*$/d' >"$work/index.lines"
+  header=$(sed -n 1p "$work/index.lines")
+  if [ "$(field "$header" schema)" != 'kix.run/releases/v1' ]; then
+    fail "$source/releases/index.json is not a release index this script can read"
+  fi
+
+  version=${KIX_VERSION:-}
+  version=${version#v}
+  if [ -z "$version" ]; then
+    version=$(field "$header" latest)
+    if [ -z "$version" ]; then
+      # Prereleases are never latest, so a site with only prereleases has
+      # none to install by default.
+      pre=$(grep -F '"prerelease":true' "$work/index.lines" | sed -n 1p || true)
+      [ -z "$pre" ] || fail "$source lists no Kix release yet, only the prerelease $(field "$pre" version). To install it, run: curl -fsSL $source/install | KIX_VERSION=$(field "$pre" version) sh"
+      fail "$source lists no Kix release yet"
+    fi
+  fi
+  case $version in
+    *[!0-9A-Za-z.-]* | [!0-9]* | *. | *- | *..* | *.-* | *-.*) fail "KIX_VERSION=$version is not a Kix version. Write one such as 0.8.3 or 0.9.0-rc.1" ;;
+  esac
+
+  entry=$(grep -F "\"version\":\"$version\"" "$work/index.lines" | sed -n 1p || true)
+  if [ -z "$entry" ]; then
+    latest=$(field "$header" latest)
+    fail "no Kix $version release exists${latest:+. The newest is $latest}"
+  fi
+  case $entry in
+    *"\"$system\""*) ;;
+    *) fail "Kix $version has no release archive for $system" ;;
+  esac
+  archive=kix-$system.tar.gz
+  dest=$data/$version
+
+  if [ -x "$dest/bin/kix" ]; then
+    say "Kix $version is already installed in $(tilde "$dest")"
+  else
+    say "Downloading Kix $version for $system"
+    fetch "$(field "$entry" sums)" "$work/SHA256SUMS"
+    fetch "$(field "$entry" signature)" "$work/SHA256SUMS.sig"
+    verify_sums "$work/SHA256SUMS" "$work/SHA256SUMS.sig"
+
+    expected=$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA256SUMS")
+    [ -n "$expected" ] || fail "SHA256SUMS for Kix $version lists no $archive"
+    fetch "$(field "$entry" download)$archive" "$work/$archive"
+    actual=$(sha256 "$work/$archive")
+    if [ "$actual" != "$expected" ]; then
+      fail "downloaded $archive does not match SHA256SUMS (expected $expected, got $actual)"
+    fi
+
+    mkdir "$work/unpack"
+    tar -xzf "$work/$archive" -C "$work/unpack"
+    top=$work/unpack/kix-$version-$system
+    [ -x "$top/bin/kix" ] || fail "$archive does not contain kix-$version-$system/bin/kix"
+    rm -rf "$dest"
+    mv "$top" "$dest"
+  fi
+
+  link_kix "$dest/bin/kix" "$bindir/kix"
+  {
+    printf '{\n'
+    printf '  "installer": "script",\n'
+    printf '  "version": %s,\n' "$(json_string "$version")"
+    printf '  "installed_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "link": %s\n' "$(json_string "$bindir/kix")"
+    printf '}\n'
+  } >"$work/receipt.json"
+  mv "$work/receipt.json" "$data/receipt.json"
+
+  say "Installed Kix $version to $(tilde "$dest")"
+  case ":$PATH:" in
+    *":$bindir:"*)
+      found=$(command -v kix || true)
+      if [ -n "$found" ] && [ "$found" != "$bindir/kix" ]; then
+        say "Another kix comes first on your PATH: $found"
+      fi
+      ;;
+    *)
+      case $bindir in
+        "$HOME"/*) say "Add $(tilde "$bindir") to your PATH: export PATH=\"\$HOME${bindir#"$HOME"}:\$PATH\"" ;;
+        *) say "Add $bindir to your PATH: export PATH=\"$bindir:\$PATH\"" ;;
+      esac
+      ;;
+  esac
+}
+
+main "$@"

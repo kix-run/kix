@@ -65,6 +65,11 @@ kix-container.workspace = true
 blake3.workspace = true
 sha2.workspace = true
 
+# Installing Kix releases (`release`)
+ring.workspace = true
+flate2.workspace = true
+tar.workspace = true
+
 # Paths
 walkdir.workspace = true
 tempfile.workspace = true

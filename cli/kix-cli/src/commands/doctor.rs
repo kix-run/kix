@@ -1,9 +1,11 @@
-//! `kix doctor`: check the installation Kix runs from and the project's
-//! builder.
+//! `kix doctor`: check the installation Kix runs from, the project's
+//! builder, and the version of Kix the project needs.
 
-use kix::project::{BuilderKind, BuilderSource, ProjectConfig};
+use kix::installs;
+use kix::project::{BuilderKind, BuilderSource, FILE, ProjectConfig};
 use kix::runtime;
 use kix::system_nix;
+use kix::version::{self, policy};
 use miette::miette;
 
 use crate::cli::GlobalArgs;
@@ -12,8 +14,9 @@ use crate::output::{green, red, yellow};
 /// Run every check, print one line per result, and fail when any check
 /// fails.
 pub fn run(global: &GlobalArgs) -> miette::Result<()> {
-    ok(&format!("Kix {}", env!("CARGO_PKG_VERSION")));
-    let failures = check_runtime() + check_builder(&global.flake);
+    ok(&kix_line());
+    let failures = check_runtime() + check_builder(&global.flake) + check_version(&global.flake);
+    report_installs();
     if failures > 0 {
         return Err(miette!(
             "{failures} check{} failed",
@@ -21,6 +24,110 @@ pub fn run(global: &GlobalArgs) -> miette::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Return the first line: the running version, where it runs from, and
+/// which Kix chose it.
+fn kix_line() -> String {
+    let mut line = format!("Kix {}", version::running());
+    if let Ok(exe) = std::env::current_exe().and_then(|p| p.canonicalize()) {
+        line.push_str(&format!(" ({})", exe.display()));
+    }
+    if let Some(by) = std::env::var_os(crate::select::SELECTED_BY_VAR).filter(|v| !v.is_empty()) {
+        line.push_str(&format!(
+            ", chosen by {}",
+            std::path::Path::new(&by).display()
+        ));
+    }
+    line
+}
+
+/// Report the version of Kix the project needs. Return 1 when the running
+/// Kix does not meet it.
+fn check_version(flake: &str) -> usize {
+    let Some(dir) = super::project_dir(flake) else {
+        return 0;
+    };
+    // The builder check reports a kix.toml that cannot be read.
+    let Ok(config) = ProjectConfig::read(Some(&dir), None) else {
+        return 0;
+    };
+    let running = version::running();
+    match (&config.kix, &config.kix_source) {
+        (Some(req), Some(path)) if policy::satisfies(req, running) => {
+            ok(&format!("Project needs Kix {req} ({})", path.display()));
+            0
+        }
+        (Some(req), path) => {
+            let from = path
+                .as_ref()
+                .map_or_else(|| "kix.toml".to_string(), |p| p.display().to_string());
+            fail(&format!(
+                "Project needs Kix {req} ({from}), and this is Kix {}",
+                running.release()
+            ));
+            detail(&format!(
+                "Run `kix self install {req}`, then run kix doctor again."
+            ));
+            1
+        }
+        (None, _) => {
+            if let Some(line) =
+                missing_kix_setting(&dir.join("flake.nix"), &dir.join(FILE), running)
+            {
+                warn(&line);
+            }
+            0
+        }
+    }
+}
+
+/// Return the warning for a project with no `kix` setting, or `None` when
+/// there is nothing to warn about: the directory is not a project, or the
+/// running Kix is older than any version the setting can name.
+fn missing_kix_setting(
+    flake_nix: &std::path::Path,
+    kix_toml: &std::path::Path,
+    running: &version::Version,
+) -> Option<String> {
+    if !flake_nix.exists() || running.minor_key() < policy::FIRST_SELECTING {
+        return None;
+    }
+    // A minor never matches a prerelease, so a prerelease suggests itself.
+    let minor = if running.is_prerelease() {
+        running.release()
+    } else {
+        running.minor_text()
+    };
+    Some(if kix_toml.exists() {
+        format!(
+            "kix.toml sets no kix version. Add kix = \"{minor}\" so everyone runs a matching Kix"
+        )
+    } else {
+        format!(
+            "This project has no kix.toml. Add one with kix = \"{minor}\" so everyone runs a matching Kix"
+        )
+    })
+}
+
+/// Report the installed versions. This never fails a check, since Kix can
+/// run from outside the data directory, such as from a Nix profile.
+fn report_installs() {
+    let Some(data) = installs::data_dir() else {
+        warn(&format!("No versions installed. {}", installs::NO_HOME));
+        return;
+    };
+    let all = installs::installed();
+    if all.is_empty() {
+        warn(&format!("No versions installed under {}", data.display()));
+        return;
+    }
+    let versions: Vec<String> = all.iter().map(|i| i.version.release()).collect();
+    ok(&format!(
+        "Installed versions: {} ({})",
+        versions.join(", "),
+        data.display()
+    ));
 }
 
 fn ok(text: &str) {
@@ -172,4 +279,38 @@ fn builder_line(config: &ProjectConfig) -> String {
         }
     };
     format!("Builder: {} ({from})", config.builder)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_project_without_a_kix_setting_is_told_which_file_to_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let flake = dir.path().join("flake.nix");
+        let toml = dir.path().join(FILE);
+        let v = |s: &str| s.parse::<version::Version>().unwrap();
+        assert_eq!(missing_kix_setting(&flake, &toml, &v("0.8.1")), None);
+
+        std::fs::write(&flake, "{}").unwrap();
+        assert_eq!(
+            missing_kix_setting(&flake, &toml, &v("0.8.1+3")).as_deref(),
+            Some(
+                "This project has no kix.toml. Add one with kix = \"0.8\" so everyone runs a matching Kix"
+            )
+        );
+        std::fs::write(&toml, "builder = \"kix\"\n").unwrap();
+        assert_eq!(
+            missing_kix_setting(&flake, &toml, &v("0.9.0")).as_deref(),
+            Some("kix.toml sets no kix version. Add kix = \"0.9\" so everyone runs a matching Kix")
+        );
+        assert_eq!(missing_kix_setting(&flake, &toml, &v("0.7.2")), None);
+        assert_eq!(
+            missing_kix_setting(&flake, &toml, &v("0.9.0-rc.1+4")).as_deref(),
+            Some(
+                "kix.toml sets no kix version. Add kix = \"0.9.0-rc.1\" so everyone runs a matching Kix"
+            )
+        );
+    }
 }

@@ -109,7 +109,11 @@ fn command(
         ("NO_COLOR", global.no_color.then(|| "1".to_owned())),
     ];
     let mut command = std::process::Command::new(program);
-    command.args(args).env("KIX_BIN", kix);
+    // A `kix` the plugin runs is a new command, which selects its own Kix.
+    command
+        .args(args)
+        .env("KIX_BIN", kix)
+        .env_remove(crate::select::SELECTED_BY_VAR);
     for (var, value) in vars {
         if let Some(value) = value {
             command.env(var, value);
@@ -123,17 +127,31 @@ mod tests {
     use super::*;
     use clap::FromArgMatches;
 
-    /// Return the environment variables set by `command` for `argv`.
-    fn vars(argv: &[&str]) -> Vec<(String, String)> {
+    /// Return the environment variables `command` sets for `argv`, and the
+    /// ones it removes.
+    fn changes(argv: &[&str]) -> (Vec<(String, String)>, Vec<String>) {
         let matches = cli::command().get_matches_from(argv);
         let global = cli::Cli::from_arg_matches(&matches).unwrap().global;
-        command(Path::new("/p/kix-x"), &[], &global, Path::new("/p/kix"))
-            .get_envs()
-            .map(|(k, v)| {
-                let text = |s: &OsStr| s.to_str().unwrap().to_owned();
-                (text(k), text(v.expect("nothing is removed")))
-            })
-            .collect()
+        let text = |s: &OsStr| s.to_str().unwrap().to_owned();
+        let mut set = Vec::new();
+        let mut removed = Vec::new();
+        for (k, v) in command(Path::new("/p/kix-x"), &[], &global, Path::new("/p/kix")).get_envs() {
+            match v {
+                Some(v) => set.push((text(k), text(v))),
+                None => removed.push(text(k)),
+            }
+        }
+        (set, removed)
+    }
+
+    /// Return the environment variables set by `command` for `argv`.
+    fn vars(argv: &[&str]) -> Vec<(String, String)> {
+        changes(argv).0
+    }
+
+    #[test]
+    fn a_plugin_selects_its_own_kix_again() {
+        assert_eq!(changes(&["kix", "x"]).1, [crate::select::SELECTED_BY_VAR]);
     }
 
     // Verify that every global flag is forwarded to plugins via an environment

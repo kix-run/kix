@@ -35,6 +35,15 @@ on:
       - 'flake.lock'
       - '.github/workflows/cli-tests.yml'
   workflow_dispatch:
+    inputs:
+      rehearse:
+        description: >-
+          Rehearse a release: build the archives as this version (X.Y.Z or a
+          prerelease such as X.Y.Z-rc.N, not a released one), sign them with
+          the release key, and install them from a copy of the release site.
+          Publishes nothing.
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -130,6 +139,8 @@ jobs:
       notes: ${{ steps.version.outputs.notes }}
       build: ${{ steps.build.outputs.build }}
       runtime: ${{ steps.build.outputs.runtime }}
+      rehearse: ${{ steps.version.outputs.rehearse }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -139,7 +150,36 @@ jobs:
 
       - name: Version
         id: version
+        env:
+          REHEARSE: ${{ inputs.rehearse }}
         run: |
+          # A version with a `-` suffix, such as 0.8.0-rc.1, is a prerelease.
+          version_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          # Sort versions oldest first, with a prerelease before its release.
+          # sort -V puts `~` before the end of the text, as semver puts a
+          # prerelease before its release.
+          semver_sort() { sed 's/-/~/' | sort -V | sed 's/~/-/'; }
+
+          # A rehearsal builds the archives as the version it names, so the
+          # release index lists them like a release.
+          if [ -n "$REHEARSE" ]; then
+            if ! printf '%s\n' "$REHEARSE" | grep -Eq "$version_re"; then
+              echo "rehearse must be a version such as 0.0.1 or 0.0.1-rc.1, not '$REHEARSE'."
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/v$REHEARSE" >/dev/null; then
+              echo "v$REHEARSE is a released version. Rehearse with one that is not, such as 0.0.1."
+              exit 1
+            fi
+            {
+              echo "version=$REHEARSE"
+              echo "release=false"
+              echo "rehearse=true"
+              case $REHEARSE in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           base=$(cargo metadata --manifest-path cli/Cargo.toml --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "kix-cli") | .version')
 
@@ -149,24 +189,47 @@ jobs:
             exit 0
           fi
 
-          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
-          if [ -n "$latest" ] && [ "$(printf '%s\n' "${latest#v}" "$base" | sort -V | tail -n1)" != "$base" ]; then
-            echo "cli/Cargo.toml has version $base, lower than the latest release tag $latest."
+          if ! printf '%s\n' "$base" | grep -Eq "$version_re"; then
+            echo "cli/Cargo.toml has version $base, which is not X.Y.Z or a prerelease such as X.Y.Z-rc.N."
+            exit 1
+          fi
+          latest=$(git tag -l 'v[0-9]*' | sed 's/^v//' | semver_sort | tail -n1)
+          if [ -n "$latest" ] && [ "$(printf '%s\n' "$latest" "$base" | semver_sort | tail -n1)" != "$base" ]; then
+            echo "cli/Cargo.toml has version $base, lower than the latest release tag v$latest."
             exit 1
           fi
 
           # The release notes: this version's CHANGELOG.md section, without
-          # its heading.
-          awk -v v="$base" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
-            CHANGELOG.md > release-notes.md
-          if ! grep -q '[^[:space:]]' release-notes.md; then
-            echo "CHANGELOG.md has no '## $base' section, or it is empty. The release skill writes it."
+          # its heading. A prerelease has no section of its own, so its notes
+          # are the Unreleased section that its release will take.
+          case $base in
+            *-*)
+              prerelease=true
+              section=Unreleased
+              # The backticks are Markdown for the release page.
+              # shellcheck disable=SC2016
+              printf 'Prerelease of Kix %s. Install it by name: `kix self install %s`, or `curl -fsSL https://kix.run/install | KIX_VERSION=%s sh`.\n\n' \
+                "${base%%-*}" "$base" "$base" > release-notes.md
+              ;;
+            *)
+              prerelease=false
+              section=$base
+              : > release-notes.md
+              ;;
+          esac
+          awk -v v="$section" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
+            CHANGELOG.md >> release-notes.md
+          if ! grep -q '^[-*] ' release-notes.md; then
+            echo "CHANGELOG.md has no '## $section' section, or it lists no changes. The release skill writes it."
             exit 1
           fi
           printf '\nBuilt from kix-run/kixpkgs@%s.\n' "$GITHUB_SHA" >> release-notes.md
 
-          echo "version=$base" >> "$GITHUB_OUTPUT"
-          echo "release=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$base"
+            echo "release=true"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
           {
             echo 'notes<<KIX_RELEASE_NOTES_END'
             cat release-notes.md
@@ -544,6 +607,87 @@ jobs:
   # This repository is private and so are its releases, so the binaries go
   # to the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
   # fine-grained token with Contents read/write on that repository only.
+  # A rehearsal (a manual run with the `rehearse` input) signs the archives
+  # with the real release key, builds a copy of the release site the way
+  # pages.yml does, and installs from it with the install script and with
+  # `kix self install`, so the signing secret, the committed key, the index
+  # generator, and both verifiers are checked before a real release. It
+  # publishes nothing.
+  rehearse-release:
+    needs: [version, release]
+    if: needs.version.outputs.rehearse == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kix-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Sign checksums
+        env:
+          KIX_RELEASE_SIGNING_KEY: ${{ secrets.KIX_RELEASE_SIGNING_KEY }}
+        run: |
+          scripts/sign-release.sh dist
+          test -s dist/SHA256SUMS.sig || { echo "no key is committed, so there is nothing to rehearse"; exit 1; }
+
+      - name: Build a copy of the release site
+        run: |
+          mkdir -p "release-src/v$VERSION" "site/download/$VERSION"
+          cp dist/SHA256SUMS dist/SHA256SUMS.sig "release-src/v$VERSION/"
+          node web/scripts/release-index.mjs release-src site
+          cp dist/kix-*.tar.gz "site/download/$VERSION/"
+          if [ "$PRERELEASE" = true ]; then
+            jq -e --arg v "$VERSION" '.latest != $v and any(.releases[]; .version == $v and .prerelease == true)' site/releases/index.json
+          else
+            jq -e --arg v "$VERSION" '.latest == $v' site/releases/index.json
+          fi
+
+      # A release installs as the latest one. A prerelease is never the
+      # latest, so it is named.
+      - name: Install with the install script
+        run: |
+          home="$RUNNER_TEMP/script-home"
+          if [ "$PRERELEASE" = true ]; then export KIX_VERSION="$VERSION"; fi
+          HOME="$home" KIX_INSTALL_SOURCE="file://$PWD/site" sh web/public/install 2>&1 | tee install.log
+          grep -q "Verified SHA256SUMS for Kix $VERSION with release key" install.log
+          test "$("$home/.local/bin/kix" --version)" = "kix $VERSION"
+
+      - name: Install with kix self install
+        run: |
+          home="$RUNNER_TEMP/kix-home"
+          HOME="$home" KIX_RELEASE_SOURCE="$PWD/site" \
+            "$RUNNER_TEMP/script-home/.local/bin/kix" self install "$VERSION"
+          test "$("$home/.local/share/kix/$VERSION/bin/kix" --version)" = "kix $VERSION"
+
+      - name: A changed signature is refused
+        run: |
+          sig="site/releases/v$VERSION/SHA256SUMS.sig"
+          zeros=$(head -c 64 /dev/zero | base64 -w0)
+          sed -i "s|^signature=.*|signature=$zeros|" "$sig"
+          home="$RUNNER_TEMP/tampered-home"
+          if HOME="$home" KIX_RELEASE_SOURCE="$PWD/site" \
+            "$RUNNER_TEMP/script-home/.local/bin/kix" self install "$VERSION" 2> refused.log; then
+            echo "kix installed a release whose signature was changed"
+            exit 1
+          fi
+          cat refused.log
+          grep -q "does not verify against any key built into Kix" refused.log
+          test ! -e "$home/.local/share/kix/$VERSION"
+          if [ "$PRERELEASE" = true ]; then export KIX_VERSION="$VERSION"; fi
+          if HOME="$RUNNER_TEMP/tampered-script-home" KIX_INSTALL_SOURCE="file://$PWD/site" \
+            sh web/public/install > refused-script.log 2>&1; then
+            cat refused-script.log
+            echo "the install script installed a release whose signature was changed"
+            exit 1
+          fi
+          cat refused-script.log
+
   publish:
     needs: [version, release, without-nix, nix-builder]
     if: needs.version.outputs.release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -564,23 +708,41 @@ jobs:
           name: kix-${{ needs.version.outputs.version }}
           path: dist
 
+      # Sign SHA256SUMS with the release key, so Kix and the install script
+      # can check what they download from kix.run. The site lists only
+      # releases with a signature. The secret KIX_RELEASE_SIGNING_KEY holds
+      # the private key as PEM, and its public half must already be committed
+      # as cli/release-keys/<keyid>.pub (see cli/release-keys/README.md).
+      - name: Sign checksums
+        env:
+          KIX_RELEASE_SIGNING_KEY: ${{ secrets.KIX_RELEASE_SIGNING_KEY }}
+        run: scripts/sign-release.sh dist
+
       # A release that already exists in kix-releases is left alone, so a
       # run that published and then failed to tag can be run again.
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
           NOTES: ${{ needs.version.outputs.notes }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           if gh release view "v$VERSION" --repo kix-run/kix-releases >/dev/null; then
             echo "kix-run/kix-releases already has v$VERSION."
             exit 0
           fi
           printf '%s\n' "$NOTES" > release-notes.md
+          # A prerelease is marked as one and never becomes GitHub's latest
+          # release, matching how kix.run lists it.
+          if [ "$PRERELEASE" = true ]; then
+            set -- --prerelease --latest=false
+          else
+            set -- --latest
+          fi
           gh release create "v$VERSION" dist/* \
             --repo kix-run/kix-releases \
             --title "kix $VERSION" \
             --notes-file release-notes.md \
-            --latest
+            "$@"
 
       # Last, so a run that fails before this point leaves no tag and the
       # next run tries the release again.

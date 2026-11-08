@@ -200,7 +200,7 @@ pub enum PlanFileError {
     #[error(
         "the plan file's format is '{}' version {version}; Kix {} reads '{FORMAT}' version {VERSION}",
         printable(.format),
-        crate::VERSION
+        crate::version::running().release()
     )]
     WrongFormat { format: String, version: u32 },
     #[error("the plan file is too large: {}", printable(.0))]

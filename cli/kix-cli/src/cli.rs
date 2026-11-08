@@ -356,7 +356,8 @@ pub enum Command {
     /// checks that its manifest.json lists the programs Kix expects, and
     /// checks every file against its SHA-256 in the
     /// manifest. Also reports the project's builder and where it was chosen
-    /// (kix.toml, or the default). Exits 1 when a check fails.
+    /// (kix.toml, or the default), the version of Kix the project needs, and
+    /// the installed versions of Kix. Exits 1 when a check fails.
     Doctor,
 
     /// Compliance exports: SBOM, SLSA attestations, audit bundles
@@ -369,6 +370,14 @@ pub enum Command {
     /// Manage the Kix library this project pins in flake.lock
     #[command(subcommand)]
     Lib(LibCommand),
+
+    /// Install, list, and remove versions of Kix
+    ///
+    /// Versions live under ~/.local/share/kix/<version>. A project names the
+    /// version it needs with `kix = "0.8"` in kix.toml, and Kix runs that
+    /// version for the project, installing it first when needed.
+    #[command(name = "self", subcommand)]
+    SelfCmd(SelfCommand),
 
     /// Run an external `kix-<NAME>` plugin from `PATH`
     #[command(external_subcommand)]
@@ -413,6 +422,7 @@ impl Command {
             | Command::Drift(_)
             | Command::Pin(_)
             | Command::Lib(_)
+            | Command::SelfCmd(_)
             | Command::Plugin(_) => None,
         }
     }
@@ -428,6 +438,44 @@ pub enum LibCommand {
     /// does not change flake.nix. When flake.nix pins another release, or the
     /// input is a local path or a fork, it says what to change by hand.
     Update(LibUpdateArgs),
+}
+
+/// Install, list, and remove versions of Kix.
+#[derive(Subcommand)]
+pub enum SelfCommand {
+    /// Install a version of Kix
+    ///
+    /// Takes a minor such as 0.8, which installs its newest patch, or an
+    /// exact version such as 0.8.3. Kix checks the release's signature and
+    /// SHA-256 before it unpacks anything.
+    Install {
+        /// The version to install, such as 0.8 or 0.8.3
+        version: String,
+    },
+
+    /// List the installed versions, newest first
+    ///
+    /// Marks the running version with `*` and the one `kix` on PATH runs.
+    List,
+
+    /// Remove all but the newest installed versions
+    ///
+    /// Always keeps the running version and the one `kix` on PATH runs.
+    Prune {
+        /// How many of the newest versions to keep
+        #[arg(long, default_value_t = 2)]
+        keep: usize,
+
+        /// Show what would be removed without removing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Install the newest release and point ~/.local/bin/kix at it
+    ///
+    /// Works when the install script installed this Kix. Otherwise it says
+    /// how to upgrade Kix the way it was installed.
+    Update,
 }
 
 #[derive(clap::Args)]

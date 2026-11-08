@@ -17,6 +17,27 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+**Before you upgrade**, check these items in your projects and scripts. The sections below explain each change.
+
+- Projects whose `flake.lock` pins a Kix library of another minor: run `kix lib update`, or set `kix` in `kix.toml` to the Kix library's minor.
+
+### Breaking (shows an error)
+
+- Kix now stops when the project's Kix library has a different minor version, or a newer patch version of the same minor. The error names the fix: run `kix lib update` and commit `flake.lock` to move the project to the Kix library that matches Kix, or set `kix` in `kix.toml` so that Kix runs the version that matches the Kix library. See [Install and run Kix](https://kix.run/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/).
+
+### Added
+
+- An install script. `curl -fsSL https://kix.run/install | sh` installs Kix to `~/.local/share/kix/<version>/` and links `~/.local/bin/kix` to it. It checks the release archive against the release's signed `SHA256SUMS`, and it never edits your shell startup files. Set `KIX_VERSION` to an exact version, such as `KIX_VERSION=0.8.3`, to install that version.
+- A project can name its Kix in `kix.toml`, as a minor (`kix = "0.8"`) or an exact version (`kix = "0.8.3"`). The setting must name Kix 0.8 or newer. When the running Kix does not match, it runs a matching installed Kix instead. When none is installed, it downloads the newest matching release from kix.run, verifies its signature and SHA-256, and runs it. `kix --version` never downloads. Set `KIX_AUTO_INSTALL=0` to stop Kix from downloading versions. See [`kix.toml`](https://kix.run/docs/reference/kix-toml/#the-kix-setting).
+- `kix self install <version>`, `kix self list`, `kix self prune`, and `kix self update` manage the versions of Kix installed in `~/.local/share/kix`. See [`kix self`](https://kix.run/docs/reference/cli/self/).
+- Releases include `SHA256SUMS.sig`, an Ed25519 signature over `SHA256SUMS`, and `https://kix.run/releases/index.json` lists every signed release.
+- Prereleases, such as `0.8.0-rc.1`. Kix installs a prerelease only when you name it in full: `kix self install 0.8.0-rc.1`, `KIX_VERSION=0.8.0-rc.1` for the install script, or `kix = "0.8.0-rc.1"` in `kix.toml`. A minor such as `kix = "0.8"` never matches a prerelease, and the install script and `kix self update` never move a release to one.
+
+### Changed
+
+- `kix --version` and `kix doctor` say which Kix chose the running one, and for which `kix.toml`. `kix --version` also shows the `kix` on `PATH` when it is a different version. `kix doctor` reports the project's `kix` setting and the installed versions of Kix.
+- The install script that installed Kix through a Nix profile (`web/install.sh`, never published) is removed.
+
 ## 0.7.1 - 2026-11-08
 
 ### Changed

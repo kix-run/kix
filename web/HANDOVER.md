@@ -41,21 +41,21 @@ every section to static HTML, and the page ships three small inline scripts
 | Sections, in page order | `src/components/sections/`: `Nav`, `Hero`, `Story`, `RootIdea`, `PayoffsIntro`, `PayoffA`…`PayoffD`, `Packages`, `Ai`, `Language`, `Deploying`, `Faq`, `Team`, `FinalCta` (includes the footer) |
 | Team photos | `src/assets/` (optimised to WebP by `astro:assets`) |
 | Social card | `public/og-image.png`, `public/og-image@2x.png` (design frame `lcDUr`) |
-| Install script (not published) | `install.sh` |
+| Install script (`kix.run/install`) and its test | `public/install`, `scripts/test-install.sh` |
+| Release index and download redirect | `scripts/release-index.mjs`, `public/_worker.js`, `public/_headers` |
 
 Every terminal and sample output is a data array at the top of its section
 file, so wording can change without touching markup.
 
 ### Decisions
 
-- **D1** (install command): `install.sh` is written but not published.
-  "Install the Kix CLI" links to tutorial 02 (local setup), "Read the docs" to
-  tutorial 01. The command bars in `Hero.astro` and `FinalCta.astro` are
-  commented out. To publish: copy `install.sh` to `public/install`,
-  uncomment both `CommandBar`s and their imports, and check the script
-  against a machine with and without Nix. kixpkgs is private, so
-  `nix profile install github:kix-run/kixpkgs#kix` only works for people
-  with access until the repo is public.
+- **D1** (install command): the install script is `public/install`, served
+  at `kix.run/install`. It installs the release archive from kix.run and
+  needs no Nix. "Install the Kix CLI" links to tutorial 02 (local setup),
+  "Read the docs" to tutorial 01. The command bars in `Hero.astro` and
+  `FinalCta.astro` stay commented out until the first signed release is in
+  `kix.run/releases/index.json`, since the script has nothing to install
+  before then. To show them, uncomment both `CommandBar`s and their imports.
 - **D2**: the design's copy, without "verifiable cluster artifact"; Adam is
   retiring the phrase.
 - **D3**: the Team section ships as "Core team" with Luca Dombetzki and Adam
@@ -135,7 +135,7 @@ check counts. Re-export it if the hero snippet changes shape.
 
 ### Known gaps
 
-- The install script is unpublished (D1).
+- The command bars for the install script are commented out (D1).
 - The Team section has no founder note; the design's was a placeholder.
 - No email capture (see Decisions).
 

@@ -7,8 +7,8 @@ export const INSTALL_URL = '/docs/tutorials/02-local-setup-and-first-run/';
 export const DOCS_URL = '/docs/tutorials/01-orientation/';
 
 /**
- * The one-line installer served from web/install.sh. The command bars that
- * show it in Hero.astro and FinalCta.astro are commented out until the
- * script is published at kix.run/install; see web/HANDOVER.md.
+ * The one-line installer, served from web/public/install. The command bars
+ * that show it in Hero.astro and FinalCta.astro stay commented out until
+ * kix.run/install serves a signed release; see web/HANDOVER.md.
  */
 export const INSTALL_COMMAND = 'curl -fsSL https://kix.run/install | sh';

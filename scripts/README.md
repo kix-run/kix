@@ -27,6 +27,7 @@ Because Helm chart fetching and rendering (`fetchHelmChart` and `importChart`) a
 
 - `scripts/kix-manifests.sh <flake-dir> <cluster> <out-link>` evaluates the cluster through `kix build -o json` and writes the standard `<namespace>/<name>-<kind>.yaml` directory tree using `kix.mkManifests`.
 - `scripts/cluster-checks.sh <flake-dir> <cluster> [<rules-test.yaml>]` builds the manifest directory with `kix-manifests.sh` and runs both `kixChecks.schemaCheck` (`kubeconform`) and `kixChecks.rulesCheck` (`promtool`) against it.
+- `scripts/sign-release.sh <dist-dir>` signs a release's `SHA256SUMS` with the key in `KIX_RELEASE_SIGNING_KEY`, for the release job and the release rehearsal in `.github/workflows/cli-tests.yml` (`cli/release-keys/README.md`).
 
 ## vendor-crds.py
 

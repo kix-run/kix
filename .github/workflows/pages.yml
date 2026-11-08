@@ -21,6 +21,19 @@ name: Deploy site to Cloudflare Pages
 # `.md` twin of a docs page to clients sending `Accept: text/markdown`.
 # See docs/README.md § Agent-facing surface.
 #
+# The site also carries what an installed Kix and the install script fetch
+# (v2_discussions/163_cli_install_versions_and_upgrades.md § 2):
+#
+#   kix.run/install                       ← web/public/install
+#   kix.run/releases/index.json           ← web/scripts/release-index.mjs
+#   kix.run/releases/v<version>/SHA256SUMS and SHA256SUMS.sig
+#   kix.run/download/<version>/<file>     → redirect by _worker.js
+#
+# The index lists the releases in kix-run/kix-releases that have a signed
+# SHA256SUMS. The release job starts this workflow after it publishes, so a
+# run started by the release merge, which fetches before the release exists,
+# is followed by one that lists it.
+#
 # kix-examples is a separate private repo (kix-ops/kix-examples) used
 # by the snippet pipeline. CI checks it out with a PAT and overrides
 # the flake input at build time, so the docs flake's local file://
@@ -94,6 +107,26 @@ jobs:
           # cleanly. Default fetch-depth=1 (shallow) breaks things.
           fetch-depth: 0
 
+      # Each release tag's SHA256SUMS and SHA256SUMS.sig, for the release
+      # index. A tag whose release is not published yet, or was published
+      # without a signature, has no file to fetch and is left out.
+      - name: Fetch release sums
+        working-directory: kixpkgs
+        run: |
+          base=https://github.com/kix-run/kix-releases/releases/download
+          mkdir -p ../releases-src
+          for tag in $(git tag -l 'v[0-9]*'); do
+            dir="../releases-src/$tag"
+            mkdir -p "$dir"
+            if curl -fsSL --retry 3 -o "$dir/SHA256SUMS" "$base/$tag/SHA256SUMS" &&
+              curl -fsSL --retry 3 -o "$dir/SHA256SUMS.sig" "$base/$tag/SHA256SUMS.sig"; then
+              git log -1 --format=%cs "$tag" > "$dir/date"
+            else
+              echo "$tag has no signed SHA256SUMS in kix-run/kix-releases; the index leaves it out."
+              rm -rf "$dir"
+            fi
+          done
+
       - name: Checkout kix-examples
         uses: actions/checkout@v6
         with:
@@ -121,18 +154,24 @@ jobs:
         run: |
           npm ci
           npm run build
+          node --test 'scripts/*.test.mjs'
+          nix run --inputs-from .. nixpkgs#shellcheck -- public/install scripts/test-install.sh
+          # OpenSSL 3, so the install script's signature check runs too.
+          nix shell --inputs-from .. nixpkgs#openssl -c sh scripts/test-install.sh
 
       # Which docs to build: main, the newest release tag, and the newest
-      # tag of each older minor release. The release builds are cached by
-      # the list of tags, since a tag's docs never change.
+      # tag of each older minor release. Prerelease tags, such as
+      # v0.8.0-rc.1, get no docs of their own. The release builds are cached
+      # by the list of tags, since a tag's docs never change.
       - name: Plan docs builds
         id: docs
         working-directory: kixpkgs
         run: |
-          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
+          releases=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- - || true)
+          latest=$(head -n1 <<<"$releases")
           archived=""
           seen=" $(cut -d. -f1-2 <<<"$latest") "
-          for tag in $(git tag -l 'v[0-9]*' --sort=-v:refname); do
+          for tag in $releases; do
             minor=$(cut -d. -f1-2 <<<"$tag")
             case "$seen" in *" $minor "*) continue ;; esac
             seen="$seen$minor "
@@ -205,6 +244,7 @@ jobs:
         run: |
           mkdir -p _site
           cp -r kixpkgs/web/dist/. _site/
+          node kixpkgs/web/scripts/release-index.mjs releases-src _site
           mkdir -p _site/docs
           if [ -z "$LATEST" ]; then
             cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
@@ -239,5 +279,8 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # --branch=main marks this a production deployment, so it
-          # serves on the custom domain rather than a preview URL.
-          command: pages deploy _site --project-name=kix-run --branch=main
+          # serves on the custom domain. A manual run from any other branch
+          # deploys a preview at <branch>.kix-run.pages.dev instead, which is
+          # how to check the Worker and the release files before they reach
+          # kix.run.
+          command: pages deploy _site --project-name=kix-run --branch=${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
