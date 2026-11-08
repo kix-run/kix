@@ -44,3 +44,8 @@ assert_cmd.workspace = true
 insta.workspace = true
 predicates.workspace = true
 proptest.workspace = true
+# Signed release fixtures for `kix self install` and selection.
+ring.workspace = true
+flate2.workspace = true
+tar.workspace = true
+base64.workspace = true

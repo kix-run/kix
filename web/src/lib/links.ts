@@ -10,6 +10,6 @@ export const DOCS_URL = '/docs/tutorials/01-orientation/';
 export const GITHUB_URL = 'https://github.com/kix-run';
 
 /**
- * The one-line installer served from web/install.sh.
+ * The one-line installer, served from web/public/install.
  */
 export const INSTALL_COMMAND = 'curl -fsSL https://kix.run/install | sh';
