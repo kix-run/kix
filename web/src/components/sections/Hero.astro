@@ -1,5 +1,4 @@
 ---
-import { ArrowRight } from '@lucide/astro';
 import Container from '../Container.astro';
 import Button from '../Button.astro';
 import { DOCS_URL } from '@/lib/links';
@@ -33,9 +32,6 @@ import { DOCS_URL } from '@/lib/links';
             <span class="check-icon hidden">Copied</span>
           </button>
         </div>
-        <Button href="/checks" variant="outline">
-          Explore Checks <ArrowRight size={16} aria-hidden="true" />
-        </Button>
         <Button href={DOCS_URL} variant="outline">Read the Docs</Button>
       </div>
     </div>
@@ -186,16 +182,18 @@ import { DOCS_URL } from '@/lib/links';
             <div class="wb-output-cards">
               <div class="out-card glow-green" id="out-card-1">
                 <span class="target-anchor-dot" id="tdot-1"></span>
-                <div id="ocard1-body" class="whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind">CiliumNetworkPolicy</span>
+                <div id="ocard1-body" class="out-card-body whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind">CiliumNetworkPolicy</span>
 <span class="k8s-key">metadata:</span> &#123; <span class="k8s-key">name:</span> <span class="k8s-str">web-to-db</span> &#125;
 <span class="k8s-key">spec:</span>
   <span class="k8s-key">endpointSelector:</span> &#123; <span class="k8s-key">matchLabels:</span> &#123; <span class="k8s-key">app:</span> <span class="k8s-str">db</span> &#125; &#125;
-  <span class="k8s-key">ingress:</span> [&#123; <span class="k8s-key">fromEndpoints:</span> [&#123; <span class="k8s-key">app:</span> <span class="k8s-str">web</span> &#125;], <span class="k8s-key">toPorts:</span> [<span class="k8s-kind">5432/TCP</span>] &#125;]</div>
+  <span class="k8s-key">ingress:</span>
+    - <span class="k8s-key">fromEndpoints:</span> [&#123; <span class="k8s-key">app:</span> <span class="k8s-str">web</span> &#125;]
+      <span class="k8s-key">toPorts:</span> [<span class="k8s-kind">5432/TCP</span>]</div>
               </div>
 
               <div class="out-card glow-blue" id="out-card-2">
                 <span class="target-anchor-dot" id="tdot-2" style="background:#38BDF8;"></span>
-                <div id="ocard2-body" class="whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Role</span>
+                <div id="ocard2-body" class="out-card-body whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Role</span>
 <span class="k8s-key">metadata:</span> &#123; <span class="k8s-key">name:</span> <span class="k8s-str">web-db-reader</span> &#125;
 <span class="k8s-key">rules:</span>
   - <span class="k8s-key">resources:</span> [<span class="k8s-str">"secrets"</span>]
@@ -314,7 +312,7 @@ import { DOCS_URL } from '@/lib/links';
   }
   @media (min-width: 64rem) {
     .wb-stage-bar {
-      grid-template-columns: 600px 1fr;
+      grid-template-columns: minmax(0, 560px) minmax(0, 1fr);
     }
   }
   .wb-stage-left {
@@ -350,12 +348,12 @@ import { DOCS_URL } from '@/lib/links';
   .wb-body {
     position: relative;
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   @media (min-width: 64rem) {
     .wb-body {
       height: 412px;
-      grid-template-columns: 600px 1fr;
+      grid-template-columns: minmax(0, 560px) minmax(0, 1fr);
     }
   }
 
@@ -375,6 +373,7 @@ import { DOCS_URL } from '@/lib/links';
   }
 
   .wb-input-pane {
+    min-width: 0;
     background: var(--paper);
     border-right: 1px solid var(--line);
     padding: 18px 20px;
@@ -523,15 +522,18 @@ import { DOCS_URL } from '@/lib/links';
   }
 
   .wb-output-pane {
+    min-width: 0;
     background: var(--night);
     color: var(--on-night);
-    padding: 18px 24px 18px 34px;
+    padding: 18px 22px 18px 32px;
     display: flex;
     flex-direction: column;
     justify-content: center;
     z-index: 2;
   }
   .wb-output-cards {
+    min-width: 0;
+    width: 100%;
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -540,17 +542,22 @@ import { DOCS_URL } from '@/lib/links';
   }
   .out-card {
     position: relative;
+    min-width: 0;
+    width: 100%;
     flex: 1;
     background: var(--night-2);
     border: 1.5px solid var(--night-line);
     border-radius: 10px;
-    padding: 14px 20px;
+    padding: 12px 18px;
     font-family: var(--font-mono);
     font-size: 12.5px;
-    line-height: 1.65;
+    line-height: 1.55;
     display: flex;
     flex-direction: column;
     justify-content: center;
+  }
+  .out-card-body {
+    max-width: 100%;
     overflow-x: auto;
   }
   .out-card.single-mode {
@@ -784,7 +791,9 @@ import { DOCS_URL } from '@/lib/links';
 <span class="k8s-key">metadata:</span> { <span class="k8s-key">name:</span> <span class="k8s-str">web-to-db</span> }
 <span class="k8s-key">spec:</span>
   <span class="k8s-key">endpointSelector:</span> { <span class="k8s-key">matchLabels:</span> { <span class="k8s-key">app:</span> <span class="k8s-str">db</span> } }
-  <span class="k8s-key">ingress:</span> [{ <span class="k8s-key">fromEndpoints:</span> [{ <span class="k8s-key">app:</span> <span class="k8s-str">web</span> }], <span class="k8s-key">toPorts:</span> [<span class="k8s-kind">5432/TCP</span>] }]`;
+  <span class="k8s-key">ingress:</span>
+    - <span class="k8s-key">fromEndpoints:</span> [{ <span class="k8s-key">app:</span> <span class="k8s-str">web</span> }]
+      <span class="k8s-key">toPorts:</span> [<span class="k8s-kind">5432/TCP</span>]`;
 
         body2.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Role</span>
 <span class="k8s-key">metadata:</span> { <span class="k8s-key">name:</span> <span class="k8s-str">web-db-reader</span> }
@@ -808,7 +817,8 @@ import { DOCS_URL } from '@/lib/links';
 
         body1.innerHTML = `<span class="k8s-key">kind:</span> <span style="color:#F87171;font-weight:700;">Service</span>  <span class="k8s-muted">(shop/web)</span>
 
-<span style="color:#F87171;font-weight:700;">✗ selector {"app": "shop-wbe"} matches 0 pods in namespace "shop"</span>
+<span style="color:#F87171;font-weight:700;">✗ selector {"app": "shop-wbe"} matches 0 pods</span>
+<span style="color:#F87171;font-weight:700;">  in namespace "shop"</span>
 
   <span class="k8s-muted">clusters/shop.nix:07</span>
   <span style="color:#38BDF8;">did you mean "shop-web" (defined on line 02)?</span>`;
@@ -866,7 +876,9 @@ import { DOCS_URL } from '@/lib/links';
 <span class="k8s-key">spec:</span>
   <span class="k8s-key">containers:</span>
     - <span class="k8s-key">name:</span> <span class="k8s-str">web</span>
-      <span class="k8s-key">env:</span> [{ <span class="k8s-key">name:</span> <span class="k8s-str">DB_HOST</span>, <span class="k8s-key">value:</span> <span class="k8s-kind">"rds.prod.internal"</span> }]`;
+      <span class="k8s-key">env:</span>
+        - <span class="k8s-key">name:</span> <span class="k8s-str">DB_HOST</span>
+          <span class="k8s-key">value:</span> <span class="k8s-kind">"rds.prod.internal"</span>`;
 
         body2.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Deployment</span>  <span class="k8s-muted">(shop/web)</span>
 <span class="k8s-key">spec:</span>

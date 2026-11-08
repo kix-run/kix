@@ -17,7 +17,8 @@ const moments = [
   {
     when: 'during a rollback',
     question: '“Put back exactly what ran on Tuesday.”',
-    answer: "kix rollback reapplies a previous deploy's build, exactly as it ran.",
+    answer:
+      "kix rollback reapplies a previous deploy's activation from the local build cache, and kix gc retains at least the 10 newest records.",
   },
   {
     when: 'during an audit',
@@ -38,13 +39,13 @@ const receipt = {
   subtitle: 'kix.run/receipt/v1',
   fields: [
     { key: 'cluster', value: 'shop' },
+    { key: 'activation', value: 'shop-6w9czkc51502' },
     { key: 'deployed', value: '2026-09-09 10:47' },
     { key: 'commit', value: 'c1b8d5e' },
     { key: 'working tree', value: 'clean', emphasis: true },
     { key: 'kix', value: '0.1.0' },
-    { key: 'arch', value: 'aarch64 / macos' },
   ],
-  images: ['docker.io/nginxinc/\nnginx-unprivileged:1.28-alpine\n@sha256:7377697a…'],
+  images: ['ghcr.io/acme/web:1.5.0\n@sha256:4a8e91c0…', 'ghcr.io/valkey-io/valkey:8.0.2\n@sha256:7377697a…'],
   footer: 'Stored on the cluster after each deploy. Manifests stay out of the receipt because they can contain secrets.',
 };
 
