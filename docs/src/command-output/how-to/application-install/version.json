@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix --version",
-      "stdout": "kix 0.6.0\n",
+      "stdout": "kix 0.7.0\n",
       "stderr": "",
-      "stdoutDrift": "kix 0.6.0\n",
+      "stdoutDrift": "kix 0.7.0\n",
       "stderrDrift": "",
       "exitCode": 0
     }

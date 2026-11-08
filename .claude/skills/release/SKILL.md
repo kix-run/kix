@@ -67,9 +67,10 @@ person names a version, use it only if it is higher than the current one.
 2. The lockfiles: run `cargo update --workspace` in `cli/` and
    `cargo update -p kix-lib -p kix-bundle -p kix-container` in `cli/fuzz/`.
    Check that the diff changes only the `version` lines of Kix's own crates.
-3. The docs capture the output of `kix --version`. Replace the old version
-   in each sidecar that shows it: `git grep -l 'kix <old version>'
-   docs/src/command-output`. Without this, the Documentation captures check
+3. The docs capture the output of `kix --version`, and some captures show
+   the Nix store path of the `kix` package. Replace the old version in each
+   sidecar that shows it: `git grep -l -e 'kix <old version>' -e
+   'kix-<old version>' docs/src/command-output`. Without this, the Documentation captures check
    fails on the release pull request.
 4. `CHANGELOG.md`: rename `## Unreleased` to `## <version> - <YYYY-MM-DD>`
    with today's date, and put a new, empty `## Unreleased` above it. Remove
