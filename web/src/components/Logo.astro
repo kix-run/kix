@@ -1,6 +1,5 @@
 ---
-// The "k" mark (a rounded square with an orange mono "k") and the mono
-// "kix" wordmark. On night the square is light instead of ink.
+// The Sovereign Navy "kix" wordmark badge.
 interface Props {
   tone?: 'paper' | 'night';
   size?: 'md' | 'sm';
@@ -9,20 +8,19 @@ interface Props {
 const { tone = 'paper', size = 'md', class: className } = Astro.props;
 ---
 
-<span class:list={['inline-flex items-center gap-2.5', className]}>
-  <span
-    aria-hidden="true"
-    class:list={[
-      'inline-flex items-center justify-center font-mono font-bold text-accent-brand',
-      tone === 'paper' ? 'bg-ink' : 'bg-on-night',
-      size === 'md' ? 'size-7 rounded-md text-[17px]' : 'size-6 rounded-[5px] text-[15px]',
-    ]}>k</span
-  >
-  <span
-    class:list={[
-      'font-mono font-bold',
-      tone === 'paper' ? 'text-ink' : 'text-on-night',
-      size === 'md' ? 'text-[22px]' : 'text-[18px]',
-    ]}>kix</span
-  >
-</span>
+<span
+  aria-hidden="true"
+  class:list={[
+    'kix-logo-badge inline-flex items-center justify-center rounded-[5px] border font-mono font-bold tracking-[-0.02em] text-white',
+    tone === 'paper' ? 'kix-logo-paper border-night-line bg-night' : 'border-t-blue/40 bg-accent-button',
+    size === 'md' ? 'px-2.5 py-1 text-[15px]' : 'px-2 py-0.5 text-[13px]',
+    className,
+  ]}>kix</span
+>
+
+<style>
+  :global(:root[data-theme='dark']) .kix-logo-paper {
+    border-color: rgba(56, 189, 248, 0.35);
+    background-color: #1d65ec;
+  }
+</style>

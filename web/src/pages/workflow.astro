@@ -1,0 +1,26 @@
+---
+import Base from '@/layouts/Base.astro';
+import Nav from '@/components/sections/Nav.astro';
+import PageHeader from '@/components/PageHeader.astro';
+import PayoffB from '@/components/sections/PayoffB.astro';
+import Deploying from '@/components/sections/Deploying.astro';
+import PayoffC from '@/components/sections/PayoffC.astro';
+import FinalCta from '@/components/sections/FinalCta.astro';
+---
+
+<Base
+  title="Workflow, Diff & Rollouts | Kix"
+  description="Preview package-grouped diffs against live clusters, post plans on pull requests, deploy in dependency waves, and record verifiable receipts."
+>
+  <Nav />
+  <main id="main">
+    <PageHeader
+      title="Preview every change and deploy in dependency order."
+      subtitle="Compare your compiled cluster definition against live Kubernetes state, post package-grouped plans on pull requests, and record a deployment receipt on the cluster."
+    />
+    <PayoffB />
+    <Deploying />
+    <PayoffC />
+  </main>
+  <FinalCta />
+</Base>

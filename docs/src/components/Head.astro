@@ -18,7 +18,7 @@ const path = Astro.url.pathname.replace(/\/+$/, '');
 const hasMarkdownTwin = path !== `${base}/404`;
 const markdownPath = path === base ? `${base}/index.md` : `${path}.md`;
 const markdownHref = hasMarkdownTwin ? new URL(markdownPath, Astro.site).href : null;
-const llmsTxtHref = new URL('/llms.txt', Astro.site).href;
+const llmsTxtHref = new URL(`${base}/llms.txt`, Astro.site).href;
 ---
 
 <Default><slot /></Default>

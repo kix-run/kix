@@ -63,7 +63,7 @@ function prefersMarkdown(accept) {
  */
 function markdownPathFor(pathname) {
   if (pathname === '/' || pathname === '') {
-    return '/llms.txt';
+    return '/docs/llms.txt';
   }
   const path = pathname.replace(/\/+$/, '');
   const root = path.match(VERSION_ROOT)[0];

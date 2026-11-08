@@ -1,83 +1,1005 @@
 ---
-import { ArrowDown, ArrowUpRight } from '@lucide/astro';
 import Container from '../Container.astro';
 import Button from '../Button.astro';
-import CodeCard from '../CodeCard.astro';
-import TermLine from '../TermLine.astro';
-// import CommandBar from '../CommandBar.astro';
-import { DOCS_URL, INSTALL_URL } from '@/lib/links';
-import type { Line } from '@/lib/code';
-
-const check = [
-  { tool: 'eval', result: 'pass', details: '37 manifests evaluated' },
-  { tool: 'scorecard', result: 'pass', details: '0 errors, 2 warnings, 0 info' },
-];
-
-const shop: Line[] = [
-  ['{ kix, packages }:'],
-  ['kix.', ['buildCluster', 'fn'], ' {'],
-  ['  name = ', ['"shop"', 'str'], ';'],
-  ['  modules = ['],
-  ['    kix.flavors.', ['eks', 'pkg']],
-  ['    {'],
-  ['      availablePackages = packages;'],
-  ['      instances.shop.db.package = packages.', ['cnpg-cluster', 'pkg'], ';'],
-  [],
-  [['      # web asks for a Postgres. The cluster provides one.', 'comment']],
-  ['      instances.shop.web = {'],
-  ['        package = import ./web.nix;'],
-  ['        config.replicas = ', ['3', 'num'], ';'],
-  ['      };'],
-  ['    }'],
-  ['  ];'],
-  ['}'],
-];
+import { DOCS_URL } from '@/lib/links';
 ---
 
 <section aria-labelledby="hero-title" class="bg-paper">
+  <!-- Centered Hero Header -->
   <Container>
-    <div class="grid grid-cols-1 items-center gap-12 pt-10 pb-16 md:pt-14 xl:grid-cols-[minmax(0,1fr)_minmax(0,600px)] xl:gap-16 lg:pt-16 lg:pb-28">
-      <div class="flex flex-col gap-7">
-        <h1
-          id="hero-title"
-          class="text-[46px] leading-none font-semibold tracking-[-1.5px] text-balance text-ink sm:text-[60px] sm:tracking-[-2px] xl:text-[76px] xl:tracking-[-2.5px]"
+    <div class="flex flex-col items-center pt-12 pb-11 text-center md:pt-14 md:pb-12">
+      <h1
+        id="hero-title"
+        class="max-w-[780px] text-[44px] leading-[1.03] font-bold tracking-[-0.03em] text-balance text-ink sm:text-[56px] lg:text-[64px]"
+      >
+        Kix is a Kubernetes<br />compiler.
+      </h1>
+      <p class="mt-4 max-w-[660px] text-[18px] leading-[1.5] text-ink-2 md:text-[19px]">
+        Compile your whole cluster from one definition. If it compiles, it will deploy safely.
+      </p>
+      <div class="mt-7 flex flex-wrap items-center justify-center gap-3">
+        <div
+          class="flex items-center gap-3.5 rounded-lg border border-night-line bg-night py-1.5 pr-1.5 pl-4 font-mono text-[13px] shadow-[0_8px_20px_rgba(11,19,43,0.10)]"
         >
-          Kix is a Kubernetes compiler.
-        </h1>
-        <p class="max-w-[540px] text-[18px] leading-[1.45] text-ink-2 md:text-[20px]">
-          Compile your whole cluster from one definition.<br />Make deploys boring.
-        </p>
-        <div class="flex flex-wrap items-center gap-3 pt-2">
-          <Button href={INSTALL_URL}>Install the Kix CLI <ArrowDown size={18} aria-hidden="true" /></Button>
-          <Button href={DOCS_URL} variant="outline">Read the docs <ArrowUpRight size={18} aria-hidden="true" /></Button>
+          <span class="font-bold text-t-blue select-none" aria-hidden="true">$</span>
+          <code class="text-on-night">curl -fsSL https://kix.run/install | sh</code>
+          <button
+            type="button"
+            data-copy="curl -fsSL https://kix.run/install | sh"
+            class="copy-button inline-flex items-center gap-1.5 rounded-[5px] border border-white/15 bg-accent-brand px-3.5 py-2 font-sans text-[12.5px] font-semibold text-white transition-colors hover:bg-accent-text"
+          >
+            <span class="copy-icon">Copy</span>
+            <span class="check-icon hidden">Copied</span>
+          </button>
         </div>
-        {/* Shown once kix.run/install serves a signed release (see web/HANDOVER.md).
-        <CommandBar command={INSTALL_COMMAND} />
-        */}
-        <p class="text-sm text-ink-2">
-          The CLI is available in early access. Deploy from your laptop or CI; Kix requires no controller in the cluster.
-        </p>
+        <Button href={DOCS_URL} variant="outline">Read the Docs</Button>
       </div>
-      <CodeCard title="clusters/shop.nix" lines={shop} class="shadow-[0_24px_60px_-28px_rgb(21_23_28/0.45)]">
-        <div slot="footer" class="font-mono text-[13.5px] leading-[1.6]">
-          <TermLine>kix check shop</TermLine>
-          {/* The real `kix check` table. The hero cluster evaluates to 37 manifests; the warning count depends on web.nix and matches the OG image. */}
-          <table class="mt-1.5 border-separate border-spacing-x-0 text-left">
-            <thead class="sr-only">
-              <tr><th>Tool</th><th>Result</th><th>Details</th></tr>
-            </thead>
-            <tbody>
-              {check.map((row) => (
-                <tr>
-                  <td class="pr-6 pl-[1.4em] text-on-night-2">{row.tool}</td>
-                  <td class="pr-6 text-t-green">{row.result}</td>
-                  <td class="text-on-night-2">{row.details}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </CodeCard>
     </div>
   </Container>
+
+  <!-- Architectural Slate Well with Interactive 4-Beat Compiler Workbench -->
+  <div class="architectural-well border-y border-line py-9 pb-13" id="workbench">
+    <div class="mx-auto w-full max-w-[1200px] px-5 sm:px-8">
+      <!-- Single-Line 4-Tab Selector Bar -->
+      <div class="beat-stepper" role="tablist" aria-label="Compiler capabilities">
+        <button type="button" class="beat-tab active" id="beat-tab-0" data-beat="0" role="tab" aria-selected="true">
+          <div class="beat-tab-title">1. Derive NetworkPolicy &amp; deploy order</div>
+          <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-0"></div></div>
+        </button>
+        <button type="button" class="beat-tab" id="beat-tab-1" data-beat="1" role="tab" aria-selected="false">
+          <div class="beat-tab-title">2. Catch selector typos offline</div>
+          <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-1"></div></div>
+        </button>
+        <button type="button" class="beat-tab" id="beat-tab-2" data-beat="2" role="tab" aria-selected="false">
+          <div class="beat-tab-title">3. Preview live cluster drift</div>
+          <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-2"></div></div>
+        </button>
+        <button type="button" class="beat-tab" id="beat-tab-3" data-beat="3" role="tab" aria-selected="false">
+          <div class="beat-tab-title">4. Import RDS or set PodSpec</div>
+          <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-3"></div></div>
+        </button>
+      </div>
+
+      <!-- Unified 2-Pane Compiler Window -->
+      <div class="workbench-window" id="workbench-window">
+        <!-- Dynamic SVG Dataflow Overlay -->
+        <svg class="wire-svg-overlay" id="wire-svg" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="wireGradBlue" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#2563EB" stop-opacity="0.95"></stop>
+              <stop offset="100%" stop-color="#34D399" stop-opacity="0.95"></stop>
+            </linearGradient>
+            <linearGradient id="wireGradRed" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#DC2626" stop-opacity="0.95"></stop>
+              <stop offset="100%" stop-color="#F87171" stop-opacity="0.95"></stop>
+            </linearGradient>
+            <linearGradient id="wireGradAmber" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#D97706" stop-opacity="0.95"></stop>
+              <stop offset="100%" stop-color="#FBBF24" stop-opacity="0.95"></stop>
+            </linearGradient>
+            <filter id="glowFilter" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2.5" result="blur"></feGaussianBlur>
+              <feMerge>
+                <feMergeNode in="blur"></feMergeNode>
+                <feMergeNode in="SourceGraphic"></feMergeNode>
+              </feMerge>
+            </filter>
+          </defs>
+          <path
+            id="wire-path-1"
+            fill="none"
+            stroke="url(#wireGradBlue)"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            filter="url(#glowFilter)"></path>
+          <path
+            id="wire-path-2"
+            fill="none"
+            stroke="url(#wireGradBlue)"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            filter="url(#glowFilter)"></path>
+          <circle id="wire-orb-1" r="5" fill="#34D399" filter="url(#glowFilter)" opacity="0"></circle>
+          <circle id="wire-orb-2" r="5" fill="#38BDF8" filter="url(#glowFilter)" opacity="0"></circle>
+        </svg>
+
+        <!-- Minimal File Header Bar -->
+        <div class="wb-stage-bar">
+          <div class="wb-stage-left">
+            <span class="file-badge-dot" aria-hidden="true"></span>
+            <span>clusters/shop.nix</span>
+          </div>
+          <div class="wb-stage-right">
+            <span id="right-file-label">$ kix build shop</span>
+          </div>
+        </div>
+
+        <!-- 2-Pane Body -->
+        <div class="wb-body">
+          <!-- Left Pane: Code with Dedicated Comment Lines -->
+          <div class="wb-input-pane">
+            <div class="wb-code-editor" id="code-editor">
+              <div class="code-line" id="cline-1">
+                <span class="code-ln">01</span><span id="ctext-1">db = packages.cnpg-cluster {'{ storage.size = "20Gi"; };'}</span><span
+                  class="code-anchor-dot"
+                  id="cdot-1"></span>
+              </div>
+              <div class="code-line" id="cline-2">
+                <span class="code-ln">02</span><span id="ctext-2">web = scope.mkDeployment {'{'}</span><span
+                  class="code-anchor-dot"
+                  id="cdot-2"></span>
+              </div>
+              <div class="code-line" id="cline-3">
+                <span class="code-ln">03</span><span id="ctext-3">  image = "ghcr.io/acme/web:1.4";</span><span
+                  class="code-anchor-dot"
+                  id="cdot-3"></span>
+              </div>
+              <div class="code-line" id="cline-4">
+                <span class="code-ln">04</span><span id="ctext-4">  replicas = 3;</span><span
+                  class="code-anchor-dot"
+                  id="cdot-4"></span>
+              </div>
+              <div class="code-line comment-ref" id="cline-5">
+                <span class="code-ln">05</span><span id="ctext-5"
+                  ><span class="code-comment">  # derives CiliumNetworkPolicy and deploy order</span></span
+                ><span class="code-anchor-dot" id="cdot-5"></span>
+              </div>
+              <div class="code-line active-ref" id="cline-6">
+                <span class="code-ln">06</span><span id="ctext-6">  env.DB_HOST = db.out.fqdn;</span><span
+                  class="code-anchor-dot"
+                  id="cdot-6"></span>
+              </div>
+              <div class="code-line" id="cline-7">
+                <span class="code-ln">07</span><span id="ctext-7">  selector.matchLabels.app = "shop-web";</span><span
+                  class="code-anchor-dot"
+                  id="cdot-7"></span>
+              </div>
+              <div class="code-line" id="cline-8">
+                <span class="code-ln">08</span><span id="ctext-8">{'};'}</span><span
+                  class="code-anchor-dot"
+                  id="cdot-8"></span>
+              </div>
+              <div class="code-line hidden-line" id="cline-9">
+                <span class="code-ln">09</span><span id="ctext-9"></span><span
+                  class="code-anchor-dot"
+                  id="cdot-9"></span>
+              </div>
+              <div class="code-line hidden-line" id="cline-10">
+                <span class="code-ln">10</span><span id="ctext-10"></span><span
+                  class="code-anchor-dot"
+                  id="cdot-10"></span>
+              </div>
+              <div class="code-line hidden-line" id="cline-11">
+                <span class="code-ln">11</span><span id="ctext-11"></span><span
+                  class="code-anchor-dot"
+                  id="cdot-11"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Pane: Sovereign Navy K8s Resources (`kind: ...`) or Verbatim CLI Output -->
+          <div class="wb-output-pane">
+            <div class="wb-output-cards">
+              <div class="out-card glow-green" id="out-card-1">
+                <span class="target-anchor-dot" id="tdot-1"></span>
+                <div id="ocard1-body" class="out-card-body whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind">CiliumNetworkPolicy</span>
+<span class="k8s-key">metadata:</span> &#123; <span class="k8s-key">name:</span> <span class="k8s-str">web-to-db</span> &#125;
+<span class="k8s-key">spec:</span>
+  <span class="k8s-key">endpointSelector:</span> &#123; <span class="k8s-key">matchLabels:</span> &#123; <span class="k8s-key">app:</span> <span class="k8s-str">db</span> &#125; &#125;
+  <span class="k8s-key">ingress:</span>
+    - <span class="k8s-key">fromEndpoints:</span> [&#123; <span class="k8s-key">app:</span> <span class="k8s-str">web</span> &#125;]
+      <span class="k8s-key">toPorts:</span> [<span class="k8s-kind">5432/TCP</span>]</div>
+              </div>
+
+              <div class="out-card glow-blue" id="out-card-2">
+                <span class="target-anchor-dot" id="tdot-2" style="background:#38BDF8;"></span>
+                <div id="ocard2-body" class="out-card-body whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Deployment</span>
+<span class="k8s-key">metadata:</span>
+  <span class="k8s-key">name:</span> <span class="k8s-str">web</span>
+  <span class="k8s-key">annotations:</span>
+    <span class="k8s-key">kix.run/depends-on:</span> <span class="k8s-kind" style="color:#38BDF8;">"shop/Service/db"</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </section>
+
+<style is:global>
+  .beat-stepper {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  @media (min-width: 64rem) {
+    .beat-stepper {
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+  }
+  .beat-tab {
+    position: relative;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 13px 16px 15px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    overflow: hidden;
+    font-family: var(--font-sans);
+  }
+  .beat-tab:hover {
+    border-color: var(--ink-2);
+  }
+  .beat-tab.active {
+    border-color: var(--accent-brand);
+    box-shadow: 0 6px 18px rgba(37, 99, 235, 0.14);
+  }
+  .beat-tab.active-err {
+    border-color: #dc2626;
+    box-shadow: 0 6px 18px rgba(220, 38, 38, 0.16);
+  }
+  :root[data-theme='dark'] .beat-tab.active-err {
+    border-color: #f87171;
+  }
+  .beat-tab-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    line-height: 1.2;
+    transition: color 0.15s;
+  }
+  .beat-tab.active .beat-tab-title,
+  .beat-tab.active-err .beat-tab-title {
+    color: var(--ink);
+    font-weight: 700;
+  }
+  .beat-progress-track {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: transparent;
+  }
+  .beat-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent-brand);
+  }
+  .beat-tab.active-err .beat-progress-fill {
+    background: #dc2626;
+  }
+  :root[data-theme='dark'] .beat-tab.active-err .beat-progress-fill {
+    background: #f87171;
+  }
+
+  .workbench-window {
+    position: relative;
+    background: var(--paper);
+    border: 1.5px solid var(--line);
+    border-radius: 12px;
+    box-shadow:
+      0 20px 44px rgba(11, 19, 43, 0.1),
+      0 4px 12px rgba(11, 19, 43, 0.04);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  :root[data-theme='dark'] .workbench-window {
+    box-shadow:
+      0 24px 52px rgba(4, 8, 20, 0.55),
+      0 4px 14px rgba(4, 8, 20, 0.35);
+  }
+  @media (min-width: 64rem) {
+    .workbench-window {
+      height: 452px;
+    }
+  }
+
+  .wb-stage-bar {
+    height: 40px;
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  @media (min-width: 64rem) {
+    .wb-stage-bar {
+      grid-template-columns: minmax(0, 560px) minmax(0, 1fr);
+    }
+  }
+  .wb-stage-left {
+    background: var(--paper-2);
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-right: 1px solid var(--line);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .file-badge-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    background: var(--accent-brand);
+  }
+  .wb-stage-right {
+    background: #090d13;
+    padding: 0 24px;
+    display: none;
+    align-items: center;
+    color: #e2e8f0;
+    font-weight: 600;
+  }
+  @media (min-width: 64rem) {
+    .wb-stage-right {
+      display: flex;
+    }
+  }
+
+  .wb-body {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 64rem) {
+    .wb-body {
+      height: 412px;
+      grid-template-columns: minmax(0, 560px) minmax(0, 1fr);
+    }
+  }
+
+  .wire-svg-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 20;
+    display: none;
+  }
+  @media (min-width: 64rem) {
+    .wire-svg-overlay {
+      display: block;
+    }
+  }
+
+  .wb-input-pane {
+    min-width: 0;
+    background: var(--paper);
+    border-right: 1px solid var(--line);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    z-index: 2;
+  }
+  .wb-code-editor {
+    background: var(--paper-2);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.72;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow-x: auto;
+  }
+  .code-line {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 1px 26px 1px 10px;
+    border-radius: 5px;
+    white-space: pre;
+  }
+  .code-line.hidden-line {
+    display: none;
+  }
+  .code-line.block-mid-ref {
+    background: rgba(37, 99, 235, 0.12);
+    box-shadow: inset 3px 0 0 var(--accent-brand);
+    font-weight: 600;
+    border-radius: 0;
+  }
+  .code-line.block-mid-ref .code-comment {
+    color: var(--accent-brand);
+    font-weight: 500;
+  }
+  .code-line.block-end-ref {
+    background: rgba(37, 99, 235, 0.12);
+    box-shadow: inset 3px 0 0 var(--accent-brand);
+    font-weight: 600;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+  .code-ln {
+    width: 26px;
+    color: var(--t-dim);
+    font-size: 11px;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .code-comment {
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+  .code-line.comment-ref {
+    background: rgba(37, 99, 235, 0.08);
+    box-shadow: inset 3px 0 0 var(--accent-brand);
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .code-line.comment-ref .code-comment {
+    color: var(--accent-brand);
+    font-weight: 600;
+  }
+  .code-line.comment-err {
+    background: rgba(220, 38, 38, 0.09);
+    box-shadow: inset 3px 0 0 #dc2626;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .code-line.comment-err .code-comment,
+  .code-err-val {
+    color: #dc2626;
+    font-weight: 600;
+  }
+  :root[data-theme='dark'] .code-line.comment-err .code-comment,
+  :root[data-theme='dark'] .code-err-val {
+    color: #f87171;
+  }
+  .code-line.comment-plan {
+    background: rgba(217, 119, 6, 0.1);
+    box-shadow: inset 3px 0 0 #d97706;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .code-line.comment-plan .code-comment {
+    color: #b45309;
+    font-weight: 600;
+  }
+  :root[data-theme='dark'] .code-line.comment-plan .code-comment {
+    color: #fbbf24;
+  }
+  .code-line.active-ref {
+    background: rgba(37, 99, 235, 0.12);
+    box-shadow: inset 3px 0 0 var(--accent-brand);
+    font-weight: 600;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+  .code-line.active-err {
+    background: rgba(220, 38, 38, 0.13);
+    box-shadow: inset 3px 0 0 #dc2626;
+    font-weight: 600;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+  .code-line.active-plan {
+    background: rgba(217, 119, 6, 0.15);
+    box-shadow: inset 3px 0 0 #d97706;
+    font-weight: 600;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+
+  .code-anchor-dot {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent-brand);
+    opacity: 0;
+    transform: translateY(-50%);
+  }
+  .code-line.active-ref .code-anchor-dot,
+  .code-line.block-mid-ref.has-dot .code-anchor-dot {
+    opacity: 1;
+    background: var(--accent-brand);
+  }
+  .code-line.active-err .code-anchor-dot {
+    opacity: 1;
+    background: #dc2626;
+  }
+  .code-line.active-plan .code-anchor-dot {
+    opacity: 1;
+    background: #d97706;
+  }
+
+  .wb-output-pane {
+    min-width: 0;
+    background: var(--night);
+    color: var(--on-night);
+    padding: 18px 22px 18px 32px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    z-index: 2;
+  }
+  .wb-output-cards {
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .out-card {
+    position: relative;
+    min-width: 0;
+    width: 100%;
+    flex: 1;
+    background: var(--night-2);
+    border: 1.5px solid var(--night-line);
+    border-radius: 10px;
+    padding: 12px 18px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .out-card-body {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .out-card.single-mode {
+    flex: 1;
+  }
+  .out-card.hidden-card {
+    display: none;
+  }
+  .out-card.glow-green {
+    border-color: rgba(52, 211, 153, 0.65);
+    box-shadow: 0 8px 24px rgba(5, 10, 25, 0.45);
+  }
+  .out-card.glow-blue {
+    border-color: rgba(56, 189, 248, 0.65);
+    box-shadow: 0 8px 24px rgba(5, 10, 25, 0.45);
+  }
+  .out-card.glow-red {
+    border-color: rgba(248, 113, 113, 0.85);
+    background: rgba(220, 38, 38, 0.1);
+  }
+  .out-card.glow-amber {
+    border-color: rgba(251, 191, 36, 0.75);
+  }
+
+  .target-anchor-dot {
+    position: absolute;
+    left: -5px;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #34d399;
+    transform: translateY(-50%);
+  }
+  .out-card.single-mode .target-anchor-dot {
+    top: 32%;
+  }
+
+  .k8s-key {
+    color: #38bdf8;
+  }
+  .k8s-kind {
+    color: #34d399;
+    font-weight: 700;
+  }
+  .k8s-val {
+    color: #f1f5f9;
+  }
+  .k8s-str {
+    color: #bae6fd;
+  }
+  .k8s-muted {
+    color: #94a3b8;
+  }
+</style>
+
+<script>
+  const BEAT_DURATION = 6.0;
+  const TOTAL_DURATION = 24.0;
+  const HERO_FRAME_MIN_MS = 1000 / 62; // Cap to 60 FPS
+
+  let currentTime = 0.0;
+  let isPlaying = true;
+  let heroInViewport = true;
+  let heroRafId = 0;
+  let lastRafTimestamp: number | null = null;
+  let renderedBeatIdx = -1;
+  let wireGeometryDirty = true;
+
+  function clamp01(v: number): number {
+    return Math.max(0, Math.min(1, v));
+  }
+  function easeOutCubic(x: number): number {
+    const t = clamp01(x);
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  interface CachedWire {
+    pathEl: SVGPathElement | null;
+    orbEl: SVGCircleElement | null;
+    totalLen: number;
+    orbColor: string;
+  }
+
+  const cachedWires: [CachedWire, CachedWire] = [
+    { pathEl: null, orbEl: null, totalLen: 260, orbColor: '#34D399' },
+    { pathEl: null, orbEl: null, totalLen: 260, orbColor: '#38BDF8' },
+  ];
+
+  function computeWirePath(
+    slot: 0 | 1,
+    sourceEl: HTMLElement | null,
+    targetEl: HTMLElement | null,
+    pathEl: SVGPathElement | null,
+    orbEl: SVGCircleElement | null,
+    gradId: string,
+    orbColor: string
+  ) {
+    const winEl = document.getElementById('workbench-window');
+    if (!winEl || !sourceEl || !targetEl || !pathEl || !orbEl) return;
+
+    const winRect = winEl.getBoundingClientRect();
+    const sRect = sourceEl.getBoundingClientRect();
+    const tRect = targetEl.getBoundingClientRect();
+
+    const x1 = sRect.left + sRect.width / 2 - winRect.left;
+    const y1 = sRect.top + sRect.height / 2 - winRect.top;
+    const x2 = tRect.left + tRect.width / 2 - winRect.left;
+    const y2 = tRect.top + tRect.height / 2 - winRect.top;
+
+    const dx = Math.max(48, (x2 - x1) * 0.52);
+    const d = `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${(x1 + dx).toFixed(1)} ${y1.toFixed(1)}, ${(x2 - dx).toFixed(1)} ${y2.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+
+    pathEl.setAttribute('d', d);
+    pathEl.setAttribute('stroke', `url(#${gradId})`);
+    const totalLen = pathEl.getTotalLength ? pathEl.getTotalLength() : 260;
+    pathEl.style.strokeDasharray = `${totalLen}`;
+
+    cachedWires[slot] = { pathEl, orbEl, totalLen, orbColor };
+  }
+
+  function animateCachedWire(slot: 0 | 1, drawProgress: number, pulseProgress: number) {
+    const { pathEl, orbEl, totalLen, orbColor } = cachedWires[slot];
+    if (!pathEl || !orbEl) return;
+
+    const drawn = easeOutCubic(drawProgress);
+    pathEl.style.strokeDashoffset = `${(totalLen * (1 - drawn)).toFixed(1)}`;
+    pathEl.style.opacity = drawProgress > 0.01 ? '1' : '0';
+
+    if (pulseProgress > 0 && pulseProgress < 1 && pathEl.getPointAtLength) {
+      const pt = pathEl.getPointAtLength(totalLen * clamp01(pulseProgress));
+      orbEl.setAttribute('cx', pt.x.toFixed(1));
+      orbEl.setAttribute('cy', pt.y.toFixed(1));
+      orbEl.setAttribute('fill', orbColor);
+      orbEl.setAttribute('opacity', '1');
+    } else {
+      orbEl.setAttribute('opacity', '0');
+    }
+  }
+
+  function renderAtTime(t: number) {
+    currentTime = ((t % TOTAL_DURATION) + TOTAL_DURATION) % TOTAL_DURATION;
+    const beatIdx = Math.floor(currentTime / BEAT_DURATION);
+    const beatLocal = currentTime - beatIdx * BEAT_DURATION;
+    const beatChanged = beatIdx !== renderedBeatIdx;
+
+    for (let i = 0; i < 4; i++) {
+      const prog = document.getElementById(`beat-prog-${i}`);
+      if (!prog) continue;
+      if (beatChanged) {
+        const tab = document.getElementById(`beat-tab-${i}`);
+        if (tab) {
+          const isErrTab = i === 1 && beatIdx === 1;
+          tab.className = 'beat-tab' + (i === beatIdx ? (isErrTab ? ' active-err' : ' active') : '');
+          tab.setAttribute('aria-selected', String(i === beatIdx));
+        }
+      }
+      if (i < beatIdx) {
+        prog.style.width = '100%';
+      } else if (i === beatIdx) {
+        prog.style.width = `${((beatLocal / BEAT_DURATION) * 100).toFixed(1)}%`;
+      } else {
+        prog.style.width = '0%';
+      }
+    }
+
+    const tdot1 = document.getElementById('tdot-1');
+    const tdot2 = document.getElementById('tdot-2');
+    const wirePath1 = document.getElementById('wire-path-1') as SVGPathElement | null;
+    const wirePath2 = document.getElementById('wire-path-2') as SVGPathElement | null;
+    const wireOrb1 = document.getElementById('wire-orb-1') as SVGCircleElement | null;
+    const wireOrb2 = document.getElementById('wire-orb-2') as SVGCircleElement | null;
+    if (!tdot1 || !tdot2 || !wirePath1 || !wirePath2 || !wireOrb1 || !wireOrb2) return;
+
+    // Only mutate DOM text/classes when the active beat changes.
+    if (beatChanged) {
+      renderedBeatIdx = beatIdx;
+      wireGeometryDirty = true;
+
+      for (let ln = 1; ln <= 8; ln++) {
+        const el = document.getElementById(`cline-${ln}`);
+        if (el) el.className = 'code-line';
+      }
+      for (let ln = 9; ln <= 11; ln++) {
+        const el = document.getElementById(`cline-${ln}`);
+        if (el) el.className = 'code-line hidden-line';
+      }
+      const c1 = document.getElementById('ctext-1');
+      const c2 = document.getElementById('ctext-2');
+      const c3 = document.getElementById('ctext-3');
+      const c4 = document.getElementById('ctext-4');
+      const c5 = document.getElementById('ctext-5');
+      const c6 = document.getElementById('ctext-6');
+      const c7 = document.getElementById('ctext-7');
+      const c8 = document.getElementById('ctext-8');
+      const c9 = document.getElementById('ctext-9');
+      const c10 = document.getElementById('ctext-10');
+      const c11 = document.getElementById('ctext-11');
+      const rightLabel = document.getElementById('right-file-label');
+      const card1 = document.getElementById('out-card-1');
+      const card2 = document.getElementById('out-card-2');
+      const body1 = document.getElementById('ocard1-body');
+      const body2 = document.getElementById('ocard2-body');
+      if (!c1 || !c2 || !c3 || !c4 || !c5 || !c6 || !c7 || !c8 || !c9 || !c10 || !c11 || !rightLabel || !card1 || !card2 || !body1 || !body2)
+        return;
+
+      c1.innerHTML = 'db = packages.cnpg-cluster { storage.size = "20Gi"; };';
+      c2.innerHTML = 'web = scope.mkDeployment {';
+      c3.innerHTML = '  image = "ghcr.io/acme/web:1.4";';
+      c4.innerHTML = '  replicas = 3;';
+      c5.innerHTML = '  env.DB_HOST = db.out.fqdn;';
+      c6.innerHTML = '  selector.matchLabels.app = "shop-web";';
+      c7.innerHTML = '};';
+      c8.innerHTML = '';
+
+      if (beatIdx === 0) {
+        document.getElementById('cline-5')?.classList.add('comment-ref');
+        c5.innerHTML = '<span class="code-comment">  # derives CiliumNetworkPolicy and deploy order</span>';
+        document.getElementById('cline-6')?.classList.add('active-ref');
+        c6.innerHTML = '  env.DB_HOST = db.out.fqdn;';
+        c7.innerHTML = '  selector.matchLabels.app = "shop-web";';
+        c8.innerHTML = '};';
+
+        rightLabel.textContent = '$ kix build shop';
+        card1.className = 'out-card glow-green';
+        card2.className = 'out-card glow-blue';
+        tdot1.style.background = '#34D399';
+        tdot2.style.background = '#38BDF8';
+
+        body1.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind">CiliumNetworkPolicy</span>
+<span class="k8s-key">metadata:</span> { <span class="k8s-key">name:</span> <span class="k8s-str">web-to-db</span> }
+<span class="k8s-key">spec:</span>
+  <span class="k8s-key">endpointSelector:</span> { <span class="k8s-key">matchLabels:</span> { <span class="k8s-key">app:</span> <span class="k8s-str">db</span> } }
+  <span class="k8s-key">ingress:</span>
+    - <span class="k8s-key">fromEndpoints:</span> [{ <span class="k8s-key">app:</span> <span class="k8s-str">web</span> }]
+      <span class="k8s-key">toPorts:</span> [<span class="k8s-kind">5432/TCP</span>]`;
+
+        body2.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Deployment</span>
+<span class="k8s-key">metadata:</span>
+  <span class="k8s-key">name:</span> <span class="k8s-str">web</span>
+  <span class="k8s-key">annotations:</span>
+    <span class="k8s-key">kix.run/depends-on:</span> <span class="k8s-kind" style="color:#38BDF8;">"shop/Service/db"</span>`;
+      } else if (beatIdx === 1) {
+        card2.className = 'out-card hidden-card';
+        wirePath2.style.opacity = '0';
+        wireOrb2.setAttribute('opacity', '0');
+
+        document.getElementById('cline-6')?.classList.add('comment-err');
+        c6.innerHTML = '<span class="code-comment">  # typo: selector matches 0 pods in namespace shop</span>';
+        document.getElementById('cline-7')?.classList.add('active-err');
+        c7.innerHTML = '  selector.matchLabels.app = <span class="code-err-val">"shop-wbe"</span>;';
+        c8.innerHTML = '};';
+
+        rightLabel.textContent = '$ kix check shop';
+        card1.className = 'out-card single-mode glow-red';
+        tdot1.style.background = '#F87171';
+
+        body1.innerHTML = `<span class="k8s-key">kind:</span> <span style="color:#F87171;font-weight:700;">Service</span>  <span class="k8s-muted">(shop/web)</span>
+
+<span style="color:#F87171;font-weight:700;">✗ selector {"app": "shop-wbe"} matches 0 pods</span>
+<span style="color:#F87171;font-weight:700;">  in namespace "shop"</span>
+
+  <span class="k8s-muted">clusters/shop.nix:07</span>
+  <span style="color:#38BDF8;">did you mean "shop-web" (defined on line 02)?</span>`;
+      } else if (beatIdx === 2) {
+        document.getElementById('cline-4')?.classList.add('comment-plan');
+        c4.innerHTML = '<span class="code-comment">  # live cluster was manually scaled to 5 replicas</span>';
+        document.getElementById('cline-5')?.classList.add('active-plan');
+        c5.innerHTML = '  replicas = 3;';
+        c6.innerHTML = '  env.DB_HOST = db.out.fqdn;';
+        c7.innerHTML = '  selector.matchLabels.app = "shop-web";';
+        c8.innerHTML = '};';
+
+        rightLabel.textContent = '$ kix plan shop';
+        card1.className = 'out-card single-mode glow-amber';
+        card2.className = 'out-card hidden-card';
+        tdot1.style.background = '#FBBF24';
+
+        body1.innerHTML = `<span class="k8s-key">kind:</span> <span style="color:#FBBF24;font-weight:700;">Deployment</span>  <span class="k8s-muted">(shop/web)</span>
+
+  <span style="color:#FBBF24;font-weight:700;">~ spec.replicas: 5 ──► 3</span>  <span class="k8s-muted">(reverts manual kubectl scale)</span>`;
+
+        wirePath2.style.opacity = '0';
+        wireOrb2.setAttribute('opacity', '0');
+      } else {
+        for (let ln = 9; ln <= 11; ln++) {
+          const el = document.getElementById(`cline-${ln}`);
+          if (el) el.className = 'code-line';
+        }
+        document.getElementById('cline-1')?.classList.add('comment-ref');
+        c1.innerHTML = '<span class="code-comment"># import existing external AWS RDS database</span>';
+        document.getElementById('cline-2')?.classList.add('block-mid-ref');
+        c2.innerHTML = 'db = kix.mkImport {';
+        document.getElementById('cline-3')?.classList.add('block-mid-ref', 'has-dot');
+        c3.innerHTML = '  out.fqdn = "rds.prod.internal";';
+        document.getElementById('cline-4')?.classList.add('block-mid-ref');
+        c4.innerHTML = '<span class="code-comment">  # ... credentials</span>';
+        document.getElementById('cline-5')?.classList.add('block-end-ref');
+        c5.innerHTML = '};';
+        c6.innerHTML = 'web = scope.mkDeployment {';
+        c7.innerHTML = '  image = "ghcr.io/acme/web:1.4";';
+        c8.innerHTML = '  env.DB_HOST = db.out.fqdn;';
+        document.getElementById('cline-9')?.classList.add('comment-ref');
+        c9.innerHTML = '<span class="code-comment">  # override any raw Kubernetes PodSpec field</span>';
+        document.getElementById('cline-10')?.classList.add('active-ref');
+        c10.innerHTML = '  spec.template.spec.priorityClassName = "production-high";';
+        c11.innerHTML = '};';
+
+        rightLabel.textContent = '$ kix export shop';
+        card1.className = 'out-card glow-green';
+        card2.className = 'out-card glow-blue';
+        tdot1.style.background = '#34D399';
+        tdot2.style.background = '#38BDF8';
+
+        body1.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind">Deployment</span>  <span class="k8s-muted">(shop/web)</span>
+<span class="k8s-key">spec:</span>
+  <span class="k8s-key">containers:</span>
+    - <span class="k8s-key">name:</span> <span class="k8s-str">web</span>
+      <span class="k8s-key">env:</span>
+        - <span class="k8s-key">name:</span> <span class="k8s-str">DB_HOST</span>
+          <span class="k8s-key">value:</span> <span class="k8s-kind">"rds.prod.internal"</span>`;
+
+        body2.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Deployment</span>  <span class="k8s-muted">(shop/web)</span>
+<span class="k8s-key">spec:</span>
+  <span class="k8s-key">template:</span>
+    <span class="k8s-key">spec:</span> { <span class="k8s-key">priorityClassName:</span> <span class="k8s-kind" style="color:#38BDF8;">"production-high"</span> }`;
+      }
+    }
+
+    if (wireGeometryDirty) {
+      wireGeometryDirty = false;
+      if (beatIdx === 0) {
+        computeWirePath(0, document.getElementById('cdot-6'), tdot1, wirePath1, wireOrb1, 'wireGradBlue', '#34D399');
+        computeWirePath(1, document.getElementById('cdot-6'), tdot2, wirePath2, wireOrb2, 'wireGradBlue', '#38BDF8');
+      } else if (beatIdx === 1) {
+        computeWirePath(0, document.getElementById('cdot-7'), tdot1, wirePath1, wireOrb1, 'wireGradRed', '#F87171');
+      } else if (beatIdx === 2) {
+        computeWirePath(0, document.getElementById('cdot-5'), tdot1, wirePath1, wireOrb1, 'wireGradAmber', '#FBBF24');
+      } else {
+        computeWirePath(0, document.getElementById('cdot-3'), tdot1, wirePath1, wireOrb1, 'wireGradBlue', '#34D399');
+        computeWirePath(1, document.getElementById('cdot-10'), tdot2, wirePath2, wireOrb2, 'wireGradBlue', '#38BDF8');
+      }
+    }
+
+    const drawProg = clamp01((beatLocal - 0.12) / 0.55);
+    const pulseProg = ((beatLocal - 0.18) % 1.45) / 1.1;
+
+    animateCachedWire(0, drawProg, pulseProg);
+    if (beatIdx === 0 || beatIdx === 3) {
+      animateCachedWire(1, clamp01((beatLocal - 0.22) / 0.55), pulseProg - 0.15);
+    }
+  }
+
+  function stopHeroLoop() {
+    if (heroRafId) {
+      cancelAnimationFrame(heroRafId);
+      heroRafId = 0;
+    }
+    lastRafTimestamp = null;
+  }
+
+  function ensureHeroLoop() {
+    if (!heroRafId && isPlaying && heroInViewport && !document.hidden) {
+      heroRafId = requestAnimationFrame(rafLoop);
+    }
+  }
+
+  function rafLoop(timestamp: number) {
+    if (!isPlaying || !heroInViewport || document.hidden) {
+      heroRafId = 0;
+      lastRafTimestamp = null;
+      return;
+    }
+    if (lastRafTimestamp !== null && timestamp - lastRafTimestamp < HERO_FRAME_MIN_MS) {
+      heroRafId = requestAnimationFrame(rafLoop);
+      return;
+    }
+    const dt = lastRafTimestamp === null ? 0 : (timestamp - lastRafTimestamp) / 1000;
+    lastRafTimestamp = timestamp;
+    renderAtTime(currentTime + dt);
+    heroRafId = requestAnimationFrame(rafLoop);
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('[data-beat]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.beat ?? 0);
+      isPlaying = false;
+      stopHeroLoop();
+      renderAtTime(idx * BEAT_DURATION + 1.4);
+    });
+  });
+
+  (window as unknown as Record<string, unknown>).kixTimeline = {
+    seek(sec: number) {
+      isPlaying = false;
+      stopHeroLoop();
+      renderAtTime(sec);
+    },
+    play() {
+      isPlaying = true;
+      ensureHeroLoop();
+    },
+    pause() {
+      isPlaying = false;
+      stopHeroLoop();
+    },
+  };
+
+  const winEl = document.getElementById('workbench-window');
+  if (winEl && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          heroInViewport = entry.isIntersecting;
+        }
+        if (heroInViewport) {
+          ensureHeroLoop();
+        } else {
+          stopHeroLoop();
+        }
+      },
+      { threshold: 0 }
+    );
+    io.observe(winEl);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      stopHeroLoop();
+    } else {
+      ensureHeroLoop();
+    }
+  });
+
+  window.addEventListener(
+    'resize',
+    () => {
+      wireGeometryDirty = true;
+      renderAtTime(currentTime);
+    },
+    { passive: true }
+  );
+  renderAtTime(0);
+  ensureHeroLoop();
+</script>

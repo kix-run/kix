@@ -10,7 +10,7 @@ const code = (text: string) =>
 const reasons = [
   {
     title: 'String context',
-    body: 'Nix records which values a string was built from. Kix reads those records to find every dependency, including addresses used inside a connection string or a ConfigMap.',
+    body: 'Nix strings can carry hidden context paths alongside their text. Kix attaches resource identity and endpoint metadata to every output, and Nix preserves that metadata through string interpolation and ConfigMaps so Kix can trace every dependency and network edge.',
   },
   {
     title: 'Pure evaluation',
@@ -18,7 +18,7 @@ const reasons = [
   },
   {
     title: 'Locked inputs',
-    body: `${code('flake.lock')} pins Kix and every package by hash, and image pins are committed with the definition. The same commit builds the same resources.`,
+    body: `${code('flake.lock')} pins Kix and every package by hash, and image digests are committed with the definition. The same commit builds the same resources.`,
   },
   {
     title: 'The module system',
@@ -33,8 +33,7 @@ const reasons = [
       <Heading id="language-title">Why the Nix language?</Heading>
       <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
         Kix definitions are written in the Nix language, which has been used for reproducible builds for over 20 years.
-        Kix uses the language rather than NixOS, and it runs on any machine with Nix installed. It relies on four of the
-        language's features directly.
+        Kix relies on four of the language's features directly.
       </p>
     </div>
     <ul class="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
