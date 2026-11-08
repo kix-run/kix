@@ -1,3 +1,0 @@
-# 2026-11-08 · `cli/kix/src/eval/nix.rs`, `cli/kix/src/library.rs` · Kix does not compare its own version with the library's, so a 0.7 CLI builds a 0.8 library.
-
-Kix refuses a library too old to write an activation index (`NoActivationIndex` in `cli/kix/src/eval/error.rs`), and stops on `HelmMismatch` when a build asks for a Helm version it does not ship. Nothing else compares versions. The library publishes `kixLibrary.version` (`kix/lib/mkFlake.nix`) and `library::eval_version` reads it, but only to word the Helm error. A CLI and library one minor apart, with the same Helm versions or no charts, build and deploy without a warning, which is the partial-apply case in doc 140 §2.4.
