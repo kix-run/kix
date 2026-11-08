@@ -283,6 +283,45 @@ else
   bad 'refuses a version that has no release'
 fi
 
+h=$tmp/h-bad-version
+install_into "$h" "$tmp/good" KIX_VERSION=1.2.3- "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+if [ "$status" -ne 0 ] && has 'KIX_VERSION=1.2.3- is not a Kix version'; then
+  pass 'refuses a version that is not one'
+else
+  bad 'refuses a version that is not one'
+fi
+
+# Prereleases need the generator, which marks them in the index.
+if command -v node >/dev/null 2>&1; then
+  make_source "$tmp/mixed" 1.3.0-rc.1 1.2.3
+  h=$tmp/h-mixed
+  install_into "$h" "$tmp/mixed" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -eq 0 ] && [ "$("$h/.local/bin/kix")" = "kix 1.2.3" ]; then
+    pass 'installs the newest release, not a newer prerelease'
+  else
+    bad 'installs the newest release, not a newer prerelease'
+  fi
+  install_into "$h" "$tmp/mixed" KIX_VERSION=1.3.0-rc.1 "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -eq 0 ] && [ "$("$h/.local/bin/kix")" = "kix 1.3.0-rc.1" ] &&
+    has 'Installed Kix 1.3.0-rc.1 to ~/.local/share/kix/1.3.0-rc.1'; then
+    pass 'installs a prerelease by name'
+  else
+    bad 'installs a prerelease by name'
+  fi
+
+  make_source "$tmp/pre" 2.0.0-rc.1
+  h=$tmp/h-pre
+  install_into "$h" "$tmp/pre" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -ne 0 ] && has 'lists no Kix release yet, only the prerelease 2.0.0-rc.1' &&
+    has 'KIX_VERSION=2.0.0-rc.1 sh'; then
+    pass 'names the prerelease when there is no release'
+  else
+    bad 'names the prerelease when there is no release'
+  fi
+else
+  echo 'skip prerelease checks, which need node'
+fi
+
 mkdir -p "$tmp/fakebin"
 printf '#!/bin/sh\ncase $1 in -s) echo FreeBSD ;; -m) echo amd64 ;; esac\n' >"$tmp/fakebin/uname"
 chmod 755 "$tmp/fakebin/uname"

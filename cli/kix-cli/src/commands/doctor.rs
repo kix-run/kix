@@ -93,7 +93,12 @@ fn missing_kix_setting(
     if !flake_nix.exists() || running.minor_key() < policy::FIRST_SELECTING {
         return None;
     }
-    let minor = running.minor_text();
+    // A minor never matches a prerelease, so a prerelease suggests itself.
+    let minor = if running.is_prerelease() {
+        running.release()
+    } else {
+        running.minor_text()
+    };
     Some(if kix_toml.exists() {
         format!(
             "kix.toml sets no kix version. Add kix = \"{minor}\" so everyone runs a matching Kix"
@@ -301,5 +306,11 @@ mod tests {
             Some("kix.toml sets no kix version. Add kix = \"0.9\" so everyone runs a matching Kix")
         );
         assert_eq!(missing_kix_setting(&flake, &toml, &v("0.7.2")), None);
+        assert_eq!(
+            missing_kix_setting(&flake, &toml, &v("0.9.0-rc.1+4")).as_deref(),
+            Some(
+                "kix.toml sets no kix version. Add kix = \"0.9.0-rc.1\" so everyone runs a matching Kix"
+            )
+        );
     }
 }

@@ -445,6 +445,55 @@ fn a_missing_version_is_installed_then_run() {
 }
 
 #[test]
+fn a_prerelease_is_installed_only_when_named() {
+    let s = Setup::new("9.9");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.0-rc.1", Signed::Yes);
+    let run = || {
+        s.kix()
+            .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
+            .arg("--flake")
+            .arg(&s.project)
+            .args(["list", "clusters"])
+            .output()
+            .unwrap()
+    };
+
+    let out = run();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr
+            .contains("This project needs Kix 9.9 (kix.toml), and no Kix 9.9 release exists for "),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "Kix 9.9.0-rc.1 is a prerelease, which a minor such as 9.9 never matches. To use it for this project, set kix = \"9.9.0-rc.1\" in kix.toml"
+        ),
+        "{stderr}"
+    );
+    assert!(!s.data.join("9.9.0-rc.1").exists());
+
+    std::fs::write(s.project.join("kix.toml"), "kix = \"9.9.0-rc.1\"\n").unwrap();
+    let out = run();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("Installing Kix 9.9.0-rc.1 (this project needs 9.9.0-rc.1)"),
+        "{stderr}"
+    );
+    assert!(
+        stdout.starts_with(&format!(
+            "FAKE {} --flake",
+            s.data.join("9.9.0-rc.1/bin/kix").display()
+        )),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn a_release_whose_signature_does_not_verify_is_not_installed() {
     let s = Setup::new("9.9");
     let signer = Signer::new();

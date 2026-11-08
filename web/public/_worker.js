@@ -32,7 +32,8 @@
 const DOCS_PREFIX = '/docs/';
 
 const DOWNLOAD_ORIGIN = 'https://github.com/kix-run/kix-releases/releases/download/';
-const DOWNLOAD_PATH = /^\/download\/(\d+\.\d+\.\d+)\/([A-Za-z0-9_-][A-Za-z0-9._-]*)$/;
+// The version is a release such as 0.8.4, or a prerelease such as 0.9.0-rc.1.
+const DOWNLOAD_PATH = /^\/download\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)\/([A-Za-z0-9_-][A-Za-z0-9._-]*)$/;
 
 // Each Kix version's docs are a separate build with its own root: /docs for
 // the latest release, /docs/main for main, and /docs/v<major>.<minor> for

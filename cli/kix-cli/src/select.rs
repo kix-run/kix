@@ -203,6 +203,23 @@ pub fn decide(
     }
 }
 
+/// Return the message for an install the project's `kix` setting asked for.
+/// When the only match is a prerelease, the fix is in kix.toml, since
+/// installing the prerelease leaves the setting unmatched.
+fn install_error_for_project(e: release::InstallError) -> String {
+    match e {
+        release::InstallError::NoRelease {
+            req,
+            system,
+            prerelease: Some(pre),
+            ..
+        } => format!(
+            "This project needs Kix {req} (kix.toml), and no Kix {req} release exists for {system}. Kix {pre} is a prerelease, which a minor such as {req} never matches. To use it for this project, set kix = \"{pre}\" in kix.toml"
+        ),
+        e => e.to_string(),
+    }
+}
+
 /// Return whether installing a missing version is on: it is unless
 /// [`AUTO_INSTALL_VAR`] is `0`, `false`, or `no`.
 pub fn auto_install_on(value: Option<&OsStr>) -> bool {
@@ -268,7 +285,7 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
             let installed = release::install(&req, &system, &release::Source::from_env(), &|v| {
                 eprintln!("Installing Kix {} (this project needs {req})", v.release())
             })
-            .map_err(|e| miette!("{e}"))?;
+            .map_err(|e| miette!("{}", install_error_for_project(e)))?;
             return Err(exec(&installed.install, args));
         }
     }

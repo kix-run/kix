@@ -40,6 +40,9 @@ builder = "kix"
 | --- | --- |
 | `"0.8"` | Any 0.8 patch release. Kix runs the newest 0.8 it has, the running one or an installed one. |
 | `"0.8.3"` | Only Kix 0.8.3. |
+| `"0.9.0-rc.1"` | Only the prerelease 0.9.0-rc.1. |
+
+A minor such as `"0.9"` never matches a prerelease. To try a prerelease in a project, name it in full, and change the setting back when the release is out.
 
 Kix 0.7 and older refuse a `kix.toml` that sets `kix`, so the setting must name Kix 0.8 or newer. A value such as `kix = "0.7"` stops the command with an error.
 
@@ -191,7 +194,7 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | --- | --- |
 | Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
 | Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder, kix). Check the spelling, or upgrade Kix if the project needs a newer version `` |
-| `kix` is not a version, such as `kix = 8` or `kix = "latest"` | `<path> sets kix = <value>, which is not a Kix version. Write a minor such as kix = "0.8", or an exact version such as kix = "0.8.3"` |
+| `kix` is not a version, such as `kix = 8` or `kix = "latest"` | `<path> sets kix = <value>, which is not a Kix version. Write a minor such as kix = "0.8", an exact version such as kix = "0.8.3", or a prerelease such as kix = "0.9.0-rc.1"` |
 | `kix` is a number, such as `kix = 0.8` | `<path> sets kix = 0.8 as a number. Write it in quotes: kix = "0.8"` |
 | `kix` names Kix 0.7 or older, such as `kix = "0.7"` | `<path> sets kix = "0.7", but Kix 0.7 and older cannot read this setting. Name Kix 0.8 or newer, or remove the line.` |
 | `kix` names a version that is not installed, with `KIX_AUTO_INSTALL=0` | `` This project needs Kix <kix> (kix.toml), and no Kix <kix> is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <kix>`. `` |

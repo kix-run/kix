@@ -101,13 +101,22 @@ pass:
    reports, `SHA256SUMS`, and `SHA256SUMS.sig` to the
    public [kix-run/kix-releases](https://github.com/kix-run/kix-releases) as
    `v<version>`, with that version's `CHANGELOG.md` section as the notes, and
-   marks it `latest`. The job then tags the commit `v<version>` here, and
+   marks it `latest`. A prerelease is marked as one and never `latest`. The job then tags the commit `v<version>` here, and
    starts the site deploy, which builds kix.run/docs from the new tag and
    writes the release index (`.github/workflows/pages.yml`). Other pushes to
    main build no binaries.
 
-A workspace version lower than the latest `v*` tag, or a release with no
-`CHANGELOG.md` section, fails the `version` job, before anything is built.
+A version with a `-` suffix, such as `0.8.0-rc.1`, is a prerelease. It is
+released the same way, and its notes are the `## Unreleased` section of
+`CHANGELOG.md`, since the release it leads to takes that section. kix.run
+lists it with `"prerelease": true` and never as `latest`, the docs site
+builds no docs for its tag, and Kix installs it only when a command or a
+`kix` setting names it in full (`policy::satisfies`). A minor requirement
+such as `kix = "0.8"` never matches one.
+
+A workspace version lower than the latest `v*` tag (compared as semver, so
+`0.8.0-rc.1` is below `0.8.0`), or a release with no `CHANGELOG.md` section,
+fails the `version` job, before anything is built.
 Running a failed release again is safe: the job skips a release that
 already exists in kix-releases and creates the tag last. A manual run
 (`gh workflow run cli-tests.yml --ref <branch>`) builds the binaries as a
@@ -115,8 +124,8 @@ workflow artifact, reporting `<version>+<run number>`, and publishes
 nothing.
 
 A manual run with the `rehearse` input
-(`gh workflow run cli-tests.yml --ref <branch> -f rehearse=0.0.1`) builds the
-archives as that version, and the `rehearse-release` job signs them with the
+(`gh workflow run cli-tests.yml --ref <branch> -f rehearse=0.0.1`, or a
+prerelease such as `0.0.1-rc.1`) builds the archives as that version, and the `rehearse-release` job signs them with the
 real key through `scripts/sign-release.sh`, the script `publish` runs. It
 builds a copy of the release site with `web/scripts/release-index.mjs`,
 installs from it with the install script and with `kix self install`, and
@@ -179,6 +188,8 @@ readers skip fields they do not know:
 ```
 
 `latest` is `null` and `releases` is empty while no release is signed.
+`latest` is never a prerelease, so it is also `null` while only prereleases
+are signed.
 `node --test 'web/scripts/*.test.mjs'` tests the generator, the Worker, and
 that `RELEASE_KEYS` in the install script matches `cli/release-keys/`.
 `sh web/scripts/test-install.sh` runs the install script against signed fake
@@ -198,7 +209,9 @@ run, the version a project names.
   full string.
 - **Policy** (`kix/src/version/policy.rs`): the only code that compares Kix
   with a library or a requirement. `Requirement` is `Minor` (`"0.8"`) or
-  `Exact` (`"0.8.3"`). `FIRST_SELECTING` (0.8) is the first minor that reads
+  `Exact` (`"0.8.3"` or `"0.9.0-rc.1"`). `satisfies` never matches a
+prerelease to a `Minor`, so only a requirement that names a prerelease runs
+or installs it. `FIRST_SELECTING` (0.8) is the first minor that reads
   the `kix` setting, and `Requirement::reads_kix_setting` refuses anything
   older, since Kix 0.7 rejects the key. `choose` picks the newest installed patch of the minor,
   or the exact version. `library_compatible` requires the same minor and a Kix

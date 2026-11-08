@@ -38,9 +38,10 @@ on:
     inputs:
       rehearse:
         description: >-
-          Rehearse a release: build the archives as this version (X.Y.Z, not a
-          released one), sign them with the release key, and install them from
-          a copy of the release site. Publishes nothing.
+          Rehearse a release: build the archives as this version (X.Y.Z or a
+          prerelease such as X.Y.Z-rc.N, not a released one), sign them with
+          the release key, and install them from a copy of the release site.
+          Publishes nothing.
         required: false
         default: ''
 
@@ -139,6 +140,7 @@ jobs:
       build: ${{ steps.build.outputs.build }}
       runtime: ${{ steps.build.outputs.runtime }}
       rehearse: ${{ steps.version.outputs.rehearse }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -151,11 +153,18 @@ jobs:
         env:
           REHEARSE: ${{ inputs.rehearse }}
         run: |
+          # A version with a `-` suffix, such as 0.8.0-rc.1, is a prerelease.
+          version_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          # Sort versions oldest first, with a prerelease before its release.
+          # sort -V puts `~` before the end of the text, as semver puts a
+          # prerelease before its release.
+          semver_sort() { sed 's/-/~/' | sort -V | sed 's/~/-/'; }
+
           # A rehearsal builds the archives as the version it names, so the
           # release index lists them like a release.
           if [ -n "$REHEARSE" ]; then
-            if ! printf '%s\n' "$REHEARSE" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-              echo "rehearse must be a version such as 0.0.1, not '$REHEARSE'."
+            if ! printf '%s\n' "$REHEARSE" | grep -Eq "$version_re"; then
+              echo "rehearse must be a version such as 0.0.1 or 0.0.1-rc.1, not '$REHEARSE'."
               exit 1
             fi
             if git rev-parse -q --verify "refs/tags/v$REHEARSE" >/dev/null; then
@@ -166,6 +175,7 @@ jobs:
               echo "version=$REHEARSE"
               echo "release=false"
               echo "rehearse=true"
+              case $REHEARSE in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -179,24 +189,47 @@ jobs:
             exit 0
           fi
 
-          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
-          if [ -n "$latest" ] && [ "$(printf '%s\n' "${latest#v}" "$base" | sort -V | tail -n1)" != "$base" ]; then
-            echo "cli/Cargo.toml has version $base, lower than the latest release tag $latest."
+          if ! printf '%s\n' "$base" | grep -Eq "$version_re"; then
+            echo "cli/Cargo.toml has version $base, which is not X.Y.Z or a prerelease such as X.Y.Z-rc.N."
+            exit 1
+          fi
+          latest=$(git tag -l 'v[0-9]*' | sed 's/^v//' | semver_sort | tail -n1)
+          if [ -n "$latest" ] && [ "$(printf '%s\n' "$latest" "$base" | semver_sort | tail -n1)" != "$base" ]; then
+            echo "cli/Cargo.toml has version $base, lower than the latest release tag v$latest."
             exit 1
           fi
 
           # The release notes: this version's CHANGELOG.md section, without
-          # its heading.
-          awk -v v="$base" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
-            CHANGELOG.md > release-notes.md
-          if ! grep -q '[^[:space:]]' release-notes.md; then
-            echo "CHANGELOG.md has no '## $base' section, or it is empty. The release skill writes it."
+          # its heading. A prerelease has no section of its own, so its notes
+          # are the Unreleased section that its release will take.
+          case $base in
+            *-*)
+              prerelease=true
+              section=Unreleased
+              # The backticks are Markdown for the release page.
+              # shellcheck disable=SC2016
+              printf 'Prerelease of Kix %s. Install it by name: `kix self install %s`, or `curl -fsSL https://kix.run/install | KIX_VERSION=%s sh`.\n\n' \
+                "${base%%-*}" "$base" "$base" > release-notes.md
+              ;;
+            *)
+              prerelease=false
+              section=$base
+              : > release-notes.md
+              ;;
+          esac
+          awk -v v="$section" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
+            CHANGELOG.md >> release-notes.md
+          if ! grep -q '^[-*] ' release-notes.md; then
+            echo "CHANGELOG.md has no '## $section' section, or it lists no changes. The release skill writes it."
             exit 1
           fi
           printf '\nBuilt from kix-run/kixpkgs@%s.\n' "$GITHUB_SHA" >> release-notes.md
 
-          echo "version=$base" >> "$GITHUB_OUTPUT"
-          echo "release=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$base"
+            echo "release=true"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
           {
             echo 'notes<<KIX_RELEASE_NOTES_END'
             cat release-notes.md
@@ -586,6 +619,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -608,11 +642,18 @@ jobs:
           cp dist/SHA256SUMS dist/SHA256SUMS.sig "release-src/v$VERSION/"
           node web/scripts/release-index.mjs release-src site
           cp dist/kix-*.tar.gz "site/download/$VERSION/"
-          jq -e --arg v "$VERSION" '.latest == $v' site/releases/index.json
+          if [ "$PRERELEASE" = true ]; then
+            jq -e --arg v "$VERSION" '.latest != $v and any(.releases[]; .version == $v and .prerelease == true)' site/releases/index.json
+          else
+            jq -e --arg v "$VERSION" '.latest == $v' site/releases/index.json
+          fi
 
+      # A release installs as the latest one. A prerelease is never the
+      # latest, so it is named.
       - name: Install with the install script
         run: |
           home="$RUNNER_TEMP/script-home"
+          if [ "$PRERELEASE" = true ]; then export KIX_VERSION="$VERSION"; fi
           HOME="$home" KIX_INSTALL_SOURCE="file://$PWD/site" sh web/public/install 2>&1 | tee install.log
           grep -q "Verified SHA256SUMS for Kix $VERSION with release key" install.log
           test "$("$home/.local/bin/kix" --version)" = "kix $VERSION"
@@ -638,6 +679,7 @@ jobs:
           cat refused.log
           grep -q "does not verify against any key built into Kix" refused.log
           test ! -e "$home/.local/share/kix/$VERSION"
+          if [ "$PRERELEASE" = true ]; then export KIX_VERSION="$VERSION"; fi
           if HOME="$RUNNER_TEMP/tampered-script-home" KIX_INSTALL_SOURCE="file://$PWD/site" \
             sh web/public/install > refused-script.log 2>&1; then
             cat refused-script.log
@@ -682,17 +724,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
           NOTES: ${{ needs.version.outputs.notes }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           if gh release view "v$VERSION" --repo kix-run/kix-releases >/dev/null; then
             echo "kix-run/kix-releases already has v$VERSION."
             exit 0
           fi
           printf '%s\n' "$NOTES" > release-notes.md
+          # A prerelease is marked as one and never becomes GitHub's latest
+          # release, matching how kix.run lists it.
+          if [ "$PRERELEASE" = true ]; then
+            set -- --prerelease --latest=false
+          else
+            set -- --latest
+          fi
           gh release create "v$VERSION" dist/* \
             --repo kix-run/kix-releases \
             --title "kix $VERSION" \
             --notes-file release-notes.md \
-            --latest
+            "$@"
 
       # Last, so a run that fails before this point leaves no tag and the
       # next run tries the release again.

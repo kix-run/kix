@@ -118,6 +118,41 @@ test('orders releases numerically, newest first', () => {
   assert.ok(compareVersions('0.10.0', '0.9.1') > 0);
 });
 
+test('lists prereleases after their release and never as latest', () => {
+  for (const version of ['0.8.4', '0.9.0-rc.1', '0.9.0-rc.10', '0.9.0-rc.2']) {
+    release(version);
+  }
+  let { index } = run();
+  assert.equal(index.latest, '0.8.4');
+  assert.deepEqual(
+    index.releases.map((r) => [r.version, r.prerelease === true]),
+    [
+      ['0.9.0-rc.10', true],
+      ['0.9.0-rc.2', true],
+      ['0.9.0-rc.1', true],
+      ['0.8.4', false],
+    ],
+  );
+  assert.equal(index.releases[0].download, '/download/0.9.0-rc.10/');
+  assert.equal(index.releases[0].sums, '/releases/v0.9.0-rc.10/SHA256SUMS');
+
+  release('0.9.0');
+  ({ index } = run());
+  assert.equal(index.latest, '0.9.0');
+  assert.equal(index.releases[0].version, '0.9.0');
+  assert.ok(compareVersions('0.9.0', '0.9.0-rc.10') > 0);
+  assert.ok(compareVersions('0.9.0-rc', '0.9.0-rc.1') < 0);
+  assert.ok(compareVersions('0.9.0-beta', '0.9.0-rc.1') < 0);
+  assert.ok(compareVersions('0.9.0-1', '0.9.0-rc') < 0);
+});
+
+test('writes an empty latest when only prereleases are signed', () => {
+  release('0.9.0-rc.1');
+  const { index } = run();
+  assert.equal(index.latest, null);
+  assert.equal(index.releases.length, 1);
+});
+
 test('reads the systems from the archive names in SHA256SUMS', () => {
   assert.deepEqual(parseSystems(sums('0.8.4', ['x86_64-linux', 'aarch64-darwin'])), ['aarch64-darwin', 'x86_64-linux']);
   assert.equal(parseSystems('not a sums line\n'), null);
@@ -129,7 +164,7 @@ test('reads the systems from the archive names in SHA256SUMS', () => {
 
 test('ignores directories that are not release tags', () => {
   release('0.8.4');
-  mkdirSync(join(src, 'v0.9.0-rc.1'));
+  mkdirSync(join(src, 'v0.9'));
   mkdirSync(join(src, 'latest'));
   const { index, warnings } = run();
   assert.deepEqual(

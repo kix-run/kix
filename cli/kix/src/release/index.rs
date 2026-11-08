@@ -21,6 +21,10 @@
 //! }
 //! ```
 //!
+//! A prerelease, such as `0.9.0-rc.1`, also has `"prerelease": true` and is
+//! never `latest`. Kix tells a prerelease by its version, so it does not read
+//! that field.
+//!
 //! An archive's path is `download` followed by `kix-<system>.tar.gz`. Kix
 //! skips fields it does not know and releases whose version it cannot parse,
 //! so a newer site can add to the index without breaking an older Kix. The
@@ -106,10 +110,28 @@ impl Index {
             .max_by(|a, b| a.version.cmp(&b.version))
     }
 
-    /// Return the newest release that has an archive for `system`.
-    pub fn latest_for(&self, system: &str) -> Option<&Release> {
+    /// Return the newest release that has an archive for `system`, the one
+    /// `kix self update` moves Kix `running` to. Prereleases count only when
+    /// `running` is a prerelease of the same release, so trying one leads to
+    /// the next one or to its release and no further.
+    pub fn latest_for(&self, system: &str, running: &Version) -> Option<&Release> {
+        let core = |v: &Version| (v.major, v.minor, v.patch);
         self.releases
             .iter()
+            .filter(|r| {
+                !r.version.is_prerelease()
+                    || (running.is_prerelease() && core(&r.version) == core(running))
+            })
+            .filter(|r| r.systems.iter().any(|s| s == system))
+            .max_by(|a, b| a.version.cmp(&b.version))
+    }
+
+    /// Return the newest prerelease of `req`'s minor that has an archive for
+    /// `system`, so a message can say how to ask for it.
+    pub fn newest_prerelease(&self, req: &Requirement, system: &str) -> Option<&Release> {
+        self.releases
+            .iter()
+            .filter(|r| r.version.is_prerelease() && r.version.minor_key() == req.minor_key())
             .filter(|r| r.systems.iter().any(|s| s == system))
             .max_by(|a, b| a.version.cmp(&b.version))
     }
@@ -220,9 +242,54 @@ mod tests {
             ],
         });
         let index = Index::parse(json.to_string().as_bytes()).unwrap();
-        let latest = |system| index.latest_for(system).map(|r| r.version.to_string());
+        let running: Version = "0.9.0".parse().unwrap();
+        let latest = |system| {
+            index
+                .latest_for(system, &running)
+                .map(|r| r.version.to_string())
+        };
         assert_eq!(latest("x86_64-linux").as_deref(), Some("0.10.0"));
         assert_eq!(latest("aarch64-darwin").as_deref(), Some("0.9.2"));
         assert_eq!(latest("aarch64-linux"), None);
+    }
+
+    #[test]
+    fn prereleases_are_found_only_when_asked_for() {
+        let json = serde_json::json!({
+            "latest": "0.9.1",
+            "releases": [
+                release("0.10.0-rc.2", &["x86_64-linux"]),
+                release("0.10.0-rc.1", &["x86_64-linux"]),
+                release("0.9.1", &["x86_64-linux"]),
+                release("0.9.2-rc.1", &["x86_64-linux"]),
+            ],
+        });
+        let index = Index::parse(json.to_string().as_bytes()).unwrap();
+        let version = |r: Option<&Release>| r.map(|r| r.version.to_string());
+        let system = "x86_64-linux";
+        let latest = |running: &str| version(index.latest_for(system, &running.parse().unwrap()));
+        assert_eq!(latest("0.9.1").as_deref(), Some("0.9.1"));
+        assert_eq!(latest("0.10.0-rc.1").as_deref(), Some("0.10.0-rc.2"));
+        // The newest prerelease of its own release, which update leaves alone.
+        assert_eq!(latest("0.9.2-rc.1").as_deref(), Some("0.9.2-rc.1"));
+        // A prerelease of an older release moves to releases only.
+        assert_eq!(latest("0.8.0-rc.1").as_deref(), Some("0.9.1"));
+        assert_eq!(
+            version(index.newest(&Requirement::Minor(0, 9), system)).as_deref(),
+            Some("0.9.1")
+        );
+        assert_eq!(
+            version(index.newest(&Requirement::Minor(0, 10), system)),
+            None
+        );
+        let rc = Requirement::Exact("0.10.0-rc.1".parse().unwrap());
+        assert_eq!(
+            version(index.newest(&rc, system)).as_deref(),
+            Some("0.10.0-rc.1")
+        );
+        assert_eq!(
+            version(index.newest_prerelease(&Requirement::Minor(0, 10), system)).as_deref(),
+            Some("0.10.0-rc.2")
+        );
     }
 }

@@ -159,7 +159,7 @@ pub enum ProjectError {
     RemoteUnsupported { origin: BuilderSource },
 
     #[error(
-        "{} sets kix = {value}, which is not a Kix version. Write a minor such as kix = \"0.8\", or an exact version such as kix = \"0.8.3\"",
+        "{} sets kix = {value}, which is not a Kix version. Write a minor such as kix = \"0.8\", an exact version such as kix = \"0.8.3\", or a prerelease such as kix = \"0.9.0-rc.1\"",
         path.display()
     )]
     BadKixVersion { path: PathBuf, value: String },
@@ -631,7 +631,7 @@ mod tests {
             assert!(err.contains(shown), "{err}");
             assert!(
                 err.ends_with(
-                    "which is not a Kix version. Write a minor such as kix = \"0.8\", or an exact version such as kix = \"0.8.3\""
+                    "which is not a Kix version. Write a minor such as kix = \"0.8\", an exact version such as kix = \"0.8.3\", or a prerelease such as kix = \"0.9.0-rc.1\""
                 ),
                 "{err}"
             );

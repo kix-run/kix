@@ -31,6 +31,7 @@ Each release groups changes under these headings:
 - A project can name its Kix in `kix.toml`, as a minor (`kix = "0.8"`) or an exact version (`kix = "0.8.3"`). The setting must name Kix 0.8 or newer. When the running Kix does not match, it runs a matching installed Kix instead. When none is installed, it downloads the newest matching release from kix.run, verifies its signature and SHA-256, and runs it. `kix --version` never downloads. Set `KIX_AUTO_INSTALL=0` to stop Kix from downloading versions. See [`kix.toml`](https://kix.run/docs/reference/kix-toml/#the-kix-setting).
 - `kix self install <version>`, `kix self list`, `kix self prune`, and `kix self update` manage the versions of Kix installed in `~/.local/share/kix`. See [`kix self`](https://kix.run/docs/reference/cli/self/).
 - Releases include `SHA256SUMS.sig`, an Ed25519 signature over `SHA256SUMS`, and `https://kix.run/releases/index.json` lists every signed release.
+- Prereleases, such as `0.8.0-rc.1`. Kix installs a prerelease only when you name it in full: `kix self install 0.8.0-rc.1`, `KIX_VERSION=0.8.0-rc.1` for the install script, or `kix = "0.8.0-rc.1"` in `kix.toml`. A minor such as `kix = "0.8"` never matches a prerelease, and the install script and `kix self update` never move a release to one.
 
 ### Changed
 

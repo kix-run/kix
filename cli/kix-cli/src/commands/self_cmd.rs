@@ -135,7 +135,7 @@ fn update() -> miette::Result<()> {
     };
     let source = Source::from_env();
     let system = release::system().map_err(|e| miette!("{e}"))?;
-    let latest = release::latest(&source, &system)
+    let latest = release::latest(&source, &system, &current.version)
         .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| miette!("{source} lists no releases of Kix for {system} yet"))?;
     if latest <= current.version {

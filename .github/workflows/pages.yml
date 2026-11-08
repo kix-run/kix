@@ -160,16 +160,18 @@ jobs:
           nix shell --inputs-from .. nixpkgs#openssl -c sh scripts/test-install.sh
 
       # Which docs to build: main, the newest release tag, and the newest
-      # tag of each older minor release. The release builds are cached by
-      # the list of tags, since a tag's docs never change.
+      # tag of each older minor release. Prerelease tags, such as
+      # v0.8.0-rc.1, get no docs of their own. The release builds are cached
+      # by the list of tags, since a tag's docs never change.
       - name: Plan docs builds
         id: docs
         working-directory: kixpkgs
         run: |
-          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
+          releases=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- - || true)
+          latest=$(head -n1 <<<"$releases")
           archived=""
           seen=" $(cut -d. -f1-2 <<<"$latest") "
-          for tag in $(git tag -l 'v[0-9]*' --sort=-v:refname); do
+          for tag in $releases; do
             minor=$(cut -d. -f1-2 <<<"$tag")
             case "$seen" in *" $minor "*) continue ;; esac
             seen="$seen$minor "

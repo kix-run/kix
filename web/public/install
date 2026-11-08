@@ -10,7 +10,8 @@
 # edits a shell startup file.
 #
 # Environment:
-#   KIX_VERSION      the version to install, such as 0.8.3 (default: the latest)
+#   KIX_VERSION      the version to install, such as 0.8.3 or the prerelease
+#                    0.9.0-rc.1 (default: the latest release)
 #   KIX_INSTALL_DIR  the directory for the kix link (default: ~/.local/bin)
 #   XDG_DATA_HOME    installs go to $XDG_DATA_HOME/kix when it is set
 #
@@ -230,10 +231,16 @@ main() {
   version=${version#v}
   if [ -z "$version" ]; then
     version=$(field "$header" latest)
-    [ -n "$version" ] || fail "$source lists no Kix release yet"
+    if [ -z "$version" ]; then
+      # Prereleases are never latest, so a site with only prereleases has
+      # none to install by default.
+      pre=$(grep -F '"prerelease":true' "$work/index.lines" | sed -n 1p || true)
+      [ -z "$pre" ] || fail "$source lists no Kix release yet, only the prerelease $(field "$pre" version). To install it, run: curl -fsSL $source/install | KIX_VERSION=$(field "$pre" version) sh"
+      fail "$source lists no Kix release yet"
+    fi
   fi
   case $version in
-    *[!0-9.]* | .* | *. | *..*) fail "KIX_VERSION=$version is not a Kix version. Write one such as 0.8.3" ;;
+    *[!0-9A-Za-z.-]* | [!0-9]* | *. | *- | *..* | *.-* | *-.*) fail "KIX_VERSION=$version is not a Kix version. Write one such as 0.8.3 or 0.9.0-rc.1" ;;
   esac
 
   entry=$(grep -F "\"version\":\"$version\"" "$work/index.lines" | sed -n 1p || true)

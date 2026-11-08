@@ -36,7 +36,8 @@ kix self update
 
 Installs a version of Kix from kix.run. `<VERSION>` is a minor, such as
 `0.8`, which installs the newest patch release of that minor, or an exact
-version, such as `0.8.3`.
+version, such as `0.8.3`. A minor never installs a prerelease. Name a
+prerelease in full to install it, such as `kix self install 0.9.0-rc.1`.
 
 Kix reads the release index at `https://kix.run/releases/index.json`, checks
 the release's `SHA256SUMS` against its Ed25519 signature with the key built
@@ -95,7 +96,9 @@ Kix 0.8.3 -> 0.8.4
 ```
 
 When the running Kix is already the newest release, it prints
-`Kix <version> is the newest release` and changes nothing.
+`Kix <version> is the newest release` and changes nothing. A release never
+updates to a prerelease. A prerelease updates to a newer prerelease of the
+same release, such as 0.9.0-rc.1 to 0.9.0-rc.2, or to the newest release.
 
 When the install script did not install the running Kix, it changes nothing,
 says how to upgrade instead, and exits with status 1, for example:

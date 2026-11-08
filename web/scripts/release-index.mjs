@@ -16,6 +16,9 @@
 // sed. Add fields freely, since readers skip fields they do not know. Changing
 // or removing a field needs a new `schema`.
 //
+// A prerelease, such as v0.9.0-rc.1, is listed with `"prerelease": true` and
+// is never `latest`, so only someone who names it installs it.
+//
 // `generated` is the current time, or SOURCE_DATE_EPOCH when it is set.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -24,7 +27,7 @@ import { pathToFileURL } from 'node:url';
 
 export const SCHEMA = 'kix.run/releases/v1';
 
-const TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const ARCHIVE = /^kix-(.+)\.tar\.gz$/;
 const SUMS_LINE = /^([0-9a-f]{64}) [ *](.+)$/;
 
@@ -68,16 +71,49 @@ export function parseSystems(text) {
   return systems.sort();
 }
 
-/** Compare two `<major>.<minor>.<patch>` versions numerically. */
+/**
+ * Compare two versions the way semver does: `<major>.<minor>.<patch>`
+ * numerically, then a prerelease before its release, then prerelease
+ * identifiers in turn, numeric ones numerically and below text ones.
+ */
 export function compareVersions(a, b) {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
+  const [coreA, preA] = splitPre(a);
+  const [coreB, preB] = splitPre(b);
+  const pa = coreA.split('.').map(Number);
+  const pb = coreB.split('.').map(Number);
   for (let i = 0; i < 3; i += 1) {
     if (pa[i] !== pb[i]) {
       return pa[i] - pb[i];
     }
   }
-  return 0;
+  if (preA === null || preB === null) {
+    return (preA === null ? 1 : 0) - (preB === null ? 1 : 0);
+  }
+  const ia = preA.split('.');
+  const ib = preB.split('.');
+  for (let i = 0; i < Math.min(ia.length, ib.length); i += 1) {
+    const order = compareIdentifiers(ia[i], ib[i]);
+    if (order !== 0) {
+      return order;
+    }
+  }
+  return ia.length - ib.length;
+}
+
+function splitPre(version) {
+  const dash = version.indexOf('-');
+  return dash === -1 ? [version, null] : [version.slice(0, dash), version.slice(dash + 1)];
+}
+
+function compareIdentifiers(a, b) {
+  const numeric = /^\d+$/;
+  if (numeric.test(a) && numeric.test(b)) {
+    return Number(a) - Number(b);
+  }
+  if (numeric.test(a) !== numeric.test(b)) {
+    return numeric.test(a) ? -1 : 1;
+  }
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function generatedAt(env) {
@@ -107,7 +143,7 @@ export function collect(src, { env = process.env, warn = () => {} } = {}) {
     }
     const match = tag.match(TAG);
     if (!match) {
-      warn(`skipping ${tag}: not a v<major>.<minor>.<patch> release`);
+      warn(`skipping ${tag}: not a v<major>.<minor>.<patch>[-<prerelease>] release`);
       continue;
     }
     const version = tag.slice(1);
@@ -132,6 +168,9 @@ export function collect(src, { env = process.env, warn = () => {} } = {}) {
     }
 
     const release = { version };
+    if (match[4] !== undefined) {
+      release.prerelease = true;
+    }
     const date = readIfFile(join(dir, 'date'))?.trim();
     if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
       release.date = date;
@@ -154,7 +193,7 @@ export function collect(src, { env = process.env, warn = () => {} } = {}) {
   const index = {
     schema: SCHEMA,
     generated: generatedAt(env),
-    latest: releases.length > 0 ? releases[0].version : null,
+    latest: releases.find((r) => !r.prerelease)?.version ?? null,
     releases,
   };
   return { index, files };

@@ -49,6 +49,11 @@ impl Version {
         }
     }
 
+    /// Return whether this is a prerelease, such as `0.9.0-rc.1`.
+    pub fn is_prerelease(&self) -> bool {
+        self.pre.is_some()
+    }
+
     /// Return the major and minor version, which together decide which Kix
     /// library this version builds.
     pub fn minor_key(&self) -> (u64, u64) {

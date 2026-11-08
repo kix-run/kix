@@ -36,6 +36,15 @@ test('redirects a release download to the storage host', async () => {
   }
 });
 
+test('redirects a prerelease download', async () => {
+  const { response } = await get('/download/0.9.0-rc.1/kix-aarch64-darwin.tar.gz');
+  assert.equal(response.status, 302);
+  assert.equal(
+    response.headers.get('location'),
+    'https://github.com/kix-run/kix-releases/releases/download/v0.9.0-rc.1/kix-aarch64-darwin.tar.gz',
+  );
+});
+
 test('passes other download paths to the assets', async () => {
   for (const path of [
     '/download/../x',
@@ -46,6 +55,9 @@ test('passes other download paths to the assets', async () => {
     '/download/0.8/kix-x86_64-linux.tar.gz',
     '/download/v0.8.4/kix-x86_64-linux.tar.gz',
     '/download/0.8.4/kix%2fx',
+    '/download/0.9.0-/kix-x86_64-linux.tar.gz',
+    '/download/0.9.0-rc..1/kix-x86_64-linux.tar.gz',
+    '/download/0.9.0-rc.1/../x',
   ]) {
     const { response, seen } = await get(path);
     assert.equal(response.status, 404, path);

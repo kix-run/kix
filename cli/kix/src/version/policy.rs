@@ -23,14 +23,15 @@ pub const FIRST_SELECTING: (u64, u64) = (0, 8);
 pub enum Requirement {
     /// Any Kix of this major and minor, such as `kix = "0.8"`.
     Minor(u64, u64),
-    /// Exactly this version, such as `kix = "0.8.3"`.
+    /// Exactly this version, such as `kix = "0.8.3"` or
+    /// `kix = "0.9.0-rc.1"`.
     Exact(Version),
 }
 
 /// The text is neither a minor nor an exact version.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "{0:?} is not a Kix version. Write a minor such as \"0.8\", or an exact version such as \"0.8.3\""
+    "{0:?} is not a Kix version. Write a minor such as \"0.8\", an exact version such as \"0.8.3\", or a prerelease such as \"0.9.0-rc.1\""
 )]
 pub struct BadRequirement(pub String);
 
@@ -39,6 +40,14 @@ impl FromStr for Requirement {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let bad = || BadRequirement(s.to_string());
+        // A prerelease is named in full, such as 0.9.0-rc.1. Build metadata
+        // names a build, not a release, so a requirement cannot carry it.
+        if s.contains('-') {
+            return match s.parse::<Version>() {
+                Ok(v) if v.is_prerelease() && v.build.is_none() => Ok(Requirement::Exact(v)),
+                _ => Err(bad()),
+            };
+        }
         let numbers = s
             .split('.')
             .map(|p| {
@@ -82,9 +91,13 @@ impl fmt::Display for Requirement {
 }
 
 /// Return whether Kix `v` meets `req`.
+///
+/// A minor never matches a prerelease. A prerelease runs only where a
+/// project or a command names it exactly, so trying one never moves anyone
+/// else onto it.
 pub fn satisfies(req: &Requirement, v: &Version) -> bool {
     match req {
-        Requirement::Minor(major, minor) => v.minor_key() == (*major, *minor),
+        Requirement::Minor(major, minor) => v.minor_key() == (*major, *minor) && !v.is_prerelease(),
         Requirement::Exact(exact) => v == exact,
     }
 }
@@ -106,7 +119,8 @@ pub enum Incompatible {
     LibraryNewerMinor,
     /// The library's minor is older than Kix's.
     LibraryOlderMinor,
-    /// The minors agree, and the library's patch is newer than Kix's.
+    /// The minors agree, and the library is newer than Kix: a newer patch,
+    /// or the release that follows Kix's prerelease.
     LibraryNewerPatch,
 }
 
@@ -115,9 +129,10 @@ pub fn library_compatible(kix: &Version, library: &Version) -> Result<(), Incomp
     match library.minor_key().cmp(&kix.minor_key()) {
         std::cmp::Ordering::Greater => Err(Incompatible::LibraryNewerMinor),
         std::cmp::Ordering::Less => Err(Incompatible::LibraryOlderMinor),
-        std::cmp::Ordering::Equal if library.patch > kix.patch => {
-            Err(Incompatible::LibraryNewerPatch)
-        }
+        // Version ordering ignores build metadata, and puts a prerelease
+        // before its release, which may add Helm versions the prerelease
+        // lacks.
+        std::cmp::Ordering::Equal if library > kix => Err(Incompatible::LibraryNewerPatch),
         std::cmp::Ordering::Equal => Ok(()),
     }
 }
@@ -137,7 +152,13 @@ impl fmt::Display for LibraryIncompatible {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let lib = self.library.release();
         let kix = self.kix.release();
-        let lib_minor = self.library.minor_text();
+        // A minor never matches a prerelease, so a project on a prerelease
+        // library has to name that prerelease.
+        let lib_minor = if self.library.is_prerelease() {
+            lib.clone()
+        } else {
+            self.library.minor_text()
+        };
         match self.reason {
             Incompatible::LibraryOlderMinor => {
                 write!(
@@ -175,6 +196,10 @@ impl fmt::Display for LibraryIncompatible {
                     "This project's Kix library is {lib}, which needs Kix {lib} or newer, and this is Kix {kix}. "
                 )?;
                 match &self.requirement {
+                    _ if self.library.is_prerelease() => write!(
+                        f,
+                        "Set kix = \"{lib}\" in kix.toml so Kix installs and runs {lib} for this project."
+                    ),
                     Some(Requirement::Minor(major, minor)) => write!(
                         f,
                         "Run `kix self install {major}.{minor}`, and Kix runs the new version for this project."
@@ -206,6 +231,14 @@ mod tests {
         assert_eq!("0.8.3".parse(), Ok(Requirement::Exact(v("0.8.3"))));
         assert_eq!("0.8".parse::<Requirement>().unwrap().to_string(), "0.8");
         assert_eq!("0.8.3".parse::<Requirement>().unwrap().to_string(), "0.8.3");
+        assert_eq!(
+            "0.9.0-rc.1".parse(),
+            Ok(Requirement::Exact(v("0.9.0-rc.1")))
+        );
+        assert_eq!(
+            "0.9.0-rc.1".parse::<Requirement>().unwrap().to_string(),
+            "0.9.0-rc.1"
+        );
         for bad in [
             "",
             "0",
@@ -214,12 +247,16 @@ mod tests {
             "0.8.x",
             "v0.8",
             "0.8.3+1",
-            "0.9.0-rc.1",
+            "0.9-rc.1",
+            "0.9.0-",
+            "0.9.0-rc.1+7",
             "0..8",
         ] {
             let err = bad.parse::<Requirement>().unwrap_err().to_string();
             assert!(
-                err.contains("\"0.8\"") && err.contains("\"0.8.3\""),
+                err.contains("\"0.8\"")
+                    && err.contains("\"0.8.3\"")
+                    && err.contains("\"0.9.0-rc.1\""),
                 "{err}"
             );
         }
@@ -237,6 +274,21 @@ mod tests {
         assert!(satisfies(&exact, &v("0.8.3")));
         assert!(satisfies(&exact, &v("0.8.3+250")));
         assert!(!satisfies(&exact, &v("0.8.4")));
+    }
+
+    #[test]
+    fn only_an_exact_requirement_matches_a_prerelease() {
+        let rc = v("0.9.0-rc.1");
+        assert!(!satisfies(&Requirement::Minor(0, 9), &rc));
+        assert!(satisfies(&Requirement::Exact(v("0.9.0-rc.1")), &rc));
+        assert!(!satisfies(&Requirement::Exact(v("0.9.0-rc.2")), &rc));
+        assert!(!satisfies(&Requirement::Exact(v("0.9.0")), &rc));
+        let installed = [v("0.9.0-rc.1"), v("0.9.0-rc.2")];
+        assert_eq!(choose(&Requirement::Minor(0, 9), &installed), None);
+        assert_eq!(
+            choose(&Requirement::Exact(v("0.9.0-rc.1")), &installed),
+            Some(v("0.9.0-rc.1"))
+        );
     }
 
     #[test]
@@ -274,6 +326,48 @@ mod tests {
         assert_eq!(
             library_compatible(&kix, &v("1.8.0")),
             Err(Incompatible::LibraryNewerMinor)
+        );
+    }
+
+    #[test]
+    fn a_prerelease_builds_its_own_library_and_older_ones() {
+        let rc = v("0.9.0-rc.2+31");
+        assert_eq!(library_compatible(&rc, &v("0.9.0-rc.2")), Ok(()));
+        assert_eq!(library_compatible(&rc, &v("0.9.0-rc.1")), Ok(()));
+        assert_eq!(
+            library_compatible(&rc, &v("0.9.0")),
+            Err(Incompatible::LibraryNewerPatch)
+        );
+        assert_eq!(
+            library_compatible(&rc, &v("0.9.0-rc.3")),
+            Err(Incompatible::LibraryNewerPatch)
+        );
+        assert_eq!(library_compatible(&v("0.9.0"), &v("0.9.0-rc.2")), Ok(()));
+    }
+
+    #[test]
+    fn a_prerelease_library_is_named_exactly() {
+        assert_eq!(
+            message("0.8.3", "0.9.0-rc.1", Incompatible::LibraryNewerMinor, None),
+            "This project's Kix library is 0.9.0-rc.1, but this is Kix 0.8.3. Set kix = \"0.9.0-rc.1\" in kix.toml so Kix runs 0.9.0-rc.1 for this project."
+        );
+        assert_eq!(
+            message(
+                "0.9.0",
+                "0.9.1-rc.1",
+                Incompatible::LibraryNewerPatch,
+                Some("0.9")
+            ),
+            "This project's Kix library is 0.9.1-rc.1, which needs Kix 0.9.1-rc.1 or newer, and this is Kix 0.9.0. Set kix = \"0.9.1-rc.1\" in kix.toml so Kix installs and runs 0.9.1-rc.1 for this project."
+        );
+        assert_eq!(
+            message(
+                "0.10.0",
+                "0.9.0-rc.1",
+                Incompatible::LibraryOlderMinor,
+                None
+            ),
+            "This project's Kix library is 0.9.0-rc.1, but this is Kix 0.10.0. Run `kix lib update` to move the project to the 0.10.0 library and commit flake.lock. To keep this project on Kix 0.9.0-rc.1 instead, set kix = \"0.9.0-rc.1\" in kix.toml."
         );
     }
 

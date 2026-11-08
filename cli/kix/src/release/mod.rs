@@ -92,11 +92,14 @@ pub enum InstallError {
     #[error("the release index from {site} cannot be read: {message}")]
     BadIndex { site: String, message: String },
 
-    #[error("{}", no_release_message(.req, .system, .latest.as_deref()))]
+    #[error("{}", no_release_message(.req, .system, .latest.as_deref(), .prerelease.as_deref()))]
     NoRelease {
         req: String,
         system: String,
         latest: Option<String>,
+        /// The newest prerelease of the minor asked for, which a minor
+        /// requirement never installs.
+        prerelease: Option<String>,
     },
 
     #[error("Kix {version} has no release signature, so Kix cannot verify it")]
@@ -136,13 +139,24 @@ pub enum InstallError {
     },
 }
 
-fn no_release_message(req: &str, system: &str, latest: Option<&str>) -> String {
-    match latest {
+fn no_release_message(
+    req: &str,
+    system: &str,
+    latest: Option<&str>,
+    prerelease: Option<&str>,
+) -> String {
+    let mut message = match latest {
         Some(latest) => {
             format!("no Kix {req} release exists for {system}. The newest release is {latest}")
         }
         None => format!("no Kix {req} release exists for {system}. kix.run lists no releases yet"),
+    };
+    if let Some(pre) = prerelease {
+        message.push_str(&format!(
+            ". Kix {pre} is a prerelease, which Kix installs only when it is named exactly. To install it, run `kix self install {pre}`"
+        ));
     }
+    message
 }
 
 impl InstallError {
@@ -222,6 +236,12 @@ pub fn install(
             req: req.to_string(),
             system: system.to_string(),
             latest: index.latest.clone(),
+            prerelease: match req {
+                Requirement::Minor(..) => index
+                    .newest_prerelease(req, system)
+                    .map(|r| r.version.release()),
+                Requirement::Exact(_) => None,
+            },
         })?;
     let v = release.version.release();
     if let Some(existing) = installs::installed()
@@ -315,8 +335,13 @@ fn move_into_place(new: &Path, dest: &Path) -> Result<(), InstallError> {
     }
 }
 
-/// Return the newest release the index at `source` lists for `system`.
-pub fn latest(source: &Source, system: &str) -> Result<Option<Version>, InstallError> {
+/// Return the newest release the index at `source` lists for `system` that
+/// Kix `running` updates to ([`index::Index::latest_for`]).
+pub fn latest(
+    source: &Source,
+    system: &str,
+    running: &Version,
+) -> Result<Option<Version>, InstallError> {
     let mut fetcher = download::Fetcher::new(source.clone());
     let bytes = fetcher.get(index::PATH).map_err(|e| {
         e.into_install_error(&|message| InstallError::Download {
@@ -328,7 +353,7 @@ pub fn latest(source: &Source, system: &str) -> Result<Option<Version>, InstallE
         site: source.to_string(),
         message,
     })?;
-    Ok(index.latest_for(system).map(|r| r.version.clone()))
+    Ok(index.latest_for(system, running).map(|r| r.version.clone()))
 }
 
 /// A directory removed when dropped, including read-only trees from an
@@ -407,8 +432,17 @@ mod tests {
     fn a_missing_release_names_the_newest() {
         let req = Requirement::Minor(0, 9);
         assert_eq!(
-            no_release_message(&req.to_string(), "x86_64-linux", Some("0.8.4")),
+            no_release_message(&req.to_string(), "x86_64-linux", Some("0.8.4"), None),
             "no Kix 0.9 release exists for x86_64-linux. The newest release is 0.8.4"
+        );
+        assert_eq!(
+            no_release_message(
+                &req.to_string(),
+                "x86_64-linux",
+                Some("0.8.4"),
+                Some("0.9.0-rc.1")
+            ),
+            "no Kix 0.9 release exists for x86_64-linux. The newest release is 0.8.4. Kix 0.9.0-rc.1 is a prerelease, which Kix installs only when it is named exactly. To install it, run `kix self install 0.9.0-rc.1`"
         );
     }
 }
