@@ -1,0 +1,123 @@
+---
+title: "`self`"
+description: "Reference for kix self install, list, prune, and update, which manage the versions of Kix installed in ~/.local/share/kix."
+---
+
+import Command from "../../../../components/Command.astro";
+
+`kix self` manages the versions of Kix installed in `~/.local/share/kix/`
+(or `$XDG_DATA_HOME/kix/`). Each version is an unpacked release archive in
+its own directory, `~/.local/share/kix/<version>/`. The
+[install script](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+puts versions there, and so does Kix when a project's
+[`kix` setting](/docs/reference/kix-toml/#the-kix-setting) names a version
+that is not installed.
+
+`kix self` always runs in the version of Kix you typed, whatever the
+project's `kix.toml` says. It reads no flake and contacts no cluster.
+
+:::note
+This page is hand-maintained from `cli/kix-cli/src/cli.rs`,
+`cli/kix-cli/src/commands/self_cmd.rs`, `cli/kix/src/installs.rs`, and
+`cli/kix/src/release/`. When flag definitions or behavior change in the Rust
+source, update this page in the same change.
+:::
+
+## Synopsis
+
+```text
+kix self install <VERSION>
+kix self list
+kix self prune [--keep <N>] [--dry-run]
+kix self update
+```
+
+## `kix self install`
+
+Installs a version of Kix from kix.run. `<VERSION>` is a minor, such as
+`0.8`, which installs the newest patch release of that minor, or an exact
+version, such as `0.8.3`. A minor never installs a prerelease. Name a
+prerelease in full to install it, such as `kix self install 0.9.0-rc.1`.
+
+Kix reads the release index at `https://kix.run/releases/index.json`, checks
+the release's `SHA256SUMS` against its Ed25519 signature with the key built
+into Kix, downloads the release archive for this machine, checks its SHA-256,
+and unpacks it. A version is installed only after every check passes:
+
+<Command commands={["kix self install 0.8"]} />
+
+```text
+Installed Kix 0.8.4 to /home/me/.local/share/kix/0.8.4
+```
+
+Kix refuses to install a release when:
+
+| Condition | Message |
+| --- | --- |
+| No release matches for this platform | `no Kix <version> release exists for <system>. The newest release is <latest>` |
+| The release has no signature | `Kix <version> has no release signature, so Kix cannot verify it` |
+| The signature does not verify | `the release signature for Kix <version> does not verify against any key built into Kix <running>. Kix did not install it. Report this at https://kix.run` |
+| The archive does not match `SHA256SUMS` | `downloaded kix-<system>.tar.gz does not match SHA256SUMS (expected <a>, got <b>)` |
+| kix.run cannot be reached | `could not reach <source>: <error>. Set KIX_AUTO_INSTALL=0 to stop Kix from installing versions, and install Kix <version> with the install script` |
+| Neither `HOME` nor `XDG_DATA_HOME` is set | `Kix cannot find a home directory to install into. Set HOME or XDG_DATA_HOME.` |
+
+When two commands install the same version at once, the one that finishes
+second finds it installed and uses it.
+
+## `kix self list`
+
+Lists the installed versions, newest first. `*` marks the running Kix, and
+`(on PATH)` marks the version that the first `kix` on `PATH` runs:
+
+<Command commands={["kix self list"]} />
+
+## `kix self prune`
+
+Removes old versions. It keeps the newest versions (two unless you pass
+`--keep`), the running Kix, and the version that the first `kix` on `PATH`
+runs, and prints each version it removes.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--keep <N>` | `2` | How many of the newest versions to keep. |
+| `--dry-run` | `false` | Print the versions that would be removed, and remove nothing. |
+
+A project whose `kix` setting names a removed version gets it again the next
+time it runs, unless `KIX_AUTO_INSTALL=0` is set.
+
+## `kix self update`
+
+When the install script installed the running Kix, installs the newest
+release for this machine and moves the `kix` link the script made to it
+(`~/.local/bin/kix`, or the directory `KIX_INSTALL_DIR` named):
+
+```text
+Kix 0.8.3 -> 0.8.4
+```
+
+When the running Kix is already the newest release, it prints
+`Kix <version> is the newest release` and changes nothing. A release never
+updates to a prerelease. A prerelease updates to a newer prerelease of the
+same release, such as 0.9.0-rc.1 to 0.9.0-rc.2, or to the newest release.
+
+When the install script did not install the running Kix, it changes nothing,
+says how to upgrade instead, and exits with status 1, for example:
+
+```text
+Kix 0.8.3 at /home/me/.nix-profile/bin/kix was not installed by the install script. Upgrade it the way you installed it, for example with nix profile upgrade kix
+```
+
+Kix knows the install script installed it, and which link it made, from
+`~/.local/share/kix/receipt.json`, which the script writes.
+
+## Environment
+
+| Variable | Effect |
+| --- | --- |
+| `XDG_DATA_HOME` | Versions are installed under `$XDG_DATA_HOME/kix/` in place of `~/.local/share/kix/`. |
+| `KIX_AUTO_INSTALL` | `0`, `false`, or `no` stops Kix from downloading a version on its own when a project needs one. `kix self install` still downloads. |
+
+## Exit status
+
+- `0` when the command succeeds.
+- `1` when a release cannot be found, downloaded, or verified, when a version cannot be removed, or when `kix self update` runs in a Kix the install script did not install.

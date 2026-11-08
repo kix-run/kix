@@ -6,6 +6,7 @@ mod plan;
 mod plugin;
 #[cfg(test)]
 mod schemas;
+mod select;
 pub mod trace_sink;
 
 use clap::FromArgMatches;
@@ -136,6 +137,13 @@ fn main() -> miette::Result<()> {
         Box::new(miette::MietteHandlerOpts::new().wrap_lines(wrap).build())
     }))?;
 
+    // Run the version of Kix the project names before clap parses, since that
+    // version may take other arguments.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if select::run(&args)? == select::Outcome::PrintedVersion {
+        return Ok(());
+    }
+
     let mut cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
     override_input_from_env(&mut cli.global)?;
     if let Command::Plugin(args) = &cli.command {
@@ -148,6 +156,10 @@ fn main() -> miette::Result<()> {
     // Completions doesn't need a CommandContext (no evaluator, no runtime)
     if let Command::Completions(args) = &cli.command {
         return commands::completions::run(args, &cli.global);
+    }
+
+    if let Command::SelfCmd(command) = &cli.command {
+        return commands::self_cmd::run(command);
     }
 
     // Doctor reports a broken runtime instead of stopping on it.
@@ -218,6 +230,7 @@ fn main() -> miette::Result<()> {
         | Command::Drift(_)
         | Command::Pin(_)
         | Command::Lib(_)
+        | Command::SelfCmd(_)
         | Command::Plugin(_) => unreachable!(),
     }
 }

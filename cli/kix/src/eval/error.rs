@@ -28,8 +28,8 @@ pub enum KixEvalError {
     /// and writes no `activationIndex`.
     #[error(
         "cluster '{cluster}' uses a Kix library older than Kix {}. Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
-        crate::VERSION,
-        crate::VERSION
+        crate::version::running().release(),
+        crate::version::running().release()
     )]
     NoActivationIndex { cluster: String },
 
@@ -60,6 +60,10 @@ pub enum KixEvalError {
 
     #[error(transparent)]
     Project(#[from] crate::project::ProjectMismatch),
+
+    /// The project's Kix library is a version this Kix cannot build.
+    #[error(transparent)]
+    LibraryIncompatible(Box<crate::version::policy::LibraryIncompatible>),
 
     #[error(transparent)]
     Helm(#[from] super::helm::HelmError),

@@ -216,7 +216,7 @@ pub fn eval_activation_index(
         return Err(KixEvalError::not_found(cluster_name));
     }
 
-    check_library_builder(flake_path, input_overrides)?;
+    check_library(flake_path, input_overrides)?;
 
     let flake_ref = format!(".#{}", activation_index_attr(cluster_name));
 
@@ -289,7 +289,7 @@ pub fn eval_with_helm(
             let mismatch = crate::library::HelmMismatch {
                 library: crate::library::eval_version(flake_path, input_overrides),
                 wanted,
-                program: crate::library::PROGRAM_VERSION.to_string(),
+                program: crate::version::running().release(),
                 shipped,
             };
             return Err(super::helm::HelmError::LibraryMismatch(Box::new(mismatch)).into());
@@ -396,8 +396,14 @@ pub(crate) fn clusters_attr() -> &'static str {
 }
 
 /// Check, once per run, that the project's Kix library read the same
-/// builder from `kix.toml` as Kix did ([`crate::project::check_agreement`]).
-fn check_library_builder(
+/// builder from `kix.toml` as Kix did ([`crate::project::check_agreement`]),
+/// and that this Kix can build that library
+/// ([`crate::version::policy::library_compatible`]).
+///
+/// A library too old to publish its version is left to the checks that
+/// catch it later ([`KixEvalError::NoActivationIndex`] and
+/// [`crate::library::HelmMismatch`]).
+fn check_library(
     flake_path: &Path,
     input_overrides: &[(String, String)],
 ) -> Result<(), KixEvalError> {
@@ -408,24 +414,60 @@ fn check_library_builder(
     let Some(origin) = runtime::builder_source() else {
         return Ok(());
     };
-    let library = library_builder(flake_path, input_overrides)?;
-    crate::project::check_agreement(runtime::builder(), &origin, library.as_deref())?;
+    let facts = library_facts(flake_path, input_overrides)?;
+    crate::project::check_agreement(runtime::builder(), &origin, facts.builder.as_deref())?;
+    if let Some(library) = facts.version.as_deref().and_then(|v| v.parse().ok()) {
+        let requirement = crate::project::kix_setting(flake_path)
+            .ok()
+            .flatten()
+            .map(|s| s.requirement);
+        library_compatible(crate::version::running(), library, requirement)?;
+    }
     let _ = AGREED.set(());
     Ok(())
 }
 
-/// Return the builder the project's Kix library read from `kix.toml`, or
-/// `None` when the flake publishes no such setting.
-fn library_builder(
+/// Check that Kix `kix` can build the Kix library `library` of a project
+/// whose `kix` setting is `requirement`.
+fn library_compatible(
+    kix: &crate::version::Version,
+    library: crate::version::Version,
+    requirement: Option<crate::version::policy::Requirement>,
+) -> Result<(), KixEvalError> {
+    crate::version::policy::library_compatible(kix, &library).map_err(|reason| {
+        KixEvalError::LibraryIncompatible(Box::new(crate::version::policy::LibraryIncompatible {
+            kix: kix.clone(),
+            library,
+            reason,
+            requirement,
+        }))
+    })
+}
+
+/// What the project's Kix library publishes about itself.
+#[derive(Debug, Default, PartialEq, Eq, serde::Deserialize)]
+struct LibraryFacts {
+    /// The builder the library read from `kix.toml`.
+    builder: Option<String>,
+    /// The library's version (`kixLibrary.version`).
+    version: Option<String>,
+}
+
+/// Return the builder the project's Kix library read from `kix.toml` and the
+/// library's version, with one evaluation. Each is `None` when the flake does
+/// not publish it.
+fn library_facts(
     flake_path: &Path,
     input_overrides: &[(String, String)],
-) -> Result<Option<String>, KixEvalError> {
-    let attr = format!(".#legacyPackages.{}.kixConfig.builder", current_system());
+) -> Result<LibraryFacts, KixEvalError> {
+    let attr = format!(".#legacyPackages.{}", current_system());
     let mut cmd = command(Tool::Nix)?;
     cmd.args([
         "eval",
-        "--raw",
+        "--json",
         &attr,
+        "--apply",
+        "lp: { builder = lp.kixConfig.builder or null; version = lp.kixLibrary.version or null; }",
         "--extra-experimental-features",
         "nix-command flakes pipe-operators",
     ]);
@@ -433,11 +475,13 @@ fn library_builder(
         cmd.arg("--override-input").arg(name).arg(url);
     }
     match output(cmd.current_dir(flake_path)) {
-        Ok(out) => Ok(Some(String::from_utf8_lossy(&out).trim().to_string())),
+        Ok(out) => serde_json::from_slice(&out).map_err(|e| KixEvalError::StoreGraphError {
+            message: format!("the Kix library's settings are not the expected JSON: {e}"),
+        }),
         Err(e) if e.missing_attribute() => {
             match system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
                 Some(err) => Err(err),
-                None => Ok(None),
+                None => Ok(LibraryFacts::default()),
             }
         }
         Err(e) => match system_eval_error(&e.stderr) {

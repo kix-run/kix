@@ -1,0 +1,5 @@
+/install
+  Content-Type: text/plain; charset=utf-8
+
+/releases/*
+  Cache-Control: public, max-age=300

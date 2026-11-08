@@ -1,11 +1,11 @@
 ---
 title: "kix.toml"
-description: "Project configuration file that chooses whether Kix evaluates a repository with the Kix runtime or the machine's Nix installation."
+description: "Project configuration file that names the Kix version a project uses and chooses whether Kix evaluates it with the Kix runtime or the machine's Nix installation."
 ---
 
 import Command from '../../../components/Command.astro';
 
-`kix.toml` is an optional configuration file placed beside `flake.nix` at the root of a Kix project. It chooses the project's **builder**: whether Kix evaluates clusters with the Nix in the Kix runtime and Kix's local store (`builder = "kix"`, the default) or with the machine's installed Nix and `/nix/store` (`builder = "nix"`). Because `kix.toml` lives in the repository, every contributor and CI job uses the same builder without passing extra flags or environment variables.
+`kix.toml` is an optional configuration file placed beside `flake.nix` at the root of a Kix project. It names the version of Kix the project uses (`kix`), and it chooses the project's **builder**: whether Kix evaluates clusters with the Nix in the Kix runtime and Kix's local store (`builder = "kix"`, the default) or with the machine's installed Nix and `/nix/store` (`builder = "nix"`). Because `kix.toml` lives in the repository, every contributor and CI job uses the same Kix version and builder without passing extra flags or environment variables.
 
 :::note[Helpful background]
 - [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/): see how the release archive ships the Kix runtime and how to verify your setup with `kix doctor`.
@@ -20,16 +20,51 @@ Kix looks for `kix.toml` in the directory named by [`--flake`](/docs/reference/c
 
 ```toml
 # kix.toml
+kix = "0.8"
 builder = "nix"
 ```
 
-Both the file and the `builder` key are optional. An absent `kix.toml` or an empty `kix.toml` is equivalent to:
+The file and both keys are optional. An absent `kix.toml` or an empty `kix.toml` is equivalent to:
 
 ```toml
 builder = "kix"
 ```
 
-`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, `builder` is the only valid setting. Unknown keys, unknown builder names, and TOML syntax errors stop the command before evaluation starts.
+`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `kix` and `builder`. Unknown keys, unknown builder names, a `kix` value that is not a version, and TOML syntax errors stop the command before evaluation starts.
+
+## The `kix` setting
+
+`kix` names the version of Kix that runs for this project:
+
+| Value | Accepts |
+| --- | --- |
+| `"0.8"` | Any 0.8 patch release. Kix runs the newest 0.8 it has, the running one or an installed one. |
+| `"0.8.3"` | Only Kix 0.8.3. |
+| `"0.9.0-rc.1"` | Only the prerelease 0.9.0-rc.1. |
+
+A minor such as `"0.9"` never matches a prerelease. To try a prerelease in a project, name it in full, and change the setting back when the release is out.
+
+Kix 0.7 and older refuse a `kix.toml` that sets `kix`, so the setting must name Kix 0.8 or newer. A value such as `kix = "0.7"` stops the command with an error.
+
+Before Kix parses its command line, it reads `kix` from `kix.toml` in the directory named by [`--flake`](/docs/reference/cli/global-flags/) (or `KIX_FLAKE`), and then:
+
+| Situation | What Kix does |
+| --- | --- |
+| No `kix.toml`, or no `kix` setting | Runs |
+| The running Kix matches, and no newer matching Kix is installed | Runs |
+| A matching Kix newer than the running one is installed in `~/.local/share/kix/` | Runs that Kix in its place, with the same arguments |
+| No matching Kix is installed | Downloads the newest matching release from kix.run, checks its signature and SHA-256, prints `Installing Kix <version> (this project needs <kix>)`, and runs it |
+| No matching Kix is installed, and `KIX_AUTO_INSTALL=0` | Stops: `` This project needs Kix <kix> (kix.toml), and no Kix <kix> is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <kix>`. `` |
+
+`KIX_AUTO_INSTALL` set to `0`, `false`, or `no` stops Kix from downloading versions. [`kix self`](/docs/reference/cli/self/), `kix completions`, `kix init`, `kix help`, and `--help` run in the version you typed, whatever `kix.toml` says. A remote flake reference such as `github:org/repo` is not read. To choose, Kix reads `kix.toml` and lists `~/.local/share/kix/`. It runs no Nix and makes no network request unless it has to install. So a project with `kix = "0.8"` moves to a new 0.8 patch as soon as one is installed.
+
+At this stage Kix reads only the `kix` setting. It ignores other keys and values it does not know, so an older Kix can hand a project over to the newer Kix it names. The Kix that runs the command then checks the whole file.
+
+`kix --version` follows the same rules, except that it never downloads. When no matching Kix is installed, it prints the running version and then, on stderr, `  this project needs Kix <kix>, which is not installed. Any other kix command installs it.`
+
+The Kix that hands over sets `KIX_SELECTED_BY` to its own path for the Kix it runs, and `kix --version` and [`kix doctor`](/docs/reference/cli/doctor/) print it. A Kix that finds `KIX_SELECTED_BY` set runs without choosing again.
+
+Kix also checks that the [Kix library](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#when-kix-and-the-kix-library-do-not-match) in `flake.lock` has the same minor version as Kix and a patch version no newer than Kix's. Set `kix` to the Kix library's minor so that everyone on the project runs a Kix that can build it.
 
 ## The `builder` setting
 
@@ -158,13 +193,17 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | Condition | Error message |
 | --- | --- |
 | Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
-| Unknown key in `kix.toml` | `<path> has an unknown setting \`<key>\` (Kix <version> supports: builder). Check the spelling, or upgrade Kix if the project needs a newer version` |
+| Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder, kix). Check the spelling, or upgrade Kix if the project needs a newer version `` |
+| `kix` is not a version, such as `kix = 8` or `kix = "latest"` | `<path> sets kix = <value>, which is not a Kix version. Write a minor such as kix = "0.8", an exact version such as kix = "0.8.3", or a prerelease such as kix = "0.9.0-rc.1"` |
+| `kix` is a number, such as `kix = 0.8` | `<path> sets kix = 0.8 as a number. Write it in quotes: kix = "0.8"` |
+| `kix` names Kix 0.7 or older, such as `kix = "0.7"` | `<path> sets kix = "0.7", but Kix 0.7 and older cannot read this setting. Name Kix 0.8 or newer, or remove the line.` |
+| `kix` names a version that is not installed, with `KIX_AUTO_INSTALL=0` | `` This project needs Kix <kix> (kix.toml), and no Kix <kix> is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <kix>`. `` |
 | Unknown `builder` value | `<path> sets builder = "<value>", which is not a known builder (Kix <version> supports: kix, nix, remote). Check the spelling, or upgrade Kix if the project needs a newer version` |
 | `builder` without quotes, such as `builder = 3` | `<path> sets builder to a number. Write the builder's name in quotes, such as builder = "kix" (Kix <version> supports: kix, nix, remote)` |
 | `builder = "remote"` | `<path> sets builder = "remote", but remote builders are not supported yet. Set builder = "kix", or remove the setting` |
-| `builder = "nix"` in `kix.toml`, but `kix.toml` is not tracked by Git | `<path> is not tracked by Git, so Nix ignores it. Run \`git add kix.toml\`` |
-| `builder = "nix"` in `kix.toml`, but the flake publishes no `legacyPackages.<system>.kixConfig` | `<path> sets builder = "nix", which this project's flake does not support. If flake.nix calls kixpkgs.lib.mkFlake, run \`kix lib update\` to update the Kix library in flake.lock. If flake.nix builds Kix outputs directly (for example with kixpkgs.lib.forPkgs), switch to kixpkgs.lib.mkFlake as shown in "Use mkFlake in a consuming repo" in the docs` |
+| `builder = "nix"` in `kix.toml`, but `kix.toml` is not tracked by Git | `` <path> is not tracked by Git, so Nix ignores it. Run `git add kix.toml` `` |
+| `builder = "nix"` in `kix.toml`, but the flake publishes no `legacyPackages.<system>.kixConfig` | `` <path> sets builder = "nix", which this project's flake does not support. If flake.nix calls kixpkgs.lib.mkFlake, run `kix lib update` to update the Kix library in flake.lock. If flake.nix builds Kix outputs directly (for example with kixpkgs.lib.forPkgs), switch to kixpkgs.lib.mkFlake as shown in "Use mkFlake in a consuming repo" in the docs `` |
 | `KIX_STORE_ROOT` set when `builder = "nix"` | `KIX_STORE_ROOT is set, but it does not apply to this project. The project's builder is "nix", which uses the machine's Nix and its store. Unset KIX_STORE_ROOT` |
-| `nix` not found on `PATH` when `builder = "nix"` | `this project uses the \`nix\` builder (\`builder = "nix"\` in kix.toml), but \`nix\` is not on PATH. Install Nix 2.24 or later, or remove \`builder = "nix"\` from kix.toml` |
-| Nix older than 2.24 on `PATH` | `this project uses the \`nix\` builder (\`builder = "nix"\` in kix.toml), which requires Nix 2.24 or later, but \`nix --version\` reported <version>. Upgrade Nix, or remove \`builder = "nix"\` from kix.toml` |
-| Lix on `PATH` | `this project uses the \`nix\` builder (\`builder = "nix"\` in kix.toml), which does not support Lix (\`nix --version\` reported <version>). Install Nix 2.24 or later, or remove \`builder = "nix"\` from kix.toml` |
+| `nix` not found on `PATH` when `builder = "nix"` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), but `nix` is not on PATH. Install Nix 2.24 or later, or remove `builder = "nix"` from kix.toml `` |
+| Nix older than 2.24 on `PATH` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), which requires Nix 2.24 or later, but `nix --version` reported <version>. Upgrade Nix, or remove `builder = "nix"` from kix.toml `` |
+| Lix on `PATH` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), which does not support Lix (`nix --version` reported <version>). Install Nix 2.24 or later, or remove `builder = "nix"` from kix.toml `` |

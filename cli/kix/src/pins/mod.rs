@@ -437,7 +437,7 @@ fn parse_file(text: &str) -> Result<PinFile, String> {
             Some(v) => {
                 return Err(format!(
                     "It declares version {v}, and Kix {} reads versions {VERSION_IMAGES} and {VERSION_INSTANCES}. Upgrade Kix, or check the file.",
-                    crate::VERSION
+                    crate::version::running().release()
                 ));
             }
             None => return Err("It has no version. A pin file declares `\"version\"`.".to_string()),

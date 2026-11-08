@@ -157,9 +157,9 @@ pub enum RuntimeError {
     #[error(
         "the Kix runtime in {} ({found_by}) does not match Kix {}. It ships {found}, but Kix {} expects {expected}. Install bin/kix and libexec/kix from the release archive of Kix {}{}",
         dir.display(),
-        crate::VERSION,
-        crate::VERSION,
-        crate::VERSION,
+        crate::version::running().release(),
+        crate::version::running().release(),
+        crate::version::running().release(),
         if *found_by == FoundBy::Env { format!(", or point {RUNTIME_DIR_VAR} at the Kix runtime of that version") } else { String::new() }
     )]
     Mismatch {

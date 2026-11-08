@@ -6,7 +6,7 @@ members = ["kix-cli", "kix", "kix-container", "kix-bundle", "kix-operator"]
 name = "kix"
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 license = "LicenseRef-Proprietary"
 repository = "https://github.com/kixpkgs/kixpkgs"
@@ -90,6 +90,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Hashing
 blake3 = "1"
 sha2 = "0.10"
+
+# Release archives Kix installs (`kix self install`): Ed25519 signatures
+# with the ring that rustls already links, and gzip and tar in pure Rust.
+ring = "0.17"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
 
 # Paths
 tempfile = "3"

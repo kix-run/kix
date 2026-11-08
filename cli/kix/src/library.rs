@@ -18,10 +18,7 @@ use serde_json::Value;
 
 use crate::eval::nix::{NixCommandError, command, current_system, output};
 use crate::runtime::Tool;
-
-/// The version of Kix running now, which names the library release that
-/// matches it (`v<version>`).
-pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
+use crate::version::Version;
 
 /// A Git URL whose nodes in `flake.lock` count as the Kix library, in place of
 /// github:kix-run/kixpkgs. Only tests set it, to run `kix lib update` against
@@ -73,31 +70,6 @@ pub fn eval_version(flake_dir: &Path, input_overrides: &[(String, String)]) -> L
     }
 }
 
-/// Compare two release versions such as `0.8.1` or `0.9.0-rc.1`. Build
-/// metadata after `+` is ignored. Return `None` when either is not a version.
-pub fn compare_versions(a: &str, b: &str) -> Option<Ordering> {
-    fn parse(v: &str) -> Option<(Vec<u64>, Option<&str>)> {
-        let v = v.split('+').next()?;
-        let (core, pre) = match v.split_once('-') {
-            Some((core, pre)) => (core, Some(pre)),
-            None => (v, None),
-        };
-        let parts = core
-            .split('.')
-            .map(|p| p.parse().ok())
-            .collect::<Option<Vec<u64>>>()?;
-        (parts.len() == 3).then_some((parts, pre))
-    }
-    let (a_core, a_pre) = parse(a)?;
-    let (b_core, b_pre) = parse(b)?;
-    Some(a_core.cmp(&b_core).then(match (a_pre, b_pre) {
-        (None, None) => Ordering::Equal,
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (Some(a), Some(b)) => a.cmp(b),
-    }))
-}
-
 /// The library asks for a Helm version this version of Kix does not ship.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelmMismatch {
@@ -126,9 +98,12 @@ impl HelmMismatch {
         match &self.library {
             LibraryVersion::Older => Fix::UpdateLibrary,
             LibraryVersion::Unknown => Fix::Either,
-            LibraryVersion::Known(lib) => match compare_versions(lib, &self.program) {
-                Some(Ordering::Less) => Fix::UpdateLibrary,
-                Some(Ordering::Greater) => Fix::UpgradeProgram,
+            LibraryVersion::Known(lib) => match (lib.parse::<Version>(), self.program.parse()) {
+                (Ok(lib), Ok(program)) => match lib.cmp(&program) {
+                    Ordering::Less => Fix::UpdateLibrary,
+                    Ordering::Greater => Fix::UpgradeProgram,
+                    Ordering::Equal => Fix::Either,
+                },
                 _ => Fix::Either,
             },
         }
@@ -223,10 +198,10 @@ pub enum UpdateError {
     )]
     NotFound,
 
-    #[error("Kix cannot move this project's Kix library to {PROGRAM_VERSION} by itself.\n{}", .0.iter().map(|s| format!("- {s}")).collect::<Vec<_>>().join("\n"))]
+    #[error("Kix cannot move this project's Kix library to {} by itself.\n{}", crate::version::running().release(), .0.iter().map(|s| format!("- {s}")).collect::<Vec<_>>().join("\n"))]
     ByHand(Vec<String>),
 
-    #[error("could not move the Kix library to v{PROGRAM_VERSION}: {0}")]
+    #[error("could not move the Kix library to v{}: {}", crate::version::running().release(), .0)]
     Nix(#[source] NixCommandError),
 }
 
@@ -475,7 +450,7 @@ pub struct Updated {
 }
 
 /// Move the Kix library inputs of the flake in `flake` to the version of Kix
-/// running now, `v<PROGRAM_VERSION>`. With `dry_run`, work out the new lock
+/// running now, the tag `v<release>`. With `dry_run`, work out the new lock
 /// without writing it.
 pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
     let dir = Path::new(flake);
@@ -488,7 +463,8 @@ pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
     }
     let lock = read_lock(&lock_path)?;
     let test_repo = std::env::var(TEST_REPO_VAR).ok().filter(|v| !v.is_empty());
-    let inputs = library_inputs(&lock, PROGRAM_VERSION, test_repo.as_deref());
+    let release = crate::version::running().release();
+    let inputs = library_inputs(&lock, &release, test_repo.as_deref());
     if inputs.is_empty() {
         return Err(UpdateError::NotFound);
     }
@@ -532,7 +508,7 @@ pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
     let changed = inputs.iter().any(|i| rev_at(&new_lock, &i.path) != i.rev);
     Ok(Updated {
         from,
-        to: PROGRAM_VERSION.to_string(),
+        to: release,
         changed,
     })
 }
@@ -789,21 +765,6 @@ mod tests {
                 "git+file:///tmp/lib?ref=refs/tags/v0.8.1".into()
             )]
         );
-    }
-
-    #[test]
-    fn versions_compare() {
-        assert_eq!(compare_versions("0.8.0", "0.8.1"), Some(Ordering::Less));
-        assert_eq!(compare_versions("0.10.0", "0.9.9"), Some(Ordering::Greater));
-        assert_eq!(
-            compare_versions("0.8.1+250", "0.8.1"),
-            Some(Ordering::Equal)
-        );
-        assert_eq!(
-            compare_versions("0.9.0-rc.1", "0.9.0"),
-            Some(Ordering::Less)
-        );
-        assert_eq!(compare_versions("main", "0.9.0"), None);
     }
 
     fn mismatch(library: LibraryVersion, wanted: &str, program: &str) -> HelmMismatch {

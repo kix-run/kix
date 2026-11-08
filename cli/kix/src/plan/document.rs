@@ -120,7 +120,7 @@ pub struct KixBuild {
 
 impl KixBuild {
     /// Return the running binary's [`KixBuild`] with `version` (callers pass
-    /// [`crate::VERSION`]).
+    /// the full [`crate::version::running`] version, build metadata included).
     pub fn current(version: &str) -> Self {
         let store_path = std::env::current_exe()
             .and_then(std::fs::canonicalize)
@@ -934,7 +934,7 @@ mod tests {
             &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut plan = Plan::new(
-            KixBuild::current(crate::VERSION),
+            KixBuild::current(&crate::version::running().to_string()),
             MadeBy::DryRun,
             "c",
             Build::of(&crate::eval::store_graph::StoreGraph::empty("c")),

@@ -357,6 +357,9 @@ mod tests {
             "tools/k9s-plugin/plugins.yaml",
             "tools/lib/kix_model.py",
             "tools/nix-browse/nix-browse.py",
+            // The release client names the website kix.run, which Kix
+            // downloads releases from. It spells no annotation or label.
+            "cli/kix/src/release/",
         ];
 
         let domains = ["kix.dev", "kix.run"];
