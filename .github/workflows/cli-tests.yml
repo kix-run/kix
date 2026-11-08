@@ -570,6 +570,18 @@ jobs:
           name: kix-${{ needs.version.outputs.version }}
           path: dist
 
+      # A rehearsal builds Kix as a version the library does not report,
+      # and Kix refuses a library from a newer patch or another minor. So
+      # the rehearsal gives the library its version too. The commit is
+      # local, so Nix's git fetcher sees it.
+      - name: Give the library the rehearsal's version
+        if: needs.version.outputs.rehearse == 'true'
+        run: |
+          sed -i.bak "/^\[workspace.package\]/,/^\[/ s/^version = .*/version = \"$VERSION\"/" cli/Cargo.toml
+          rm cli/Cargo.toml.bak
+          grep -qx "version = \"$VERSION\"" cli/Cargo.toml
+          git -c user.name=rehearsal -c user.email=rehearsal@localhost commit -q -am "Rehearse $VERSION"
+
       - name: Run the archive without Nix
         run: |
           tar -xzf "dist/kix-${{ matrix.system }}.tar.gz" -C "$RUNNER_TEMP"
@@ -628,6 +640,18 @@ jobs:
         with:
           name: kix-${{ needs.version.outputs.version }}
           path: dist
+
+      # A rehearsal builds Kix as a version the library does not report,
+      # and Kix refuses a library from a newer patch or another minor. So
+      # the rehearsal gives the library its version too. The commit is
+      # local, so Nix's git fetcher sees it.
+      - name: Give the library the rehearsal's version
+        if: needs.version.outputs.rehearse == 'true'
+        run: |
+          sed -i.bak "/^\[workspace.package\]/,/^\[/ s/^version = .*/version = \"$VERSION\"/" cli/Cargo.toml
+          rm cli/Cargo.toml.bak
+          grep -qx "version = \"$VERSION\"" cli/Cargo.toml
+          git -c user.name=rehearsal -c user.email=rehearsal@localhost commit -q -am "Rehearse $VERSION"
 
       - name: Build with the machine's Nix
         run: |
