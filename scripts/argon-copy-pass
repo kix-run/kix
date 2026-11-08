@@ -15,7 +15,7 @@
 # Exit codes:
 #   0  the copy pass finished, or no file with user-facing text changed
 #   1  Antigravity did not finish (it was refused a tool, or said nothing)
-#   2  'agy' is not installed here. Leave '- [ ] Argon copy pass' unticked.
+#   2  'agy' is not installed here. Add '- [ ] Argon copy pass', unticked.
 
 set -euo pipefail
 
@@ -127,7 +127,7 @@ elif [ -x "$HOME/.local/bin/agy" ]; then
 fi
 if [ -z "$agy_bin" ]; then
   echo "argon-copy-pass: 'agy' (the Antigravity CLI) is not installed on this machine." >&2
-  echo "Leave '- [ ] Argon copy pass' unticked in the pull request description, so" >&2
+  echo "Add '- [ ] Argon copy pass', unticked, to the pull request description, so" >&2
   echo "someone with Antigravity can run scripts/argon-copy-pass." >&2
   exit 2
 fi

@@ -139,7 +139,7 @@ Every pull request that changes something a Kix user sees adds a line under `## 
 
 Antigravity, running the Gemini 4 Argon model, writes clearer user-facing text than Claude does. Before you open a pull request that adds or changes text a person reads, run `scripts/argon-copy-pass` on the branch. That text includes errors, warnings, and log lines in `cli/` and `kix/`, docs pages, the skills, and `CHANGELOG.md`. The script hands the changed text to Argon with `CLAUDE.prose.md` as its rules, and Argon edits the files in place. Review its edits, run the tests again (some check message text word for word), and commit.
 
-Then tick `- [x] Argon copy pass` in the pull request description. The Argon copy pass workflow fails a pull request that changes such text without it. If `agy` is not installed (exit 2), leave `- [ ] Argon copy pass` unticked, so someone who has it can run the pass. Never tick it unless the script ran and exited 0.
+Then add `- [x] Argon copy pass` to the pull request description. Add the box whenever the pull request adds or rewrites writing, such as a new error message or a reworded docs page. Leave it out when the text changes only mechanically, such as a version bump, a renamed path, or a line citation. The Argon copy pass workflow fails a pull request whose box is unticked, and passes one with a ticked box or no box. If `agy` is not installed (exit 2), add the box unticked as `- [ ] Argon copy pass`. The check then fails until someone who has `agy` runs the pass. Never tick it unless the script ran and exited 0.
 
 For an important new message, such as a refusal that stops a deploy, you can also give Argon the facts and ask it to write the message: `agy --model "Gemini 4 Argon (Medium)" --print "<facts and request>"`.
 
