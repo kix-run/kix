@@ -1,0 +1,24 @@
+---
+import Base from '@/layouts/Base.astro';
+import Nav from '@/components/sections/Nav.astro';
+import PageHeader from '@/components/PageHeader.astro';
+import Language from '@/components/sections/Language.astro';
+import Ai from '@/components/sections/Ai.astro';
+import FinalCta from '@/components/sections/FinalCta.astro';
+---
+
+<Base
+  title="Why the Nix Language | Kix"
+  description="Why we built a Kubernetes compiler on the Nix language: string-context dependency tracking, pure evaluation, locked inputs, and fast feedback for coding agents."
+>
+  <Nav />
+  <main id="main">
+    <PageHeader
+      title="Why we built a Kubernetes compiler on the Nix language."
+      subtitle="Kix uses the Nix configuration language for dependency tracking, hermetic offline evaluation, and instant compiler feedback for both engineers and coding agents."
+    />
+    <Language />
+    <Ai />
+  </main>
+  <FinalCta />
+</Base>

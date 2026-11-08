@@ -83,6 +83,8 @@ A prerelease is published like a release, with these differences, all
 automatic:
 
 - Its notes are `## Unreleased`, so in step 2 leave `CHANGELOG.md` alone.
+  The Changelog check fails a pull request that changes `cli/` and not
+  `CHANGELOG.md`, so label the release pull request `no-changelog`.
 - kix.run lists it as a prerelease and never as the latest release, and the
   docs site keeps serving the last release's docs.
 - Kix installs it only when it is named in full:

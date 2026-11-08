@@ -6,9 +6,10 @@ export const INSTALL_URL = '/docs/tutorials/02-local-setup-and-first-run/';
 /** "Read the docs": the first tutorial. */
 export const DOCS_URL = '/docs/tutorials/01-orientation/';
 
+/** GitHub organisation URL. */
+export const GITHUB_URL = 'https://github.com/kix-run';
+
 /**
- * The one-line installer, served from web/public/install. The command bars
- * that show it in Hero.astro and FinalCta.astro stay commented out until
- * kix.run/install serves a signed release; see web/HANDOVER.md.
+ * The one-line installer, served from web/public/install.
  */
 export const INSTALL_COMMAND = 'curl -fsSL https://kix.run/install | sh';

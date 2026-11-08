@@ -1,4 +1,5 @@
 ---
+import { ChevronRight, Check, GitMerge, GitPullRequest, MessageSquare, Receipt, Rocket } from '@lucide/astro';
 import Section from '../Section.astro';
 import Terminal from '../Terminal.astro';
 
@@ -6,6 +7,15 @@ import Terminal from '../Terminal.astro';
 // change colours "changed" (yellow), "added" (green), "removed" (red).
 type Tone = 'text' | 'out' | 'dim' | 'changed' | 'added' | 'removed';
 type Run = [string, Tone];
+
+const pipeline = [
+  { step: '01', title: 'pull request', desc: 'edit cluster or package Nix files', icon: GitPullRequest },
+  { step: '02', title: 'kix check', desc: 'validate wiring, quotas, and policy offline', icon: Check },
+  { step: '03', title: 'kix diff / plan', desc: 'preview package-grouped changes on the PR', icon: MessageSquare },
+  { step: '04', title: 'merge', desc: 'every release is a Git commit', icon: GitMerge },
+  { step: '05', title: 'kix deploy', desc: 'apply in dependency waves and wait on readiness', icon: Rocket },
+  { step: '06', title: 'receipt', desc: 'record commit and image digests on the cluster', icon: Receipt },
+];
 
 // `kix diff shop`, in the layout of the real captures in
 // docs/src/command-output (tutorials/04-from-scratch/diff-after-edit.json):
@@ -45,127 +55,136 @@ const toneClass: Record<Tone, string> = {
   removed: 'text-t-red',
 };
 
-// The deploy waves are a diagram of dependency order, not CLI output.
-const waves = [
-  ['Secret/db', 'ConfigMap/web'],
-  ['Cluster/db'],
-  ['Service/web', 'Deployment/web'],
-  ['HTTPRoute/web'],
-];
-
-const notes = [
-  {
-    cmd: 'kix rollback',
-    desc: 'Reapplies a previous deploy from the local Nix store. kix gc keeps at least the 10 newest records.',
-  },
-  {
-    cmd: 'kix drift',
-    desc: 'Reports Kix-managed resources whose applied fields changed since the last deploy, and which tool changed them.',
-  },
-  {
-    cmd: '--prune',
-    desc: 'Removes resources no longer defined, except Namespaces and CRDs. Without --prune, the plan lists them and leaves them in place.',
-  },
-  {
-    cmd: 'kix snapshot',
-    desc: 'Saves the Kix-managed resources of a live cluster, so kix diff --from can compare against them later.',
-  },
-];
+const comment = {
+  author: 'ci-bot',
+  action: 'commented on pull request #214',
+  heading: 'kix diff',
+  summary: [
+    ['Plan:', '2 updated, 1 added, 0 removed, 9 unchanged'],
+    ['Resources:', '2 with real content changes, 3 dep-affected (hash bump only)'],
+  ],
+  added: [{ name: 'shop/valkey', rest: '8.0.2 (4 resources)' }],
+  changed: [
+    { name: 'monitoring/grafana', rest: '11.2.0 (1 changed, 1 dep-affected)' },
+    { name: 'shop/web', rest: '1.4.2 → 1.5.0 (1 changed, 2 dep-affected)' },
+  ],
+  activation: ['shop-ll6g0k5f2kqm', 'shop-6w9czkc51502'],
+};
 ---
 
-<Section id="plan" tone="paper-2" labelledby="plan-title">
-  <div class="flex flex-col gap-14">
-    <div class="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,700px)_minmax(0,1fr)] xl:gap-16">
-      <div class="flex flex-col gap-5 xl:order-2">
-        <h2
-          id="plan-title"
-          class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance text-ink md:text-[40px] md:tracking-[-1px]"
-        >
-          {/* accent-button, not the brand orange: on paper-2 the brand orange is 2.7:1. */}
-          <span class="text-accent-button">B.</span> plan a change
-        </h2>
-        <p class="text-[17px] leading-[1.6] text-ink-2">
-          Before deploying, kix diff compares the compiled definition with the live cluster and groups the changes by
-          package. You can also post the plan to a pull request so the review happens alongside the change.
-        </p>
-        <p class="text-[17px] leading-[1.6] text-ink-2">
-          When you deploy, Kix applies resources in dependency order and waits for each step to become ready before
-          moving on.
-        </p>
-      </div>
-
-      <Terminal class="min-w-0 xl:order-1">
-        <div aria-hidden="true" class="flex gap-[7px] border-b border-night-line px-[18px] py-3">
-          <span class="size-[11px] rounded-full bg-t-dot"></span>
-          <span class="size-[11px] rounded-full bg-t-dot"></span>
-          <span class="size-[11px] rounded-full bg-t-dot"></span>
-        </div>
-        <pre
-          class="overflow-x-auto px-5 pt-5 pb-6 sm:px-6"><code class="block min-w-max">{diff.map((line) => (
-          <span class="block min-h-[25px] whitespace-pre">{line.map(([text, tone]) => <span class={toneClass[tone]}>{text}</span>)}</span>
-        ))}</code></pre>
-      </Terminal>
-    </div>
-
+<Section id="plan" labelledby="plan-title">
+  <div class="flex flex-col gap-16">
+    <!-- 6-Step End-to-End Lifecycle Overview Strip -->
     <div class="flex flex-col gap-4">
-      <p class="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 font-mono">
-        <span class="text-sm font-semibold text-ink">$ kix deploy shop</span>
-        <span class="text-[13px] text-ink-2">dependency order</span>
+      <p class="font-mono text-xs font-semibold tracking-[1.2px] text-accent-text uppercase">
+        End-to-end delivery lifecycle
       </p>
-      <ol class="flex flex-col xl:flex-row xl:items-stretch">
+      <ol class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {
-          waves.map((resources, i) => (
-            <li
-              class:list={[
-                'flex min-w-0 flex-col xl:flex-row xl:items-center',
-                // Later items also hold a 96px connector; giving them that
-                // as flex-basis keeps the four boxes the same width.
-                i > 0 ? 'xl:flex-[1_1_96px]' : 'xl:flex-[1_1_0%]',
-              ]}
-            >
-              {i > 0 && (
-                <span
-                  aria-hidden="true"
-                  class="flex shrink-0 items-center gap-2 py-1.5 pl-6 xl:w-24 xl:flex-col xl:gap-1 xl:py-0 xl:pl-0"
-                >
-                  <span class="h-5 w-[1.5px] bg-ink xl:hidden" />
-                  <span class="font-mono text-[11px] text-ink-2">ready</span>
-                  <span class="hidden h-[1.5px] w-full bg-ink xl:block" />
-                </span>
-              )}
-              <div class="flex min-w-0 flex-1 flex-col gap-2 self-stretch rounded-lg border border-ink bg-paper p-4 xl:min-h-[100px]">
-                <span class="font-mono text-xs text-accent-text">wave {i + 1}</span>
-                {resources.map((r) => (
-                  <span class="font-mono text-[13.5px] break-all text-ink">{r}</span>
-                ))}
+          pipeline.map((item) => (
+            <li class="flex flex-col gap-2 rounded-lg border border-line bg-paper-2/70 p-4">
+              <div class="flex items-center justify-between text-ink-2">
+                <span class="font-mono text-[11px] font-semibold text-accent-text">{item.step}</span>
+                <item.icon size={16} aria-hidden="true" class="text-ink-2" />
               </div>
+              <span class="font-mono text-[13.5px] font-semibold text-ink">{item.title}</span>
+              <span class="text-[13px] leading-[1.45] text-ink-2">{item.desc}</span>
             </li>
           ))
         }
       </ol>
     </div>
 
-    <dl class="grid grid-cols-1 border-t-[1.5px] border-ink sm:grid-cols-2 lg:grid-cols-4">
-      {
-        notes.map((note, i) => (
-          <div
-            class:list={[
-              'flex flex-col gap-2 py-5 lg:pb-0',
-              {
-                'border-t border-line lg:border-t-0': i > 0,
-                'sm:border-t-0': i === 1,
-                'sm:pr-6': i % 2 === 0,
-                'sm:border-l sm:pl-6': i % 2 === 1,
-                'lg:border-l lg:pl-6': i > 0,
-                'lg:pr-6': i < notes.length - 1,
-              },
-            ]}
-          >
-            <dt class="font-mono text-sm font-semibold text-ink">{note.cmd}</dt>
-            <dd class="text-[14.5px] leading-[1.5] text-ink-2">{note.desc}</dd>
+    <!-- Stage 1: Preview locally & on Pull Requests -->
+    <div class="grid grid-cols-1 items-start gap-10 xl:grid-cols-[minmax(0,640px)_minmax(0,1fr)] xl:gap-14">
+      <div class="flex min-w-0 flex-col gap-4">
+        <p class="font-mono text-xs font-semibold text-ink-2">Terminal output ($ kix diff shop)</p>
+        <Terminal class="min-w-0">
+          <div aria-hidden="true" class="flex gap-[7px] border-b border-night-line px-[18px] py-3">
+            <span class="size-[11px] rounded-full bg-t-dot"></span>
+            <span class="size-[11px] rounded-full bg-t-dot"></span>
+            <span class="size-[11px] rounded-full bg-t-dot"></span>
           </div>
-        ))
-      }
-    </dl>
+          <pre
+            class="overflow-x-auto px-5 pt-5 pb-6 sm:px-6"><code class="block min-w-max">{diff.map((line) => (
+            <span class="block min-h-[25px] whitespace-pre">{line.map(([text, tone]) => <span class={toneClass[tone]}>{text}</span>)}</span>
+          ))}</code></pre>
+        </Terminal>
+      </div>
+
+      <div class="flex min-w-0 flex-col gap-7">
+        <div class="flex flex-col gap-4">
+          <h2
+            id="plan-title"
+            class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance text-ink md:text-[38px] md:tracking-[-1px]"
+          >
+            Preview package-grouped diffs locally and on pull requests
+          </h2>
+          <p class="text-[16.5px] leading-[1.6] text-ink-2">
+            Before deploying, <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix diff</code> compares the compiled cluster against live Kubernetes state and groups every change by namespace and package, separating direct field edits from downstream <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">via dependency</code> hash updates.
+          </p>
+          <p class="text-[16.5px] leading-[1.6] text-ink-2">
+            In CI, <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix diff -o markdown</code> posts the summary directly to the pull request so reviewers inspect the exact package and resource impact alongside the code change.
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-3">
+          <p class="font-mono text-xs font-semibold text-ink-2">Pull request comment ($ kix diff shop -o markdown)</p>
+          <figure class="overflow-hidden rounded-[10px] border border-line bg-paper text-ink shadow-sm">
+            <figcaption class="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line bg-paper-2 px-[18px] py-3">
+              <span
+                aria-hidden="true"
+                class="inline-flex size-[22px] items-center justify-center rounded-full bg-accent-button font-mono text-[12px] font-bold text-white"
+                >k</span
+              >
+              <span class="text-sm font-semibold">{comment.author}</span>
+              <span class="text-[13.5px] text-ink-2">{comment.action}</span>
+            </figcaption>
+            <div class="flex flex-col gap-3 px-[22px] pt-[18px] pb-[22px]">
+              <p class="text-[18px] font-bold">{comment.heading}</p>
+              <p class="flex flex-col gap-0.5 text-[14px]">
+                {
+                  comment.summary.map(([label, text]) => (
+                    <span>
+                      <strong>{label}</strong> {text}
+                    </span>
+                  ))
+                }
+              </p>
+              <p class="text-[14.5px] font-bold">Added packages</p>
+              <ul class="flex flex-col gap-1.5">
+                {
+                  comment.added.map((item) => (
+                    <li class="flex flex-wrap items-center gap-2 text-[14px]">
+                      <span aria-hidden="true">•</span>
+                      <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[12.5px]">{item.name}</code>
+                      <span class="text-ink-2">{item.rest}</span>
+                    </li>
+                  ))
+                }
+              </ul>
+              <p class="text-[14.5px] font-bold">Changed packages</p>
+              <ul class="flex flex-col gap-1.5">
+                {
+                  comment.changed.map((item) => (
+                    <li class="flex flex-wrap items-center gap-2 text-[14px]">
+                      <ChevronRight size={14} aria-hidden="true" class="text-ink-2" />
+                      <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[12.5px]">{item.name}</code>
+                      <span class="text-ink-2">{item.rest}</span>
+                    </li>
+                  ))
+                }
+              </ul>
+              <p class="flex flex-wrap items-center gap-2 pt-1 text-[13.5px]">
+                <strong>Activation:</strong>
+                <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[12.5px]">{comment.activation[0]}</code>
+                <span aria-hidden="true">→</span><span class="sr-only">to</span>
+                <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[12.5px]">{comment.activation[1]}</code>
+              </p>
+            </div>
+          </figure>
+        </div>
+      </div>
+    </div>
   </div>
 </Section>

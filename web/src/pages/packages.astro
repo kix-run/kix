@@ -1,0 +1,24 @@
+---
+import Base from '@/layouts/Base.astro';
+import Nav from '@/components/sections/Nav.astro';
+import PageHeader from '@/components/PageHeader.astro';
+import PayoffD from '@/components/sections/PayoffD.astro';
+import PackagesSection from '@/components/sections/Packages.astro';
+import FinalCta from '@/components/sections/FinalCta.astro';
+---
+
+<Base
+  title="Packages & Escape Hatches | Kix"
+  description="Production-ready Kubernetes packages that adapt to each cluster profile and compile to standard Kubernetes YAML."
+>
+  <Nav />
+  <main id="main">
+    <PageHeader
+      title="Standard library packages that compile to plain YAML."
+      subtitle="Use high-level packages that adapt from single-node kind clusters to multi-zone production, while keeping full access to external managed services and raw PodSpec fields."
+    />
+    <PayoffD />
+    <PackagesSection />
+  </main>
+  <FinalCta />
+</Base>
