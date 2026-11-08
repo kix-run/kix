@@ -35,9 +35,9 @@ const cards = [
     cta: 'Browse packages & profiles',
     cmd: 'clusters/shop.nix',
     lines: [
-      { mark: '', tone: 'text-t-blue', text: 'db = kix.import { host = "rds.prod.internal"; /* ... credentials */ };' },
+      { mark: '', tone: 'text-t-blue', text: 'db = kix.mkImport { out.fqdn = "rds.prod.internal"; /* ... credentials */ };' },
       { mark: '', tone: 'text-on-night-2', text: '# or override any raw PodSpec field:' },
-      { mark: '', tone: 'text-t-green', text: 'podSpec.priorityClassName = "production-high";' },
+      { mark: '', tone: 'text-t-green', text: 'spec.template.spec.priorityClassName = "production-high";' },
     ],
   },
   {

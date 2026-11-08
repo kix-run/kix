@@ -148,11 +148,128 @@ const url = new URL(Astro.url.pathname, Astro.site);
         lastTouchedAt: Float64Array;
         minDist: Float32Array;
         alpha: Float32Array;
+        frameAlpha: Float32Array;
+        frameRadius: Float32Array;
+        frameColor: Uint8Array;
+        edgeA: Int32Array;
+        edgeB: Int32Array;
+        litList: Int32Array;
         ripples: Ripple[];
       }
 
       const wellStates: WellState[] = [];
       const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      // Deterministic integer hash for DAG topology generation.
+      function cellHash(r: number, c: number): number {
+        let h = (r * 374761393 + c * 668265263) | 0;
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        return (h ^ (h >>> 16)) >>> 0;
+      }
+
+      function buildDagEdges(cols: number, rows: number, edgeA: Int32Array, edgeB: Int32Array) {
+        edgeA.fill(-1);
+        edgeB.fill(-1);
+        const total = cols * rows;
+        // Track cells where a down-right diagonal (r, c) -> (r+1, c+1) was placed so (r+1, c) -> (r, c+1) never crosses it.
+        const usedDiagDown = new Uint8Array(total);
+        // Cap incoming edges per node so connections stay airy and never pile up on one dot.
+        const inDegree = new Uint8Array(total);
+
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const idx = r * cols + c;
+            const h = cellHash(r, c);
+            const pick = h % 100;
+
+            if (pick < 15) {
+              // Down-right S-curve: (r, c) -> (r + 1, c + 1)
+              if (r + 1 < rows && c + 1 < cols) {
+                const target = (r + 1) * cols + (c + 1);
+                if (inDegree[target]! < 1) {
+                  edgeA[idx] = target;
+                  inDegree[target]!++;
+                  usedDiagDown[idx] = 1;
+                  // 22% of these form a 1-to-2 DAG fan-out fork: also (r, c) -> (r - 1, c + 1) if uncrossed
+                  if ((h >>> 8) % 100 < 22 && r - 1 >= 0 && !usedDiagDown[(r - 1) * cols + c]) {
+                    const targetB = (r - 1) * cols + (c + 1);
+                    if (inDegree[targetB]! < 1) {
+                      edgeB[idx] = targetB;
+                      inDegree[targetB]!++;
+                    }
+                  }
+                }
+              }
+            } else if (pick < 29) {
+              // Up-right S-curve: (r, c) -> (r - 1, c + 1), avoiding X-crossings
+              if (r - 1 >= 0 && c + 1 < cols && !usedDiagDown[(r - 1) * cols + c]) {
+                const target = (r - 1) * cols + (c + 1);
+                if (inDegree[target]! < 1) {
+                  edgeA[idx] = target;
+                  inDegree[target]!++;
+                }
+              }
+            } else if (pick < 37) {
+              // Long 2-column DAG skip-connection S-curve: (r, c) -> (r ± 1, c + 2)
+              const dr = (h >>> 7) & 1 ? 1 : -1;
+              const nr = r + dr;
+              if (nr >= 0 && nr < rows && c + 2 < cols) {
+                const target = nr * cols + (c + 2);
+                if (inDegree[target]! < 1) {
+                  edgeA[idx] = target;
+                  inDegree[target]!++;
+                }
+              }
+            } else if (pick < 43) {
+              // Gentle arched horizontal link: (r, c) -> (r, c + 1)
+              if (c + 1 < cols) {
+                const target = r * cols + (c + 1);
+                if (inDegree[target]! < 1) {
+                  edgeA[idx] = target;
+                  inDegree[target]!++;
+                }
+              }
+            } else if (pick < 47) {
+              // Gentle arched vertical link: (r, c) -> (r + 1, c)
+              if (r + 1 < rows) {
+                const target = (r + 1) * cols + c;
+                if (inDegree[target]! < 1) {
+                  edgeA[idx] = target;
+                  inDegree[target]!++;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      function drawDagEdge(
+        ctx: CanvasRenderingContext2D,
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        idx: number,
+      ) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        if (dx !== 0 && dy !== 0) {
+          // Smooth horizontal-tangent S-curve matching the compiler workbench dataflow wires
+          const bend = dx * 0.55;
+          ctx.bezierCurveTo(x1 + bend, y1, x2 - bend, y2, x2, y2);
+        } else if (dx !== 0) {
+          // Subtle arched horizontal connection
+          const arch = (idx & 1 ? 1 : -1) * 3.2;
+          ctx.quadraticCurveTo((x1 + x2) * 0.5, y1 + arch, x2, y2);
+        } else {
+          // Subtle arched vertical connection
+          const arch = (idx & 1 ? 1 : -1) * 3.2;
+          ctx.quadraticCurveTo(x1 + arch, (y1 + y2) * 0.5, x2, y2);
+        }
+        ctx.stroke();
+      }
 
       function resizeWell(state: WellState) {
         const rect = state.el.getBoundingClientRect();
@@ -174,6 +291,13 @@ const url = new URL(Astro.url.pathname, Astro.site);
           state.lastTouchedAt = new Float64Array(total);
           state.minDist = new Float32Array(total).fill(1);
           state.alpha = new Float32Array(total);
+          state.frameAlpha = new Float32Array(total);
+          state.frameRadius = new Float32Array(total);
+          state.frameColor = new Uint8Array(total);
+          state.edgeA = new Int32Array(total);
+          state.edgeB = new Int32Array(total);
+          state.litList = new Int32Array(total);
+          buildDagEdges(cols, rows, state.edgeA, state.edgeB);
           state.hasLitDots = false;
           state.canvasDirty = false;
         }
@@ -205,6 +329,12 @@ const url = new URL(Astro.url.pathname, Astro.site);
             lastTouchedAt: new Float64Array(0),
             minDist: new Float32Array(0),
             alpha: new Float32Array(0),
+            frameAlpha: new Float32Array(0),
+            frameRadius: new Float32Array(0),
+            frameColor: new Uint8Array(0),
+            edgeA: new Int32Array(0),
+            edgeB: new Int32Array(0),
+            litList: new Int32Array(0),
             ripples: [],
           };
           resizeWell(state);
@@ -261,6 +391,7 @@ const url = new URL(Astro.url.pathname, Astro.site);
             const hasRipples = s.ripples.length > 0;
             let wellHasLitDots = false;
             let wellChanging = hasRipples;
+            let litCount = 0;
 
             for (let r = 0; r < rows; r++) {
               const dy = r * GRID + HALF;
@@ -273,6 +404,7 @@ const url = new URL(Astro.url.pathname, Astro.site);
 
                 // Fast-skip untouched dots outside the cursor bounding box when no ripples are active.
                 if (!inCursorBox && s.triggeredAt[idx] === 0 && !hasRipples) {
+                  s.frameAlpha[idx] = 0;
                   continue;
                 }
 
@@ -385,15 +517,64 @@ const url = new URL(Astro.url.pathname, Astro.site);
                   }
                 }
 
+                s.frameAlpha[idx] = drawAlpha;
                 if (drawAlpha > 0.004) {
-                  const lutIdx = Math.max(0, Math.min(255, (drawColorT * 255) | 0));
-                  s.ctx.fillStyle = RAINBOW_LUT[lutIdx]!;
-                  s.ctx.globalAlpha = drawAlpha;
-                  s.ctx.beginPath();
-                  s.ctx.arc(dx, dy, drawRadius, 0, Math.PI * 2);
-                  s.ctx.fill();
+                  s.frameRadius[idx] = drawRadius;
+                  s.frameColor[idx] = Math.max(0, Math.min(255, (drawColorT * 255) | 0));
+                  s.litList[litCount++] = idx;
                 }
               }
+            }
+
+            // Pass 1: Draw subtle curved DAG wires between pairs of illuminated dots.
+            s.ctx.lineWidth = 0.85;
+            s.ctx.lineCap = 'round';
+            for (let i = 0; i < litCount; i++) {
+              const idx = s.litList[i]!;
+              const a1 = s.frameAlpha[idx]!;
+              if (a1 < 0.06) continue;
+
+              const r1 = (idx / cols) | 0;
+              const c1 = idx - r1 * cols;
+              const x1 = c1 * GRID + HALF;
+              const y1 = r1 * GRID + HALF;
+              const colorStr = RAINBOW_LUT[s.frameColor[idx]!]!;
+
+              const tA = s.edgeA[idx]!;
+              if (tA >= 0) {
+                const a2 = s.frameAlpha[tA]!;
+                if (a2 > 0.06) {
+                  const r2 = (tA / cols) | 0;
+                  const c2 = tA - r2 * cols;
+                  s.ctx.strokeStyle = colorStr;
+                  s.ctx.globalAlpha = Math.min(a1, a2) * 0.3;
+                  drawDagEdge(s.ctx, x1, y1, c2 * GRID + HALF, r2 * GRID + HALF, idx);
+                }
+              }
+
+              const tB = s.edgeB[idx]!;
+              if (tB >= 0) {
+                const a2 = s.frameAlpha[tB]!;
+                if (a2 > 0.06) {
+                  const r2 = (tB / cols) | 0;
+                  const c2 = tB - r2 * cols;
+                  s.ctx.strokeStyle = colorStr;
+                  s.ctx.globalAlpha = Math.min(a1, a2) * 0.27;
+                  drawDagEdge(s.ctx, x1, y1, c2 * GRID + HALF, r2 * GRID + HALF, idx + 1);
+                }
+              }
+            }
+
+            // Pass 2: Draw the illuminated dots on top of the graph edges.
+            for (let i = 0; i < litCount; i++) {
+              const idx = s.litList[i]!;
+              const r = (idx / cols) | 0;
+              const c = idx - r * cols;
+              s.ctx.fillStyle = RAINBOW_LUT[s.frameColor[idx]!]!;
+              s.ctx.globalAlpha = s.frameAlpha[idx]!;
+              s.ctx.beginPath();
+              s.ctx.arc(c * GRID + HALF, r * GRID + HALF, s.frameRadius[idx]!, 0, Math.PI * 2);
+              s.ctx.fill();
             }
 
             s.ctx.globalAlpha = 1;

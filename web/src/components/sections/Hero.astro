@@ -43,7 +43,7 @@ import { DOCS_URL } from '@/lib/links';
       <!-- Single-Line 4-Tab Selector Bar -->
       <div class="beat-stepper" role="tablist" aria-label="Compiler capabilities">
         <button type="button" class="beat-tab active" id="beat-tab-0" data-beat="0" role="tab" aria-selected="true">
-          <div class="beat-tab-title">1. Derive NetworkPolicy &amp; RBAC</div>
+          <div class="beat-tab-title">1. Derive NetworkPolicy &amp; deploy order</div>
           <div class="beat-progress-track"><div class="beat-progress-fill" id="beat-prog-0"></div></div>
         </button>
         <button type="button" class="beat-tab" id="beat-tab-1" data-beat="1" role="tab" aria-selected="false">
@@ -120,12 +120,12 @@ import { DOCS_URL } from '@/lib/links';
           <div class="wb-input-pane">
             <div class="wb-code-editor" id="code-editor">
               <div class="code-line" id="cline-1">
-                <span class="code-ln">01</span><span id="ctext-1">db = kix.postgres {'{ storage = "20Gi"; };'}</span><span
+                <span class="code-ln">01</span><span id="ctext-1">db = packages.cnpg-cluster {'{ storage.size = "20Gi"; };'}</span><span
                   class="code-anchor-dot"
                   id="cdot-1"></span>
               </div>
               <div class="code-line" id="cline-2">
-                <span class="code-ln">02</span><span id="ctext-2">web = kix.app {'{'}</span><span
+                <span class="code-ln">02</span><span id="ctext-2">web = scope.mkDeployment {'{'}</span><span
                   class="code-anchor-dot"
                   id="cdot-2"></span>
               </div>
@@ -141,7 +141,7 @@ import { DOCS_URL } from '@/lib/links';
               </div>
               <div class="code-line comment-ref" id="cline-5">
                 <span class="code-ln">05</span><span id="ctext-5"
-                  ><span class="code-comment">  # derives CiliumNetworkPolicy and RBAC Role</span></span
+                  ><span class="code-comment">  # derives CiliumNetworkPolicy and deploy order</span></span
                 ><span class="code-anchor-dot" id="cdot-5"></span>
               </div>
               <div class="code-line active-ref" id="cline-6">
@@ -150,7 +150,7 @@ import { DOCS_URL } from '@/lib/links';
                   id="cdot-6"></span>
               </div>
               <div class="code-line" id="cline-7">
-                <span class="code-ln">07</span><span id="ctext-7">  selector = "shop-web";</span><span
+                <span class="code-ln">07</span><span id="ctext-7">  selector.matchLabels.app = "shop-web";</span><span
                   class="code-anchor-dot"
                   id="cdot-7"></span>
               </div>
@@ -193,11 +193,11 @@ import { DOCS_URL } from '@/lib/links';
 
               <div class="out-card glow-blue" id="out-card-2">
                 <span class="target-anchor-dot" id="tdot-2" style="background:#38BDF8;"></span>
-                <div id="ocard2-body" class="out-card-body whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Role</span>
-<span class="k8s-key">metadata:</span> &#123; <span class="k8s-key">name:</span> <span class="k8s-str">web-db-reader</span> &#125;
-<span class="k8s-key">rules:</span>
-  - <span class="k8s-key">resources:</span> [<span class="k8s-str">"secrets"</span>]
-    <span class="k8s-key">resourceNames:</span> [<span class="k8s-kind" style="color:#38BDF8;">"db-creds"</span>]</div>
+                <div id="ocard2-body" class="out-card-body whitespace-pre"><span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Deployment</span>
+<span class="k8s-key">metadata:</span>
+  <span class="k8s-key">name:</span> <span class="k8s-str">web</span>
+  <span class="k8s-key">annotations:</span>
+    <span class="k8s-key">kix.run/depends-on:</span> <span class="k8s-kind" style="color:#38BDF8;">"shop/Service/db"</span></div>
               </div>
             </div>
           </div>
@@ -764,21 +764,21 @@ import { DOCS_URL } from '@/lib/links';
       if (!c1 || !c2 || !c3 || !c4 || !c5 || !c6 || !c7 || !c8 || !c9 || !c10 || !c11 || !rightLabel || !card1 || !card2 || !body1 || !body2)
         return;
 
-      c1.innerHTML = 'db = kix.postgres { storage = "20Gi"; };';
-      c2.innerHTML = 'web = kix.app {';
+      c1.innerHTML = 'db = packages.cnpg-cluster { storage.size = "20Gi"; };';
+      c2.innerHTML = 'web = scope.mkDeployment {';
       c3.innerHTML = '  image = "ghcr.io/acme/web:1.4";';
       c4.innerHTML = '  replicas = 3;';
       c5.innerHTML = '  env.DB_HOST = db.out.fqdn;';
-      c6.innerHTML = '  selector = "shop-web";';
+      c6.innerHTML = '  selector.matchLabels.app = "shop-web";';
       c7.innerHTML = '};';
       c8.innerHTML = '';
 
       if (beatIdx === 0) {
         document.getElementById('cline-5')?.classList.add('comment-ref');
-        c5.innerHTML = '<span class="code-comment">  # derives CiliumNetworkPolicy and RBAC Role</span>';
+        c5.innerHTML = '<span class="code-comment">  # derives CiliumNetworkPolicy and deploy order</span>';
         document.getElementById('cline-6')?.classList.add('active-ref');
         c6.innerHTML = '  env.DB_HOST = db.out.fqdn;';
-        c7.innerHTML = '  selector = "shop-web";';
+        c7.innerHTML = '  selector.matchLabels.app = "shop-web";';
         c8.innerHTML = '};';
 
         rightLabel.textContent = '$ kix build shop';
@@ -795,11 +795,11 @@ import { DOCS_URL } from '@/lib/links';
     - <span class="k8s-key">fromEndpoints:</span> [{ <span class="k8s-key">app:</span> <span class="k8s-str">web</span> }]
       <span class="k8s-key">toPorts:</span> [<span class="k8s-kind">5432/TCP</span>]`;
 
-        body2.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Role</span>
-<span class="k8s-key">metadata:</span> { <span class="k8s-key">name:</span> <span class="k8s-str">web-db-reader</span> }
-<span class="k8s-key">rules:</span>
-  - <span class="k8s-key">resources:</span> [<span class="k8s-str">"secrets"</span>]
-    <span class="k8s-key">resourceNames:</span> [<span class="k8s-kind" style="color:#38BDF8;">"db-creds"</span>]`;
+        body2.innerHTML = `<span class="k8s-key">kind:</span> <span class="k8s-kind" style="color:#38BDF8;">Deployment</span>
+<span class="k8s-key">metadata:</span>
+  <span class="k8s-key">name:</span> <span class="k8s-str">web</span>
+  <span class="k8s-key">annotations:</span>
+    <span class="k8s-key">kix.run/depends-on:</span> <span class="k8s-kind" style="color:#38BDF8;">"shop/Service/db"</span>`;
       } else if (beatIdx === 1) {
         card2.className = 'out-card hidden-card';
         wirePath2.style.opacity = '0';
@@ -808,7 +808,7 @@ import { DOCS_URL } from '@/lib/links';
         document.getElementById('cline-6')?.classList.add('comment-err');
         c6.innerHTML = '<span class="code-comment">  # typo: selector matches 0 pods in namespace shop</span>';
         document.getElementById('cline-7')?.classList.add('active-err');
-        c7.innerHTML = '  selector = <span class="code-err-val">"shop-wbe"</span>;';
+        c7.innerHTML = '  selector.matchLabels.app = <span class="code-err-val">"shop-wbe"</span>;';
         c8.innerHTML = '};';
 
         rightLabel.textContent = '$ kix check shop';
@@ -828,7 +828,7 @@ import { DOCS_URL } from '@/lib/links';
         document.getElementById('cline-5')?.classList.add('active-plan');
         c5.innerHTML = '  replicas = 3;';
         c6.innerHTML = '  env.DB_HOST = db.out.fqdn;';
-        c7.innerHTML = '  selector = "shop-web";';
+        c7.innerHTML = '  selector.matchLabels.app = "shop-web";';
         c8.innerHTML = '};';
 
         rightLabel.textContent = '$ kix plan shop';
@@ -850,20 +850,20 @@ import { DOCS_URL } from '@/lib/links';
         document.getElementById('cline-1')?.classList.add('comment-ref');
         c1.innerHTML = '<span class="code-comment"># import existing external AWS RDS database</span>';
         document.getElementById('cline-2')?.classList.add('block-mid-ref');
-        c2.innerHTML = 'db = kix.import {';
+        c2.innerHTML = 'db = kix.mkImport {';
         document.getElementById('cline-3')?.classList.add('block-mid-ref', 'has-dot');
-        c3.innerHTML = '  host = "rds.prod.internal";';
+        c3.innerHTML = '  out.fqdn = "rds.prod.internal";';
         document.getElementById('cline-4')?.classList.add('block-mid-ref');
         c4.innerHTML = '<span class="code-comment">  # ... credentials</span>';
         document.getElementById('cline-5')?.classList.add('block-end-ref');
         c5.innerHTML = '};';
-        c6.innerHTML = 'web = kix.app {';
+        c6.innerHTML = 'web = scope.mkDeployment {';
         c7.innerHTML = '  image = "ghcr.io/acme/web:1.4";';
         c8.innerHTML = '  env.DB_HOST = db.out.fqdn;';
         document.getElementById('cline-9')?.classList.add('comment-ref');
         c9.innerHTML = '<span class="code-comment">  # override any raw Kubernetes PodSpec field</span>';
         document.getElementById('cline-10')?.classList.add('active-ref');
-        c10.innerHTML = '  podSpec.priorityClassName = "production-high";';
+        c10.innerHTML = '  spec.template.spec.priorityClassName = "production-high";';
         c11.innerHTML = '};';
 
         rightLabel.textContent = '$ kix export shop';

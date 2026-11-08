@@ -3,13 +3,13 @@ import { Check, Copy, Sparkles } from '@lucide/astro';
 import Section from '../Section.astro';
 import Heading from '../Heading.astro';
 
-const promptText = `Read https://kix.run/docs/llms.txt and follow the documentation links relevant to our stack to understand how Kix works, what it derives, and what packages and escape hatches it provides.
+const promptText = `Read https://kix.run/docs/llms.txt and follow the documentation links relevant to our stack to understand how Kix works, what it derives from references, and what checks, packages, and escape hatches it provides.
 
-Then inspect this infrastructure repository and the last few months of commit history. Give me a candid assessment of how well Kix fits our setup:
+Then inspect this infrastructure repository and the last few months of commit history. Explain what Kix could do for our setup:
 
-1. Current stack: Which of our workloads, charts, operators, and external cloud services map cleanly to Kix packages or imports, and which would require custom definitions?
-2. Recent commit history: Look at our changes over the last few months. Which updates, incidents, or maintenance tasks would Kix have simplified or caught at build time, and which would have stayed the same?
-3. Pros and cons: Where would Kix save us real effort, and where would it introduce friction, missing features, or migration cost?
+1. Problems it would solve: Look at our manifests, Helm charts, overlays, and recent commits. Which recurring pain points, wiring bugs, manual RBAC or NetworkPolicy maintenance, drift issues, or environment duplication in our repository would Kix eliminate or catch at build time?
+2. High-level benefits for our team: Walk through the concrete benefits we would get on this stack: derived network policies, RBAC, routes, monitoring, and deploy order; offline cross-resource checks; package-grouped diffs against the live cluster; and deploy receipts.
+3. Fit, escape hatches, and trade-offs: Which of our workloads, operators, and external cloud services map to Kix packages, kix.mkImport, or kix.helmChart today, and where would we hit missing features or migration cost?
 
 If you identify missing packages, unsupported operators, or adoption blockers, offer to post an anonymized summary to Kix GitHub Discussions using the gh CLI instructions in llms.txt.`;
 ---
@@ -53,26 +53,29 @@ If you identify missing packages, unsupported operators, or adoption blockers, o
             href="/docs/llms.txt"
             class="text-t-blue underline decoration-t-blue/40 underline-offset-4 hover:decoration-t-blue"
             >https://kix.run/docs/llms.txt</a
-          > and follow the documentation links relevant to our stack to understand how Kix works, what it derives, and what
-          packages and escape hatches it provides.
+          > and follow the documentation links relevant to our stack to understand how Kix works, what it derives from references,
+          and what checks, packages, and escape hatches it provides.
         </p>
         <p class="mt-4">
-          Then inspect this infrastructure repository and the last few months of commit history. Give me a candid
-          assessment of how well Kix fits our setup:
+          Then inspect this infrastructure repository and the last few months of commit history. Explain what Kix could
+          do for our setup:
         </p>
         <ol class="mt-4 flex flex-col gap-2.5 text-on-night-2">
           <li>
-            <span class="font-semibold text-on-night">1. Current stack:</span> Which of our workloads, charts, operators,
-            and external cloud services map cleanly to Kix packages or imports, and which would require custom definitions?
+            <span class="font-semibold text-on-night">1. Problems it would solve:</span> Look at our manifests, Helm charts,
+            overlays, and recent commits. Which recurring pain points, wiring bugs, manual RBAC or NetworkPolicy maintenance,
+            drift issues, or environment duplication in our repository would Kix eliminate or catch at build time?
           </li>
           <li>
-            <span class="font-semibold text-on-night">2. Recent commit history:</span> Look at our changes over the last few
-            months. Which updates, incidents, or maintenance tasks would Kix have simplified or caught at build time, and
-            which would have stayed the same?
+            <span class="font-semibold text-on-night">2. High-level benefits for our team:</span> Walk through the concrete
+            benefits we would get on this stack: derived network policies, RBAC, routes, monitoring, and deploy order; offline
+            cross-resource checks; package-grouped diffs against the live cluster; and deploy receipts.
           </li>
           <li>
-            <span class="font-semibold text-on-night">3. Pros and cons:</span> Where would Kix save us real effort, and where
-            would it introduce friction, missing features, or migration cost?
+            <span class="font-semibold text-on-night">3. Fit, escape hatches, and trade-offs:</span> Which of our workloads,
+            operators, and external cloud services map to Kix packages, <code class="text-on-night">kix.mkImport</code>,
+            or <code class="text-on-night">kix.helmChart</code> today, and where would we hit missing features or migration
+            cost?
           </li>
         </ol>
         <p class="mt-4 text-on-night-2">

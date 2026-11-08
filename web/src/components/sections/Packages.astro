@@ -6,8 +6,8 @@ const escapeHatches = [
   {
     title: 'Import external managed services',
     desc: 'Wire an external AWS RDS or CloudSQL database into your cluster definition so consuming apps receive its endpoint and credentials without changing app code.',
-    code: `db = kix.import {
-  host = "rds.prod.internal";
+    code: `db = kix.mkImport {
+  out.fqdn = "rds.prod.internal";
   # ... credentials
 };`,
   },
@@ -19,12 +19,16 @@ const escapeHatches = [
   {
     title: 'Override any raw Kubernetes field',
     desc: 'Every Kix package exposes the underlying Kubernetes resources and PodSpec fields, so you can set priorityClassName, nodeSelector, tolerations, or custom sidecars directly.',
-    code: 'podSpec.priorityClassName = "production-high";',
+    code: 'spec.template.spec.priorityClassName = "production-high";',
   },
   {
     title: 'Bring existing Helm charts',
     desc: 'Include existing Helm charts alongside native Kix packages so you can adopt Kix incrementally with the third-party software you already run.',
-    code: 'kix export shop > manifests.yaml',
+    code: `chart = kix.helmChart {
+  repo = "https://charts.jetstack.io";
+  name = "cert-manager";
+  # ... version, hash
+};`,
   },
 ];
 ---
