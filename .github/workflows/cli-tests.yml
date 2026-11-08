@@ -564,6 +564,44 @@ jobs:
           name: kix-${{ needs.version.outputs.version }}
           path: dist
 
+      # Sign SHA256SUMS with the release key, so Kix and the install script
+      # can check what they download from kix.run. The site lists only
+      # releases with a signature. The secret KIX_RELEASE_SIGNING_KEY holds
+      # the private key as PEM, and its public half must already be committed
+      # as cli/release-keys/<keyid>.pub (see cli/release-keys/README.md).
+      - name: Sign checksums
+        env:
+          KIX_RELEASE_SIGNING_KEY: ${{ secrets.KIX_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$KIX_RELEASE_SIGNING_KEY" ]; then
+            echo "::error::The repository secret KIX_RELEASE_SIGNING_KEY is not set, so the release cannot be signed. See cli/release-keys/README.md."
+            exit 1
+          fi
+          umask 077
+          key="$RUNNER_TEMP/kix-release.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$KIX_RELEASE_SIGNING_KEY" > "$key"
+
+          openssl pkey -in "$key" -pubout -outform DER | tail -c 32 > "$RUNNER_TEMP/release-key.raw"
+          keyid=$(sha256sum "$RUNNER_TEMP/release-key.raw" | cut -c1-8)
+          public=$(od -An -v -tx1 "$RUNNER_TEMP/release-key.raw" | tr -d ' \n')
+          committed="cli/release-keys/$keyid.pub"
+          if [ ! -f "$committed" ] || [ "$(tr -d '[:space:]' < "$committed")" != "$public" ]; then
+            echo "::error::$committed does not hold the public half of KIX_RELEASE_SIGNING_KEY. Commit it before releasing. See cli/release-keys/README.md."
+            exit 1
+          fi
+
+          openssl pkeyutl -sign -inkey "$key" -rawin -in dist/SHA256SUMS > "$RUNNER_TEMP/SHA256SUMS.sig.bin"
+          printf 'kix-release-signature v1\nkeyid=%s\nsignature=%s\n' \
+            "$keyid" "$(base64 -w0 < "$RUNNER_TEMP/SHA256SUMS.sig.bin")" > dist/SHA256SUMS.sig
+
+          # Check the signature with the public key, which equals the
+          # committed one, as Kix will.
+          openssl pkey -in "$key" -pubout -out "$RUNNER_TEMP/release-key.pub.pem"
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/release-key.pub.pem" -rawin \
+            -in dist/SHA256SUMS -sigfile "$RUNNER_TEMP/SHA256SUMS.sig.bin"
+          cat dist/SHA256SUMS.sig
+
       # A release that already exists in kix-releases is left alone, so a
       # run that published and then failed to tag can be run again.
       - name: Publish release

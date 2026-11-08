@@ -662,7 +662,7 @@ mod tests {
         // kix diff: the live view is the deployed build.
         let diff_side = super::super::diff_graphs(&deployed_graph, &new_graph);
         let diff_doc = Plan::new(
-            super::super::document::KixBuild::current(crate::VERSION),
+            super::super::document::KixBuild::current(&crate::version::running().to_string()),
             MadeBy::LiveRead,
             "c",
             Build::of(&new_graph),
@@ -689,7 +689,7 @@ mod tests {
         }
         .apply(&mut plan_side, &answers);
         let plan_doc = Plan::new(
-            super::super::document::KixBuild::current(crate::VERSION),
+            super::super::document::KixBuild::current(&crate::version::running().to_string()),
             MadeBy::DryRun,
             "c",
             Build::of(&new_graph),

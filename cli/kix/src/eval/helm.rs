@@ -41,9 +41,9 @@ const SPEC_VERSION: u64 = 1;
 pub enum HelmError {
     #[error(
         "Helm {wanted} is not in the Kix runtime (Kix {} has {}). Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
-        crate::VERSION,
+        crate::version::running().release(),
         shipped_text(shipped),
-        crate::VERSION
+        crate::version::running().release()
     )]
     VersionNotShipped {
         wanted: String,
@@ -55,8 +55,8 @@ pub enum HelmError {
 
     #[error(
         "this cluster's Kix library does not match Kix {} (Helm format {found}, expected {SPEC_VERSION}). Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
-        crate::VERSION,
-        crate::VERSION
+        crate::version::running().release(),
+        crate::version::running().release()
     )]
     SpecVersion { found: u64 },
 
@@ -783,7 +783,7 @@ mod tests {
             wanted: "4.3.1".into(),
             shipped: vec!["4.3.2".into()],
         };
-        let v = crate::VERSION;
+        let v = crate::version::running().release();
         assert_eq!(
             err.to_string(),
             format!(

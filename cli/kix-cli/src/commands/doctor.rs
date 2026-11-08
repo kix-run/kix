@@ -1,9 +1,11 @@
-//! `kix doctor`: check the installation Kix runs from and the project's
-//! builder.
+//! `kix doctor`: check the installation Kix runs from, the project's
+//! builder, and the version of Kix the project needs.
 
+use kix::installs;
 use kix::project::{BuilderKind, BuilderSource, ProjectConfig};
 use kix::runtime;
 use kix::system_nix;
+use kix::version::{self, policy};
 use miette::miette;
 
 use crate::cli::GlobalArgs;
@@ -12,8 +14,9 @@ use crate::output::{green, red, yellow};
 /// Run every check, print one line per result, and fail when any check
 /// fails.
 pub fn run(global: &GlobalArgs) -> miette::Result<()> {
-    ok(&format!("Kix {}", env!("CARGO_PKG_VERSION")));
-    let failures = check_runtime() + check_builder(&global.flake);
+    ok(&kix_line());
+    let failures = check_runtime() + check_builder(&global.flake) + check_version(&global.flake);
+    report_installs();
     if failures > 0 {
         return Err(miette!(
             "{failures} check{} failed",
@@ -21,6 +24,79 @@ pub fn run(global: &GlobalArgs) -> miette::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Return the first line: the running version, where it runs from, and
+/// which Kix chose it.
+fn kix_line() -> String {
+    let mut line = format!("Kix {}", version::running());
+    if let Ok(exe) = std::env::current_exe().and_then(|p| p.canonicalize()) {
+        line.push_str(&format!(" ({})", exe.display()));
+    }
+    if let Some(by) = std::env::var_os(crate::select::SELECTED_BY_VAR).filter(|v| !v.is_empty()) {
+        line.push_str(&format!(
+            ", chosen by {}",
+            std::path::Path::new(&by).display()
+        ));
+    }
+    line
+}
+
+/// Report the version of Kix the project needs. Return 1 when the running
+/// Kix does not meet it.
+fn check_version(flake: &str) -> usize {
+    let Some(dir) = super::project_dir(flake) else {
+        return 0;
+    };
+    // The builder check reports a kix.toml that cannot be read.
+    let Ok(config) = ProjectConfig::read(Some(&dir), None) else {
+        return 0;
+    };
+    let running = version::running();
+    match (&config.kix, &config.kix_source) {
+        (Some(req), Some(path)) if policy::satisfies(req, running) => {
+            ok(&format!("Project needs Kix {req} ({})", path.display()));
+            0
+        }
+        (Some(req), path) => {
+            let from = path
+                .as_ref()
+                .map_or_else(|| "kix.toml".to_string(), |p| p.display().to_string());
+            fail(&format!(
+                "Project needs Kix {req} ({from}), and this is Kix {}",
+                running.release()
+            ));
+            detail(&format!(
+                "Run `kix self install {req}`, then run kix doctor again."
+            ));
+            1
+        }
+        (None, _) if dir.join("flake.nix").exists() => {
+            warn(&format!(
+                "kix.toml sets no kix version. Add kix = \"{}\" so everyone runs a matching Kix",
+                running.minor_text()
+            ));
+            0
+        }
+        (None, _) => 0,
+    }
+}
+
+/// Report the installed versions. This never fails a check, since Kix can
+/// run from outside the data directory, such as from a Nix profile.
+fn report_installs() {
+    let data = installs::data_dir();
+    let all = installs::installed();
+    if all.is_empty() {
+        warn(&format!("No versions installed under {}", data.display()));
+        return;
+    }
+    let versions: Vec<String> = all.iter().map(|i| i.version.release()).collect();
+    ok(&format!(
+        "Installed versions: {} ({})",
+        versions.join(", "),
+        data.display()
+    ));
 }
 
 fn ok(text: &str) {

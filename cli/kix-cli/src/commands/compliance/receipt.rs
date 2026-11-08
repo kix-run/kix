@@ -67,7 +67,7 @@ pub(super) fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
     }
 
     let mut builder = json!({
-        "kixVersion": kix::VERSION,
+        "kixVersion": kix::version::running().to_string(),
         "arch": std::env::consts::ARCH,
         "os": std::env::consts::OS,
     });
@@ -113,7 +113,7 @@ fn from_provenance(graph: &StoreGraph, made: Provenance, sha256: &str) -> Value 
         "source": source,
         "builder": made.builder,
         "deployer": {
-            "kixVersion": kix::VERSION,
+            "kixVersion": kix::version::running().to_string(),
             "arch": std::env::consts::ARCH,
             "os": std::env::consts::OS,
         },
@@ -562,7 +562,10 @@ mod tests {
         assert_eq!(r["source"]["bundle"]["kixRev"], json!(kix_rev));
         assert_eq!(r["inputs"][0]["name"], "nixpkgs");
         assert_eq!(r["builder"]["kixVersion"], "0.0.1");
-        assert_eq!(r["deployer"]["kixVersion"], kix::VERSION);
+        assert_eq!(
+            r["deployer"]["kixVersion"],
+            kix::version::running().to_string()
+        );
         assert_eq!(
             r["activationHash"],
             json!(kix::eval::store_graph::store_hash(

@@ -21,8 +21,18 @@
 //     cover clients like Codex CLI that fetch HTML without negotiating.
 //
 // Browsers never send text/markdown, so they are unaffected.
+//
+// The Worker also answers `/download/<version>/<file>`, where Kix and the
+// install script fetch release archives, with a redirect to wherever the
+// archives are stored. They verify every archive against the signed
+// SHA256SUMS that kix.run serves under /releases/, so the storage host
+// carries no trust. Moving the archives changes DOWNLOAD_ORIGIN here and the
+// fetch in .github/workflows/pages.yml, and no shipped Kix.
 
 const DOCS_PREFIX = '/docs/';
+
+const DOWNLOAD_ORIGIN = 'https://github.com/kix-run/kix-releases/releases/download/';
+const DOWNLOAD_PATH = /^\/download\/(\d+\.\d+\.\d+)\/([A-Za-z0-9_-][A-Za-z0-9._-]*)$/;
 
 // Each Kix version's docs are a separate build with its own root: /docs for
 // the latest release, /docs/main for main, and /docs/v<major>.<minor> for
@@ -77,6 +87,22 @@ function withVaryAccept(response) {
   });
 }
 
+/** Redirect a release download to the storage host, or return null for any other path. */
+function downloadRedirect(url) {
+  const match = url.pathname.match(DOWNLOAD_PATH);
+  if (!match) {
+    return null;
+  }
+  const [, version, file] = match;
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: `${DOWNLOAD_ORIGIN}v${version}/${file}`,
+      'cache-control': 'no-store',
+    },
+  });
+}
+
 /** A route with a Markdown representation worth serving, not the `.md` asset itself. */
 function isNegotiablePage(url) {
   if (url.pathname === '/') {
@@ -92,6 +118,28 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const readOnly = request.method === 'GET' || request.method === 'HEAD';
+
+    const download = readOnly ? downloadRedirect(url) : null;
+    if (download) {
+      return download;
+    }
+
+    // Pages may not apply _headers to responses that pass through this
+    // Worker, so the install script and the release index get their headers
+    // here. The script must arrive as text for `curl | sh`, and both must
+    // refresh within minutes of a release.
+    if (readOnly && (url.pathname === '/install' || url.pathname.startsWith('/releases/'))) {
+      const asset = await env.ASSETS.fetch(request);
+      if (!asset.ok) {
+        return asset;
+      }
+      const headers = new Headers(asset.headers);
+      if (url.pathname === '/install') {
+        headers.set('content-type', 'text/plain; charset=utf-8');
+      }
+      headers.set('cache-control', 'public, max-age=300');
+      return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
+    }
 
     if (readOnly && isNegotiablePage(url) && prefersMarkdown(request.headers.get('accept'))) {
       const markdownUrl = new URL(url);

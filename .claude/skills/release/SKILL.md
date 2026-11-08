@@ -92,9 +92,18 @@ Follow the run with `gh run watch`. Then check:
 
 - `gh release view v<version> --repo kix-run/kix-releases` lists the three
   platform release archives (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
-  `kix-<version>-third-party-sources.tar.zst`, and `SHA256SUMS`, and shows the
-  changelog section as the notes.
+  `kix-<version>-third-party-sources.tar.zst`, `SHA256SUMS`, and
+  `SHA256SUMS.sig`, and shows the changelog section as the notes.
 - `git ls-remote --tags origin v<version>` shows the tag.
+- The site rebuild that `publish` starts writes `kix.run/releases/index.json`.
+  Once the "Deploy site to Cloudflare Pages" run finishes,
+  `curl -s https://kix.run/releases/index.json | grep <version>` shows the
+  release, and `curl -fsSL https://kix.run/install | KIX_VERSION=<version> sh`
+  installs it.
+
+If `publish` stops at "Sign checksums", the secret `KIX_RELEASE_SIGNING_KEY`
+is missing or its public key is not committed in `cli/release-keys/`. Ask the
+person to fix it (`cli/release-keys/README.md`), then run the job again.
 
 Give the person the release URL.
 

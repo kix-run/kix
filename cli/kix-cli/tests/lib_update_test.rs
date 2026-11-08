@@ -203,3 +203,36 @@ fn lib_update_without_a_library_input_fails() {
             "flake.lock has no input for the Kix library",
         ));
 }
+
+#[test]
+fn a_library_of_another_minor_is_refused_with_the_fix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = tmp.path().join("project");
+    std::fs::create_dir(&proj).unwrap();
+    std::fs::write(
+        proj.join("flake.nix"),
+        r#"{
+  outputs = _: {
+    legacyPackages = builtins.listToAttrs (map (system: {
+      name = system;
+      value.kixLibrary.version = "0.1.0";
+    }) [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ]);
+  };
+}
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("kix")
+        .unwrap()
+        .env("NO_COLOR", "true")
+        .env("KIX_NO_CACHE", "1")
+        .arg("--flake")
+        .arg(&proj)
+        .args(["build", "c"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!(
+            "This project's Kix library is 0.1.0, but Kix is {VERSION}. Run `kix lib update` to move the project to the {VERSION} library"
+        )));
+}

@@ -530,7 +530,7 @@ pub fn render_never_pruned(kept: &[ResourceId]) -> String {
 
 /// Return the [`kix::plan::document::KixBuild`] metadata for this CLI binary.
 pub fn kix_build() -> kix::plan::document::KixBuild {
-    kix::plan::document::KixBuild::current(kix::VERSION)
+    kix::plan::document::KixBuild::current(&kix::version::running().to_string())
 }
 
 /// Hint explaining how to delete orphans retained by a deploy without

@@ -74,7 +74,7 @@ pub fn unusable(reviewed: &Plan) -> Option<String> {
         return Some(format!(
             "the plan has schema version {}, and Kix {} reads version {}",
             reviewed.schema_version,
-            crate::VERSION,
+            crate::version::running().release(),
             super::document::SCHEMA_VERSION
         ));
     }
@@ -498,7 +498,7 @@ mod tests {
             &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut p = Plan::new(
-            KixBuild::current(crate::VERSION),
+            KixBuild::current(&crate::version::running().to_string()),
             MadeBy::DryRun,
             "c",
             Build {
