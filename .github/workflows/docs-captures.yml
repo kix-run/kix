@@ -63,7 +63,7 @@ jobs:
       - name: Checkout kix-examples
         uses: actions/checkout@v6
         with:
-          repository: kix-ops/kix-examples
+          repository: kix-run/kix-examples
           ref: ${{ steps.examples-rev.outputs.rev }}
           token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
           path: kix-examples

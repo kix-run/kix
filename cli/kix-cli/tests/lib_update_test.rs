@@ -1,5 +1,5 @@
 //! `kix lib update` against a local Git repository that stands in for
-//! github:kix-run/kixpkgs, so the test needs no network. The repository is
+//! github:kix-run/kix, so the test needs no network. The repository is
 //! named in `KIX_LIB_UPDATE_TEST_REPO`. Needs a Kix runtime
 //! (`KIX_RUNTIME_DIR` in the development shell).
 

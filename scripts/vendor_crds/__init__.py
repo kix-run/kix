@@ -18,7 +18,7 @@ import urllib.request
 
 import yaml
 
-USER_AGENT = "kixpkgs-vendor-crds (+https://github.com/kix-run/kixpkgs)"
+USER_AGENT = "kix-vendor-crds (+https://github.com/kix-run/kix)"
 CRD_KIND = "CustomResourceDefinition"
 RBAC_KINDS = ("ClusterRole", "Role")
 
@@ -34,7 +34,9 @@ class _Loader(yaml.SafeLoader):
 
 
 _Loader.yaml_implicit_resolvers = {
-    first: [(tag, regexp) for tag, regexp in resolvers if tag != "tag:yaml.org,2002:value"]
+    first: [
+        (tag, regexp) for tag, regexp in resolvers if tag != "tag:yaml.org,2002:value"
+    ]
     for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
 

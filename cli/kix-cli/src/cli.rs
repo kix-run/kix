@@ -433,7 +433,7 @@ impl Command {
 pub enum LibCommand {
     /// Move this project's Kix library to the version of the installed Kix
     ///
-    /// Locks the project's Kix library input (github:kix-run/kixpkgs) to the
+    /// Locks the project's Kix library input (github:kix-run/kix) to the
     /// tag `v<version>` of the installed Kix and writes flake.lock. It
     /// does not change flake.nix. When flake.nix pins another release, or the
     /// input is a local path or a fork, it says what to change by hand.

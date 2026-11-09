@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn a_remote_flake_reference_names_no_directory() {
-        assert!(flake_dir("github:kix-run/kixpkgs").is_none());
+        assert!(flake_dir("github:kix-run/kix").is_none());
         assert!(flake_dir("git+https://example.com/repo").is_none());
     }
 

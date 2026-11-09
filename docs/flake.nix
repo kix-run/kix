@@ -77,7 +77,7 @@
             };
             repositorySnippets = snippetLib.mkSnippetsFromTree {
               root = "${kixpkgs}";
-              sourceUrlBase = "https://github.com/kix-run/kixpkgs/blob/${kixpkgs.rev or "main"}";
+              sourceUrlBase = "https://github.com/kix-run/kix/blob/${kixpkgs.rev or "main"}";
             };
           in
           # Auto-discovery: every `.nix` file under kix-examples or kixpkgs

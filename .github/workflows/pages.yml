@@ -34,7 +34,7 @@ name: Deploy site to Cloudflare Pages
 # run started by the release merge, which fetches before the release exists,
 # is followed by one that lists it.
 #
-# kix-examples is a separate private repo (kix-ops/kix-examples) used
+# kix-examples is a separate private repo (kix-run/kix-examples) used
 # by the snippet pipeline. CI checks it out with a PAT and overrides
 # the flake input at build time, so the docs flake's local file://
 # input stays untouched for dev workflow.
@@ -84,8 +84,8 @@ jobs:
       #
       # GITHUB_TOKEN lets Nix fetch this private repo as a flake input. It
       # is sufficient ONLY because `--override-input kix-examples` below
-      # bypasses the one fetch it cannot cover (kix-ops/kix-examples is a
-      # different org).
+      # bypasses the one fetch it cannot cover (kix-run/kix-examples is a
+      # different repository).
       # `extra-` matters: the bare `experimental-features` REPLACES whatever
       # /etc/nix/nix.conf enabled, and the Spindle image now enables
       # `configurable-impure-env` there to carry a crates.io User-Agent
@@ -130,7 +130,7 @@ jobs:
       - name: Checkout kix-examples
         uses: actions/checkout@v6
         with:
-          repository: kix-ops/kix-examples
+          repository: kix-run/kix-examples
           token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
           path: kix-examples
           fetch-depth: 0

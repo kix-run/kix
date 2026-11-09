@@ -30,14 +30,14 @@ If you upgrade Kix (or update `flake.lock`) and the two sides disagree on a Helm
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--dry-run` | `false` | Resolve `github:kix-run/kixpkgs/v<version>` and print the lockfile change that would occur without writing `flake.lock`. |
+| `--dry-run` | `false` | Resolve `github:kix-run/kix/v<version>` and print the lockfile change that would occur without writing `flake.lock`. |
 | `--flake <FLAKE>` | `.` | Path to the flake directory containing `flake.nix` and `flake.lock` (also read from `KIX_FLAKE`). |
 
 Global flags `-v` / `--verbose`, `-q` / `--quiet`, and `--no-color` also apply. `-o` / `--output` is ignored.
 
 ## How `kix lib update` updates `flake.lock`
 
-`kix lib update` reads `flake.lock` and finds the input locked to `github:kix-run/kixpkgs` (or named `kixpkgs` or `kix`). If an input uses `follows`, Kix updates the declaring input. It then locks that input to `github:kix-run/kixpkgs/v<version>`.
+`kix lib update` reads `flake.lock` and finds the input locked to `github:kix-run/kix` (or named `kixpkgs` or `kix`). If an input uses `follows`, Kix updates the declaring input. It then locks that input to `github:kix-run/kix/v<version>`.
 
 It modifies **only `flake.lock`** and never edits `flake.nix`.
 
@@ -45,7 +45,7 @@ For this lockfile update to work cleanly, your `flake.nix` should declare `kixpk
 
 ```nix
 {
-  inputs.kixpkgs.url = "github:kix-run/kixpkgs";
+  inputs.kixpkgs.url = "github:kix-run/kix";
 }
 ```
 
@@ -53,9 +53,10 @@ For this lockfile update to work cleanly, your `flake.nix` should declare `kixpk
 
 `kix lib update` refuses to overwrite inputs that are pinned or non-standard in `flake.nix`, and prints instructions instead:
 
-- **Pinned tag, branch, or commit in `flake.nix`** (for example, `github:kix-run/kixpkgs/v0.6.0`): `kix lib update` will not silently override a ref written in `flake.nix`. Change the input URL in `flake.nix` to `github:kix-run/kixpkgs/v<version>` (or remove the `/v...` ref from `flake.nix` so `kix lib update` can manage the version in `flake.lock`) and run `kix lib update` again.
-- **Custom fork or Git URL**: Point the input in `flake.nix` at `github:kix-run/kixpkgs/v<version>`, or move that copy of Kix to the `v<version>` release.
-- **Local `path:` input**: Point the input in `flake.nix` at `github:kix-run/kixpkgs/v<version>`, or check out the `v<version>` release in that local directory.
+- **Pinned tag, branch, or commit in `flake.nix`** (for example, `github:kix-run/kix/v0.6.0`): `kix lib update` will not silently override a ref written in `flake.nix`. Change the input URL in `flake.nix` to `github:kix-run/kix/v<version>` (or remove the `/v...` ref from `flake.nix` so `kix lib update` can manage the version in `flake.lock`) and run `kix lib update` again.
+- **Custom fork or Git URL**: Point the input in `flake.nix` at `github:kix-run/kix/v<version>`, or move that copy of Kix to the `v<version>` release.
+- **The former address `github:kix-run/kixpkgs`**: the Kix library moved to `github:kix-run/kix`, and the old repository gets no new releases. Point the input in `flake.nix` at `github:kix-run/kix`, then run `kix lib update` again.
+- **Local `path:` input**: Point the input in `flake.nix` at `github:kix-run/kix/v<version>`, or check out the `v<version>` release in that local directory.
 
 ## Examples
 
