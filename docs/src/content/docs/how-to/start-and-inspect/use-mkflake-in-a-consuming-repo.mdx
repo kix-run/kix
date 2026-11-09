@@ -21,7 +21,7 @@ Create a `flake.nix` and declare nixpkgs and kixpkgs:
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    kixpkgs.url = "github:kix-run/kixpkgs";
+    kixpkgs.url = "github:kix-run/kix";
     kixpkgs.inputs.nixpkgs.follows = "nixpkgs";
   };
 

@@ -227,7 +227,7 @@ jobs:
             echo "CHANGELOG.md has no '## $section' section, or it lists no changes. The release skill writes it."
             exit 1
           fi
-          printf '\nBuilt from kix-run/kixpkgs@%s.\n' "$GITHUB_SHA" >> release-notes.md
+          printf '\nBuilt from kix-run/kix@%s.\n' "$GITHUB_SHA" >> release-notes.md
 
           {
             echo "version=$base"

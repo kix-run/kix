@@ -9,7 +9,7 @@ name = "kix"
 version = "0.8.0-rc.1"
 edition = "2024"
 license = "LicenseRef-Proprietary"
-repository = "https://github.com/kixpkgs/kixpkgs"
+repository = "https://github.com/kix-run/kix"
 
 [workspace.dependencies]
 # Serialization

@@ -20,9 +20,11 @@ Each release groups changes under these headings:
 **Before you upgrade**, check these items in your projects and scripts. The sections below explain each change.
 
 - Projects whose `flake.lock` pins a Kix library of another minor: run `kix lib update`, or set `kix` in `kix.toml` to the Kix library's minor.
+- Projects whose `flake.nix` reads the Kix library from `github:kix-run/kixpkgs`: change it to `github:kix-run/kix`.
 
 ### Breaking (shows an error)
 
+- The Kix library moved from `github:kix-run/kixpkgs` to `github:kix-run/kix`, and the old repository gets no new releases. `kix lib update` no longer moves an input that reads from the old address. It stops and asks you to point the input at `github:kix-run/kix` in `flake.nix`. See [`kix lib`](https://kix.run/docs/reference/cli/lib/).
 - Kix now stops when the project's Kix library has a different minor version, or a newer patch version of the same minor. The error names the fix: run `kix lib update` and commit `flake.lock` to move the project to the Kix library that matches Kix, or set `kix` in `kix.toml` so that Kix runs the version that matches the Kix library. See [Install and run Kix](https://kix.run/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/).
 
 ### Added

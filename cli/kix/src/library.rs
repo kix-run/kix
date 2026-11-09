@@ -20,8 +20,19 @@ use crate::eval::nix::{NixCommandError, command, current_system, output};
 use crate::runtime::Tool;
 use crate::version::Version;
 
+/// The GitHub owner and repository of the Kix library.
+pub const LIBRARY_OWNER: &str = "kix-run";
+pub const LIBRARY_REPO: &str = "kix";
+/// The Kix library as a flake URL without a ref.
+pub const LIBRARY_FLAKE: &str = "github:kix-run/kix";
+
+/// The repository the library lived in up to 0.8.0-rc.1. It gets no new
+/// releases, so `kix lib update` asks the user to point the input at
+/// [`LIBRARY_FLAKE`] instead of moving it.
+const FORMER_REPO: &str = "kixpkgs";
+
 /// A Git URL whose nodes in `flake.lock` count as the Kix library, in place of
-/// github:kix-run/kixpkgs. Only tests set it, to run `kix lib update` against
+/// [`LIBRARY_FLAKE`]. Only tests set it, to run `kix lib update` against
 /// a local repository.
 pub const TEST_REPO_VAR: &str = "KIX_LIB_UPDATE_TEST_REPO";
 
@@ -194,7 +205,7 @@ pub enum UpdateError {
     BadLock { path: PathBuf, message: String },
 
     #[error(
-        "flake.lock has no input for the Kix library. Kix looks for an input locked to github:kix-run/kixpkgs"
+        "flake.lock has no input for the Kix library. Kix looks for an input locked to {LIBRARY_FLAKE}"
     )]
     NotFound,
 
@@ -235,10 +246,10 @@ impl LibraryInput {
 /// Return the Kix library inputs in `lock`, a parsed `flake.lock`, with what
 /// to do to move each to the release `version`.
 ///
-/// An input counts as the library when it is locked to github:kix-run/kixpkgs
-/// (or to `test_repo`). An input named `kixpkgs` or `kix`, or a repository
-/// named `kixpkgs` elsewhere, counts too, so that a fork or a local path gets
-/// instructions instead of being skipped.
+/// An input counts as the library when it is locked to [`LIBRARY_FLAKE`] (or
+/// to `test_repo`). An input named `kixpkgs` or `kix`, or a repository named
+/// `kixpkgs` or `kix` elsewhere, counts too, so that the former repository, a
+/// fork, or a local path gets instructions instead of being skipped.
 pub fn library_inputs(lock: &Value, version: &str, test_repo: Option<&str>) -> Vec<LibraryInput> {
     let nodes = &lock["nodes"];
     let root = lock["root"].as_str().unwrap_or("root");
@@ -277,23 +288,32 @@ type ActionFn = Box<dyn Fn(&[String]) -> Action>;
 fn classify(node: &Value, name: &str, version: &str, test_repo: Option<&str>) -> Option<ActionFn> {
     let original = node["original"].clone();
     let tag = format!("v{version}");
-    let official = is_official(&original, test_repo);
+    let official = test_repo.is_some_and(|t| original["url"].as_str() == Some(t))
+        || kix_run_repo(&original).is_some_and(|r| r.eq_ignore_ascii_case(LIBRARY_REPO));
     if !official {
         let named = matches!(name, "kixpkgs" | "kix");
-        let repo = original["repo"]
-            .as_str()
-            .is_some_and(|r| r.eq_ignore_ascii_case("kixpkgs"))
+        let is_lib_name =
+            |r: &str| r.eq_ignore_ascii_case(FORMER_REPO) || r.eq_ignore_ascii_case(LIBRARY_REPO);
+        let repo = original["repo"].as_str().is_some_and(is_lib_name)
             || original["url"].as_str().is_some_and(|u| {
                 let u = u.trim_end_matches('/').trim_end_matches(".git");
-                u.ends_with("/kixpkgs")
+                u.rsplit('/').next().is_some_and(is_lib_name)
             });
         if !named && !repo {
             return None;
         }
         let from = flake_url(&original);
+        if kix_run_repo(&original).is_some_and(|r| r.eq_ignore_ascii_case(FORMER_REPO)) {
+            return Some(Box::new(move |path| {
+                Action::ByHand(format!(
+                    "The input `{}` reads the Kix library from {from}, which has moved to {LIBRARY_FLAKE} and gets no new releases. Point the input at {LIBRARY_FLAKE} in flake.nix, then run `kix lib update` again.",
+                    path.join("/")
+                ))
+            }));
+        }
         return Some(Box::new(move |path| {
             Action::ByHand(format!(
-                "The input `{}` reads the Kix library from {from} instead of github:kix-run/kixpkgs, so Kix cannot move it. Point it at github:kix-run/kixpkgs/{tag}, or move that copy to the {tag} release.",
+                "The input `{}` reads the Kix library from {from} instead of {LIBRARY_FLAKE}, so Kix cannot move it. Point it at {LIBRARY_FLAKE}/{tag}, or move that copy to the {tag} release.",
                 path.join("/")
             ))
         }));
@@ -332,29 +352,31 @@ fn classify(node: &Value, name: &str, version: &str, test_repo: Option<&str>) ->
     }))
 }
 
-fn is_official(original: &Value, test_repo: Option<&str>) -> bool {
-    let is = |key: &str, want: &str| {
-        original[key]
-            .as_str()
-            .is_some_and(|v| v.eq_ignore_ascii_case(want))
-    };
+/// Return the repository name when `original` points at a repository of
+/// [`LIBRARY_OWNER`] on github.com.
+fn kix_run_repo(original: &Value) -> Option<&str> {
     match original["type"].as_str() {
         Some("github") => {
-            original.get("host").is_none() && is("owner", "kix-run") && is("repo", "kixpkgs")
+            let owner = original["owner"].as_str()?;
+            (original.get("host").is_none() && owner.eq_ignore_ascii_case(LIBRARY_OWNER))
+                .then(|| original["repo"].as_str())
+                .flatten()
         }
         Some("git") => {
-            let url = original["url"].as_str().unwrap_or_default();
-            if test_repo.is_some_and(|t| t == url) {
-                return true;
-            }
+            let url = original["url"].as_str()?;
             let rest = url
                 .strip_prefix("https://")
                 .or_else(|| url.strip_prefix("ssh://git@"))
                 .unwrap_or(url);
             let rest = rest.trim_end_matches('/').trim_end_matches(".git");
-            rest.eq_ignore_ascii_case("github.com/kix-run/kixpkgs")
+            let (host, path) = rest.split_once('/')?;
+            if !host.eq_ignore_ascii_case("github.com") {
+                return None;
+            }
+            let (owner, repo) = path.split_once('/')?;
+            (owner.eq_ignore_ascii_case(LIBRARY_OWNER) && !repo.contains('/')).then_some(repo)
         }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -529,9 +551,17 @@ mod tests {
 
     fn github(owner: &str, rev: &str) -> Value {
         json!({
-            "locked": { "type": "github", "owner": owner, "repo": "kixpkgs", "rev": rev },
-            "original": { "type": "github", "owner": owner, "repo": "kixpkgs" }
+            "locked": { "type": "github", "owner": owner, "repo": "kix", "rev": rev },
+            "original": { "type": "github", "owner": owner, "repo": "kix" }
         })
+    }
+
+    #[test]
+    fn the_library_flake_names_the_owner_and_repository() {
+        assert_eq!(
+            LIBRARY_FLAKE,
+            format!("github:{LIBRARY_OWNER}/{LIBRARY_REPO}")
+        );
     }
 
     fn nixpkgs() -> Value {
@@ -564,7 +594,7 @@ mod tests {
         let found = library_inputs(&lock, "0.8.1", None);
         assert_eq!(
             moves(&found),
-            [("kixpkgs".into(), "github:kix-run/kixpkgs/v0.8.1".into())]
+            [("kixpkgs".into(), "github:kix-run/kix/v0.8.1".into())]
         );
         assert_eq!(found[0].rev.as_deref(), Some("a"));
     }
@@ -585,10 +615,7 @@ mod tests {
         });
         assert_eq!(
             moves(&library_inputs(&lock, "0.8.1", None)),
-            [(
-                "platform/kix".into(),
-                "github:kix-run/kixpkgs/v0.8.1".into()
-            )]
+            [("platform/kix".into(), "github:kix-run/kix/v0.8.1".into())]
         );
     }
 
@@ -611,7 +638,7 @@ mod tests {
             moves(&found),
             [(
                 "platform/kixpkgs".into(),
-                "github:kix-run/kixpkgs/v0.8.1".into()
+                "github:kix-run/kix/v0.8.1".into()
             )]
         );
         assert_eq!(
@@ -639,7 +666,7 @@ mod tests {
             panic!("by hand")
         };
         assert!(text.contains("path:/src/kixpkgs"), "{text}");
-        assert!(text.contains("github:kix-run/kixpkgs/v0.8.1"), "{text}");
+        assert!(text.contains("github:kix-run/kix/v0.8.1"), "{text}");
     }
 
     #[test]
@@ -655,9 +682,38 @@ mod tests {
             panic!("one input")
         };
         assert!(
-            matches!(&input.action, Action::ByHand(t) if t.contains("github:someone/kixpkgs")),
+            matches!(&input.action, Action::ByHand(t) if t.contains("github:someone/kix")),
             "{input:?}"
         );
+    }
+
+    #[test]
+    fn the_former_repository_is_by_hand() {
+        let former = |original: Value| {
+            json!({
+                "root": "root",
+                "nodes": {
+                    "root": { "inputs": { "kixpkgs": "kixpkgs" } },
+                    "kixpkgs": { "locked": original.clone(), "original": original }
+                }
+            })
+        };
+        for original in [
+            json!({ "type": "github", "owner": "kix-run", "repo": "kixpkgs", "ref": "v0.7.0" }),
+            json!({ "type": "github", "owner": "kix-run", "repo": "kixpkgs" }),
+            json!({ "type": "git", "url": "https://github.com/kix-run/kixpkgs.git" }),
+        ] {
+            let [input] = &library_inputs(&former(original.clone()), "0.8.1", None)[..] else {
+                panic!("one input for {original}")
+            };
+            let Action::ByHand(text) = &input.action else {
+                panic!("by hand for {original}")
+            };
+            assert!(
+                text.contains("which has moved to github:kix-run/kix"),
+                "{text}"
+            );
+        }
     }
 
     #[test]
@@ -674,7 +730,7 @@ mod tests {
         assert_eq!(
             input.action,
             Action::ByHand(
-                "flake.nix pins the input `kixpkgs` to github:kix-run/kixpkgs/v0.8.0. Change it to github:kix-run/kixpkgs/v0.8.1 in flake.nix, then run `kix lib update` again.".into()
+                "flake.nix pins the input `kixpkgs` to github:kix-run/kix/v0.8.0. Change it to github:kix-run/kix/v0.8.1 in flake.nix, then run `kix lib update` again.".into()
             )
         );
     }
@@ -703,7 +759,7 @@ mod tests {
         };
         assert!(
             text.contains(
-                "add `inputs.platform.inputs.kixpkgs.url = \"github:kix-run/kixpkgs/v0.8.1\";`"
+                "add `inputs.platform.inputs.kixpkgs.url = \"github:kix-run/kix/v0.8.1\";`"
             ),
             "{text}"
         );
@@ -744,13 +800,13 @@ mod tests {
         };
         assert_eq!(
             moves(&library_inputs(
-                &git("https://github.com/kix-run/kixpkgs.git"),
+                &git("https://github.com/kix-run/kix.git"),
                 "0.8.1",
                 None
             )),
             [(
                 "k".into(),
-                "git+https://github.com/kix-run/kixpkgs.git?ref=refs/tags/v0.8.1".into()
+                "git+https://github.com/kix-run/kix.git?ref=refs/tags/v0.8.1".into()
             )]
         );
         assert!(library_inputs(&git("file:///tmp/lib"), "0.8.1", None).is_empty());
