@@ -8,7 +8,7 @@ import Command from "../../../../components/Command.astro";
 `kix doctor` inspects the Kix runtime that Kix uses to run Nix, Helm, `kubectl`, and `sops`, and checks the project's builder setting in [`kix.toml`](/docs/reference/kix-toml/). It confirms that every program in the Kix runtime matches the version compiled into Kix, checks the SHA-256 hash of every file and symlink target in `manifest.json`, and, when the project uses `builder = "nix"`, verifies the machine's `nix` installation. It also reports the Kix version the project names in `kix.toml` and the versions of Kix installed for [`kix self`](/docs/reference/cli/self/).
 
 :::note
-This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/commands/doctor.rs`, `cli/kix/src/runtime.rs`, `cli/kix/src/project.rs`, `cli/kix/src/installs.rs`, `cli/kix/src/system_nix.rs`, and `cli/runtime/programs.json`. When flag definitions or runtime behavior change in the Rust source, update this page in the same change.
+This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/commands/doctor.rs`, `cli/kix/src/runtime.rs`, `cli/kix/src/project.rs`, `cli/kix/src/installs.rs`, `cli/kix/src/system_nix.rs`, and `cli/kix/runtime/programs.json`. When flag definitions or runtime behavior change in the Rust source, update this page in the same change.
 :::
 
 ## Synopsis
@@ -31,7 +31,7 @@ On normal commands (`kix check`, `kix diff`, `kix deploy`), `kix` reads `<runtim
 
 ## Programs in the Kix runtime
 
-Each build of Kix is compiled against the exact tool versions in `cli/runtime/programs.json`:
+Each build of Kix is compiled against the exact tool versions in `cli/kix/runtime/programs.json`:
 
 | Program | Version(s) in the Kix runtime | Used by Kix for |
 | --- | --- | --- |

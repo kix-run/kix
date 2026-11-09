@@ -19,7 +19,7 @@ kix lib update [--dry-run] [--flake <FLAKE>]
 
 ## Why the Kix library and Kix versions stay aligned
 
-When a cluster uses Helm charts (`kix.helmChart`, `scope.helm.importChart`, or `scope.helm.importChartCrds`), both the Kix library and Kix record the exact Helm 3 and Helm 4 versions used to render templates (`kix/lib/helm-versions.json` in the Kix library, and `cli/runtime/programs.json` in Kix). Keeping those versions identical guarantees that `helm template` produces the same resource hashes on every machine.
+When a cluster uses Helm charts (`kix.helmChart`, `scope.helm.importChart`, or `scope.helm.importChartCrds`), both the Kix library and Kix record the exact Helm 3 and Helm 4 versions used to render templates (`kix/lib/helm-versions.json` in the Kix library, and `cli/kix/runtime/programs.json` in Kix). Keeping those versions identical guarantees that `helm template` produces the same resource hashes on every machine.
 
 If you upgrade Kix (or update `flake.lock`) and the two sides disagree on a Helm version, Kix stops before rendering the chart and prints a mismatch error telling you how to align them:
 

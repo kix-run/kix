@@ -6,9 +6,9 @@
 #   KIX_RELEASE_SIGNING_KEY=<PEM> scripts/sign-release.sh <dist-dir>
 #
 # Writes <dist-dir>/SHA256SUMS.sig. The key's public half must be committed
-# as cli/release-keys/<keyid>.pub, so run this from the repository root. The
+# as cli/kix/release-keys/<keyid>.pub, so run this from the repository root. The
 # release job and the release rehearsal in .github/workflows/cli-tests.yml
-# both run it. cli/release-keys/README.md describes the key and the file
+# both run it. cli/kix/release-keys/README.md describes the key and the file
 # format. Needs OpenSSL 3 and GNU coreutils.
 set -euo pipefail
 
@@ -16,12 +16,12 @@ dist="${1:?usage: scripts/sign-release.sh <dist-dir>}"
 
 # Before the first key is committed, no Kix could verify a signature, so the
 # release goes out unsigned.
-if ! ls cli/release-keys/*.pub >/dev/null 2>&1; then
-  echo "::warning::cli/release-keys has no key, so this release is unsigned and Kix cannot install it automatically. cli/release-keys/README.md says how to add a key."
+if ! ls cli/kix/release-keys/*.pub >/dev/null 2>&1; then
+  echo "::warning::cli/kix/release-keys has no key, so this release is unsigned and Kix cannot install it automatically. cli/kix/release-keys/README.md says how to add a key."
   exit 0
 fi
 if [ -z "${KIX_RELEASE_SIGNING_KEY:-}" ]; then
-  echo "::error::The repository secret KIX_RELEASE_SIGNING_KEY is not set, so the release cannot be signed. See cli/release-keys/README.md."
+  echo "::error::The repository secret KIX_RELEASE_SIGNING_KEY is not set, so the release cannot be signed. See cli/kix/release-keys/README.md."
   exit 1
 fi
 
@@ -34,9 +34,9 @@ printf '%s\n' "$KIX_RELEASE_SIGNING_KEY" > "$key"
 openssl pkey -in "$key" -pubout -outform DER | tail -c 32 > "$work/release-key.raw"
 keyid=$(sha256sum "$work/release-key.raw" | cut -c1-8)
 public=$(od -An -v -tx1 "$work/release-key.raw" | tr -d ' \n')
-committed="cli/release-keys/$keyid.pub"
+committed="cli/kix/release-keys/$keyid.pub"
 if [ ! -f "$committed" ] || [ "$(tr -d '[:space:]' < "$committed")" != "$public" ]; then
-  echo "::error::$committed does not hold the public half of KIX_RELEASE_SIGNING_KEY. Commit it before releasing. See cli/release-keys/README.md."
+  echo "::error::$committed does not hold the public half of KIX_RELEASE_SIGNING_KEY. Commit it before releasing. See cli/kix/release-keys/README.md."
   exit 1
 fi
 

@@ -18,7 +18,7 @@ let
   inherit (pkgs) lib;
   inherit (pkgs.stdenv.hostPlatform) system isDarwin;
 
-  compiledIn = lib.importJSON ./programs.json;
+  compiledIn = lib.importJSON ../kix/runtime/programs.json;
   helmVersions = lib.importJSON ../../kix/lib/helm-versions.json;
 
   kubectlVersion = "1.37.2";
@@ -409,7 +409,7 @@ let
   ) components;
 in
 assert lib.assertMsg (shippedVersions == compiledIn) ''
-  cli/runtime/programs.json lists ${builtins.toJSON compiledIn},
+  cli/kix/runtime/programs.json lists ${builtins.toJSON compiledIn},
   but cli/runtime/runtime.nix ships ${builtins.toJSON shippedVersions}.
   kix compiles programs.json in, so update it to match.
 '';

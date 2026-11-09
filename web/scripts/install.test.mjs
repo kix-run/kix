@@ -4,9 +4,9 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const script = readFileSync(new URL('../public/install', import.meta.url), 'utf8');
-const keysDir = new URL('../../cli/release-keys/', import.meta.url);
+const keysDir = new URL('../../cli/kix/release-keys/', import.meta.url);
 
-test('the install script carries the keys in cli/release-keys', () => {
+test('the install script carries the keys in cli/kix/release-keys', () => {
   const match = script.match(/^RELEASE_KEYS='([^']*)'$/m);
   assert.ok(match, "web/public/install has no RELEASE_KEYS='...' line");
   const inScript = match[1].split(/\s+/).filter(Boolean).sort();

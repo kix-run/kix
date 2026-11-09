@@ -44,7 +44,7 @@ when the secret `KIX_RELEASE_SIGNING_KEY` is empty.
 openssl genpkey -algorithm ed25519 -out kix-release.pem
 pub=$(openssl pkey -in kix-release.pem -pubout -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
 keyid=$(printf '%s' "$pub" | xxd -r -p | shasum -a 256 | cut -c1-8)
-printf '%s\n' "$pub" > "cli/release-keys/$keyid.pub"
+printf '%s\n' "$pub" > "cli/kix/release-keys/$keyid.pub"
 ```
 
 `openssl` here must be OpenSSL 3 (macOS ships LibreSSL, which has no
