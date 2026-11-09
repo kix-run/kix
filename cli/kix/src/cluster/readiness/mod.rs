@@ -31,7 +31,7 @@ use super::cancel::CancelToken;
 use super::discovery;
 use crate::manifest::types::ResourceId;
 
-pub use declared::{check_readiness, is_immediate_kind};
+pub use declared::{check_readiness, declared_rule, is_immediate_kind};
 pub use imports::{ImportTarget, MalformedMarker, import_target_from_manifest};
 pub use terminal::{TerminalReason, classify_pod_terminal, classify_workload_terminal};
 

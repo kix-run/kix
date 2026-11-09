@@ -27,8 +27,19 @@ fn make_obj_gen(generation: i64, data: Value) -> DynamicObject {
     }
 }
 
-/// Build a `DynamicObject` with a `kix.run/readiness` annotation.
+/// Build a `DynamicObject` with a `kix.run/readiness` annotation, written
+/// by Kix.
 fn make_annotated_obj(annotation: &str, data: Value) -> DynamicObject {
+    written_by(
+        crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+        make_copied_obj(annotation, data),
+    )
+}
+
+/// Build a `DynamicObject` with a `kix.run/readiness` annotation and no
+/// `managedFields`, as an operator's copy of a Kix object reads before
+/// [`written_by`] names the operator.
+fn make_copied_obj(annotation: &str, data: Value) -> DynamicObject {
     let mut annotations = std::collections::BTreeMap::new();
     annotations.insert(keys::READINESS.to_string(), annotation.to_string());
     DynamicObject {
@@ -40,6 +51,18 @@ fn make_annotated_obj(annotation: &str, data: Value) -> DynamicObject {
         types: None,
         data,
     }
+}
+
+/// Give `obj` one `managedFields` entry, by `manager`.
+fn written_by(manager: &str, mut obj: DynamicObject) -> DynamicObject {
+    obj.metadata.managed_fields = Some(vec![
+        k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+            manager: Some(manager.into()),
+            operation: Some("Apply".into()),
+            ..Default::default()
+        },
+    ]);
+    obj
 }
 
 const VM_RULE: &str = r#"{"path":"/status/updateStatus","equals":"operational"}"#;
@@ -609,6 +632,28 @@ fn statefulset_ready() {
         }),
     );
     assert!(check_readiness(&obj, "StatefulSet"));
+}
+
+#[test]
+fn a_rule_an_operator_copied_does_not_judge_the_copy() {
+    let rule = r#"{"path":"/status/status","equals":"Completed"}"#;
+    let status = json!({
+        "spec": {"replicas": 1},
+        "status": {"observedGeneration": 1, "readyReplicas": 1, "updatedReplicas": 1}
+    });
+    let mut copy = written_by("operator", make_copied_obj(rule, status.clone()));
+    copy.metadata.generation = Some(1);
+    assert!(declared_rule(&copy).is_none());
+    assert!(check_readiness(&copy, "StatefulSet"));
+
+    let mut unrecorded = make_copied_obj(rule, status.clone());
+    unrecorded.metadata.generation = Some(1);
+    assert!(declared_rule(&unrecorded).is_none());
+
+    let mut applied = make_annotated_obj(rule, status);
+    applied.metadata.generation = Some(1);
+    assert_eq!(declared_rule(&applied), Some(rule));
+    assert!(!check_readiness(&applied, "StatefulSet"));
 }
 
 #[test]
