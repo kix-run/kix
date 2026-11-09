@@ -38,6 +38,10 @@ Each release groups changes under these headings:
 - `kix --version` and `kix doctor` say which Kix chose the running one, and for which `kix.toml`. `kix --version` also shows the `kix` on `PATH` when it is a different version. `kix doctor` reports the project's `kix` setting and the installed versions of Kix.
 - The install script that installed Kix through a Nix profile (`web/install.sh`, never published) is removed.
 
+### Fixed
+
+- Kix bundles a newer SQLite for its evaluation cache, which fixes CVE-2026-119375 (RUSTSEC-2026-0459).
+
 ## 0.7.1 - 2026-11-08
 
 ### Changed

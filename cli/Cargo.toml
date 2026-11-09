@@ -85,7 +85,7 @@ petgraph = "0.7"
 zstd = "0.14"
 
 # SQLite
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Hashing
 blake3 = "1"
