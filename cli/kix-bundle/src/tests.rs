@@ -615,7 +615,7 @@ fn a_header_that_breaks_its_rules_is_malformed() {
     let out_of_range = |h: &mut Value| h["files"][1][2] = json!([9999]);
     let not_a_store_path = |h: &mut Value| h["files"][1][0] = json!("/tmp/x");
     let bad_name = |h: &mut Value| {
-        h["files"][1][0] = json!("/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-a b");
+        h["files"][1][0] = json!("/nix/store/gqikj37r12iss0zrq8v90xr2qv65qsgj-a b");
     };
     for change in [
         &swap as &dyn Fn(&mut Value),
@@ -763,7 +763,7 @@ fn a_file_outside_the_build_is_refused() {
     // Two files that reference each other are no root, and the record
     // does not reach them. Roles come from the header, before any path
     // is checked.
-    let hash = "0h5dy43cxa771fiz9dsx14c0vf32sn67";
+    let hash = "gqikj37r12iss0zrq8v90xr2qv65qsgj";
     let bytes = with_header(|h| {
         let files = h["files"].as_array_mut().unwrap();
         let n = files.len();

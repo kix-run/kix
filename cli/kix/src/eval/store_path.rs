@@ -234,9 +234,9 @@ mod tests {
         assert_ne!(base, path_for(Method::Source, b"a", &[], "n"));
     }
 
-    /// Files and references captured from a real `kix-enterprise-test`
-    /// build on stage1: the Activation record, `kix-packages.json`, and three
-    /// manifests. Each must recompute to the path Nix gave it.
+    /// Files and references from a `kix-enterprise-test` build: the
+    /// Activation record, `kix-packages.json`, and three manifests. Each must
+    /// recompute to its store path.
     #[test]
     fn real_build_paths_recompute_to_themselves() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
