@@ -180,9 +180,11 @@ jobs:
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "archived=${archived# }" >> "$GITHUB_OUTPUT"
           # The key also covers this workflow, which decides how the docs are
-          # built. It is hashed here because `hashFiles()` starts a Node 20
+          # built, and the files that prepare-release-docs.sh copies into each
+          # release. It is hashed here because `hashFiles()` starts a Node 20
           # the Spindle image does not have.
-          workflow=$(sha256sum .github/workflows/pages.yml | cut -c1-16)
+          workflow=$(cat .github/workflows/pages.yml docs/scripts/prepare-release-docs.sh \
+            $(docs/scripts/prepare-release-docs.sh --list) | sha256sum | cut -c1-16)
           echo "key=docs-releases-$(sha256sum <<<"$latest $archived" | cut -c1-16)-$workflow" >> "$GITHUB_OUTPUT"
           echo "Latest release: ${latest:-none}. Older minor releases: ${archived:-none}."
 
@@ -195,7 +197,10 @@ jobs:
           key: ${{ steps.docs.outputs.key }}
 
       # Each tag is built against the kix-examples commit its own
-      # docs/flake.lock names, so its snippets match it too.
+      # docs/flake.lock names, so its snippets match it too. Each tag also
+      # gets main's theme, so every version looks the same while keeping its
+      # own pages, and any snippet its rewritten history lost
+      # (docs/scripts/prepare-release-docs.sh).
       - name: Build release docs
         if: steps.docs.outputs.latest != '' && steps.release-docs.outputs.cache-hit != 'true'
         working-directory: kixpkgs
@@ -206,6 +211,7 @@ jobs:
           build_release_docs() {
             local tag="$1" output="$2" dest="$3"
             git worktree add "../kixpkgs-$tag" "$tag"
+            docs/scripts/prepare-release-docs.sh "../kixpkgs-$tag"
             rev=$(nix run --inputs-from . nixpkgs#jq -- -r '.nodes["kix-examples"].locked.rev' "../kixpkgs-$tag/docs/flake.lock")
             git -C ../kix-examples worktree add "../kix-examples-$tag" "$rev"
             nix build "../kixpkgs-$tag/docs#$output" \

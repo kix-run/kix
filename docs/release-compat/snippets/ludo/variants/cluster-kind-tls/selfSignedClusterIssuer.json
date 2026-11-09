@@ -1,0 +1,9 @@
+{
+  "childRegions": [],
+  "code": "        instances.cert-manager.selfsigned = {\n          package = packages.cluster-issuer;\n          config.spec.selfSigned = { };\n        };",
+  "endLine": 56,
+  "lang": "nix",
+  "source": "how-to/homelab/cluster-kind-tls.nix",
+  "startLine": 53,
+  "url": "https://github.com/kix-run/kix-examples/blob/52b18cad7197ffedf64a1465edb770e93a55e745/how-to/homelab/cluster-kind-tls.nix#L53-L56"
+}
