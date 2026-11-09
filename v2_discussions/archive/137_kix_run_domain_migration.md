@@ -10,7 +10,7 @@ Kubernetes convention says the prefix of an annotation or label key, and the gro
 
 This is a rename, but not a search and replace. The domain is written into live objects on every cluster Kix has deployed. It is the API group of two CRDs whose records hold the deploy history. And the CLI identifies resources without looking at the group.
 
-## Inventory (2026-09-08, main at f64c998)
+## Inventory (2026-09-08, main at 6f3084f)
 
 | Where | Files | Mentions | What |
 |---|---|---|---|

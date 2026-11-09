@@ -58,7 +58,7 @@ If requests and resolutions share a directory, the two lifecycles collide. A res
 
 ## 6. A correction to doc 138, and what it changes here
 
-Doc 138 argued that a pin file must be Nix rather than JSON, because the CLI's evaluation cache fingerprints `.nix` files and `flake.lock` and nothing else. That was true when the cache landed in `c622cb6`, but `d96297d` widened `walk_nix_files` (`cli/kix/src/eval/cache.rs`) to `.nix`, `.yaml`, `.yml` and `.json`. A JSON pin file would invalidate the cache correctly today.
+Doc 138 argued that a pin file must be Nix rather than JSON, because the CLI's evaluation cache fingerprints `.nix` files and `flake.lock` and nothing else. That was true when the cache landed in `6fd83ae`, but `2a7e0ad` widened `walk_nix_files` (`cli/kix/src/eval/cache.rs`) to `.nix`, `.yaml`, `.yml` and `.json`. A JSON pin file would invalidate the cache correctly today.
 
 This matters here because doc 117 §3.3 proposes JSON instance files. Had the original claim held, 117 would have had the same bug. It does not, so requests can be JSON, which is what an external portal or an agent can write without knowing Nix.
 

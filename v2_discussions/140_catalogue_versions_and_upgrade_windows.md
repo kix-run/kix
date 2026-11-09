@@ -61,7 +61,7 @@ about six weeks of drift.
 | lib | packages | result |
 |---|---|---|
 | Sept (HEAD) | Jul 29 | ludo-kind fails, 9 assertions (`distinctSameKindLabels`, `monitorSelectorMatchesService`, Service matches no workload) |
-| Jul 29 | Sept | `attribute 'keys' missing` at `kix/packages/cilium/default.nix:240`; `kix.keys` landed in `ec80405` and 9 packages now use it |
+| Jul 29 | Sept | `attribute 'keys' missing` at `kix/packages/cilium/default.nix:240`; `kix.keys` landed in `66091fb` and 9 packages now use it |
 | Sept | any | `test-minimal` (coredns) identical output in every combination |
 
 A newer lib gets stricter about package output. Newer packages adopt
@@ -91,7 +91,7 @@ change.
 
 Two rules follow. The CLI is built from the newest live revision. The oldest
 live revision sits at or after the CLI's compatibility floor, today
-`ec80405`.
+`66091fb`.
 
 ### 2.5 Private packages set the floor, and it keeps rising
 
@@ -127,7 +127,7 @@ triggers a deploy.
 the lock, so it triggers nothing. The bump then sits on `main` until the next
 Atlas push, whose deploy builds from `main` and carries it.
 
-On 2026-09-10 this was harmless only because the bump to `f4115a1` was inert,
+On 2026-09-10 this was harmless only because the bump to `01e827d` was inert,
 verified by building `cluster-lab1`, `cluster-stage1` and `cluster-stage2` at both
 revisions and comparing store paths. A bump that changed anything would have
 shipped under a commit message about image pins.

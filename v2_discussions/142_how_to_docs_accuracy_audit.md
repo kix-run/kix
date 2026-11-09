@@ -1,7 +1,7 @@
 # 142: How-to docs accuracy audit and the verification gap
 
 **Status:** All five phases landed 2026-09-16 on
-`docs/how-to-cluster-safety-fixes`, thirteen commits from `726afe2`.
+`docs/how-to-cluster-safety-fixes`, thirteen commits from `7168903`.
 kix-examples PR #1 is merged and the docs lock points at it. What remains is
 follow-on pipeline work and two design questions, listed under "What remains"
 below.
@@ -141,12 +141,12 @@ The review also exposed product defects that required code changes:
 
 | Bug | Location | Status |
 |---|---|---|
-| Error-severity scorecard findings never reach SARIF (empty run + exit 1) | `check.rs:264-266` | Fixed in `84effbd`. SARIF now contains one error result, attributed to the rule when the message identifies it. |
-| `--prune-mode eager` claims interleaving that does not exist | `cli.rs:438,507`; `deploy.rs:727-731` | Removed in `fc3c512`. Actual interleaving requires scheduler changes and is tracked in ROADMAP. |
-| `kix export --for exit` includes both Kix CRDs; `--force` leaves stale files | `export.rs:64-73,84-90` | Directory replacement was fixed in `84effbd`, with a guard that permits deletion only of an export-shaped YAML tree. The CRDs remain part of the export and are now documented. |
-| No Kubernetes object-name validation in `kix/lib` or `cli/` | absent | Fixed in `254f64a`. The validator immediately found camel-case instance names in two repository examples. |
-| `isValidSeverity` and `isValidLevel` are defined but unused | `scorecard.nix:10-19` | Fixed in `84effbd`, including validation of all three severity override channels. |
-| `cluster.domain` is read in two places but declared nowhere | `compose.nix:955`, `monitoring.nix:219-222` | Fixed in `a85fea8`. Kix now declares the option, ludo no longer declares it locally, and the multi-environment example is included in routine builds. |
+| Error-severity scorecard findings never reach SARIF (empty run + exit 1) | `check.rs:264-266` | Fixed in `40980c0`. SARIF now contains one error result, attributed to the rule when the message identifies it. |
+| `--prune-mode eager` claims interleaving that does not exist | `cli.rs:438,507`; `deploy.rs:727-731` | Removed in `fcfbac5`. Actual interleaving requires scheduler changes and is tracked in ROADMAP. |
+| `kix export --for exit` includes both Kix CRDs; `--force` leaves stale files | `export.rs:64-73,84-90` | Directory replacement was fixed in `40980c0`, with a guard that permits deletion only of an export-shaped YAML tree. The CRDs remain part of the export and are now documented. |
+| No Kubernetes object-name validation in `kix/lib` or `cli/` | absent | Fixed in `01e6c8b`. The validator immediately found camel-case instance names in two repository examples. |
+| `isValidSeverity` and `isValidLevel` are defined but unused | `scorecard.nix:10-19` | Fixed in `40980c0`, including validation of all three severity override channels. |
+| `cluster.domain` is read in two places but declared nowhere | `compose.nix:955`, `monitoring.nix:219-222` | Fixed in `f08e191`. Kix now declares the option, ludo no longer declares it locally, and the multi-environment example is included in routine builds. |
 | `lib.mkForce` could not replace an attrset option's defaults | `resolve.nix:198-202` | Fixed while completing the remaining how-to guides. The compatibility deep merge now omits defaults for a whole option explicitly wrapped in `mkForce`; the library test matrix covers the replacement behavior. |
 | Cluster-state commands filter Activations by CLI name, while the label uses `buildCluster.name` | `activation.rs:107-116` vs `core/activation.nix:92-94` | Open. The how-to now requires the names to match. A product fix needs a decision about which name defines cluster identity. |
 | The phase-1 dependency pass cannot use explicit `deps` | `cluster.nix:223`; already documented in BEST-PRACTICES §8.4 | Open by design. Both dependency-debugging guides now explain the required alias workaround. |
@@ -155,8 +155,8 @@ The fixes exposed two additional problems:
 
 | Bug | Status |
 |---|---|
-| treefmt reformatted region extracts under `docs/src/snippets/**`, which must remain byte-identical to their sources | Fixed in `c159411`. The formatter had also reported syntax errors for 39 non-standalone excerpts on every commit. |
-| `clusters/test-fragments.nix` used the reserved `kix.run` domain for example platform labels | Fixed in `a85fea8`. This problem predated the audit. |
+| treefmt reformatted region extracts under `docs/src/snippets/**`, which must remain byte-identical to their sources | Fixed in `37ed59e`. The formatter had also reported syntax errors for 39 non-standalone excerpts on every commit. |
+| `clusters/test-fragments.nix` used the reserved `kix.run` domain for example platform labels | Fixed in `f08e191`. This problem predated the audit. |
 
 ## Upstream sources of error
 
@@ -244,7 +244,7 @@ module; and validate scorecard levels and severities when loading rules.
 
 ### Phases 2 and 3, landed 2026-09-16
 
-**Phase 2** (`3abd392` in kix-examples, `239c1ec` here). The four example
+**Phase 2** (`3abd392` in kix-examples, `4f082af` here). The four example
 fixes went in, PR #1 merged as `3b0a04e`, and `docs/flake.lock` moved off the
 branch it had been pinned to since 9 September. All 31 example clusters
 evaluate against the new name validator; the `ingressNginx` instance was the
@@ -259,7 +259,7 @@ and not only the source. And the `monitoringStack` region had excluded the
 `specialArgs` line that makes the module resolve, so the snippet a reader
 copies omitted the one line they needed.
 
-**Phase 3** (`37b0b71`). Six jq projections reshaped their input rather than
+**Phase 3** (`5574d47`). Six jq projections reshaped their input rather than
 excerpting it, three of them on pages that tell the reader to compare what
 they see against a live object at a named path. Every key now sits where it
 sits in the real output.
@@ -277,7 +277,7 @@ logs an apiserver 429 retry, stable across runs and left in as real output.
   and whether the phase-1 pre-pass can be taught to see explicit `deps`
   (`cluster.nix:223`). Both are documented as cautions in the guides.
 - **Snippet conversion**: 41 hand-written nix blocks across 19 pages have a
-  tracked count (`1fc70c6`) and a checker that fails when it moves
+  tracked count (`4ad21df`) and a checker that fails when it moves
   unannounced. Converting them to checked snippets is the durable half of
   this work, a page at a time.
 - **Scorecard in the example clusters**, the one pipeline item from the plan

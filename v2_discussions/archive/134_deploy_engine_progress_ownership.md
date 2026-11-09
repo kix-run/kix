@@ -1,6 +1,6 @@
 # 134: The deploy engine owns its own progress
 
-**Status:** Implemented (PR #64, squash-merged 2026-09-07 as f0b5929). Open questions from §6 live in `ROADMAP.md` under the engine item: relative abort bound, `cargo test` in CI, a CRD-bearing package in the kind test cluster, kube 4.x, two latent hazards in kube's request path.
+**Status:** Implemented (PR #64, squash-merged 2026-09-07 as e89c59c). Open questions from §6 live in `ROADMAP.md` under the engine item: relative abort bound, `cargo test` in CI, a CRD-bearing package in the kind test cluster, kube 4.x, two latent hazards in kube's request path.
 **Related:** `../98_deploy_execution_topology.md`, `../99_graph_streaming.md`, `../81_deploy_as_lifecycle_engine.md`, kixpkgs#60, #61, #62, #63, #64
 
 ---

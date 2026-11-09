@@ -9,5 +9,5 @@ so the 8-character prefix in `Active activation: <name> (aq1zdgf9...)` and in
 `how-to/application-receipt/active-receipt.json` and
 `how-to/policy-receipt-attestation/attest.json`, `flakeLock`, `rev`,
 `gitCommit`, `narHash` and `nixVersion` move with the commit and Nix version
-(checked in: rev 6cdd930, Nix 2.28.5), and `arch` and `os` move with the host
+(checked in: rev 6c584f5, Nix 2.28.5), and `arch` and `os` move with the host
 (checked in: aarch64 macOS). Every live refresh rewrites these sidecars.

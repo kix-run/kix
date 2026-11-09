@@ -74,11 +74,11 @@ session scratchpad, not in the repo.
   can turn on certificate generation.
 - **The converters match.** `cli/kix/src/eval/helm_yaml.rs` reproduces
   `yq eval-all -o=json '[.]'` from yq 4 scalar for scalar. A test checks
-  it against yq's output for every chart in the repo (commit bbecabfd,
+  it against yq's output for every chart in the repo (commit 15cf55e5,
   fixtures in `cli/kix/tests/fixtures/helm-yaml/`). So the `nix` builder can
   use `yq-go` from the project's nixpkgs.
 - **The `nix` route already existed on this branch.** Phase 3 of doc 161
-  (commit e9e291ef) rendered every chart in a real derivation with the
+  (commit 5de6e510) rendered every chart in a real derivation with the
   pinned Helm 4.3.1 from `helm-versions.json` and `yq-go` from nixpkgs,
   before phase 4 moved rendering into the CLI. Its `helm.nix` is the
   starting point for section 3.
@@ -170,7 +170,7 @@ says which setting to change.
 ### 3. Helm under the `nix` builder
 
 Nix runs Helm in an ordinary derivation, as phase 3 of the branch did
-(commit e9e291ef). Compared with `main`, two changes keep a chart's meaning
+(commit 5de6e510). Compared with `main`, two changes keep a chart's meaning
 the same under both builders:
 
 - **The Helm binary is the release Kix pins**, not `pkgs.kubernetes-helm`.

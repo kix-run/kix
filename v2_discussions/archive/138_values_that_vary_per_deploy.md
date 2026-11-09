@@ -1,6 +1,6 @@
 # 138: Values that vary per deploy, and the record of what was deployed
 
-**Status:** Implemented, in #89 (`baec055`). Three of its decisions did not survive implementation review; §0 records them, and the body below is the reasoning as it stood, left unedited except for pointers back to §0.
+**Status:** Implemented, in #89 (`a38f4e3`). Three of its decisions did not survive implementation review; §0 records them, and the body below is the reasoning as it stood, left unedited except for pointers back to §0.
 **Related:** `117_self_service_platform_interface.md` (where configuration lives), `119_core_surface_audit.md` (boundary markers, refusal law 1), `120_compiler_theory_mapping.md` (§3.1 link-time typing, §3.9 no smart runtime), `129_scaling_axes_fleet_and_linking.md` (`kix promote`, the contract artifact), `archive/122_runtime_content_drift.md` (`applied-hash`)
 **Source:** Adam, 2026-09-09, after `sha-REPLACE_ME` nearly took down Atlas on lab1 twice during the domain migration: "I like to think about the best practices here in terms of this replace me issue." Grounded by four parallel reviewers (Kix purist, online researcher, codebase, monorepo operations) and three critiqued designs.
 
@@ -14,7 +14,7 @@ for each is worth keeping because each mistake had a cause.
 **The pin file is JSON, not Nix.** §5.1 and §9 said it had to be Nix, because
 the evaluation cache fingerprints `.nix` files only, so a JSON pin file would
 change a render without invalidating the cache. That was true when the sentence
-was written and false by the time it was read: `d96297d` widened
+was written and false by the time it was read: `2a7e0ad` widened
 `cli/kix/src/eval/cache.rs` to accept `.nix`, `.yaml`, `.yml` and `.json`. The
 claim had been checked once, against a version of the file that no longer
 existed, and then repeated in five places without being checked again.
@@ -213,7 +213,7 @@ The first draft left six questions open. Five now have answers, from our own cod
 
 **Does rollback from any machine stay out of scope? Split the question, because the two halves have different answers.** Audit and diff from any machine is achievable. Push the rendered manifests to the registry as an OCI artifact and reference it by digest from the receipt. Flux does this already, under the name gitless GitOps, for exactly our case: the repository does not contain the final manifests because a generator produces them. It puts the bundle where the images already live, so it inherits their credentials and retention, and it sidesteps every size limit in §3. **Rollback by replay does not follow, and we should stop implying it might.** Built manifests carry secret values inline. `immich-db-bootstrap-password` in the example cluster renders `stringData.password` with a literal in it. So an unredacted bundle is a credential archive in the registry, which is Helm's documented failure moved to a worse-read place, and a redacted bundle cannot be applied, because a Secret with its body removed applies cleanly and fails at authentication. Rollback by replay needs the plaintext, which needs sops, which needs the source. So: **build the bundle for audit and diff, and keep rollback tied to the source.**
 
-**Does anything else read a non-`.nix` file into eval? The premise was wrong, so the worry does not arise.** `compute_source_fingerprint` walks `.nix` files only, but `compute_key_with_source` hashes the contents of `flake.lock` directly into the cache key alongside that fingerprint (`cli/kix/src/eval/cache.rs:171`). A pin bump therefore invalidates correctly, and there is no latent stale-render bug. The reason to prefer `pins.nix` over `pins.json` survives unchanged and is now better stated: JSON is in neither the fingerprint nor the key, so a JSON pin file would be the one input that changes a render without invalidating the cache. *(False since `d96297d`, which widened the fingerprint to `.json`. See §0.)*
+**Does anything else read a non-`.nix` file into eval? The premise was wrong, so the worry does not arise.** `compute_source_fingerprint` walks `.nix` files only, but `compute_key_with_source` hashes the contents of `flake.lock` directly into the cache key alongside that fingerprint (`cli/kix/src/eval/cache.rs:171`). A pin bump therefore invalidates correctly, and there is no latent stale-render bug. The reason to prefer `pins.nix` over `pins.json` survives unchanged and is now better stated: JSON is in neither the fingerprint nor the key, so a JSON pin file would be the one input that changes a render without invalidating the cache. *(False since `2a7e0ad`, which widened the fingerprint to `.json`. See §0.)*
 
 ## 10. The risk to watch
 

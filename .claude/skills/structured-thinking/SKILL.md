@@ -5,7 +5,7 @@ description: >
   Use when the user wants to brainstorm, analyze, design, or think through something:
   keywords like "think about", "brainstorm", "let's figure out", "what should we do about",
   "design", "explore the idea of". Also use when the user references business_discussions/
-  or v2_discussions/ directly. Prefer this over plan mode for bigger new features or ideas.
+  (in kix-run/planning-private) or v2_discussions/ directly. Prefer this over plan mode for bigger new features or ideas.
 ---
 
 # Structured Thinking
@@ -14,7 +14,7 @@ Turn loose thinking into a short, durable document that someone can pick up late
 
 ## Ground yourself first (mandatory)
 
-1. Read `v2_discussions/README.md` (has Status + Relevance markers, Recently Archived, `interesting_thoughts/` index) and `ls business_discussions/`.
+1. Read `v2_discussions/README.md` (has Status + Relevance markers, Recently Archived, `interesting_thoughts/` index). For business topics, also list `business_discussions/` in the private `kix-run/planning-private` repository (checked out beside this one).
 2. For loose/abstract technical topics, skim `v2_discussions/29_compiler-design.md` to know what Kix *is*.
 3. For technical opinions, read the relevant files in `kix/lib/` and `cli/README.md`. Opine on code, not on stale docs.
 
@@ -24,7 +24,7 @@ Answer to the user in one message:
 
 1. **Topic:** restate in one sentence.
 2. **Destination:**
-   - `business_discussions/`: market, GTM, pricing, positioning, fundraising.
+   - `business_discussions/` in the private `kix-run/planning-private` repository: market, GTM, pricing, positioning, fundraising. Never write these into this repository, which is public.
    - `v2_discussions/`: technical, near-term, would be opened in the next 1–2 milestones.
    - `v2_discussions/interesting_thoughts/`: technical, future/curious, no near-term driver. Signals: "at some point", "cool idea, not blocking", requires scale/hardware/customers we don't have. **Default here when in doubt.**
 3. **Existing docs on the topic:** list the leading active doc, relevant archived docs, related `interesting_thoughts/` entries.

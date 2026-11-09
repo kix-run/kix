@@ -59,7 +59,7 @@ did the work.
 
 ## Structured thinking
 
-Use the `structured-thinking` skill (instead of plan mode) when the user wants to think through, brainstorm, design, or analyze something. It routes to `business_discussions/`, `v2_discussions/`, or `v2_discussions/interesting_thoughts/` and produces a durable doc.
+Use the `structured-thinking` skill (instead of plan mode) when the user wants to think through, brainstorm, design, or analyze something. It routes to `v2_discussions/` or `v2_discussions/interesting_thoughts/`, or for business topics to the private `kix-run/planning-private` repository, and produces a durable doc.
 
 Two rules the skill enforces and you should honor outside it too:
 

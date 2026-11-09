@@ -4,7 +4,7 @@
 **Related:** `29_compiler-design.md` §4.6 and §7.4, `archive/38_resource_type_tags.md` §8, `119_core_surface_audit.md`, `126_compiler_core_rewrite_plan.md`, `131_fact_kinds_and_operand_attribution.md`
 **Trigger:** kixpkgs#69 added six VictoriaMetrics kinds to the `operatorManagedKinds` allowlist in `kix/checks.nix`. Adam asked whether that list should exist at all, and what the history of this code is.
 
-Method: one read of all 13 checks against the constructors and the scorecard rules, one git history pass, and a break-it session on ludo-kind and the `cluster-victoria-metrics` fixture (2026-09-07). Every claim below was verified on commit 7152f67.
+Method: one read of all 13 checks against the constructors and the scorecard rules, one git history pass, and a break-it session on ludo-kind and the `cluster-victoria-metrics` fixture (2026-09-07). Every claim below was verified on commit 51e77a0.
 
 ## 1. What exists
 
@@ -21,8 +21,8 @@ The three ask different questions. Constructors ask "is this one resource well f
 ## 2. History in five lines
 
 - 2026-03-08: seven checks born inside `flake.nix`, the day raw manifests became attrsets. 2026-03-24: rewritten, grown to 13, allowlist for Prometheus and Alertmanager added the same day. Three documented catches in total (external-dns selector, valkey targetPort, harbor headless Service), all on 2026-03-24, none since.
-- 2026-03-27: the kixpkgs CI workflow running `nix flake check` was deleted (301e888). In this repo the 13 checks have run since only when a person types `nix flake check`. No test exercises them. The lithus monorepo is different: `mise nix-deploy` and `mise nix-install` run `nix flake check` as an eval gate before every NixOS host deploy, so `validate-cluster-stage1` and `stage2` do run there, on the host-deploy path (not on `kix deploy`, and not in CI).
-- 2026-04-02: the scorecard framework arrived (705f6de). New validation work moved there for good. `checks.nix` was never touched again on main.
+- 2026-03-27: the kixpkgs CI workflow running `nix flake check` was deleted (f3f7c01). In this repo the 13 checks have run since only when a person types `nix flake check`. No test exercises them. The lithus monorepo is different: `mise nix-deploy` and `mise nix-install` run `nix flake check` as an eval gate before every NixOS host deploy, so `validate-cluster-stage1` and `stage2` do run there, on the host-deploy path (not on `kix deploy`, and not in CI).
+- 2026-04-02: the scorecard framework arrived (b5f5735). New validation work moved there for good. `checks.nix` was never touched again on main.
 - 2026-08-31: the ServiceMonitor selector bugs (#48) were caught live on stage1, not by any check. The rule written afterwards (#50) is a scorecard rule and caught a shipped bug on day one.
 - 2026-09-07: #69 grew the allowlist for the first time in five months, because the monorepo's eval gate ran `validate-cluster-stage2` and kixpkgs has no equivalent gate.
 
