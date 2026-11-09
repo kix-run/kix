@@ -427,7 +427,10 @@ mod tests {
             json!("vm-agent")
         );
         assert_eq!(m["metadata"]["annotations"]["helm.sh/hook"], json!("x"));
-        assert_eq!(m["metadata"]["labels"][keys::CLUSTER_LABEL], json!("stage2"));
+        assert_eq!(
+            m["metadata"]["labels"][keys::CLUSTER_LABEL],
+            json!("stage2")
+        );
         assert!(
             m["metadata"]["annotations"]
                 .get("old.example/package")
