@@ -108,6 +108,22 @@ pub(super) enum FailedRule {
     },
 }
 
+/// The `kix.run/readiness` annotation on `obj`, as written, if Kix wrote
+/// `obj`.
+///
+/// Operators copy a custom resource's annotations onto the objects they make
+/// from it, such as a StatefulSet and its Pods. The rule names a status that
+/// only the custom resource has, so it never holds on a copy. An object that
+/// no `managedFields` entry says Kix wrote is a copy: it has no declared rule,
+/// and the rule for its kind judges it.
+pub fn declared_rule(obj: &DynamicObject) -> Option<&str> {
+    let entries = obj.metadata.managed_fields.as_deref().unwrap_or_default();
+    if !crate::cluster::fieldsv1::written_by_kix(entries) {
+        return None;
+    }
+    keys::get_meta(obj.metadata.annotations.as_ref()?, keys::READINESS)
+}
+
 /// Parse a well-formed `kix.run/readiness` annotation.
 ///
 /// Ignore malformed annotations and fall back to kind-based readiness so
@@ -117,7 +133,7 @@ pub(super) enum FailedRule {
 /// dropped on its own, so a shape this CLI does not know can only make the
 /// deploy wait longer, never fail it.
 pub(super) fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
-    let raw = keys::get_meta(obj.metadata.annotations.as_ref()?, keys::READINESS)?;
+    let raw = declared_rule(obj)?;
     let v: Value = serde_json::from_str(raw).ok()?;
     let ready = parse_ready_rule(&v)?;
     let failed = v

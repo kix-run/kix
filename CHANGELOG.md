@@ -19,6 +19,7 @@ Each release groups changes under these headings:
 
 ### Fixed
 
+- A StatefulSet or Pod that an operator made from a custom resource no longer reads as not ready because it carries the custom resource's `kix.run/readiness` annotation. Operators copy a custom resource's annotations onto the objects they make, and the rule names a status only the custom resource has. Kix now uses the declared rule only on objects it wrote, and judges the copies by their kind's rule.
 - The `kix-lib` Rust crate now builds when a tool copies it out of the repository on its own, such as `cargo vendor`, `cargo package`, or crane's `vendorCargoDeps` in Nix. It used to read its release keys and its list of programs in the Kix runtime from outside its own folder, so those builds failed with "couldn't read".
 
 ## 0.8.0 - 2026-11-09
