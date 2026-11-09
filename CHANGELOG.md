@@ -17,6 +17,10 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+### Fixed
+
+- The `kix-lib` Rust crate now builds when a tool copies it out of the repository on its own, such as `cargo vendor`, `cargo package`, or crane's `vendorCargoDeps` in Nix. It used to read its release keys and its list of programs in the Kix runtime from outside its own folder, so those builds failed with "couldn't read".
+
 ## 0.8.0 - 2026-11-09
 
 **Before you upgrade**, check these items in your projects and scripts. The sections below explain each change.

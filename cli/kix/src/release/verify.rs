@@ -25,12 +25,9 @@ use super::Source;
 pub const TEST_KEY_VAR: &str = "KIX_RELEASE_TEST_KEY";
 
 /// The release keys built into Kix, as `(keyid, hex of the raw public key)`.
-/// Add one line per key in `cli/release-keys/`:
-/// `("<keyid>", include_str!("../../../release-keys/<keyid>.pub"))`.
-const KEYS: &[(&str, &str)] = &[(
-    "07c2b3e1",
-    include_str!("../../../release-keys/07c2b3e1.pub"),
-)];
+/// Add one line per key in `cli/kix/release-keys/`:
+/// `("<keyid>", include_str!("../../release-keys/<keyid>.pub"))`.
+const KEYS: &[(&str, &str)] = &[("07c2b3e1", include_str!("../../release-keys/07c2b3e1.pub"))];
 
 /// The first line of a signature file.
 const HEADER: &str = "kix-release-signature v1";

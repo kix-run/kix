@@ -10,7 +10,7 @@ kix-container/   library: the seekable zstd container bundles and plan files sha
 kix-bundle/      library: bundles, a build as one file, read without Nix
 kix-cli/         binary: clap CLI, command dispatch, plan display
 kix-operator/    binary: kube-rs controller watching Activation CRs
-runtime/         Kix runtime assembly (programs.json, runtime.nix, assemble.py, legal.py, without-nix.sh, nix-builder.sh)
+runtime/         Kix runtime assembly (runtime.nix, assemble.py, legal.py, without-nix.sh, nix-builder.sh)
 fuzz/            cargo-fuzz targets for the bundle and plan file readers (own workspace)
 ```
 
@@ -100,7 +100,7 @@ tests run. Then:
 6. Once `without-nix` and `nix-builder` pass, `publish` signs `SHA256SUMS`
    with the release key in the secret `KIX_RELEASE_SIGNING_KEY` (the "Sign
    checksums" step, which also checks the public key against
-   `cli/release-keys/`), writing `SHA256SUMS.sig`. While `cli/release-keys/`
+   `cli/kix/release-keys/`), writing `SHA256SUMS.sig`. While `cli/kix/release-keys/`
    holds no `*.pub` key, the step warns and the release goes out unsigned,
    which kix.run does not list, so Kix cannot install it automatically. Once
    a key is committed, an empty secret fails the step. It uploads the three
@@ -202,7 +202,7 @@ readers skip fields they do not know:
 `latest` is never a prerelease, so it is also `null` while only prereleases
 are signed.
 `node --test 'web/scripts/*.test.mjs'` tests the generator, the Worker, and
-that `RELEASE_KEYS` in the install script matches `cli/release-keys/`.
+that `RELEASE_KEYS` in the install script matches `cli/kix/release-keys/`.
 `sh web/scripts/test-install.sh` runs the install script against signed fake
 releases on disk. `pages.yml` runs both, and shellcheck, before it deploys.
 
@@ -282,7 +282,7 @@ or installs it. `FIRST_SELECTING` (0.8) is the first minor that reads
   a directory laid out the same way in tests. `index` reads
   `releases/index.json`. `verify` parses `SHA256SUMS.sig` and checks it with
   `ring`'s Ed25519 against the keys compiled into Kix (`KEYS`, from
-  `cli/release-keys/`). `install` picks the newest release that satisfies the
+  `cli/kix/release-keys/`). `install` picks the newest release that satisfies the
   requirement for this system, says
   `Installing Kix {version} (this project needs {req})`, verifies the
   signature, downloads the archive through `kix.run/download/`, checks its
@@ -926,7 +926,7 @@ a record line need regenerating.
 
 #### runtime (`kix/src/runtime.rs`, `cli/runtime/`)
 
-- `runtime.rs`: locates and verifies the external tools in the Kix runtime (`Tool`: `Nix`, `NixStore`, `Helm`, `Kubectl`, `Sops`, requested with `Want::Shipped` or `Want::Exact(version)`). Looks up the runtime directory in order: `KIX_RUNTIME_DIR` (when set to a non-empty value; empty `KIX_RUNTIME_DIR=""` is ignored), `../libexec/kix` beside `current_exe()` (after resolving symlinks on the `kix` binary) when it contains `manifest.json`, or `KIX_BUILTIN_RUNTIME_DIR` when it contains `manifest.json`. Normal commands verify `<runtime>/manifest.json` (when present) against `cli/runtime/programs.json` (embedded via `include_str!`) once per process; `runtime::doctor()` also verifies the SHA-256 of every file and symlink target listed in `manifest.json`. `runtime::tool()` prepares a `std::process::Command`. Helm, kubectl, and sops always come from the runtime. For `Nix` and `NixStore` it follows the `NixRunner` this run uses: `Bundled { root }` (the `kix` and `remote` builders) takes the runtime's Nix, and `use_store()` writes `<root>/etc/nix/nix.conf` (`store = <root>`) and sets `NIX_CONF_DIR`, `NIX_STATE_DIR`, `NIX_USER_CONF_FILES=""`, and `NIX_SSL_CERT_FILE` (resolved from the host's system CA bundle locations), with `init_store()` creating the store database once under a lock; `System` (the `nix` builder) runs `nix`/`nix-store` from `PATH` with no Kix settings. `runtime::select_builder(builder, source)` sets the runner and records where the builder came from (`runtime::builder_source()`) once per process (a `OnceLock` beside `runtime()`), and `kix-cli`'s `commands::select_builder` calls it from `main` before any Nix runs. Under `System`, the first Nix command of a run checks the machine's Nix (`system_nix::check_once`: Nix 2.24 or later, not Lix, `nix` on `PATH`) and fails with `RuntimeError::SystemNix`. Kix writes no `nix.conf` then, so every `nix` call passes `--extra-experimental-features` itself. Without a call (unit tests, commands that read no project), `nix_runner()` returns `Bundled`. `KIX_STORE_ROOT` under the `nix` builder is an error (`RuntimeError::StoreRootWithSystemNix`).
+- `runtime.rs`: locates and verifies the external tools in the Kix runtime (`Tool`: `Nix`, `NixStore`, `Helm`, `Kubectl`, `Sops`, requested with `Want::Shipped` or `Want::Exact(version)`). Looks up the runtime directory in order: `KIX_RUNTIME_DIR` (when set to a non-empty value; empty `KIX_RUNTIME_DIR=""` is ignored), `../libexec/kix` beside `current_exe()` (after resolving symlinks on the `kix` binary) when it contains `manifest.json`, or `KIX_BUILTIN_RUNTIME_DIR` when it contains `manifest.json`. Normal commands verify `<runtime>/manifest.json` (when present) against `cli/kix/runtime/programs.json` (embedded via `include_str!`) once per process; `runtime::doctor()` also verifies the SHA-256 of every file and symlink target listed in `manifest.json`. `runtime::tool()` prepares a `std::process::Command`. Helm, kubectl, and sops always come from the runtime. For `Nix` and `NixStore` it follows the `NixRunner` this run uses: `Bundled { root }` (the `kix` and `remote` builders) takes the runtime's Nix, and `use_store()` writes `<root>/etc/nix/nix.conf` (`store = <root>`) and sets `NIX_CONF_DIR`, `NIX_STATE_DIR`, `NIX_USER_CONF_FILES=""`, and `NIX_SSL_CERT_FILE` (resolved from the host's system CA bundle locations), with `init_store()` creating the store database once under a lock; `System` (the `nix` builder) runs `nix`/`nix-store` from `PATH` with no Kix settings. `runtime::select_builder(builder, source)` sets the runner and records where the builder came from (`runtime::builder_source()`) once per process (a `OnceLock` beside `runtime()`), and `kix-cli`'s `commands::select_builder` calls it from `main` before any Nix runs. Under `System`, the first Nix command of a run checks the machine's Nix (`system_nix::check_once`: Nix 2.24 or later, not Lix, `nix` on `PATH`) and fails with `RuntimeError::SystemNix`. Kix writes no `nix.conf` then, so every `nix` call passes `--extra-experimental-features` itself. Without a call (unit tests, commands that read no project), `nix_runner()` returns `Bundled`. `KIX_STORE_ROOT` under the `nix` builder is an error (`RuntimeError::StoreRootWithSystemNix`).
 - `cli/runtime/`: builds the self-contained runtime tree (`programs.json` pins `nix` `2.35.4`, `helm` `3.19.1` and `4.3.1`, `kubectl` `1.37.2`, and `sops` `3.12.1`; `flake.nix` exposes `.#kix-runtime-spec` from `cli/runtime/default.nix` and `.#kix-runtime` from `cli/runtime/in-store.nix`; `assemble.py` copies the binaries into `libexec/kix/<name>-<version>/`, relocates Mach-O `.dylib` load commands to `@loader_path` on macOS when not `--in-store` (Linux `nix` is a static `musl` binary), and writes `manifest.json`; `legal.py` writes `THIRD_PARTY_LICENSES` and the LGPL source archive; `without-nix.sh` tests the release archive with `/nix` unreachable; `nix-builder.sh` tests the release archive with the machine's Nix as an untrusted user).
 
 #### project (`kix/src/project.rs`)
