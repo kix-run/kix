@@ -17,6 +17,8 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-09
+
 **Before you upgrade**, check these items in your projects and scripts. The sections below explain each change.
 
 - Projects whose `flake.lock` pins a Kix library of another minor: run `kix lib update`, or set `kix` in `kix.toml` to the Kix library's minor.
