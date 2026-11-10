@@ -99,7 +99,7 @@ in
         logLevel = failedMessages { logLevel = "debug"; };
         none = failedMessages { };
       };
-      placement = "Set the operator pod's placement with the instance's partsOverlays.";
+      placement = option: "Set extraSpec.template.spec.${option} instead.";
       deployment = byName "vm-operator" (
         ofKind "Deployment" (
           manifests (withConfig {
@@ -111,9 +111,9 @@ in
     in
     (
       got == {
-        nodeSelector = [ "nodeSelector was removed. ${placement}" ];
-        tolerations = [ "tolerations was removed. ${placement}" ];
-        affinity = [ "affinity was removed. ${placement}" ];
+        nodeSelector = [ "nodeSelector was removed. ${placement "nodeSelector"}" ];
+        tolerations = [ "tolerations was removed. ${placement "tolerations"}" ];
+        affinity = [ "affinity was removed. ${placement "affinity"}" ];
         logLevel = [ "logLevel was removed. Pass --zap-log-level=<level> in extraArgs." ];
         none = [ ];
       }

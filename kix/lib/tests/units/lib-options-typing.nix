@@ -1133,7 +1133,11 @@ in
         (lib.findFirst (c: c.name == "operator") null deployment.spec.template.spec.containers).args;
     in
     (
-      builtins.elem "--zap-log-level=info" (operatorArgs (operator [ ]))
+      lib.take 3 (operatorArgs (operator [ ])) == [
+        "--zap-log-level=info"
+        "--leader-elect"
+        "--health-probe-bind-address=:8081"
+      ]
       && builtins.elem "--metrics-bind-address=:8080" (
         operatorArgs (operator [ "--metrics-bind-address=:8080" ])
       )
