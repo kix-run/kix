@@ -138,6 +138,7 @@ export default defineConfig({
                 {
                   label: 'Policy and runtime contracts',
                   items: [
+                    'reference/dependency-contracts',
                     'reference/scorecard-and-rules',
                     'reference/validation-checks',
                     'reference/annotations-crds-and-receipts',

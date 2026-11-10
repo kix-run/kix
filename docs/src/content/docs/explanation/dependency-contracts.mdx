@@ -1,0 +1,91 @@
+---
+title: "Dependency contracts"
+description: "Why Kix validates shared service interfaces like databases, Redis caches, mail servers, and single sign-on providers through compile-time contracts."
+---
+
+import Snippet from '/src/components/Snippet.astro';
+import postgresSwapConsumer from '/src/snippets/clusters/test-postgres-swap/consumer/postgresSwapConsumer.json';
+import postgresSwapStackgres from '/src/snippets/clusters/test-postgres-swap/stackgres/postgresSwapStackgres.json';
+import postgresSwapCnpg from '/src/snippets/clusters/test-postgres-swap/cnpg/postgresSwapCnpg.json';
+import importedPostgresDatabase from '/src/snippets/clusters/test-doc-how-tos/importedPostgresDatabase.json';
+import keycloakOidcClient from '/src/snippets/clusters/test-doc-how-tos/keycloakOidcClient.json';
+
+When you deploy an application in Kubernetes, connecting it to backing services like PostgreSQL, Redis, SMTP mail, or OpenID Connect (OIDC) usually requires configuring each application's specific environment variables, Secret keys, and ConfigMap files by hand. If you run an operator in local development and a cloud-managed service in production, you end up maintaining two different sets of application configuration. Kix avoids this by defining shared **dependency contracts** (`kix.contracts.*`) between service providers and consuming applications.
+
+:::note[Helpful background]
+- [Packages and clusters](/docs/explanation/packages-and-clusters/): see why Kix separates reusable application packages from cluster-level wiring.
+- [The dependency graph](/docs/explanation/the-dependency-graph/): learn how `.out` references track deployment order and generate network policy rules.
+- [11. Flavors, roles, and imports](/docs/tutorials/11-flavors-roles-and-imports/): see how `kix.mkImport` represents external services in the dependency graph.
+- [Dependency contracts reference](/docs/reference/dependency-contracts/): look up the exact fields, secret keys, and helper functions for every contract in `kix.contracts.*`.
+:::
+
+## Decoupling what an application needs from who provides it
+
+In Kix, an application package declares *what* backing service it needs by naming a dependency argument on its `build` function (`database`, `valkey`, `smtp`, `oidc`, `gateway`, or `otlp`). The package never inspects which operator or cloud service satisfies that argument. Instead, both sides agree on a contract in `kix.contracts.*`:
+
+- **Providers** (`cnpg-database`, `stackgres-database`, `valkey`, `oidc-client`, `envoy-gateway`, `traefik`, `tempo`, `otel-collector`) validate their `root.out` attribute set with `kix.contracts.<name>.check` before exposing it to the cluster.
+- **Consumers** (`grafana`, `harbor`, `immich`, `keycloak`, `metabase`, `n8n`, `plausible`, `vaultwarden`) validate the bound dependency with `kix.contracts.<name>.assertions` (or a contract helper such as `kix.contracts.smtp.settings` or `kix.contracts.oidc.client`) and read its fields to render their own environment variables, ConfigMaps, and network policies.
+
+Because the contract sits between the two packages, changing how a backing service is provisioned requires zero changes to the application's configuration.
+
+For example, consider a `metabase` instance that requires a PostgreSQL `database` dependency:
+
+<Snippet {...postgresSwapConsumer} />
+
+On a cluster running the StackGres operator, a `stackgres-database` instance in the `app` namespace satisfies `database`:
+
+<Snippet {...postgresSwapStackgres} />
+
+On another cluster running CloudNativePG, a `cnpg-database` instance satisfies the exact same `database` dependency:
+
+<Snippet {...postgresSwapCnpg} />
+
+And on a cloud cluster where PostgreSQL runs on Amazon RDS or Google Cloud SQL, a `kix.mkImport` instance in the same namespace satisfies `database` by publishing the required contract fields (`host`, `port`, `database`, and `credentials`):
+
+<Snippet {...importedPostgresDatabase} />
+
+In all three environments, the `metabase` instance definition is identical. Furthermore, when `metabase` requests the `citext` PostgreSQL extension through `deps.database.config.extensions = [ "citext" ]`, a managed database package provisions the extension automatically, while an imported cluster can declare `out.extensions` so Kix verifies that the external database supports it.
+
+## Why credentials travel on the contract (`out.credentials`)
+
+In raw Kubernetes manifests or Helm values, connecting an application to an authenticated database, cache, mail server, or OIDC provider usually means wiring two separate things: the connection address (in values or a ConfigMap) and the login Secret (in `secretKeyRef` or volume mounts). Those two settings can easily drift out of sync, or point an application at one server with another server's credentials.
+
+In Kix, every contract that carries a login bundles the login directly on the dependency at `out.credentials`:
+
+- For `kix.contracts.postgresDatabase` and `kix.contracts.smtp`, `out.credentials` is a secret with keys `username` and `password`.
+- For `kix.contracts.redis`, `out.credentials` is a secret with key `password`.
+- For `kix.contracts.oidc`, `out.credentials` is a secret with keys `clientId` and `clientSecret`.
+
+When Kix runs the provider in the cluster (such as `cnpg-database`, `stackgres-database`, or `valkey`), the provider creates the Kubernetes `Secret` and publishes it at `out.credentials`. When the service lives outside Kix, a `kix.mkImport` sets `credentials = ref.<namespace>.<secret>`, pointing at a `secret` or `secret-ref` instance.
+
+The consumer package always reads `dep.out.credentials.out.keyRef "<key>"`. Kix verifies at build time that the secret declares every key required by the contract, and orders the deployment so the Secret exists before the import marker and the consuming workload roll out.
+
+### Why authenticated imports are namespace-scoped
+
+Kubernetes pods can only mount or read `Secret` objects that live in their own namespace, and Kix's workload validators reject cross-namespace Secret references at evaluation time. That Kubernetes boundary shapes how contracts handle scope:
+
+- **Unauthenticated imports can be cluster-wide (`scope = "cluster"`):** An internal SMTP relay that requires no login has no `out.credentials` Secret. A single `kix.mkImport` in a `mail` namespace can keep the default `scope = "cluster"` and satisfy `smtp` for applications across every namespace.
+- **Authenticated imports live in the consumer's namespace (`scope = "namespace"`):** Because an authenticated database, Redis server, SMTP server, or OIDC client carries `out.credentials`, the Secret must live in the consuming application's namespace. Placing the `kix.mkImport` beside that Secret with `scope = "namespace"` ensures that another namespace cannot accidentally bind to it and try to read a Secret across namespace boundaries.
+- **Multi-realm OIDC providers split the provider from the per-namespace client:** A single `keycloak` instance in an `auth` namespace can serve the whole cluster (`kix.contracts.oidcProvider`), while each consuming application needs its own realm and its own `clientId`/`clientSecret` Secret in its own namespace. The `oidc-client` package bridges that boundary: it sits in the application's namespace with `meta.scope = "namespace"`, pairs `deps.oidcProvider = ref.auth.keycloak` with `config.realm` and the local `oidcClient` secret, and publishes `kix.contracts.oidc` to the application:
+
+<Snippet {...keycloakOidcClient} />
+
+## Guarding against secret leaks, mailer pitfalls, and duplicate configuration
+
+Contracts also let packages enforce security and operational invariants that would otherwise be left to manual review:
+
+1. **Preventing duplicate or conflicting configuration:** Once a contract dependency such as `smtp` or `oidc` is bound, the consuming package owns the corresponding application settings. Packages such as `grafana`, `immich`, `plausible`, and `vaultwarden` refuse manual SMTP or OIDC environment variables and config keys when the dependency is wired, so settings cannot be defined in two places at once.
+2. **Keeping passwords out of ConfigMaps:** Some applications (such as Immich) accept an SMTP password inside their JSON configuration file. If a cluster author sets `notifications.smtp.transport.password` in `config.settings`, that password would be written into an unencrypted Kubernetes `ConfigMap`. The `immich` package refuses that setting and requires the `smtp` dependency instead, injecting the password from `out.credentials` at container startup so no `ConfigMap` ever holds the secret.
+3. **Enforcing TLS safety across mailers:** Different mail clients behave differently when negotiating TLS:
+   - Any external SMTP server (`external = true`, the default) with `tls = "none"` is rejected by `kix.contracts.smtp.settings` and `kix.contracts.smtp.server` so credentials and mail are never sent across the internet in clear text.
+   - The mailers in Plausible and Immich will send the login password over a plain connection if a server on a `starttls` port does not advertise `STARTTLS`. When `out.credentials` is set, those packages require `tls = "implicit"`.
+   - Grafana's mailer uses implicit TLS only on port 465, so the `grafana` package rejects `tls = "implicit"` on any other port and rejects `tls = "starttls"` on port 465.
+4. **Opening network policy egress automatically:** When a cluster enables generated network policies (`networkPolicy.enable = true`), in-cluster dependencies derive pod-to-pod firewall rules from `.out` string context. For an external SMTP server (`external = true`), `kix.contracts.smtp.egressPolicy` automatically generates a network policy rule allowing the application's pods to reach `"world"` on the server's TCP port.
+
+:::tip[Use it in a task]
+See [Connect external databases, caches, mail, and single sign-on](/docs/how-to/adopt-existing-resources/connect-external-databases-caches-mail-and-sso/) for step-by-step recipes using `kix.mkImport` and `oidc-client`.
+:::
+
+:::note[Reference]
+See [Dependency contracts](/docs/reference/dependency-contracts/) for the complete field tables and helper signatures for every contract in `kix.contracts.*`.
+:::

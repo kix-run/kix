@@ -367,6 +367,7 @@ in
       # (scope.forwardEdges).
       pg = scope.forwardEdges postgres [ self.database ];
 
+      # region:postgresDatabaseCheck
       root = {
         resource = credentials;
         # `postHooks` puts the Database, and the role and Secret it
@@ -385,5 +386,6 @@ in
           tls = postgres.out.tls or null;
         };
       };
+      # endregion:postgresDatabaseCheck
     };
 }

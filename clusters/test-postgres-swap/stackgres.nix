@@ -9,6 +9,7 @@ kix.buildCluster {
     (import ./consumer.nix { inherit packages; })
     (
       { ref, ... }:
+      # region:postgresSwapStackgres
       {
         instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
         instances.db.pg.package = packages.stackgres-cluster;
@@ -19,6 +20,7 @@ kix.buildCluster {
           config.password = "swap-fixture-password";
         };
       }
+      # endregion:postgresSwapStackgres
     )
   ];
 }

@@ -1,0 +1,93 @@
+---
+title: "Connect external databases, caches, mail, and single sign-on"
+description: "Wire catalog applications to external PostgreSQL databases, Redis caches, SMTP mail servers, and OpenID Connect providers using dependency contracts."
+---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import importedPostgresDatabase from '/src/snippets/clusters/test-doc-how-tos/importedPostgresDatabase.json';
+import importedRedisCache from '/src/snippets/clusters/test-doc-how-tos/importedRedisCache.json';
+import clusterWideSmtpRelay from '/src/snippets/clusters/test-doc-how-tos/clusterWideSmtpRelay.json';
+import authenticatedSmtpImport from '/src/snippets/clusters/test-doc-how-tos/authenticatedSmtpImport.json';
+import keycloakOidcClient from '/src/snippets/clusters/test-doc-how-tos/keycloakOidcClient.json';
+import externalOidcImport from '/src/snippets/clusters/test-doc-how-tos/externalOidcImport.json';
+
+Catalog applications such as `grafana`, `harbor`, `immich`, `keycloak`, `metabase`, `n8n`, `plausible`, and `vaultwarden` connect to databases, Redis caches, mail servers, and OpenID Connect (OIDC) providers through shared dependency contracts (`kix.contracts.*`). When one of those backing services runs outside Kix (such as Amazon RDS, ElastiCache, Mailgun, or an external OIDC provider), declare a `kix.mkImport` instance that publishes the contract's `out` fields.
+
+Because Kubernetes pods can only read `Secret` objects in their own namespace, place any import that carries a login (`out.credentials`) in the consuming application's namespace beside its secret and set `scope = "namespace"`. Include `{ ref, ... }:` in the cluster module header so `ref.<namespace>.<instance>` is in scope.
+
+## Connect an external PostgreSQL database (`database`)
+
+Applications that require PostgreSQL take a `database` dependency checked against [`kix.contracts.postgresDatabase`](/docs/reference/dependency-contracts/#postgresql-database-kixcontractspostgresdatabase). Declare a `secret` or `secret-ref` instance with keys `username` and `password`, and reference it from `out.credentials` on a namespaced `database` import:
+
+<Snippet {...importedPostgresDatabase} />
+
+`port` must be a string (such as `"5432"`). If the consuming package requires specific PostgreSQL extensions (for example, `immich`), list the extensions installed on the external server in `out.extensions`.
+
+## Connect an external Redis server (`valkey`)
+
+Applications that use Redis (`harbor`, `immich`, and `n8n`) take a `valkey` dependency checked against [`kix.contracts.redis`](/docs/reference/dependency-contracts/#redis-kixcontractsredis). Declare a secret with key `password` and reference it from `out.credentials` on a namespaced `valkey` import:
+
+<Snippet {...importedRedisCache} />
+
+Omit `credentials` and `scope = "namespace"` when the Redis server takes no password. Set `tls = true` when the server requires TLS (`n8n` connects over TLS when `tls = true`, while `harbor` and `immich` refuse a TLS-only Redis server).
+
+## Connect an SMTP mail server (`smtp`)
+
+Applications that send email (`grafana`, `immich`, `keycloak`, `plausible`, and `vaultwarden`) take an optional `smtp` dependency checked against [`kix.contracts.smtp`](/docs/reference/dependency-contracts/#mail-kixcontractssmtp-and-kixoptionsmail).
+
+### Unauthenticated cluster-wide relay
+
+When an SMTP relay requires no login, a single `kix.mkImport` with the default `scope = "cluster"` can serve every namespace in the cluster:
+
+<Snippet {...clusterWideSmtpRelay} />
+
+An external server (`external = true`, the default) must set `tls` to `"starttls"` or `"implicit"`. Set `external = false` only when the relay runs inside the cluster.
+
+### Authenticated SMTP server
+
+When the SMTP server requires a login, declare a secret with keys `username` and `password` in the application's namespace, and place the `smtp` import beside it with `scope = "namespace"`:
+
+<Snippet {...authenticatedSmtpImport} />
+
+Set `config.mail.from` on the application instance when you want to override the default `out.from` address declared on the `smtp` import. For `plausible` and `immich`, an authenticated `smtp` server must use `tls = "implicit"` (usually port `"465"`). For `grafana`, `tls = "implicit"` is only supported on port `"465"`.
+
+## Connect OpenID Connect single sign-on (`oidc`)
+
+Applications that support OpenID Connect (`grafana`, `harbor`, and `immich`) take an optional `oidc` dependency checked against [`kix.contracts.oidc`](/docs/reference/dependency-contracts/#single-sign-on-kixcontractsoidc-and-kixcontractsoidcprovider). Single sign-on is enabled automatically when `oidc` is bound.
+
+### Multi-realm provider (`keycloak` with `oidc-client`)
+
+When a multi-realm provider such as `keycloak` runs in the cluster (or is imported via `kix.contracts.oidcProvider`), add an `oidc-client` instance and an `oidcClient` secret (`keys = [ "clientId" "clientSecret" ]`) in the application's namespace:
+
+<Snippet {...keycloakOidcClient} />
+
+`packages.oidc-client` has `meta.scope = "namespace"` and `meta.defaultAliases = [ "oidc" ]`, so the application in that namespace binds to it automatically.
+
+### Single-issuer external provider
+
+When your external identity provider has a single issuer URL, declare a `kix.mkImport` directly in the application's namespace with `scope = "namespace"` and `credentials = ref.<namespace>.<secret>`:
+
+<Snippet {...externalOidcImport} />
+
+If the consuming application does not use OIDC discovery (such as `grafana`), also set `out.endpoints = { authorizationUrl = "..."; tokenUrl = "..."; userinfoUrl = "..."; };` on the `oidc` import.
+
+## Check the contract wiring
+
+Run `kix check` to verify that every imported `out` attribute set and referenced secret satisfies the consumer's contract:
+
+<Command
+  commands={[
+    "kix check doc-how-tos",
+  ]}
+/>
+
+If a required contract field or secret key is missing, or if a TLS or scope constraint is violated, evaluation stops and prints the instance name, the contract name, and the missing field or key.
+
+:::note[Reference]
+See [Dependency contracts](/docs/reference/dependency-contracts/) for the full list of required and optional fields on every contract in `kix.contracts.*`.
+:::
+
+:::note[Explanation]
+See [Dependency contracts](/docs/explanation/dependency-contracts/) for why credentials travel on `out.credentials` and why authenticated imports are scoped to a single namespace.
+:::

@@ -105,11 +105,13 @@ in
     owner = "app-team";
   };
 
+  # region:postgresDatabaseAssertions
   deps.database = {
     # Metabase's first migration runs CREATE EXTENSION citext.
     config.extensions = [ "citext" ];
     assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
   };
+  # endregion:postgresDatabaseAssertions
 
   options = {
     image = kix.options.image {

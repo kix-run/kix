@@ -4,6 +4,7 @@
 # cnpg.nix, which each add a PostgreSQL provider and a `database` instance
 # named metabase-db.
 { packages }:
+# region:postgresSwapConsumer
 {
   instances.app = {
     metabase.package = packages.metabase;
@@ -15,3 +16,4 @@
     };
   };
 }
+# endregion:postgresSwapConsumer

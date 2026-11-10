@@ -30,6 +30,19 @@
       "unverifiedNixBlocks": 2
     },
     {
+      "page": "adopt-existing-resources/connect-external-databases-caches-mail-and-sso",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "importedPostgresDatabase",
+        "importedRedisCache",
+        "clusterWideSmtpRelay",
+        "authenticatedSmtpImport",
+        "keycloakOidcClient",
+        "externalOidcImport"
+      ]
+    },
+    {
       "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely",
       "scenario": "adoption",
       "status": "implemented",

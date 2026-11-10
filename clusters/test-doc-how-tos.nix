@@ -212,6 +212,224 @@ kix.buildCluster {
           config.ingress.host = "web.example.com";
         };
         # endregion:tlsApplicationInstance
+
+        # region:importedPostgresDatabase
+        instances.contracts-rds = {
+          rds-login = {
+            package = packages.secret-ref;
+            config.keys = [
+              "username"
+              "password"
+            ];
+          };
+
+          database.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              host = "app.abc123.eu-west-1.rds.amazonaws.com";
+              port = "5432";
+              database = "metabase";
+              tls = true;
+              credentials = ref.contracts-rds.rds-login;
+            };
+          };
+
+          encryption-key = {
+            package = packages.secret-ref;
+            aliases = [ "encryptionKey" ];
+            config.keys = [ "key" ];
+          };
+
+          metabase.package = packages.metabase;
+        };
+        # endregion:importedPostgresDatabase
+
+        # region:importedRedisCache
+        instances.contracts-redis = {
+          redis-login = {
+            package = packages.secret-ref;
+            config.keys = [ "password" ];
+          };
+
+          valkey.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              host = "app-cache.abc123.euw1.cache.amazonaws.com";
+              port = "6379";
+              tls = true;
+              credentials = ref.contracts-redis.redis-login;
+            };
+          };
+          # endregion:importedRedisCache
+
+          n8n-db-login = {
+            package = packages.secret-ref;
+            config.keys = [
+              "username"
+              "password"
+            ];
+          };
+
+          database.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              host = "n8n.abc123.eu-west-1.rds.amazonaws.com";
+              port = "5432";
+              database = "n8n";
+              tls = true;
+              credentials = ref.contracts-redis.n8n-db-login;
+            };
+          };
+
+          encryption-key = {
+            package = packages.secret-ref;
+            aliases = [ "encryptionKey" ];
+            config.keys = [ "key" ];
+          };
+
+          n8n.package = packages.n8n;
+        };
+
+        # region:clusterWideSmtpRelay
+        instances.mail.smtp.package = kix.mkImport {
+          out = {
+            host = "relay.internal.example.org";
+            port = "587";
+            tls = "starttls";
+            from = "noreply@example.org";
+          };
+        };
+        # endregion:clusterWideSmtpRelay
+
+        instances.vault = {
+          storage = {
+            package = packages.persistent-volume-claim;
+            config.size = "2Gi";
+          };
+
+          vault-db-login = {
+            package = packages.secret-ref;
+            config.keys = [
+              "username"
+              "password"
+            ];
+          };
+
+          database.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              host = "vault.abc123.eu-west-1.rds.amazonaws.com";
+              port = "5432";
+              database = "vaultwarden";
+              tls = true;
+              credentials = ref.vault.vault-db-login;
+            };
+          };
+
+          # region:authenticatedSmtpImport
+          smtp-login = {
+            package = packages.secret-ref;
+            config.keys = [
+              "username"
+              "password"
+            ];
+          };
+
+          smtp.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              host = "smtp.mailgun.org";
+              port = "465";
+              tls = "implicit";
+              from = "alerts@example.org";
+              credentials = ref.vault.smtp-login;
+            };
+          };
+
+          vaultwarden = {
+            package = packages.vaultwarden;
+            config = {
+              domain = "https://vault.example.org";
+              mail.from = "vault@example.org";
+            };
+          };
+          # endregion:authenticatedSmtpImport
+        };
+
+        # region:keycloakOidcProvider
+        instances.auth.keycloak.package = kix.mkImport {
+          out = {
+            issuerUrl = realm: "https://sso.example.org/realms/${realm}";
+            endpoints = realm: {
+              authorizationUrl = "https://sso.example.org/realms/${realm}/protocol/openid-connect/auth";
+              tokenUrl = "https://sso.example.org/realms/${realm}/protocol/openid-connect/token";
+              userinfoUrl = "https://sso.example.org/realms/${realm}/protocol/openid-connect/userinfo";
+            };
+          };
+        };
+        # endregion:keycloakOidcProvider
+
+        instances.monitoring = {
+          grafana-storage = {
+            package = packages.persistent-volume-claim;
+            aliases = [ "storage" ];
+            config.size = "2Gi";
+          };
+
+          grafana-admin = {
+            package = packages.secret-ref;
+            aliases = [ "grafanaAdmin" ];
+            config.keys = [
+              "admin-user"
+              "admin-password"
+            ];
+          };
+
+          # region:keycloakOidcClient
+          grafana-oidc = {
+            package = packages.secret-ref;
+            aliases = [ "oidcClient" ];
+            config.keys = [
+              "clientId"
+              "clientSecret"
+            ];
+          };
+
+          oidc = {
+            package = packages.oidc-client;
+            deps.oidcProvider = ref.auth.keycloak;
+            config.realm = "main";
+          };
+
+          grafana = {
+            package = packages.grafana;
+            config = {
+              ingress.host = "grafana.example.org";
+              oidc.autoLogin = true;
+            };
+          };
+          # endregion:keycloakOidcClient
+        };
+
+        # region:externalOidcImport
+        instances.photos = {
+          immich-oidc = {
+            package = packages.secret-ref;
+            config.keys = [
+              "clientId"
+              "clientSecret"
+            ];
+          };
+
+          oidc.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              issuerUrl = "https://login.example.org";
+              credentials = ref.photos.immich-oidc;
+            };
+          };
+        };
+        # endregion:externalOidcImport
       }
     )
   ];

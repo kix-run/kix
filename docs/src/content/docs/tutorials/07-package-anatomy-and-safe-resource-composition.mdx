@@ -120,7 +120,7 @@ At the bottom of `build`, a single line chooses the package's root resource:
 
 Setting `root = self.service` does two things:
 
-1. When another package depends on `gateway`, `gateway.out` forwards the `.out` fields of `self.service` (`gateway.out.name`, `gateway.out.fqdn`, `gateway.out.port`, `gateway.out.ports`, `gateway.out.url`, and so on). If a package needs to expose additional custom `.out` fields beyond what the root resource provides, it can pass an attribute set instead: `root = { resource = self.service; out = { ... }; };`.
+1. When another package depends on `gateway`, `gateway.out` forwards the `.out` fields of `self.service` (`gateway.out.name`, `gateway.out.fqdn`, `gateway.out.port`, `gateway.out.ports`, `gateway.out.url`, and so on). If a package needs to expose additional custom `.out` fields beyond what the root resource provides, it can pass an attribute set instead: `root = { resource = self.service; out = { ... }; };`. Catalog packages that provide shared backing services (such as PostgreSQL databases, Redis caches, or OpenTelemetry receivers) validate `root.out` against built-in [dependency contracts](/docs/reference/dependency-contracts/) (`kix.contracts.*`), which you will meet in tutorial 11.
 2. During deployment, the instance's `PackageInstance` resource waits on `root`, and any resource in `build` that is reachable from `root` is included in the package's built resources.
 
 ## Verify The Rendered Resources
