@@ -108,15 +108,14 @@ in
 
   warnings =
     { config, deps, ... }:
-    lib.optional (
-      config.replicaCount != null
-    ) "replicaCount is deprecated and 0.10 removes it. Set config.replicas instead."
+    lib.optional (config.replicaCount != null)
+      "replicaCount is deprecated and 0.10 removes it; Kix uses it as config.replicas. Set config.replicas instead."
     ++
       lib.optional (config.configSecretName != null)
-        "configSecretName is deprecated and 0.10 removes it. Give the Caddyfile through a caddyfile dependency instead."
+        "configSecretName is deprecated and 0.10 removes it; Kix reads the Caddyfile from the Secret ${config.configSecretName}. Give the Caddyfile through a caddyfile dependency instead."
     ++
       lib.optional (!(deps ? caddyfile) && config.configSecretName == null)
-        "the Caddyfile comes from the Secret ${name}-config, a default that 0.10 removes. Give the Caddyfile through a caddyfile dependency instead.";
+        "no caddyfile dependency is set; the Caddyfile comes from the Secret ${name}-config, a default that 0.10 removes. Give the Caddyfile through a caddyfile dependency instead.";
 
   options = {
     image = kix.options.image {
