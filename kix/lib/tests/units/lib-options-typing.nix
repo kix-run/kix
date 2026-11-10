@@ -1137,7 +1137,7 @@ in
       && builtins.elem "--metrics-bind-address=:8080" (
         operatorArgs (operator [ "--metrics-bind-address=:8080" ])
       )
-      && evalFails' (operator [ "--zap-log-level=debug" ])
+      && builtins.elem "--zap-log-level=debug" (operatorArgs (operator [ "--zap-log-level=debug" ]))
       && evalFails' (operator [ "-leader-elect=false" ])
       && evalFails' (operator [ "--health-probe-bind-address=:9000" ])
     )

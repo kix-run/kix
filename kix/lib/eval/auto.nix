@@ -171,7 +171,7 @@ rec {
               inherit kixlib;
             };
             aliases = meta.effectiveAliases {
-              instanceAliases = instCfg.aliases or [ ];
+              instanceAliases = instCfg.aliases or null;
               inherit packageMeta;
             };
           in
@@ -192,7 +192,7 @@ rec {
               inherit kixlib;
             };
             aliases = meta.effectiveAliases {
-              instanceAliases = instCfg.aliases or [ ];
+              instanceAliases = instCfg.aliases or null;
               inherit packageMeta;
             };
             keys = lib.unique ([ instName ] ++ aliases);

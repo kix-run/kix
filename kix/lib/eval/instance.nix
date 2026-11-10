@@ -875,7 +875,7 @@ in
                   evaluatedConfig
                   ;
                 rootOut = (rootRes.out or { }) // packageOut;
-                aliases = instCfg.aliases or [ ];
+                aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
               };
             in
             view'

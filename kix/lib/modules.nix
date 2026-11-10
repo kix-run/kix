@@ -85,13 +85,14 @@ in
                 '';
               };
               aliases = lib.mkOption {
-                type = lib.types.listOf lib.types.str;
-                default = [ ];
+                type = lib.types.nullOr (lib.types.listOf lib.types.str);
+                default = null;
                 description = ''
                   DI resolution keys for this instance, in addition to the
-                  instance name itself.  When non-empty, *replaces* the
-                  package's `meta.defaultAliases`; when empty (the default),
-                  the package defaults apply.
+                  instance name itself. A list replaces the package's
+                  `meta.defaultAliases`, so `[ ]` gives the instance no
+                  aliases. When unset (null, the default), the package
+                  defaults apply.
 
                   For multi-instance disambiguation prefer `deps.<argName>
                   = ref.<ns>.<inst>` at the consumer site. Aliases are

@@ -36,13 +36,29 @@ in
     owner = "platform";
   };
 
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion = config.replicaCount == null;
+        message = "replicaCount was renamed to replicas. Set config.replicas instead.";
+      }
+    ];
+
   options = {
     image = kix.options.image {
       repository = "tykling/dns_exporter";
       tag = "v1.2.3";
     };
+    # Declared only so that setting the removed name fails with the new one.
     replicaCount = lib.mkOption {
-      type = lib.types.int;
+      type = lib.types.unspecified;
+      default = null;
+      visible = false;
+      description = "Removed. Use `replicas`.";
+    };
+    replicas = lib.mkOption {
+      type = lib.types.ints.positive;
       # Probe-style exporter behind a Service: each scrape lands on one
       # pod, so a second replica is redundancy and not duplicate series.
       default = kix.availability.pick availability {
@@ -77,7 +93,7 @@ in
         {
           name = name;
           spec = {
-            replicas = config.replicaCount;
+            replicas = config.replicas;
             selector.matchLabels = scope.selectorLabels;
             # Kubernetes default: a scrape in flight is the only work lost.
             template.spec.terminationGracePeriodSeconds = 30;

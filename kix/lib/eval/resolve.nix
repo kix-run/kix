@@ -42,17 +42,39 @@ rec {
         ) (builtins.attrNames staticMeta.${ns})
       ) nsNames;
 
-      byKey = lib.foldl' (
+      groupByKey = lib.foldl' (
         acc: entry:
         acc
         // {
           ${entry.key} = (acc.${entry.key} or [ ]) ++ [ entry ];
         }
-      ) { } entries;
+      ) { };
+
+      byKey = groupByKey entries;
+
+      # Index instances by their package's `meta.defaultAliases`, including
+      # the defaults the instance's own `aliases` replace. The
+      # `meta.conflictsWith` check reads it, so an instance cannot leave a
+      # singleton's conflict by renaming its aliases.
+      byDefaultAlias = groupByKey (
+        builtins.concatMap (
+          ns:
+          builtins.concatMap (
+            instName:
+            let
+              meta = staticMeta.${ns}.${instName}._meta;
+            in
+            map (key: {
+              inherit key instName meta;
+              namespace = ns;
+            }) (lib.unique (meta.defaultAliases or [ ]))
+          ) (builtins.attrNames staticMeta.${ns})
+        ) nsNames
+      );
 
     in
     {
-      inherit byKey;
+      inherit byKey byDefaultAlias;
     };
 
   # Format an instance identifier for resolution error messages, noting

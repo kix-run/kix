@@ -573,7 +573,7 @@ rec {
       _meta = {
         inherit instanceName namespaceName;
         namespace = namespaceName;
-        aliases = instCfg.aliases or [ ];
+        aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
       };
     };
 }

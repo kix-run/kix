@@ -1,3 +1,0 @@
-# 2026-10-01 · `kix/packages/{dns-exporter,echo-server}` · Both packages name their replica option `replicaCount`, where newer packages use `replicas`.
-
-Cluster authors have to remember which spelling each package uses: alertmanager, prometheus, grafana, and cloudflared say `replicas`. Both options take a plain `int`, so `0` and negative counts pass evaluation. The victoria-metrics-* packages also use `replicaCount`, but there the option feeds the VMAgent, VMAlert, and VMCluster CR field of the same name. Renaming touches `clusters/test-spread.nix`, `clusters/test-kind-v2.nix`, kix-examples' `how-to/composition/multi-env-cluster.nix`, and the mkEnv how-to page.

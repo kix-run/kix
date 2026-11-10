@@ -136,9 +136,9 @@ kix.buildCluster {
         # region:stagingClusterIssuer
         instances.cert-manager.letsencrypt-staging = {
           package = packages.cluster-issuer;
-          # A non-empty alias replaces the default `clusterIssuer`, so only
-          # the production issuer answers it.
-          aliases = [ "stagingClusterIssuer" ];
+          # An empty list replaces the default alias `clusterIssuer`, so
+          # only the production issuer answers it.
+          aliases = [ ];
           deps.issuerCredentials = ref.cert-manager.cloudflare-api-token;
           config.spec.acme = {
             server = "https://acme-staging-v02.api.letsencrypt.org/directory";

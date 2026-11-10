@@ -11,8 +11,8 @@
 # The controller reads and writes Secrets and ConfigMaps in every namespace
 # and mints ServiceAccount tokens (for the Kubernetes auth method). Upstream
 # requires both. Every instance watches every namespace, so a cluster runs
-# one: `conflictsWith` refuses a second instance by alias, and
-# `annotationDomains` refuses it whatever its aliases.
+# one: `conflictsWith` and `annotationDomains` each refuse a second
+# instance whatever its aliases.
 #
 # Minimal instance:
 #

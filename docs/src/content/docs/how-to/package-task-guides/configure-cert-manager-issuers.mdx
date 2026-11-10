@@ -68,13 +68,13 @@ Give that Secret the same key, so one source feeds both.
 
 Every `cluster-issuer` instance answers the `clusterIssuer` dependency that
 TLS-capable packages read, so a second issuer in the same namespace makes that
-dependency ambiguous. Give the staging issuer a non-empty `aliases` list:
+dependency ambiguous. Give the staging issuer an empty `aliases` list:
 
 <Snippet {...stagingClusterIssuer} />
 
-Instance `aliases` replace the package's default alias. The list must not be
-empty, because an empty list falls back to the default, so it names an alias
-nothing reads. Kix has no way yet to say that an instance answers no alias.
+Instance `aliases` replace the package's default alias, so the staging issuer
+answers no alias. A package that needs it names it with
+`deps.clusterIssuer = ref.cert-manager.letsencrypt-staging`.
 
 ## Configure a self-signed issuer
 

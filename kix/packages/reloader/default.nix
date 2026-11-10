@@ -29,10 +29,9 @@
 # annotation written on a workload, for every Secret the workload reads, so
 # a change to a Kix-built Secret restarts that workload twice.
 #
-# One instance per cluster: the annotation-domain index refuses a second
-# instance whatever its aliases. `conflictsWith` also refuses one while
-# either instance has the alias `reloader`, but the index runs first, so its
-# message is the one shown.
+# One instance per cluster: the annotation-domain index and `conflictsWith`
+# each refuse a second instance whatever its aliases. The index runs first,
+# so its message is the one shown.
 #
 # Escape hatches: `extraArgs` and `env` (the flags and variables the package
 # sets are refused), and `partsOverlays` on `deployment` for placement.
