@@ -1,10 +1,55 @@
-# Caddy reverse proxy package.
+# caddy: the Caddy web server and reverse proxy, from the official image.
 #
-# Runs Caddy as a LoadBalancer-fronted deployment with HPA, PDB,
-# and ServiceAccount.  Config is mounted from an external Secret.
+# Installs a ServiceAccount, a Deployment, a Service on ports 80 and 443
+# (LoadBalancer by default), a HorizontalPodAutoscaler on CPU, and, when
+# `customDomainsService.enabled`, a second LoadBalancer Service named
+# `<instance>-custom-domains`.
 #
-# Resources: ServiceAccount, Deployment, Service, HPA, PDB,
-#            optional custom-domains Service.
+# Dependencies:
+#   caddyfile (optional)  a secret with the key `Caddyfile`. A
+#                         `packages.secret` instance or a `packages.secret-ref`
+#                         instance. Every key is a file in /etc/caddy, so
+#                         snippets the Caddyfile imports can sit beside it.
+#   storage (optional)    a claim for /data, where Caddy keeps certificates,
+#                         OCSP staples, and ACME account keys. Defaults to an
+#                         emptyDir.
+#
+# Minimal instance:
+#
+#   instances.edge = {
+#     caddy.package = packages.caddy;
+#     caddy-config = {
+#       package = packages.secret;
+#       aliases = [ "caddyfile" ];
+#       config.keys = [ "Caddyfile" ];
+#       config.source = ./secrets/caddyfile.sops.yaml;
+#     };
+#   };
+#
+# The Caddyfile must answer `/healthz` on port 8080, which both probes call.
+# Port 2019 serves metrics when the Caddyfile moves the admin endpoint off
+# localhost (`admin :2019`).
+#
+# Without a `caddyfile` dependency, the package reads the keys `Caddyfile`
+# and `crs-setup.conf` from the Secret `configSecretName`, or
+# `<instance>-config` when that is unset, and warns. 0.10 removes that route.
+#
+# A Kix-built `caddyfile` secret restarts the pods when it changes. A
+# `secret-ref` secret has no content hash, so Caddy reads a changed
+# Caddyfile on the next restart.
+#
+# Network: egress to anywhere, for the upstreams a Caddyfile can name and
+# for ACME.
+#
+# `out`: the main Service's `name`, `fqdn`, and `port`.
+#
+# Escape hatches: `image` for a build with plugins, and the instance's
+# `partsOverlays`.
+#
+# Limits: without `storage`, each pod keeps its own certificates on an
+# emptyDir, so a new pod requests them again and can reach the ACME
+# issuer's rate limits. With `storage` and more than one replica, the claim
+# must be ReadWriteMany, which Kix does not check.
 
 {
   scope,
@@ -15,11 +60,26 @@
 
 let
   name = scope.instanceName;
+  who = "caddy ${scope.namespaceName}/${name}";
+  release = "2.10.0";
+
+  # Stateless and serving user traffic: two replicas once a pod restart
+  # must not be downtime, spread so either survives a lost node or zone.
+  replicasForLevel = kix.availability.pick availability {
+    none = 1;
+    pod = 2;
+    node = 2;
+    zone = 2;
+  };
+
+  # The official image defines no user. uid 65532 is the conventional
+  # unprivileged `nonroot` id.
+  uid = 65532;
 in
 {
   meta = {
-    version = "2.10.0-cf";
-    description = "Caddy reverse proxy";
+    version = release;
+    description = "Caddy web server and reverse proxy";
     owner = "app-team";
     network = {
       # Entities for auto-derived external ingress (LoadBalancer Service).
@@ -37,25 +97,46 @@ in
     };
   };
 
+  assertions =
+    { config, deps, ... }:
+    [
+      {
+        assertion = !(deps ? caddyfile && config.configSecretName != null);
+        message = "configSecretName and the caddyfile dependency both name the Caddyfile. Remove configSecretName.";
+      }
+    ];
+
+  warnings =
+    { config, deps, ... }:
+    lib.optional (
+      config.replicaCount != null
+    ) "replicaCount is deprecated and 0.10 removes it. Set config.replicas instead."
+    ++
+      lib.optional (config.configSecretName != null)
+        "configSecretName is deprecated and 0.10 removes it. Give the Caddyfile through a caddyfile dependency instead."
+    ++
+      lib.optional (!(deps ? caddyfile) && config.configSecretName == null)
+        "the Caddyfile comes from the Secret ${name}-config, a default that 0.10 removes. Give the Caddyfile through a caddyfile dependency instead.";
+
   options = {
     image = kix.options.image {
-      repository = "ghcr.io/northwind/shopfront/caddy";
-      tag = "2.10.0-cf";
+      repository = "docker.io/library/caddy";
+      tag = release;
+      digest = "sha256:133b5eb7ef9d42e34756ba206b06d84f4e3eb308044e268e182c2747083f09de";
     };
-    replicaCount = lib.mkOption {
-      type = lib.types.int;
-      # Stateless and serving user traffic: two replicas once a pod restart
-      # must not be downtime, spread so either survives a lost node or zone.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 2;
-        node = 2;
-        zone = 2;
-      };
+    replicas = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = replicasForLevel;
       description = ''
         Number of Caddy `Deployment` replicas. Defaults from the cluster's
         availability level.
       '';
+    };
+    replicaCount = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      visible = false;
+      description = "Deprecated. Use `replicas`. 0.10 removes it.";
     };
     resources = kix.options.resources {
       requests = {
@@ -111,14 +192,9 @@ in
         options = {
           minReplicas = lib.mkOption {
             type = lib.types.int;
-            # The floor follows replicaCount's mapping of the availability
-            # level, so the autoscaler never undoes it.
-            default = kix.availability.pick availability {
-              none = 1;
-              pod = 2;
-              node = 2;
-              zone = 2;
-            };
+            # The floor follows the replicas default, so the autoscaler
+            # never undoes the availability level.
+            default = replicasForLevel;
             description = "HorizontalPodAutoscaler `spec.minReplicas`. Defaults from the cluster's availability level.";
           };
           maxReplicas = lib.mkOption {
@@ -138,8 +214,10 @@ in
     };
 
     configSecretName = lib.mkOption {
-      type = lib.types.str;
-      default = "${name}-config";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      visible = false;
+      description = "Deprecated. Give the Caddyfile through a `caddyfile` dependency. 0.10 removes it.";
     };
   };
 
@@ -148,7 +226,66 @@ in
       self,
       config,
       clusterConfig,
+      caddyfile ? null,
+      storage ? null,
     }:
+    let
+      caddyfileSecret =
+        if caddyfile != null then
+          kix.checkSecretKeys {
+            inherit who;
+            arg = "caddyfile";
+            dep = caddyfile;
+            keys = [ "Caddyfile" ];
+          }
+        else
+          null;
+
+      # A Kix-built Secret has an identity hash. A changed Caddyfile then
+      # rolls the pods, since Caddy reads it only at start.
+      configAnnotations =
+        lib.optionalAttrs (caddyfileSecret != null && caddyfileSecret.out ? identityHash)
+          {
+            "checksum/caddyfile" = caddyfileSecret.out.identityHash;
+          };
+
+      configMounts =
+        if caddyfileSecret != null then
+          [
+            {
+              name = "caddy-config";
+              mountPath = "/etc/caddy";
+              readOnly = true;
+            }
+          ]
+        else
+          [
+            {
+              name = "caddy-config";
+              mountPath = "/etc/caddy/Caddyfile";
+              readOnly = true;
+              subPath = "Caddyfile";
+            }
+            {
+              name = "caddy-config";
+              mountPath = "/etc/caddy/crs-setup.conf";
+              readOnly = true;
+              subPath = "crs-setup.conf";
+            }
+          ];
+
+      configSecretName =
+        if caddyfileSecret != null then caddyfileSecret.out.name else self.configSecret.out.name;
+
+      dataVolume =
+        if storage != null then
+          { name = "data"; } // (kix.mount.pvc storage { mountPath = "/data"; }).source
+        else
+          {
+            name = "data";
+            emptyDir = { };
+          };
+    in
     {
       serviceAccount = scope.mkResource {
         apiVersion = "v1";
@@ -156,22 +293,26 @@ in
         name = name;
       };
 
-      # User-provided external Secret, wrapped in a SecretRef so volume
-      # mounts carry DI context and the deploy engine gates on its existence.
-      configSecret = scope.mkSecretRef {
-        name = config.configSecretName;
-        # Both are mounted by subPath below.
-        keys = [
-          "Caddyfile"
-          "crs-setup.conf"
-        ];
-      };
+      # A Secret managed outside Kix, wrapped in a SecretRef so volume
+      # mounts carry DI context and the deploy engine waits for it to exist.
+      configSecret =
+        if caddyfileSecret == null then
+          scope.mkSecretRef {
+            name = if config.configSecretName != null then config.configSecretName else "${name}-config";
+            # Both are mounted by subPath below.
+            keys = [
+              "Caddyfile"
+              "crs-setup.conf"
+            ];
+          }
+        else
+          null;
 
       deployment =
         {
           inherit name;
           spec = {
-            replicas = config.replicaCount;
+            replicas = if config.replicaCount != null then config.replicaCount else config.replicas;
             revisionHistoryLimit = 10;
             selector.matchLabels = scope.selectorLabels;
             strategy = {
@@ -181,22 +322,29 @@ in
                 maxUnavailable = 0;
               };
             };
+            template.metadata.annotations = configAnnotations;
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
               # Caddy's `grace_period` is unbounded by default, so the
               # Kubernetes default of 30s is what ends a drain.
               terminationGracePeriodSeconds = 30;
-              # Caddy listens on 80 and 443 as a non-root user. A custom
-              # build such as the default image may lack the
-              # cap_net_bind_service file capability the official image sets
-              # on /usr/bin/caddy, so the pod lowers the privileged-port
-              # floor (a safe sysctl since Kubernetes 1.22).
-              securityContext.sysctls = [
-                {
-                  name = "net.ipv4.ip_unprivileged_port_start";
-                  value = "0";
-                }
-              ];
+              securityContext = {
+                # Caddy listens on 80 and 443 as a non-root user. The
+                # official image sets the cap_net_bind_service file
+                # capability on /usr/bin/caddy, but the kernel ignores file
+                # capabilities when allowPrivilegeEscalation is false. The
+                # pod lowers the privileged-port floor instead (a safe
+                # sysctl since Kubernetes 1.22).
+                sysctls = [
+                  {
+                    name = "net.ipv4.ip_unprivileged_port_start";
+                    value = "0";
+                  }
+                ];
+                # Makes a `storage` claim writable by the Caddy user.
+                fsGroup = uid;
+                fsGroupChangePolicy = "OnRootMismatch";
+              };
               containers = [
                 {
                   name = "caddy";
@@ -235,32 +383,18 @@ in
                     timeoutSeconds = 1;
                   };
                   resources = config.resources;
-                  # The official Caddy image defines no user; uid 65532 is
-                  # the conventional unprivileged `nonroot` id.
                   securityContext = {
                     runAsNonRoot = true;
-                    runAsUser = 65532;
-                    runAsGroup = 65532;
+                    runAsUser = uid;
+                    runAsGroup = uid;
                     allowPrivilegeEscalation = false;
                     privileged = false;
                     readOnlyRootFilesystem = true;
                   };
-                  volumeMounts = [
-                    {
-                      name = "caddy-config";
-                      mountPath = "/etc/caddy/Caddyfile";
-                      readOnly = true;
-                      subPath = "Caddyfile";
-                    }
-                    {
-                      name = "caddy-config";
-                      mountPath = "/etc/caddy/crs-setup.conf";
-                      readOnly = true;
-                      subPath = "crs-setup.conf";
-                    }
+                  volumeMounts = configMounts ++ [
                     # The official image sets XDG_DATA_HOME=/data (certificates,
                     # OCSP staples, locks) and XDG_CONFIG_HOME=/config (autosaved
-                    # config). Both last as long as the pod.
+                    # config).
                     {
                       name = "data";
                       mountPath = "/data";
@@ -269,8 +403,9 @@ in
                       name = "config";
                       mountPath = "/config";
                     }
-                    # The Coraza WAF configured by crs-setup.conf writes request
-                    # bodies over 128 KiB to os.TempDir(), which is /tmp.
+                    # The root filesystem is read-only. Caddy and its plugins
+                    # write temporary files, such as large request bodies, to
+                    # os.TempDir(), which is /tmp.
                     {
                       name = "tmp";
                       mountPath = "/tmp";
@@ -282,14 +417,11 @@ in
                 {
                   name = "caddy-config";
                   secret = {
-                    secretName = self.configSecret.out.name;
+                    secretName = configSecretName;
                     defaultMode = 420;
                   };
                 }
-                {
-                  name = "data";
-                  emptyDir = { };
-                }
+                dataVolume
                 {
                   name = "config";
                   emptyDir = { };

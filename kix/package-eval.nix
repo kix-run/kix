@@ -124,7 +124,14 @@ let
           provider = "test";
         };
       };
-      instances.metrics-server.package = packages.metrics-server;
+      instances = {
+        metrics-server.package = packages.metrics-server;
+        caddyfile = {
+          package = packages.secret;
+          aliases = [ "caddyfile" ];
+          config.stringData.Caddyfile = ":8080 {\n  respond /healthz 200\n}\n";
+        };
+      };
     };
     cilium.module = _: {
       cluster.roles.cni = {

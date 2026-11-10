@@ -17,6 +17,16 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+### Changed
+
+- `caddy` takes `replicas`, like other packages. `replicaCount` still works with a warning, and 0.10 removes it.
+- `caddy` takes the Caddyfile from a `caddyfile` dependency, a secret with the key `Caddyfile` whose keys all appear in /etc/caddy. `configSecretName` still works with a warning, and 0.10 removes it and the default Secret `<instance>-config`.
+- `caddy` takes an optional `storage` dependency, a claim for /data, so pods share certificates. Without it, /data stays an emptyDir.
+
+### Fixed
+
+- `caddy` defaults to the official Caddy image, `caddy:2.10.0`. Before, it pointed at a private registry nobody else could pull. A Caddyfile that uses plugins needs `image` set to a build that has them.
+
 ## 0.9.0 - 2026-11-10
 
 ### Breaking (shows an error)
