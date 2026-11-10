@@ -10,6 +10,7 @@ import listPackages from '/src/command-output/tutorials/02-hello-world/list-pack
 import clusterFrame from '/src/snippets/tutorials/02-hello-world/cluster/clusterFrame.json';
 import importExistingService from '/src/snippets/how-to/adoption/cluster/importExistingService.json';
 import consumeImportedService from '/src/snippets/how-to/adoption/client-package/consumeImportedService.json';
+import importedPostgresDatabase from '/src/snippets/clusters/test-doc-how-tos/importedPostgresDatabase.json';
 
 Back in tutorial 02, when you ran `kix list packages --cluster 02-hello-world`, the output included two rows you did not write in `cluster.nix`: `platform-dns` and `platform-storage`, both marked `import [kube-system]`.
 
@@ -90,8 +91,22 @@ Look at what `kix.mkImport` produces:
 
 Later, if you migrate `legacy-api` into a native Kix package, you only replace `package = kix.mkImport { ... }` in `cluster.nix` with the real package. The consumer package (`client-package.nix`) does not change at all.
 
+## Shared Dependency Contracts For Backing Services
+
+In the `legacy-api` example above, `client-package.nix` only read two fields (`fqdn` and `port`). Catalog applications such as `grafana`, `harbor`, `immich`, `metabase`, `n8n`, `plausible`, and `vaultwarden` go further: when they ask for a backing service (`database`, `valkey`, `smtp`, `oidc`, `gateway`, or `otlp`), they validate the provider's `out` attributes against a shared **dependency contract** in `kix.contracts.*`.
+
+Whether a `database` dependency is satisfied by an in-cluster operator (`cnpg-database` or `stackgres-database`) or by an external cloud database declared with `kix.mkImport`, Kix checks that `out` exposes `host`, `port`, `database`, and a `credentials` secret declaring the keys `username` and `password`:
+
+<Snippet {...importedPostgresDatabase} />
+
+Because a pod can only read `Secret` objects in its own namespace, an import that carries `out.credentials` (`credentials = ref.<namespace>.<secret>`) sits in the consuming application's namespace with `scope = "namespace"`. If a required contract field or secret key is missing on `out`, `kix check` catches it before deployment.
+
 :::note[Explanation]
-See [Helm integration and resource adoption](/docs/explanation/helm-integration/) for how `kix.mkImport`, `kix.importChart`, and `kix.helmChart` let you adopt existing cluster workloads incrementally.
+See [Dependency contracts](/docs/explanation/dependency-contracts/) and [Helm integration](/docs/explanation/helm-integration/) for how contracts and `kix.mkImport` let you swap between in-cluster operators and external cloud services without editing application configuration.
+:::
+
+:::tip[Use it in a task]
+See [Connect external databases, caches, mail, and single sign-on](/docs/how-to/adopt-existing-resources/connect-external-databases-caches-mail-and-sso/) for complete recipes covering PostgreSQL (`database`), Redis (`valkey`), mail (`smtp`), and OpenID Connect (`oidc`).
 :::
 
 ## What You Learned
@@ -101,8 +116,8 @@ You saw how Kix connects packages to the surrounding Kubernetes cluster:
 <Recap>
 - including `kix.flavors.kind` in `modules` declares the capabilities and pre-installed services of a kind cluster;
 - infrastructure roles (`dns` and `storageClasses`) connect workloads and PVCs to the cluster's DNS provider and storage classes;
-- `kix.mkImport` registers an existing Kubernetes resource in the dependency graph without managing its lifecycle;
-- packages consume imported services through `.out` (`.out.fqdn`, `.out.port`, `.out.name`) using the exact same syntax as Kix-managed instances.
+- `kix.mkImport` registers an existing Kubernetes resource or external service in the dependency graph without managing its lifecycle;
+- packages consume imported services through `.out` (`.out.fqdn`, `.out.port`, `.out.credentials`) using the exact same syntax and `kix.contracts.*` checks as Kix-managed instances.
 </Recap>
 
 In the final tutorial (`12. Scorecards and compile-time policy`), you will write custom scorecard rules that inspect package instances and enforce routing and configuration policies across the entire cluster at build time.

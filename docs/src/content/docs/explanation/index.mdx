@@ -16,6 +16,9 @@ Explanation pages cover the ideas and tradeoffs behind Kix. Read these when you 
   <Card title="Packages and clusters">
     [Packages and clusters](/docs/explanation/packages-and-clusters/): Why Kix separates reusable application packages from cluster configuration and environment flavors, and why Kix stays close to standard Kubernetes schemas.
   </Card>
+  <Card title="Dependency contracts">
+    [Dependency contracts](/docs/explanation/dependency-contracts/): How shared `kix.contracts.*` interfaces let applications swap between in-cluster operators and external cloud services without changing application config.
+  </Card>
   <Card title="Availability levels">
     [Availability levels](/docs/explanation/availability-levels/): Instead of tuning replica counts and pod anti-affinity on every Deployment by hand, you tell Kix what kind of failure a cluster should survive (`none`, `pod`, `node`, or `zone`).
   </Card>

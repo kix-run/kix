@@ -9,6 +9,7 @@ kix.buildCluster {
     (import ./consumer.nix { inherit packages; })
     (
       { ref, ... }:
+      # region:postgresSwapCnpg
       {
         instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
         instances.db.pg.package = packages.cnpg-cluster;
@@ -19,6 +20,7 @@ kix.buildCluster {
           config.password = "swap-fixture-password";
         };
       }
+      # endregion:postgresSwapCnpg
     )
   ];
 }
