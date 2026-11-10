@@ -25,7 +25,9 @@
 #                                `prometheusServer` is wired.
 #   prometheus (optional)        ServiceMonitor on `/metrics` when
 #                                `metrics.enabled`.
-#   oidcProvider, oidcClient     Single sign-on when `oidc.enabled` is true.
+#   oidc (optional)              Single sign-on, through an OpenID Connect
+#                                client honouring kix.contracts.oidc: an
+#                                oidc-client instance, or a kix.mkImport.
 #   smtp (optional)              Mail server for alert notifications,
 #                                invitations, and reports, honouring the SMTP
 #                                contract (kix.contracts.smtp), usually a
@@ -60,10 +62,10 @@
 # `settings.metrics.enabled = false` and `metrics.enabled = false` to disable
 # it on a routed instance.
 #
-# Single sign-on: with `oidc.enabled`, Grafana authenticates users via
-# `auth.generic_oauth` against `oidcProvider` (`kix.contracts.oidcProvider`) in
-# `oidc.realm`, reading `clientId` and `clientSecret` from `oidcClient`.
-# Register a confidential client with redirect URI
+# Single sign-on: with `oidc` wired, Grafana authenticates users via
+# `auth.generic_oauth` against that client's issuer and endpoints, reading
+# `clientId` and `clientSecret` from its `out.credentials`, with
+# `oidc.scopes` and `oidc.autoLogin`. Register a confidential client with redirect URI
 # `<root_url>/login/generic_oauth` (requires `root_url`). Role mapping can be
 # configured via `settings."auth.generic_oauth".role_attribute_path`.
 #
@@ -127,8 +129,6 @@ in
     inherit lib kix release;
   };
 
-  deps.oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
-
   build = [
     (
       {
@@ -140,8 +140,7 @@ in
         alertmanager ? null,
         loki ? null,
         tempo ? null,
-        oidcProvider ? null,
-        oidcClient ? null,
+        oidc ? null,
         smtp ? null,
         ...
       }:
@@ -162,21 +161,12 @@ in
           else
             r;
 
-        oidcOn = config.oidc.enabled;
-        oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
-          inherit who;
-          inherit (config) oidc;
-          provider = oidcProvider;
-          client = oidcClient;
+        oidcProviderInfo = kix.contracts.oidc.client {
+          inherit who oidc;
+          options = config.oidc;
         };
-        oidcCredentials = builtins.seq oidcProviderInfo (
-          kix.checkSecretKeys {
-            inherit who;
-            arg = "oidcClient";
-            dep = oidcClient;
-            keys = kix.contracts.oidcProvider.clientKeys;
-          }
-        );
+        oidcOn = oidcProviderInfo != null;
+        oidcCredentials = oidcProviderInfo.credentials;
 
         admin = kix.checkSecretKeys {
           inherit who;

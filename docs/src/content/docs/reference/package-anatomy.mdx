@@ -355,8 +355,8 @@ Every package in a flake checked by `kix.mkFlake` or `kix.checkPackageOptions` m
 | `kix.options.monitor` | option attrset (not a function) | Attribute set of options `{ enabled; interval; }` where `enabled` is `bool` (default `true`) and `interval` is `nullOr str` (default `null`). Assign as `options.metrics = kix.options.monitor;`; read by `kix.monitor` from `config.metrics`. |
 | `kix.options.alerts` | option attrset (not a function) | Attribute set `{ enabled; }` where `enabled` is `bool` (default `true`), for packages that render alert rules without a `kix.monitor` scrape. Assign as `options.metrics = kix.options.alerts;`; read by `kix.alerts` from `config.metrics.enabled`. |
 | `kix.options.healthCheck` | option attrset (not a function) | Attribute set `{ enabled; retryFor; }` where `enabled` is `bool` (default `false`) and `retryFor` is `int` (default `90`). Assign as `options.healthCheck = kix.options.healthCheck;`; read by `kix.healthCheck` from `config.healthCheck`. |
-| `kix.options.oidc` | `{ scopes, autoLogin ? null }` | Attribute set of options `{ enabled; realm; scopes; autoLogin?; }` where `enabled` is `bool` (default `false`), `realm` is `nullOr str` (default `null`), `scopes` is `listOf str` that must include `"openid"` (default `scopes`), and `autoLogin` is `bool` (default `false`, included only when `autoLogin != null`). |
-| `kix.options.mail` | option attrset (not a function) | Attribute set `{ from; }` where `from` is `nullOr str` holding one `@` (default `null`): the sender address that replaces the `smtp` relay's `out.from`. Assign as `options.mail = kix.options.mail;` and pass `config.mail.from` to `kix.contracts.smtpRelay.requireRelay`. |
+| `kix.options.oidc` | `{ scopes, autoLogin ? null }` | Attribute set of options `{ scopes; autoLogin?; }` where `scopes` is `listOf str` that must include `"openid"` (default `scopes`), and `autoLogin` is `bool` (default `false`, included only when `autoLogin != null`). Setting the removed `enabled` or `realm` options fails evaluation in `kix.contracts.oidc.client` with migration steps. |
+| `kix.options.mail` | option attrset (not a function) | Attribute set `{ from; }` where `from` is `nullOr str` holding one `@` (default `null`): the sender address that replaces the `smtp` server's `out.from`. Assign as `options.mail = kix.options.mail;` and pass `config.mail.from` to `kix.contracts.smtp.settings`. |
 
 ### Resource quantities (`kix.types.quantity` and `kix.parseQuantity`)
 
@@ -478,69 +478,145 @@ deps.postgres = {
 `kix.contracts.*` provides contract objects (`{ alias, fields, problems, check, assertions }` or `require`) shared between providers and consumers:
 - A provider validates its own `root.out` by calling `kix.contracts.<name>.check "my-provider" { ... }`, which checks every required and optional contract field and returns `out`.
 - A consumer validates a bound dependency in `deps.<alias>.assertions` with `kix.contracts.<name>.assertions "my-consumer"` (a function `dep: [ { assertion; message; } ]`), which checks all required contract fields and validates the shape of any present optional fields.
+- Every contract that carries a login defines `out.credentials` with `credentialsField { keys; required ? true; }` in `kix/lib/vocab/contract.nix`. See [Credentials in contracts](#credentials-in-contracts).
 
 | Contract object | Default `alias` | Contract fields on `dep.out` |
 | --- | --- | --- |
-| `kix.contracts.postgresDatabase` | `"database"` | Required: `host` (`str`), `port` (`str`), `database` (`str`), `credentials` (Secret instance exposing `out.keyRef` with keys `username` and `password`). Optional: `username` (`str`), `extensions` (list of strings or `{ name; version; }`), `tls` (`nullOr bool`). |
+| `kix.contracts.postgresDatabase` | `"database"` | Required: `host` (`str`), `port` (`str`), `database` (`str`), `credentials` (secret instance or Secret exposing `out.keyRef` with keys `username` and `password`). Optional: `username` (`str`), `extensions` (list of strings or `{ name; version; }`), `tls` (`nullOr bool`). |
 | `kix.contracts.gateway` | `"gateway"` | Required: `gatewayRef` (`{ name; namespace; }`). Optional: `listeners` (list of `{ name; port; protocol; }`), `podSelector` (non-empty attrset of strings or `null`), `podNamespace` (`nullOr str`; must be set together with `podSelector`). Exposes `require` (`who: dep: dep`) and `claims` instead of `assertions`. |
-| `kix.contracts.oidcProvider` | `"oidcProvider"` | Required: `issuerUrl` (function `realm -> url`). Optional: `endpoints` (function `realm -> { authorizationUrl; tokenUrl; userinfoUrl; }`). Also provides `requireClient`, `clientKeys`, and `clientOptions` (`kix.options.oidc`). |
-| `kix.contracts.smtpRelay` | `"smtp"` | Required: `host` (hostname or IP address with no port), `port` (`str` or `int` from 1 to 65535), `tls` (`"starttls"`, `"implicit"`, or `"none"`). Optional: `from` (`nullOr str`, the default sender address), `external` (`bool`; a relay without it counts as outside the cluster). Also provides `requireRelay`, `egressPolicy`, `credentialKeys`, and `options` (`kix.options.mail`). See [Mail relays](#mail-relays-kixcontractssmtprelay). |
+| `kix.contracts.oidc` | `"oidc"` | Required: `issuerUrl` (URL `scheme://host/path`), `credentials` (secret instance or Secret exposing `out.keyRef` with keys `clientId` and `clientSecret`). Optional: `endpoints` (`{ authorizationUrl; tokenUrl; userinfoUrl; }`, each a URL). Also provides `client`, `credentialKeys`, `endpointKeys`, and `clientOptions` (`kix.options.oidc`). See [Single sign-on](#single-sign-on-kixcontractsoidc-and-kixcontractsoidcprovider). |
+| `kix.contracts.oidcProvider` | `"oidcProvider"` | Required: `issuerUrl` (function `realm -> url`). Optional: `endpoints` (function `realm -> { authorizationUrl; tokenUrl; userinfoUrl; }`). Provided by multi-realm identity providers such as `keycloak` and consumed by `oidc-client`. |
+| `kix.contracts.smtp` | `"smtp"` | Required: `host` (hostname or IP address with no port), `port` (`str` or `int` from 1 to 65535), `tls` (`"starttls"`, `"implicit"`, or `"none"`). Optional: `credentials` (secret instance or Secret exposing `out.keyRef` with keys `username` and `password`), `from` (`nullOr str`, the default sender address), `external` (`bool`; a server without it counts as outside the cluster). Also provides `settings`, `egressPolicy`, `credentialKeys`, and `options` (`kix.options.mail`). See [Mail](#mail-kixcontractssmtp). |
 | `kix.contracts.otlpEndpoint` | `"otlp"` | Required: `otlpGrpcUrl` (base URL `scheme://host:port` with no path), `otlpHttpUrl` (base URL `scheme://host:port` with no path). Optional: `tls` (`nullOr bool`). |
 
 ```nix
 deps.database.assertions = kix.contracts.postgresDatabase.assertions "grafana";
 ```
 
-### Mail relays (`kix.contracts.smtpRelay`)
+### Credentials in contracts
 
-A package that sends mail takes two optional dependencies:
+When a dependency contract carries a login, it puts the login in `out.credentials`: a `secret` or `secret-ref` instance, or a Secret built by the provider package, whose `out.keyRef` reads the keys the contract names. Every such contract uses `credentialsField { keys; required ? true; }` in `kix/lib/vocab/contract.nix`. A consumer never takes a second dependency for the login.
 
-- `smtp ? null` is the relay. It carries only settings, so one `kix.mkImport` can serve every namespace in the cluster.
-- `smtpCredentials ? null` is a secret with keys `username` and `password`, the login at the relay. It lives in the consumer's namespace, because a pod can read Secrets only from its own namespace. Each application can have its own login.
+A provider that Kix runs builds and publishes its own Secret in `out.credentials`. An external service declared with [`kix.mkImport`](/docs/reference/helm-and-imports/#mkimport) names a secret instance in `out` with `credentials = ref.<namespace>.<instance>`.
+
+A pod reads Secrets only from its own namespace, and the workload builder refuses a Secret from another namespace at build time. Because of this, an import that carries a login sits in the consumer's namespace beside its secret, with `scope = "namespace"`. An import without a login can keep the default `scope = "cluster"` and serve every namespace. A Nix `let` binding can share common settings across per-namespace imports.
+
+### Mail (`kix.contracts.smtp`)
+
+A package that sends mail takes one optional dependency, `smtp ? null`, checked against `kix.contracts.smtp` (`kix/lib/vocab/smtp.nix`).
 
 ```nix
-# One relay for the cluster.
-instances.mail.smtp.package = kix.mkImport {
-  out = {
-    host = "smtp.example.org";
-    port = "465";
-    tls = "implicit";
-    from = "noreply@example.org";
+{ ref, packages, kix, ... }:
+{
+  # No login: one server for the whole cluster.
+  instances.mail.smtp.package = kix.mkImport {
+    out = {
+      host = "relay.internal.example.org";
+      port = "587";
+      tls = "starttls";
+      from = "noreply@example.org";
+    };
   };
-};
 
-# The login for one application, in that application's namespace.
-instances.vault.vaultwarden-smtp = {
-  package = packages.secret-ref;
-  aliases = [ "smtpCredentials" ];
-  config.keys = [ "username" "password" ];
-};
+  # With a login: one import per namespace, beside its secret.
+  instances.vault.smtp-login = {
+    package = packages.secret;
+    config.source = ./secrets/vault-smtp.sops.yaml;
+    config.keys = [ "username" "password" ];
+  };
+  instances.vault.smtp.package = kix.mkImport {
+    scope = "namespace";
+    out = {
+      host = "smtp.mailgun.org";
+      port = "465";
+      tls = "implicit";
+      from = "vault@example.org";
+      credentials = ref.vault.smtp-login;
+    };
+  };
+}
 ```
 
-To give one application a different relay, declare a second import and wire it with `deps.smtp = ref.<namespace>.<instance>`.
-
-In the package, `requireRelay` checks both dependencies and returns the settings, or `null` when no relay is wired:
+In a consumer package, `kix.contracts.smtp.settings` validates the `smtp` dependency and returns its settings, or `null` when no server is wired:
 
 ```nix
-relay = kix.contracts.smtpRelay.requireRelay {
+mail = kix.contracts.smtp.settings {
   inherit who smtp;
-  credentials = smtpCredentials;
   inherit (config.mail) from;
 };
-# relay = { host; port; portNumber; tls; external; from; credentials; }
+# mail = { host; port; portNumber; tls; external; from; credentials; }
 ```
 
-`requireRelay` refuses these setups:
+`kix.contracts.smtp.settings` refuses these setups:
 
-- `tls = "none"` on a relay outside the cluster, because the password and the mail would cross the internet in clear text
-- a relay with no sender address, from either its `out.from` or the instance's `mail.from`
-- `smtpCredentials` without `smtp`
+- `tls = "none"` when `external` is `true` (or omitted), because the password and the mail would cross the internet in clear text. An in-cluster server sets `external = false`.
+- A server with no sender address in either `out.from` or `from` (`config.mail.from`).
 
-`port` is a string, as in `out.port`, and `portNumber` is the same port as a number. `credentials` is the checked secret, or `null`. Read the login with `relay.credentials.out.keyRef "username"` and `"password"`.
+`port` is a string and `portNumber` is an integer. `credentials` is the secret in `out.credentials`, or `null`. Read the login with `mail.credentials.out.keyRef "username"` and `"password"`.
 
-`kix.contracts.smtpRelay.egressPolicy { scope; name; selector; relay; }` returns a network policy for a relay outside the cluster, or `null`. The policy lets the selected pods reach any address on the relay's port, because the network policy cannot name a host outside the cluster.
+`kix.contracts.smtp.egressPolicy { scope; name; selector; smtp; }` returns a network policy that allows the selected pods to reach any address on the server's port (because the network policy enforcer cannot name a host outside the cluster), or `null` when `smtp` is `null` or `smtp.external` is `false`.
 
-Each package maps the TLS mode onto the application's own settings. Check that the application refuses to send when a `"starttls"` relay does not offer STARTTLS. If it sends the login anyway, refuse `"starttls"` while `smtpCredentials` is wired, as `plausible` does.
+`kix.options.mail` declares `{ from; }`, a per-instance sender override.
+
+`plausible`, `vaultwarden`, and `grafana` consume `smtp` and refuse their mail settings in `env` or `settings` while `smtp` is wired. Each consumer checks that the TLS mode matches its mailer: `plausible` requires `tls = "implicit"` when `out.credentials` is set (because its mailer sends the password in clear text when a server offers no STARTTLS), and `grafana` uses implicit TLS only on port 465.
+
+### Single sign-on (`kix.contracts.oidc` and `kix.contracts.oidcProvider`)
+
+An application that signs users in with OpenID Connect takes one optional dependency, `oidc ? null`, checked against `kix.contracts.oidc` (`kix/lib/vocab/oidc.nix`). Single sign-on is on when `oidc` is wired. `grafana`, `harbor`, and `immich` consume `oidc`.
+
+Two kinds of instance answer `oidc`, both placed in the application's namespace beside the client secret:
+
+1. **`oidc-client` (`packages.oidc-client`)**: Pairs a multi-realm identity provider (`kix.contracts.oidcProvider` in `kix/lib/vocab/oidc-provider.nix`, such as `keycloak` or a cluster-wide `kix.mkImport` whose `out.issuerUrl` and `out.endpoints` are functions of the realm) with one realm and one client secret. `oidc-client` has `meta.scope = "namespace"` and `defaultAliases = [ "oidc" ]`. It takes `config.realm`, `deps.oidcProvider = ref.<namespace>.<provider>`, and an `oidcClient` secret (`secret` or `secret-ref` with keys `clientId` and `clientSecret`). It renders no Kubernetes resources; its root marker waits for the client secret.
+2. **Namespaced `kix.mkImport`**: For an external provider with a single issuer, declare a `kix.mkImport` in the application's namespace with `scope = "namespace"` whose `out` sets `issuerUrl`, optional `endpoints` (`{ authorizationUrl; tokenUrl; userinfoUrl; }`), and `credentials = ref.<namespace>.<secret>`.
+
+```nix
+{ ref, packages, kix, ... }:
+{
+  # Multi-realm provider (Keycloak) paired through oidc-client:
+  instances.monitoring = {
+    grafana.package = packages.grafana;
+    oidc = {
+      package = packages.oidc-client;
+      deps.oidcProvider = ref.auth.keycloak;
+      config.realm = "main";
+    };
+    grafana-oidc = {
+      package = packages.secret;
+      aliases = [ "oidcClient" ];
+      config.source = ./secrets/grafana-oidc.sops.yaml;
+      config.keys = [ "clientId" "clientSecret" ];
+    };
+  };
+
+  # Single-issuer external provider imported directly:
+  instances.photos.immich-oidc = {
+    package = packages.secret;
+    config.source = ./secrets/immich-oidc.sops.yaml;
+    config.keys = [ "clientId" "clientSecret" ];
+  };
+  instances.photos.oidc.package = kix.mkImport {
+    scope = "namespace";
+    out = {
+      issuerUrl = "https://login.example.com";
+      credentials = ref.photos.immich-oidc;
+    };
+  };
+}
+```
+
+In a consumer package, `kix.contracts.oidc.client` validates the `oidc` dependency and checks `config.oidc`:
+
+```nix
+client = kix.contracts.oidc.client {
+  inherit who oidc;
+  options = config.oidc;
+};
+# client = { issuerUrl; endpoints; credentials; }
+```
+
+`kix.contracts.oidc.client` returns `null` when `oidc` is `null`. Reading `client.endpoints` throws an evaluation error if the provider did not publish `out.endpoints`.
+
+`kix.options.oidc { scopes; autoLogin ? null; }` declares `scopes` and (when `autoLogin` is non-null) `autoLogin`. Setting the removed `oidc.enabled` or `oidc.realm` options fails the build with migration instructions: add an `oidc-client` instance in the application's namespace with `config.realm` and `deps.oidcProvider`, keep the existing secret aliased `oidcClient`, and remove `oidc.enabled`, `oidc.realm`, and `deps.oidcProvider` from the application.
 
 ---
 

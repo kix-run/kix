@@ -12,8 +12,7 @@
   caBundle ? null,
   prometheus ? null,
   reloader ? null,
-  oidcProvider ? null,
-  oidcClient ? null,
+  oidc ? null,
   ...
 }:
 
@@ -71,27 +70,12 @@ let
     metricsServicePort
     ;
 
-  oidcOn = config.oidc.enabled;
-  oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
-    inherit who;
-    inherit (config) oidc;
-    provider = oidcProvider;
-    client = oidcClient;
+  oidcProviderInfo = kix.contracts.oidc.client {
+    inherit who oidc;
+    options = config.oidc;
   };
-  # Forcing oidcProviderInfo first reports a missing dependency by
-  # name rather than as a missing attribute of null.
-  oidcCredentials =
-    if oidcOn then
-      builtins.seq oidcProviderInfo (
-        kix.checkSecretKeys {
-          inherit who;
-          arg = "oidcClient";
-          dep = oidcClient;
-          keys = kix.contracts.oidcProvider.clientKeys;
-        }
-      )
-    else
-      null;
+  oidcOn = oidcProviderInfo != null;
+  oidcCredentials = if oidcOn then oidcProviderInfo.credentials else null;
 
   # Harbor configuration items for CONFIG_OVERWRITE_JSON. The client
   # id and secret are `$(VAR)` references that Kubernetes expands from
@@ -131,9 +115,9 @@ let
           if k != "oidc_client_secret" then
             "Harbor has no reference form for it; configure it in Harbor's UI without core.settings."
           else if oidcOn then
-            "oidc.enabled already sets it from the oidcClient dependency; remove it from core.settings."
+            "deps.oidc already sets it from its credentials; remove it from core.settings."
           else
-            "Set oidc.enabled and wire the client through deps.oidcClient instead."
+            "Wire the client through deps.oidc instead."
         }"
       )
       (
@@ -145,7 +129,7 @@ let
     ++ lib.optionals oidcOn (
       map (
         k:
-        "core.settings sets ${k}, which oidc.enabled sets. Use the oidc option and the oidcProvider and oidcClient dependencies instead."
+        "core.settings sets ${k}, which deps.oidc sets. Use the oidc option and the oidc dependency instead."
       ) (builtins.filter (k: k != "oidc_client_secret" && config.core.settings ? ${k}) oidcOwnedSettings)
     );
   coreSettings =

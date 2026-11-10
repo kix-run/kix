@@ -168,7 +168,7 @@ let
   };
 
   # Grafana reads GF_<SECTION>_<KEY> over grafana.ini, so `env` is locked for
-  # OIDC keys too while `oidc.enabled` is set.
+  # OIDC keys too while `oidc` is wired.
   oidcKeys = [
     "enabled"
     "client_id"
@@ -226,7 +226,7 @@ let
 
   oidcRootUrlCheck =
     if oidcOn && (ini.server.root_url or null) == null then
-      throw "${who}: oidc.enabled is true, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth. Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open."
+      throw "${who}: deps.oidc is wired, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth. Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open."
     else
       null;
 
@@ -305,8 +305,8 @@ let
             "GF_AUTH_GENERIC_OAUTH_CLIENT_ID__FILE"
             "GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE"
           ];
-        from = "the oidc option and the oidcClient dependency";
-        fix = "Set the oidc option, or wire another secret through deps.oidcClient.";
+        from = "the oidc option and the oidc dependency";
+        fix = "Set the oidc option, or wire another client through deps.oidc.";
       }
       ++ lib.optional (relay != null) {
         vars = lib.optionalAttrs (relay.credentials != null) {

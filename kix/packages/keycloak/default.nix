@@ -115,12 +115,14 @@
 #                dials them gets derived egress to Keycloak. They are plain
 #                HTTP (port 8080), so the client secret crosses the pod
 #                network unencrypted.
-# grafana, harbor, and immich take an instance as their `oidcProvider`
-# dependency when their `oidc.enabled` is set; each package header names the
-# redirect URI to register. The package answers no alias by default, because
-# two Keycloak instances answering one would fail every such application in
-# the cluster. Wire it with `deps.oidcProvider = ref.<ns>.<instance>`, or
-# give the one instance `aliases = [ "oidcProvider" ]`.
+# Applications (grafana, harbor, immich) sign in through an `oidc-client`
+# instance in their namespace, which takes this instance as its
+# `oidcProvider` dependency with a realm and the client's secret; each
+# application's header names the redirect URI to register. The package
+# answers no alias by default, because two Keycloak instances answering one
+# would fail every such client in the cluster. Wire it with
+# `deps.oidcProvider = ref.<ns>.<instance>`, or give the one instance
+# `aliases = [ "oidcProvider" ]`.
 #
 # Alerts: with a prometheus dependency and `metrics.enabled`, a
 # PrometheusRule `<instance>-alerts` selects the Service's series.
