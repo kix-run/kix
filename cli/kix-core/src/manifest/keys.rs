@@ -361,6 +361,9 @@ mod tests {
             // The release client names the website kix.run, which Kix
             // downloads releases from. It spells no annotation or label.
             "cli/kix/src/release/",
+            // The change records script names the schema of the JSON file
+            // each release publishes. It spells no annotation or label.
+            "scripts/change_records/",
         ];
 
         let domains = ["kix.dev", "kix.run"];
