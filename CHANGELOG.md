@@ -32,6 +32,7 @@ Each release groups changes under these headings:
 ### Fixed
 
 - `caddy` defaults to the official Caddy image, `caddy:2.10.0`. Before, it pointed at a private registry nobody else could pull. A Caddyfile that uses plugins needs `image` set to a build that has them.
+- An instance under a `_`-prefixed key, such as `instances._platform`, no longer makes Kix emit a Namespace with that name. Kubernetes refuses names that contain `_`, so the deploy failed.
 
 ## 0.9.0 - 2026-11-10
 
