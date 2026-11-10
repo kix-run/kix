@@ -112,7 +112,8 @@ pub struct PackageNode {
     pub store_path: PathBuf,
     /// From the PI manifest: spec.instanceName
     pub instance_name: String,
-    /// From the PI manifest: metadata.namespace
+    /// The instance's namespace key, from the PI manifest's
+    /// `spec.namespaceName`. See [`package_namespace`].
     pub namespace: String,
     /// From the PI manifest: spec.version
     pub version: Option<String>,
@@ -201,6 +202,20 @@ fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
     .into_iter()
     .find(|(_, ok)| !ok)
     .map(|(field, _)| field)
+}
+
+/// Return the namespace key of the instance a PackageInstance records:
+/// `spec.namespaceName`, else `metadata.namespace`, else `_cluster`.
+///
+/// The key can differ from the record's own namespace. The record of an
+/// instance under a `_`-prefixed key such as `_cluster` sits in the cluster's
+/// `cluster.recordNamespace`, because Kubernetes stores a PackageInstance only
+/// inside a real namespace.
+pub(crate) fn package_namespace(pi: &serde_json::Value) -> &str {
+    pi.pointer("/spec/namespaceName")
+        .or_else(|| pi.pointer("/metadata/namespace"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("_cluster")
 }
 
 /// Format a `"Kind/name"` label for `manifest`.
@@ -384,11 +399,7 @@ impl StoreGraph {
                     ),
                 })?
                 .to_string();
-            let namespace = pi_manifest
-                .pointer("/metadata/namespace")
-                .and_then(|v| v.as_str())
-                .unwrap_or("_cluster")
-                .to_string();
+            let namespace = package_namespace(pi_manifest).to_string();
             let version = pi_manifest
                 .pointer("/spec/version")
                 .and_then(|v| v.as_str())
@@ -545,6 +556,12 @@ impl StoreGraph {
             let kind = pi.manifest.get("kind");
             if kind.and_then(|k| k.as_str()) != Some(lifecycle::PACKAGE_INSTANCE_KIND) {
                 return fail(format!("{} is not a PackageInstance", shown(pi_path)));
+            }
+            if package.namespace.is_empty() || package.namespace.contains('/') {
+                return fail(format!(
+                    "{}'s spec.namespaceName must be a namespace key: not empty and without '/'",
+                    shown(pi_path)
+                ));
             }
             let key = (package.namespace.as_str(), package.instance_name.as_str());
             if let Some(other) = keys.insert(key, pi_path) {
@@ -776,10 +793,7 @@ impl StoreGraph {
                     // other PackageInstance is a package.
                     if is_pi && !(crate::manifest::lifecycle::is_marker(m) && stamped_pkg.is_some())
                     {
-                        let ns = m
-                            .pointer("/metadata/namespace")
-                            .and_then(Value::as_str)
-                            .unwrap_or("_cluster");
+                        let ns = package_namespace(m);
                         let name = m
                             .pointer("/spec/instanceName")
                             .and_then(Value::as_str)
@@ -997,6 +1011,16 @@ mod tests {
             assert!(err.to_string().contains("plan would show as one"), "{err}");
         }
 
+        /// Plan keys packages as `namespace/instance`, so a `/` in the
+        /// namespace key would make two packages read as one.
+        #[test]
+        fn a_package_namespace_with_a_slash_is_refused() {
+            let mut g = build(&[("a", "x")], true);
+            g.packages.values_mut().next().unwrap().namespace = "a/b".into();
+            let err = g.validate().unwrap_err();
+            assert!(err.to_string().contains("spec.namespaceName"), "{err}");
+        }
+
         #[test]
         fn a_build_without_one_record_at_its_path_is_refused() {
             let mut g = build(&[("a", "x")], true);
@@ -1128,6 +1152,29 @@ mod tests {
             let dns = pkg(&g, "kube-system", "dns");
             assert!(dns.resource_paths.is_empty());
             assert_eq!(dns.version.as_deref(), Some("2.0"));
+        }
+
+        /// The record of an instance under `_cluster` sits in the cluster's
+        /// record namespace. Its package keeps the instance's key, so it
+        /// groups with the resources stamped with that key.
+        #[test]
+        fn a_sentinel_record_keys_its_package_by_the_instance_key() {
+            let mut pi = package_instance("kube-system", "high", "1.0", &h("pi"));
+            pi["spec"]["namespaceName"] = json!("_cluster");
+            let manifests = vec![
+                pi,
+                stamped(
+                    "ConfigMap",
+                    "kube-system",
+                    "high-settings",
+                    ("_cluster", "high"),
+                    &h("cm"),
+                    json!({}),
+                ),
+            ];
+            let g = StoreGraph::synthesize(&manifests, &StoreGraph::empty("c"));
+            assert_eq!(pkg(&g, "_cluster", "high").resource_paths.len(), 1);
+            assert!(!g.packages.values().any(|p| p.namespace == "kube-system"));
         }
 
         /// Synthesize the live side from every stamped manifest of `build`,

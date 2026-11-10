@@ -340,6 +340,21 @@ in
       '';
     };
 
+    cluster.recordNamespace = lib.mkOption {
+      type = lib.types.str;
+      default = "kube-system";
+      description = ''
+        The namespace that holds the PackageInstance record of each instance
+        under a `_`-prefixed key, such as `instances._cluster`. Such an
+        instance has no namespace of its own, and Kubernetes only stores a
+        PackageInstance inside a namespace. Records of other instances stay
+        in their own namespace. Kix does not create this namespace, so it
+        must exist. Some managed services, such as GKE Autopilot, refuse
+        writes to `kube-system`. Clusters there set another namespace that
+        exists.
+      '';
+    };
+
     cluster.factBehavior = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };

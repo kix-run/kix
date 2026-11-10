@@ -148,6 +148,8 @@ spec:
 
 `PackageInstance` (`packageinstances.kix.run`, API version `kix.run/v1alpha1`) is a namespaced custom resource emitted for each active package instance, external import (`kix.mkImport`), Secret reference (`scope.mkSecretRef`), Service reference (`scope.mkServiceRef`), and CRD reference (`scope.mkCRDRef`).
 
+A package instance's record sits in the instance's namespace. The record of an instance under a `_`-prefixed key, such as `instances._cluster`, sits in [`cluster.recordNamespace`](/docs/reference/cluster-configuration/#clusterrecordnamespace) (`kube-system` by default), and its `spec.namespaceName` keeps the key.
+
 ```yaml
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
@@ -171,7 +173,7 @@ spec:
 | Field or annotation | Present on | Meaning |
 | --- | --- | --- |
 | `spec.instanceName` | Managed and import instances | Name of the instance within its namespace. |
-| `spec.namespaceName` | Managed and import instances | Namespace of the instance. |
+| `spec.namespaceName` | Managed and import instances | Namespace of the instance, or its `_`-prefixed key such as `_cluster`. Kix groups a package's resources by this value, not by the record's own namespace. |
 | `spec.version` | Managed and import instances | The instance's `version` override, else the package's `meta.version`, else the `out.version` the package builds. Left out when none is set. |
 | `spec.lifecycle` | When `meta.lifecycle` is set | Workload lifecycle (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes build validation and deploy behavior; other values are informational. |
 | `kix.run/root` | Managed instances | Name of the package's `root` resource. |
