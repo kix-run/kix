@@ -499,7 +499,7 @@ When a dependency contract carries a login, it puts the login in `out.credential
 
 A provider that Kix runs builds and publishes its own Secret in `out.credentials`. An external service declared with [`kix.mkImport`](/docs/reference/helm-and-imports/#mkimport) names a secret instance in `out` with `credentials = ref.<namespace>.<instance>`.
 
-A pod reads Secrets only from its own namespace, and the workload builder refuses a Secret from another namespace at build time. Because of this, an import that carries a login sits in the consumer's namespace beside its secret, with `scope = "namespace"`. An import without a login can keep the default `scope = "cluster"` and serve every namespace. A Nix `let` binding can share common settings across per-namespace imports.
+A pod reads Secrets only from its own namespace, and Kix refuses a Secret from another namespace at build time. Because of this, an import that carries a login sits in the consumer's namespace beside its secret, with `scope = "namespace"`. An import without a login can keep the default `scope = "cluster"` and serve every namespace. A Nix `let` binding can share common settings across per-namespace imports.
 
 ### Mail (`kix.contracts.smtp`)
 

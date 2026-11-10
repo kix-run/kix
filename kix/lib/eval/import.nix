@@ -475,11 +475,11 @@ rec {
           refText = "ref.${entry.namespace}.${entry.instanceName}";
         in
         if entry.namespace == namespaceName && entry.instanceName == instanceName then
-          throw "${who}: out.${path} names ${refText}, the import itself."
+          throw "${who}: out.${path} names ${refText}, the import itself. Point out.${path} at another instance, or remove it."
         else if isInstanceActive entry.namespace entry.instanceName then
           allInstances.${entry.namespace}.${entry.instanceName}
         else
-          throw "${who}: out.${path} names ${refText}, which is not an active instance. Declare it under instances.${entry.namespace}.${entry.instanceName}, or set optional = false on it.";
+          throw "${who}: out.${path} names ${refText}, which is not an active instance. A ref in out does not activate an optional instance. Declare it under instances.${entry.namespace}.${entry.instanceName}, or set optional = false on it.";
 
       # Replace each ref in `out`, at any depth of plain attribute sets.
       resolveOutRefs =

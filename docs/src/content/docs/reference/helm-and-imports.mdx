@@ -232,7 +232,7 @@ In a cluster definition, `out` may contain `ref.<namespace>.<instance>` at any d
 
 A `ref` in `out` does not activate an optional instance. A `ref` to an inactive instance, or to the import itself, fails the build.
 
-A pod reads Secrets only from its own namespace, and the workload builder refuses a Secret from another namespace at build time. Because of this, an import that carries a login in `out.credentials` (such as an external RDS or Cloud SQL database matching `kix.contracts.postgresDatabase`, an authenticated `smtp` server, or an external `oidc` provider) sits in the consumer's namespace beside its secret, with `scope = "namespace"`. An import without a login can keep the default `scope = "cluster"` and serve every namespace. When several namespaces connect to the same external service with their own secrets, a Nix `let` binding can share the common settings across the per-namespace imports.
+A pod reads Secrets only from its own namespace, and Kix refuses a Secret from another namespace at build time. Because of this, an import that carries a login in `out.credentials` (such as an external RDS or Cloud SQL database matching `kix.contracts.postgresDatabase`, an authenticated `smtp` server, or an external `oidc` provider) sits in the consumer's namespace beside its secret, with `scope = "namespace"`. An import without a login can keep the default `scope = "cluster"` and serve every namespace. When several namespaces connect to the same external service with their own secrets, a Nix `let` binding can share the common settings across the per-namespace imports.
 
 ### Three ways to use `kix.mkImport`
 

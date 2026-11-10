@@ -122,9 +122,9 @@ Kix replaces the `ref` with that secret instance (so the consumer can call
 `dep.out.credentials.out.keyRef "password"` with no package changes) and orders
 the import marker after the secret.
 
-Because a pod reads Secrets only from its own namespace, and the workload
-builder refuses a Secret from another namespace at build time, place the import
-and its secret in the consumer's namespace with `scope = "namespace"`:
+Because a pod reads Secrets only from its own namespace, and Kix refuses a
+Secret from another namespace at build time, place the import and its secret in
+the consumer's namespace with `scope = "namespace"`:
 
 ```nix title="cluster.nix"
 { ref, packages, kix, ... }:
