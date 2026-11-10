@@ -19,6 +19,7 @@
   evalFails,
   netpolOn,
   storageClassImport,
+  kixKeys,
   ...
 }:
 
@@ -417,7 +418,7 @@ in
         ns: cluster:
         (lib.findFirst (
           r: r.kind == "PackageInstance" && r.metadata.name == "smtp" && r.metadata.namespace == ns
-        ) null (manifests cluster)).metadata.annotations."kix.run/depends-on";
+        ) null (manifests cluster)).metadata.annotations.${kixKeys.dependsOn};
       withRef = dependsOn "vault" (vaultwardenCluster { });
       withoutRef = dependsOn "mail" (vaultwardenCluster {
         credentials = false;
