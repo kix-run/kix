@@ -1,10 +1,10 @@
 # clusters/test-plausible.nix: Plausible Community Edition on a CloudNativePG
 # database and a single-node ClickHouse, under Cilium default-deny.
 #
-# Every dependency is wired, the optional smtp relay and its credentials
-# included. The relay is a kix.mkImport in its own namespace, as one relay
-# for the whole cluster would be. Its address is a placeholder, so mail
-# fails and nothing else does.
+# Every dependency is wired, the optional smtp server included. It is a
+# kix.mkImport whose out names the login secret with `ref`, so the import
+# sits in Plausible's namespace beside that secret. Its address is a
+# placeholder, so mail fails and nothing else does.
 # ingress-nginx and a host give the route and BASE_URL. The ClickHouse
 # server lives in `events` and the application in `analytics`, so the
 # clickhouse-database facade crosses a namespace as it does in a real
@@ -58,15 +58,6 @@ kix.buildCluster {
           };
         };
 
-        instances.mail.smtp.package = kix.mkImport {
-          out = {
-            host = "smtp.localtest.me";
-            port = "465";
-            tls = "implicit";
-            from = "noreply@localtest.me";
-          };
-        };
-
         instances.analytics = {
           plausible = {
             package = packages.plausible;
@@ -94,9 +85,18 @@ kix.buildCluster {
             aliases = [ "secretKeyBase" ];
             config.stringData.key = "test-only-0123456789abcdef0123456789abcdef0123456789abcdef";
           };
+          smtp.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              host = "smtp.localtest.me";
+              port = "465";
+              tls = "implicit";
+              from = "noreply@localtest.me";
+              credentials = ref.analytics.plausible-smtp;
+            };
+          };
           plausible-smtp = {
             package = packages.secret;
-            aliases = [ "smtpCredentials" ];
             config.stringData = {
               username = "plausible";
               password = "smtp-dev-password";

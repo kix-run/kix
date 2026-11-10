@@ -1,15 +1,16 @@
-# Define the SMTP relay contract for `smtp` dependencies
-# (`kix.contracts.smtpRelay`), the consumer helpers that read it, and the
-# shared `mail` option set (`kix.options.mail`).
+# Define the SMTP contract for `smtp` dependencies (`kix.contracts.smtp`),
+# the consumer helpers that read it, and the shared `mail` option set
+# (`kix.options.mail`).
 #
-# The relay and its credentials are two dependencies. `smtp` carries only
-# plain settings, so a `kix.mkImport` can declare one relay for the whole
-# cluster. `smtpCredentials` is a secret with keys `username` and `password`
-# in the consumer's own namespace, because a pod reads Secrets only from its
-# own namespace. Each application can then have its own login at the relay.
+# An `smtp` instance is one application's way to send mail: a server, and
+# the login the application uses there. A server outside the cluster is a
+# `kix.mkImport`. Without a login, one import serves every namespace. With a
+# login, `out.credentials` names a secret, and a pod reads Secrets only from
+# its own namespace, so each namespace gets its own import (a Nix `let` can
+# share the common settings).
 { lib }:
 let
-  inherit (import ./contract.nix { inherit lib; }) mkContract;
+  inherit (import ./contract.nix { inherit lib; }) mkContract credentialsField;
   compose = import ./compose.nix { inherit lib; };
 
   tlsModes = [
@@ -34,23 +35,32 @@ let
 
   isAddress = v: builtins.isString v && builtins.match "[^@[:space:]]+@[^@[:space:]]+" v != null;
 
+  credentialKeys = [
+    "username"
+    "password"
+  ];
+
   fields = {
     host = {
       required = true;
-      shape = "the relay's hostname or IP address";
+      shape = "the server's hostname or IP address";
       test = v: builtins.isString v && builtins.match "[^[:space:]:/]+" v != null;
     };
     # A string keeps the string context an in-cluster provider attaches,
     # which is how Kix derives the network edge to it.
     port = {
       required = true;
-      shape = "the relay's port, as a string or an integer from 1 to 65535";
+      shape = "the server's port, as a string or an integer from 1 to 65535";
       test = isPort;
     };
     tls = {
       required = true;
       shape = "one of ${lib.concatMapStringsSep ", " builtins.toJSON tlsModes}";
       test = v: builtins.elem v tlsModes;
+    };
+    credentials = credentialsField {
+      keys = credentialKeys;
+      required = false;
     };
     from = {
       required = false;
@@ -59,23 +69,18 @@ let
     };
     external = {
       required = false;
-      shape = "true when the relay is outside the cluster, false when it runs in it";
+      shape = "true when the server is outside the cluster, false when it runs in it";
       test = builtins.isBool;
     };
   };
 
   contract = mkContract {
-    name = "SMTP relay";
+    name = "SMTP";
     alias = "smtp";
-    remedyNoun = "relay";
-    here = "kix/lib/vocab/smtp-relay.nix";
+    remedyNoun = "SMTP server";
+    here = "kix/lib/vocab/smtp.nix";
     inherit fields;
   };
-
-  credentialKeys = [
-    "username"
-    "password"
-  ];
 in
 {
   inherit (contract)
@@ -88,45 +93,31 @@ in
 
   inherit credentialKeys;
 
-  # Validate the `smtp` and `smtpCredentials` dependencies and return the
-  # relay's settings, or null when no relay is wired. `from` is the
-  # instance's `mail.from`, which replaces the relay's `out.from`.
+  # Validate the `smtp` dependency and return its settings, or null when no
+  # server is wired. `from` is the instance's `mail.from`, which replaces
+  # the server's `out.from`.
   #
-  # A relay without `external = false` counts as outside the cluster, so
+  # A server without `external = false` counts as outside the cluster, so
   # `tls = "none"` is refused there: the password and the mail would cross
   # the internet in clear text.
-  requireRelay =
+  settings =
     {
       who,
       smtp,
-      credentials,
       from ? null,
     }:
     if smtp == null then
-      if credentials != null then
-        throw "${who}: deps.smtpCredentials is wired, but no relay is. Declare the relay and wire it with deps.smtp = ref.<ns>.<instance> (a kix.mkImport whose out sets host, port, and tls), or remove smtpCredentials."
-      else
-        null
+      null
     else
       let
         out = (contract.require who smtp).out;
         external = out.external or true;
         sender = if from != null then from else out.from or null;
-        checked =
-          if credentials == null then
-            null
-          else
-            compose.checkSecretKeys {
-              inherit who;
-              arg = "smtpCredentials";
-              dep = credentials;
-              keys = credentialKeys;
-            };
       in
       if out.tls == "none" && external then
-        throw "${who}: deps.smtp is a relay outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text. Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on the relay's out. A relay inside the cluster sets external = false."
+        throw "${who}: deps.smtp is a server outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text. Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false."
       else if sender == null then
-        throw "${who}: deps.smtp has no sender address. Set out.from on the relay, or mail.from on this instance."
+        throw "${who}: deps.smtp has no sender address. Set out.from on the SMTP instance, or mail.from on this instance."
       else
         {
           inherit (out) host tls;
@@ -134,21 +125,21 @@ in
           port = toString out.port;
           portNumber = if builtins.isInt out.port then out.port else lib.toInt out.port;
           from = sender;
-          credentials = checked;
+          credentials = out.credentials or null;
         };
 
   # Build a network policy that lets the pods `selector` matches reach an
-  # external relay on its port, or return null for a relay in the cluster.
-  # The rule allows any address on that port, because the enforcer cannot
-  # name a host outside the cluster.
+  # external server on its port, or return null for a server in the
+  # cluster. The rule allows any address on that port, because the enforcer
+  # cannot name a host outside the cluster.
   egressPolicy =
     {
       scope,
       name,
       selector,
-      relay,
+      smtp,
     }:
-    if relay == null || !relay.external then
+    if smtp == null || !smtp.external then
       null
     else
       compose.operandPolicy {
@@ -166,7 +157,7 @@ in
                     to = "world";
                     ports = [
                       {
-                        port = relay.portNumber;
+                        port = smtp.portNumber;
                         protocol = "TCP";
                       }
                     ];
@@ -182,7 +173,7 @@ in
       type = lib.types.nullOr (lib.types.strMatching "[^@[:space:]]+@[^@[:space:]]+");
       default = null;
       example = "vault@example.org";
-      description = "Sender address for this instance's mail. Null uses the `smtp` relay's `out.from`.";
+      description = "Sender address for this instance's mail. Null uses the `smtp` instance's `out.from`.";
     };
   };
 }

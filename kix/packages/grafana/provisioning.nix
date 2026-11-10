@@ -141,7 +141,7 @@ let
   }
   // lib.optionalAttrs (rootUrl != null) { server.root_url = rootUrl; }
   # Grafana's mailer picks implicit TLS from port 465 alone, which the
-  # package checks. MandatoryStartTLS refuses a relay that does not offer
+  # package checks. MandatoryStartTLS refuses a server that does not offer
   # STARTTLS.
   // lib.optionalAttrs (relay != null) {
     smtp = {
@@ -317,8 +317,8 @@ let
           "GF_SMTP_USER__FILE"
           "GF_SMTP_PASSWORD__FILE"
         ];
-        from = "the smtp and smtpCredentials dependencies";
-        fix = "Wire another relay through deps.smtp, another login through deps.smtpCredentials, or set mail.from.";
+        from = "the smtp dependency";
+        fix = "Wire another SMTP instance through deps.smtp, or set mail.from.";
       };
     } config.env
   );

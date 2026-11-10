@@ -30,11 +30,9 @@
 #                                  the two-factor vault key. A `secret`, or a
 #                                  `secret-ref` for a Secret that ESO, Vault,
 #                                  or Infisical writes.
-#   smtp (optional)                a mail relay honouring the SMTP relay
-#                                  contract (kix.contracts.smtpRelay),
-#                                  usually a kix.mkImport. See "Mail" below.
-#   smtpCredentials (optional)     a secret with keys `username` and
-#                                  `password`, the login at the relay.
+#   smtp (optional)                a mail server honouring the SMTP
+#                                  contract (kix.contracts.smtp), usually a
+#                                  kix.mkImport. See "Mail" below.
 #
 # Minimal instances, with a stackgres-cluster `postgres` and a `clickhouse`
 # elsewhere (clusters/test-plausible.nix evaluates the same wiring with
@@ -95,12 +93,12 @@
 # the dashboard creates. Open the dashboard right after the first deploy.
 #
 # Mail (invitations, password resets, reports) goes out through the `smtp`
-# relay, with Plausible's Bamboo.Mua mailer. The package sets the
-# `SMTP_*` variables, `MAILER_ADAPTER`, and `MAILER_EMAIL` (the relay's
-# `out.from`, or `mail.from`) and refuses them in `env`. A relay outside
+# server, with Plausible's Bamboo.Mua mailer. The package sets the
+# `SMTP_*` variables, `MAILER_ADAPTER`, and `MAILER_EMAIL` (the server's
+# `out.from`, or `mail.from`) and refuses them in `env`. A server outside
 # the cluster gets egress to any address on its port, because the network
 # policy cannot name a host outside the cluster. Bamboo.Mua uses STARTTLS
-# only when the relay offers it, so with `smtpCredentials` the relay must
+# only when the server offers it, so with `out.credentials` the server must
 # use implicit TLS (`tls = "implicit"`, usually port 465). Without `smtp`,
 # Plausible delivers to each recipient's mail server on port 25, which the
 # package does not open; `env.MAILER_ADAPTER` can pick an API adapter
@@ -272,7 +270,7 @@ in
       limits.memory = "2Gi";
     };
     env = kix.options.env // {
-      description = "Extra environment variables for Plausible settings the package does not set: a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. The database, clickhouseDatabase, secretKeyBase, smtp, and smtpCredentials dependencies are wired by the package. `BASE_URL` replaces the routed URL, `TMPDIR` the temporary directory, and `ERL_MAX_PORTS` the port limit (65536); null removes any of them.";
+      description = "Extra environment variables for Plausible settings the package does not set: a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. The database, clickhouseDatabase, secretKeyBase, and smtp dependencies are wired by the package. `BASE_URL` replaces the routed URL, `TMPDIR` the temporary directory, and `ERL_MAX_PORTS` the port limit (65536); null removes any of them.";
     };
     ingress = kix.options.ingress;
     mail = kix.options.mail;
@@ -289,7 +287,6 @@ in
         clickhouseDatabase,
         secretKeyBase,
         smtp ? null,
-        smtpCredentials ? null,
         smtpPassword ? null,
         ...
       }:
@@ -305,20 +302,19 @@ in
 
         relay =
           if smtpPassword != null then
-            throw "${who}: deps.smtpPassword was replaced by two dependencies. Declare the relay as a kix.mkImport whose out sets host, port, tls, and from, and wire it as deps.smtp. Put the relay login in a secret with keys `username` and `password`, and wire it as deps.smtpCredentials. Remove the SMTP_* variables from env."
+            throw "${who}: deps.smtpPassword was replaced by deps.smtp. Declare the mail server as a kix.mkImport in this namespace whose out sets host, port, tls, from, and credentials = ref.<ns>.<secret>, a secret with keys `username` and `password`. Remove the SMTP_* variables from env."
           else
-            kix.contracts.smtpRelay.requireRelay {
+            kix.contracts.smtp.settings {
               inherit who smtp;
-              credentials = smtpCredentials;
               inherit (config.mail) from;
             };
 
-        # Bamboo.Mua sends the login over a plain connection when the relay
-        # does not offer STARTTLS, so a relay that strips STARTTLS would see
-        # the password. Implicit TLS has no plain phase.
+        # Bamboo.Mua sends the login over a plain connection when the server
+        # does not offer STARTTLS, so anyone who strips STARTTLS on the way
+        # would see the password. Implicit TLS has no plain phase.
         _relayCheck =
           if relay != null && relay.credentials != null && relay.tls == "starttls" then
-            throw "${who}: deps.smtp uses tls = \"starttls\" and deps.smtpCredentials is wired. Plausible's mailer (Bamboo.Mua) sends the password without TLS when the relay does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way. Use the relay's implicit TLS port: a kix.mkImport with tls = \"implicit\" and port = \"465\", wired to this instance with deps.smtp = ref.<ns>.<instance>."
+            throw "${who}: deps.smtp uses tls = \"starttls\" with credentials. Plausible's mailer (Bamboo.Mua) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way. Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance."
           else
             null;
 
@@ -461,8 +457,8 @@ in
                     "MAILER_ADAPTER"
                     "MAILER_EMAIL"
                   ];
-                  from = "the smtp and smtpCredentials dependencies";
-                  fix = "Declare the relay as a kix.mkImport whose out sets host, port, tls, and from, and wire it as deps.smtp. Wire a secret with keys `username` and `password` as deps.smtpCredentials (a secret-ref for a Secret written outside Kix). Set the sender with mail.from.";
+                  from = "the smtp dependency";
+                  fix = "Declare the mail server as a kix.mkImport whose out sets host, port, tls, and from, with credentials = ref.<ns>.<secret> naming a secret with keys `username` and `password` (a secret-ref for a Secret written outside Kix). Set the sender with mail.from.";
                 }
                 {
                   vars = {
@@ -719,8 +715,9 @@ in
             else
               null;
 
-          mailEgress = kix.contracts.smtpRelay.egressPolicy {
-            inherit scope relay;
+          mailEgress = kix.contracts.smtp.egressPolicy {
+            inherit scope;
+            smtp = relay;
             name = "${name}-mail-egress";
             selector = self.deployment.out.selector;
           };

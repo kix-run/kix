@@ -2,7 +2,7 @@
 # routed or explicit BASE_URL, the privileges it asks of its
 # clickhouse-database and the ClickHouse stand-ins it refuses, the citext
 # request and sslmode, the migrations and replicate init container on a
-# replicated server, the secretKeyBase key check, the smtp relay and its
+# replicated server, the secretKeyBase key check, the smtp server and its
 # credentials, literal credentials in env, the mail relay egress, the
 # checksum annotations, and two instances in two namespaces.
 # Also clickhouse-database's check on its grants keys.
@@ -245,10 +245,18 @@ let
       // lib.optionalAttrs smtpCredentials {
         plausible-smtp = {
           package = secretPackage;
-          aliases = [ "smtpCredentials" ];
           config.stringData = {
             username = "plausible";
             password = "smtp-pw";
+          };
+        };
+      }
+      # An SMTP server with a login sits beside its secret.
+      // lib.optionalAttrs (relay != null && smtpCredentials) {
+        smtp.package = eval.mkImport {
+          scope = "namespace";
+          out = relay // {
+            credentials = ref.${ns}.plausible-smtp;
           };
         };
       }
@@ -259,8 +267,10 @@ let
           config.stringData.password = "smtp-pw";
         };
       };
-      # One relay for the cluster, in a namespace of its own.
-      instances.${if relay != null then "mail" else null}.smtp.package = eval.mkImport { out = relay; };
+      # Without a login, one SMTP server serves the cluster from its own namespace.
+      instances.${if relay != null && !smtpCredentials then "mail" else null}.smtp.package =
+        eval.mkImport
+          { out = relay; };
     };
 
   implicitRelay = {
@@ -536,7 +546,7 @@ in
 
   # A relay and its credentials set the mailer, the relay, the login from
   # the secret, and the relay's sender; mail.from replaces the sender.
-  plausible-smtp-relay-env =
+  plausible-smtp-env =
     let
       env = mainEnvOf (clusterWith {
         relay = implicitRelay;
@@ -566,8 +576,8 @@ in
 
   # Each refusal beside a passing control: credentials over STARTTLS (Mua
   # would send them in clear text when STARTTLS is stripped), tls = "none"
-  # outside the cluster, credentials without a relay, a relay without a
-  # sender, the replaced smtpPassword dependency, and SMTP_* in env.
+  # outside the cluster, a server without a sender, the replaced
+  # smtpPassword dependency, and SMTP_* in env.
   plausible-smtp-refusals =
     let
       starttls = implicitRelay // {
@@ -594,9 +604,6 @@ in
           external = false;
         };
       }))
-      && evalFails (clusterWith {
-        smtpCredentials = true;
-      })
       && evalFails (clusterWith {
         relay = removeAttrs implicitRelay [ "from" ];
       })

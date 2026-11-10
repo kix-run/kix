@@ -12,11 +12,9 @@
 #                         Postgres database contract
 #                         (kix.contracts.postgresDatabase), such as
 #                         stackgres-database
-#   smtp (optional)       a mail relay honouring the SMTP relay contract
-#                         (kix.contracts.smtpRelay), usually a kix.mkImport,
-#                         for invitations, verification, and alerts
-#   smtpCredentials       a secret with keys `username` and `password`, the
-#     (optional)          login at the relay
+#   smtp (optional)       a mail server honouring the SMTP contract
+#                         (kix.contracts.smtp), usually a kix.mkImport, for
+#                         invitations, verification, and alerts
 #
 # Minimal instance, with a stackgres-cluster `postgres` elsewhere:
 #
@@ -35,9 +33,9 @@
 #
 # Mail: with `smtp` wired, the package sets SMTP_HOST, SMTP_PORT,
 # SMTP_SECURITY (`starttls`, `force_tls` for implicit TLS, or `off`),
-# SMTP_FROM (the relay's `out.from`, or `mail.from`), and the login from
-# `smtpCredentials`, and refuses them in `env`. Vaultwarden refuses to send
-# when the relay does not offer STARTTLS. A relay outside the cluster gets
+# SMTP_FROM (the server's `out.from`, or `mail.from`), and the login from
+# its `out.credentials`, and refuses them in `env`. Vaultwarden refuses to
+# send when the server does not offer STARTTLS. A server outside the cluster gets
 # egress to any address on its port, because the network policy cannot name
 # a host outside the cluster.
 #
@@ -139,16 +137,14 @@ in
         storage,
         database,
         smtp ? null,
-        smtpCredentials ? null,
         scope,
         kix,
         ...
       }:
       let
-        relay = kix.contracts.smtpRelay.requireRelay {
+        relay = kix.contracts.smtp.settings {
           who = "vaultwarden ${scope.namespaceName}/${name}";
           inherit smtp;
-          credentials = smtpCredentials;
           inherit (config.mail) from;
         };
 
@@ -294,8 +290,8 @@ in
                                 "SMTP_PASSWORD_FILE"
                                 "USE_SENDMAIL"
                               ];
-                              from = "the smtp and smtpCredentials dependencies";
-                              fix = "Wire another relay through deps.smtp, another login through deps.smtpCredentials, or set mail.from.";
+                              from = "the smtp dependency";
+                              fix = "Wire another SMTP instance through deps.smtp, or set mail.from.";
                             }
                             ++ [
                               {
@@ -336,8 +332,9 @@ in
           ]
           |> scope.mkDeployment;
 
-        mailEgress = kix.contracts.smtpRelay.egressPolicy {
-          inherit scope relay;
+        mailEgress = kix.contracts.smtp.egressPolicy {
+          inherit scope;
+          smtp = relay;
           name = "${name}-mail-egress";
           selector = self.deployment.out.selector;
         };

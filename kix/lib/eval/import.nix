@@ -462,7 +462,53 @@ rec {
           { ${h.kind} = h.handle; }
       ) (derived.out.crds or { }) crdHandleList;
 
-      out = derived.out // lib.optionalAttrs (crdEntries != [ ]) { crds = crdHandles; };
+      isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
+      isPlainAttrs = v: builtins.isAttrs v && !(v ? _type);
+
+      # Return the instance a `ref` in `out` names. An import has no
+      # dependency resolution, so `ref` is how its `out` carries another
+      # instance, such as the Secret that holds a login. A ref does not
+      # activate an optional target.
+      resolveOutRef =
+        path: entry:
+        let
+          refText = "ref.${entry.namespace}.${entry.instanceName}";
+        in
+        if entry.namespace == namespaceName && entry.instanceName == instanceName then
+          throw "${who}: out.${path} names ${refText}, the import itself."
+        else if isInstanceActive entry.namespace entry.instanceName then
+          allInstances.${entry.namespace}.${entry.instanceName}
+        else
+          throw "${who}: out.${path} names ${refText}, which is not an active instance. Declare it under instances.${entry.namespace}.${entry.instanceName}, or set optional = false on it.";
+
+      # Replace each ref in `out`, at any depth of plain attribute sets.
+      resolveOutRefs =
+        path: v:
+        if isRef v then
+          resolveOutRef path v
+        else if isPlainAttrs v then
+          lib.mapAttrs (k: resolveOutRefs (if path == "" then k else "${path}.${k}")) v
+        else
+          v;
+
+      # Collect the refs the cluster definition wrote in `out`, so the
+      # import's marker waits for each target at deploy time.
+      outRefTargets =
+        let
+          collect =
+            path: v:
+            if isRef v then
+              [ (resolveOutRef path v).root ]
+            else if isPlainAttrs v then
+              lib.concatLists (lib.mapAttrsToList (k: collect (if path == "" then k else "${path}.${k}")) v)
+            else
+              [ ];
+        in
+        collect "" importDef.out;
+
+      out = resolveOutRefs "" (
+        derived.out // lib.optionalAttrs (crdEntries != [ ]) { crds = crdHandles; }
+      );
 
       networkConfig = clusterConfig.networkPolicy or { enable = false; };
       rawPlatformIntents = instCfg.platformIntents or { };
@@ -529,7 +575,8 @@ rec {
         else
           entry;
 
-      instanceExtraDeps = map resolveExtraDep (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
+      instanceExtraDeps =
+        map resolveExtraDep (instCfg.extraDeps or [ ]) ++ outRefTargets ++ materializedIntentPolicies;
 
       markerResource = mkResource {
         apiVersion = kixAnnotations.apiVersion;
