@@ -552,6 +552,12 @@ rec {
       # cluster-level instances, which do not emit a Namespace resource.
       isSentinelNamespace = ns: lib.hasPrefix "_" ns;
 
+      # Report whether `r` is the PackageInstance record of an instance under
+      # a sentinel key. It sits in `cluster.recordNamespace`, which Kix
+      # expects to exist and does not create.
+      isSentinelRecord =
+        r: r.kind == "PackageInstance" && isSentinelNamespace (r.spec.namespaceName or "");
+
       uniqueNamespaceFailures =
         let
           missingNs = lib.unique (
@@ -560,7 +566,12 @@ rec {
               let
                 ns = r.metadata.namespace or null;
               in
-              if ns != null && !(isSentinelNamespace ns) && !(namespaceNames ? ${ns}) then [ ns ] else [ ]
+              if
+                ns != null && !(isSentinelNamespace ns) && !(namespaceNames ? ${ns}) && !(isSentinelRecord r)
+              then
+                [ ns ]
+              else
+                [ ]
             ) resources
           );
         in

@@ -40,6 +40,8 @@ in
       namespaceName,
       instCfg,
       namespaceResource,
+      # The namespace of this instance's PackageInstance record.
+      recordNamespace ? namespaceResource,
       nsResources ? { },
       clusterLabels,
       resolutionIndex,
@@ -670,7 +672,7 @@ in
 
         packageInstance = mkPackageInstance {
           inherit instanceName namespaceName;
-          namespace = namespaceResource;
+          namespace = recordNamespace;
           mainResource = rootRes;
           inherit packageRequires postHooks;
           inverseDeps = inverseDeps ++ processorResources;

@@ -518,6 +518,14 @@
               namespaceName = nsName;
               inherit instCfg nsResources;
               namespaceResource = nsResources.${nsName};
+              # A sentinel key names no real namespace, so its record goes to
+              # `cluster.recordNamespace`. Referencing that Namespace when the
+              # cluster manages it orders the record after it.
+              recordNamespace =
+                if isSentinelNs nsName then
+                  nsResources.${cfg.cluster.recordNamespace} or cfg.cluster.recordNamespace
+                else
+                  nsResources.${nsName};
               allInstances = self;
               clusterLabels = cfg.clusterLabels;
               clusterConfig = cfg;

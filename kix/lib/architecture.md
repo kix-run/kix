@@ -24,7 +24,7 @@ Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema 
 flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
   1. evalModules (modules.nix, imports plugins/netpol/module.nix + plugins/availability/module.nix)
   2. computeAutoInstances (eval/auto.nix)      # explicit wins
-  3. namespaces: real vs sentinel (`_`-prefixed)
+  3. namespaces: real vs sentinel (`_`-prefixed); a sentinel instance's PI goes to cluster.recordNamespace
   4. resolution index (eval/resolve.nix)       # DNS-like DI map
   5. phase-1 pre-pass                          # introspect, resolve dep targets, config injections
                                                # (`ref.<ns>.<inst>` is a static pointer built over

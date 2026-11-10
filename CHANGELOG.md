@@ -17,6 +17,10 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+### Added
+
+- `cluster.recordNamespace` names the namespace for the `PackageInstance` record of each instance under a `_`-prefixed key such as `instances._cluster`. The default is `kube-system`. Before, Kix wrote these records to a namespace named `_cluster`, which Kubernetes refuses, so a deploy of such an instance failed. Kix does not create this namespace. On a cluster that refuses writes to `kube-system`, such as GKE Autopilot, set another namespace that exists.
+
 ### Changed
 
 - `caddy` takes `replicas`, like other packages. `replicaCount` still works with a warning, and 0.10 removes it.
