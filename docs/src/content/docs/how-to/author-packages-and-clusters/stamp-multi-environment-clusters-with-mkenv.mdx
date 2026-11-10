@@ -37,7 +37,7 @@ The three arguments are:
 2. Environment configuration, with optional per-instance `overrides`.
 3. Named instance-set functions.
 
-The production call passes `replicaCount = 3` to every instance set through
+The production call passes `replicas = 3` to every instance set through
 `env.config`, then overrides the `web` instance's message.
 
 Overrides are keyed by `<set>.<instance>` and recognize only `config` and
