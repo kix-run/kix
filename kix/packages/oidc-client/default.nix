@@ -91,6 +91,9 @@ in
       ...
     }:
     let
+      # Order the marker after the secret instance's root resource. A
+      # dependency's own `root` is its PackageInstance record, which a
+      # resource must not depend on.
       credentials = kix.checkSecretKeys {
         inherit who;
         arg = "oidcClient";
@@ -102,7 +105,7 @@ in
       ready = scope.mkSecretRef {
         name = credentials.out.name;
         keys = kix.contracts.oidc.credentialKeys;
-        requires = lib.optional (credentials ? root) credentials.root;
+        requires = lib.optional (credentials ? raw) (credentials.raw.root.resource or credentials.raw.root);
       };
 
       root = {
