@@ -3,8 +3,8 @@ title: "Eval cache behavior"
 description: "Where Kix caches cluster evaluations, what the cache key covers, what invalidates an entry, and when to pass `--no-cache`."
 ---
 
-Kix keeps the results of cluster evaluations in a local SQLite database so that
-repeated commands against an unchanged flake skip evaluation. A cached result
+Kix keeps the results of cluster evaluations in local files so that repeated
+commands against an unchanged flake skip evaluation. A cached result
 is reused only when the flake's source files and `flake.lock` are unchanged.
 
 This page is hand-maintained. Check `cli/kix/src/eval/cache.rs`,
@@ -14,13 +14,17 @@ This page is hand-maintained. Check `cli/kix/src/eval/cache.rs`,
 
 | Path | Content |
 | --- | --- |
-| `<cache dir>/kix/eval-cache.db` | Evaluation results and source fingerprints |
+| `<cache dir>/kix/eval-cache` | Evaluation results and source fingerprints, one file each |
 | `<cache dir>/kix/store` | Kix's local store for the default `kix` builder (flake inputs, rendered Helm charts, and evaluated manifests), or `$KIX_STORE_ROOT` when set; projects with `builder = "nix"` in [`kix.toml`](/docs/reference/kix-toml/) use `/nix/store` instead |
 | `<cache dir>/kix/activations/<cluster>` | Symlinks and paths for each cluster's last local activation |
 
 `<cache dir>` is `$XDG_CACHE_HOME` when set, or `~/.cache` on both Linux and
-macOS. Deleting `eval-cache.db` is safe; the next command re-creates it and
-re-evaluates the cluster.
+macOS. Deleting `eval-cache` is safe. The next command re-creates it and
+evaluates the cluster again.
+
+Kix keeps one result for each project and each thing it evaluates, such as a
+cluster. A new result replaces the old one, so the cache does not grow as you
+edit. Switching back to a branch you used before evaluates its clusters again.
 
 ## What is cached
 
@@ -32,7 +36,7 @@ re-evaluates the cluster.
 
 Commands that evaluate the cluster's activation index directly, such as
 `deploy`, `plan`, `diff`, `bundle`, `export`, `logs`, and `pf`, do not read
-`eval-cache.db`. They evaluate the cluster each time. The store
+the eval cache. They evaluate the cluster each time. The store
 (`<cache dir>/kix/store` under the default `kix` builder, or `/nix/store`
 under `builder = "nix"`) keeps the project's inputs and rendered Helm charts,
 so these are not fetched or rendered again.
@@ -62,25 +66,26 @@ reused without reading the files.
 - Changing `builder` in [`kix.toml`](/docs/reference/kix-toml/) or changing `KIX_STORE_ROOT`.
 - Running from a different flake directory.
 
+Kix does not use the cache when you pass `--override-input`, because the key
+cannot tell what an overridden input holds.
+
 The key does not cover:
 
 - files with other extensions that the cluster reads, for example with
   `builtins.readFile`;
-- `--override-input` values;
 - inputs whose content changes without a change to `flake.lock`, such as a
   `path:` input pointing outside the flake directory.
 
 Pass `--no-cache` after changing any of these. It evaluates from source and
-neither reads nor writes the database.
+neither reads nor writes the cache.
 
 A cache entry that cannot be parsed is discarded and the evaluation runs
 again. A failure to write the cache is logged and does not fail the command.
 
 ## Remote flake references
 
-The source fingerprint needs a local directory. A command that uses this
-cache fails with "could not access the Nix evaluation cache" when `--flake`
-names a remote reference such as `github:org/repo`, with or without
+The commands that use this cache need a local directory. They fail when
+`--flake` names a remote reference such as `github:org/repo`, with or without
 `--no-cache`. Clone the repository and pass its local path.
 
 :::note[Reference]

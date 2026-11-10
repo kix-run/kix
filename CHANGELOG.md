@@ -17,6 +17,16 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+### Upgrade notes
+
+- Kix keeps its eval cache in files under `~/.cache/kix/eval-cache` instead of a SQLite database. The first command after you upgrade evaluates your clusters again, and Kix deletes the old `~/.cache/kix/eval-cache.db`. The cache now holds one result for each cluster and no longer grows as you edit.
+
+### Fixed
+
+- `--override-input` no longer returns a cached result built before the override. Kix now evaluates from source whenever you pass it.
+- A busy or broken eval cache no longer fails a command. Kix logs a warning and evaluates from source.
+- The `kix-lib` Rust crate no longer depends on SQLite, so a program that links it can use any SQLite version.
+
 ## 0.8.1 - 2026-11-09
 
 ### Fixed

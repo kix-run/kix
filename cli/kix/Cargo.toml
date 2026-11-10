@@ -51,9 +51,6 @@ fastrand.workspace = true
 # DAG
 petgraph.workspace = true
 
-# SQLite (eval caching)
-rusqlite.workspace = true
-
 # Container registry (`kix pin`)
 reqwest.workspace = true
 base64.workspace = true

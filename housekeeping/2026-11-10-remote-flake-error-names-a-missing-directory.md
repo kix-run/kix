@@ -1,0 +1,3 @@
+# 2026-11-10 · `kix-cli/src/commands/mod.rs`, `--flake` · A remote `--flake` reference fails with an error about a missing directory and does not say that remote references are unsupported.
+
+`kix --flake git+file:///path/to/repo list clusters` logs "failed to canonicalize path" twice and stops with "`nix eval ...` in git+file:///... did not run: No such file or directory". `LocalBuilder` runs `nix` with the flake reference as its working directory. The docs (`eval-cache-behavior.mdx`, `global-flags.mdx`) say remote references fail, but the user gets no hint to clone the repository and pass a local path.

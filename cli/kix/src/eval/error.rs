@@ -33,12 +33,6 @@ pub enum KixEvalError {
     )]
     NoActivationIndex { cluster: String },
 
-    #[error("could not access the Nix evaluation cache: {source}")]
-    CacheError {
-        #[source]
-        source: anyhow::Error,
-    },
-
     #[error("could not read the built resources and their dependencies: {message}")]
     StoreGraphError { message: String },
 
