@@ -1,8 +1,10 @@
 # clusters/test-plausible.nix: Plausible Community Edition on a CloudNativePG
 # database and a single-node ClickHouse, under Cilium default-deny.
 #
-# Every dependency is wired, the optional smtpPassword included (the relay
-# address is a placeholder, so mail fails and nothing else does).
+# Every dependency is wired, the optional smtp relay and its credentials
+# included. The relay is a kix.mkImport in its own namespace, as one relay
+# for the whole cluster would be. Its address is a placeholder, so mail
+# fails and nothing else does.
 # ingress-nginx and a host give the route and BASE_URL. The ClickHouse
 # server lives in `events` and the application in `analytics`, so the
 # clickhouse-database facade crosses a namespace as it does in a real
@@ -56,16 +58,21 @@ kix.buildCluster {
           };
         };
 
+        instances.mail.smtp.package = kix.mkImport {
+          out = {
+            host = "smtp.localtest.me";
+            port = "465";
+            tls = "implicit";
+            from = "noreply@localtest.me";
+          };
+        };
+
         instances.analytics = {
           plausible = {
             package = packages.plausible;
             config = {
               ingress.host = "plausible.localtest.me";
-              env = {
-                MAILER_EMAIL = "plausible@localtest.me";
-                SMTP_HOST_ADDR = "smtp.localtest.me";
-                SMTP_USER_NAME = "plausible";
-              };
+              mail.from = "plausible@localtest.me";
             };
           };
           plausible-pg = {
@@ -89,8 +96,11 @@ kix.buildCluster {
           };
           plausible-smtp = {
             package = packages.secret;
-            aliases = [ "smtpPassword" ];
-            config.stringData.password = "smtp-dev-password";
+            aliases = [ "smtpCredentials" ];
+            config.stringData = {
+              username = "plausible";
+              password = "smtp-dev-password";
+            };
           };
         };
       }

@@ -228,4 +228,5 @@ in
     ];
     autoLogin = "`auth.generic_oauth.auto_login`";
   };
+  mail = kix.options.mail;
 }

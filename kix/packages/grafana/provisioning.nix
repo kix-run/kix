@@ -12,6 +12,7 @@
   oidcOn,
   oidcProviderInfo,
   oidcCredentials,
+  relay,
   prometheusServer,
   alertmanager,
   loki,
@@ -139,6 +140,17 @@ let
     log.mode = "console";
   }
   // lib.optionalAttrs (rootUrl != null) { server.root_url = rootUrl; }
+  # Grafana's mailer picks implicit TLS from port 465 alone, which the
+  # package checks. MandatoryStartTLS refuses a relay that does not offer
+  # STARTTLS.
+  // lib.optionalAttrs (relay != null) {
+    smtp = {
+      enabled = true;
+      host = "${relay.host}:${relay.port}";
+      from_address = relay.from;
+      startTLS_policy = if relay.tls == "none" then "NoStartTLS" else "MandatoryStartTLS";
+    };
+  }
   // lib.optionalAttrs oidcOn {
     "auth.generic_oauth" =
       let
@@ -169,6 +181,15 @@ let
     "auto_login"
   ];
 
+  smtpKeys = [
+    "enabled"
+    "host"
+    "from_address"
+    "startTLS_policy"
+    "user"
+    "password"
+  ];
+
   ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
     kix.mergeGuarded {
       inherit who;
@@ -193,6 +214,12 @@ let
           "auth.generic_oauth"
           k
         ]) oidcKeys
+      )
+      ++ lib.optionals (relay != null) (
+        map (k: [
+          "smtp"
+          k
+        ]) smtpKeys
       );
     } defaultIni config.settings
   );
@@ -280,6 +307,18 @@ let
           ];
         from = "the oidc option and the oidcClient dependency";
         fix = "Set the oidc option, or wire another secret through deps.oidcClient.";
+      }
+      ++ lib.optional (relay != null) {
+        vars = lib.optionalAttrs (relay.credentials != null) {
+          GF_SMTP_USER = relay.credentials.out.keyRef "username";
+          GF_SMTP_PASSWORD = relay.credentials.out.keyRef "password";
+        };
+        names = map (k: "GF_SMTP_${lib.toUpper k}") smtpKeys ++ [
+          "GF_SMTP_USER__FILE"
+          "GF_SMTP_PASSWORD__FILE"
+        ];
+        from = "the smtp and smtpCredentials dependencies";
+        fix = "Wire another relay through deps.smtp, another login through deps.smtpCredentials, or set mail.from.";
       };
     } config.env
   );

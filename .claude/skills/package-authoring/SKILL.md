@@ -194,8 +194,11 @@ the defaults fails there.
 ### 4. Contracts consumed, and fixing the provider
 
 - Choose by alias and contract, never by package (P10, P13). Lib contracts:
-  `kix.contracts.postgresDatabase`, `oidcProvider`, and `otlpEndpoint`
-  (`kix/lib/vocab/`); `gateway` is held by `kix.expose`, not by the package.
+  `kix.contracts.postgresDatabase`, `oidcProvider`, `otlpEndpoint`, and
+  `smtpRelay` (`kix/lib/vocab/`); `gateway` is held by `kix.expose`, not by
+  the package. An application that sends mail takes `smtp ? null` and
+  `smtpCredentials ? null`, and maps `requireRelay`'s result onto its own
+  settings (vaultwarden, grafana, plausible).
   Package-local: `kix/packages/clickhouse/contract.nix`. Consumers hold the
   dependency with `assertions`, providers pass `root.out` through `check`
   (D30; pattern table, "Contracts").

@@ -26,6 +26,12 @@
 #   prometheus (optional)        ServiceMonitor on `/metrics` when
 #                                `metrics.enabled`.
 #   oidcProvider, oidcClient     Single sign-on when `oidc.enabled` is true.
+#   smtp (optional)              Mail relay for alert notifications,
+#                                invitations, and reports, honouring the SMTP
+#                                relay contract (kix.contracts.smtpRelay),
+#                                usually a kix.mkImport.
+#   smtpCredentials (optional)   Secret with keys `username` and `password`,
+#                                the login at the relay.
 #
 # Minimal instances:
 #
@@ -62,6 +68,15 @@
 # Register a confidential client with redirect URI
 # `<root_url>/login/generic_oauth` (requires `root_url`). Role mapping can be
 # configured via `settings."auth.generic_oauth".role_attribute_path`.
+#
+# Mail: with `smtp` wired, the package fills grafana.ini's `[smtp]` section
+# (the sender is the relay's `out.from`, or `mail.from`) and passes the login
+# from `smtpCredentials` as GF_SMTP_USER and GF_SMTP_PASSWORD. It refuses
+# those keys in `settings` and `env`. Grafana requires STARTTLS
+# (MandatoryStartTLS), and uses implicit TLS only on port 465, so an
+# implicit-TLS relay on another port is refused. A relay outside the cluster
+# gets egress to any address on its port, because the network policy cannot
+# name a host outside the cluster.
 #
 # `out`: Service `name`, `fqdn`, and `port` (80).
 # Limits: single replica (`availability.max = "none"` on the Deployment).
@@ -129,9 +144,28 @@ in
         tempo ? null,
         oidcProvider ? null,
         oidcClient ? null,
+        smtp ? null,
+        smtpCredentials ? null,
         ...
       }:
       let
+        relay =
+          let
+            r = kix.contracts.smtpRelay.requireRelay {
+              inherit who smtp;
+              credentials = smtpCredentials;
+              inherit (config.mail) from;
+            };
+          in
+          if r == null then
+            null
+          else if r.tls == "implicit" && r.portNumber != 465 then
+            throw "${who}: deps.smtp uses tls = \"implicit\" on port ${r.port}. Grafana's mailer uses implicit TLS only on port 465, so it would speak plain SMTP to this port. Use the relay's port 465, or its STARTTLS port with tls = \"starttls\"."
+          else if r.tls != "implicit" && r.portNumber == 465 then
+            throw "${who}: deps.smtp uses tls = \"${r.tls}\" on port 465. Grafana's mailer always uses implicit TLS on port 465. Set tls = \"implicit\" on the relay."
+          else
+            r;
+
         oidcOn = config.oidc.enabled;
         oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
           inherit who;
@@ -185,6 +219,7 @@ in
             oidcOn
             oidcProviderInfo
             oidcCredentials
+            relay
             prometheusServer
             alertmanager
             loki
@@ -435,6 +470,11 @@ in
               "checksum/config" = self.configMap.out.identityHash;
               "checksum/grafana-admin" = admin.out.identityHash or null;
               "checksum/oidc-client" = if oidcOn then oidcCredentials.out.identityHash or null else null;
+              "checksum/smtp" =
+                if relay != null && relay.credentials != null then
+                  relay.credentials.out.identityHash or null
+                else
+                  null;
             };
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
@@ -553,6 +593,12 @@ in
               initContainers = [ initChownContainer ];
             };
           };
+        };
+
+        mailEgress = kix.contracts.smtpRelay.egressPolicy {
+          inherit scope relay;
+          name = "${name}-mail-egress";
+          selector = self.deployment.out.selector;
         };
 
         service =

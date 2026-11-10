@@ -88,6 +88,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `vocab/gateway.nix` | `kix.contracts.gateway`: Gateway provider/consumer contract (`gatewayRef`, `listeners`, `podSelector`, `podNamespace`). |
 | `vocab/oidc-provider.nix` | `kix.contracts.oidcProvider` and `kix.options.oidc`: OpenID Connect provider contract (`issuerUrl`, `endpoints`), `requireClient`, and consumer option schema. |
 | `vocab/otlp-endpoint.nix` | `kix.contracts.otlpEndpoint`: OTLP receiver contract (`otlpGrpcUrl`, `otlpHttpUrl`, `tls`). |
+| `vocab/smtp-relay.nix` | `kix.contracts.smtpRelay` and `kix.options.mail`: SMTP relay contract (`host`, `port`, `tls`, `from`, `external`), `requireRelay` (checks `smtp` and `smtpCredentials`, refuses `tls = "none"` outside the cluster), and `egressPolicy`. |
 | `vocab/postgres-database.nix` | `kix.contracts.postgresDatabase`: PostgreSQL database contract (`host`, `port`, `database`, `credentials`, `username`, `extensions`, `tls`). |
 | `vocab/pins.nix` | `kix.pins`: loads and validates committed JSON pin files. |
 | `vocab/quantity.nix` | Kubernetes quantity grammar (`kix.types.quantity`) and parser (`kix.parseQuantity`). |

@@ -356,6 +356,7 @@ Every package in a flake checked by `kix.mkFlake` or `kix.checkPackageOptions` m
 | `kix.options.alerts` | option attrset (not a function) | Attribute set `{ enabled; }` where `enabled` is `bool` (default `true`), for packages that render alert rules without a `kix.monitor` scrape. Assign as `options.metrics = kix.options.alerts;`; read by `kix.alerts` from `config.metrics.enabled`. |
 | `kix.options.healthCheck` | option attrset (not a function) | Attribute set `{ enabled; retryFor; }` where `enabled` is `bool` (default `false`) and `retryFor` is `int` (default `90`). Assign as `options.healthCheck = kix.options.healthCheck;`; read by `kix.healthCheck` from `config.healthCheck`. |
 | `kix.options.oidc` | `{ scopes, autoLogin ? null }` | Attribute set of options `{ enabled; realm; scopes; autoLogin?; }` where `enabled` is `bool` (default `false`), `realm` is `nullOr str` (default `null`), `scopes` is `listOf str` that must include `"openid"` (default `scopes`), and `autoLogin` is `bool` (default `false`, included only when `autoLogin != null`). |
+| `kix.options.mail` | option attrset (not a function) | Attribute set `{ from; }` where `from` is `nullOr str` holding one `@` (default `null`): the sender address that replaces the `smtp` relay's `out.from`. Assign as `options.mail = kix.options.mail;` and pass `config.mail.from` to `kix.contracts.smtpRelay.requireRelay`. |
 
 ### Resource quantities (`kix.types.quantity` and `kix.parseQuantity`)
 
@@ -483,11 +484,63 @@ deps.postgres = {
 | `kix.contracts.postgresDatabase` | `"database"` | Required: `host` (`str`), `port` (`str`), `database` (`str`), `credentials` (Secret instance exposing `out.keyRef` with keys `username` and `password`). Optional: `username` (`str`), `extensions` (list of strings or `{ name; version; }`), `tls` (`nullOr bool`). |
 | `kix.contracts.gateway` | `"gateway"` | Required: `gatewayRef` (`{ name; namespace; }`). Optional: `listeners` (list of `{ name; port; protocol; }`), `podSelector` (non-empty attrset of strings or `null`), `podNamespace` (`nullOr str`; must be set together with `podSelector`). Exposes `require` (`who: dep: dep`) and `claims` instead of `assertions`. |
 | `kix.contracts.oidcProvider` | `"oidcProvider"` | Required: `issuerUrl` (function `realm -> url`). Optional: `endpoints` (function `realm -> { authorizationUrl; tokenUrl; userinfoUrl; }`). Also provides `requireClient`, `clientKeys`, and `clientOptions` (`kix.options.oidc`). |
+| `kix.contracts.smtpRelay` | `"smtp"` | Required: `host` (hostname or IP address with no port), `port` (`str` or `int` from 1 to 65535), `tls` (`"starttls"`, `"implicit"`, or `"none"`). Optional: `from` (`nullOr str`, the default sender address), `external` (`bool`; a relay without it counts as outside the cluster). Also provides `requireRelay`, `egressPolicy`, `credentialKeys`, and `options` (`kix.options.mail`). See [Mail relays](#mail-relays-kixcontractssmtprelay). |
 | `kix.contracts.otlpEndpoint` | `"otlp"` | Required: `otlpGrpcUrl` (base URL `scheme://host:port` with no path), `otlpHttpUrl` (base URL `scheme://host:port` with no path). Optional: `tls` (`nullOr bool`). |
 
 ```nix
 deps.database.assertions = kix.contracts.postgresDatabase.assertions "grafana";
 ```
+
+### Mail relays (`kix.contracts.smtpRelay`)
+
+A package that sends mail takes two optional dependencies:
+
+- `smtp ? null` is the relay. It carries only settings, so one `kix.mkImport` can serve every namespace in the cluster.
+- `smtpCredentials ? null` is a secret with keys `username` and `password`, the login at the relay. It lives in the consumer's namespace, because a pod can read Secrets only from its own namespace. Each application can have its own login.
+
+```nix
+# One relay for the cluster.
+instances.mail.smtp.package = kix.mkImport {
+  out = {
+    host = "smtp.example.org";
+    port = "465";
+    tls = "implicit";
+    from = "noreply@example.org";
+  };
+};
+
+# The login for one application, in that application's namespace.
+instances.vault.vaultwarden-smtp = {
+  package = packages.secret-ref;
+  aliases = [ "smtpCredentials" ];
+  config.keys = [ "username" "password" ];
+};
+```
+
+To give one application a different relay, declare a second import and wire it with `deps.smtp = ref.<namespace>.<instance>`.
+
+In the package, `requireRelay` checks both dependencies and returns the settings, or `null` when no relay is wired:
+
+```nix
+relay = kix.contracts.smtpRelay.requireRelay {
+  inherit who smtp;
+  credentials = smtpCredentials;
+  inherit (config.mail) from;
+};
+# relay = { host; port; portNumber; tls; external; from; credentials; }
+```
+
+`requireRelay` refuses these setups:
+
+- `tls = "none"` on a relay outside the cluster, because the password and the mail would cross the internet in clear text
+- a relay with no sender address, from either its `out.from` or the instance's `mail.from`
+- `smtpCredentials` without `smtp`
+
+`port` is a string, as in `out.port`, and `portNumber` is the same port as a number. `credentials` is the checked secret, or `null`. Read the login with `relay.credentials.out.keyRef "username"` and `"password"`.
+
+`kix.contracts.smtpRelay.egressPolicy { scope; name; selector; relay; }` returns a network policy for a relay outside the cluster, or `null`. The policy lets the selected pods reach any address on the relay's port, because the network policy cannot name a host outside the cluster.
+
+Each package maps the TLS mode onto the application's own settings. Check that the application refuses to send when a `"starttls"` relay does not offer STARTTLS. If it sends the login anyway, refuse `"starttls"` while `smtpCredentials` is wired, as `plausible` does.
 
 ---
 

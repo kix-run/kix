@@ -12,6 +12,11 @@
 #                         Postgres database contract
 #                         (kix.contracts.postgresDatabase), such as
 #                         stackgres-database
+#   smtp (optional)       a mail relay honouring the SMTP relay contract
+#                         (kix.contracts.smtpRelay), usually a kix.mkImport,
+#                         for invitations, verification, and alerts
+#   smtpCredentials       a secret with keys `username` and `password`, the
+#     (optional)          login at the relay
 #
 # Minimal instance, with a stackgres-cluster `postgres` elsewhere:
 #
@@ -27,6 +32,14 @@
 #     };
 #     vaultwarden.package = packages.vaultwarden;   # takes deps.storage
 #   };                                              # and deps.database
+#
+# Mail: with `smtp` wired, the package sets SMTP_HOST, SMTP_PORT,
+# SMTP_SECURITY (`starttls`, `force_tls` for implicit TLS, or `off`),
+# SMTP_FROM (the relay's `out.from`, or `mail.from`), and the login from
+# `smtpCredentials`, and refuses them in `env`. Vaultwarden refuses to send
+# when the relay does not offer STARTTLS. A relay outside the cluster gets
+# egress to any address on its port, because the network policy cannot name
+# a host outside the cluster.
 #
 # `out`: the Service's `name`, `fqdn`, and `port` (8080).
 #
@@ -100,6 +113,7 @@ in
       };
     };
     ingress = kix.options.ingress;
+    mail = kix.options.mail;
     initChownData = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -124,11 +138,20 @@ in
         clusterConfig,
         storage,
         database,
+        smtp ? null,
+        smtpCredentials ? null,
         scope,
         kix,
         ...
       }:
       let
+        relay = kix.contracts.smtpRelay.requireRelay {
+          who = "vaultwarden ${scope.namespaceName}/${name}";
+          inherit smtp;
+          credentials = smtpCredentials;
+          inherit (config.mail) from;
+        };
+
         healthCheck = {
           httpGet = {
             path = "/alive";
@@ -156,9 +179,16 @@ in
               selector.matchLabels = scope.selectorLabels;
               # A changed database password restarts the pods, which read it
               # once at start. A Secret Kix does not build has no hash.
-              template.metadata.annotations = lib.optionalAttrs (database.out.credentials.out ? identityHash) {
-                "checksum/database" = database.out.credentials.out.identityHash;
-              };
+              template.metadata.annotations =
+                lib.optionalAttrs (database.out.credentials.out ? identityHash) {
+                  "checksum/database" = database.out.credentials.out.identityHash;
+                }
+                //
+                  lib.optionalAttrs
+                    (relay != null && relay.credentials != null && relay.credentials.out ? identityHash)
+                    {
+                      "checksum/smtp" = relay.credentials.out.identityHash;
+                    };
               template.spec = {
                 # Kubernetes default: Rocket's own shutdown grace is a few
                 # seconds.
@@ -239,6 +269,35 @@ in
                                 from = "the storage dependency, which the package mounts at ${dataMount.mountPath}";
                                 fix = "Remove it.";
                               }
+                            ]
+                            ++ lib.optional (relay != null) {
+                              vars = {
+                                SMTP_HOST = relay.host;
+                                SMTP_PORT = relay.port;
+                                SMTP_SECURITY =
+                                  {
+                                    starttls = "starttls";
+                                    implicit = "force_tls";
+                                    none = "off";
+                                  }
+                                  .${relay.tls};
+                                SMTP_FROM = relay.from;
+                              }
+                              // lib.optionalAttrs (relay.credentials != null) {
+                                SMTP_USERNAME = relay.credentials.out.keyRef "username";
+                                SMTP_PASSWORD = relay.credentials.out.keyRef "password";
+                              };
+                              names = [
+                                "SMTP_USERNAME"
+                                "SMTP_PASSWORD"
+                                "SMTP_USERNAME_FILE"
+                                "SMTP_PASSWORD_FILE"
+                                "USE_SENDMAIL"
+                              ];
+                              from = "the smtp and smtpCredentials dependencies";
+                              fix = "Wire another relay through deps.smtp, another login through deps.smtpCredentials, or set mail.from.";
+                            }
+                            ++ [
                               {
                                 vars = {
                                   ROCKET_ADDRESS = "0.0.0.0";
@@ -276,6 +335,12 @@ in
             dataMount
           ]
           |> scope.mkDeployment;
+
+        mailEgress = kix.contracts.smtpRelay.egressPolicy {
+          inherit scope relay;
+          name = "${name}-mail-egress";
+          selector = self.deployment.out.selector;
+        };
 
         service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
 

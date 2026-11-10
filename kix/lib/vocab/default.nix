@@ -8,6 +8,7 @@ let
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
   oidcProvider = import ./oidc-provider.nix { inherit lib; };
+  smtpRelay = import ./smtp-relay.nix { inherit lib; };
   quotaUse = import ./quota-use.nix { inherit lib; };
 in
 compose
@@ -30,10 +31,15 @@ compose
   contracts.gateway = import ./gateway.nix { inherit lib; };
   # Validate and consume `oidcProvider` outputs (`vocab/oidc-provider.nix`).
   contracts.oidcProvider = oidcProvider;
+  # Validate and consume `smtp` relay outputs and `smtpCredentials`
+  # (`vocab/smtp-relay.nix`).
+  contracts.smtpRelay = smtpRelay;
   # Build the `oidc` option set for an application that signs users in through
   # an `oidcProvider`.
   options = compose.options // {
     oidc = oidcProvider.clientOptions;
+    # The `mail.from` sender override for a package that takes `smtp`.
+    mail = smtpRelay.options;
   };
   # Map availability levels to replica counts, quorums, and topology spread
   # constraints (`core/availability.nix`). Single-replica workloads set a

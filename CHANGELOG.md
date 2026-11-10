@@ -17,12 +17,17 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+### Breaking (shows an error)
+
+- `plausible` takes its mail relay from the new `smtp` and `smtpCredentials` dependencies. The `smtpPassword` dependency and the `SMTP_HOST_ADDR`, `SMTP_HOST_PORT`, `SMTP_HOST_SSL_ENABLED`, `SMTP_USER_NAME`, and `SMTP_USER_PWD` variables in `env` are refused. Declare the relay as a `kix.mkImport` whose `out` sets `host`, `port`, `tls`, and `from`. Put the login in a secret with keys `username` and `password`, aliased `smtpCredentials`, and set the sender with `mail.from` if it differs from the relay's. With a login, the relay must use implicit TLS (`tls = "implicit"`, usually port 465), because Plausible's mailer sends the password over a plain connection when the relay does not offer STARTTLS.
+
 ### Upgrade notes
 
 - Kix keeps its eval cache in files under `~/.cache/kix/eval-cache` instead of a SQLite database. The first command after you upgrade evaluates your clusters again, and Kix deletes the old `~/.cache/kix/eval-cache.db`. The cache now holds one result for each cluster and no longer grows as you edit.
 
 ### Added
 
+- Packages can take a mail relay as a dependency. `kix.contracts.smtpRelay` describes a relay (`host`, `port`, `tls`, `from`), which one `kix.mkImport` can declare for the whole cluster. The login is a separate `smtpCredentials` secret in each application's namespace. `vaultwarden` and `grafana` take both dependencies, set their mail settings from them, and open egress to the relay's port. Kix refuses a relay outside the cluster with `tls = "none"`. Each instance can set its sender with `mail.from`.
 - A new Rust crate, `kix-core`, holds the parts of `kix-lib` that need no Kubernetes client: evaluating a project, reading `kix.toml`, and handling manifests. It has no C dependencies and pulls in 84 crates, where `kix-lib` pulls in 286. `kix-lib` re-exports every `kix-core` module under the same path, so code that uses `kix-lib` needs no change.
 
 ### Fixed
