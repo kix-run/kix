@@ -12,11 +12,13 @@
 #                               `extensions`, and a stackgres-database forwards
 #                               them to its stackgres-cluster. Declare
 #                               `stackgres-operator` once, in its own namespace.
-#   valkey (required)           the job queue. An auto-instantiated valkey lands in
-#                               this namespace and reads its password from a `secret`
-#                               aliased `valkeyPassword` (key `password`) in this
-#                               namespace. A valkey running Sentinel is reached
-#                               through Sentinel.
+#   valkey (required)           the job queue, honouring kix.contracts.redis. An
+#                               auto-instantiated valkey lands in this namespace and
+#                               reads its password from a `secret` aliased
+#                               `valkeyPassword` (key `password`) in this namespace.
+#                               A kix.mkImport stands in for an outside server
+#                               without TLS. A server that publishes out.sentinel is
+#                               reached through Sentinel.
 #   storage (required)          the photo library: a ReadWriteOnce claim, such as a
 #                               persistent-volume-claim instance.
 #   machineLearning (optional)  an immich-machine-learning instance in this
@@ -27,8 +29,10 @@
 #                               an import. Without the dependency the server turns
 #                               machine learning off.
 #   prometheus (optional)       scrapes the metrics ports while `metrics.enabled`.
-#   oidcProvider, oidcClient (optional, with `oidc.enabled`)
-#                               single sign-on; see below.
+#   oidc (optional)             single sign-on, through an OpenID Connect
+#                               client honouring kix.contracts.oidc; see below.
+#   smtp (optional)             a mail server honouring kix.contracts.smtp, for
+#                               email notifications; see below.
 #
 # A minimal instance, in namespace `photos`:
 #
@@ -48,11 +52,10 @@
 # makes every setting in the admin UI read-only. `partsOverlays` patches
 # the rendered resources.
 #
-# Single sign-on: with `oidc.enabled`, Immich's OAuth login uses the
-# `oidcProvider` dependency (`kix.contracts.oidcProvider`, such as a keycloak
-# instance wired with `deps.oidcProvider = ref.<ns>.<name>`) in the realm
-# `oidc.realm`, with `oidc.scopes` and `oidc.autoLogin` (`oauth.autoLaunch`).
-# `oidcClient` is a secret with keys `clientId` and `clientSecret`. Register a confidential client with the redirect URIs
+# Single sign-on: with `oidc` wired (an oidc-client instance, or a
+# kix.mkImport), Immich's OAuth login uses that client's issuer and its
+# `out.credentials`, with `oidc.scopes` and `oidc.autoLogin`
+# (`oauth.autoLaunch`). Register a confidential client with the redirect URIs
 # `<public URL>/auth/login`, `<public URL>/user-settings`, and
 # `app.immich:///oauth-callback` for the mobile app. The settings go into
 # the config file, which turns the admin UI read-only. The client id and
@@ -76,11 +79,20 @@
 # request reaches the ingress controller from a pod, which its policy does
 # not admit.
 #
+# Mail: with `smtp` wired, the package writes the server and the sender
+# (the server's `out.from`, or `mail.from`) into `notifications.smtp` of
+# the config file, and turns email notifications on. The login reaches the
+# file at start, like the OIDC client. Because the config file then exists,
+# the admin UI shows every setting read-only; set them in `settings`.
+# Immich's mailer uses STARTTLS only when the server offers it and would
+# then send the login in clear text, so a server with credentials must use
+# implicit TLS (`tls = "implicit"`, usually port 465). A server outside the
+# cluster gets an egress policy for its port.
+#
 # Known limits: the server runs one pod and rolls out with Recreate, so
-# every rollout stops it briefly. The world:443 intent does not open SMTP
-# (465 or 587) for email notifications. A database or valkey password, or
-# an oidcClient secret, from a secret-ref has no identity hash, so rotating
-# it restarts the server only with reloader.
+# every rollout stops it briefly. A database or valkey password, an OIDC
+# client secret, or a mail login from a secret-ref has no identity hash, so
+# rotating it restarts the server only with reloader.
 
 {
   scope,
@@ -115,7 +127,6 @@ let
   # wrote, so a missing one fails here with the fields that dependency needs.
   importFields = {
     database = "out.host, out.port, out.database, and out.credentials";
-    valkey = "out.fqdn and out.port";
     machineLearning = "out.fqdn and out.port";
   };
   depOut =
@@ -161,8 +172,6 @@ in
   };
 
   deps = {
-    oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
-
     database.config.extensions = requiredExtensions;
 
     database.assertions =
@@ -178,6 +187,8 @@ in
           lib.concatMapStringsSep ", " extensionName requiredExtensions
         }; missing: ${lib.concatStringsSep ", " missing}. For a kix.mkImport database, install them on that server and list them in the import's out.extensions. For a stackgres-database, remove the setting that drops them from its extensions.";
       };
+
+    valkey.assertions = dep: kix.contracts.redis.assertions who dep;
 
     storage.warnings =
       dep:
@@ -238,9 +249,14 @@ in
         `machineLearning.urls` and `machineLearning.enabled` are refused:
         they follow the `machineLearning` dependency. `oauth.clientSecret`
         is refused, because the ConfigMap would hold it; with
-        `oidc.enabled` the package sets `oauth.enabled`, `oauth.issuerUrl`,
+        `oidc` wired the package sets `oauth.enabled`, `oauth.issuerUrl`,
         `oauth.clientId`, `oauth.clientSecret`, `oauth.scope`, and
         `oauth.autoLaunch`, and refuses them here.
+        `notifications.smtp.transport.password` is refused for the same
+        reason; with `smtp` wired the package sets
+        `notifications.smtp.enabled`, `notifications.smtp.from`, and the
+        transport's `host`, `port`, `secure`, `ignoreCert`, `username`, and
+        `password`, and refuses them here.
       '';
     };
     oidc = kix.options.oidc {
@@ -253,6 +269,7 @@ in
     };
     metrics = kix.options.monitor;
     ingress = kix.options.ingress;
+    mail = kix.options.mail;
     initChownData = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -281,30 +298,19 @@ in
         storage,
         machineLearning ? null,
         prometheus ? null,
-        oidcProvider ? null,
-        oidcClient ? null,
+        oidc ? null,
+        smtp ? null,
         ...
       }:
       let
         hasMetrics = config.metrics.enabled && prometheus != null;
 
-        oidcOn = config.oidc.enabled;
-        oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
-          inherit who;
-          inherit (config) oidc;
-          provider = oidcProvider;
-          client = oidcClient;
+        oidcProviderInfo = kix.contracts.oidc.client {
+          inherit who oidc;
+          options = config.oidc;
         };
-        # Forcing oidcProviderInfo first reports a missing dependency by
-        # name rather than as a missing attribute of null.
-        oidcCredentials = builtins.seq oidcProviderInfo (
-          kix.checkSecretKeys {
-            inherit who;
-            arg = "oidcClient";
-            dep = oidcClient;
-            keys = kix.contracts.oidcProvider.clientKeys;
-          }
-        );
+        oidcOn = oidcProviderInfo != null;
+        oidcCredentials = oidcProviderInfo.credentials;
         oauthSettings = lib.optionalAttrs oidcOn {
           oauth = {
             enabled = true;
@@ -313,7 +319,38 @@ in
             autoLaunch = config.oidc.autoLogin;
           };
         };
-        effectiveSettings = lib.recursiveUpdate config.settings oauthSettings;
+        relay = kix.contracts.smtp.settings {
+          inherit who smtp;
+          inherit (config.mail) from;
+        };
+        mailLogin = relay != null && relay.credentials != null;
+        # nodemailer sends the login without TLS when `secure` is false and
+        # the server offers no STARTTLS, and Immich cannot ask it to require
+        # STARTTLS.
+        relayCheck =
+          if mailLogin && relay.tls == "starttls" then
+            throw "${who}: deps.smtp uses tls = \"starttls\" with credentials. Immich's mailer (nodemailer) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way. Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance."
+          else
+            null;
+        mailSettings = lib.optionalAttrs (relay != null) {
+          notifications.smtp = {
+            enabled = true;
+            inherit (relay) from;
+            transport = {
+              inherit (relay) host;
+              port = relay.portNumber;
+              secure = relay.tls == "implicit";
+              ignoreCert = false;
+            };
+          };
+        };
+        effectiveSettings = lib.foldl' lib.recursiveUpdate config.settings [
+          oauthSettings
+          mailSettings
+        ];
+        # The OIDC client and the mail login reach the config file at start,
+        # so the ConfigMap holds no credential.
+        runtimeSecrets = oidcOn || mailLogin;
 
         healthCheck = {
           httpGet = {
@@ -353,23 +390,25 @@ in
         # ignores the other REDIS_* variables, so the password goes into that
         # JSON. The container builds REDIS_URL from REDIS_SENTINEL_OPTIONS and
         # REDIS_PASSWORD at start, which keeps the password in its Secret.
-        useSentinel = valkey.out ? sentinelPort;
+        redis = kix.contracts.redis.requirePlaintext who valkey;
+        useSentinel = kix.contracts.redis.usesSentinel redis;
         sentinelStart = ''
           REDIS_URL="ioredis://$(node -e 'const o = JSON.parse(process.env.REDIS_SENTINEL_OPTIONS); if (process.env.REDIS_PASSWORD) o.password = process.env.REDIS_PASSWORD; process.stdout.write(Buffer.from(JSON.stringify(o)).toString("base64"))')"
           export REDIS_URL
         '';
 
-        # The config file Immich reads while OIDC is on: the ConfigMap's
-        # copy with the client credentials added, written at start by the
-        # image's node to a memory-backed volume.
-        oauthConfigFile = "${self.oauthMount.mountPath}/immich-config.json";
-        oauthStart = ''
-          node -e 'const fs = require("fs"); const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); c.oauth.clientId = process.env.OAUTH_CLIENT_ID; c.oauth.clientSecret = process.env.OAUTH_CLIENT_SECRET; fs.writeFileSync(process.argv[2], JSON.stringify(c), { mode: 0o600 })' ${self.configMount.mountPath}/immich-config.json ${oauthConfigFile}
+        # The config file Immich reads while it has a credential: the
+        # ConfigMap's copy with the OIDC client and the mail login added,
+        # written at start by the image's node to a memory-backed volume.
+        runtimeConfigFile = "${self.runtimeConfigMount.mountPath}/immich-config.json";
+        runtimeConfigStart = ''
+          node -e 'const fs = require("fs"); const e = process.env; const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (e.OAUTH_CLIENT_ID) { c.oauth.clientId = e.OAUTH_CLIENT_ID; c.oauth.clientSecret = e.OAUTH_CLIENT_SECRET; } if (e.SMTP_USERNAME) { c.notifications.smtp.transport.username = e.SMTP_USERNAME; c.notifications.smtp.transport.password = e.SMTP_PASSWORD; } fs.writeFileSync(process.argv[2], JSON.stringify(c), { mode: 0o600 })' ${self.configMount.mountPath}/immich-config.json ${runtimeConfigFile}
         '';
-        startSteps = lib.optional useSentinel sentinelStart ++ lib.optional oidcOn oauthStart;
+        startSteps =
+          lib.optional useSentinel sentinelStart ++ lib.optional runtimeSecrets runtimeConfigStart;
         startScript = "set -e\n${lib.concatStrings startSteps}exec start.sh\n";
-        valkeyPassword = lib.optionalAttrs (valkey.out ? authSecret) {
-          REDIS_PASSWORD = valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey;
+        valkeyPassword = lib.optionalAttrs (redis.out ? credentials) {
+          REDIS_PASSWORD = redis.out.credentials.out.keyRef "password";
         };
 
         ownedSettings = [
@@ -382,7 +421,7 @@ in
             "enabled"
           ]
         ];
-        # With oidc.enabled the package owns these oauth keys; clientId and
+        # With oidc wired the package owns these oauth keys; clientId and
         # clientSecret are added at start.
         oidcOwnedSettings = lib.optionals oidcOn (
           map
@@ -398,17 +437,60 @@ in
               "autoLaunch"
             ]
         );
+        # With smtp wired the package owns the server, sender, and login.
+        mailOwnedSettings = lib.optionals (relay != null) (
+          map
+            (
+              p:
+              [
+                "notifications"
+                "smtp"
+              ]
+              ++ p
+            )
+            [
+              [ "enabled" ]
+              [ "from" ]
+              [
+                "transport"
+                "host"
+              ]
+              [
+                "transport"
+                "port"
+              ]
+              [
+                "transport"
+                "secure"
+              ]
+              [
+                "transport"
+                "ignoreCert"
+              ]
+              [
+                "transport"
+                "username"
+              ]
+            ]
+        );
         settingsCheck =
           let
             hits = builtins.filter (p: lib.hasAttrByPath p config.settings) ownedSettings;
             oidcHits = builtins.filter (p: lib.hasAttrByPath p config.settings) oidcOwnedSettings;
+            mailHits = builtins.filter (p: lib.hasAttrByPath p config.settings) mailOwnedSettings;
           in
-          if lib.hasAttrByPath [ "oauth" "clientSecret" ] config.settings then
-            throw "${who}: settings sets oauth.clientSecret, which the config ConfigMap would hold. Set oidc.enabled and wire the client id and secret through deps.oidcClient instead."
+          if lib.hasAttrByPath [ "notifications" "smtp" "transport" "password" ] config.settings then
+            throw "${who}: settings sets notifications.smtp.transport.password, which the config ConfigMap would hold. Wire the mail server through deps.smtp instead, whose credentials hold the username and password."
+          else if mailHits != [ ] then
+            throw "${who}: settings sets ${
+              lib.concatMapStringsSep ", " (lib.concatStringsSep ".") mailHits
+            }, which deps.smtp sets. Set the server on the SMTP instance, and the sender there or in mail.from."
+          else if lib.hasAttrByPath [ "oauth" "clientSecret" ] config.settings then
+            throw "${who}: settings sets oauth.clientSecret, which the config ConfigMap would hold. Wire the client through deps.oidc instead, whose credentials hold the client id and secret."
           else if oidcHits != [ ] then
             throw "${who}: settings sets ${
               lib.concatMapStringsSep ", " (lib.concatStringsSep ".") oidcHits
-            }, which oidc.enabled sets. Use the oidc option and the oidcProvider and oidcClient dependencies instead."
+            }, which deps.oidc sets. Use the oidc option and the oidc dependency instead."
           else if hits == [ ] then
             null
           else
@@ -443,11 +525,11 @@ in
                     REDIS_SENTINEL_OPTIONS = builtins.toJSON {
                       sentinels = [
                         {
-                          host = valkey.out.fqdn;
-                          port = valkey.out.sentinelPort;
+                          host = redis.out.host;
+                          port = redis.out.sentinel.port;
                         }
                       ];
-                      name = valkey.out.primarySet;
+                      name = redis.out.sentinel.primarySet;
                     };
                   }
                   // valkeyPassword;
@@ -465,8 +547,8 @@ in
               else
                 {
                   vars = {
-                    REDIS_HOSTNAME = depOut "valkey" valkey "fqdn";
-                    REDIS_PORT = toString (depOut "valkey" valkey "port");
+                    REDIS_HOSTNAME = redis.out.host;
+                    REDIS_PORT = redis.out.port;
                   }
                   // valkeyPassword;
                   names = [
@@ -500,8 +582,8 @@ in
                 fix = "Set Immich's configuration in settings.";
               }
               // (
-                if oidcOn then
-                  { vars.IMMICH_CONFIG_FILE = oauthConfigFile; }
+                if runtimeSecrets then
+                  { vars.IMMICH_CONFIG_FILE = runtimeConfigFile; }
                 else if self.configMount != null then
                   { vars.IMMICH_CONFIG_FILE = "${self.configMount.mountPath}/immich-config.json"; }
                 else
@@ -510,8 +592,8 @@ in
             )
             (
               {
-                from = "the oidcClient dependency";
-                fix = "Wire another secret through deps.oidcClient.";
+                from = "the oidc dependency";
+                fix = "Wire another client through deps.oidc.";
               }
               // (
                 if oidcOn then
@@ -526,6 +608,28 @@ in
                     names = [
                       "OAUTH_CLIENT_ID"
                       "OAUTH_CLIENT_SECRET"
+                    ];
+                  }
+              )
+            )
+            (
+              {
+                from = "the smtp dependency";
+                fix = "Wire another mail server through deps.smtp.";
+              }
+              // (
+                if mailLogin then
+                  {
+                    vars = {
+                      SMTP_USERNAME = relay.credentials.out.keyRef "username";
+                      SMTP_PASSWORD = relay.credentials.out.keyRef "password";
+                    };
+                  }
+                else
+                  {
+                    names = [
+                      "SMTP_USERNAME"
+                      "SMTP_PASSWORD"
                     ];
                   }
               )
@@ -545,15 +649,17 @@ in
       in
       {
         configMap = builtins.seq settingsCheck (
-          if effectiveSettings == { } then
-            null
-          else
-            scope.mkResource {
-              apiVersion = "v1";
-              kind = "ConfigMap";
-              name = "${name}-config";
-              data."immich-config.json" = builtins.toJSON effectiveSettings;
-            }
+          builtins.seq relayCheck (
+            if effectiveSettings == { } then
+              null
+            else
+              scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "${name}-config";
+                data."immich-config.json" = builtins.toJSON effectiveSettings;
+              }
+          )
         );
 
         libraryMount = kix.mount.pvc storage { mountPath = "/usr/src/app/upload"; };
@@ -563,10 +669,10 @@ in
           mountPath = "/tmp";
           sizeLimit = "1Gi";
         };
-        oauthMount =
-          if oidcOn then
+        runtimeConfigMount =
+          if runtimeSecrets then
             kix.mount.emptyDir {
-              name = "oauth-config";
+              name = "runtime-config";
               mountPath = "/run/immich";
               medium = "Memory";
               sizeLimit = "1Mi";
@@ -590,8 +696,9 @@ in
                 "checksum/config" = if self.configMap != null then self.configMap.out.identityHash else null;
                 "checksum/database" = dbCreds.identityHash or null;
                 "checksum/valkey-password" =
-                  if valkey.out ? authSecret then valkey.out.authSecret.out.identityHash or null else null;
+                  if redis.out ? credentials then redis.out.credentials.out.identityHash or null else null;
                 "checksum/oidc-client" = if oidcOn then oidcCredentials.out.identityHash or null else null;
+                "checksum/smtp" = if mailLogin then relay.credentials.out.identityHash or null else null;
               };
               template.spec = {
                 # Kubernetes default: Immich documents no shutdown drain.
@@ -690,9 +797,16 @@ in
           |> kix.withMounts [
             self.configMount
             self.tmpMount
-            self.oauthMount
+            self.runtimeConfigMount
           ]
           |> scope.mkDeployment;
+
+        mailEgress = kix.contracts.smtp.egressPolicy {
+          inherit scope;
+          smtp = relay;
+          name = "${name}-mail-egress";
+          selector = self.deployment.out.selector;
+        };
 
         service =
           self.deployment |> kix.service.fromWorkload { name = "${name}-server"; } |> scope.mkResource;

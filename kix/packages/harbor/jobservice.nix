@@ -45,7 +45,7 @@ let
     checksumOf
     reloadOn
     sslmode
-    dbPasswordEnv
+    dbLoginEnv
     coreUrl
     tokenServiceUrl
     registryUrl
@@ -83,7 +83,6 @@ let
     HARBOR_DATABASE_DBNAME = database.out.database;
     HARBOR_DATABASE_HOST = database.out.host;
     HARBOR_DATABASE_PORT = database.out.port;
-    HARBOR_DATABASE_USERNAME = database.out.username;
     HARBOR_DATABASE_SSLMODE = sslmode;
     HARBOR_EXPORTER_METRICS_ENABLED = "true";
     HARBOR_EXPORTER_METRICS_PATH = "/metrics";
@@ -261,14 +260,13 @@ in
                       JOBSERVICE_SECRET = "jobserviceSecret";
                       REGISTRY_CREDENTIAL_PASSWORD = "registryPassword";
                     }
-                    ++ dbPasswordEnv "POSTGRESQL_PASSWORD"
+                    ++ dbLoginEnv "POSTGRESQL_USERNAME" "POSTGRESQL_PASSWORD"
                     ++ redisPasswordEnv;
                   facts = builtins.attrNames jobserviceEnvData;
                   sslmodeVar = "POSTGRESQL_SSLMODE";
                   vars = {
                     POSTGRESQL_HOST = database.out.host;
                     POSTGRESQL_PORT = database.out.port;
-                    POSTGRESQL_USERNAME = database.out.username;
                     POSTGRESQL_DATABASE = database.out.database;
                     JOB_SERVICE_POOL_REDIS_URL = redisUrl 1;
                   };
@@ -369,7 +367,7 @@ in
                   option = "exporter.env";
                   secretEnv =
                     secrets.out.mkEnv { HARBOR_ADMIN_PASSWORD = "adminPassword"; }
-                    ++ dbPasswordEnv "HARBOR_DATABASE_PASSWORD"
+                    ++ dbLoginEnv "HARBOR_DATABASE_USERNAME" "HARBOR_DATABASE_PASSWORD"
                     ++ redisPasswordEnv;
                   facts = builtins.attrNames exporterEnvData;
                   sslmodeVar = "HARBOR_DATABASE_SSLMODE";

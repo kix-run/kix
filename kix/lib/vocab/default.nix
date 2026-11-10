@@ -8,6 +8,8 @@ let
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
   oidcProvider = import ./oidc-provider.nix { inherit lib; };
+  oidc = import ./oidc.nix { inherit lib; };
+  smtp = import ./smtp.nix { inherit lib; };
   quotaUse = import ./quota-use.nix { inherit lib; };
 in
 compose
@@ -30,10 +32,18 @@ compose
   contracts.gateway = import ./gateway.nix { inherit lib; };
   # Validate and consume `oidcProvider` outputs (`vocab/oidc-provider.nix`).
   contracts.oidcProvider = oidcProvider;
+  # Validate and consume `oidc` client outputs (`vocab/oidc.nix`).
+  contracts.oidc = oidc;
+  # Validate and consume `smtp` outputs (`vocab/smtp.nix`).
+  contracts.smtp = smtp;
+  # Validate and consume Redis outputs, taken as `valkey` (`vocab/redis.nix`).
+  contracts.redis = import ./redis.nix { inherit lib; };
   # Build the `oidc` option set for an application that signs users in through
-  # an `oidcProvider`.
+  # an `oidc` dependency.
   options = compose.options // {
-    oidc = oidcProvider.clientOptions;
+    oidc = oidc.clientOptions;
+    # The `mail.from` sender override for a package that takes `smtp`.
+    mail = smtp.options;
   };
   # Map availability levels to replica counts, quorums, and topology spread
   # constraints (`core/availability.nix`). Single-replica workloads set a

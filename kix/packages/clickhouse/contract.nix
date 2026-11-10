@@ -11,6 +11,7 @@
 # consumer renders the same on both. This file is the definition.
 { lib }:
 let
+  inherit (import ../../lib/vocab/contract.nix { inherit lib; }) credentialsField;
   isString = builtins.isString;
   # A ClickHouse release is YY.M.patch.build; the contract carries YY.M,
   # which is what a consumer's requirement compares against.
@@ -37,14 +38,8 @@ let
       shape = "the administrative user";
       test = isString;
     };
-    authSecret = {
-      shape = "a secret instance (out.keyRef)";
-      test = v: builtins.isAttrs v && builtins.isFunction ((v.out or { }).keyRef or null);
-    };
-    authPasswordKey = {
-      shape = "the key of authSecret holding the password";
-      test = isString;
-    };
+    # The administrator's password; `username` names the user.
+    credentials = credentialsField { keys = [ "password" ]; };
     clusterName = {
       shape = "what the {cluster} macro expands to";
       test = isString;

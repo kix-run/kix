@@ -8,6 +8,7 @@
 
 {
   lib,
+  eval,
   mkCluster,
   manifests,
   ofKind,
@@ -79,6 +80,7 @@ let
       availability ? null,
       netpol ? false,
       dbTls ? "absent",
+      smtp ? null,
     }:
     mkCluster [
       {
@@ -107,6 +109,9 @@ let
         cluster.capabilities.multiNode = true;
       })
       (lib.optionalAttrs netpol netpolOn)
+      (lib.optionalAttrs (smtp != null) {
+        instances.mail.smtp.package = eval.mkImport { out = smtp; };
+      })
     ];
 
   deploymentOf = cluster: byName "keycloak" (ofKind "Deployment" (manifests cluster));
@@ -401,4 +406,31 @@ in
       && peerPolicyOf single == null
     )
     || throw "keycloak peer policy: ${builtins.toJSON (peerPolicyOf c)}";
+
+  # An smtp dependency outside the cluster opens egress to its port; one
+  # inside the cluster, or none, adds no policy. The realm keeps the
+  # sender, so the server needs no `from`.
+  keycloak-mail-egress =
+    let
+      server = {
+        host = "smtp.example.org";
+        port = "465";
+        tls = "implicit";
+      };
+      policyOf =
+        smtp:
+        lib.findFirst (r: r.metadata.name == "keycloak-mail-egress") null (
+          manifests (clusterWith {
+            netpol = true;
+            inherit smtp;
+          })
+        );
+    in
+    (
+      policyOf server != null
+      && policyOf null == null
+      && policyOf (server // { external = false; }) == null
+      && lib.hasInfix "465" (builtins.toJSON (policyOf server))
+    )
+    || throw "keycloak mail egress: ${builtins.toJSON (policyOf server)}";
 }

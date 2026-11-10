@@ -193,22 +193,25 @@ Clusters frequently rely on services or platform components that live outside th
 `kix.mkImport` creates an import definition that can be bound in `instances.<namespace>.<name>.package` (or inside a cluster flavor). Imports participate in dependency resolution, role binding, and contract checking without emitting workload manifests. At build time, Kix emits a `kix.run/v1alpha1` `PackageInstance` marker with `metadata.annotations."kix.run/mode" = "import"` (and `spec.mode = "import"`) so `kix deploy` can verify any expected in-cluster resources before deploying consumers.
 
 ```nix
-# Importing an external managed PostgreSQL database in cluster configuration
-instances.app.postgres = {
-  package = kix.mkImport {
+# Importing an external RDS PostgreSQL database in cluster configuration
+{ ref, packages, kix, ... }:
+{
+  instances.app.rds-login = {
+    package = packages.secret;
+    config.source = ./secrets/rds-login.sops.yaml;
+    config.keys = [ "username" "password" ];
+  };
+  instances.app.database.package = kix.mkImport {
+    scope = "namespace";
     out = {
-      fqdn = "prod-db.cluster-xyz.us-east-1.rds.amazonaws.com";
-      port = 5432;
-      databases.grafana = {
-        user = "grafana";
-        secret = {
-          name = "rds-grafana-credentials";
-          keys = [ "password" ];
-        };
-      };
+      host = "app.abc123.eu-west-1.rds.amazonaws.com";
+      port = "5432";
+      database = "app";
+      tls = true;
+      credentials = ref.app.rds-login;
     };
   };
-};
+}
 ```
 
 ### `kix.mkImport` arguments
@@ -216,12 +219,20 @@ instances.app.postgres = {
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
 | `from` | package or `null` | `null` | Optional Kix package evaluated against a synthetic import scope to derive its default `out` surface and `root` resource `kind` and `apiVersion` hints. Does not inherit `meta.roles` or `crds` from `from.meta` (unless `from`'s `root.out` exposes `out.crds`). |
-| `out` | attrset | `{ }` | Output fields exposed to downstream consumers (`fqdn`, `port`, `storageClassName`, etc.). When both `from` and `out` are set, `out` overrides matching keys on the package-derived `out`. |
+| `out` | attrset | `{ }` | Output fields exposed to downstream consumers (`host`, `fqdn`, `port`, `credentials`, `storageClassName`, etc.). May contain `ref.<namespace>.<instance>` at any depth of plain attribute sets (see [Referencing instances in `out` and namespace scope](#referencing-instances-in-out-and-namespace-scope)). When both `from` and `out` are set, `out` overrides matching keys on the package-derived `out`. |
 | `kind` | string or `null` | Derived from `from`'s root resource, or `null` | Optional Kubernetes kind of an existing in-cluster resource (`"Service"`, `"Deployment"`, `"StorageClass"`, etc.). When present, Kix stamps `kix.run/import-kind` (and `kix.run/import-name` when `out.name` is set) on the `PackageInstance` import marker so `kix deploy` checks that the resource exists in the cluster. |
 | `apiVersion` | string or `null` | Derived from `from`'s root resource, or `null` | API version stamped as `kix.run/import-apiversion` on the import marker when `kind` is present. Not inferred from `kind` when `from` is `null`. |
 | `roles` | list of strings | `[ ]` | Platform roles satisfied by this import (`"cni"`, `"dns"`, `"loadBalancer"`, `"metricsApi"`, `"storageClasses"`, etc.). Not inherited from `from.meta.roles`. |
 | `crds` | list of `{ group, kind, plural, version, servedVersions?, crdScope?, factBehavior?, readiness?, usesAtLeast?, holdsData? }` | `[ ]` | Pre-installed CRDs provided by this import (`version` is required on each entry). Wrapped as CRD reference handles, emitted as CRD ref markers while the import is active, and exposed to consumers at `dep.out.crds.<Kind>`. |
 | `scope` | `"cluster"` \| `"namespace"` | `"cluster"` | Which namespaces resolve a dependency to this import by name. The default offers it to every namespace, unlike a managed package with `meta.scope` unset; `"namespace"` keeps it to its own namespace, even against `ref`. When several imports answer one name, name the one you mean with `deps.<arg> = ref.<namespace>.<instance>`. |
+
+### Referencing instances in `out` and namespace scope
+
+In a cluster definition, `out` may contain `ref.<namespace>.<instance>` at any depth of plain attribute sets. Write `{ ref, ... }:` in the cluster module header so `ref` is in scope. Kix replaces each `ref` with that instance (so expressions such as `dep.out.credentials.out.keyRef "password"` work in the consumer without consumer changes) and adds the referenced instance to the import marker's dependencies, so `kix deploy` applies the secret before the import.
+
+A `ref` in `out` does not activate an optional instance. A `ref` to an inactive instance, or to the import itself, fails the build.
+
+A pod reads Secrets only from its own namespace, and Kix refuses a Secret from another namespace at build time. Because of this, an import that carries a login in `out.credentials` (such as an external RDS or Cloud SQL database matching `kix.contracts.postgresDatabase`, an authenticated `smtp` server, or an external `oidc` provider) sits in the consumer's namespace beside its secret, with `scope = "namespace"`. An import without a login can keep the default `scope = "cluster"` and serve every namespace. When several namespaces connect to the same external service with their own secrets, a Nix `let` binding can share the common settings across the per-namespace imports.
 
 ### Three ways to use `kix.mkImport`
 

@@ -66,7 +66,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `eval/hooks.nix` | `buildRolesIndex`/`findRoleProvider`, `checkRoleBindings`, `buildAnnotationDomainIndex`, `collectHooks` (priority-sorted and shape-validated), and `runChecks`. |
 | `eval/consumers.nix` | Multi-team platform/consumer interface generation (`platform`), loading (`interface`), and namespace/quota enforcement (`consumer`). |
 | `eval/pod-security.nix` | `violations level manifest`: checks workload pod templates against Kubernetes Pod Security Standards (`baseline`, `restricted`). |
-| `eval/import.nix` | `mkImport`, `mkImportScope`, `evaluateImportInstance`, and `resolveExtraDep` for externally managed resources and platform imports. |
+| `eval/import.nix` | `mkImport`, `mkImportScope`, `evaluateImportInstance`, and `resolveExtraDep` for externally managed resources and platform imports. `evaluateImportInstance` also swaps each `ref.<ns>.<instance>` in an import's `out` for that instance and adds its root to the marker's `extraDeps`, which is how an import carries a credentials secret. |
 | `eval/namespace.nix` / `view.nix` / `helpers.nix` | `mkNamespace`, `mkPackageView`, and shared traversal/merge helpers (`collectTypedAttrs`, `mergeCollide`). |
 | `scope/default.nix` | `mkScope`: assembles labels, validators, and builders into the package `scope` object, plus `forNamespace` and `forService` subscopes. |
 | `scope/builders.nix` | Resource builders and the `sealWorkload` pipeline (edge analysis, DNS dependency injection, `workloadInterceptors`, `podSpec` merging, pre-seal `requires` splicing, and `_injectedResources` attachment). Every sealed resource carries `_builtBy` (`<namespace>/<instance>`, outside the manifest); `eval/cluster.nix` `ownedResources` uses it to list a resource that several instances hold under the one that built it. |
@@ -84,10 +84,13 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `vocab/options.nix` | Reusable package option schemas (`kix.options.{image,resources,env,ingress,monitor,healthCheck}`). |
 | `vocab/health-check.nix` | `kix.healthCheck`: builds post-deploy probe Jobs and script ConfigMaps. |
 | `vocab/monitor.nix` | `kix.monitor` and `kix.alerts`: builds `ServiceMonitor` and `PrometheusRule` parts. |
-| `vocab/contract.nix` | Shared `mkContract` builder for provider `check` and consumer `problems` / `assertions` / `require` validators. |
+| `vocab/contract.nix` | Shared `mkContract` builder for provider `check` and consumer `problems` / `assertions` / `require` validators, and `credentialsField`, the one field shape every contract uses for a login in `out.credentials`. |
 | `vocab/gateway.nix` | `kix.contracts.gateway`: Gateway provider/consumer contract (`gatewayRef`, `listeners`, `podSelector`, `podNamespace`). |
-| `vocab/oidc-provider.nix` | `kix.contracts.oidcProvider` and `kix.options.oidc`: OpenID Connect provider contract (`issuerUrl`, `endpoints`), `requireClient`, and consumer option schema. |
+| `vocab/oidc-provider.nix` | `kix.contracts.oidcProvider`: multi-realm OpenID Connect provider contract (`issuerUrl`, `endpoints`, each a function of the realm). keycloak passes it; the `oidc-client` package consumes it. |
+| `vocab/oidc.nix` | `kix.contracts.oidc` and `kix.options.oidc`: one application's OIDC client (`issuerUrl`, `endpoints`, `credentials`), `client` (returns the client or null, refuses the removed `oidc.enabled` and `oidc.realm`), and the consumer option schema. |
 | `vocab/otlp-endpoint.nix` | `kix.contracts.otlpEndpoint`: OTLP receiver contract (`otlpGrpcUrl`, `otlpHttpUrl`, `tls`). |
+| `vocab/smtp.nix` | `kix.contracts.smtp` and `kix.options.mail`: SMTP contract (`host`, `port`, `tls`, `credentials`, `from`, `external`), `server` (refuses `tls = "none"` outside the cluster), `settings` (`server` plus a required sender), and `egressPolicy`. |
+| `vocab/redis.nix` | `kix.contracts.redis`, taken as the `valkey` dependency: `host`, `port`, `credentials` (key `password`), `tls`, `sentinel` (null or `{ port; primarySet; }`), plus `usesSentinel` and `requirePlaintext`. |
 | `vocab/postgres-database.nix` | `kix.contracts.postgresDatabase`: PostgreSQL database contract (`host`, `port`, `database`, `credentials`, `username`, `extensions`, `tls`). |
 | `vocab/pins.nix` | `kix.pins`: loads and validates committed JSON pin files. |
 | `vocab/quantity.nix` | Kubernetes quantity grammar (`kix.types.quantity`) and parser (`kix.parseQuantity`). |

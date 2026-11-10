@@ -25,6 +25,7 @@
 let
   immichPackage = import ../../../packages/immich;
   mlPackage = import ../../../packages/immich-machine-learning;
+  secretPackage = import ../../../packages/secret;
   rules = import ../../rules { inherit lib; };
 
   databaseOut = {
@@ -65,8 +66,8 @@ let
             valkey = {
               package = eval.mkImport {
                 out = {
-                  fqdn = "valkey.example.net";
-                  port = 6379;
+                  host = "valkey.example.net";
+                  port = "6379";
                 };
               };
               aliases = [ "valkey" ];
@@ -101,6 +102,53 @@ let
         value = e.value or e.valueFrom;
       }) (builtins.head d.spec.template.spec.containers).env
     );
+
+  # immich with an SMTP server in its namespace whose `tls` is `tls`, with
+  # a login when `login` is true.
+  immichMailCluster =
+    {
+      tls ? "implicit",
+      login ? true,
+      config ? { },
+    }:
+    immichCluster {
+      inherit config;
+      modules = [
+        (
+          { ref, ... }:
+          {
+            instances.photos = {
+              smtp-login = {
+                package = secretPackage;
+                config.stringData = {
+                  username = "immich";
+                  password = "mail-pw";
+                };
+              };
+              smtp.package = eval.mkImport {
+                scope = "namespace";
+                out = {
+                  host = "smtp.example.org";
+                  port = if tls == "implicit" then "465" else "587";
+                  inherit tls;
+                  from = "photos@example.org";
+                }
+                // lib.optionalAttrs login { credentials = ref.photos.smtp-login; };
+              };
+            };
+          }
+        )
+      ];
+    };
+
+  serverConfig =
+    cluster:
+    builtins.fromJSON
+      (byName "immich-config" (ofKind "ConfigMap" (manifests cluster))).data."immich-config.json";
+  serverContainer =
+    cluster:
+    builtins.head (byName "immich-server" (ofKind "Deployment" (manifests cluster)))
+      .spec.template.spec.containers;
 
   # The database assertion's failed messages for a dependency publishing
   # databaseOut with `out` over it.
@@ -363,4 +411,60 @@ in
         } == [ ]
     )
     || throw "immich database assertion: ${builtins.toJSON partial}";
+
+  # With smtp wired, the config file carries the server and sender, and the
+  # login reaches the file at start from the secret.
+  immich-mail =
+    let
+      c = immichMailCluster { };
+      smtp = (serverConfig c).notifications.smtp;
+      env = serverEnv c;
+      args = builtins.head (serverContainer c).args;
+      plain = serverConfig (immichMailCluster {
+        tls = "starttls";
+        login = false;
+        config.mail.from = "me@example.org";
+      });
+    in
+    (
+      smtp == {
+        enabled = true;
+        from = "photos@example.org";
+        transport = {
+          host = "smtp.example.org";
+          port = 465;
+          secure = true;
+          ignoreCert = false;
+        };
+      }
+      && env.SMTP_PASSWORD.secretKeyRef.key == "password"
+      && env.SMTP_USERNAME.secretKeyRef.key == "username"
+      && env.IMMICH_CONFIG_FILE == "/run/immich/immich-config.json"
+      && lib.hasInfix "SMTP_USERNAME" args
+      && plain.notifications.smtp.transport.secure == false
+      && plain.notifications.smtp.from == "me@example.org"
+      && !(
+        serverEnv (immichMailCluster {
+          login = false;
+        }) ? SMTP_PASSWORD
+      )
+    )
+    || throw "immich mail: ${builtins.toJSON smtp}, env ${builtins.toJSON env}";
+
+  # STARTTLS with a login, a password in settings, and a setting the smtp
+  # dependency owns each fail the build.
+  immich-mail-refusals =
+    !(evalFails (immichMailCluster { }))
+    && evalFails (immichMailCluster {
+      tls = "starttls";
+    })
+    && evalFails (immichCluster {
+      config.settings.notifications.smtp.transport.password = "pw";
+    })
+    && !(evalFails (immichCluster {
+      config.settings.notifications.smtp.transport.host = "mail";
+    }))
+    && evalFails (immichMailCluster {
+      config.settings.notifications.smtp.transport.host = "mail";
+    });
 }

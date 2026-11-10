@@ -16,17 +16,17 @@
 #                             (kix.contracts.postgresDatabase), such as a
 #                             `stackgres-database` instance; n8n reads its
 #                             host, port, database name, and credentials.
-#   valkey (required)         a `valkey` in this namespace, or a
-#                             `kix.mkImport` of one. n8n has no Sentinel
-#                             client, so the package turns Sentinel off on
-#                             a managed valkey and refuses an import that
-#                             publishes a Sentinel port. valkey itself
-#                             needs a `valkeyPassword` secret (key
-#                             `password`). An import carries no password,
-#                             so when the imported Valkey needs one, set
-#                             `env.QUEUE_BULL_REDIS_PASSWORD` to a
-#                             `secretKeyRef` whose name is a
-#                             `kix.untrackedRef`.
+#   valkey (required)         a Redis server honouring kix.contracts.redis:
+#                             a `valkey` in this namespace, or a
+#                             `kix.mkImport` in this namespace whose
+#                             `out.credentials` names the password secret
+#                             (`credentials = ref.<ns>.<secret>`). n8n has
+#                             no Sentinel client, so the package turns
+#                             Sentinel off on a managed valkey and refuses
+#                             a server that publishes `out.sentinel`.
+#                             n8n connects over TLS when `out.tls` is true.
+#                             valkey itself needs a `valkeyPassword` secret
+#                             (key `password`).
 #   encryptionKey (required)  a `secret` or `secret-ref` with key `key`.
 #                             n8n encrypts saved credentials with it, so
 #                             the main instance and the workers must share
@@ -199,7 +199,8 @@ in
     # An import is not reached by the injection above.
     assertions =
       dep:
-      lib.optional (dep.out ? sentinelPort) {
+      kix.contracts.redis.assertions who dep
+      ++ lib.optional (kix.contracts.redis.usesSentinel dep) {
         assertion = false;
         message = "n8n needs a standalone valkey with one pod: it has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Wire a valkey with sentinel.enabled = false.";
       };
@@ -226,7 +227,7 @@ in
     };
 
     env = kix.options.env // {
-      description = "Extra environment variables for the n8n container of the main instance and of every worker. A value is a string, a `fieldRef` source such as `{ valueFrom.fieldRef.fieldPath = \"metadata.name\"; }`, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. Credentials from the dependencies are wired by the package, except the password of a valkey from `kix.mkImport`, which `QUEUE_BULL_REDIS_PASSWORD` supplies. Null removes a variable the package sets by default. ${lib.concatStringsSep ", " runnerSharedVars} also reach the task-runner sidecar; set other runner settings in `runners.env`.";
+      description = "Extra environment variables for the n8n container of the main instance and of every worker. A value is a string, a `fieldRef` source such as `{ valueFrom.fieldRef.fieldPath = \"metadata.name\"; }`, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. Credentials from the dependencies are wired by the package. Null removes a variable the package sets by default. ${lib.concatStringsSep ", " runnerSharedVars} also reach the task-runner sidecar; set other runner settings in `runners.env`.";
     };
 
     worker = {
@@ -334,9 +335,7 @@ in
           keys = [ "key" ];
         };
 
-        # A valkey from `kix.mkImport` has no `out.authSecret`, so `env`
-        # supplies its password when it needs one.
-        valkeyAuth = valkey.out ? authSecret;
+        valkeyAuth = valkey.out ? credentials;
 
         # A `kix.mergeEnv` owned group that also refuses the `_FILE` twins.
         group = vars: extra: { inherit vars; } // extra // { names = twins vars ++ extra.names or [ ]; };
@@ -360,11 +359,12 @@ in
           group
             (
               {
-                QUEUE_BULL_REDIS_HOST = valkey.out.fqdn;
+                QUEUE_BULL_REDIS_HOST = valkey.out.host;
                 QUEUE_BULL_REDIS_PORT = valkey.out.port;
               }
+              // lib.optionalAttrs (valkey.out.tls or false) { QUEUE_BULL_REDIS_TLS = "true"; }
               // lib.optionalAttrs valkeyAuth {
-                QUEUE_BULL_REDIS_PASSWORD = valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey;
+                QUEUE_BULL_REDIS_PASSWORD = valkey.out.credentials.out.keyRef "password";
               }
             )
             {
@@ -492,7 +492,7 @@ in
         podAnnotations =
           depHash "database" database.out.credentials
           // depHash "encryption-key" ek
-          // lib.optionalAttrs valkeyAuth (depHash "valkey-password" valkey.out.authSecret);
+          // lib.optionalAttrs valkeyAuth (depHash "valkey-password" valkey.out.credentials);
 
         # The broker accepts connections from 127.0.0.1 only, so a random
         # token per pod authenticates the sidecar without a Secret. The init

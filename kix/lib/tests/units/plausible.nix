@@ -2,9 +2,9 @@
 # routed or explicit BASE_URL, the privileges it asks of its
 # clickhouse-database and the ClickHouse stand-ins it refuses, the citext
 # request and sslmode, the migrations and replicate init container on a
-# replicated server, the secretKeyBase key check, the smtpPassword
-# pairing with SMTP_USER_NAME, literal credentials in env, the mail relay
-# egress, the checksum annotations, and two instances in two namespaces.
+# replicated server, the secretKeyBase key check, the smtp server and its
+# credentials, literal credentials in env, the mail relay egress, the
+# checksum annotations, and two instances in two namespaces.
 # Also clickhouse-database's check on its grants keys.
 #
 # Plausible runs in namespace `web` with a database stub. The ClickHouse
@@ -21,6 +21,7 @@
   ofKind,
   byName,
   evalFails,
+  eval,
   storageClassImport,
   netpolOn,
   ...
@@ -204,7 +205,9 @@ let
       dbTls ? null,
       facade ? null,
       facadeConfig ? { },
-      smtp ? false,
+      relay ? null,
+      smtpCredentials ? false,
+      legacySmtp ? false,
     }:
     { ref, ... }:
     {
@@ -239,14 +242,43 @@ let
           config.stringData = keyData;
         };
       }
-      // lib.optionalAttrs smtp {
+      // lib.optionalAttrs smtpCredentials {
         plausible-smtp = {
+          package = secretPackage;
+          config.stringData = {
+            username = "plausible";
+            password = "smtp-pw";
+          };
+        };
+      }
+      # An SMTP server with a login sits beside its secret.
+      // lib.optionalAttrs (relay != null && smtpCredentials) {
+        smtp.package = eval.mkImport {
+          scope = "namespace";
+          out = relay // {
+            credentials = ref.${ns}.plausible-smtp;
+          };
+        };
+      }
+      // lib.optionalAttrs legacySmtp {
+        plausible-smtp-password = {
           package = secretPackage;
           aliases = [ "smtpPassword" ];
           config.stringData.password = "smtp-pw";
         };
       };
+      # Without a login, one SMTP server serves the cluster from its own namespace.
+      instances.${if relay != null && !smtpCredentials then "mail" else null}.smtp.package =
+        eval.mkImport
+          { out = relay; };
     };
+
+  implicitRelay = {
+    host = "smtp.example.org";
+    port = "465";
+    tls = "implicit";
+    from = "noreply@example.org";
+  };
 
   clusterWith =
     {
@@ -512,49 +544,94 @@ in
     )
     || throw "plausible secretKeyBase: a secret without `key` was accepted";
 
-  # smtpPassword and env.SMTP_USER_NAME come together: either alone fails.
-  # Both together set SMTP_USER_PWD from the secret.
-  plausible-smtp-pairing =
+  # A relay and its credentials set the mailer, the relay, the login from
+  # the secret, and the relay's sender; mail.from replaces the sender.
+  plausible-smtp-env =
     let
-      withUser = {
-        env = {
-          BASE_URL = "https://plausible.example.org";
-          SMTP_USER_NAME = "plausible";
+      env = mainEnvOf (clusterWith {
+        relay = implicitRelay;
+        smtpCredentials = true;
+      });
+      own = mainEnvOf (clusterWith {
+        relay = implicitRelay;
+        config = {
+          env.BASE_URL = "https://plausible.example.org";
+          mail.from = "stats@example.org";
         };
-      };
-      both = mainEnvOf (clusterWith {
-        smtp = true;
-        config = withUser;
       });
     in
     (
-      evalFails (clusterWith {
-        smtp = true;
+      env.MAILER_ADAPTER == "Bamboo.Mua"
+      && env.MAILER_EMAIL == "noreply@example.org"
+      && env.SMTP_HOST_ADDR == "smtp.example.org"
+      && env.SMTP_HOST_PORT == "465"
+      && env.SMTP_HOST_SSL_ENABLED == "true"
+      && env.SMTP_USER_NAME.secretKeyRef.name == "plausible-smtp"
+      && env.SMTP_USER_NAME.secretKeyRef.key == "username"
+      && env.SMTP_USER_PWD.secretKeyRef.key == "password"
+      && own.MAILER_EMAIL == "stats@example.org"
+      && !(own ? SMTP_USER_NAME)
+    )
+    || throw "plausible smtp: ${builtins.toJSON env}";
+
+  # Each refusal beside a passing control: credentials over STARTTLS (Mua
+  # would send them in clear text when STARTTLS is stripped), tls = "none"
+  # outside the cluster, a server without a sender, the replaced
+  # smtpPassword dependency, and SMTP_* in env.
+  plausible-smtp-refusals =
+    let
+      starttls = implicitRelay // {
+        port = "587";
+        tls = "starttls";
+      };
+    in
+    (
+      !(evalFails (clusterWith {
+        relay = starttls;
+      }))
+      && evalFails (clusterWith {
+        relay = starttls;
+        smtpCredentials = true;
       })
       && evalFails (clusterWith {
-        config = withUser;
+        relay = starttls // {
+          tls = "none";
+        };
       })
-      && both.SMTP_USER_PWD.secretKeyRef.name == "plausible-smtp"
+      && !(evalFails (clusterWith {
+        relay = starttls // {
+          tls = "none";
+          external = false;
+        };
+      }))
       && evalFails (clusterWith {
-        smtp = true;
-        config.env = withUser.env // {
-          SMTP_USER_PWD = "x";
+        relay = removeAttrs implicitRelay [ "from" ];
+      })
+      && !(evalFails (clusterWith {
+        relay = removeAttrs implicitRelay [ "from" ];
+        config = {
+          env.BASE_URL = "https://plausible.example.org";
+          mail.from = "stats@example.org";
+        };
+      }))
+      && evalFails (clusterWith {
+        legacySmtp = true;
+      })
+      && evalFails (clusterWith {
+        config.env = {
+          BASE_URL = "https://plausible.example.org";
+          SMTP_HOST_ADDR = "smtp.example.org";
+        };
+      })
+      && evalFails (clusterWith {
+        relay = implicitRelay;
+        config.env = {
+          BASE_URL = "https://plausible.example.org";
+          MAILER_EMAIL = "x@example.org";
         };
       })
     )
-    || throw "plausible smtp: ${builtins.toJSON both}";
-
-  # With Bamboo.SMTPAdapter, Plausible accepts SMTP_USER_NAME alone, so the
-  # pairing check does not apply.
-  plausible-smtp-pairing-only-for-mua =
-    !(evalFails (clusterWith {
-      config.env = {
-        BASE_URL = "https://plausible.example.org";
-        MAILER_ADAPTER = "Bamboo.SMTPAdapter";
-        SMTP_USER_NAME = "plausible";
-      };
-    }))
-    || throw "plausible smtp: Bamboo.SMTPAdapter with SMTP_USER_NAME alone was refused";
+    || throw "plausible smtp: a refusal did not fire, or a control failed";
 
   # A credential variable set to a literal string is refused; the same
   # cluster without it is the control.
@@ -581,40 +658,27 @@ in
     )
     || throw "plausible credentials: a literal credential in env was accepted";
 
-  # A relay in env renders the mail egress policy under an enforcer, and
-  # none without a relay; a port that is not a number is refused. The stub
+  # A relay outside the cluster renders the mail egress policy under an
+  # enforcer; no relay, or one inside the cluster, renders none. The stub
   # enforcer translates no intents, so the port in the rule is checked in
   # clusters/test-plausible.nix, which renders it with Cilium.
   plausible-mail-egress =
     let
       policyOf =
-        env:
+        relay:
         lib.findFirst (r: r.metadata.name == "plausible-mail-egress") null (
           manifests (clusterWith {
             netpol = true;
-            smtp = true;
-            config.env = {
-              BASE_URL = "https://plausible.example.org";
-              SMTP_USER_NAME = "plausible";
-            }
-            // env;
+            inherit relay;
           })
         );
-      default = policyOf { SMTP_HOST_ADDR = "smtp.example.org"; };
     in
     (
-      default != null
-      && policyOf { } == null
-      && evalFails (clusterWith {
-        netpol = true;
-        config.env = {
-          BASE_URL = "https://plausible.example.org";
-          SMTP_HOST_ADDR = "smtp.example.org";
-          SMTP_HOST_PORT = "submission";
-        };
-      })
+      policyOf implicitRelay != null
+      && policyOf null == null
+      && policyOf (implicitRelay // { external = false; }) == null
     )
-    || throw "plausible mail egress: ${builtins.toJSON default}";
+    || throw "plausible mail egress: ${builtins.toJSON (policyOf implicitRelay)}";
 
   # DATABASE_URL asks for TLS only when the database says it serves it.
   plausible-database-sslmode =

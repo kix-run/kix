@@ -63,9 +63,8 @@
 #   out.host            the Service FQDN
 #   out.ports           { http = "8123"; native = "9000"; }
 #   out.username        "default"
-#   out.authSecret      the credentials Secret; `out.authSecret.out.keyRef
-#                       out.authPasswordKey`
-#   out.authPasswordKey "password"
+#   out.credentials     the credentials Secret; `out.credentials.out.keyRef
+#                       "password"`
 #   out.clusterName     the name `{cluster}` expands to
 #   out.version         the server release as YY.M
 #   out.replicas        "1"
@@ -581,8 +580,7 @@ in
                 native = toString ports.native;
               };
               username = "default";
-              authSecret = credentials;
-              authPasswordKey = passwordKey;
+              inherit credentials;
               inherit (config) clusterName;
               version = builtins.unsafeDiscardStringContext (lib.versions.majorMinor config.image.tag);
               replicas = "1";
@@ -626,7 +624,7 @@ in
         {
           CLICKHOUSE_URL = self.root.out.httpUrl;
           CLICKHOUSE_USER = self.root.out.username;
-          CLICKHOUSE_PASSWORD = self.root.out.authSecret.out.keyRef self.root.out.authPasswordKey;
+          CLICKHOUSE_PASSWORD = self.root.out.credentials.out.keyRef "password";
           CLICKHOUSE_CLUSTER = self.root.out.clusterName;
           CLICKHOUSE_REPLICA_URLS = self.root.out.httpUrl;
         };

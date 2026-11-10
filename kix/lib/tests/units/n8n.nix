@@ -76,13 +76,39 @@ let
     };
   };
 
-  # An import is cluster-scoped, so n8n resolves it from another namespace.
+  # An import without a password is cluster-scoped, so n8n resolves it
+  # from another namespace.
   importedValkey = out: {
     instances.cache.valkey.package = eval.mkImport {
       from = valkeyPackage;
-      inherit out;
+      out = {
+        host = "valkey.example.net";
+        port = "6379";
+      }
+      // out;
     };
   };
+
+  # An import with a password sits in n8n's namespace beside its secret.
+  importedValkeyWithPassword =
+    { ref, ... }:
+    {
+      instances.n8n = {
+        valkey-login = {
+          package = secretPackage;
+          config.stringData.password = "test";
+        };
+        valkey.package = eval.mkImport {
+          scope = "namespace";
+          out = {
+            host = "valkey.example.net";
+            port = "6379";
+            tls = true;
+            credentials = ref.n8n.valkey-login;
+          };
+        };
+      };
+    };
 
   n8nCluster =
     {
@@ -190,11 +216,14 @@ in
     )
     || throw "n8n valkey password ${builtins.toJSON (password base "n8n")}, enableServiceLinks ${builtins.toJSON serviceLinks}";
 
-  # An imported valkey publishes no password Secret, so n8n sets no
-  # password and `env` may supply one from a Secret managed outside Kix.
+  # An import without credentials sets no password, and `env` may supply
+  # one. An import whose credentials name a secret sets the password from
+  # it, and its `tls` turns TLS on.
   n8n-imported-valkey-password =
     let
       bare = n8nCluster { valkey = importedValkey { }; };
+      withCredentials = n8nCluster { valkey = importedValkeyWithPassword; };
+      tlsOf = cluster: (envOf cluster "n8n" "n8n").QUEUE_BULL_REDIS_TLS or null;
       withPassword = n8nCluster {
         valkey = importedValkey { };
         config.env.QUEUE_BULL_REDIS_PASSWORD.valueFrom.secretKeyRef = {
@@ -208,8 +237,14 @@ in
         "n8n-worker"
       ];
     in
-    (password bare "n8n" == null && builtins.all (p: p.secretKeyRef.key or null == "password") supplied)
-    || throw "n8n imported valkey: without env ${builtins.toJSON (password bare "n8n")}, with env ${builtins.toJSON supplied}";
+    (
+      password bare "n8n" == null
+      && builtins.all (p: p.secretKeyRef.key or null == "password") supplied
+      && (password withCredentials "n8n").secretKeyRef.key or null == "password"
+      && tlsOf bare == null
+      && tlsOf withCredentials == "true"
+    )
+    || throw "n8n imported valkey: without env ${builtins.toJSON (password bare "n8n")}, with env ${builtins.toJSON supplied}, with credentials ${builtins.toJSON (password withCredentials "n8n")}, tls ${builtins.toJSON (tlsOf withCredentials)}";
 
   # An import that publishes a Sentinel port fails the build; the
   # assertion's message asks for a standalone valkey.
@@ -217,13 +252,35 @@ in
     let
       messages =
         dep: map (a: a.message) (lib.filter (a: !a.assertion) (n8nAttrs.deps.valkey.assertions dep));
-      sentinel = messages { out.sentinelPort = 26379; };
+      plain = {
+        host = "valkey.example.net";
+        port = "6379";
+      };
+      sentinel = messages {
+        out = plain // {
+          sentinel = {
+            port = "26379";
+            primarySet = "primary";
+          };
+        };
+      };
     in
     (
-      messages { out = { }; } == [ ]
+      messages { out = plain; } == [ ]
+      &&
+        messages {
+          out = plain // {
+            sentinel = null;
+          };
+        } == [ ]
       && builtins.any (lib.hasInfix "standalone valkey") sentinel
       && evalFails (n8nCluster {
-        valkey = importedValkey { sentinelPort = 26379; };
+        valkey = importedValkey {
+          sentinel = {
+            port = "26379";
+            primarySet = "primary";
+          };
+        };
       })
     )
     || throw "n8n Sentinel import: messages ${builtins.toJSON sentinel}";

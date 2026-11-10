@@ -12,6 +12,7 @@
   oidcOn,
   oidcProviderInfo,
   oidcCredentials,
+  relay,
   prometheusServer,
   alertmanager,
   loki,
@@ -139,6 +140,17 @@ let
     log.mode = "console";
   }
   // lib.optionalAttrs (rootUrl != null) { server.root_url = rootUrl; }
+  # Grafana's mailer picks implicit TLS from port 465 alone, which the
+  # package checks. MandatoryStartTLS refuses a server that does not offer
+  # STARTTLS.
+  // lib.optionalAttrs (relay != null) {
+    smtp = {
+      enabled = true;
+      host = "${relay.host}:${relay.port}";
+      from_address = relay.from;
+      startTLS_policy = if relay.tls == "none" then "NoStartTLS" else "MandatoryStartTLS";
+    };
+  }
   // lib.optionalAttrs oidcOn {
     "auth.generic_oauth" =
       let
@@ -156,7 +168,7 @@ let
   };
 
   # Grafana reads GF_<SECTION>_<KEY> over grafana.ini, so `env` is locked for
-  # OIDC keys too while `oidc.enabled` is set.
+  # OIDC keys too while `oidc` is wired.
   oidcKeys = [
     "enabled"
     "client_id"
@@ -167,6 +179,15 @@ let
     "scopes"
     "use_pkce"
     "auto_login"
+  ];
+
+  smtpKeys = [
+    "enabled"
+    "host"
+    "from_address"
+    "startTLS_policy"
+    "user"
+    "password"
   ];
 
   ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
@@ -193,13 +214,19 @@ let
           "auth.generic_oauth"
           k
         ]) oidcKeys
+      )
+      ++ lib.optionals (relay != null) (
+        map (k: [
+          "smtp"
+          k
+        ]) smtpKeys
       );
     } defaultIni config.settings
   );
 
   oidcRootUrlCheck =
     if oidcOn && (ini.server.root_url or null) == null then
-      throw "${who}: oidc.enabled is true, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth. Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open."
+      throw "${who}: deps.oidc is wired, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth. Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open."
     else
       null;
 
@@ -278,8 +305,20 @@ let
             "GF_AUTH_GENERIC_OAUTH_CLIENT_ID__FILE"
             "GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE"
           ];
-        from = "the oidc option and the oidcClient dependency";
-        fix = "Set the oidc option, or wire another secret through deps.oidcClient.";
+        from = "the oidc option and the oidc dependency";
+        fix = "Set the oidc option, or wire another client through deps.oidc.";
+      }
+      ++ lib.optional (relay != null) {
+        vars = lib.optionalAttrs (relay.credentials != null) {
+          GF_SMTP_USER = relay.credentials.out.keyRef "username";
+          GF_SMTP_PASSWORD = relay.credentials.out.keyRef "password";
+        };
+        names = map (k: "GF_SMTP_${lib.toUpper k}") smtpKeys ++ [
+          "GF_SMTP_USER__FILE"
+          "GF_SMTP_PASSWORD__FILE"
+        ];
+        from = "the smtp dependency";
+        fix = "Wire another SMTP instance through deps.smtp, or set mail.from.";
       };
     } config.env
   );

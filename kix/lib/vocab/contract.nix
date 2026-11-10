@@ -2,6 +2,29 @@
 { lib }:
 
 {
+  # Build the field for a login a contract carries in `out.credentials`: a
+  # Secret, or a secret instance, whose `out.keyRef` reads each of `keys`.
+  # A provider Kix runs publishes its own Secret. A `kix.mkImport` names one
+  # with `credentials = ref.<namespace>.<instance>`. The Secret must be in
+  # the consumer's namespace, which the workload builder checks.
+  credentialsField =
+    {
+      keys,
+      required ? true,
+    }:
+    {
+      inherit required;
+      shape = "a secret (out.keyRef) with the keys ${lib.concatStringsSep " and " keys}, such as ref.<namespace>.<instance> naming a secret or secret-ref instance in the consumer's namespace";
+      test =
+        v:
+        let
+          out = if builtins.isAttrs v then v.out or { } else { };
+          declared = out.keys or null;
+        in
+        builtins.isFunction (out.keyRef or null)
+        && (!builtins.isList declared || lib.all (k: builtins.elem k declared) keys);
+    };
+
   # Build a contract checker from a field table.
   #
   # - `check who out`: validate that a provider's `root.out` defines every
