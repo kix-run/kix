@@ -17,6 +17,8 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+## 0.9.0 - 2026-11-10
+
 ### Breaking (shows an error)
 
 - `grafana`, `harbor`, and `immich` take single sign-on from one `oidc` dependency, and `oidc.enabled` and `oidc.realm` are refused. Single sign-on is on when the instance has an `oidc` dependency. To move a Keycloak setup, add an instance of the new `oidc-client` package in the application's namespace with `config.realm` and `deps.oidcProvider = ref.<ns>.<keycloak>`. The existing secret aliased `oidcClient` binds to it unchanged. Then remove `oidc.enabled`, `oidc.realm`, and `deps.oidcProvider` from the application.
