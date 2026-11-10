@@ -3,7 +3,8 @@
 # quorum and of a cluster with no memory limit, the health check's
 # addresses for each replica, Keeper's metrics endpoint, and the alert
 # rules of the operator, Keeper, and both server packages and what each
-# rule is gated on.
+# rule is gated on, and clickhouse-database's warning on a literal
+# `password`.
 # The operator runs in `clickhouse-system`, Keeper and the servers in `db`,
 # the prometheus stub in `monitoring`.
 # tryEval drops a throw's message, so each refusal is checked with
@@ -30,6 +31,7 @@ let
   secretPackage = import ../../../packages/secret;
   barePackage = import ../../../packages/clickhouse;
   pvcPackage = import ../../../packages/persistent-volume-claim;
+  databasePackage = import ../../../packages/clickhouse-database;
 
   withPrometheus = {
     instances.monitoring.prometheus.package = prometheusStub;
@@ -373,4 +375,46 @@ in
     || throw "clickhouse-keeper alerts: three ${
       builtins.toJSON (if rules3 == null then null else builtins.attrNames rules3)
     }, one ${builtins.toJSON (if rules1 == null then null else builtins.attrNames rules1)}";
+
+  # A literal `password` still fills both Secrets, and warns that Kix 0.10
+  # removes it. `passwordSource` gives no such warning.
+  clickhouse-database-password-warns =
+    let
+      withDatabase =
+        config:
+        bare {
+          modules = [
+            (
+              { ref, ... }:
+              {
+                instances.apps.app-db = {
+                  package = databasePackage;
+                  deps.clickhouse = ref.db.ch;
+                  inherit config;
+                };
+              }
+            )
+          ];
+        };
+      literal = withDatabase { password = "pw"; };
+      sops = withDatabase {
+        passwordSource = ./clickhouse.nix;
+        passwordHash = "hash";
+      };
+      warningsOf = cluster: cluster.instances.apps.app-db._diagnostics.warnings;
+      warns = cluster: builtins.any (lib.hasInfix "Kix 0.10 removes") (warningsOf cluster);
+      passwordIn = name: (byName name (ofKind "Secret" (manifests literal))).stringData.password;
+    in
+    (
+      warns literal
+      && !(warns sops)
+      && passwordIn "app-db-credentials" == "pw"
+      && passwordIn "app-db-apps-bootstrap-password" == "pw"
+    )
+    || throw "clickhouse-database password warning: ${
+      builtins.toJSON {
+        literal = warningsOf literal;
+        sops = warningsOf sops;
+      }
+    }";
 }

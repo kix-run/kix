@@ -3,7 +3,8 @@
 # beside a positive control, the rendered Cluster, Database, DatabaseRole,
 # backups, and Pooler, the webhook check that every postgresql.cnpg.io
 # custom resource waits for, the vendored sources' release, and the alert
-# rules of cnpg-operator and cnpg-cluster and what each is gated on.
+# rules of cnpg-operator and cnpg-cluster and what each is gated on, and
+# cnpg-database's warning on a literal `password`.
 
 {
   lib,
@@ -654,6 +655,34 @@ in
       && credentials.stringData.host == "postgres-rw.data.svc.cluster.local"
     )
     || throw "cnpg-database resources: ${builtins.toJSON { inherit role database secret; }}";
+
+  # A literal `password` still fills both Secrets, and warns that Kix 0.10
+  # removes it. `passwordSource` gives no such warning.
+  cnpg-database-password-warns =
+    let
+      literal = cnpg { database.password = "pw"; };
+      sops = cnpg {
+        database = {
+          passwordSource = ./cnpg.nix;
+          passwordHash = "hash";
+        };
+      };
+      warningsOf = cluster: cluster.instances.data.app-db._diagnostics.warnings;
+      warns = cluster: builtins.any (lib.hasInfix "Kix 0.10 removes") (warningsOf cluster);
+      passwordIn = name: (byName name (ofKind "Secret" (ms literal))).stringData.password;
+    in
+    (
+      warns literal
+      && !(warns sops)
+      && passwordIn "app-db-credentials" == "pw"
+      && passwordIn "data-app-db-role" == "pw"
+    )
+    || throw "cnpg-database password warning: ${
+      builtins.toJSON {
+        literal = warningsOf literal;
+        sops = warningsOf sops;
+      }
+    }";
 
   # A name listed twice, as when a consumer's deps.database.config.extensions
   # repeats one of the instance's, renders once, keeping the one version

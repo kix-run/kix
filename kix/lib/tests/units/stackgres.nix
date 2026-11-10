@@ -4,8 +4,9 @@
 # stackgres-object-storage, the operand image table, the rendered
 # SGCluster, the webhook check that StackGres custom resources wait for,
 # the alert rules of stackgres-operator and stackgres-cluster and what
-# each is gated on, and
-# stackgres-database's names in the cluster's namespace.
+# each is gated on,
+# stackgres-database's names in the cluster's namespace, and its warning on
+# a literal `password`.
 
 {
   lib,
@@ -487,6 +488,45 @@ in
       && builtins.elem "app-db-team-b-bootstrap-password" secrets
     )
     || throw "stackgres-database same name: jobs ${builtins.toJSON jobs}, secrets ${builtins.toJSON secrets}";
+
+  # A literal `password` still fills both Secrets, and warns that Kix 0.10
+  # removes it. `passwordSource` gives no such warning.
+  stackgres-database-password-warns =
+    let
+      withDatabase =
+        config:
+        sgCluster {
+          extra =
+            { ref, ... }:
+            {
+              instances.apps.app-db = {
+                package = databasePackage;
+                deps.postgres = ref.data.postgres;
+                inherit config;
+              };
+            };
+        };
+      literal = withDatabase { password = "pw"; };
+      sops = withDatabase {
+        passwordSource = ./stackgres.nix;
+        passwordHash = "hash";
+      };
+      warningsOf = cluster: cluster.instances.apps.app-db._diagnostics.warnings;
+      warns = cluster: builtins.any (lib.hasInfix "Kix 0.10 removes") (warningsOf cluster);
+      passwordIn = name: (byName name (ofKind "Secret" (manifests literal))).stringData.password;
+    in
+    (
+      warns literal
+      && !(warns sops)
+      && passwordIn "app-db-credentials" == "pw"
+      && passwordIn "app-db-apps-bootstrap-password" == "pw"
+    )
+    || throw "stackgres-database password warning: ${
+      builtins.toJSON {
+        literal = warningsOf literal;
+        sops = warningsOf sops;
+      }
+    }";
 
   stackgres-resolve-postgres =
     let
