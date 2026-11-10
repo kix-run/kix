@@ -339,7 +339,7 @@ in
         ) credentialNames;
         _credentialCheck =
           if literalCredentials != [ ] then
-            throw "${who}: env sets ${lib.concatStringsSep ", " literalCredentials} to a literal string, which would land in the Nix store and the rendered Deployment. Pass a secretKeyRef source to a Secret managed outside Kix (kix.untrackedRef)."
+            throw "${who}: env sets ${lib.concatStringsSep ", " literalCredentials} to a literal string, which would land in Kix's local store and the rendered Deployment. Pass a secretKeyRef source to a Secret managed outside Kix (kix.untrackedRef)."
           else
             null;
 
