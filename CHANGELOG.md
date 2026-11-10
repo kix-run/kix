@@ -23,7 +23,7 @@ Each release groups changes under these headings:
 
 ### Added
 
-- A new Rust crate, `kix-core`, holds the parts of the Kix library that need no Kubernetes client: evaluating a project, reading `kix.toml`, and handling manifests. It has no C dependencies and pulls in 84 crates, where `kix-lib` pulls in 286. `kix-lib` re-exports every `kix-core` module under the same path, so code that uses `kix-lib` needs no change.
+- A new Rust crate, `kix-core`, holds the parts of `kix-lib` that need no Kubernetes client: evaluating a project, reading `kix.toml`, and handling manifests. It has no C dependencies and pulls in 84 crates, where `kix-lib` pulls in 286. `kix-lib` re-exports every `kix-core` module under the same path, so code that uses `kix-lib` needs no change.
 
 ### Fixed
 
