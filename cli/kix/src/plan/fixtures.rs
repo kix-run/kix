@@ -1,15 +1,11 @@
 //! Test fixtures and helpers for comparing manifest sets and builds.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use serde_json::{Value, json};
 
 use super::baseline::{ActiveSource, Baseline};
 use super::document::{PlanFlags, PruneModeFlag};
 use super::{CheckedPlan, PackageDiff, PlanError, Planner, diff_graphs};
 use crate::cluster::scheduler::PrunePolicy;
-use crate::eval::manifest_json::parse_index;
 use crate::eval::stamp::stamp_annotations;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::keys;
@@ -144,42 +140,7 @@ pub fn web_resource(kind: &str, hash: &str, fields: Value) -> Value {
     v
 }
 
-/// Load and validate the `kix-enterprise-test` fixture graph (26 manifests).
-pub fn kix_enterprise_test() -> StoreGraph {
-    #[derive(serde::Deserialize)]
-    struct File {
-        text: String,
-        references: Vec<PathBuf>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Build {
-        record: PathBuf,
-        index: PathBuf,
-        files: HashMap<PathBuf, File>,
-    }
-    let build: Build = serde_json::from_str(include_str!(
-        "../../tests/fixtures/kix-enterprise-test.json"
-    ))
-    .unwrap();
-    let index = parse_index("index", build.files[&build.index].text.as_bytes()).unwrap();
-    let ref_cache = build
-        .files
-        .iter()
-        .filter(|(_, f)| !f.references.is_empty())
-        .map(|(path, f)| (path.clone(), f.references.clone()))
-        .collect();
-    let graph = StoreGraph::assemble(
-        index,
-        build.record,
-        PathBuf::from("fixture:kix-enterprise-test"),
-        ref_cache,
-        &mut |path| Ok(build.files[path].text.clone().into_bytes()),
-        &|_| {},
-    )
-    .unwrap();
-    graph.validate().unwrap();
-    graph
-}
+pub use crate::eval::fixtures::kix_enterprise_test;
 
 /// Parse planning flags from `extra` as `kix deploy` does.
 pub fn flags(extra: &[&str]) -> PlanFlags {

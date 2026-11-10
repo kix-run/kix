@@ -23,6 +23,8 @@ mod redact;
 pub mod saved;
 pub mod server;
 #[cfg(test)]
+mod synthesize_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

@@ -11,8 +11,8 @@ platform (`cli/README.md` § Releases). The library a project pins in
 from `cli/Cargo.toml`, and `mkFlake.nix` publishes it as
 `legacyPackages.<system>.kixLibrary.version`). Today nothing compares the two
 except two side effects: a library too old to write an activation index
-(`NoActivationIndex`, `cli/kix/src/eval/error.rs`) and a Helm version the
-running Kix does not ship (`HelmMismatch`, `cli/kix/src/library.rs`). A Kix
+(`NoActivationIndex`, `cli/kix-core/src/eval/error.rs`) and a Helm version the
+running Kix does not ship (`HelmMismatch`, `cli/kix-core/src/library.rs`). A Kix
 0.7 builds a 0.8 library without a word when no chart is involved
 (`housekeeping/2026-11-08-cli-library-version-check-needs-a-helm-chart.md`).
 
@@ -138,7 +138,7 @@ Rejected: Sigstore (a network dependency on a third party at verify time).
 Before 1.0: Kix and the library must have the same minor, and Kix's patch must
 be greater than or equal to the library's. A patch release may add a Helm
 version and never removes one; only a minor release removes. The rule lives in
-`cli/kix/src/version/policy.rs` and nothing else compares versions, so the
+`cli/kix-core/src/version/policy.rs` and nothing else compares versions, so the
 move at 1.0 to "a newer Kix builds older libraries back to a cutoff" changes
 that module and the `specVersion` the library writes into chart fetch specs
 (`kix/lib/helm.nix`, `fetchSpec`), which is the hook for a future Kix to read
@@ -215,7 +215,7 @@ set or `KIX_NO_UPDATE_CHECK=1`.
 
 After evaluation, Kix compares `kixLibrary.version` with its own version
 through the policy module. The comparison is folded into the once-per-run
-builder agreement check (`check_library_builder` in `cli/kix/src/eval/nix.rs`,
+builder agreement check (`check_library_builder` in `cli/kix-core/src/eval/nix.rs`,
 `check_agreement` in `project.rs`), which already evaluates
 `legacyPackages.<system>`; one `--apply` reads both values, so the check costs
 no extra Nix call. `HelmMismatch` stays as a backstop for a library whose

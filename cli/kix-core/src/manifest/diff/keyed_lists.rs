@@ -18,7 +18,7 @@ pub(crate) type KeyedListPair<'a> = (IndexMap<String, &'a Value>, IndexMap<Strin
 ///
 /// Returns `None` if the parent field is not a known keyed list type,
 /// or if the item is not an object.
-pub(crate) fn extract_key(parent_field: &str, item: &Value) -> Option<String> {
+pub fn extract_key(parent_field: &str, item: &Value) -> Option<String> {
     let obj = item.as_object()?;
     match parent_field {
         "containers" | "initContainers" => obj

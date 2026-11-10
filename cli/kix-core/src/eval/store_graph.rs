@@ -1046,34 +1046,9 @@ mod tests {
 
     mod synthesize {
         use super::super::*;
+        use crate::eval::fixtures::*;
         use crate::manifest::keys;
         use serde_json::{Value, json};
-
-        /// Build a stamped manifest matching the shape produced by a build or
-        /// the Kix-owned view of a live object.
-        fn stamped(
-            kind: &str,
-            ns: &str,
-            name: &str,
-            pkg: (&str, &str),
-            hash: &str,
-            spec: Value,
-        ) -> Value {
-            json!({
-                "apiVersion": "v1",
-                "kind": kind,
-                "metadata": {
-                    "name": name,
-                    "namespace": ns,
-                    "annotations": {
-                        keys::PACKAGE: pkg.1,
-                        keys::PACKAGE_NAMESPACE: pkg.0,
-                        keys::IDENTITY_HASH: hash,
-                    }
-                },
-                "spec": spec,
-            })
-        }
 
         fn package_instance(ns: &str, name: &str, version: &str, hash: &str) -> Value {
             json!({
@@ -1101,18 +1076,6 @@ mod tests {
                     "annotations": {keys::IDENTITY_HASH: hash}
                 },
             })
-        }
-
-        /// Format a 32-character store hash from `seed`.
-        fn h(seed: &str) -> String {
-            format!("{seed:a<32}")
-        }
-
-        fn pkg<'a>(g: &'a StoreGraph, ns: &str, name: &str) -> &'a PackageNode {
-            g.packages
-                .values()
-                .find(|p| p.namespace == ns && p.instance_name == name)
-                .unwrap_or_else(|| panic!("no package {ns}/{name}"))
         }
 
         #[test]
@@ -1165,92 +1128,6 @@ mod tests {
             let dns = pkg(&g, "kube-system", "dns");
             assert!(dns.resource_paths.is_empty());
             assert_eq!(dns.version.as_deref(), Some("2.0"));
-        }
-
-        /// Build an unstamped `PackageInstance` manifest as rendered by the Nix
-        /// library, optionally configured as an import marker (`secret-ref-*`,
-        /// `service-ref-*`, or `platform-*`).
-        fn rendered_pi(ns: &str, name: &str, import: Option<(&str, &str)>) -> Value {
-            let mut anns = serde_json::Map::new();
-            anns.insert(keys::DEPENDS_ON.into(), json!("x,requires:y"));
-            if let Some((kind, target)) = import {
-                anns.insert(keys::MODE.into(), json!("import"));
-                anns.insert(keys::IMPORT_API_VERSION.into(), json!("v1"));
-                anns.insert(keys::IMPORT_KIND.into(), json!(kind));
-                anns.insert(keys::IMPORT_NAME.into(), json!(target));
-            }
-            let mut spec = json!({"instanceName": name, "namespaceName": ns});
-            if import.is_some() {
-                spec["mode"] = json!("import");
-            } else {
-                spec["version"] = json!("1");
-            }
-            json!({
-                "apiVersion": keys::API_VERSION,
-                "kind": crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
-                "metadata": {
-                    "name": name,
-                    "namespace": ns,
-                    "annotations": anns,
-                    "labels": {"app.kubernetes.io/instance": name},
-                },
-                "spec": spec,
-            })
-        }
-
-        fn rendered(kind: &str, ns: &str, name: &str) -> Value {
-            json!({
-                "apiVersion": "v1",
-                "kind": kind,
-                "metadata": {"name": name, "namespace": ns},
-            })
-        }
-
-        /// `(store hash seed, PackageInstance, [(seed, resource)])`.
-        type BuiltPackage<'a> = (&'a str, Value, Vec<(&'a str, Value)>);
-
-        /// Build a stamped `StoreGraph` from `packages`, sharing store paths for
-        /// identical seeds across packages.
-        fn built(packages: &[BuiltPackage]) -> StoreGraph {
-            let path = |seed: &str| PathBuf::from(format!("/nix/store/{}-k8s", h(seed)));
-            let mut g = StoreGraph::empty("c");
-            for (pi_seed, pi, resources) in packages {
-                let pi_path = path(pi_seed);
-                g.resources.insert(
-                    pi_path.clone(),
-                    ResourceNode {
-                        store_path: pi_path.clone(),
-                        manifest: pi.clone(),
-                    },
-                );
-                let mut resource_paths = Vec::new();
-                for (seed, manifest) in resources {
-                    let p = path(seed);
-                    g.resources.insert(
-                        p.clone(),
-                        ResourceNode {
-                            store_path: p.clone(),
-                            manifest: manifest.clone(),
-                        },
-                    );
-                    g.resource_owner.insert(p.clone(), pi_path.clone());
-                    resource_paths.push(p);
-                }
-                g.packages.insert(
-                    pi_path.clone(),
-                    PackageNode {
-                        store_path: pi_path,
-                        instance_name: pi["spec"]["instanceName"].as_str().unwrap().into(),
-                        namespace: pi["metadata"]["namespace"].as_str().unwrap().into(),
-                        version: pi["spec"]["version"].as_str().map(str::to_string),
-                        lifecycle: None,
-                        resource_paths,
-                        cross_deps: vec![],
-                    },
-                );
-            }
-            crate::eval::stamp::stamp_annotations(&mut g);
-            g
         }
 
         /// Synthesize the live side from every stamped manifest of `build`,
@@ -1415,76 +1292,6 @@ mod tests {
             );
         }
 
-        /// Return the live side as a failed deploy leaves it: every manifest of
-        /// `build`, with each import marker's identity hash moved and its
-        /// `kix.run/package` stamp replaced by `stamp`.
-        fn after_failed_deploy(build: &StoreGraph, stamp: &str) -> Vec<Value> {
-            build
-                .resources
-                .values()
-                .map(|n| {
-                    let mut m = n.manifest.clone();
-                    if crate::manifest::lifecycle::is_marker(&m) {
-                        let anns = &mut m["metadata"]["annotations"];
-                        anns[keys::IDENTITY_HASH] = json!(h("moved"));
-                        anns[keys::PACKAGE] = json!(stamp);
-                    }
-                    m
-                })
-                .collect()
-        }
-
-        /// Return the names of the resources `g` lists under package `ns/name`.
-        fn names_in(g: &StoreGraph, ns: &str, name: &str) -> Vec<String> {
-            let mut names: Vec<String> = pkg(g, ns, name)
-                .resource_paths
-                .iter()
-                .map(|p| {
-                    g.resources[p].manifest["metadata"]["name"]
-                        .as_str()
-                        .unwrap()
-                        .into()
-                })
-                .collect();
-            names.sort();
-            names
-        }
-
-        /// After a failed deploy, a live import marker carries another
-        /// identity hash than the new build's, and its stamp says `_cluster`
-        /// or names another package. It stays under the package that declares
-        /// it in the build, as a changed resource, and is not a removed
-        /// package.
-        #[test]
-        fn a_marker_whose_hash_moved_stays_under_its_declaring_package() {
-            let build = built(&[(
-                "pi",
-                rendered_pi("other-ns", "other", None),
-                vec![
-                    ("cm", rendered("ConfigMap", "other-ns", "other")),
-                    (
-                        "mk",
-                        rendered_pi(
-                            "other-ns",
-                            "secret-ref-other-mcp-token",
-                            Some(("Secret", "mcp-token")),
-                        ),
-                    ),
-                ],
-            )]);
-            for stamp in ["_cluster", "elsewhere"] {
-                let old = StoreGraph::synthesize(&after_failed_deploy(&build, stamp), &build);
-                assert_eq!(old.packages.len(), 1, "stamp {stamp}");
-                assert_eq!(
-                    names_in(&old, "other-ns", "other"),
-                    vec!["other", "secret-ref-other-mcp-token"],
-                );
-                let d = crate::plan::diff_graphs(&old, &build);
-                assert!(d.removed.is_empty() && d.added.is_empty(), "stamp {stamp}");
-                assert_eq!(d.changed.len(), 1);
-            }
-        }
-
         /// A marker two packages list stays under both after its hash moved,
         /// although its stamp names one package or `_cluster`.
         #[test]
@@ -1516,97 +1323,6 @@ mod tests {
                     );
                 }
             }
-        }
-
-        /// An object that moved from package `old` to package `web` and also
-        /// changed shows only as a change inside `web`, because the build
-        /// decides where it goes. `old` shows no removal. This pins the
-        /// limit, so a change to it is deliberate.
-        #[test]
-        fn a_moved_and_changed_object_shows_only_under_its_new_package() {
-            let build = built(&[(
-                "pi",
-                rendered_pi("app", "web", None),
-                vec![("cm", rendered("ConfigMap", "app", "settings"))],
-            )]);
-            let mut live: Vec<Value> = build
-                .resources
-                .values()
-                .filter(|n| n.manifest["kind"] != "ConfigMap")
-                .map(|n| n.manifest.clone())
-                .collect();
-            live.push(stamped(
-                "ConfigMap",
-                "app",
-                "settings",
-                ("app", "old"),
-                &h("before-move"),
-                json!({"k": "v"}),
-            ));
-
-            let old = StoreGraph::synthesize(&live, &build);
-            assert_eq!(names_in(&old, "app", "web"), vec!["settings"]);
-            let d = crate::plan::diff_graphs(&old, &build);
-            assert!(d.removed.is_empty() && d.added.is_empty());
-            assert_eq!(d.changed.len(), 1);
-            assert_eq!(d.changed[0].key, "app/web");
-        }
-
-        /// With the deployed record's package index, the same move shows
-        /// `settings` removed from `old` and added to `web`, as a comparison
-        /// with the deployed build does. An index in another format is not
-        /// read, and the move shows only under `web` again.
-        #[test]
-        fn a_moved_and_changed_object_shows_under_both_packages_with_an_index() {
-            let build = built(&[
-                (
-                    "pi",
-                    rendered_pi("app", "web", None),
-                    vec![("cm", rendered("ConfigMap", "app", "settings"))],
-                ),
-                ("pi-old", rendered_pi("app", "old", None), vec![]),
-            ]);
-            let mut live: Vec<Value> = build
-                .resources
-                .values()
-                .filter(|n| n.manifest["kind"] != "ConfigMap")
-                .map(|n| n.manifest.clone())
-                .collect();
-            live.push(stamped(
-                "ConfigMap",
-                "app",
-                "settings",
-                ("app", "old"),
-                &h("before-move"),
-                json!({"k": "v"}),
-            ));
-            let deployed: RecordPackageIndex = serde_json::from_value(json!({
-                "format": crate::eval::package_index::FORMAT,
-                "packages": {
-                    "app/old": { "instance": h("pi-old"), "resources": [h("before-move")] },
-                    "app/web": { "instance": h("pi"), "resources": [] },
-                },
-                "clusterLevel": [],
-            }))
-            .unwrap();
-
-            let old = StoreGraph::synthesize_placed(&live, &build, &[&deployed]);
-            assert_eq!(names_in(&old, "app", "old"), vec!["settings"]);
-            assert!(names_in(&old, "app", "web").is_empty());
-            let d = crate::plan::diff_graphs(&old, &build);
-            let change = |key: &str| d.changed.iter().find(|c| c.key == key).unwrap();
-            let settings = ResourceId::from_value(&live[live.len() - 1]);
-            assert_eq!(change("app/old").removed_resources, vec![settings.clone()]);
-            assert_eq!(change("app/web").added_resources, vec![settings]);
-
-            let mut unknown = deployed.to_value();
-            unknown["format"] = json!(crate::eval::package_index::FORMAT + 1);
-            let unread: Vec<RecordPackageIndex> = RecordPackageIndex::from_value(&unknown)
-                .into_iter()
-                .collect();
-            let unread: Vec<&RecordPackageIndex> = unread.iter().collect();
-            let old = StoreGraph::synthesize_placed(&live, &build, &unread);
-            assert_eq!(names_in(&old, "app", "web"), vec!["settings"]);
         }
 
         /// Two build objects of one kind, namespace, and name (two API groups)

@@ -1,4 +1,5 @@
-//! Check that `kix-lib` builds from its own directory alone.
+//! Check that `kix-lib` and `kix-core` each build from their own directory
+//! alone.
 //!
 //! crane's `vendorCargoDeps`, `cargo vendor`, and `cargo package` copy only the
 //! files under the crate root. A file that `include_str!` or `include_bytes!`
@@ -48,10 +49,18 @@ fn normalize(path: &Path) -> PathBuf {
 
 #[test]
 fn every_included_file_is_in_the_package() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lib = Path::new(env!("CARGO_MANIFEST_DIR"));
+    check_package("kix-lib", lib);
+    check_package("kix-core", &lib.join("../kix-core"));
+}
+
+/// Fail when a file that `package`'s sources include is missing from what
+/// `cargo package` would ship for it.
+fn check_package(package: &str, root: &Path) {
+    let root = &normalize(root);
 
     let output = Command::new(env!("CARGO"))
-        .args(["package", "-p", "kix-lib", "--list", "--allow-dirty"])
+        .args(["package", "-p", package, "--list", "--allow-dirty"])
         .current_dir(root)
         .output()
         .expect("cargo runs");
@@ -88,8 +97,9 @@ fn every_included_file_is_in_the_package() {
     }
     assert!(
         missing.is_empty(),
-        "these files are compiled into kix-lib but are not in its package, \
-         so a vendored build of kix-lib fails. Keep them under cli/kix/:\n{}",
+        "these files are compiled into {package} but are not in its package, \
+         so a vendored build of {package} fails. Keep them under {}:\n{}",
+        root.display(),
         missing.join("\n")
     );
 }

@@ -78,16 +78,16 @@ pub const SLSA_BUILD_TYPE: &str = concat!("https://", domain!(), "/build/v1");
 pub const RECEIPT_SCHEMA: &str = concat!(domain!(), "/receipt/v1");
 
 /// Field under an Activation's `status` that carries the deploy receipt.
-pub(crate) const RECEIPT_FIELD: &str = "receipt";
+pub const RECEIPT_FIELD: &str = "receipt";
 
 /// Field under an Activation's `status` that lists the builds whose orphans
 /// the deploy that finalized it reported and did not delete. See
 /// `cluster::activation::KeptOrphanSource`.
-pub(crate) const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
+pub const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
 
 /// Field under an Activation's `status` that holds the build's package index.
 /// See `eval::package_index::RecordPackageIndex`.
-pub(crate) const PACKAGE_INDEX_FIELD: &str = "packageIndex";
+pub const PACKAGE_INDEX_FIELD: &str = "packageIndex";
 
 /// `activations.<domain>`, the CRD name.
 pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
@@ -147,32 +147,32 @@ pub const MODE: &str = key!("mode");
 // --- Import markers ---
 
 /// Kind of the imported resource.
-pub(crate) const IMPORT_KIND: &str = key!("import-kind");
+pub const IMPORT_KIND: &str = key!("import-kind");
 
 /// `apiVersion` of the imported resource.
-pub(crate) const IMPORT_API_VERSION: &str = key!("import-apiversion");
+pub const IMPORT_API_VERSION: &str = key!("import-apiversion");
 
 /// Name of the imported resource.
-pub(crate) const IMPORT_NAME: &str = key!("import-name");
+pub const IMPORT_NAME: &str = key!("import-name");
 
 /// Comma-separated keys an imported Secret must carry.
-pub(crate) const IMPORT_SECRET_KEYS: &str = key!("import-secret-keys");
+pub const IMPORT_SECRET_KEYS: &str = key!("import-secret-keys");
 
 /// Kind a CRD ref marker declares (`scope.mkCRDRef`, `kix.mkImport { crds }`).
 /// An import marker that carries it is a CRD ref marker.
-pub(crate) const CRD_KIND: &str = key!("crd-kind");
+pub const CRD_KIND: &str = key!("crd-kind");
 
 /// Default API version a CRD ref marker declares for its kind: the version
 /// custom resources built from the ref use unless they set their own. The
 /// deploy does not read it; tests stamp it to show that.
-#[cfg(test)]
-pub(crate) const CRD_VERSION: &str = key!("crd-version");
+#[cfg(any(test, feature = "test-util"))]
+pub const CRD_VERSION: &str = key!("crd-version");
 
 /// Comma-separated API versions a CRD ref marker declares as served, its
 /// default version among them. The library stamps it on every CRD ref marker,
 /// and it is the only list the deploy checks against the live CRD. A deploy
 /// refuses a build with a CRD ref marker that lacks it.
-pub(crate) const CRD_SERVED_VERSIONS: &str = key!("crd-served-versions");
+pub const CRD_SERVED_VERSIONS: &str = key!("crd-served-versions");
 
 // --- Graph and deploy behaviour ---
 
@@ -192,19 +192,19 @@ pub const HOLDS_DATA: &str = key!("holds-data");
 /// Comma-separated field paths the resource cedes to another field manager
 /// after creation (`spec.versions`, `webhooks[*].rules`). On a 409 confined
 /// to these paths, apply retries without them.
-pub(crate) const CEDE_FIELDS: &str = key!("cede-fields");
+pub const CEDE_FIELDS: &str = key!("cede-fields");
 
 /// Objects the resource expects something else to have created, as
 /// comma-separated `apiVersion|Kind|name` entries in the resource's own
 /// namespace. Apply waits for each to exist first.
-pub(crate) const EXPECTS: &str = key!("expects");
+pub const EXPECTS: &str = key!("expects");
 
 /// A Job carrying `rerun: on-change` is deleted and created again rather than
 /// patched. See [`RERUN_ON_CHANGE`].
 pub const RERUN: &str = key!("rerun");
 
 /// The only value [`RERUN`] honours.
-pub(crate) const RERUN_ON_CHANGE: &str = "on-change";
+pub const RERUN_ON_CHANGE: &str = "on-change";
 
 /// Finalizer the operator holds on records it reconciles.
 pub const OPERATOR_GC_FINALIZER: &str = key!("operator-gc");
@@ -212,15 +212,15 @@ pub const OPERATOR_GC_FINALIZER: &str = key!("operator-gc");
 // --- Secrets ---
 
 /// Store path of the SOPS file a Secret is decrypted from at apply time.
-pub(crate) const SOPS_SOURCE: &str = key!("sops-source");
+pub const SOPS_SOURCE: &str = key!("sops-source");
 
 /// Hash of a Secret's decrypted content.
 pub const CONTENT_HASH: &str = key!("content-hash");
 
 /// Comma-separated keys a Secret carries. The deploy takes the keys from the
 /// SOPS file instead; tests stamp it to show that.
-#[cfg(test)]
-pub(crate) const SECRET_KEYS: &str = key!("secret-keys");
+#[cfg(any(test, feature = "test-util"))]
+pub const SECRET_KEYS: &str = key!("secret-keys");
 
 /// Return whether `key` is one of Kix's own annotation or label keys.
 ///
@@ -321,7 +321,7 @@ mod tests {
     /// Only string literals count. Comments and doc comments may name a key
     /// for the reader; they are prose, and a move sweeps them with the docs.
     ///
-    /// Walks up from `CARGO_MANIFEST_DIR` (`cli/kix`) to the repository root.
+    /// Walks up from `CARGO_MANIFEST_DIR` (`cli/kix-core`) to the repository root.
     /// Skipped when that tree is not there, so a packaged crate still tests
     /// clean.
     #[test]
@@ -336,9 +336,9 @@ mod tests {
         // Every file allowed to spell a domain, and why.
         let allowed: &[&str] = &[
             // This file: the one Rust literal.
-            "cli/kix/src/manifest/keys.rs",
+            "cli/kix-core/src/manifest/keys.rs",
             // The retired domains, listed so old objects still parse.
-            "cli/kix/src/legacy_domain/mod.rs",
+            "cli/kix-core/src/legacy_domain/mod.rs",
             // The one Nix literal.
             "kix/lib/core/annotations.nix",
             // Test fixtures and integration tests: literal API objects and
@@ -346,6 +346,7 @@ mod tests {
             // that catches accidental changes to the constants, so they spell
             // the domain directly.
             "cli/kix/tests/fixtures",
+            "cli/kix-core/tests/fixtures",
             "cli/kix-operator/tests",
             // The Python half of the compatibility layer. It declares both
             // domains for the same reason `legacy_domain` does, and it
@@ -419,7 +420,7 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "a Kix domain is spelled in a string literal outside the two constants \
-             files. Use kix::manifest::keys (Rust) or core/annotations.nix (Nix):\n{}",
+             files. Use kix_core::manifest::keys (Rust) or core/annotations.nix (Nix):\n{}",
             offenders.join("\n")
         );
     }

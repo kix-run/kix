@@ -19,7 +19,7 @@ pub fn printable(s: &str) -> String {
 }
 
 /// Format `s` like [`printable`], showing at most `max_chars` characters.
-pub(crate) fn printable_up_to(s: &str, max_chars: usize) -> String {
+pub fn printable_up_to(s: &str, max_chars: usize) -> String {
     let (shown, rest) = match s.char_indices().nth(max_chars) {
         Some((i, _)) => s.split_at(i),
         None => (s, ""),

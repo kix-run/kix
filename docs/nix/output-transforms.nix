@@ -147,7 +147,7 @@ let
     '';
 
     # Drop Nix's build-progress chatter. `kix` forwards these from the
-    # `nix build` it shells out to (cli/kix/src/eval/nix.rs), and Nix
+    # `nix build` it shells out to (cli/kix-core/src/eval/nix.rs), and Nix
     # only emits them when it actually has to build: a warm store prints
     # nothing. So whether a capture contains them records the state of
     # the machine that generated it, not the behaviour of the command.

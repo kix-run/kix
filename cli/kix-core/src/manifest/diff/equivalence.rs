@@ -89,7 +89,7 @@ impl DefaultValue {
 /// An empty object is not included. `emptyDir: {}` and many custom
 /// resource fields mean something different from an absent field, and the
 /// server keeps such an object, so the live side has it too.
-pub(crate) fn equivalent_to_unset(path: &str, value: &Value) -> bool {
+pub fn equivalent_to_unset(path: &str, value: &Value) -> bool {
     match value {
         Value::Null => true,
         Value::Array(items) if items.is_empty() => true,
@@ -144,7 +144,7 @@ pub(crate) fn is_quantity_field(parent: &str, key: &str) -> bool {
 
 /// Check whether two values are the same resource quantity, such as `1` and `"1"`,
 /// or `"500m"` and `0.5`. Returns false when either does not parse.
-pub(crate) fn same_quantity(a: &Value, b: &Value) -> bool {
+pub fn same_quantity(a: &Value, b: &Value) -> bool {
     match (quantity_nanos(a), quantity_nanos(b)) {
         (Some(x), Some(y)) => x == y,
         _ => false,

@@ -107,7 +107,7 @@ fn strip_null_values(v: &mut Value) {
 }
 
 /// Recursively sort all object keys by converting to BTreeMap.
-pub(crate) fn sort_keys(v: &Value) -> Value {
+pub fn sort_keys(v: &Value) -> Value {
     match v {
         Value::Object(map) => {
             let sorted: BTreeMap<String, Value> =
@@ -120,7 +120,7 @@ pub(crate) fn sort_keys(v: &Value) -> Value {
 }
 
 /// Compute the Blake3 hash of an already normalized and key-sorted `Value`.
-pub(crate) fn hash_value(v: &Value) -> String {
+pub fn hash_value(v: &Value) -> String {
     let canonical = serde_json::to_string(v).unwrap_or_default();
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }

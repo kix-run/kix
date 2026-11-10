@@ -4,10 +4,10 @@
 //! and path-based ignore patterns.
 
 pub mod display;
-pub(crate) mod engine;
-pub(crate) mod equivalence;
+pub mod engine;
+pub mod equivalence;
 pub(crate) mod ignore;
-pub(crate) mod keyed_lists;
+pub mod keyed_lists;
 
 use std::collections::BTreeSet;
 
@@ -117,7 +117,7 @@ impl DiffConfig {
     }
 
     /// Return this config with list order comparison enabled; see [`DiffConfig::ordered`].
-    pub(crate) fn in_order(self) -> Self {
+    pub fn in_order(self) -> Self {
         Self {
             ordered: true,
             ..self

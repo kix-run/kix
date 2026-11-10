@@ -241,7 +241,7 @@ impl Build {
     /// build (`carried_sops`). When `placeholders` is true, nothing is
     /// decrypted and each Secret receives placeholder values so unapproved
     /// plans do not read secrets.
-    pub(crate) fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
+    pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
         let Origin::Carried { source, .. } = &mut self.origin else {
             return Ok(SopsSources::Local);
         };
@@ -252,7 +252,7 @@ impl Build {
     /// Return the stamped build carried for the Activation record with
     /// `identity_hash`, after verifying its identity hash and validating the
     /// graph. Returns `Ok(None)` for a local build.
-    pub(crate) fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+    pub fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
         let Origin::Carried { source, .. } = &self.origin else {
             return Ok(None);
         };
@@ -290,10 +290,10 @@ pub enum SopsSources {
 #[derive(Debug)]
 pub struct CarriedSources {
     /// Store path named by `kix.run/sops-source` to the file on disk.
-    pub(crate) files: HashMap<String, PathBuf>,
+    pub files: HashMap<String, PathBuf>,
     /// Plan without decrypting: each Secret gets placeholder values for
     /// the keys it declares.
-    pub(crate) placeholders: bool,
+    pub placeholders: bool,
     _dir: tempfile::TempDir,
 }
 
@@ -302,10 +302,7 @@ impl SopsSources {
     /// directory, each under its SHA-256 and the end of its store name, and
     /// read them only from there. The caller has checked each file's store
     /// path against its bytes: see [`Build::sops_sources`].
-    pub(crate) fn carried(
-        sources: HashMap<String, Vec<u8>>,
-        placeholders: bool,
-    ) -> std::io::Result<Self> {
+    pub fn carried(sources: HashMap<String, Vec<u8>>, placeholders: bool) -> std::io::Result<Self> {
         let dir = tempfile::tempdir()?;
         let mut files = HashMap::new();
         for (store_path, bytes) in sources {
@@ -360,7 +357,7 @@ mod tests {
     use crate::eval::store_path::{Method, path_for};
 
     fn fixture() -> StoreGraph {
-        crate::plan::fixtures::kix_enterprise_test()
+        crate::eval::fixtures::kix_enterprise_test()
     }
 
     /// A source that returns `.0` as the build for any Activation record.

@@ -5,7 +5,8 @@ The Rust CLI for kixpkgs evaluates Nix-defined Kubernetes clusters, diffs agains
 ## Workspace
 
 ```
-kix/             library: eval, manifest handling, cluster operations, planning, plan files
+kix-core/        library: eval, project config, manifest handling; no Kubernetes client, no C code
+kix/             library (`kix-lib`): cluster operations, planning, plan files, releases, pins
 kix-container/   library: the seekable zstd container bundles and plan files share
 kix-bundle/      library: bundles, a build as one file, read without Nix
 kix-cli/         binary: clap CLI, command dispatch, plan display
@@ -13,6 +14,24 @@ kix-operator/    binary: kube-rs controller watching Activation CRs
 runtime/         Kix runtime assembly (runtime.nix, assemble.py, legal.py, without-nix.sh, nix-builder.sh)
 fuzz/            cargo-fuzz targets for the bundle and plan file readers (own workspace)
 ```
+
+`kix-core` (lib name `kix_core`) holds everything that needs no Kubernetes
+client: `eval`, `manifest`, `build_source`, `project`, `library`, `runtime`,
+`system_nix`, `legacy_domain`, `text`, `yaml`, and `version`. Its dependency
+tree has no kube, tokio, reqwest, ring, zstd, or any crate that links C code,
+so a program that only evaluates projects or reads manifests depends on it
+alone. `kix` re-exports each of its modules under the same path, so
+`kix::eval` and `kix_core::eval` are the same module and callers of `kix`
+see no difference. Two modules take Kubernetes client types for a few
+functions, and `kix` wraps them: `kix::manifest` adds
+`lifecycle::lifecycle_of_live` and `types::to_manifest_value`, and
+`kix::legacy_domain` adds `check_discovery` and the `migrate` module. Each
+wrapper starts with `pub use kix_core::<module>::*`. A crate-private item
+in `kix-core` that `kix` needs must be `pub`. Fixtures the two crates' tests
+share (`eval::fixtures`, and the `#[cfg(test)]` keys) sit behind
+`kix-core`'s `test-util` feature, which `kix`'s `test-util` turns on.
+`kix/tests/package_test.rs` checks that each crate builds from its own
+directory alone.
 
 Both binaries depend on `kix`, and `kix-cli` on `kix-bundle`, which is
 built on `kix` as any other user of the library would be. `kix` knows
@@ -143,7 +162,7 @@ the site's Worker and release files, run `pages.yml` from the branch
 
 A pull request that makes a release (its version has no tag yet) runs the
 same steps, except `publish`. Another pull request that changes the runtime,
-cluster evaluation (`cli/kix/src/eval/`), or the Nix side of Helm renders
+cluster evaluation (`cli/kix-core/src/eval/`), or the Nix side of Helm renders
 runs only the `runtime` job, which checks that each platform's runtime builds
 and its programs run. The `build` binaries take about ten minutes to
 build, so such a pull request runs `without-nix` and `nix-builder` only
@@ -212,13 +231,13 @@ releases on disk. `pages.yml` runs both, and shellcheck, before it deploys.
 project names its Kix in `kix.toml`, and every Kix can run, or install and
 run, the version a project names.
 
-- **Version** (`kix/src/version/mod.rs`): `Version` parses
+- **Version** (`kix-core/src/version/mod.rs`): `Version` parses
   `<major>.<minor>.<patch>`, with an optional `-pre` and `+build`, and orders
   versions ignoring the build. `running()` is this Kix, parsed once.
   Messages that name a release use `release()`, which drops the build
   metadata. The plan document, receipts, the SBOM, and the audit keep the
   full string.
-- **Policy** (`kix/src/version/policy.rs`): the only code that compares Kix
+- **Policy** (`kix-core/src/version/policy.rs`): the only code that compares Kix
   with a library or a requirement. `Requirement` is `Minor` (`"0.8"`) or
   `Exact` (`"0.8.3"` or `"0.9.0-rc.1"`). `satisfies` never matches a
 prerelease to a `Minor`, so only a requirement that names a prerelease runs
@@ -230,7 +249,7 @@ or installs it. `FIRST_SELECTING` (0.8) is the first minor that reads
   `LibraryOlderMinor`, or `LibraryNewerPatch` otherwise. The 1.0 change to
   "a newer Kix builds older libraries" happens here and in `specVersion` in
   `kix/lib/helm.nix` (`fetchSpec`).
-- **Library check** (`check_library` in `kix/src/eval/nix.rs`): once per run,
+- **Library check** (`check_library` in `kix-core/src/eval/nix.rs`): once per run,
   one `nix eval --apply` of `legacyPackages.<system>` reads both
   `kixConfig.builder` and `kixLibrary.version` (`library_facts`). The builder
   goes to `project::check_agreement`, the version to
@@ -920,32 +939,32 @@ a record line need regenerating.
   - `receipt.rs` is not a subcommand. It assembles the provenance a deploy writes into the Activation's `status` subresource: flake ref, git commit **and whether the tree was dirty**, the `flake.lock` digest, every input, the Kix and Nix versions, and every image the build renders. It omits the manifests: built manifests carry secret values inline, so storing them would make every deploy record a readable credential archive. `shared::git_state` replaced `git_commit` to supply the dirty flag, and `deploy.rs` prints it above the confirmation.
   - `audit` bundles `scorecard-results.sarif`, `sbom.json`, `provenance.json`, `assessment-results.json`, and `audit-report.md` under `--out` (default `./compliance`). The OSCAL assessment maps findings to framework controls via static Rust tables (see `audit.rs`: SOC 2, ISO 27001, DORA, and NIS2). A control is marked `not-satisfied` only if an error-level scorecard finding exists whose rule ID starts with one of the control's declared `required_rules` prefixes. The markdown summary is a self-contained PR-comment-ready report. SARIF generation duplicates the shape used by `kix check --sarif`.
 
-#### yaml (`kix/src/yaml.rs`)
+#### yaml (`kix-core/src/yaml.rs`)
 
 - `yaml.rs`: every YAML read and write in `kix-lib` and `kix-cli`, except the Helm output that `eval/helm_yaml.rs` reads with `yaml-rust2`, goes through `to_string`, `from_str`, and `read_options` here, on `serde-saphyr` (pure Rust, the same library kube uses for kubeconfig). Reading follows the YAML 1.2 core schema, so `yes`, `on`, `0755`, and `1_000` stay strings. Repeated keys are an error, nesting stops at 64 levels, and alias expansion is capped at one million replayed events. Writing never folds long strings and quotes strings that a YAML 1.1 reader would take for another type. `cluster/secrets.rs` raises the alias cap for a carried SOPS file so that its own 8 MiB count refuses first.
 
-#### runtime (`kix/src/runtime.rs`, `cli/runtime/`)
+#### runtime (`kix-core/src/runtime.rs`, `cli/runtime/`)
 
-- `runtime.rs`: locates and verifies the external tools in the Kix runtime (`Tool`: `Nix`, `NixStore`, `Helm`, `Kubectl`, `Sops`, requested with `Want::Shipped` or `Want::Exact(version)`). Looks up the runtime directory in order: `KIX_RUNTIME_DIR` (when set to a non-empty value; empty `KIX_RUNTIME_DIR=""` is ignored), `../libexec/kix` beside `current_exe()` (after resolving symlinks on the `kix` binary) when it contains `manifest.json`, or `KIX_BUILTIN_RUNTIME_DIR` when it contains `manifest.json`. Normal commands verify `<runtime>/manifest.json` (when present) against `cli/kix/runtime/programs.json` (embedded via `include_str!`) once per process; `runtime::doctor()` also verifies the SHA-256 of every file and symlink target listed in `manifest.json`. `runtime::tool()` prepares a `std::process::Command`. Helm, kubectl, and sops always come from the runtime. For `Nix` and `NixStore` it follows the `NixRunner` this run uses: `Bundled { root }` (the `kix` and `remote` builders) takes the runtime's Nix, and `use_store()` writes `<root>/etc/nix/nix.conf` (`store = <root>`) and sets `NIX_CONF_DIR`, `NIX_STATE_DIR`, `NIX_USER_CONF_FILES=""`, and `NIX_SSL_CERT_FILE` (resolved from the host's system CA bundle locations), with `init_store()` creating the store database once under a lock; `System` (the `nix` builder) runs `nix`/`nix-store` from `PATH` with no Kix settings. `runtime::select_builder(builder, source)` sets the runner and records where the builder came from (`runtime::builder_source()`) once per process (a `OnceLock` beside `runtime()`), and `kix-cli`'s `commands::select_builder` calls it from `main` before any Nix runs. Under `System`, the first Nix command of a run checks the machine's Nix (`system_nix::check_once`: Nix 2.24 or later, not Lix, `nix` on `PATH`) and fails with `RuntimeError::SystemNix`. Kix writes no `nix.conf` then, so every `nix` call passes `--extra-experimental-features` itself. Without a call (unit tests, commands that read no project), `nix_runner()` returns `Bundled`. `KIX_STORE_ROOT` under the `nix` builder is an error (`RuntimeError::StoreRootWithSystemNix`).
+- `runtime.rs`: locates and verifies the external tools in the Kix runtime (`Tool`: `Nix`, `NixStore`, `Helm`, `Kubectl`, `Sops`, requested with `Want::Shipped` or `Want::Exact(version)`). Looks up the runtime directory in order: `KIX_RUNTIME_DIR` (when set to a non-empty value; empty `KIX_RUNTIME_DIR=""` is ignored), `../libexec/kix` beside `current_exe()` (after resolving symlinks on the `kix` binary) when it contains `manifest.json`, or `KIX_BUILTIN_RUNTIME_DIR` when it contains `manifest.json`. Normal commands verify `<runtime>/manifest.json` (when present) against `cli/kix-core/runtime/programs.json` (embedded via `include_str!`) once per process; `runtime::doctor()` also verifies the SHA-256 of every file and symlink target listed in `manifest.json`. `runtime::tool()` prepares a `std::process::Command`. Helm, kubectl, and sops always come from the runtime. For `Nix` and `NixStore` it follows the `NixRunner` this run uses: `Bundled { root }` (the `kix` and `remote` builders) takes the runtime's Nix, and `use_store()` writes `<root>/etc/nix/nix.conf` (`store = <root>`) and sets `NIX_CONF_DIR`, `NIX_STATE_DIR`, `NIX_USER_CONF_FILES=""`, and `NIX_SSL_CERT_FILE` (resolved from the host's system CA bundle locations), with `init_store()` creating the store database once under a lock; `System` (the `nix` builder) runs `nix`/`nix-store` from `PATH` with no Kix settings. `runtime::select_builder(builder, source)` sets the runner and records where the builder came from (`runtime::builder_source()`) once per process (a `OnceLock` beside `runtime()`), and `kix-cli`'s `commands::select_builder` calls it from `main` before any Nix runs. Under `System`, the first Nix command of a run checks the machine's Nix (`system_nix::check_once`: Nix 2.24 or later, not Lix, `nix` on `PATH`) and fails with `RuntimeError::SystemNix`. Kix writes no `nix.conf` then, so every `nix` call passes `--extra-experimental-features` itself. Without a call (unit tests, commands that read no project), `nix_runner()` returns `Bundled`. `KIX_STORE_ROOT` under the `nix` builder is an error (`RuntimeError::StoreRootWithSystemNix`).
 - `cli/runtime/`: builds the self-contained runtime tree (`programs.json` pins `nix` `2.35.4`, `helm` `3.19.1` and `4.3.1`, `kubectl` `1.37.2`, and `sops` `3.12.1`; `flake.nix` exposes `.#kix-runtime-spec` from `cli/runtime/default.nix` and `.#kix-runtime` from `cli/runtime/in-store.nix`; `assemble.py` copies the binaries into `libexec/kix/<name>-<version>/`, relocates Mach-O `.dylib` load commands to `@loader_path` on macOS when not `--in-store` (Linux `nix` is a static `musl` binary), and writes `manifest.json`; `legal.py` writes `THIRD_PARTY_LICENSES` and the LGPL source archive; `without-nix.sh` tests the release archive with `/nix` unreachable; `nix-builder.sh` tests the release archive with the machine's Nix as an untrusted user).
 
-#### project (`kix/src/project.rs`)
+#### project (`kix-core/src/project.rs`)
 
 - `project.rs`: reads `kix.toml` beside `flake.nix` in the `--flake` directory (`ProjectConfig::load`). Its keys are `builder` and `kix`. `builder` is `kix` (the default when the file or key is missing), `nix`, or `remote` (`BuilderKind`); `builder_source` records where the choice came from (`BuilderSource`). `kix` is the project's `Requirement` (`"0.8"` or `"0.8.3"`), which selection reads, and anything else is `BadKixVersion`. Unknown keys, unknown values, and invalid TOML are errors that name the file. `ProjectConfig::check_supported` is the one place that refuses `remote`. `check_agreement` compares the builder with `legacyPackages.<system>.kixConfig.builder`, which the library reads from the same file through Nix and so misses while git does not track `kix.toml`; `eval::nix::eval_activation_index` runs it once per run before it evaluates a cluster (skipped for `KIX_TEST_BUILDER`), and its `ProjectMismatch` names the fix (`git add kix.toml`, `kix lib update` or merging `mkFlake` for a flake without `kixConfig`, or both values). `KIX_TEST_BUILDER` overrides the file, for Kix's own tests only. A remote flake reference gets the default.
 
-#### system_nix (`kix/src/system_nix.rs`)
+#### system_nix (`kix-core/src/system_nix.rs`)
 
 - `system_nix.rs`: checks the machine's `nix` on `PATH` when `NixRunner::System` (`builder = "nix"`) is selected. `check_once()` runs `check_version()` once per process before the first `nix` or `nix-store` subprocess and caches the result in a `OnceLock`: requires upstream Nix (refusing Lix, which reports `(Lix, like Nix)` in `nix --version`) at version `2.24` (`MIN_VERSION`) or later (for `pipe-operators`), returning `SystemNixError` with the builder's `BuilderSource` and instructions to install Nix 2.24+ or set `builder = "kix"`. Also provides `version_line()`, and `import_from_derivation_allowed()` (reads `allow-import-from-derivation` from `nix config show`) for `kix doctor`.
 
-#### library (`kix/src/library.rs`)
+#### library (`kix-core/src/library.rs`)
 
 - `library.rs`: checks that the flake's Kix library expects the same Helm 3 and Helm 4 versions as the running Kix (`check_helm_versions`, reading `kix/lib/helm-versions.json` via `nix eval` before rendering a Helm chart and returning `HelmMismatch` with instructions to run `kix lib update` or upgrade `kix`), and implements `kix lib update` (`library::update`), which reads and parses `flake.lock` directly, walks the `nodes` graph from the root (skipping `follows` aliases so it finds the declaring input path), refuses pinned tags/commits, forks, or `path:` inputs in `flake.nix` with manual instructions, and updates `flake.lock` to `github:kix-run/kixpkgs/v<version>` via `nix flake lock --override-input`.
 
-#### version, installs, and release (`kix/src/version/`, `kix/src/installs.rs`, `kix/src/release/`)
+#### version, installs, and release (`kix-core/src/version/`, `kix/src/installs.rs`, `kix/src/release/`)
 
 - `version/mod.rs` (`Version`, `running()`), `version/policy.rs` (the only comparison of Kix with a library or a `kix.toml` requirement), `installs.rs` (the versions under `~/.local/share/kix` and the install script's receipt), and `release/` (`index`, `verify`, `download`, and `install` from kix.run). See "Versions, selection, and installs"
 
-#### build_source (`kix/src/build_source.rs`)
+#### build_source (`kix-core/src/build_source.rs`)
 
 - `Build` is the build plan and deploy work from, and a caller cannot hold one unchecked. It is the only way a command or the operator loads a build, new or one a record names. Its fields are private and it has two constructors, each doing every check once: `Build::local(build_path)` loads an activation index JSON file (`kix-activation-<cluster>.json`) or a legacy result directory in Kix's local store via `eval::BuildFiles`, validating it (`Build::of_flake(flake, cluster, overrides, status)` runs `eval::nix::eval_activation_index` first, and its `FlakeBuildError` says whether the evaluation or the load failed, so each command keeps its own wording), and `Build::carried(bytes, cluster, read)` hashes the bytes itself, hands them to `read` for a `CarriedBuild` and its `StoreGraph`, and refuses a graph that is not valid or not of `cluster`. Either constructor then runs `legacy_domain::check_build` on the graph as loaded and stamps it (`eval::stamp`), in that order, so a graph is stamped once and the check sees it before stamping upgrades it. Everything else comes through accessors that give only checked results: `graph` (stamped) and `into_graph`, `installable` (consumes the `Build` and gives an `InstallableBuild`, or the check's `LegacyDomainError`; `kix plan`, `kix deploy` (with or without `--bundle`), and `kix migrate domain` take only an `InstallableBuild`, while a build a record names, which can predate the domain move, is never refused), `is_local` (the activation cache and GC root, the dirty-source wording), `carried_provenance` (the maker's `Provenance` and the core's SHA-256, for the receipt's `source.bundle.sha256`; `None` for a local build), `sops_sources(placeholders)` (`SopsSources::Local` for a local build; for a carried one, the carried files a Secret names, each refused unless its store path is made from its bytes, as `SopsSources::Carried`, placeholders for `kix plan`), and `deployed_build(identity_hash)` (a carried build's copy of the build a record names, stamped, refused unless the record has that identity hash and it is valid; `None` for a local build). `CarriedBuild` is the seam a build made elsewhere implements, inside or outside the crate: `sops_files`, `provenance`, and `deployed_build`, each a claim the `Build` checks. `Provenance` lives here; the bundle header re-exports it.
 
@@ -962,7 +981,7 @@ a record line need regenerating.
 - `server.rs`: `Overlay`, which replaces each answered object's package-diff entry with the dry-run field changes and labels them, and `field_changes`/`comparable`
 - `saved.rs`: `kix deploy --plan`: `unusable` (schema version, no `objects` or `objects_digest` (a `kix diff` plan), an `objects_digest` its `objects` do not give (an edit), `made_by: builds`, and sections that do not match `made_by`: a `dry_run` plan with no `flags` or with conflicts, admission, or prune not checked, a `live_read` plan with `flags`, which only an edit produces; and a `live_read` plan whose drift is not checked: a diff of a snapshot, or one made without the deployed build), `flags_for` (the saved plan's planning flags; a command-line flag the plan was made without is an error, and a `kix diff` plan refuses `--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`), and `compare(reviewed, fresh) -> Comparison` (cluster; new `identity_hash`; `objects_digest`, refused when either is missing or they differ, with the writes and deletes that differ named (`Rule::Objects`); deployed `identity_hash`, or the record name when a record has none; flags; new conflicts by resource and admission refusals by resource and reason; new `reverted` drift by resource and path; new `delete` prune fates; and, for a `dry_run` plan, objects newly in `not_checked`, whose refusals and drift a dry run could not see). A rule the reviewed plan did not check is `skipped`; a different `kix` is `kix_differs`, never a mismatch: the objects digest already holds the deploy to the reviewed objects and files, and the binary is chosen by whoever deploys. `commands/deploy/` (`saved_plan.rs`) exits `EXIT_STALE` (4) on a mismatch, loads the plan file (`load_saved_plan`, `PlanFile::verify`; its SHA-256 is printed and in the JSON as `plan_sha256`) before any build, compares after `plan::document`, passes the merged planning flags to `run_deploy_async` (the apply never reads `args.plan`), and `check_saved_plan` is `--plan` with `--dry-run`, which exits 4 when stale, 3 when it matches but the deploy would stop (`doc.stops()` or migrations not accepted), and 0 otherwise
 
-#### eval (`kix/src/eval/`)
+#### eval (`kix-core/src/eval/`)
 
 - `store_graph.rs`: **central data structure.** `StoreGraph` holds the full in-memory DAG: `PackageNode` (instance_name, namespace, version, resource_paths, cross_deps) and `ResourceNode` (store_path, manifest). Built from a `BuildFiles` (an activation index JSON file `kix-activation-<cluster>.json` or a legacy result dir's `kix-packages.json`) + `nix-store -q --graph`, reading manifest bytes from Kix's local store via `store::disk_path`. `assemble` (public, shared by every reader of a build) reads each manifest's bytes once, parses them with `manifest_json`, and fails on one it cannot read or parse, and on a package with no `spec.instanceName`. `validate()` runs on every build, whichever reader read it: each manifest's kind, `apiVersion` parts, name, and namespace one URL path segment each (not empty, `.`, or `..`, no `/`, `%`, `?`, `#`; kube-rs puts them in request paths unescaped); each object (kind, namespace, name) once; one Activation record, at `activation_path`, whose `kix.run/cluster` label is the index's `cluster`; each package's PackageInstance among the resources; one package per namespace and instance; and only import markers listed by more than one package. It does not run on `synthesize`'s graphs. `StoreGraph::synthesize(manifests, reference)` builds one from a flat set of stamped manifests instead (live objects' Kix-owned view, a snapshot, an export), and `synthesize_placed(manifests, reference, indexes)` places a manifest whose identity hash one of the `package_index::RecordPackageIndex`es lists where that index puts it before the rules below: a manifest whose kind, namespace, and name the reference holds goes where the reference puts that identity (under every package listing it, as a package's PackageInstance, or at cluster level), and only an unknown identity groups by its `kix.run/package[-namespace]` annotations, where every PackageInstance except an import marker stamped with another package makes a package (resources or not); a package sits at its PackageInstance's store path, `resource_owner` is filled, and a manifest reuses the reference's store path and manifest when its identity hash names a reference manifest of the same kind, namespace, and name (the deploy's skip rule); any other manifest keeps its own content-named synthetic path, so `plan::diff_graphs` sees the change. Used by `deploy` (previous state when the store path is gone) and `diff` (live and `--from <manifest dir>` sides)
 - `build_files.rs`: `BuildFiles::read(location)` reads either an activation index JSON file (`kix-activation-<cluster>.json`, written by `builtins.toFile` with `version`, `activation`, `packages`, `scorecard`, `extraImages`, `imageSources`, and `interfaces`) or a legacy activation result directory of symlinks (`activation`, `kix-packages.json`, etc.), mapping logical `/nix/store/...` paths to their physical paths in Kix's local store via `store::disk_path` and `store::real_path`.
@@ -983,7 +1002,7 @@ a record line need regenerating.
 - `lib.rs`, `read.rs`, and `write.rs`: the format. The crate doc in `lib.rs` is the specification: format 3 (zstd's seekable format; frame 0 the `Header` with `format`, `version`, `kix_rev`, optional `receipt`, and `files` as `[path, size, references]`; data frames; seek table), the record, index, and cluster derived from the references (`Role`), every manifest and the index parsed with `manifest_json`, as a result directory's are, the caps and refusals each with what it protects, and the threat model. `PathsChecked::read` (`read.rs`, used by the Kix Enterprise server) checks the container, every store path, the roles and closure, and parses only the record; `Bundle::read` (agent and CLI) also parses every manifest and returns the `StoreGraph` (`assemble` + `validate`), with `result_dir` `bundle:sha256:<sha>`; `OpenBundle::open` reads the seek table and header only (what `--deployed-bundle` matches records with). `BundleError` messages show the uploader's text through `kix::text::printable`. `Contents::write` (`write.rs`) writes a bundle, and `from_result_dir` gathers one from a result directory with `nix path-info`. Its tests (`tests.rs`) run on `tests/fixtures/`, and check that `kix::plan::fixtures::kix_enterprise_test`, the JSON copy of one fixture that `kix-lib`'s own tests read, is still the build that bundle holds.
 - `file.rs`: bundles on disk. `write_build` (`kix bundle`, whose command in `kix-cli/src/commands/bundle.rs` only builds and names the file) reads its output back with `Bundle::read` and refuses it unless the graph equals the result directory's (`result_dir` aside). `read_build` reads the `--bundle` file (at most `MAX_STORED_BYTES`), opens each `--deployed-bundle` header (a format 1 one is set aside with a warning, any other error fails), and makes the `Build::carried` whose reader is `Bundle::read`, for plan, deploy, and graph. `BundleSource` is the bundle's private `CarriedBuild`: `deployed_build` re-reads and re-verifies the file on each call; `sops_files` gives the bundle's `Role::Other` files, and `cluster::secrets` checks each carried SOPS source once per plan (age recipients only, no repeated key, at most 8 MiB of keys and values with YAML aliases expanded) and decrypts it once per deploy; `provenance` is the header's receipt plus `source.bundle.kixRev`.
 
-#### manifest (`kix/src/manifest/`)
+#### manifest (`kix-core/src/manifest/`)
 
 - `types.rs`: `ResourceId` (kind/namespace/name), `CLUSTER_SCOPED` constant. Used everywhere
 - `workload.rs`: `pod_spec(&Value)`: the one table of where a kind keeps its pod template (`spec` for a Pod, `spec.template.spec` for Deployment/StatefulSet/DaemonSet/ReplicaSet/Job, one level deeper for a CronJob). `kix images`, the SBOM, and the topology preflight all read pod templates through it, so a kind added here is seen by all three
