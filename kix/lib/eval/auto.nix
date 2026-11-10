@@ -502,6 +502,33 @@ rec {
         )
       ) (builtins.attrNames placementsByName);
 
+      # Warn about a package that runs once per cluster and lands beside the
+      # one consumer that needs it, because nothing names its namespace.
+      # Removing that consumer removes the package for the whole cluster.
+      # Two consumers in two namespaces are refused by spreadRefusals.
+      besideConsumerWarnings = builtins.concatMap (
+        name:
+        let
+          ps = placementsByName.${name};
+          namespaces = lib.unique (map (p: p.ns) ps);
+          reason = onePerClusterReason name;
+          placed = normalizedAvail.${name}.namespace != null || autoNamespace != null;
+        in
+        lib.optional (builtins.length namespaces == 1 && reason != null && !placed) (
+          builtins.concatStringsSep "\n" (
+            [
+              "${name} runs once per cluster (${reason}). Kix added it to namespace ${builtins.head namespaces}, because the package that needs it is there:"
+            ]
+            ++ map (p: "  ${labelRequester p.requester}, for dependency '${p.depName}'") ps
+            ++ [
+              "Removing that package would remove ${name} for the whole cluster. Declare it once, in a namespace of its own:"
+              "  instances.<namespace>.${name}.package = packages.${name};"
+              "or set autoNamespace to place every package Kix adds there. Kix 0.10 will refuse this placement."
+            ]
+          )
+        )
+      ) (builtins.attrNames placementsByName);
+
       traceMsg =
         let
           items = map (item: "${item.instName} (${item.ns})") autoInstanceList;
@@ -526,6 +553,6 @@ rec {
       throw (builtins.concatStringsSep "\n" spreadRefusals)
     else
       (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
-        inherit autoInstances activatedOptionals;
+        inherit autoInstances activatedOptionals besideConsumerWarnings;
       };
 }

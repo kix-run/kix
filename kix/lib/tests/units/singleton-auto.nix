@@ -156,8 +156,62 @@ let
       };
   };
 
+  besideConsumer =
+    cluster: builtins.filter (lib.hasInfix "runs once per cluster") cluster.diagnostics.warnings;
+
 in
 {
+  # A singleton added beside its only consumer builds, with a warning that
+  # names the consumer and the two ways to give it a namespace. A plain
+  # shelf package, autoNamespace, or a catalog namespace give no warning.
+  singleton-auto-beside-consumer-warns =
+    let
+      warned = besideConsumer (mkCluster [
+        (shelfWith singleton)
+        { instances.a.consumer.package = consumer; }
+      ]);
+      quietPlain = besideConsumer (mkCluster [
+        (shelfWith plain)
+        { instances.a.consumer.package = consumer; }
+      ]);
+      quietAuto = besideConsumer (mkCluster [
+        (shelfWith singleton)
+        {
+          autoNamespace = "ops";
+          instances.a.consumer.package = consumer;
+        }
+      ]);
+      quietEntry = besideConsumer (mkCluster [
+        {
+          availablePackages.op = {
+            package = singleton;
+            namespace = "ops";
+          };
+          instances.a.consumer.package = consumer;
+        }
+      ]);
+      text = builtins.head warned;
+    in
+    (
+      builtins.length warned == 1
+      && lib.hasInfix "a/consumer" text
+      && lib.hasInfix "instances.<namespace>.op.package" text
+      && lib.hasInfix "autoNamespace" text
+      && quietPlain == [ ]
+      && quietAuto == [ ]
+      && quietEntry == [ ]
+    )
+    || throw "beside-consumer warning: ${
+      builtins.toJSON {
+        inherit
+          warned
+          quietPlain
+          quietAuto
+          quietEntry
+          ;
+      }
+    }";
+
   # With no instance anywhere, the first consumer pulls the singleton into
   # its own namespace, and a second consumer there shares it.
   singleton-auto-one-namespace-instantiates =

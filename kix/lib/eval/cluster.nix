@@ -1268,7 +1268,7 @@
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
         inherit allInstancesList;
-        extraWarnings = crossScorecardDiag.warnings;
+        extraWarnings = crossScorecardDiag.warnings ++ autoResult.besideConsumerWarnings;
         extraAssertions =
           crossScorecardDiag.assertions
           ++ sharedClusterObjectAssertions

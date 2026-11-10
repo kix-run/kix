@@ -23,6 +23,7 @@ Each release groups changes under these headings:
 - `caddy` takes the Caddyfile from a `caddyfile` dependency, a secret with the key `Caddyfile` whose keys all appear in /etc/caddy. `configSecretName` still works with a warning, and 0.10 removes it and the default Secret `<instance>-config`.
 - `caddy` takes an optional `storage` dependency, a claim for /data, so pods share certificates. Without it, /data stays an emptyDir.
 - `stackgres-database`, `cnpg-database`, and `clickhouse-database` warn when `password` is set, because the password then sits in plain text in Kix's local store and in the built Secrets. The build still uses it. Kix 0.10 removes `password`. Set `passwordSource` to a SOPS-encrypted file with a `password` key, and `passwordHash` to the content hash of the decrypted password.
+- Kix warns when it adds a package that runs once per cluster, such as `stackgres-operator`, beside the one package that needs it. Removing that package would remove the operator for the whole cluster. Declare the operator under `instances` in a namespace of its own, or set `autoNamespace`. Kix 0.10 will refuse this placement.
 
 ### Fixed
 
