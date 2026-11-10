@@ -310,15 +310,18 @@ in
           };
       # Info logging unless extraArgs picks another level.
       setsLogLevel = builtins.any (a: builtins.match "--?zap-log-level(=.*)?" a != null) config.extraArgs;
-      args = [
-        "--leader-elect"
-        "--health-probe-bind-address=:8081"
-      ]
-      ++ lib.optional (!setsLogLevel) "--zap-log-level=info"
-      ++ kix.guardArgs {
-        who = "victoria-metrics-operator ${ns}/${name}";
-        owned = ownedFlags;
-      } config.extraArgs;
+      # Keep the level flag first. Moving it changes the pod template, which
+      # restarts the operator when a cluster upgrades Kix.
+      args =
+        lib.optional (!setsLogLevel) "--zap-log-level=info"
+        ++ [
+          "--leader-elect"
+          "--health-probe-bind-address=:8081"
+        ]
+        ++ kix.guardArgs {
+          who = "victoria-metrics-operator ${ns}/${name}";
+          owned = ownedFlags;
+        } config.extraArgs;
 
       # The prometheus-operator converter is the compat contract for the
       # `prometheus` alias claim: every converter is pinned explicitly from

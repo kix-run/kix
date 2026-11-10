@@ -44,9 +44,9 @@ let
   # Removed options and what replaces each. They stay declared, hidden, so
   # that setting one fails with the replacement.
   removedOptions = {
-    nodeSelector = "Set the operator pod's placement with the instance's partsOverlays.";
-    tolerations = "Set the operator pod's placement with the instance's partsOverlays.";
-    affinity = "Set the operator pod's placement with the instance's partsOverlays.";
+    nodeSelector = "Set extraSpec.template.spec.nodeSelector instead.";
+    tolerations = "Set extraSpec.template.spec.tolerations instead.";
+    affinity = "Set extraSpec.template.spec.affinity instead.";
     logLevel = "Pass --zap-log-level=<level> in extraArgs.";
   };
 in
