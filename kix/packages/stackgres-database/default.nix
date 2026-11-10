@@ -19,8 +19,8 @@
 #                        The `extensions` option is added to its
 #                        `extensions`.
 #
-# Config: one of `password` (a literal, for development) or
-# `passwordSource` with `passwordHash` (a SOPS file).
+# Config: `passwordSource` with `passwordHash` (a SOPS file), or the
+# deprecated `password` (a literal), which Kix 0.10 removes.
 #
 # Minimal instance, beside an app that takes deps.database:
 #
@@ -59,9 +59,14 @@
 # Escape hatches: `bootstrap.image` and `bootstrap.resources` for the Job,
 # and the instance's `partsOverlays`.
 #
-# Limits: the role's password is an option rather than a secret
+# Limits: the role's password comes from options rather than a secret
 # dependency, because the same value has to reach a Secret in each of two
-# namespaces. A literal `password` lands in the Nix store.
+# namespaces. The bootstrap Job runs in the cluster's namespace and reads
+# it there. A literal `password` lands in the Nix store, so the package
+# warns when it is set. The password should come from a secret dependency
+# with a declared `password` key, as in other packages. That needs Kix to
+# copy a dependency's Secret into a second namespace, which Kix cannot do
+# yet.
 
 {
   scope,
@@ -100,6 +105,11 @@ in
   deps.postgres.config = consumerConfig: {
     extensions = map normalizeExtension consumerConfig.extensions;
   };
+
+  warnings =
+    { config, ... }:
+    lib.optional (config.password != null)
+      "`password` puts the password in plain text in Kix's local store and in the built Secrets. This build still uses it, but Kix 0.10 removes the option. Set `passwordSource` to a SOPS-encrypted file with a `password` key, and `passwordHash` to the content hash of the decrypted password.";
 
   options = {
     database = lib.mkOption {
@@ -154,9 +164,10 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Literal password (development only). Mutually exclusive with
-        passwordSource. The plaintext lands in the Nix store and the
-        rendered K8s Secret manifest, so use SOPS for anything real.
+        Deprecated, and Kix 0.10 removes it. Literal password. Mutually
+        exclusive with passwordSource. The plaintext lands in Kix's local
+        store and the rendered Secrets, so the build warns. Use
+        passwordSource with passwordHash instead.
       '';
     };
 
