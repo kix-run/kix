@@ -8,7 +8,7 @@
 # connection fields.
 { lib }:
 let
-  inherit (import ./contract.nix { inherit lib; }) mkContract;
+  inherit (import ./contract.nix { inherit lib; }) mkContract credentialsField;
 
   isString = builtins.isString;
 
@@ -26,7 +26,7 @@ let
   fields = {
     host = {
       required = true;
-      shape = "the PostgreSQL Service FQDN";
+      shape = "the PostgreSQL hostname, such as a Service FQDN or an RDS endpoint";
       test = isString;
     };
     # Kept as a string because consumers interpolate it into URLs and
@@ -41,18 +41,7 @@ let
       shape = "the database name";
       test = isString;
     };
-    credentials = {
-      required = true;
-      shape = "a Secret instance (out.keyRef) with the keys ${lib.concatStringsSep " and " credentialKeys}";
-      test =
-        v:
-        let
-          out = if builtins.isAttrs v then v.out or { } else { };
-          keys = out.keys or null;
-        in
-        builtins.isFunction (out.keyRef or null)
-        && (!builtins.isList keys || lib.all (k: builtins.elem k keys) credentialKeys);
-    };
+    credentials = credentialsField { keys = credentialKeys; };
     username = {
       required = false;
       shape = "the role name";

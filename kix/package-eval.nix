@@ -371,6 +371,29 @@ let
         };
       };
     };
+    # A provider outside the cluster and the client's secret.
+    oidc-client = {
+      config.realm = "main";
+      instances = {
+        oidcProvider.package = kix.mkImport {
+          out = {
+            issuerUrl = realm: "https://auth.example.com/realms/${realm}";
+            endpoints = realm: {
+              authorizationUrl = "https://auth.example.com/realms/${realm}/auth";
+              tokenUrl = "https://auth.example.com/realms/${realm}/token";
+              userinfoUrl = "https://auth.example.com/realms/${realm}/userinfo";
+            };
+          };
+        };
+        oidcClient = {
+          package = packages.secret;
+          config.stringData = {
+            clientId = "app";
+            clientSecret = "secret";
+          };
+        };
+      };
+    };
     # The static seal, the default, needs the key. A declared policy, role,
     # and engine give the reconcile Job data to apply.
     openbao = {

@@ -17,6 +17,18 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+### Breaking (shows an error)
+
+- `grafana`, `harbor`, and `immich` take single sign-on from one `oidc` dependency, and `oidc.enabled` and `oidc.realm` are refused. Single sign-on is on when the instance has an `oidc` dependency. To move a Keycloak setup, add an instance of the new `oidc-client` package in the application's namespace with `config.realm` and `deps.oidcProvider = ref.<ns>.<keycloak>`. The existing secret aliased `oidcClient` binds to it unchanged. Then remove `oidc.enabled`, `oidc.realm`, and `deps.oidcProvider` from the application.
+- For packages that sign users in: `kix.contracts.oidcProvider.requireClient` and `clientKeys` are removed. Take `oidc ? null`, and call `kix.contracts.oidc.client { who; oidc; options = config.oidc; }`, which returns the issuer, the endpoints, and the client's `credentials`, or null when no client is wired. `kix.options.oidc` no longer has `enabled` or `realm`.
+- `plausible` takes its mail server from the new `smtp` dependency. The `smtpPassword` dependency and the `SMTP_HOST_ADDR`, `SMTP_HOST_PORT`, `SMTP_HOST_SSL_ENABLED`, `SMTP_USER_NAME`, and `SMTP_USER_PWD` variables in `env` are refused. Declare the server as a `kix.mkImport` in Plausible's namespace whose `out` sets `host`, `port`, `tls`, `from`, and `credentials = ref.<ns>.<secret>`, naming a secret with keys `username` and `password`. With a login, the server must use implicit TLS (`tls = "implicit"`, usually port 465), because Plausible's mailer sends the password over a plain connection when the server does not offer STARTTLS.
+
+### Added
+
+- A `kix.mkImport`'s `out` can name another instance with `ref.<namespace>.<instance>`. The import then carries that instance, and the deploy waits for it before the import. An outside service with a login, such as an RDS database or a mail provider, is now an import in the application's namespace whose `out.credentials` names a secret there. This works for every contract that carries a login, the PostgreSQL `database` contract included.
+- Packages can take a mail server as a dependency. `kix.contracts.smtp` describes it (`host`, `port`, `tls`, `from`, and an optional login in `credentials`). Without a login, one `kix.mkImport` can serve the whole cluster. `vaultwarden` and `grafana` take the `smtp` dependency, set their mail settings from it, and open egress to the server's port. Kix refuses a server outside the cluster with `tls = "none"`. Each instance can set its sender with `mail.from`.
+- A new `oidc-client` package pairs an identity provider that serves several realms, such as `keycloak`, with a realm and a client secret. It answers an application's `oidc` dependency (`kix.contracts.oidc`). A provider outside the cluster with one issuer can answer it with a `kix.mkImport` instead.
+
 ## 0.8.2 - 2026-11-10
 
 ### Upgrade notes

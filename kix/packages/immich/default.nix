@@ -27,8 +27,8 @@
 #                               an import. Without the dependency the server turns
 #                               machine learning off.
 #   prometheus (optional)       scrapes the metrics ports while `metrics.enabled`.
-#   oidcProvider, oidcClient (optional, with `oidc.enabled`)
-#                               single sign-on; see below.
+#   oidc (optional)             single sign-on, through an OpenID Connect
+#                               client honouring kix.contracts.oidc; see below.
 #
 # A minimal instance, in namespace `photos`:
 #
@@ -48,11 +48,10 @@
 # makes every setting in the admin UI read-only. `partsOverlays` patches
 # the rendered resources.
 #
-# Single sign-on: with `oidc.enabled`, Immich's OAuth login uses the
-# `oidcProvider` dependency (`kix.contracts.oidcProvider`, such as a keycloak
-# instance wired with `deps.oidcProvider = ref.<ns>.<name>`) in the realm
-# `oidc.realm`, with `oidc.scopes` and `oidc.autoLogin` (`oauth.autoLaunch`).
-# `oidcClient` is a secret with keys `clientId` and `clientSecret`. Register a confidential client with the redirect URIs
+# Single sign-on: with `oidc` wired (an oidc-client instance, or a
+# kix.mkImport), Immich's OAuth login uses that client's issuer and its
+# `out.credentials`, with `oidc.scopes` and `oidc.autoLogin`
+# (`oauth.autoLaunch`). Register a confidential client with the redirect URIs
 # `<public URL>/auth/login`, `<public URL>/user-settings`, and
 # `app.immich:///oauth-callback` for the mobile app. The settings go into
 # the config file, which turns the admin UI read-only. The client id and
@@ -79,7 +78,7 @@
 # Known limits: the server runs one pod and rolls out with Recreate, so
 # every rollout stops it briefly. The world:443 intent does not open SMTP
 # (465 or 587) for email notifications. A database or valkey password, or
-# an oidcClient secret, from a secret-ref has no identity hash, so rotating
+# an OIDC client secret, from a secret-ref has no identity hash, so rotating
 # it restarts the server only with reloader.
 
 {
@@ -161,8 +160,6 @@ in
   };
 
   deps = {
-    oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
-
     database.config.extensions = requiredExtensions;
 
     database.assertions =
@@ -238,7 +235,7 @@ in
         `machineLearning.urls` and `machineLearning.enabled` are refused:
         they follow the `machineLearning` dependency. `oauth.clientSecret`
         is refused, because the ConfigMap would hold it; with
-        `oidc.enabled` the package sets `oauth.enabled`, `oauth.issuerUrl`,
+        `oidc` wired the package sets `oauth.enabled`, `oauth.issuerUrl`,
         `oauth.clientId`, `oauth.clientSecret`, `oauth.scope`, and
         `oauth.autoLaunch`, and refuses them here.
       '';
@@ -281,30 +278,18 @@ in
         storage,
         machineLearning ? null,
         prometheus ? null,
-        oidcProvider ? null,
-        oidcClient ? null,
+        oidc ? null,
         ...
       }:
       let
         hasMetrics = config.metrics.enabled && prometheus != null;
 
-        oidcOn = config.oidc.enabled;
-        oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
-          inherit who;
-          inherit (config) oidc;
-          provider = oidcProvider;
-          client = oidcClient;
+        oidcProviderInfo = kix.contracts.oidc.client {
+          inherit who oidc;
+          options = config.oidc;
         };
-        # Forcing oidcProviderInfo first reports a missing dependency by
-        # name rather than as a missing attribute of null.
-        oidcCredentials = builtins.seq oidcProviderInfo (
-          kix.checkSecretKeys {
-            inherit who;
-            arg = "oidcClient";
-            dep = oidcClient;
-            keys = kix.contracts.oidcProvider.clientKeys;
-          }
-        );
+        oidcOn = oidcProviderInfo != null;
+        oidcCredentials = oidcProviderInfo.credentials;
         oauthSettings = lib.optionalAttrs oidcOn {
           oauth = {
             enabled = true;
@@ -382,7 +367,7 @@ in
             "enabled"
           ]
         ];
-        # With oidc.enabled the package owns these oauth keys; clientId and
+        # With oidc wired the package owns these oauth keys; clientId and
         # clientSecret are added at start.
         oidcOwnedSettings = lib.optionals oidcOn (
           map
@@ -404,11 +389,11 @@ in
             oidcHits = builtins.filter (p: lib.hasAttrByPath p config.settings) oidcOwnedSettings;
           in
           if lib.hasAttrByPath [ "oauth" "clientSecret" ] config.settings then
-            throw "${who}: settings sets oauth.clientSecret, which the config ConfigMap would hold. Set oidc.enabled and wire the client id and secret through deps.oidcClient instead."
+            throw "${who}: settings sets oauth.clientSecret, which the config ConfigMap would hold. Wire the client through deps.oidc instead, whose credentials hold the client id and secret."
           else if oidcHits != [ ] then
             throw "${who}: settings sets ${
               lib.concatMapStringsSep ", " (lib.concatStringsSep ".") oidcHits
-            }, which oidc.enabled sets. Use the oidc option and the oidcProvider and oidcClient dependencies instead."
+            }, which deps.oidc sets. Use the oidc option and the oidc dependency instead."
           else if hits == [ ] then
             null
           else
@@ -510,8 +495,8 @@ in
             )
             (
               {
-                from = "the oidcClient dependency";
-                fix = "Wire another secret through deps.oidcClient.";
+                from = "the oidc dependency";
+                fix = "Wire another client through deps.oidc.";
               }
               // (
                 if oidcOn then

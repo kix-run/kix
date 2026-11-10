@@ -1,6 +1,8 @@
 # Define the OpenID Connect provider contract for `oidcProvider` dependencies
-# (`kix.contracts.oidcProvider`) and the shared consumer option helper
-# (`kix.options.oidc`).
+# (`kix.contracts.oidcProvider`): an identity provider that can serve several
+# realms, such as keycloak. Applications do not take it directly. An
+# `oidc-client` instance pairs it with a realm and a client secret, and
+# answers the application's `oidc` dependency (`vocab/oidc.nix`).
 #
 # Both `issuerUrl` and `endpoints` take a realm name because a single Keycloak
 # instance can serve multiple realms. Providers with a single issuer ignore the
@@ -67,75 +69,4 @@ in
     check
     assertions
     ;
-
-  # Validate that `provider`, `client`, and `oidc.realm` are present when OIDC
-  # is enabled, and return the resolved `issuerUrl` and `endpoints` for that
-  # realm. The caller checks `client` secret keys separately via
-  # `kix.checkSecretKeys`.
-  requireClient =
-    {
-      who,
-      oidc,
-      provider,
-      client,
-    }:
-    if provider == null then
-      throw "${who}: oidc.enabled is true, but no OIDC provider is wired. Wire one with deps.oidcProvider = ref.<ns>.<instance> (a keycloak instance, or a kix.mkImport whose out sets issuerUrl), or set oidc.enabled = false."
-    else if client == null then
-      throw "${who}: oidc.enabled is true, but no client credentials are wired. Register a client for this application at the provider, put its id and secret in a secret with keys clientId and clientSecret, and wire it with deps.oidcClient = ref.<ns>.<instance>."
-    else if oidc.realm == null then
-      throw "${who}: oidc.enabled is true, but oidc.realm is not set. Set it to the realm that holds this application's client, such as \"main\"."
-    else
-      {
-        issuerUrl = provider.out.issuerUrl oidc.realm;
-        endpoints =
-          if provider.out ? endpoints then
-            provider.out.endpoints oidc.realm
-          else
-            throw "${who}: deps.oidcProvider publishes no out.endpoints, the authorization, token, and userinfo URLs this application needs. Set out.endpoints on that instance (a kix.mkImport sets it in `out`).";
-      };
-
-  clientKeys = [
-    "clientId"
-    "clientSecret"
-  ];
-
-  # Build the `oidc` option set for a consumer package. Pass `autoLogin = null`
-  # when the application has no setting to bypass its login page.
-  clientOptions =
-    {
-      scopes,
-      autoLogin ? null,
-    }:
-    {
-      enabled = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Sign users in through the `oidcProvider` dependency, with the client id and secret from the `oidcClient` dependency (a secret with keys `clientId` and `clientSecret`). Register the client at the provider first, with the redirect URI the package header names.";
-      };
-      realm = lib.mkOption {
-        type = lib.types.nullOr (lib.types.strMatching "[^/?#[:space:]]+");
-        default = null;
-        example = "main";
-        description = "The provider's realm that holds this application's client; the issuer is `oidcProvider`'s `out.issuerUrl realm`. Required while `enabled` is true.";
-      };
-      scopes = lib.mkOption {
-        type =
-          lib.types.addCheck (lib.types.listOf (lib.types.strMatching "[^[:space:],]+")) (
-            builtins.elem "openid"
-          )
-          // {
-            description = "list of scopes without spaces or commas that includes \"openid\"";
-          };
-        default = scopes;
-        description = "OAuth scopes the application requests. OpenID Connect needs `openid`, so a list without it is refused.";
-      };
-    }
-    // lib.optionalAttrs (autoLogin != null) {
-      autoLogin = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Send users straight to the provider instead of showing the application's login page (${autoLogin}).";
-      };
-    };
 }

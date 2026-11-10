@@ -28,6 +28,8 @@ let
   keycloakPackage = import ../../../packages/keycloak;
   grafanaPackage = import ../../../packages/grafana;
   harborPackage = import ../../../packages/harbor;
+  oidcClientPackage = import ../../../packages/oidc-client;
+  clientContract = kixlib.contracts.oidc;
   immichPackage = import ../../../packages/immich;
 
   issuer = realm: "https://auth.example.com/realms/${realm}";
@@ -52,16 +54,23 @@ let
     out: (builtins.tryEval (builtins.deepSeq (contract.check "provider auth/sso" out) true)).success;
 
   # The instances an application needs to sign in: the provider stand-in in
-  # `auth` and the client secret in the application's namespace.
+  # `auth`, and in the application's namespace an oidc-client for realm
+  # `main` with the client secret beside it.
   ssoInstances = ns: clientData: {
     instances.auth.sso = {
       package = eval.mkImport { out = providerOut; };
       aliases = [ "oidcProvider" ];
     };
-    instances.${ns}.app-oidc = {
-      package = secretPackage;
-      aliases = [ "oidcClient" ];
-      config.stringData = clientData;
+    instances.${ns} = {
+      oidc = {
+        package = oidcClientPackage;
+        config.realm = "main";
+      };
+      app-oidc = {
+        package = secretPackage;
+        aliases = [ "oidcClient" ];
+        config.stringData = clientData;
+      };
     };
   };
   clientData = {
@@ -69,10 +78,9 @@ let
     clientSecret = "test-client-secret";
   };
 
-  oidcOn = {
-    enabled = true;
-    realm = "main";
-  };
+  # Single sign-on is on when the application has an `oidc` dependency, so
+  # the `oidc` option only tunes it.
+  oidcOn = { };
 
   # Grafana
 
@@ -119,16 +127,17 @@ let
       }) (builtins.head d.spec.template.spec.containers).env
     );
 
-  # Grafana with its own client secret and `deps`, for clusters with
-  # keycloak instances.
-  grafanaWith = oidc: deps: {
+  # Grafana with its own client secret and, when `sso` is set, an
+  # oidc-client with `deps`, for clusters with keycloak instances.
+  grafanaWith = sso: deps: {
     instances.monitoring = {
       grafana = {
         package = grafanaPackage;
-        config = {
-          settings.server.root_url = "https://grafana.example.com";
-          inherit oidc;
-        };
+        config.settings.server.root_url = "https://grafana.example.com";
+      };
+      ${if sso then "oidc" else null} = {
+        package = oidcClientPackage;
+        config.realm = "main";
         inherit deps;
       };
       grafana-admin = {
@@ -432,6 +441,63 @@ in
     )
     || throw "keycloak endpoints: ${builtins.toJSON e}";
 
+  # The client contract wants an issuer URL and credentials with both keys;
+  # endpoints are optional but checked when present.
+  oidc-client-contract-fields =
+    let
+      credentials = keys: {
+        out = {
+          inherit keys;
+          keyRef = key: { secretKeyRef = { inherit key; }; };
+        };
+      };
+      good = {
+        issuerUrl = "https://login.example.com";
+        credentials = credentials [
+          "clientId"
+          "clientSecret"
+        ];
+      };
+    in
+    clientContract.problems good == [ ]
+    && clientContract.problems (removeAttrs good [ "credentials" ]) != [ ]
+    && clientContract.problems (good // { credentials = credentials [ "clientId" ]; }) != [ ]
+    && clientContract.problems (good // { issuerUrl = "login.example.com"; }) != [ ]
+    && clientContract.problems (good // { endpoints.tokenUrl = "https://x"; }) != [ ];
+
+  # A provider outside the cluster with one issuer: a kix.mkImport in the
+  # application's namespace answers `oidc`, naming the client secret with
+  # ref. Grafana reads the issuer's endpoints and the secret from it.
+  oidc-grafana-import-client =
+    let
+      c = mkCluster [
+        (grafanaWith false { })
+        (
+          { ref, ... }:
+          {
+            instances.monitoring.oidc.package = eval.mkImport {
+              scope = "namespace";
+              out = {
+                issuerUrl = "https://login.example.com";
+                endpoints = {
+                  authorizationUrl = "https://login.example.com/authorize";
+                  tokenUrl = "https://login.example.com/token";
+                  userinfoUrl = "https://login.example.com/userinfo";
+                };
+                credentials = ref.monitoring.grafana-oidc;
+              };
+            };
+          }
+        )
+      ];
+      ini = grafanaIni c;
+    in
+    (
+      lib.hasInfix "token_url = https://login.example.com/token" ini
+      && (grafanaEnv c).GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET.secretKeyRef.name == "grafana-oidc"
+    )
+    || throw "grafana import client: ${ini}";
+
   # Grafana renders auth.generic_oauth from the provider and reads the
   # client from the secret through env; this instance is the positive
   # control for the Grafana refusals below. Role mapping stays in settings.
@@ -466,10 +532,14 @@ in
     )
     || throw "grafana oidc: ${ini}";
 
-  # With oidc off, a bound provider and client change nothing.
+  # Without an `oidc` dependency, a provider and a client secret change
+  # nothing.
   oidc-grafana-off-ignores-provider =
     let
-      c = grafanaCluster { };
+      c = mkCluster [
+        (grafanaWith false { })
+        keycloakInstances
+      ];
     in
     !(lib.hasInfix "generic_oauth" (grafanaIni c))
     && !((grafanaEnv c) ? GF_AUTH_GENERIC_OAUTH_CLIENT_ID);
@@ -480,13 +550,13 @@ in
     manifests (mkCluster [
       keycloakInstances
       netpolOn
-      ({ ref, ... }: grafanaWith oidcOn { oidcProvider = ref.auth.keycloak; })
+      ({ ref, ... }: grafanaWith true { oidcProvider = ref.auth.keycloak; })
     ])
   );
 
-  # keycloak answers no alias, so two instances bind no application by
-  # themselves: Grafana with oidc off evaluates, and with oidc on it names
-  # one with deps or fails for want of a provider.
+  # keycloak answers no alias, so two instances bind no client by
+  # themselves: Grafana without a client evaluates, and its oidc-client
+  # names one with deps or fails for want of a provider.
   oidc-grafana-two-providers =
     let
       two =
@@ -497,17 +567,24 @@ in
           extra
         ];
     in
-    !(evalFails (two (grafanaWith { } { })))
-    && !(evalFails (two ({ ref, ... }: grafanaWith oidcOn { oidcProvider = ref.auth2.keycloak; })))
-    && evalFails (two (grafanaWith oidcOn { }));
+    !(evalFails (two (grafanaWith false { })))
+    && !(evalFails (two ({ ref, ... }: grafanaWith true { oidcProvider = ref.auth2.keycloak; })))
+    && evalFails (two (grafanaWith true { }));
 
-  oidc-grafana-needs-provider = evalFails (grafanaCluster {
-    sso = false;
-    config.oidc = oidcOn;
-  });
-  oidc-grafana-needs-realm = evalFails (grafanaCluster {
-    config.oidc.enabled = true;
-  });
+  # An oidc-client without a provider fails.
+  oidc-client-needs-provider = evalFails (mkCluster [ (grafanaWith true { }) ]);
+
+  # The removed oidc.enabled and oidc.realm are refused, with or without a
+  # client.
+  oidc-removed-options-refused =
+    evalFails (grafanaCluster {
+      config.oidc.enabled = true;
+    })
+    && evalFails (grafanaCluster {
+      sso = false;
+      config.oidc.realm = "main";
+    })
+    && !(evalFails (grafanaCluster { }));
   oidc-grafana-needs-client-keys = evalFails (grafanaCluster {
     config.oidc = oidcOn;
     client.clientId = "app";

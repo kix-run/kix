@@ -1,9 +1,11 @@
 # clusters/test-keycloak-oidc.nix: Grafana, Harbor, and Immich signing users
 # in through Keycloak, under Cilium default deny.
 #
-# Each application turns on `oidc` and names Keycloak with
-# `deps.oidcProvider = ref.auth.keycloak`. Its client id and
-# secret come from a `secret` aliased `oidcClient` in its own namespace. The
+# Each application's namespace holds an `oidc-client` instance named `oidc`,
+# which names Keycloak with `deps.oidcProvider = ref.auth.keycloak`, sets the
+# realm, and reads the client id and secret from a `secret` aliased
+# `oidcClient` beside it. The application takes it as its `oidc`
+# dependency. The
 # realm `main` and the three clients are not created by Kix: create them in
 # Keycloak's admin console with the redirect URIs each package header names
 # before signing in.
@@ -77,14 +79,9 @@ kix.buildCluster {
         instances.monitoring = {
           grafana = {
             package = packages.grafana;
-            deps.oidcProvider = ref.auth.keycloak;
             config = {
               ingress.host = "grafana.localhost";
-              oidc = {
-                enabled = true;
-                realm = "main";
-                autoLogin = true;
-              };
+              oidc.autoLogin = true;
               settings."auth.generic_oauth".role_attribute_path =
                 "contains(realm_access.roles[*], 'grafana-admin') && 'Admin' || 'Viewer'";
             };
@@ -97,6 +94,11 @@ kix.buildCluster {
               admin-user = "admin";
               admin-password = "dev-grafana-admin-password";
             };
+          };
+          oidc = {
+            package = packages.oidc-client;
+            deps.oidcProvider = ref.auth.keycloak;
+            config.realm = "main";
           };
           grafana-oidc = {
             package = packages.secret;
@@ -111,16 +113,18 @@ kix.buildCluster {
         instances.harbor = {
           harbor = {
             package = packages.harbor;
-            deps.oidcProvider = ref.auth.keycloak;
             config.oidc = {
-              enabled = true;
-              realm = "main";
               groupsClaim = "groups";
               adminGroup = "harbor-admins";
             };
             config.core.settings.oidc_auto_onboard = true;
           };
           # Test values only.
+          oidc = {
+            package = packages.oidc-client;
+            deps.oidcProvider = ref.auth.keycloak;
+            config.realm = "main";
+          };
           harbor-oidc = {
             package = packages.secret;
             aliases = [ "oidcClient" ];
@@ -206,14 +210,14 @@ kix.buildCluster {
         instances.photos = {
           immich = {
             package = packages.immich;
-            deps.oidcProvider = ref.auth.keycloak;
-            config.oidc = {
-              enabled = true;
-              realm = "main";
-              autoLogin = true;
-            };
+            config.oidc.autoLogin = true;
           };
           # Test values only.
+          oidc = {
+            package = packages.oidc-client;
+            deps.oidcProvider = ref.auth.keycloak;
+            config.realm = "main";
+          };
           immich-oidc = {
             package = packages.secret;
             aliases = [ "oidcClient" ];

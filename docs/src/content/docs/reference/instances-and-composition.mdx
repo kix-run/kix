@@ -177,7 +177,7 @@ Kix starts from all non-optional instances (`optional = false`) and walks the de
 1. a **required** build argument (one with no `? null` default) that matches the optional instance's name, `aliases`, `meta.defaultAliases`, or `meta.roles`; or
 2. an explicit `deps.<arg> = ref.<namespace>.<instance>` (or an entry in a `deps` ref list).
 
-An optional build argument (`{ prometheus ? null, ... }`) never activates a dormant optional instance, and a dormant optional instance or import never answers an optional build argument (the argument receives `null` unless an active instance matches). Note that `extraDeps` on a `kix.mkImport` instance also does not activate an optional instance.
+An optional build argument (`{ prometheus ? null, ... }`) never activates a dormant optional instance, and a dormant optional instance or import never answers an optional build argument (the argument receives `null` unless an active instance matches). Note that `extraDeps` or a `ref` in `out` on a `kix.mkImport` instance also does not activate an optional instance.
 
 When activated, the instance is stamped with `kix.run/optional-activated: "true"` on its `PackageInstance` record and deployed normally. When dormant, it emits no manifests.
 

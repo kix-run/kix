@@ -31,8 +31,8 @@
 #                             through kix.expose.
 #   prometheus (optional)     the exporter, ServiceMonitors, and alerts.
 #   reloader (optional)       restarts pods when a secret-ref Secret changes.
-#   oidcProvider, oidcClient (with `oidc.enabled`)
-#                             single sign-on; see below.
+#   oidc (optional)           single sign-on, through an OpenID Connect
+#                             client honouring kix.contracts.oidc; see below.
 #
 #   instances.harbor = {
 #     harbor.package = packages.harbor;
@@ -91,11 +91,10 @@
 # and portal to the controller; through a Gateway, no policy admits the
 # Gateway's data plane yet.
 #
-# Single sign-on: with `oidc.enabled`, core runs in `oidc_auth` mode
-# against the `oidcProvider` dependency (`kix.contracts.oidcProvider`, such
-# as a keycloak instance wired with `deps.oidcProvider = ref.<ns>.<name>`)
-# in the realm `oidc.realm`. `oidcClient` is a secret with keys `clientId`
-# and `clientSecret`; register a confidential client with the redirect URI
+# Single sign-on: with `oidc` wired (an oidc-client instance, or a
+# kix.mkImport), core runs in `oidc_auth` mode against that client's issuer,
+# with the client id and secret from its `out.credentials`. Register a
+# confidential client with the redirect URI
 # `<EXT_ENDPOINT>/c/oidc/callback`. Core applies the auth mode, the issuer,
 # `oidc.scopes`, `oidc.groupsClaim`, and `oidc.adminGroup` from
 # CONFIG_OVERWRITE_JSON on every start, with the client id and secret
@@ -216,8 +215,6 @@ in
       message = "${who}: deps.database publishes no out.username, which Harbor sets as POSTGRESQL_USERNAME and HARBOR_DATABASE_USERNAME. Set out.username to the role name on that instance.";
     };
 
-  deps.oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
-
   assertions =
     { config, ... }:
     [
@@ -327,8 +324,8 @@ in
         description = ''
           Harbor configuration items (the keys of `GET /api/v2.0/configurations`),
           which core applies from CONFIG_OVERWRITE_JSON on every start. A
-          non-empty value, or `oidc.enabled`, makes every setting read-only
-          in Harbor's UI. With `oidc.enabled` the package sets `auth_mode`,
+          non-empty value, or an `oidc` dependency, makes every setting
+          read-only in Harbor's UI. With `oidc` wired the package sets `auth_mode`,
           `oidc_endpoint`, `oidc_client_id`, `oidc_client_secret`,
           `oidc_scope`, `oidc_groups_claim`, and `oidc_admin_group`, and
           refuses them here; it defaults `oidc_name` to "OpenID Connect".

@@ -1,8 +1,10 @@
 # clusters/test-plausible.nix: Plausible Community Edition on a CloudNativePG
 # database and a single-node ClickHouse, under Cilium default-deny.
 #
-# Every dependency is wired, the optional smtpPassword included (the relay
-# address is a placeholder, so mail fails and nothing else does).
+# Every dependency is wired, the optional smtp server included. It is a
+# kix.mkImport whose out names the login secret with `ref`, so the import
+# sits in Plausible's namespace beside that secret. Its address is a
+# placeholder, so mail fails and nothing else does.
 # ingress-nginx and a host give the route and BASE_URL. The ClickHouse
 # server lives in `events` and the application in `analytics`, so the
 # clickhouse-database facade crosses a namespace as it does in a real
@@ -61,11 +63,7 @@ kix.buildCluster {
             package = packages.plausible;
             config = {
               ingress.host = "plausible.localtest.me";
-              env = {
-                MAILER_EMAIL = "plausible@localtest.me";
-                SMTP_HOST_ADDR = "smtp.localtest.me";
-                SMTP_USER_NAME = "plausible";
-              };
+              mail.from = "plausible@localtest.me";
             };
           };
           plausible-pg = {
@@ -87,10 +85,22 @@ kix.buildCluster {
             aliases = [ "secretKeyBase" ];
             config.stringData.key = "test-only-0123456789abcdef0123456789abcdef0123456789abcdef";
           };
+          smtp.package = kix.mkImport {
+            scope = "namespace";
+            out = {
+              host = "smtp.localtest.me";
+              port = "465";
+              tls = "implicit";
+              from = "noreply@localtest.me";
+              credentials = ref.analytics.plausible-smtp;
+            };
+          };
           plausible-smtp = {
             package = packages.secret;
-            aliases = [ "smtpPassword" ];
-            config.stringData.password = "smtp-dev-password";
+            config.stringData = {
+              username = "plausible";
+              password = "smtp-dev-password";
+            };
           };
         };
       }
