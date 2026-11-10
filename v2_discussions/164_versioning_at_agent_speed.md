@@ -54,7 +54,7 @@ PackageInstance records, and Kix's own custom resources.
 six months, or by the previous minor, whichever covers more.** This replaces
 "reads the state the previous minor wrote" in `CLAUDE.md`, which at today's
 pace is about a day and a half. A change that cannot keep that promise is
-marked as a required stop (§2.4). Required stops should be rare.
+marked as a required stop (`required-stop = true` on its record, §2.4). Required stops should be rare.
 
 A deploy by an older Kix onto a cluster that a newer minor last deployed is
 already refused (163 §9), so the window only has to run forwards.
@@ -99,25 +99,40 @@ place only (§2.2).
 
 ### 2.1 Change records
 
-- One file per change, `changes/<branch>.md`, so parallel branches never edit
-  the same file. `CHANGELOG.md` is generated at release.
-- A short header with closed fields. The prose below the header is for people.
+- One file per change, `changes/<name>.md`, so parallel branches never edit
+  the same file. `<name>` is free, usually the branch.
+- At release the records move to `changes/<version>/` and are kept.
+  `CHANGELOG.md` is generated from them.
+- A TOML header between `+++` lines, so Python (`tomllib`) and Rust (`toml`)
+  read it with no new dependency. Closed fields: an unknown field is an
+  error. The prose below the header is for people and becomes one
+  CHANGELOG bullet.
 
 ```markdown
----
-kind: error            # error | silent | cli | state | fix | security
-packages: [echo-server, dns-exporter]
-library: []            # library symbols, such as kix.contracts.redis
-cli: []                # removed or changed flags and commands
-touchesData: false     # silent changes that move or reinterpret stored data
-id: K0142              # stable id, also printed in the refusal
-cve: []
-workaround: null       # for security: how to get the fix without upgrading
----
++++
+kind = "error"
+packages = ["echo-server", "dns-exporter"]
+id = "K0142"
++++
 `echo-server` and `dns-exporter` rename `replicaCount` to `replicas`.
 ```
 
-The Changelog workflow checks that the header is complete.
+- `kind` follows the CHANGELOG headings: `error`, `silent`, `note`,
+  `security`, `added`, `changed`, `fixed`. Any `error` or `silent` record
+  makes the release a minor.
+- What a change touches is in separate fields: `packages`, `library`
+  (symbols such as `kix.contracts.redis`), `cli` (removed or changed flags
+  and commands), `state` (cluster state), `touches-data` (only for
+  `silent`), and `required-stop` (only with `state`, §2.4).
+- `id` (`K` and four digits) is required for `error` and optional
+  otherwise. Security records carry `cve` and a required `workaround`.
+- Each release ships its records as `kix-<version>-changes.json`, a release
+  asset listed in `SHA256SUMS`, so the signature covers it and nothing new
+  is signed.
+
+`changes/README.md` has the full format, and `scripts/change-records.py`
+validates it. The Changelog workflow runs the validation on every pull
+request.
 
 ### 2.2 A pull-request check that works out the kind
 
@@ -126,12 +141,13 @@ kix-examples) at the base and the head of each pull request.
 
 - An old definition that fails at head is an `error` change. The check also
   confirms that the message names the replacement.
-- Manifests that differ for an unchanged definition need a label: `fix` or
-  `silent`. **Only the maintainer sets `silent`.** This is the one call an
+- Manifests that differ for an unchanged definition need a kind: `fixed`
+  or `silent`. **Only the maintainer sets `silent`.** This is the one call an
   agent cannot make reliably.
-- A diff of `kix --help` and the JSON schemas catches `cli` changes.
-- A test that reads saved cluster state from six months back catches `state`
-  changes.
+- A diff of `kix --help` and the JSON schemas catches changes that need the
+  `cli` field.
+- A test that reads saved cluster state from six months back catches changes
+  that need `state = true`.
 
 Running this on the pull request means the agent that caused a diff is still
 there to explain it. Part of it exists already: `cli-tests.yml` renders whole
@@ -143,14 +159,12 @@ A refusal that a change record describes prints the record's id
 (`[K0142]`), and `kix explain K0142` prints the record. Tools and agents match
 the id, so the Argon copy pass can reword the sentence freely.
 
-### 2.4 Withdrawing a release, and required stops
+### 2.4 Required stops
 
-- `kix release withdraw <version> --reason <text>` changes only
-  `releases/index.json`. The fix is always the next patch.
-- Kix never selects a withdrawn release. A Kix running one says so on every
-  run, with the reason and the replacement.
-- A release can be marked as a required stop: "deploy with this release
-  before upgrading further".
+A change record with `state = true` can set `required-stop = true`: "deploy
+with this release before upgrading further". The flag lives on the record,
+so the release index needs no new field. `kix upgrade` stops at that
+release.
 
 ### 2.5 `kix upgrade`
 
@@ -160,11 +174,11 @@ This extends 163 §8.
    project's version and the target that touches what the project uses. It
    groups them as edits, silent changes, CLI changes, and state, and says how
    many steps and how much disk the upgrade needs.
-2. With no `--to`, the target is the newest release that is at least seven
-   days old and not withdrawn. `--to latest` skips the wait.
+2. With no `--to`, the target is the newest release. A delay is opt-in:
+   `--min-age 7d`, or `[upgrade] min-age = "7d"` in `kix.toml`.
 3. It jumps straight to the target and checks every cluster. If that fails, it
-   steps through the newest patch of each minor in between, skipping withdrawn
-   releases, and stops at the first step that fails. It prints the errors and
+   steps through the newest patch of each minor in between, and stops at the
+   first step that fails. It prints the errors and
    that release's change records for the packages in use.
 4. It deletes each installed Kix it only passed through. Each one takes about
    290 MB.
@@ -173,12 +187,11 @@ This extends 163 §8.
 6. It writes exact pins to `kix.toml` and `flake.lock`, and saves its progress
    in `kix-upgrade.json`, so a person or an agent with no memory can resume.
 7. It reports per cluster, and groups identical changes across clusters.
-8. Exit codes: 0 done, 2 fixes needed, 3 needs a person, 4 the pinned release
-   is withdrawn. It returns 3 for any change no record explains, any `silent`
-   record, any required stop, and any diff that touches Secrets, RBAC,
-   NetworkPolicy, or TLS settings.
+8. Exit codes: 0 done, 2 fixes needed, 3 needs a person. It returns 3 for
+   any change no record explains, any `silent` record, any required stop,
+   and any diff that touches Secrets, RBAC, NetworkPolicy, or TLS settings.
 9. `kix deploy` refuses until the user acknowledges each `silent` record
-   marked `touchesData`.
+   marked `touches-data`.
 
 Measured on homelab-kind (328 objects, several Helm charts), starting from an
 empty cache: the first check took 10.5 s, mostly rendering Helm charts. The
@@ -198,6 +211,8 @@ local store and shared between Kix versions.
   this first.
 - A security-only backport line (§1.3).
 - Declared Kix version ranges for outside package sets.
+- Withdrawing a release. Until then, a bad release is fixed by the next
+  patch.
 - An upgrade bot that opens a pull request for each release that affects a
   project, and merges only when no record applies and nothing changes.
 

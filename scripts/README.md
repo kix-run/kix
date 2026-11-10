@@ -45,6 +45,20 @@ uv run scripts/vendor-crds.py velero arc     # just these
 uv run scripts/vendor-crds.py --check        # what CI runs
 ```
 
+## change-records.py
+
+Checks the change records under `changes/` and writes the changelog from
+them (`changes/README.md` has the format). The Changelog workflow runs
+`check`, and the release skill runs `bump` and `release`. The logic lives in
+`scripts/change_records/` so other scripts can import the parser.
+
+```bash
+scripts/change-records.py check                   # every record's format
+scripts/change-records.py changelog               # the next release's section
+scripts/change-records.py release 0.10.0          # move records, write CHANGELOG.md
+cd scripts && python3 -m unittest change_records.test_change_records
+```
+
 ## kix-dump.py
 
 Dumps live cluster resources into a directory of normalized YAML files, organized by namespace.

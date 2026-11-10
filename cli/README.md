@@ -72,9 +72,11 @@ reads plan files through `kix::plan::file`.
 
 ### Releases
 
-Kix uses semantic versioning. `CHANGELOG.md` lists what each release
-changed, and the `release` skill (`.claude/skills/release/SKILL.md`) cuts
-one. `CLAUDE.md` § Versioning and breaking changes says what counts as
+Kix uses semantic versioning. Each change is a change record under
+`changes/` (`changes/README.md`), and `scripts/change-records.py` checks
+them. A release moves its records to `changes/<version>/` and writes its
+`CHANGELOG.md` section from them. The `release` skill
+(`.claude/skills/release/SKILL.md`) cuts one. `CLAUDE.md` § Versioning and breaking changes says what counts as
 breaking.
 
 The workspace version in `cli/Cargo.toml` decides when Kix is released. On
@@ -101,7 +103,9 @@ tests run. Then:
    `kix-<version>-<system>/`) containing `bin/kix` and `libexec/kix/`
    (`nix-2.35.4`, `helm-3.19.1`, `helm-4.3.1`, `kubectl-1.37.2`,
    `sops-3.12.1`, `manifest.json`, and `THIRD_PARTY_LICENSES`), alongside
-   `kix-<version>-third-party-sources.tar.zst` for LGPL compliance. For each
+   `kix-<version>-third-party-sources.tar.zst` for LGPL compliance, and
+   `kix-<version>-changes.json`, the release's change records as JSON
+   (`scripts/change-records.py json`). For each
    binary it writes the RustSec report that `cargo audit bin` reads from the
    binary's embedded crate list, ships it in the archive as
    `share/kix/cargo-audit.json` and beside it as
@@ -124,7 +128,7 @@ tests run. Then:
    which kix.run does not list, so Kix cannot install it automatically. Once
    a key is committed, an empty secret fails the step. It uploads the three
    platform archives, the third-party sources archive, the three audit
-   reports, `SHA256SUMS`, and `SHA256SUMS.sig` to the
+   reports, the change records, `SHA256SUMS`, and `SHA256SUMS.sig` to the
    public [kix-run/kix-releases](https://github.com/kix-run/kix-releases) as
    `v<version>`, with that version's `CHANGELOG.md` section as the notes, and
    marks it `latest`. A prerelease is marked as one and never `latest`. The job then tags the commit `v<version>` here, and
@@ -133,16 +137,18 @@ tests run. Then:
    main build no binaries.
 
 A version with a `-` suffix, such as `0.8.0-rc.1`, is a prerelease. It is
-released the same way, and its notes are the `## Unreleased` section of
-`CHANGELOG.md`, since the release it leads to takes that section. kix.run
+released the same way, and its notes are written from the unreleased
+change records (`scripts/change-records.py changelog`), which the release it
+leads to takes. kix.run
 lists it with `"prerelease": true` and never as `latest`, the docs site
 builds no docs for its tag, and Kix installs it only when a command or a
 `kix` setting names it in full (`policy::satisfies`). A minor requirement
 such as `kix = "0.8"` never matches one.
 
 A workspace version lower than the latest `v*` tag (compared as semver, so
-`0.8.0-rc.1` is below `0.8.0`), or a release with no `CHANGELOG.md` section,
-fails the `version` job, before anything is built.
+`0.8.0-rc.1` is below `0.8.0`), a release with no `CHANGELOG.md` section,
+or a prerelease with no unreleased change records fails the `version` job,
+before anything is built.
 Running a failed release again is safe: the job skips a release that
 already exists in kix-releases and creates the tag last. A manual run
 (`gh workflow run cli-tests.yml --ref <branch>`) builds the binaries as a
