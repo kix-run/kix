@@ -17,6 +17,8 @@ Each release groups changes under these headings:
 
 ## Unreleased
 
+## 0.8.2 - 2026-11-10
+
 ### Upgrade notes
 
 - Kix keeps its eval cache in files under `~/.cache/kix/eval-cache` instead of a SQLite database. The first command after you upgrade evaluates your clusters again, and Kix deletes the old `~/.cache/kix/eval-cache.db`. The cache now holds one result for each cluster and no longer grows as you edit.
