@@ -195,14 +195,15 @@ the defaults fails there.
 
 - Choose by alias and contract, never by package (P10, P13). Lib contracts:
   `kix.contracts.postgresDatabase`, `oidc`, `oidcProvider`, `otlpEndpoint`,
-  and `smtp` (`kix/lib/vocab/`); `gateway` is held by `kix.expose`, not by
+  `redis` (taken as the `valkey` dependency), and `smtp` (`kix/lib/vocab/`); `gateway` is held by `kix.expose`, not by
   the package. A login always travels in the provider's `out.credentials`
   (`credentialsField` in `contract.nix`), never in a second dependency: a
   provider Kix runs publishes its own Secret, and an outside service is a
   `kix.mkImport` in the consumer's namespace with `credentials =
   ref.<ns>.<secret>`. An application that sends mail takes `smtp ? null`
   and maps `kix.contracts.smtp.settings` onto its own settings (vaultwarden,
-  grafana, plausible). One that signs users in takes `oidc ? null` and calls
+  grafana, plausible, immich); one that keeps mail settings elsewhere calls
+  `kix.contracts.smtp.server` for the egress only (keycloak). One that signs users in takes `oidc ? null` and calls
   `kix.contracts.oidc.client` (grafana, harbor, immich).
   Package-local: `kix/packages/clickhouse/contract.nix`. Consumers hold the
   dependency with `assertions`, providers pass `root.out` through `check`

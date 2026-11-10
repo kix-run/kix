@@ -81,6 +81,30 @@ let
     here = "kix/lib/vocab/smtp.nix";
     inherit fields;
   };
+
+  # A server without `external = false` counts as outside the cluster, so
+  # `tls = "none"` is refused there: the password and the mail would cross
+  # the internet in clear text.
+  server =
+    { who, smtp }:
+    if smtp == null then
+      null
+    else
+      let
+        out = (contract.require who smtp).out;
+        external = out.external or true;
+      in
+      if out.tls == "none" && external then
+        throw "${who}: deps.smtp is a server outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text. Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false."
+      else
+        {
+          inherit (out) host tls;
+          inherit external;
+          port = toString out.port;
+          portNumber = if builtins.isInt out.port then out.port else lib.toInt out.port;
+          from = out.from or null;
+          credentials = out.credentials or null;
+        };
 in
 {
   inherit (contract)
@@ -93,40 +117,31 @@ in
 
   inherit credentialKeys;
 
-  # Validate the `smtp` dependency and return its settings, or null when no
-  # server is wired. `from` is the instance's `mail.from`, which replaces
-  # the server's `out.from`.
-  #
-  # A server without `external = false` counts as outside the cluster, so
-  # `tls = "none"` is refused there: the password and the mail would cross
-  # the internet in clear text.
+  # Validate the `smtp` dependency and return its connection details, or
+  # null when no server is wired. `from` is the server's `out.from` or
+  # null. For an application that keeps its sender elsewhere, such as
+  # Keycloak's realms.
+  inherit server;
+
+  # Validate the `smtp` dependency and return its settings with a sender,
+  # or null when no server is wired. `from` is the instance's `mail.from`,
+  # which replaces the server's `out.from`.
   settings =
     {
       who,
       smtp,
       from ? null,
     }:
-    if smtp == null then
+    let
+      found = server { inherit who smtp; };
+      sender = if from != null then from else found.from;
+    in
+    if found == null then
       null
+    else if sender == null then
+      throw "${who}: deps.smtp has no sender address. Set out.from on the SMTP instance, or mail.from on this instance."
     else
-      let
-        out = (contract.require who smtp).out;
-        external = out.external or true;
-        sender = if from != null then from else out.from or null;
-      in
-      if out.tls == "none" && external then
-        throw "${who}: deps.smtp is a server outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text. Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false."
-      else if sender == null then
-        throw "${who}: deps.smtp has no sender address. Set out.from on the SMTP instance, or mail.from on this instance."
-      else
-        {
-          inherit (out) host tls;
-          inherit external;
-          port = toString out.port;
-          portNumber = if builtins.isInt out.port then out.port else lib.toInt out.port;
-          from = sender;
-          credentials = out.credentials or null;
-        };
+      found // { from = sender; };
 
   # Build a network policy that lets the pods `selector` matches reach an
   # external server on its port, or return null for a server in the

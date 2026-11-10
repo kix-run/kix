@@ -70,13 +70,18 @@ setting `metrics.enabled = false`, restarts every pod.
 
 ## Connect an application
 
-Applications read the connection from the instance's `out`:
+Valkey's `out` follows the Redis contract, `kix.contracts.redis`.
+Applications take it as their `valkey` dependency and read these fields:
 
 | Key | Value |
 |---|---|
-| `out.fqdn`, `out.port` | The Service that selects every Valkey pod, port 6379 |
-| `out.authSecret`, `out.authPasswordKey` | The password secret and its key: `valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey` |
-| `out.sentinelPort`, `out.primarySet` | With Sentinel only: port 26379 on the same Service, and the name Sentinel monitors the primary under |
+| `out.host`, `out.port` | The Service that selects every Valkey pod, port `"6379"` |
+| `out.credentials` | The password secret: `valkey.out.credentials.out.keyRef "password"` |
+| `out.tls` | `false`: Valkey serves no TLS |
+| `out.sentinel` | `null`, or with Sentinel `{ port = "26379"; primarySet = "primary"; }` |
+
+A package checks the dependency with
+`deps.valkey.assertions = dep: kix.contracts.redis.assertions who dep;`.
 
 A consumer must run in Valkey's namespace, because Kubernetes resolves a
 `secretKeyRef` only in the pod's own namespace. Dependency injection does not
@@ -84,12 +89,12 @@ offer a Valkey instance to a consumer in another namespace, and an explicit
 `ref` to one fails evaluation.
 
 With Sentinel on, the Service also routes to replicas, which refuse writes. A
-client that writes asks Sentinel at `out.fqdn` and `out.sentinelPort` for the
-primary of `out.primarySet`. It sends Sentinel no password: Sentinel's default
-user takes none, and an AUTH with a password is an error. That user may read
-Sentinel's state, which covers the discovery calls of common clients
-(`SENTINEL GET-PRIMARY-ADDR-BY-NAME`, `SENTINEL MASTERS`, `SENTINEL
-REPLICAS`, `SENTINEL SENTINELS`), and may not change it. Only the
+client that writes asks Sentinel at `out.host` and `out.sentinel.port` for the
+primary of `out.sentinel.primarySet`. It sends Sentinel no password:
+Sentinel's default user takes none, and an AUTH with a password is an error.
+That user may read Sentinel's state, which covers the discovery calls of
+common clients (`SENTINEL GET-PRIMARY-ADDR-BY-NAME`, `SENTINEL MASTERS`,
+`SENTINEL REPLICAS`, `SENTINEL SENTINELS`), and may not change it. Only the
 `sentinel-admin` user, with the instance password, can reconfigure Sentinel.
 
 A package whose client cannot use Sentinel asks for a standalone Valkey and
@@ -100,12 +105,47 @@ deps.valkey = {
   config.sentinel.enabled = false;
   assertions =
     dep:
-    lib.optional (dep.out ? sentinelPort) {
+    kix.contracts.redis.assertions who dep
+    ++ lib.optional (kix.contracts.redis.usesSentinel dep) {
       assertion = false;
       message = "this package has no Sentinel client; set sentinel.enabled = false on the valkey instance.";
     };
 };
 ```
+
+## Use a Redis server outside the cluster
+
+To use a server Kix does not run, such as ElastiCache, replace the `valkey`
+instance with a `kix.mkImport` that sets the contract's fields. Put the
+import in the application's namespace, beside the secret that holds the
+password:
+
+```nix title="cluster definition"
+{ ref, ... }:
+{
+  instances.app = {
+    redis-login = {
+      package = packages.secret;
+      config.source = ./secrets/redis-login.sops.yaml;
+      config.keys = [ "password" ];
+    };
+    valkey.package = kix.mkImport {
+      scope = "namespace";
+      out = {
+        host = "app-cache.abc123.euw1.cache.amazonaws.com";
+        port = "6379";
+        tls = true;
+        credentials = ref.app.redis-login;
+      };
+    };
+  };
+}
+```
+
+Leave out `credentials` for a server that takes no password. An import
+without a password can keep the default `scope = "cluster"` and serve every
+namespace. Not every application can connect over TLS: Harbor and Immich
+refuse a server with `tls = true`, and n8n turns TLS on for it.
 
 ## Check the generated resources
 

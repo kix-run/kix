@@ -555,8 +555,7 @@ in
                 native = toString ports.native;
               };
               username = "default";
-              authSecret = credentials;
-              authPasswordKey = passwordKey;
+              inherit credentials;
               inherit (config) clusterName;
               version = builtins.unsafeDiscardStringContext (lib.versions.majorMinor config.image.tag);
               replicas = toString config.replicas;
@@ -598,7 +597,7 @@ in
         {
           CLICKHOUSE_URL = self.root.out.httpUrl;
           CLICKHOUSE_USER = self.root.out.username;
-          CLICKHOUSE_PASSWORD = self.root.out.authSecret.out.keyRef self.root.out.authPasswordKey;
+          CLICKHOUSE_PASSWORD = self.root.out.credentials.out.keyRef "password";
           CLICKHOUSE_CLUSTER = self.root.out.clusterName;
           CLICKHOUSE_REPLICAS = self.root.out.replicas;
           CLICKHOUSE_REPLICA_URLS = lib.concatMapStringsSep " " (

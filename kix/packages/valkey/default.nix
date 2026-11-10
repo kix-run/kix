@@ -8,8 +8,9 @@
 # namespace, aliased `valkeyPassword`, with key `password`. Auth is always
 # on.
 #
-# `out`: `name`, `fqdn`, `port`, and the password as `authSecret` and
-# `authPasswordKey`; with Sentinel also `sentinelPort` and `primarySet`.
+# `out` honours `kix.contracts.redis`: `host`, `port`, `credentials` (the
+# valkeyPassword secret), `tls = false`, and `sentinel`: null, or with
+# Sentinel `{ port; primarySet; }`. It also keeps the Service's `name` and `fqdn`.
 # Consumers run in this namespace (`meta.scope`). With Sentinel the Service
 # also reaches replicas, so a client that writes asks Sentinel for the
 # primary, without AUTH.
@@ -33,7 +34,7 @@ let
     metrics = 9121;
   };
   # The name Sentinel monitors the primary under, published as
-  # `out.primarySet`.
+  # `out.sentinel.primarySet`.
   primarySet = "primary";
 
   conf = import ./conf.nix { inherit lib kix; };
@@ -57,7 +58,7 @@ in
     description = "Valkey, a Redis-compatible data store: one primary, or a primary with replicas and Sentinel failover";
     owner = "platform";
     lifecycle = "stateful";
-    # Consumers read `out.authSecret` through a secretKeyRef, which
+    # Consumers read `out.credentials` through a secretKeyRef, which
     # Kubernetes resolves only in the pod's own namespace.
     scope = "namespace";
     defaultAliases = [
@@ -608,13 +609,7 @@ in
             inherit name;
             labels."app.kubernetes.io/component" = "server";
             ports = servicePorts;
-            outputs = {
-              port = toString ports.valkey;
-            }
-            // lib.optionalAttrs sentinel {
-              sentinelPort = toString ports.sentinel;
-              inherit primarySet;
-            };
+            outputs.port = toString ports.valkey;
           }
           |> scope.mkResource;
 
@@ -639,10 +634,20 @@ in
 
         root = {
           resource = self.mainService;
-          out = {
-            authSecret = password;
-            authPasswordKey = "password";
-          };
+          out = kix.contracts.redis.check who ({
+            host = self.mainService.out.fqdn;
+            port = toString ports.valkey;
+            credentials = password;
+            tls = false;
+            sentinel =
+              if sentinel then
+                {
+                  port = toString ports.sentinel;
+                  inherit primarySet;
+                }
+              else
+                null;
+          });
           # Parts the root Service does not reference itself; `requires`
           # keeps them in the build.
           requires = builtins.filter (r: r != null) [

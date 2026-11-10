@@ -161,13 +161,14 @@ rec {
           creds = database.out.credentials;
           declared = if creds.out.keys or null == null then [ ] else creds.out.keys;
         in
-        if builtins.elem "password" declared then
+        if builtins.elem "username" declared && builtins.elem "password" declared then
           creds
         else
           throw "${who}: the database dependency's credentials Secret \"${creds.out.name}\" declares ${
             if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
-          }; this package reads its `password` key. Wire a database whose out.credentials declares `password`.";
-      valkeySecret = if redisAuth then valkey.out.authSecret else null;
+          }; this package reads its `username` and `password` keys. Wire a database whose out.credentials declares both.";
+      redis = kix.contracts.redis.requirePlaintext who valkey;
+      valkeySecret = redis.out.credentials or null;
 
       # A pod template annotation that changes with a Secret's content,
       # so the pods roll when it changes. A secret-ref has no content
@@ -196,7 +197,12 @@ rec {
           "disable"
         else
           throw "${who}: the database dependency does not say whether it serves TLS (it publishes no out.tls). Set database.sslmode to \"require\" for a server with TLS, or \"disable\" for one without.";
-      dbPasswordEnv = var: dbCredentials.out.mkEnv { ${var} = "password"; };
+      dbLoginEnv =
+        userVar: passwordVar:
+        dbCredentials.out.mkEnv {
+          ${userVar} = "username";
+          ${passwordVar} = "password";
+        };
 
       # `out.url` carries the endpoint fact: the consuming pod gets the
       # netpol egress and waits for the Service.
@@ -210,25 +216,24 @@ rec {
       # Valkey. The password arrives as REDIS_PASSWORD from valkey's own
       # Secret and Kubernetes splices it into each URL through $(VAR)
       # expansion, so no ConfigMap carries it.
-      redisAuth = valkey.out ? authSecret;
+      redisAuth = valkeySecret != null;
       # With Sentinel on, the valkey Service also routes to read-only
       # replicas, so Harbor asks Sentinel for the primary: the
       # `redis+sentinel://<sentinels>/<primary set>/<db>` URL and the
       # registry's `sentinelMasterSet`, as harbor-helm writes them for an
       # external Sentinel.
-      redisSentinel = valkey.out ? sentinelPort;
+      redisSentinel = kix.contracts.redis.usesSentinel redis;
       redisAddr =
         if redisSentinel then
-          "${valkey.out.fqdn}:${valkey.out.sentinelPort}"
+          "${redis.out.host}:${redis.out.sentinel.port}"
         else
-          "${valkey.out.fqdn}:${valkey.out.port}";
+          "${redis.out.host}:${redis.out.port}";
       redisUrl =
         db:
         "${
           if redisSentinel then "redis+sentinel" else "redis"
-        }://${lib.optionalString redisAuth ":$(REDIS_PASSWORD)@"}${redisAddr}${lib.optionalString redisSentinel "/${valkey.out.primarySet}"}/${toString db}";
-      redisPasswordRef =
-        var: valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey // { name = var; };
+        }://${lib.optionalString redisAuth ":$(REDIS_PASSWORD)@"}${redisAddr}${lib.optionalString redisSentinel "/${redis.out.sentinel.primarySet}"}/${toString db}";
+      redisPasswordRef = var: valkeySecret.out.keyRef "password" // { name = var; };
       redisPasswordEnv = lib.optional redisAuth (redisPasswordRef "REDIS_PASSWORD");
       valkeyChecksum = checksumOf "valkey-password" valkeySecret;
 

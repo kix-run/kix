@@ -36,6 +36,8 @@ compose
   contracts.oidc = oidc;
   # Validate and consume `smtp` outputs (`vocab/smtp.nix`).
   contracts.smtp = smtp;
+  # Validate and consume Redis outputs, taken as `valkey` (`vocab/redis.nix`).
+  contracts.redis = import ./redis.nix { inherit lib; };
   # Build the `oidc` option set for an application that signs users in through
   # an `oidc` dependency.
   options = compose.options // {

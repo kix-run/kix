@@ -1,0 +1,3 @@
+# 2026-11-10 · `kix/packages/alertmanager` · Alertmanager cannot read an SMTP username from a Secret, so it cannot take the `smtp` dependency's login.
+
+Alertmanager v0.33 has `smtp_auth_password_file` but no file form of `smtp_auth_username` (`config/config.go`, `GlobalConfig`). A login from `kix.contracts.smtp` keeps the username in a Secret, so the package would have to write it into the configuration Secret Kix renders, where the value would sit in the Nix store. Until upstream adds the file form, Alertmanager mail goes through `settings.global.smtp_*` with `smtp_auth_password_file`, and the package already opens egress to the smarthost's port.
