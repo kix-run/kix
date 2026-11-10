@@ -77,7 +77,7 @@ impl FileCache {
         {
             Ok(key) => key,
             Err(e) => {
-                tracing::warn!(flake = %canonical.display(), error = %e, "could not fingerprint the flake's files, eval cache skipped");
+                tracing::warn!(flake = %canonical.display(), error = %e, "could not fingerprint the flake's files; skipping the eval cache and evaluating from source");
                 return Lookup {
                     hit: None,
                     slot: None,
@@ -143,10 +143,12 @@ impl FileCache {
         match serde_json::to_vec(&snapshot) {
             Ok(body) => {
                 if let Err(e) = write_atomic(&snapshot_path, &body) {
-                    tracing::warn!(error = %e, "could not save the source fingerprint");
+                    tracing::warn!(path = %snapshot_path.display(), error = %e, "could not save the source fingerprint; the next run will hash the flake's files again");
                 }
             }
-            Err(e) => tracing::warn!(error = %e, "could not save the source fingerprint"),
+            Err(e) => {
+                tracing::warn!(path = %snapshot_path.display(), error = %e, "could not save the source fingerprint; the next run will hash the flake's files again")
+            }
         }
         Ok(hash)
     }
@@ -213,7 +215,7 @@ fn read_entry(path: &Path, key: &str) -> Option<String> {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "could not read the eval cache");
+            tracing::warn!(path = %path.display(), error = %e, "could not read the eval cache; evaluating from source");
             return None;
         }
     };
@@ -221,7 +223,7 @@ fn read_entry(path: &Path, key: &str) -> Option<String> {
         Ok(entry) if entry.key == key => Some(entry.value.get().to_owned()),
         Ok(_) => None,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "discarding an eval cache entry that cannot be read");
+            tracing::warn!(path = %path.display(), error = %e, "discarding an unreadable eval cache entry and evaluating from source");
             None
         }
     }

@@ -181,7 +181,9 @@ impl KixEvaluator {
                     tracing::info!(attr, elapsed = ?start.elapsed(), "cache hit");
                     return Ok(value);
                 }
-                Err(e) => tracing::warn!(attr, error = %e, "corrupted cache entry, re-evaluating"),
+                Err(e) => {
+                    tracing::warn!(attr, error = %e, "discarding an unreadable eval cache entry and evaluating from source")
+                }
             }
         }
 
@@ -192,7 +194,7 @@ impl KixEvaluator {
                 .map_err(std::io::Error::other)
                 .and_then(|json| cache.store(&lookup, &json));
             if let Err(e) = stored {
-                tracing::warn!(attr, error = %e, "failed to cache result");
+                tracing::warn!(attr, error = %e, "could not write to the eval cache; continuing with the evaluated result");
             }
         }
         tracing::info!(attr, elapsed = ?start.elapsed(), "evaluation complete");
