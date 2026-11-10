@@ -12,3 +12,4 @@ consumer namespace still gets the operator.
 A role-named dependency is keyed by the role, so its provider lands in the
 namespace of the first requester in closure order, and consumers in other
 namespaces bind to that copy without an error.
+- 2026-11-10: Kix now warns when it places a once-per-cluster package beside its only consumer, and 0.10 will refuse it. Delete this entry when the warning becomes an error.

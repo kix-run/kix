@@ -322,6 +322,8 @@ When Kix auto-instantiates a catalog package, it selects the target namespace in
 
 Setting `autoNamespace = "platform"` places shared auto-instantiated providers into a single namespace instead of duplicating them in every requesting namespace. It has no effect on instances declared explicitly under `instances`.
 
+A package that runs once per cluster, such as an operator, needs a namespace of its own. When step 3 would place one beside the package that needs it, Kix builds the cluster and prints a warning, because removing that package would remove the operator for the whole cluster. Declare the operator under `instances`, set `autoNamespace`, or set a namespace on its catalog entry. Kix 0.10 will refuse this placement. When consumers in two namespaces need it, Kix already refuses the cluster.
+
 ## availablePackages
 
 `availablePackages` registers a catalog of packages that Kix can instantiate on demand when a required dependency argument is not satisfied by any declared instance.
