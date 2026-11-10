@@ -236,7 +236,7 @@ A pod reads Secrets only from its own namespace, and Kix refuses a Secret from a
 
 ### Three ways to use `kix.mkImport`
 
-1. **Direct `out` import (`out = { ... }`)**: Provide the exact `.out` contract expected by consumers (such as `fqdn` and `port` for an external database, or `storageClassName = "gp3"` with `roles = [ "storageClasses" ]`).
+1. **Direct `out` import (`out = { ... }`)**: Provide the exact `.out` contract expected by consumers (such as `host`, `port`, `database`, and `credentials` for an external database, or `storageClassName = "gp3"` with `roles = [ "storageClasses" ]`).
 2. **Package-derived import (`from = pkgs.coredns; roles = [ "dns" ];`)**: Evaluates the referenced Kix package in an import scope to extract its default `.out` surface and root `kind`/`apiVersion` while discarding its deployment manifests. Pass `roles` or `crds` explicitly when the import should also claim platform roles or expose CRD ref markers.
 3. **Hybrid import (`from = pkgs.coredns; roles = [ "dns" ]; out = { ... };`)**: Starts from `from`'s default `.out` surface and overrides specific output fields in `out`.
 

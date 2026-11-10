@@ -97,10 +97,11 @@ instances.database = {
 ```
 
 Kix refuses `backups` when no `stackgres-object-storage` instance is in the
-same namespace, and refuses a credentials Secret that does not declare the
-keys the storage type reads. `credentialKeys` maps those keys to other names.
-With backups on, the package sets `archive_timeout` to 60 seconds, so a quiet
-database still archives its write-ahead log every minute.
+same namespace, or when `backups` has more than one entry (StackGres runs only
+the first entry). It also refuses a credentials Secret that does not declare
+the keys the storage type reads. `credentialKeys` maps those keys to other
+names. With backups on, the package sets `archive_timeout` to 60 seconds, so a
+quiet database still archives its write-ahead log every minute.
 
 The network policy treats an `endpoint` written in `extraSpec` as an address
 outside the cluster. For an S3 store that runs in the cluster, wire the
