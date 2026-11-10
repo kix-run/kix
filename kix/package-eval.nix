@@ -385,8 +385,9 @@ let
             };
           };
         };
-        oidcClient = {
+        oidc-client-secret = {
           package = packages.secret;
+          aliases = [ "oidcClient" ];
           config.stringData = {
             clientId = "app";
             clientSecret = "secret";

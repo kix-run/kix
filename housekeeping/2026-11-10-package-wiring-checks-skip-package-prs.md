@@ -1,0 +1,3 @@
+# 2026-11-10 · `.github/workflows/bundle-checks.yml` · A pull request that changes only packages or `kix/lib` never runs the PackageInstance wiring check or `every-package-evaluates`.
+
+Both checks run only in `flake_checks_evaluate_with_helm`, inside Bundle checks, and that workflow's `paths` filter lists `cli/` files and `kix/lib/helm.nix` only. A package bug therefore first fails on the release pull request, which changes `cli/Cargo.toml`. For 0.9.0, the new `oidc-client` package passed every check on its own pull request. Then the release pull request found that it depended on a PackageInstance record, and that the `every-package-evaluates` fixture used an invalid Secret name. `kix check` and the library unit tests run neither check.
