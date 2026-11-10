@@ -37,7 +37,7 @@ Each entry under `instances.<namespace>.<name>` places a managed package instanc
 | `package` | raw function or attrset | required | single definition (conflict on duplicate) | Package function, evaluated package attribute set, or `kix.mkImport` marker. |
 | [`config`](#config) | `deferredModule` | `{ }` | NixOS module merge (`lib.mkDefault`, `lib.mkForce`) | Values evaluated against the package's `options`. |
 | [`deps`](#deps) | `attrsOf anything` | `{ }` | collision on same key is an error | Explicit dependency bindings (`ref.<ns>.<inst>`, list of `ref`s, or direct values) keyed by build argument name. |
-| [`aliases`](#aliases) | `listOf str` | `[ ]` | list merge | Dependency-resolution names for this instance. When non-empty, replaces `meta.defaultAliases`. |
+| [`aliases`](#aliases) | `nullOr (listOf str)` | `null` | list merge | Dependency-resolution names for this instance. A list replaces `meta.defaultAliases`. |
 | [`optional`](#optional) | `bool` | `false` | boolean merge | Keeps the instance dormant unless an active instance transitively depends on it. |
 | [`availability`](#availability) | `null \| "none" \| "pod" \| "node" \| "zone"` | `null` | single definition | Overrides `cluster.availability.default` for this instance. |
 | [`partsOverlays`](#partsoverlays) | `listOf raw` | `[ ]` | lists concatenate in module order | Post-build functions (`scope: self: base: attrset`) that modify, add, or remove rendered parts. |
@@ -150,8 +150,8 @@ instances.apps.valkey-cache = {
 ```
 
 - The instance's own `<name>` (`valkey-cache` above) and any roles in the package's `meta.roles` are always registered as resolution keys.
-- When `aliases` is `[ ]` (the default), Kix registers the package's `meta.defaultAliases`.
-- When `aliases` is non-empty, it **replaces** `meta.defaultAliases`. Include any default alias the instance should still answer.
+- When `aliases` is unset (the default), Kix registers the package's `meta.defaultAliases`.
+- When `aliases` is set, it **replaces** `meta.defaultAliases`. Include any default alias the instance should still answer. `aliases = [ ]` gives the instance no aliases, so it answers only its instance name and the package's `meta.roles`.
 
 When multiple instances in a cluster provide the same service (such as two PostgreSQL clusters or two ingress controllers), prefer wiring `deps.<arg> = ref.<namespace>.<instance>` on the consumer rather than inventing per-instance aliases.
 

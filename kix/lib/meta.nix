@@ -159,13 +159,14 @@ rec {
       )
     );
 
-  # Return the DI aliases for an instance. Role names always remain active,
-  # while `instanceAliases` replaces `meta.defaultAliases` when non-empty.
+  # Return the DI aliases for an instance. Role names always remain active.
+  # A list in `instanceAliases` replaces `meta.defaultAliases`, even an empty
+  # one, and null keeps the defaults.
   effectiveAliases =
     { instanceAliases, packageMeta }:
     lib.unique (
       (packageMeta.roles or [ ])
-      ++ (if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ])
+      ++ (if instanceAliases != null then instanceAliases else packageMeta.defaultAliases or [ ])
     );
 
   peekPackageAliases =
@@ -245,8 +246,16 @@ rec {
         let
           isClusterWide = lib.hasPrefix "cluster:" conflict;
           name = if isClusterWide then lib.removePrefix "cluster:" conflict else conflict;
-          candidates = resolutionIndex.byKey.${name} or [ ];
           isSelf = c: c.instName == instanceName && c.namespace == namespaceName;
+          # An instance whose package declares `name` as a default alias
+          # conflicts even when its own `aliases` replace that default.
+          byKey = resolutionIndex.byKey.${name} or [ ];
+          sameInstance = a: b: a.instName == b.instName && a.namespace == b.namespace;
+          candidates =
+            byKey
+            ++ builtins.filter (c: !(builtins.any (sameInstance c) byKey)) (
+              resolutionIndex.byDefaultAlias.${name} or [ ]
+            );
           matching =
             if isClusterWide then
               builtins.filter (c: !(isSelf c)) candidates

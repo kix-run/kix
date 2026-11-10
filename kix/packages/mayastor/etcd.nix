@@ -61,7 +61,9 @@ let
     && (depRef._type or null) == "kix-ref"
     && depRef.namespace == ns
     && depRef.instanceName == name;
-  selfByAlias = builtins.elem "storageClasses" (instance.aliases or [ ]);
+  selfByAlias = builtins.elem "storageClasses" (
+    if (instance.aliases or null) == null then [ ] else instance.aliases
+  );
 
   storageClassName =
     let

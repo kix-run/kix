@@ -204,6 +204,10 @@ in
         assertion = config.backups == null || builtins.all (b: !(b ? sgObjectStorage)) config.backups;
         message = "backups entries take sgObjectStorage from the sgObjectStorage dependency. Remove it.";
       }
+      {
+        assertion = config.backups == null || builtins.length config.backups <= 1;
+        message = "backups has more than one entry, but StackGres schedules backups only from the first entry and ignores the rest. Keep one entry.";
+      }
     ]
     ++ lib.imap0 (i: s: {
       assertion = (s.script == null) != (s.scriptFrom == null);

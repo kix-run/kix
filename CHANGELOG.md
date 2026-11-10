@@ -26,6 +26,14 @@ Each release groups changes under these headings:
 - The ClickHouse contract carries the administrator's password as `credentials`, like the other contracts. The `authSecret` and `authPasswordKey` fields of `clickhouse` and `clickhouse-cluster` are removed. Read `out.credentials.out.keyRef "password"` instead.
 - `harbor` reads the database role from the `username` key of the database's `out.credentials` instead of `out.username`. A database whose credentials secret does not declare `username` is refused. An import, such as one for RDS, no longer needs `out.username`.
 - `immich` refuses `notifications.smtp.transport.password` in `settings`, because the config ConfigMap would hold it. Wire the mail server through the new `smtp` dependency instead. With `smtp` wired, `immich` also refuses the other `notifications.smtp` settings it sets, and `SMTP_USERNAME` and `SMTP_PASSWORD` in `env`.
+- The `echo-server` and `dns-exporter` packages rename the option `replicaCount` to `replicas`, which now must be 1 or more. A cluster that sets `replicaCount` fails with a message that names `replicas`. Change `config.replicaCount` to `config.replicas`.
+- The `victoria-metrics-operator` package removes the options `nodeSelector`, `tolerations`, `affinity`, and `logLevel`. A cluster that sets one fails with a message that names its replacement. Set the operator pod's placement with the instance's `partsOverlays`, and pass `--zap-log-level=<level>` in `extraArgs` in place of `logLevel`.
+- The `stackgres-cluster` package refuses a `backups` list with more than one entry. StackGres schedules backups only from the first entry and ignored the others. Keep one entry.
+- `meta.conflictsWith` now also counts an instance whose package lists the conflicting name in `meta.defaultAliases`, even when the instance sets its own `aliases`. Two instances of a one-per-cluster package, such as `velero` or `stackgres-operator`, now fail even when each sets `aliases`. Remove the second instance.
+
+### Breaking (no error)
+
+- An instance with `aliases = [ ]` now answers no aliases. Before, an empty list fell back to the package's `meta.defaultAliases`. To keep the defaults, leave `aliases` unset. An instance that set `aliases = [ ]` and relied on the defaults must list them, or a consumer that resolved it by a default alias fails to find it.
 
 ### Upgrade notes
 

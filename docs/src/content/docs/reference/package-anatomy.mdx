@@ -224,7 +224,7 @@ When comparing versions in `compatibleWith` and `k8s`:
 
 Each role in `meta.roles` also registers that role name as a dependency alias so other packages can request `{ dns ? null }:` or `{ loadBalancer ? null }:`. At most one active instance in a cluster may provide a given role unless disambiguated.
 
-`meta.defaultAliases` provides additional dependency-injection names when the instance does not set `instances.<name>.aliases`. If an instance sets a non-empty `aliases` list, `defaultAliases` are replaced while `meta.roles` remain active.
+`meta.defaultAliases` provides additional dependency-injection names when the instance does not set `instances.<name>.aliases`. If an instance sets an `aliases` list, even an empty one, `defaultAliases` are replaced while `meta.roles` remain active.
 
 ### `meta.availability`
 
@@ -252,6 +252,8 @@ Entries in `meta.conflictsWith` prevent incompatible packages from being deploye
 - `"<pkg>"` forbids another instance of `<pkg>` in the **same namespace**.
 - `"cluster:<pkg>"` forbids `<pkg>` anywhere in the **same cluster**.
 - Listing the package's own name in `"cluster:<self>"` enforces a cluster-wide singleton.
+
+An instance counts when it answers `<pkg>` by its name or its aliases, or when its package lists `<pkg>` in `meta.defaultAliases`. The last case holds even when the instance sets its own `aliases`, so two instances of a singleton package fail whatever aliases they set.
 
 ### `meta.podSecurity` and `meta.unsafe`
 

@@ -24,7 +24,7 @@ kix.buildCluster {
             package = packages.echo-server;
             config = {
               message = "hello from kix v2 — updated!";
-              replicaCount = 2;
+              replicas = 2;
             };
           };
         };

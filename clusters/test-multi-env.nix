@@ -36,7 +36,7 @@ kix.buildCluster {
         // kix.mkEnv "production" {
           # Per-instance overrides merge into the generated config rather
           # than replacing the instance.
-          overrides.app.web.config.replicaCount = 3;
+          overrides.app.web.config.replicas = 3;
         } { app = application; };
     }
   ];

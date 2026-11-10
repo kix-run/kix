@@ -40,6 +40,15 @@
 
 let
   inherit (import ./kinds.nix) promCompatDefs;
+
+  # Removed options and what replaces each. They stay declared, hidden, so
+  # that setting one fails with the replacement.
+  removedOptions = {
+    nodeSelector = "Set the operator pod's placement with the instance's partsOverlays.";
+    tolerations = "Set the operator pod's placement with the instance's partsOverlays.";
+    affinity = "Set the operator pod's placement with the instance's partsOverlays.";
+    logLevel = "Pass --zap-log-level=<level> in extraArgs.";
+  };
 in
 
 {
@@ -60,6 +69,13 @@ in
     # architecture.annotationDomainOwnership lint.
     annotationDomains = [ "operator.victoriametrics.com" ];
   };
+
+  assertions =
+    { config, ... }:
+    lib.mapAttrsToList (option: fix: {
+      assertion = config.${option} == null;
+      message = "${option} was removed. ${fix}";
+    }) removedOptions;
 
   options = {
     image = kix.options.image {
@@ -90,11 +106,6 @@ in
         cpu = "500m";
         memory = "320Mi";
       };
-    };
-    logLevel = lib.mkOption {
-      type = lib.types.str;
-      default = "info";
-      description = "Value for --zap-log-level.";
     };
     # Self-monitoring: the operator auto-creates scrapes for its operands
     # but never for its own Deployment; this emits a VMServiceScrape for
@@ -178,24 +189,12 @@ in
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Extra arguments appended to the operator container's args. The package refuses `--zap-log-level`, which `logLevel` sets, and `--leader-elect` and `--health-probe-bind-address`, which it sets itself.";
+      description = "Extra arguments appended to the operator container's args, such as `--zap-log-level=debug`. The package refuses `--leader-elect` and `--health-probe-bind-address`, which it sets itself.";
     };
     env = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
       default = [ ];
       description = "Extra env entries merged into the operator container env.";
-    };
-    tolerations = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-    };
-    nodeSelector = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-    };
-    affinity = lib.mkOption {
-      type = lib.types.anything;
-      default = { };
     };
     priorityClassName = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -218,7 +217,16 @@ in
         options.
       '';
     };
-  };
+  }
+  // lib.mapAttrs (
+    _: fix:
+    lib.mkOption {
+      type = lib.types.unspecified;
+      default = null;
+      visible = false;
+      description = "Removed. ${fix}";
+    }
+  ) removedOptions;
 
   build = [
     ./crds.nix

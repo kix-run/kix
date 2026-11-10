@@ -305,15 +305,16 @@ in
             "--${flag}" = reason;
           })
           {
-            "zap-log-level" = "set logLevel instead.";
             "leader-elect" = "leader election keeps one replica active when multiple replicas run; remove it.";
             "health-probe-bind-address" = "the liveness and readiness probes use :8081; remove it.";
           };
+      # Info logging unless extraArgs picks another level.
+      setsLogLevel = builtins.any (a: builtins.match "--?zap-log-level(=.*)?" a != null) config.extraArgs;
       args = [
-        "--zap-log-level=${config.logLevel}"
         "--leader-elect"
         "--health-probe-bind-address=:8081"
       ]
+      ++ lib.optional (!setsLogLevel) "--zap-log-level=info"
       ++ kix.guardArgs {
         who = "victoria-metrics-operator ${ns}/${name}";
         owned = ownedFlags;
@@ -396,13 +397,8 @@ in
           seccompProfile.type = "RuntimeDefault";
         };
         containers = [ container ];
-        nodeSelector = {
-          "kubernetes.io/os" = "linux";
-        }
-        // config.nodeSelector;
+        nodeSelector."kubernetes.io/os" = "linux";
       }
-      // lib.optionalAttrs (config.tolerations != [ ]) { tolerations = config.tolerations; }
-      // lib.optionalAttrs (config.affinity != { }) { affinity = config.affinity; }
       // lib.optionalAttrs (config.priorityClassName != null) {
         priorityClassName = config.priorityClassName;
       }

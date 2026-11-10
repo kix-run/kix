@@ -61,8 +61,8 @@ instances.apps.redis-primary = {
 A package with a required `cache` build argument can now resolve this
 instance.
 
-A non-empty instance alias list replaces `meta.defaultAliases` for that
-instance. Include any package defaults you still need:
+An instance alias list replaces `meta.defaultAliases` for that instance, and
+`aliases = [ ]` removes them. Include any package defaults you still need:
 
 ```nix title="cluster.nix"
 aliases = [ "cache" "valkey" ];

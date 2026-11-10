@@ -199,7 +199,8 @@
     description = ''
       Entries of `spec.configurations.backups`, each wired to the
       `sgObjectStorage` dependency's `SGObjectStorage`. Requires that
-      dependency in this namespace when non-null.
+      dependency in this namespace when non-null. Takes at most one entry,
+      because StackGres schedules backups only from the first entry.
     '';
   };
 

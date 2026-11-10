@@ -454,11 +454,12 @@ in
     (withDep == [ ] && builtins.length noDep == 1)
     || throw "reloader annotation domains: with dependency ${builtins.toJSON withDep}, without ${builtins.toJSON noDep}";
 
-  # A second instance is refused by two guards: the annotation-domain index,
-  # whatever the aliases, and conflictsWith, while either instance has the
-  # alias `reloader`. The index runs first, so each guard is tested on a
-  # second instance (alias `secondReloader`) whose package lacks the other
-  # guard, against one whose package lacks both and builds.
+  # A second instance is refused by two guards: the annotation-domain index
+  # and conflictsWith, whatever the aliases. conflictsWith also counts an
+  # instance whose package declares the default alias `reloader`. The index
+  # runs first, so each guard is tested on a second instance (alias
+  # `secondReloader`) whose package lacks the other guard, against one
+  # whose package lacks both and the default alias, and builds.
   reloader-singleton =
     let
       without =
@@ -495,6 +496,7 @@ in
         pair (without [
           "annotationDomains"
           "conflictsWith"
+          "defaultAliases"
         ])
       ))
     )

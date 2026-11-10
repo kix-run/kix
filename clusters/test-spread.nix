@@ -58,7 +58,7 @@ kix.buildCluster {
         # "node" on a zoned cluster: hard on hosts, soft on the zone.
         pinned = {
           package = packages.echo-server;
-          config.replicaCount = 3;
+          config.replicas = 3;
           availability = "node";
         };
         # No volumes, so the descheduler may move it: three replicas from

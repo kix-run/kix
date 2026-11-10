@@ -274,9 +274,10 @@
               namespaceName = nsName;
               namespace = nsName;
               aliases = meta.effectiveAliases {
-                instanceAliases = instCfg.aliases or [ ];
+                instanceAliases = instCfg.aliases or null;
                 inherit packageMeta;
               };
+              defaultAliases = packageMeta.defaultAliases or [ ];
               isImport = (instCfg.package._type or "") == "kix-import";
               scope = meta.scopeOf {
                 inherit packageMeta;
@@ -394,7 +395,7 @@
               map (k: lib.nameValuePair k true) (
                 [ instName ]
                 ++ meta.effectiveAliases {
-                  instanceAliases = mergedInstances.${nsName}.${instName}.aliases or [ ];
+                  instanceAliases = mergedInstances.${nsName}.${instName}.aliases or null;
                   packageMeta = peekedMetas.${nsName}.${instName};
                 }
               )

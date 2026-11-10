@@ -212,7 +212,10 @@ in
         instanceName = "postgres";
         config = {
           extraSpec.pods.disableEnvoy = false;
-          backups = [ { sgObjectStorage = "other"; } ];
+          backups = [
+            { sgObjectStorage = "other"; }
+            { cronSchedule = "0 2 * * 0"; }
+          ];
           scripts = [ { name = "empty"; } ];
           extensions = [
             {
@@ -231,6 +234,12 @@ in
       says ''StackGres limits an SGCluster name to 44 characters matching ^[a-z]([-a-z0-9]*[a-z0-9])?$; "${longName}" is 45 characters. Rename the instance.'' named
       && says "extraSpec sets pods.disableEnvoy = false." got
       && says "backups entries take sgObjectStorage from the sgObjectStorage dependency. Remove it." got
+      && says "backups has more than one entry, but StackGres schedules backups only from the first entry" got
+      && !(says "backups has more than one entry" (failedMessages {
+        package = clusterPackage;
+        instanceName = "postgres";
+        config.backups = [ { } ];
+      }))
       && says "scripts entry 0 must set exactly one of script or scriptFrom." got
       && says "extension vector is requested at versions 0.7.0 and 0.8.0." got
     )

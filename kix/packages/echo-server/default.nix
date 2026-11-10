@@ -38,14 +38,30 @@ in
     owner = "app-team";
   };
 
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion = config.replicaCount == null;
+        message = "replicaCount was renamed to replicas. Set config.replicas instead.";
+      }
+    ];
+
   options = {
     image = kix.options.image {
       repository = "docker.io/nginxinc/nginx-unprivileged";
       tag = "1.30.5-alpine";
       digest = "sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e";
     };
+    # Declared only so that setting the removed name fails with the new one.
     replicaCount = lib.mkOption {
-      type = lib.types.int;
+      type = lib.types.unspecified;
+      default = null;
+      visible = false;
+      description = "Removed. Use `replicas`.";
+    };
+    replicas = lib.mkOption {
+      type = lib.types.ints.positive;
       # Stateless and serving: two replicas as soon as a pod restart must
       # not be downtime, spread so either survives a lost node or zone.
       default = kix.availability.pick availability {
@@ -113,7 +129,7 @@ in
         {
           inherit name;
           spec = {
-            replicas = config.replicaCount;
+            replicas = config.replicas;
             selector.matchLabels = scope.selectorLabels;
             template.spec = {
               # nginx drains open connections on the image's SIGQUIT stop
