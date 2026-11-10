@@ -1,6 +1,6 @@
 # Kix's Kubernetes domain and all annotation, label, and API names built on it.
 #
-# Keep `domain` in sync with `cli/kix/src/manifest/keys.rs` (enforced by the
+# Keep `domain` in sync with `cli/kix-core/src/manifest/keys.rs` (enforced by the
 # `no_other_file_spells_a_kix_domain` Rust test). Packages access these keys
 # through `kix.keys`.
 rec {

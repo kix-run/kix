@@ -10,29 +10,18 @@ name = "kix"
 path = "src/lib.rs"
 
 [dependencies]
+# Evaluation, project configuration, and manifest handling
+kix-core.workspace = true
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true
-# Helm renders: an event parser, so Kix chooses each scalar's JSON type
-yaml-rust2.workspace = true
-# A project's kix.toml
-toml.workspace = true
 # The plan document's JSON Schema
 schemars.workspace = true
 
 # Error handling
 thiserror.workspace = true
-anyhow.workspace = true
-
-# Diffing
-similar.workspace = true
-strsim.workspace = true
-rayon.workspace = true
-indexmap.workspace = true
-
-# Output formatting
-owo-colors.workspace = true
 
 # K8s
 kube.workspace = true
@@ -59,7 +48,6 @@ base64.workspace = true
 kix-container.workspace = true
 
 # Hashing
-blake3.workspace = true
 sha2.workspace = true
 
 # Installing Kix releases (`release`)
@@ -78,13 +66,13 @@ chrono.workspace = true
 tracing.workspace = true
 
 [features]
-test-util = []
+test-util = ["kix-core/test-util"]
 
 [dev-dependencies]
+kix-core = { workspace = true, features = ["test-util"] }
 # Tests read plan files with zstd's own decoder too.
 zstd.workspace = true
 tempfile.workspace = true
-insta.workspace = true
 proptest.workspace = true
 # Paused-clock tests for the deploy engine (start_paused, time::advance).
 tokio = { workspace = true, features = ["test-util"] }

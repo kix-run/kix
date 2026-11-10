@@ -87,7 +87,7 @@ change.
   `atlas.yaml:417-448`, "Refuse a kix that is too old to deploy lab1".
 - New CLI, old lib: hard refusal, `StalePin`, "Update the kixpkgs pin to a
   revision at or after the kix.run move"
-  (`cli/kix/src/legacy_domain/mod.rs:296-300,331-375`).
+  (`cli/kix-core/src/legacy_domain/mod.rs:296-300,331-375`).
 
 Two rules follow. The CLI is built from the newest live revision. The oldest
 live revision sits at or after the CLI's compatibility floor, today
@@ -111,7 +111,7 @@ package takes a new lib feature, the floor moves up under every client.
 ### 3.1 Deploy builds from source
 
 `kix deploy` always builds the current tree
-(`cli/kix/src/eval/build.rs:41`). There is no flag to deploy a previously
+(`cli/kix-core/src/eval/build.rs:41`). There is no flag to deploy a previously
 built store path (`cli/kix-cli/src/cli.rs:403-461`), and no per-package deploy
 filter.
 

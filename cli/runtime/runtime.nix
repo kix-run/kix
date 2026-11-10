@@ -6,7 +6,7 @@
 # runtime whose manifest lists others. Evaluating this file fails when the two
 # disagree, so a version change edits both files.
 #
-# Each program here also needs a `Tool` variant in cli/kix/src/runtime.rs
+# Each program here also needs a `Tool` variant in cli/kix-core/src/runtime.rs
 # before Kix can run it.
 #
 # `nixRelease` is the flake of the Nix release to ship (the `nix-runtime`
@@ -18,7 +18,7 @@ let
   inherit (pkgs) lib;
   inherit (pkgs.stdenv.hostPlatform) system isDarwin;
 
-  compiledIn = lib.importJSON ../kix/runtime/programs.json;
+  compiledIn = lib.importJSON ../kix-core/runtime/programs.json;
   helmVersions = lib.importJSON ../../kix/lib/helm-versions.json;
 
   kubectlVersion = "1.37.2";
@@ -409,7 +409,7 @@ let
   ) components;
 in
 assert lib.assertMsg (shippedVersions == compiledIn) ''
-  cli/kix/runtime/programs.json lists ${builtins.toJSON compiledIn},
+  cli/kix-core/runtime/programs.json lists ${builtins.toJSON compiledIn},
   but cli/runtime/runtime.nix ships ${builtins.toJSON shippedVersions}.
   kix compiles programs.json in, so update it to match.
 '';

@@ -2,7 +2,7 @@
 
 **Status:** RFC
 **Relevance:** Active
-**Related:** `90_ludo_north_star_ideation.md`, `105_ludo_homelab_operational_readiness.md`, `106_ops_lifecycle_verbs_and_capacity_check.md`, `67_stateful_migration_orchestration.md`, `81_deploy_as_lifecycle_engine.md`, `98_deploy_execution_topology.md`, `cli/README.md`, `cli/kix-cli/src/plan.rs`, `cli/kix/src/cluster/migrate.rs`, `cli/kix/src/eval/store_graph.rs`
+**Related:** `90_ludo_north_star_ideation.md`, `105_ludo_homelab_operational_readiness.md`, `106_ops_lifecycle_verbs_and_capacity_check.md`, `67_stateful_migration_orchestration.md`, `81_deploy_as_lifecycle_engine.md`, `98_deploy_execution_topology.md`, `cli/README.md`, `cli/kix-cli/src/plan.rs`, `cli/kix/src/cluster/migrate.rs`, `cli/kix-core/src/eval/store_graph.rs`
 **Supersedes:** none.
 
 ---

@@ -40,14 +40,14 @@ pub struct RecordKind {
 /// The activation history. Copied.
 pub const ACTIVATION: RecordKind = RecordKind {
     kind: RECORD_KIND,
-    plural: "activations",
+    plural: kix_core::legacy_domain::ACTIVATION_PLURAL,
     cluster_scoped: true,
 };
 
 /// The package markers. Re-created by the next deploy, so not copied.
 pub const PACKAGE_INSTANCE: RecordKind = RecordKind {
     kind: PACKAGE_INSTANCE_KIND,
-    plural: "packageinstances",
+    plural: kix_core::legacy_domain::PACKAGE_INSTANCE_PLURAL,
     cluster_scoped: false,
 };
 

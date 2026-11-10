@@ -224,7 +224,7 @@ pub fn save_activation_path(cluster: &str, built_via: &Path) -> std::io::Result<
 /// build moves on the next deploy, so without these a listed build is
 /// collectable and every later plan reports it as unreadable. Best-effort:
 /// failures are logged, never returned.
-pub(crate) fn sync_kept_roots(cluster: &str, listed: &[(String, Option<PathBuf>)]) {
+pub fn sync_kept_roots(cluster: &str, listed: &[(String, Option<PathBuf>)]) {
     sync_kept_roots_in(&activations_dir(), cluster, listed, |link, target| {
         super::nix::add_gc_root(link, target).map_err(|e| e.to_string())
     });
@@ -300,7 +300,7 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
 /// Return the identity hash of the Activation of the build at `built_via`
 /// (the first 32 characters of the Activation's store name), or `None` if
 /// the build cannot be read.
-pub(crate) fn build_hash_of(built_via: &Path) -> Option<String> {
+pub fn build_hash_of(built_via: &Path) -> Option<String> {
     let activation = super::build_files::BuildFiles::read(built_via)
         .ok()?
         .activation;

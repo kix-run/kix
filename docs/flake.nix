@@ -23,7 +23,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     # kixpkgs keeps its own nixpkgs. The `kix` package carries a runtime
     # built from it, and kix refuses a runtime whose programs differ from the
-    # versions compiled into it (cli/kix/runtime/programs.json).
+    # versions compiled into it (cli/kix-core/runtime/programs.json).
     kixpkgs.url = "path:..";
     # Fetched via the GitHub fetcher. Both kixpkgs (above) and
     # kix-examples are currently private; any consumer must supply

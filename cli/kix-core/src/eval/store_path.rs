@@ -13,7 +13,7 @@
 use sha2::{Digest, Sha256};
 
 /// The store directory every path in a build lives under.
-pub(crate) const STORE_DIR: &str = "/nix/store";
+pub const STORE_DIR: &str = "/nix/store";
 
 /// Nix's base32 alphabet (omits `e`, `o`, `u`, and `t`).
 const BASE32: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
@@ -36,7 +36,7 @@ pub(crate) const MAX_NAME_BYTES: usize = 211;
 /// store paths it `references`, and its `name` (the suffix after `<hash>-`).
 ///
 /// ```
-/// use kix::eval::store_path::{Method, path_for};
+/// use kix_core::eval::store_path::{Method, path_for};
 /// let p = path_for(Method::Text, b"hello", &[], "greeting");
 /// assert!(p.starts_with("/nix/store/") && p.ends_with("-greeting"));
 /// ```

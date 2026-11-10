@@ -22,6 +22,8 @@ pub mod cli_backend;
 pub mod derivation;
 pub mod error;
 pub(crate) mod evaluator;
+#[cfg(any(test, feature = "test-util"))]
+pub mod fixtures;
 pub mod helm;
 pub mod helm_yaml;
 pub mod manifest_json;
@@ -35,8 +37,8 @@ pub mod store_graph;
 pub mod store_path;
 
 pub use cli_backend::{LocalBuilder, cluster_name_command, eval_cluster_name};
-pub(crate) use error::KixEvalError;
+pub use error::KixEvalError;
 pub use evaluator::{
     Builder, ClusterOutput, ClusterPackageInfo, InstanceInfo, KixEvaluator, PackageInfo,
 };
-pub(crate) use store_graph::PackageNode;
+pub use store_graph::PackageNode;

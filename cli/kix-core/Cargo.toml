@@ -1,0 +1,49 @@
+[package]
+name = "kix-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "kix core: Nix evaluation, project configuration, and manifest handling, without a Kubernetes client"
+
+[lib]
+name = "kix_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+# Helm renders: an event parser, so Kix chooses each scalar's JSON type
+yaml-rust2.workspace = true
+# A project's kix.toml
+toml.workspace = true
+# The plan document's JSON Schema
+schemars.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Diffing
+similar.workspace = true
+indexmap.workspace = true
+
+# Hashing
+base64.workspace = true
+blake3.workspace = true
+sha2.workspace = true
+
+# Paths
+walkdir.workspace = true
+tempfile.workspace = true
+
+# Logging
+tracing.workspace = true
+
+[features]
+# Fixtures that kix-lib's tests share with this crate's own.
+test-util = []
+
+[dev-dependencies]
+# Helm render fixtures are stored compressed.
+zstd.workspace = true

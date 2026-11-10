@@ -8,7 +8,7 @@ import Command from "../../../../components/Command.astro";
 `kix lib` manages the Kix library locked in your project's `flake.lock`. Its `update` subcommand moves your locked Kix library revision to match the version of Kix you are running.
 
 :::note
-This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/commands/library.rs`, and `cli/kix/src/library.rs`. When flag definitions or behavior change in the Rust source, update this page in the same change.
+This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/commands/library.rs`, and `cli/kix-core/src/library.rs`. When flag definitions or behavior change in the Rust source, update this page in the same change.
 :::
 
 ## Synopsis
@@ -19,7 +19,7 @@ kix lib update [--dry-run] [--flake <FLAKE>]
 
 ## Why the Kix library and Kix versions stay aligned
 
-When a cluster uses Helm charts (`kix.helmChart`, `scope.helm.importChart`, or `scope.helm.importChartCrds`), both the Kix library and Kix record the exact Helm 3 and Helm 4 versions used to render templates (`kix/lib/helm-versions.json` in the Kix library, and `cli/kix/runtime/programs.json` in Kix). Keeping those versions identical guarantees that `helm template` produces the same resource hashes on every machine.
+When a cluster uses Helm charts (`kix.helmChart`, `scope.helm.importChart`, or `scope.helm.importChartCrds`), both the Kix library and Kix record the exact Helm 3 and Helm 4 versions used to render templates (`kix/lib/helm-versions.json` in the Kix library, and `cli/kix-core/runtime/programs.json` in Kix). Keeping those versions identical guarantees that `helm template` produces the same resource hashes on every machine.
 
 If you upgrade Kix (or update `flake.lock`) and the two sides disagree on a Helm version, Kix stops before rendering the chart and prints a mismatch error telling you how to align them:
 

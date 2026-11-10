@@ -1,9 +1,7 @@
-//! K8s manifest types, YAML serialization and structural diff.
+//! The manifest modules of `kix-core`, plus the functions that read live
+//! objects as the Kubernetes client returns them.
 
-pub mod diff;
-pub mod hash;
-pub mod keys;
+pub use kix_core::manifest::*;
+
 pub mod lifecycle;
-pub mod serialize;
 pub mod types;
-pub mod workload;

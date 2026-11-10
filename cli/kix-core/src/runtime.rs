@@ -39,7 +39,7 @@
 //!
 //! The first time Kix uses a runtime with a manifest, it checks that the
 //! manifest lists the programs and versions compiled into this binary from
-//! `cli/kix/runtime/programs.json`, and stops when it does not. The check reads
+//! `cli/kix-core/runtime/programs.json`, and stops when it does not. The check reads
 //! no file contents, so a user can swap in their own build of a program of
 //! the same version. [`verify_files`] checks the contents for `kix doctor`.
 //!
@@ -297,9 +297,9 @@ pub fn searched() -> Vec<String> {
 }
 
 /// Return the programs and versions this binary expects, from
-/// `cli/kix/runtime/programs.json`.
+/// `cli/kix-core/runtime/programs.json`.
 pub fn compiled_in() -> BTreeMap<String, Vec<String>> {
-    serde_json::from_str(PROGRAMS_JSON).expect("cli/kix/runtime/programs.json is valid JSON")
+    serde_json::from_str(PROGRAMS_JSON).expect("cli/kix-core/runtime/programs.json is valid JSON")
 }
 
 /// Fail when `rt` has a manifest that lists other programs or versions than

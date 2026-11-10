@@ -772,7 +772,7 @@ mod tests {
                 Ok(None)
             }
         }
-        let bytes: &[u8] = include_bytes!("../../tests/fixtures/kix-enterprise-test.json");
+        let bytes: &[u8] = crate::eval::fixtures::KIX_ENTERPRISE_TEST_JSON;
         let graph = crate::plan::fixtures::kix_enterprise_test();
         let build =
             crate::build_source::Build::carried(bytes.to_vec(), "kix-enterprise-test", |_| {

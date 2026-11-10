@@ -21,6 +21,10 @@ Each release groups changes under these headings:
 
 - Kix keeps its eval cache in files under `~/.cache/kix/eval-cache` instead of a SQLite database. The first command after you upgrade evaluates your clusters again, and Kix deletes the old `~/.cache/kix/eval-cache.db`. The cache now holds one result for each cluster and no longer grows as you edit.
 
+### Added
+
+- A new Rust crate, `kix-core`, holds the parts of the Kix library that need no Kubernetes client: evaluating a project, reading `kix.toml`, and handling manifests. It has no C dependencies and pulls in 84 crates, where `kix-lib` pulls in 286. `kix-lib` re-exports every `kix-core` module under the same path, so code that uses `kix-lib` needs no change.
+
 ### Fixed
 
 - `--override-input` no longer returns a cached result built before the override. Kix now evaluates from source whenever you pass it.

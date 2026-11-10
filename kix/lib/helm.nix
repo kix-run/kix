@@ -367,7 +367,7 @@ rec {
     };
 
   # Return the arguments of the `helm template` that `spec` describes, in the
-  # order the CLI passes them (`render` in cli/kix/src/eval/helm.rs). The
+  # order the CLI passes them (`render` in cli/kix-core/src/eval/helm.rs). The
   # values file is `values.json` in the working directory.
   helmTemplateArgs =
     spec:

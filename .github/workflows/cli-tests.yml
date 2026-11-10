@@ -266,7 +266,7 @@ jobs:
           esac
           runtime=$build
           if [ "$EVENT" = pull_request ] && git diff --name-only "$BASE_SHA...HEAD" | grep -Eq \
-            '^(cli/runtime/|cli/kix/runtime/|cli/kix/src/eval/|kix/lib/helm\.nix$|kix/lib/helm-versions\.json$|\.github/workflows/cli-tests\.yml$)'; then
+            '^(cli/runtime/|cli/kix-core/runtime/|cli/kix-core/src/eval/|kix/lib/helm\.nix$|kix/lib/helm-versions\.json$|\.github/workflows/cli-tests\.yml$)'; then
             runtime=true
           fi
           echo "build=$build" | tee -a "$GITHUB_OUTPUT"

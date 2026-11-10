@@ -29,7 +29,7 @@ on:
       - 'cli/kix-bundle/**'
       - 'cli/kix-container/**'
       - 'cli/kix/src/plan/file.rs'
-      - 'cli/kix/src/eval/**'
+      - 'cli/kix-core/src/eval/**'
       - 'kix/lib/helm.nix'
       - 'cli/kix-cli/src/commands/bundle.rs'
       - 'cli/kix-cli/tests/commands_test.rs'
