@@ -9,18 +9,20 @@
 #   database (required)       a logical PostgreSQL database honouring the
 #                             Postgres database contract
 #                             (kix.contracts.postgresDatabase), such as
-#                             stackgres-database, that also publishes
-#                             out.username. Harbor reads out.tls (whether the
+#                             stackgres-database or an RDS import. Harbor
+#                             reads the role and password from
+#                             out.credentials, and out.tls (whether the
 #                             server speaks TLS); without it, set
 #                             database.sslmode.
-#   valkey (required)         Redis-compatible cache and job queue
-#                             (out.{fqdn,port,authSecret,authPasswordKey}),
-#                             reached through Sentinel when the instance
-#                             publishes out.{sentinelPort,primarySet}. Harbor
-#                             uses fixed database indexes 0 to 2 and a fixed
-#                             job-queue prefix, so give each Harbor instance
-#                             its own valkey; for a second Harbor in one
-#                             namespace, wire deps.valkey = ref.<ns>.<valkey>.
+#   valkey (required)         a Redis cache and job queue honouring
+#                             kix.contracts.redis: a valkey, or a
+#                             kix.mkImport for a server without TLS. Harbor
+#                             asks Sentinel for the primary when the server
+#                             publishes out.sentinel. Harbor uses fixed
+#                             database indexes 0 to 2 and a fixed job-queue
+#                             prefix, so give each Harbor instance its own
+#                             server; for a second Harbor in one namespace,
+#                             wire deps.valkey = ref.<ns>.<valkey>.
 #   storage (required)        a persistent volume for registry blobs.
 #   harborSecrets (required)  a Secret declaring the keys in `secretKeys` in
 #                             common.nix.
@@ -206,14 +208,8 @@ in
     ];
   };
 
-  # Harbor also reads out.username, which the contract lets an import omit.
-  deps.database.assertions =
-    dep:
-    kix.contracts.postgresDatabase.assertions who dep
-    ++ lib.optional (!(dep.out ? username)) {
-      assertion = false;
-      message = "${who}: deps.database publishes no out.username, which Harbor sets as POSTGRESQL_USERNAME and HARBOR_DATABASE_USERNAME. Set out.username to the role name on that instance.";
-    };
+  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  deps.valkey.assertions = dep: kix.contracts.redis.assertions who dep;
 
   assertions =
     { config, ... }:

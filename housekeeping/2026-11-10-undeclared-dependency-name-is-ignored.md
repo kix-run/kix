@@ -1,0 +1,3 @@
+# 2026-11-10 · `kix/lib/eval/resolve.nix` · An instance's `deps.<name>` that its package does not take is accepted and ignored.
+
+A cluster that sets `deps.bogus = ref.a.x` on an instance whose package declares no `bogus` dependency builds with no warning; a probe in the unit matrix confirmed it. A typo in a dependency name goes unnoticed, and the dependency then resolves by alias, perhaps to another instance. It also means a package cannot rename a dependency: clusters that wire the old name keep building and lose the wiring with no error. The Redis contract kept the dependency name `valkey` for this reason.

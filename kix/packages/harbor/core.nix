@@ -46,7 +46,7 @@ let
     checksumOf
     reloadOn
     sslmode
-    dbPasswordEnv
+    dbLoginEnv
     coreUrl
     tokenServiceUrl
     portalUrl
@@ -167,7 +167,6 @@ let
     DATABASE_TYPE = "postgresql";
     POSTGRESQL_HOST = database.out.host;
     POSTGRESQL_PORT = database.out.port;
-    POSTGRESQL_USERNAME = database.out.username;
     POSTGRESQL_DATABASE = database.out.database;
     POSTGRESQL_SSLMODE = sslmode;
     CHART_CACHE_DRIVER = "redis";
@@ -260,7 +259,7 @@ in
                     CSRF_KEY = "csrfKey";
                     REGISTRY_CREDENTIAL_PASSWORD = "registryPassword";
                   }
-                  ++ dbPasswordEnv "POSTGRESQL_PASSWORD"
+                  ++ dbLoginEnv "POSTGRESQL_USERNAME" "POSTGRESQL_PASSWORD"
                   ++ redisPasswordEnv
                   ++ lib.optionals oidcOn (
                     oidcCredentials.out.mkEnv {

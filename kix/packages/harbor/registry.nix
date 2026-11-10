@@ -39,6 +39,7 @@ let
     metricsEnabled
     secrets
     ca
+    redis
     valkeySecret
     checksumOf
     reloadOn
@@ -146,7 +147,7 @@ let
                 idletimeout = "60s";
               };
             }
-            // lib.optionalAttrs redisSentinel { sentinelMasterSet = valkey.out.primarySet; };
+            // lib.optionalAttrs redisSentinel { sentinelMasterSet = redis.out.sentinel.primarySet; };
             http = {
               addr = ":5000";
               relativeurls = false;

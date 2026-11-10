@@ -26,7 +26,7 @@
 #   3. `schemaFiles`, a ConfigMap in the server's namespace holding the
 #      consumer's `schema` files, when there are any.
 #   4. `bootstrapJob`, in the server's namespace, logged in as the server's
-#      administrator from `clickhouse.out.authSecret`. It creates the
+#      administrator from `clickhouse.out.credentials`. It creates the
 #      database and the user, sets the password, grants the privileges, and
 #      then runs the schema files in name order. Every statement is
 #      idempotent. The Job's name carries a hash of its inputs, so a change
@@ -451,7 +451,7 @@ in
                         CH_HOST = server.host;
                         CH_PORT = server.ports.native;
                         CH_ADMIN_USER = server.username;
-                        CH_ADMIN_PASSWORD = server.authSecret.out.keyRef server.authPasswordKey;
+                        CH_ADMIN_PASSWORD = server.credentials.out.keyRef "password";
                         NEW_PASSWORD = self.bootstrapPassword.out.keyRef "password";
                       };
                       resources = {

@@ -89,7 +89,8 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `vocab/oidc-provider.nix` | `kix.contracts.oidcProvider`: multi-realm OpenID Connect provider contract (`issuerUrl`, `endpoints`, each a function of the realm). keycloak passes it; the `oidc-client` package consumes it. |
 | `vocab/oidc.nix` | `kix.contracts.oidc` and `kix.options.oidc`: one application's OIDC client (`issuerUrl`, `endpoints`, `credentials`), `client` (returns the client or null, refuses the removed `oidc.enabled` and `oidc.realm`), and the consumer option schema. |
 | `vocab/otlp-endpoint.nix` | `kix.contracts.otlpEndpoint`: OTLP receiver contract (`otlpGrpcUrl`, `otlpHttpUrl`, `tls`). |
-| `vocab/smtp.nix` | `kix.contracts.smtp` and `kix.options.mail`: SMTP contract (`host`, `port`, `tls`, `credentials`, `from`, `external`), `settings` (refuses `tls = "none"` outside the cluster and a missing sender), and `egressPolicy`. |
+| `vocab/smtp.nix` | `kix.contracts.smtp` and `kix.options.mail`: SMTP contract (`host`, `port`, `tls`, `credentials`, `from`, `external`), `server` (refuses `tls = "none"` outside the cluster), `settings` (`server` plus a required sender), and `egressPolicy`. |
+| `vocab/redis.nix` | `kix.contracts.redis`, taken as the `valkey` dependency: `host`, `port`, `credentials` (key `password`), `tls`, `sentinel` (null or `{ port; primarySet; }`), plus `usesSentinel` and `requirePlaintext`. |
 | `vocab/postgres-database.nix` | `kix.contracts.postgresDatabase`: PostgreSQL database contract (`host`, `port`, `database`, `credentials`, `username`, `extensions`, `tls`). |
 | `vocab/pins.nix` | `kix.pins`: loads and validates committed JSON pin files. |
 | `vocab/quantity.nix` | Kubernetes quantity grammar (`kix.types.quantity`) and parser (`kix.parseQuantity`). |

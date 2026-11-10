@@ -202,10 +202,10 @@ in
     && lib.hasInfix "${pname} apps/${pname}" (builtins.head noHost)
   ) (builtins.attrNames consumers);
 
-  # Harbor also needs out.username, which an import may omit.
-  postgres-database-harbor-needs-username = builtins.any (lib.hasInfix "publishes no out.username") (
-    messagesOf (consumers.harbor.deps.database.assertions (depOf importOut))
-  );
+  # Harbor reads the role from out.credentials, so an import without
+  # out.username satisfies it.
+  postgres-database-harbor-takes-import =
+    messagesOf (consumers.harbor.deps.database.assertions (depOf importOut)) == [ ];
 
   # Metabase calls toString on the port, so its build succeeds on an
   # integer port and only the contract refuses it. Metabase's assertion

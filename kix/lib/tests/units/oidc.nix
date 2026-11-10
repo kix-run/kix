@@ -246,8 +246,8 @@ let
           valkey = {
             package = eval.mkImport {
               out = {
-                fqdn = "valkey.example.net";
-                port = 6379;
+                host = "valkey.example.net";
+                port = "6379";
               };
             };
             aliases = [ "valkey" ];
@@ -344,7 +344,7 @@ let
           valkey = {
             package = eval.mkImport {
               out = {
-                fqdn = "valkey.example.net";
+                host = "valkey.example.net";
                 port = "6379";
               };
             };
@@ -649,7 +649,7 @@ in
       )
       && lib.hasSuffix "exec start.sh\n" (builtins.head container.args)
       && builtins.any (
-        v: v.name == "oauth-config" && v.emptyDir.medium == "Memory"
+        v: v.name == "runtime-config" && v.emptyDir.medium == "Memory"
       ) d.spec.template.spec.volumes
     )
     || throw "immich oidc: ${builtins.toJSON oauth}";

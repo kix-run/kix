@@ -35,6 +35,12 @@
 #                              Prometheus does not restart Keycloak.
 #   ingressNginx or gateway, clusterIssuer (optional)
 #                              the route from `kix.expose`.
+#   smtp (optional)            a mail server honouring kix.contracts.smtp.
+#                              Keycloak keeps mail settings in each realm,
+#                              so enter the server, sender, and login in
+#                              the realm's Email tab. The dependency opens
+#                              egress to the server's port when it is
+#                              outside the cluster.
 #
 # Minimal instances, with a stackgres-cluster `postgres` elsewhere
 # (`clusters/test-keycloak.nix` evaluates this shape with `stringData`):
@@ -97,12 +103,12 @@
 # and the progress deadline allow 15 minutes, which also covers the first
 # start's schema creation.
 #
-# Network policy covers the database, the route, the scrape, and the peers.
-# Identity brokering, user federation (LDAP), and email (SMTP) dial
-# servers outside the cluster that differ per instance, and the package
-# declares no egress to them. Under default deny, add a NetworkPolicy or a
-# CiliumNetworkPolicy that selects this instance's pods and allows that
-# egress.
+# Network policy covers the database, the route, the scrape, the peers,
+# and the mail server of the `smtp` dependency. Identity brokering and user
+# federation (LDAP) dial servers outside the cluster that differ per
+# instance, and the package declares no egress to them. Under default deny,
+# add a NetworkPolicy or a CiliumNetworkPolicy that selects this instance's
+# pods and allows that egress.
 #
 # `out`, checked by `kix.contracts.oidcProvider`:
 #   url          the public URL, `KC_HOSTNAME`.
@@ -225,9 +231,14 @@ in
         database,
         bootstrapAdmin,
         prometheus ? null,
+        smtp ? null,
         ...
       }:
       let
+        # Keycloak keeps each realm's mail settings, sender and login
+        # included, in the realm. The dependency only opens the network
+        # path to the server.
+        relay = kix.contracts.smtp.server { inherit who smtp; };
         # Only `metrics.enabled` decides KC_METRICS_ENABLED. Wiring a
         # prometheus dependency changes the Service and the ServiceMonitor
         # but not the pod template, so it does not restart Keycloak.
@@ -532,6 +543,13 @@ in
             }
           else
             null;
+
+        mailEgress = kix.contracts.smtp.egressPolicy {
+          inherit scope;
+          smtp = relay;
+          name = "${name}-mail-egress";
+          selector = self.deployment.out.selector;
+        };
 
         root = {
           resource = self.service;

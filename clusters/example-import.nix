@@ -1,8 +1,7 @@
 # clusters/example-import.nix: example of immich with imported (external) valkey.
 #
-# Demonstrates mkImport: valkey is not managed by kix but exists in the cluster.
-# The import derives out (name, fqdn, port) from the real valkey package via
-# lazy evaluation, so immich's DI resolution gets correct connection details.
+# Demonstrates mkImport: valkey and postgres are not managed by kix but exist
+# in the cluster. Each import's `out` gives immich the connection details.
 #
 # Build:  nix build .#cluster-example-import
 
@@ -31,17 +30,20 @@ kix.buildCluster {
         };
         # endregion:importedStorageClass
 
-        # Valkey exists in the cluster but is managed externally.
-        # mkImport with `from` runs the valkey package build in import mode
-        # (lightweight mkResource) to derive out.name, out.fqdn, out.port.
-        # Only a marker PackageInstance CR is deployed. The import's out has
-        # no authSecret (housekeeping/2026-10-01-import-drops-root-out-extras.md),
-        # so immich sends no password, and the external Valkey must accept
-        # clients without one.
+        # Valkey exists in the cluster but is managed externally. The
+        # import's `out` sets the fields of the Redis contract
+        # (kix.contracts.redis) that immich reads. Only a marker
+        # PackageInstance CR is deployed. This server takes no password;
+        # for one that does, put the import in immich's namespace with
+        # `scope = "namespace"` and `credentials = ref.<ns>.<secret>`.
         cache = {
           valkey = {
-            package = kix.mkImport { from = packages.valkey; };
-
+            package = kix.mkImport {
+              out = {
+                host = "valkey.cache.svc.cluster.local";
+                port = "6379";
+              };
+            };
           };
         };
 
