@@ -238,10 +238,13 @@ fn create_evaluator(
     no_cache: bool,
     input_overrides: Vec<(String, String)>,
 ) -> miette::Result<kix::eval::KixEvaluator> {
+    // The cache key cannot see what an overridden input holds, so an override
+    // always evaluates from source.
+    let uncached = no_cache || !input_overrides.is_empty();
     let backend = kix::eval::LocalBuilder::with_overrides(input_overrides);
     let flake_path = resolve_flake_path(flake)?;
 
-    if no_cache {
+    if uncached {
         kix::eval::KixEvaluator::new_uncached(backend, &flake_path).into_diagnostic()
     } else {
         let cache_dir = kix::eval::store::default_cache_dir();

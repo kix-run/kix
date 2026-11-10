@@ -5,10 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::cache::SqliteCache;
+use super::cache::{FileCache, Lookup};
 use super::error::KixEvalError;
 
 /// Output from evaluating a cluster.
@@ -123,198 +124,112 @@ pub trait Builder: Send {
 /// Evaluator wrapping a [`Builder`].
 pub struct KixEvaluator {
     backend: Box<dyn Builder>,
-    cache: SqliteCache,
+    /// `None` evaluates every request from source.
+    cache: Option<FileCache>,
     /// The flake path to evaluate (resolved, no symlinks).
     flake_path: PathBuf,
 }
 
 impl KixEvaluator {
-    /// Create a new evaluator with the given backend and cache directory.
+    /// Create a new evaluator that caches results under `cache_dir`.
     pub fn new(
         backend: impl Builder + 'static,
         flake_path: &Path,
         cache_dir: &Path,
     ) -> Result<Self, KixEvalError> {
-        let db_path = cache_dir.join("eval-cache.db");
-        let cache = SqliteCache::open(&db_path)?;
         let flake_path = super::store::resolve_symlinks(flake_path);
         tracing::debug!(flake = %flake_path.display(), "evaluator created");
         Ok(Self {
             backend: Box::new(backend),
-            cache,
+            cache: Some(FileCache::open(cache_dir)),
             flake_path,
         })
     }
 
-    /// Create a new evaluator that never reads from cache.
-    ///
-    /// Uses an ephemeral in-memory SQLite database, so every evaluation
-    /// goes straight to Nix. Useful for debugging stale-cache issues.
+    /// Create a new evaluator that neither reads nor writes the cache, so
+    /// every evaluation goes straight to Nix.
     pub fn new_uncached(
         backend: impl Builder + 'static,
         flake_path: &Path,
     ) -> Result<Self, KixEvalError> {
-        let cache = SqliteCache::open_in_memory()?;
         let flake_path = super::store::resolve_symlinks(flake_path);
         tracing::debug!(flake = %flake_path.display(), "evaluator created (no cache)");
         Ok(Self {
             backend: Box::new(backend),
-            cache,
+            cache: None,
             flake_path,
         })
     }
 
-    /// Evaluate a cluster, returning cached results when source files are unchanged.
+    /// Return the cached value of `attr`, or run `eval` and cache its result.
     ///
-    /// Cache key includes a source fingerprint computed from all `.nix` files in the
-    /// flake directory tree. File additions, removals, or content changes invalidate
-    /// the cache automatically.
+    /// The cache key covers the flake's source files and `flake.lock`, so a
+    /// file added, removed, or changed invalidates the entry.
+    fn cached<T: Serialize + DeserializeOwned>(
+        &mut self,
+        attr: &str,
+        eval: impl FnOnce(&mut dyn Builder, &Path) -> Result<T, KixEvalError>,
+    ) -> Result<T, KixEvalError> {
+        let start = std::time::Instant::now();
+        let lookup = match &self.cache {
+            Some(cache) => cache.lookup(&self.flake_path, attr),
+            None => Lookup::none(),
+        };
+        if let Some(json) = &lookup.hit {
+            match serde_json::from_str::<T>(json) {
+                Ok(value) => {
+                    tracing::info!(attr, elapsed = ?start.elapsed(), "cache hit");
+                    return Ok(value);
+                }
+                Err(e) => {
+                    tracing::warn!(attr, error = %e, "discarding an unreadable eval cache entry and evaluating from source")
+                }
+            }
+        }
+
+        let value = eval(self.backend.as_mut(), &self.flake_path)?;
+
+        if let Some(cache) = &self.cache {
+            let stored = serde_json::to_string(&value)
+                .map_err(std::io::Error::other)
+                .and_then(|json| cache.store(&lookup, &json));
+            if let Err(e) = stored {
+                tracing::warn!(attr, error = %e, "could not write to the eval cache; continuing with the evaluated result");
+            }
+        }
+        tracing::info!(attr, elapsed = ?start.elapsed(), "evaluation complete");
+        Ok(value)
+    }
+
+    /// Evaluate a cluster, returning the cached result when the source is unchanged.
     pub fn eval_cluster(&mut self, cluster_name: &str) -> Result<ClusterOutput, KixEvalError> {
-        let start = std::time::Instant::now();
         tracing::debug!(cluster = cluster_name, "evaluating");
-
-        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
-        let cache_key = SqliteCache::compute_key_with_source(
-            &self.flake_path,
+        self.cached(
             &super::nix::activation_index_attr(cluster_name),
-            &fingerprint,
-        )?;
-
-        if let Some(cached_json) = self.cache.get(&cache_key)? {
-            if let Ok(output) = serde_json::from_str::<ClusterOutput>(&cached_json) {
-                tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "cache hit");
-                return Ok(output);
-            }
-            tracing::warn!(
-                cluster = cluster_name,
-                "corrupted cache entry, re-evaluating"
-            );
-        }
-
-        let output = self.backend.eval_cluster(&self.flake_path, cluster_name)?;
-
-        // Cache writes are non-fatal because evaluation already succeeded. A
-        // write failure, such as a full disk or insufficient permissions,
-        // just means the next invocation will re-evaluate instead of hitting cache.
-        if let Ok(json) = serde_json::to_string(&output)
-            && let Err(e) = self.cache.put(&cache_key, &json)
-        {
-            tracing::warn!(cluster = cluster_name, error = %e, "failed to cache result");
-        }
-
-        tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "evaluation complete");
-        Ok(output)
+            |b, flake| b.eval_cluster(flake, cluster_name),
+        )
     }
 
-    /// List available clusters, with source-fingerprint caching.
+    /// List available clusters.
     pub fn list_clusters(&mut self) -> Result<Vec<String>, KixEvalError> {
-        let start = std::time::Instant::now();
-
-        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
-        let cache_key = SqliteCache::compute_key_with_source(
-            &self.flake_path,
-            "__list_clusters",
-            &fingerprint,
-        )?;
-
-        if let Some(cached_json) = self.cache.get(&cache_key)? {
-            if let Ok(names) = serde_json::from_str::<Vec<String>>(&cached_json) {
-                tracing::info!(elapsed = ?start.elapsed(), "list_clusters cache hit");
-                return Ok(names);
-            }
-            tracing::warn!("corrupted list_clusters cache entry, re-evaluating");
-        }
-
-        let names = self.backend.list_clusters(&self.flake_path)?;
-
-        if let Ok(json) = serde_json::to_string(&names)
-            && let Err(e) = self.cache.put(&cache_key, &json)
-        {
-            tracing::warn!(error = %e, "failed to cache list_clusters result");
-        }
-
-        tracing::info!(elapsed = ?start.elapsed(), "list_clusters complete");
-        Ok(names)
+        self.cached("__list_clusters", |b, flake| b.list_clusters(flake))
     }
 
-    /// List all packages with version info, with source-fingerprint caching.
+    /// List all packages with version info.
     pub fn list_packages(
         &mut self,
     ) -> Result<std::collections::BTreeMap<String, PackageInfo>, KixEvalError> {
-        let start = std::time::Instant::now();
-
-        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
-        let cache_key = SqliteCache::compute_key_with_source(
-            &self.flake_path,
-            "__list_packages",
-            &fingerprint,
-        )?;
-
-        if let Some(cached_json) = self.cache.get(&cache_key)? {
-            if let Ok(packages) = serde_json::from_str::<
-                std::collections::BTreeMap<String, PackageInfo>,
-            >(&cached_json)
-            {
-                tracing::info!(elapsed = ?start.elapsed(), "list_packages cache hit");
-                return Ok(packages);
-            }
-            tracing::warn!("corrupted list_packages cache entry, re-evaluating");
-        }
-
-        let packages = self.backend.list_packages(&self.flake_path)?;
-
-        if let Ok(json) = serde_json::to_string(&packages)
-            && let Err(e) = self.cache.put(&cache_key, &json)
-        {
-            tracing::warn!(error = %e, "failed to cache list_packages result");
-        }
-
-        tracing::info!(elapsed = ?start.elapsed(), "list_packages complete");
-        Ok(packages)
+        self.cached("__list_packages", |b, flake| b.list_packages(flake))
     }
 
-    /// List instances and available packages for a cluster, with caching.
+    /// List instances and available packages for a cluster.
     pub fn list_cluster_packages(
         &mut self,
         cluster_name: &str,
     ) -> Result<ClusterPackageInfo, KixEvalError> {
-        let start = std::time::Instant::now();
-
-        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
-        let cache_key = SqliteCache::compute_key_with_source(
-            &self.flake_path,
-            &format!("__cluster_packages_{cluster_name}"),
-            &fingerprint,
-        )?;
-
-        if let Some(cached_json) = self.cache.get(&cache_key)? {
-            if let Ok(info) = serde_json::from_str::<ClusterPackageInfo>(&cached_json) {
-                tracing::info!(
-                    cluster = cluster_name,
-                    elapsed = ?start.elapsed(),
-                    "list_cluster_packages cache hit"
-                );
-                return Ok(info);
-            }
-            tracing::warn!("corrupted list_cluster_packages cache entry, re-evaluating");
-        }
-
-        let info = self
-            .backend
-            .list_cluster_packages(&self.flake_path, cluster_name)?;
-
-        if let Ok(json) = serde_json::to_string(&info)
-            && let Err(e) = self.cache.put(&cache_key, &json)
-        {
-            tracing::warn!(error = %e, "failed to cache list_cluster_packages result");
-        }
-
-        tracing::info!(
-            cluster = cluster_name,
-            elapsed = ?start.elapsed(),
-            "list_cluster_packages complete"
-        );
-        Ok(info)
+        self.cached(&format!("__cluster_packages_{cluster_name}"), |b, flake| {
+            b.list_cluster_packages(flake, cluster_name)
+        })
     }
 }
 

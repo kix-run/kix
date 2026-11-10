@@ -6,7 +6,7 @@
 //!   extracts manifests through `StoreGraph`.
 //!
 //! Nix's built-in evaluation cache keeps repeated invocations fast, and
-//! [`super::evaluator::KixEvaluator`] layers a SQLite cache on top.
+//! [`super::evaluator::KixEvaluator`] layers a file cache on top.
 
 use std::path::Path;
 use std::process::Command;

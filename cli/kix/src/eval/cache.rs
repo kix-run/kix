@@ -1,197 +1,268 @@
-//! SQLite-backed eval cache, keyed by BLAKE3 hash of flake path + lockfile + attribute.
+//! File-backed eval cache.
+//!
+//! Each evaluation has one slot file, named by a hash of the flake path, the
+//! evaluated attribute, the builder, and the store root. The file holds the
+//! full cache key next to the value, and a miss overwrites it. So the cache
+//! holds at most one result per project and attribute, and needs no pruning.
+//!
+//! The cache is an optimisation. Every error while reading or writing it is
+//! logged and the caller evaluates from source.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 
-use super::error::KixEvalError;
+/// Bump to discard every entry written in an older layout.
+const LAYOUT: &str = "v1";
 
-/// SQLite eval cache for memoizing Nix evaluation results.
-pub(crate) struct SqliteCache {
-    conn: Connection,
+/// The SQLite database earlier Kix releases kept in the cache directory.
+const LEGACY_DB: &str = "eval-cache.db";
+
+pub(crate) struct FileCache {
+    entries: PathBuf,
+    snapshots: PathBuf,
 }
 
-impl SqliteCache {
-    /// Open (or create) a cache database at the given path.
-    pub(crate) fn open(path: &Path) -> Result<Self, KixEvalError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+/// The result of [`FileCache::lookup`]: a cached value when there was one,
+/// and where to store a fresh value when there was not.
+pub(crate) struct Lookup {
+    pub(crate) hit: Option<String>,
+    /// `None` when no key could be computed, for example for a remote flake
+    /// reference. Nothing is stored then.
+    slot: Option<(PathBuf, String)>,
+}
+
+#[derive(Deserialize)]
+struct Entry<'a> {
+    key: String,
+    #[serde(borrow)]
+    value: &'a RawValue,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    /// Relative path to modification time in nanoseconds since the epoch.
+    files: BTreeMap<String, u64>,
+    hash: String,
+}
+
+impl FileCache {
+    /// Use `<cache_dir>/eval-cache` and delete a leftover SQLite database
+    /// from an earlier release.
+    pub(crate) fn open(cache_dir: &Path) -> Self {
+        remove_legacy_db(cache_dir);
+        let root = cache_dir.join("eval-cache").join(LAYOUT);
+        Self {
+            entries: root.join("entries"),
+            snapshots: root.join("snapshots"),
         }
-        let conn =
-            Connection::open(path).map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS eval_cache (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT (unixepoch())
-            );
-            CREATE TABLE IF NOT EXISTS source_snapshot (
-                flake_path TEXT PRIMARY KEY,
-                files_json TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-            );",
-        )
-        .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        Ok(Self { conn })
     }
 
-    /// Open an in-memory cache (for testing).
-    pub(crate) fn open_in_memory() -> Result<Self, KixEvalError> {
-        let conn = Connection::open_in_memory()
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS eval_cache (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT (unixepoch())
-            );
-            CREATE TABLE IF NOT EXISTS source_snapshot (
-                flake_path TEXT PRIMARY KEY,
-                files_json TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-            );",
-        )
-        .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        Ok(Self { conn })
-    }
-
-    /// Look up a cached evaluation result by key.
-    pub(crate) fn get(&self, key: &str) -> Result<Option<String>, KixEvalError> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT value FROM eval_cache WHERE key = ?1")
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        let result = stmt
-            .query_row([key], |row| row.get(0))
-            .optional()
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        Ok(result)
-    }
-
-    /// Store an evaluation result.
-    pub(crate) fn put(&self, key: &str, value: &str) -> Result<(), KixEvalError> {
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO eval_cache (key, value) VALUES (?1, ?2)",
-                [key, value],
-            )
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        Ok(())
-    }
-
-    /// Compute a source fingerprint that changes when any tracked input file is
-    /// added, removed, or modified.
-    ///
-    /// Uses a two-level strategy:
-    /// 1. **mtime fast path**: collect file paths and modification times; if
-    ///    they match the stored snapshot, return the stored content hash
-    ///    without reading file contents.
-    /// 2. **content hash**: read all tracked files, compute BLAKE3 over sorted
-    ///    `(path, content)` pairs, and store the new snapshot.
-    pub(crate) fn compute_source_fingerprint(
-        &self,
-        flake_path: &Path,
-    ) -> Result<String, KixEvalError> {
+    /// Look up the cached value of `attr` for the flake at `flake_path`.
+    pub(crate) fn lookup(&self, flake_path: &Path, attr: &str) -> Lookup {
         let canonical = super::store::resolve_symlinks(flake_path);
-        let canonical_str = canonical.to_string_lossy().to_string();
-        let files = walk_nix_files(&canonical)?;
-
-        let file_map: BTreeMap<&str, u64> = files.iter().map(|(p, m)| (p.as_str(), *m)).collect();
-        let current_json = serde_json::to_string(&file_map)
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-
-        let stored: Option<(String, String)> = {
-            let mut stmt = self
-                .conn
-                .prepare_cached(
-                    "SELECT files_json, content_hash FROM source_snapshot WHERE flake_path = ?1",
-                )
-                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-            stmt.query_row([&canonical_str], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .optional()
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?
+        if !canonical.is_dir() {
+            tracing::debug!(flake = %flake_path.display(), "not a local directory, eval cache skipped");
+            return Lookup {
+                hit: None,
+                slot: None,
+            };
+        }
+        let key = match self
+            .source_fingerprint(&canonical)
+            .and_then(|fp| cache_key(&canonical, attr, &fp))
+        {
+            Ok(key) => key,
+            Err(e) => {
+                tracing::warn!(flake = %canonical.display(), error = %e, "could not fingerprint the flake's files; skipping the eval cache and evaluating from source");
+                return Lookup {
+                    hit: None,
+                    slot: None,
+                };
+            }
         };
+        let path = self
+            .entries
+            .join(format!("{}.json", slot_name(&canonical, attr)));
+        let hit = read_entry(&path, &key);
+        Lookup {
+            hit,
+            slot: Some((path, key)),
+        }
+    }
 
-        if let Some((stored_json, stored_hash)) = stored
-            && stored_json == current_json
+    /// Store `value`, a JSON document, in the slot `lookup` named.
+    pub(crate) fn store(&self, lookup: &Lookup, value: &str) -> std::io::Result<()> {
+        let Some((path, key)) = &lookup.slot else {
+            return Ok(());
+        };
+        let mut body = Vec::with_capacity(value.len() + key.len() + 24);
+        write!(body, "{{\"key\":\"{key}\",\"value\":")?;
+        body.extend_from_slice(value.as_bytes());
+        body.push(b'}');
+        write_atomic(path, &body)
+    }
+
+    /// Return a hash that changes when any tracked input file is added,
+    /// removed, or modified.
+    ///
+    /// When the files and their modification times match the stored
+    /// snapshot, return the stored hash without reading any file. Otherwise
+    /// hash every `(path, content)` pair and store a new snapshot.
+    fn source_fingerprint(&self, canonical: &Path) -> std::io::Result<String> {
+        let files: BTreeMap<String, u64> = walk_nix_files(canonical)?.into_iter().collect();
+        let snapshot_path = self.snapshots.join(format!(
+            "{}.json",
+            blake3::hash(canonical.as_os_str().as_encoded_bytes()).to_hex()
+        ));
+
+        if let Ok(bytes) = std::fs::read(&snapshot_path)
+            && let Ok(stored) = serde_json::from_slice::<Snapshot>(&bytes)
+            && stored.files == files
         {
             tracing::debug!(flake = %canonical.display(), "source fingerprint: mtime fast path hit");
-            return Ok(stored_hash);
+            return Ok(stored.hash);
         }
 
         tracing::debug!(flake = %canonical.display(), file_count = files.len(), "source fingerprint: computing content hash");
         let mut hasher = blake3::Hasher::new();
-        for (rel_path, _) in &files {
-            let full_path = canonical.join(rel_path);
-            let content = std::fs::read(&full_path)
-                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+        for rel_path in files.keys() {
+            let content = std::fs::read(canonical.join(rel_path))?;
             hasher.update(rel_path.as_bytes());
             hasher.update(&content);
         }
-        let content_hash = hasher.finalize().to_hex().to_string();
+        let hash = hasher.finalize().to_hex().to_string();
 
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO source_snapshot (flake_path, files_json, content_hash) VALUES (?1, ?2, ?3)",
-                [&canonical_str, &current_json, &content_hash],
-            )
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-
-        Ok(content_hash)
+        let snapshot = Snapshot {
+            files,
+            hash: hash.clone(),
+        };
+        match serde_json::to_vec(&snapshot) {
+            Ok(body) => {
+                if let Err(e) = write_atomic(&snapshot_path, &body) {
+                    tracing::warn!(path = %snapshot_path.display(), error = %e, "could not save the source fingerprint; the next run will hash the flake's files again");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(path = %snapshot_path.display(), error = %e, "could not save the source fingerprint; the next run will hash the flake's files again")
+            }
+        }
+        Ok(hash)
     }
+}
 
-    /// Compute a cache key that includes the source fingerprint.
-    ///
-    /// Key = BLAKE3(canonical_path + flake.lock contents + source_fingerprint + attr).
-    pub(crate) fn compute_key_with_source(
-        flake_path: &Path,
-        attr: &str,
-        source_fingerprint: &str,
-    ) -> Result<String, KixEvalError> {
-        let canonical = super::store::resolve_symlinks(flake_path);
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(canonical.to_string_lossy().as_bytes());
-
-        let lockfile = canonical.join("flake.lock");
-        if lockfile.exists() {
-            let lock_contents = std::fs::read(&lockfile)
-                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-            hasher.update(&lock_contents);
+impl Lookup {
+    /// Return a lookup that never hits and never stores.
+    pub(crate) fn none() -> Self {
+        Self {
+            hit: None,
+            slot: None,
         }
+    }
+}
 
-        hasher.update(source_fingerprint.as_bytes());
-        hasher.update(attr.as_bytes());
-        // A result from one builder or store says nothing about what another
-        // holds.
-        hasher.update(b"\0builder:");
-        hasher.update(crate::runtime::builder().name().as_bytes());
-        match crate::runtime::nix_runner().root() {
-            Some(root) => {
-                hasher.update(b"\0store-root:");
-                hasher.update(root.as_os_str().as_encoded_bytes());
+/// Return the name of the slot file. It leaves out the source fingerprint
+/// and `flake.lock`, so a changed source overwrites the slot.
+fn slot_name(canonical: &Path, attr: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(canonical.as_os_str().as_encoded_bytes());
+    hasher.update(b"\0attr:");
+    hasher.update(attr.as_bytes());
+    hash_runtime(&mut hasher);
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Return the BLAKE3 hash of the flake path, `flake.lock`, the source
+/// fingerprint, the attribute, the builder, and the store root.
+fn cache_key(canonical: &Path, attr: &str, source_fingerprint: &str) -> std::io::Result<String> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(canonical.as_os_str().as_encoded_bytes());
+    match std::fs::read(canonical.join("flake.lock")) {
+        Ok(lock) => {
+            hasher.update(&lock);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    hasher.update(source_fingerprint.as_bytes());
+    hasher.update(attr.as_bytes());
+    hash_runtime(&mut hasher);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Add the builder and store root, because a result from one builder or
+/// store says nothing about what another holds.
+fn hash_runtime(hasher: &mut blake3::Hasher) {
+    hasher.update(b"\0builder:");
+    hasher.update(crate::runtime::builder().name().as_bytes());
+    match crate::runtime::nix_runner().root() {
+        Some(root) => {
+            hasher.update(b"\0store-root:");
+            hasher.update(root.as_os_str().as_encoded_bytes());
+        }
+        None => {
+            hasher.update(b"\0system-nix");
+        }
+    }
+}
+
+/// Return the value in the slot at `path` when its key is `key`.
+fn read_entry(path: &Path, key: &str) -> Option<String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "could not read the eval cache; evaluating from source");
+            return None;
+        }
+    };
+    match serde_json::from_slice::<Entry>(&bytes) {
+        Ok(entry) if entry.key == key => Some(entry.value.get().to_owned()),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "discarding an unreadable eval cache entry and evaluating from source");
+            None
+        }
+    }
+}
+
+/// Write `body` to `path` through a temporary file in the same directory, so
+/// a concurrent reader sees the old file or the new one and never a partial
+/// one.
+fn write_atomic(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(body)?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+fn remove_legacy_db(cache_dir: &Path) {
+    for suffix in ["", "-journal", "-wal", "-shm"] {
+        let path = cache_dir.join(format!("{LEGACY_DB}{suffix}"));
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                tracing::debug!(path = %path.display(), "removed the old eval cache database")
             }
-            None => {
-                hasher.update(b"\0system-nix");
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::debug!(path = %path.display(), error = %e, "could not remove the old eval cache database");
             }
         }
-        Ok(hasher.finalize().to_hex().to_string())
     }
 }
 
 /// Walk `flake_path` recursively and collect evaluation input files as
-/// `(relative_path, mtime_secs)`.
+/// `(relative_path, mtime_nanos)`.
 ///
 /// Includes `.nix`, `.yaml`, `.yml`, and `.json` files so that changes to files
 /// read via `builtins.readFile` invalidate the evaluation cache. Skips `.git`,
-/// `.direnv`, `result`, and `node_modules` directories, and sorts results by
-/// relative path for deterministic hashing.
-pub(crate) fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalError> {
+/// `.direnv`, `result`, and `node_modules` directories.
+pub(crate) fn walk_nix_files(flake_path: &Path) -> std::io::Result<Vec<(String, u64)>> {
     use std::time::UNIX_EPOCH;
 
     const SKIP_DIRS: &[&str] = &[".git", ".direnv", "result", "node_modules"];
@@ -199,14 +270,9 @@ pub(crate) fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, Ki
     let mut stack = vec![flake_path.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
-        let entries =
-            std::fs::read_dir(&dir).map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-
-        for entry in entries {
-            let entry = entry.map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-            let file_type = entry
-                .file_type()
-                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
             let path = entry.path();
 
             if file_type.is_dir() {
@@ -221,19 +287,16 @@ pub(crate) fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, Ki
             {
                 let rel = path
                     .strip_prefix(flake_path)
-                    .map_err(|e| KixEvalError::CacheError { source: e.into() })?
+                    .map_err(std::io::Error::other)?
                     .to_string_lossy()
                     .to_string();
-                let metadata = std::fs::metadata(&path)
-                    .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-                let mtime = metadata
-                    .modified()
-                    .map_err(|e| KixEvalError::CacheError { source: e.into() })?
+                let mtime = std::fs::metadata(&path)?
+                    .modified()?
                     .duration_since(UNIX_EPOCH)
                     // An mtime before the Unix epoch cannot match the fast path,
                     // forcing a content-hash recompute.
                     .unwrap_or_default()
-                    .as_secs();
+                    .as_nanos() as u64;
                 results.push((rel, mtime));
             }
         }
@@ -243,49 +306,80 @@ pub(crate) fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, Ki
     Ok(results)
 }
 
-/// Internal extension trait on `rusqlite::OptionalExtension`.
-trait OptionalExt<T> {
-    fn optional(self) -> Result<Option<T>, rusqlite::Error>;
-}
-
-impl<T> OptionalExt<T> for Result<T, rusqlite::Error> {
-    fn optional(self) -> Result<Option<T>, rusqlite::Error> {
-        match self {
-            Ok(v) => Ok(Some(v)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn cache_put_and_get() {
-        let cache = SqliteCache::open_in_memory().unwrap();
-        cache.put("key1", r#"{"hello":"world"}"#).unwrap();
-        let val = cache.get("key1").unwrap();
-        assert_eq!(val, Some(r#"{"hello":"world"}"#.to_string()));
+    fn flake() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("flake.nix"), "{ }").unwrap();
+        std::fs::write(dir.path().join("lib.nix"), "x: x").unwrap();
+        dir
     }
 
     #[test]
-    fn cache_get_missing_returns_none() {
-        let cache = SqliteCache::open_in_memory().unwrap();
-        let val = cache.get("nonexistent").unwrap();
-        assert_eq!(val, None);
+    fn store_then_lookup_hits() {
+        let (src, cache_dir) = (flake(), tempfile::tempdir().unwrap());
+        let cache = FileCache::open(cache_dir.path());
+        let miss = cache.lookup(src.path(), "a");
+        assert_eq!(miss.hit, None);
+        cache.store(&miss, r#"{"hello":"world"}"#).unwrap();
+        let hit = cache.lookup(src.path(), "a");
+        assert_eq!(hit.hit.as_deref(), Some(r#"{"hello":"world"}"#));
+        assert_eq!(cache.lookup(src.path(), "b").hit, None);
+    }
+
+    #[test]
+    fn source_change_misses_and_overwrites_the_slot() {
+        let (src, cache_dir) = (flake(), tempfile::tempdir().unwrap());
+        let cache = FileCache::open(cache_dir.path());
+        cache.store(&cache.lookup(src.path(), "a"), "1").unwrap();
+        std::fs::write(src.path().join("lib.nix"), "x: x + 1").unwrap();
+        let after = cache.lookup(src.path(), "a");
+        assert_eq!(after.hit, None);
+        cache.store(&after, "2").unwrap();
+        let entries = std::fs::read_dir(&cache.entries).unwrap().count();
+        assert_eq!(entries, 1);
+        assert_eq!(cache.lookup(src.path(), "a").hit.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn unreadable_entry_is_a_miss() {
+        let (src, cache_dir) = (flake(), tempfile::tempdir().unwrap());
+        let cache = FileCache::open(cache_dir.path());
+        let lookup = cache.lookup(src.path(), "a");
+        let (path, _) = lookup.slot.as_ref().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "not json").unwrap();
+        assert_eq!(cache.lookup(src.path(), "a").hit, None);
+    }
+
+    #[test]
+    fn remote_reference_skips_the_cache() {
+        let cache_dir = tempfile::tempdir().unwrap();
+        let cache = FileCache::open(cache_dir.path());
+        let lookup = cache.lookup(Path::new("github:org/repo"), "a");
+        assert_eq!(lookup.hit, None);
+        cache.store(&lookup, "1").unwrap();
+        assert!(!cache_dir.path().join("eval-cache").exists());
+    }
+
+    #[test]
+    fn open_removes_the_legacy_database() {
+        let cache_dir = tempfile::tempdir().unwrap();
+        std::fs::write(cache_dir.path().join("eval-cache.db"), "x").unwrap();
+        std::fs::write(cache_dir.path().join("eval-cache.db-wal"), "x").unwrap();
+        FileCache::open(cache_dir.path());
+        assert!(!cache_dir.path().join("eval-cache.db").exists());
+        assert!(!cache_dir.path().join("eval-cache.db-wal").exists());
     }
 
     #[test]
     fn fingerprint_stable_when_unchanged() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("default.nix"), "{ }").unwrap();
-        std::fs::write(dir.path().join("lib.nix"), "x: x").unwrap();
-
-        let cache = SqliteCache::open_in_memory().unwrap();
-        let fp1 = cache.compute_source_fingerprint(dir.path()).unwrap();
-        let fp2 = cache.compute_source_fingerprint(dir.path()).unwrap();
+        let (src, cache_dir) = (flake(), tempfile::tempdir().unwrap());
+        let cache = FileCache::open(cache_dir.path());
+        let fp1 = cache.source_fingerprint(src.path()).unwrap();
+        let fp2 = cache.source_fingerprint(src.path()).unwrap();
         assert_eq!(fp1, fp2);
     }
 }

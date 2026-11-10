@@ -27,7 +27,7 @@ for plugins.
 | `--context <CONTEXT>` | `KIX_CONTEXT` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
 | `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed as a remote flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
 | `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and re-evaluate the cluster every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
-| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL during evaluation. Repeatable, two values each time. |
+| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL during evaluation. Repeatable, two values each time. Kix skips the [eval cache](/docs/reference/cli/eval-cache-behavior/) when this is set. |
 | `-h`, `--help` | | | Print help. `-h` prints a summary, `--help` the long form. |
 | `-V`, `--version` | | | Print the version. |
 
