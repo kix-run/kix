@@ -6,7 +6,7 @@
 # `<instance>-custom-domains`.
 #
 # Dependencies:
-#   caddyfile (optional)  a secret with the key `Caddyfile`. A
+#   caddyfile             a secret with the key `Caddyfile`. A
 #                         `packages.secret` instance or a `packages.secret-ref`
 #                         instance. Every key is a file in /etc/caddy, so
 #                         snippets the Caddyfile imports can sit beside it.
@@ -29,10 +29,6 @@
 # The Caddyfile must answer `/healthz` on port 8080, which both probes call.
 # Port 2019 serves metrics when the Caddyfile moves the admin endpoint off
 # localhost (`admin :2019`).
-#
-# Without a `caddyfile` dependency, the package reads the keys `Caddyfile`
-# and `crs-setup.conf` from the Secret `configSecretName`, or
-# `<instance>-config` when that is unset, and warns. 0.10 removes that route.
 #
 # A Kix-built `caddyfile` secret restarts the pods when it changes. A
 # `secret-ref` secret has no content hash, so Caddy reads a changed
@@ -98,24 +94,17 @@ in
   };
 
   assertions =
-    { config, deps, ... }:
+    { config, ... }:
     [
       {
-        assertion = !(deps ? caddyfile && config.configSecretName != null);
-        message = "configSecretName and the caddyfile dependency both name the Caddyfile. Remove configSecretName.";
+        assertion = config.replicaCount == null;
+        message = "[K6965] caddy: replicaCount was removed. Set config.replicas instead.";
+      }
+      {
+        assertion = config.configSecretName == null;
+        message = "[K2263] caddy: configSecretName was removed. Give the Caddyfile through the caddyfile dependency, a secret with the key Caddyfile, such as a packages.secret instance with aliases = [ \"caddyfile\" ].";
       }
     ];
-
-  warnings =
-    { config, deps, ... }:
-    lib.optional (config.replicaCount != null)
-      "replicaCount is deprecated and 0.10 removes it; Kix uses it as config.replicas. Set config.replicas instead."
-    ++
-      lib.optional (config.configSecretName != null)
-        "configSecretName is deprecated and 0.10 removes it; Kix reads the Caddyfile from the Secret ${config.configSecretName}. Give the Caddyfile through a caddyfile dependency instead."
-    ++
-      lib.optional (!(deps ? caddyfile) && config.configSecretName == null)
-        "no caddyfile dependency is set; the Caddyfile comes from the Secret ${name}-config, a default that 0.10 removes. Give the Caddyfile through a caddyfile dependency instead.";
 
   options = {
     image = kix.options.image {
@@ -135,7 +124,7 @@ in
       type = lib.types.nullOr lib.types.int;
       default = null;
       visible = false;
-      description = "Deprecated. Use `replicas`. 0.10 removes it.";
+      description = "Removed. Setting it fails the build with a message that names `replicas`.";
     };
     resources = kix.options.resources {
       requests = {
@@ -216,7 +205,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       visible = false;
-      description = "Deprecated. Give the Caddyfile through a `caddyfile` dependency. 0.10 removes it.";
+      description = "Removed. Setting it fails the build with a message that names the `caddyfile` dependency.";
     };
   };
 
@@ -225,56 +214,22 @@ in
       self,
       config,
       clusterConfig,
-      caddyfile ? null,
+      caddyfile,
       storage ? null,
     }:
     let
-      caddyfileSecret =
-        if caddyfile != null then
-          kix.checkSecretKeys {
-            inherit who;
-            arg = "caddyfile";
-            dep = caddyfile;
-            keys = [ "Caddyfile" ];
-          }
-        else
-          null;
+      caddyfileSecret = kix.checkSecretKeys {
+        inherit who;
+        arg = "caddyfile";
+        dep = caddyfile;
+        keys = [ "Caddyfile" ];
+      };
 
       # A Kix-built Secret has an identity hash. A changed Caddyfile then
       # rolls the pods, since Caddy reads it only at start.
-      configAnnotations =
-        lib.optionalAttrs (caddyfileSecret != null && caddyfileSecret.out ? identityHash)
-          {
-            "checksum/caddyfile" = caddyfileSecret.out.identityHash;
-          };
-
-      configMounts =
-        if caddyfileSecret != null then
-          [
-            {
-              name = "caddy-config";
-              mountPath = "/etc/caddy";
-              readOnly = true;
-            }
-          ]
-        else
-          [
-            {
-              name = "caddy-config";
-              mountPath = "/etc/caddy/Caddyfile";
-              readOnly = true;
-              subPath = "Caddyfile";
-            }
-            {
-              name = "caddy-config";
-              mountPath = "/etc/caddy/crs-setup.conf";
-              readOnly = true;
-              subPath = "crs-setup.conf";
-            }
-          ];
-
-      configSecretName =
-        if caddyfileSecret != null then caddyfileSecret.out.name else self.configSecret.out.name;
+      configAnnotations = lib.optionalAttrs (caddyfileSecret.out ? identityHash) {
+        "checksum/caddyfile" = caddyfileSecret.out.identityHash;
+      };
 
       dataVolume =
         if storage != null then
@@ -292,26 +247,11 @@ in
         name = name;
       };
 
-      # A Secret managed outside Kix, wrapped in a SecretRef so volume
-      # mounts carry DI context and the deploy engine waits for it to exist.
-      configSecret =
-        if caddyfileSecret == null then
-          scope.mkSecretRef {
-            name = if config.configSecretName != null then config.configSecretName else "${name}-config";
-            # Both are mounted by subPath below.
-            keys = [
-              "Caddyfile"
-              "crs-setup.conf"
-            ];
-          }
-        else
-          null;
-
       deployment =
         {
           inherit name;
           spec = {
-            replicas = if config.replicaCount != null then config.replicaCount else config.replicas;
+            replicas = config.replicas;
             revisionHistoryLimit = 10;
             selector.matchLabels = scope.selectorLabels;
             strategy = {
@@ -390,7 +330,12 @@ in
                     privileged = false;
                     readOnlyRootFilesystem = true;
                   };
-                  volumeMounts = configMounts ++ [
+                  volumeMounts = [
+                    {
+                      name = "caddy-config";
+                      mountPath = "/etc/caddy";
+                      readOnly = true;
+                    }
                     # The official image sets XDG_DATA_HOME=/data (certificates,
                     # OCSP staples, locks) and XDG_CONFIG_HOME=/config (autosaved
                     # config).
@@ -416,7 +361,7 @@ in
                 {
                   name = "caddy-config";
                   secret = {
-                    secretName = configSecretName;
+                    secretName = caddyfileSecret.out.name;
                     defaultMode = 420;
                   };
                 }

@@ -1,10 +1,12 @@
-# Tests for kix/packages/experimental/caddy: the default image is the official one, the
-# deprecated `replicaCount` and `configSecretName` still work and warn, the
-# Caddyfile comes from a `caddyfile` dependency, and a `storage` dependency
-# backs /data. Caddy runs in namespace `edge`.
+# Tests for kix/packages/experimental/caddy: the default image is the
+# official one, the removed `replicaCount` and `configSecretName` fail the
+# build, the Caddyfile comes from the required `caddyfile` dependency, and a
+# `storage` dependency backs /data. Caddy runs in namespace `edge`.
 
 {
   lib,
+  eval,
+  kixlib,
   mkCluster,
   manifests,
   ofKind,
@@ -69,7 +71,37 @@ let
     cluster: name: builtins.head (builtins.filter (v: v.name == name) (podOf cluster).volumes);
   mountsOf = cluster: map (m: m.mountPath) (containerOf cluster).volumeMounts;
   warningsOf = cluster: cluster.instances.edge.caddy._diagnostics.warnings;
-  warns = cluster: text: builtins.any (lib.hasInfix text) (warningsOf cluster);
+
+  # The package's failed assertion messages for `config`. A failed
+  # assertion stops the cluster, and tryEval drops its message, so the
+  # assertions are evaluated against the package directly.
+  failedOf =
+    config:
+    let
+      attrs = caddyPackage {
+        scope = {
+          instanceName = "caddy";
+          namespaceName = "edge";
+        };
+        inherit lib;
+        kix = kixlib;
+        availability = "none";
+      };
+      evaluated = eval.evaluateInstanceConfig {
+        packageOptions = attrs.options;
+        instCfg.config.imports = [ config ];
+        namespaceName = "edge";
+        instanceName = "caddy";
+      };
+    in
+    map (a: a.message) (
+      builtins.filter (a: !a.assertion) (
+        attrs.assertions {
+          config = evaluated;
+          deps = { };
+        }
+      )
+    );
 in
 {
   caddy-default-image =
@@ -81,48 +113,47 @@ in
     in
     lib.hasPrefix "docker.io/library/caddy:2.10.0@sha256:" image || throw "caddy image: ${image}";
 
-  # The old name sets the Deployment's replicas and warns with the new name.
-  caddy-replica-count-deprecated =
+  # `replicas` sets the Deployment's replicas. The removed `replicaCount`
+  # fails the build with a message that names `replicas`.
+  caddy-replica-count-refused =
     let
-      old = clusterWith {
-        config.replicaCount = 3;
-        extra = caddyfileSecret;
-      };
-      new = clusterWith {
-        config.replicas = 4;
-        extra = caddyfileSecret;
-      };
+      old = failedOf { replicaCount = 3; };
     in
     (
-      (deploymentOf old).spec.replicas == 3
-      && warns old "Set config.replicas instead"
-      && (deploymentOf new).spec.replicas == 4
-      && !(warns new "replicaCount")
+      (deploymentOf (clusterWith {
+        config.replicas = 4;
+        extra = caddyfileSecret;
+      })).spec.replicas == 4
+      && failedOf { replicas = 4; } == [ ]
+      && old == [ "[K6965] caddy: replicaCount was removed. Set config.replicas instead." ]
+      && evalFails (clusterWith {
+        config.replicaCount = 3;
+        extra = caddyfileSecret;
+      })
       && evalFails (clusterWith {
         config.replicas = 0;
         extra = caddyfileSecret;
       })
     )
-    || throw "caddy replicaCount: ${builtins.toJSON (warningsOf old)}";
+    || throw "caddy replicaCount: ${builtins.toJSON old}";
 
-  # The old route mounts both keys by subPath from the named Secret.
-  caddy-config-secret-name-deprecated =
+  # The removed `configSecretName` fails the build with a message that names
+  # the `caddyfile` dependency, and a cluster without that dependency fails.
+  caddy-config-secret-name-refused =
     let
-      named = clusterWith { config.configSecretName = "my-caddy"; };
-      unnamed = clusterWith { };
+      named = failedOf { configSecretName = "my-caddy"; };
     in
     (
-      (volumeOf named "caddy-config").secret.secretName == "my-caddy"
-      && builtins.elem "/etc/caddy/crs-setup.conf" (mountsOf named)
-      && warns named "configSecretName is deprecated"
-      && (volumeOf unnamed "caddy-config").secret.secretName == "caddy-config"
-      && warns unnamed "a default that 0.10 removes"
+      builtins.length named == 1
+      && lib.hasPrefix "[K2263] " (builtins.head named)
+      && lib.hasInfix "caddyfile dependency" (builtins.head named)
       && evalFails (clusterWith {
         config.configSecretName = "my-caddy";
         extra = caddyfileSecret;
       })
+      && evalFails (clusterWith { })
     )
-    || throw "caddy configSecretName: ${builtins.toJSON (warningsOf named)}";
+    || throw "caddy configSecretName: ${builtins.toJSON named}";
 
   # The dependency's Secret is mounted as /etc/caddy, a change rolls the
   # pods, and nothing warns.
