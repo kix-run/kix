@@ -263,24 +263,36 @@ pub fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LegacyDomainError {
     #[error(
-        "this cluster's Kix records use the retired {group} API group.\n\
-         Run once:  kix migrate domain <cluster>\n\
-         Then retry. `kix migrate domain --help` says what it does."
+        "this Kubernetes cluster's deployment records use the retired `{group}` API group\n  \
+         Nothing was changed on the cluster.\n\n  \
+         Why:\n    \
+         This cluster was deployed with an older version of Kix, which stored deployment records under `{group}`. Kix now stores deployment records under `{}`.\n\n  \
+         Next:\n    \
+         Run the one-time domain migration (replace `<cluster>` with your Kix cluster name; run `kix list clusters` if you need to check the name), then run your command again:\n      \
+         kix migrate domain <cluster>",
+        keys::GROUP
     )]
     NotMigrated { group: String },
 
     #[error(
-        "this cluster has Kix records under both {legacy} and {current}. A \
-         migration was interrupted.\n\
-         Run again:  kix migrate domain <cluster>\n\
-         It skips what it already copied."
+        "domain migration from `{legacy}` to `{current}` on this Kubernetes cluster is unfinished\n  \
+         Nothing was changed on the cluster.\n\n  \
+         Why:\n    \
+         This cluster has deployment records under both `{legacy}` and `{current}` because an earlier `kix migrate domain` run stopped before finishing.\n\n  \
+         Next:\n    \
+         Run the domain migration again to finish it (replace `<cluster>` with your Kix cluster name; records already copied to `{current}` are skipped), then run your command again:\n      \
+         kix migrate domain <cluster>"
     )]
     BothGroups { legacy: String, current: String },
 
     #[error(
-        "this build renders Kix's own records under the retired {group} API \
-         group, which would put the old CRDs back on the cluster.\n\
-         Update the project's Kix library to a revision at or after the {current} move."
+        "this project's Kix library writes deployment records under the retired `{group}` API group\n  \
+         Nothing was applied to the cluster.\n\n  \
+         Why:\n    \
+         Kix now stores deployment records under `{current}`, and deploying this build would put the retired `{group}` resource types back on the cluster.\n\n  \
+         Next:\n    \
+         Update the Kix library in `flake.lock` to match this version of Kix, commit `flake.lock`, and run the command again:\n      \
+         kix lib update"
     )]
     StalePin { group: String, current: String },
 }

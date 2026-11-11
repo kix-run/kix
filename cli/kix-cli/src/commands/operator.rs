@@ -44,8 +44,13 @@ async fn open_records(client: &Client) -> Result<Records> {
     let records = Records::open_installed(client, &discovery).map_err(|e| miette!("{e}"))?;
     records.reachable().await.map_err(|e| {
         miette!(
-            "could not access Kix Activation records on this cluster: {e}\n\
-             Check the Kubernetes context, access permissions, and that the Kix operator and CRDs are installed."
+            "could not read deployment records on this Kubernetes cluster\n  \
+             Nothing was changed on the cluster.\n\n  \
+             Kubernetes API error:\n    \
+             {e}\n\n  \
+             Next:\n    \
+             Check which cluster your kubeconfig points at (`kubectl config current-context` or pass `--context <name>`), verify that your Kubernetes account has permission to read `activations.{}`, and make sure the cluster has been deployed at least once with `kix deploy <cluster>`.",
+            kix::manifest::keys::GROUP
         )
     })?;
     Ok(records)

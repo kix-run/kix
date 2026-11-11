@@ -143,8 +143,15 @@ fn fail(text: &str) {
 }
 
 /// Print a line under the one before it, such as the fix for a problem.
+/// Print `text` under a check line, indenting each of its lines.
 fn detail(text: &str) {
-    println!("  {text}");
+    for line in text.lines() {
+        if line.is_empty() {
+            println!();
+        } else {
+            println!("  {line}");
+        }
+    }
 }
 
 /// Check the Kix runtime: that Kix finds it, that it holds the program
@@ -153,7 +160,7 @@ fn check_runtime() -> usize {
     let rt = match runtime::runtime() {
         Ok(rt) => rt,
         Err(e) => {
-            fail("Kix runtime not found");
+            fail("Kix runtime: not usable");
             detail(&e.to_string());
             return 1;
         }
@@ -169,14 +176,16 @@ fn check_runtime() -> usize {
         Ok(manifest) => manifest,
         Err(_) if !rt.dir.join("manifest.json").exists() => {
             warn(&format!(
-                "Kix runtime{from} can't be checked: it has no manifest.json"
+                "Kix runtime{from}: cannot verify program versions because {}/manifest.json is absent",
+                rt.dir.display()
             ));
+            detail(
+                "Kix allows a custom runtime in `KIX_RUNTIME_DIR`, so `kix doctor` continues. To use the standard Kix runtime instead, unset `KIX_RUNTIME_DIR`.",
+            );
             return 0;
         }
         Err(e) => {
-            fail(&format!(
-                "Kix runtime{from} doesn't match this version of Kix"
-            ));
+            fail(&format!("Kix runtime{from}: cannot read manifest.json"));
             detail(&e.to_string());
             return 1;
         }

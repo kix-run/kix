@@ -489,7 +489,10 @@ fn only_an_import_marker_may_be_listed_by_two_packages() {
     };
     read_both(&shared(&marker("secret-ref-x"))).unwrap();
     let message = build_error(&shared(&configmap("x")));
-    assert!(message.contains("only an import marker"), "{message}");
+    assert!(
+        message.contains("only valid for an external resource reference"),
+        "{message}"
+    );
 }
 
 /// A package that lists one path twice holds it once.
@@ -932,7 +935,10 @@ fn a_second_activation_is_refused() {
     second["kind"] = json!(lifecycle::RECORD_KIND);
     add_manifest(&mut contents, "k8s-Activation-x", &second);
     let message = build_error(&contents);
-    assert!(message.contains("one Activation record"), "{message}");
+    assert!(
+        message.contains("must hold 1 deployment record"),
+        "{message}"
+    );
 }
 
 #[test]

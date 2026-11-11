@@ -99,10 +99,18 @@ impl Tenancy {
         let mut known: Vec<&str> = self.others.values().map(String::as_str).collect();
         known.sort();
         known.dedup();
+        let cluster = &self.cluster;
+        let known = known.join(", ");
         Err(format!(
-            "no Activation records of Kix cluster '{}' on this cluster. Kix clusters with records here: {}",
-            self.cluster,
-            known.join(", ")
+            "no deployment records for '{cluster}' on this Kubernetes cluster\n  \
+             Nothing was changed on the cluster.\n\n  \
+             Kix clusters with deployment records on this cluster: {known}\n\n  \
+             Why:\n    \
+             This Kubernetes cluster holds deployment records for {known}, and none for '{cluster}'. Either '{cluster}' is a typo, your kubeconfig points at the cluster for {known}, or '{cluster}' has never been deployed here.\n\n  \
+             Next (choose one):\n    \
+             - If you meant a cluster already on this Kubernetes cluster, run the command with that name ({known}).\n    \
+             - If '{cluster}' is on another Kubernetes cluster, pass `--context <name>` for that cluster and run the command again.\n    \
+             - If '{cluster}' belongs on this Kubernetes cluster and has not been deployed yet, run `kix deploy {cluster}`."
         ))
     }
 
@@ -231,7 +239,8 @@ mod tests {
             .require_records()
             .unwrap_err();
         assert!(
-            err.contains("'typo'") && err.ends_with("records here: b"),
+            err.contains("'typo'")
+                && err.contains("Kix clusters with deployment records on this cluster: b\n"),
             "{err}"
         );
         assert!(

@@ -323,6 +323,7 @@ in
         spec.configurations.backups == [
           {
             compression = "zstd";
+            reconciliationTimeout = 3600;
             sgObjectStorage = "backups";
           }
         ]

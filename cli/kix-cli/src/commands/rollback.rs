@@ -222,11 +222,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         .active(cluster)
         .await
         .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| {
-            miette!(
-                "cannot roll back '{cluster}': no current deployment record found on the cluster. Nothing was applied to the cluster. Next: run `kix deploy {cluster}` to deploy the cluster first."
-            )
-        })?;
+        .ok_or_else(|| super::no_active_record(cluster))?;
 
     print_current(&current);
 
@@ -461,11 +457,7 @@ async fn run_operator_async(
         .active(cluster)
         .await
         .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| {
-            miette!(
-                "cannot roll back '{cluster}': no current deployment record found on the cluster. Nothing was applied to the cluster. Next: run `kix deploy {cluster}` to deploy the cluster first."
-            )
-        })?;
+        .ok_or_else(|| super::no_active_record(cluster))?;
 
     print_current(&current);
 

@@ -262,9 +262,15 @@ impl Build {
         let found = store_hash(&graph.activation_path);
         if found != identity_hash {
             return Err(format!(
-                "the build source gave activation {} for activation {}",
+                "internal error in Kix: bundle returned a build with the wrong hash\n  \
+                 This is a bug in Kix (in `kix bundle`). No project files or cluster resources were changed.\n\n  \
+                 Detail:\n    \
+                 requested build hash {} from bundle, got build hash {}\n\n  \
+                 Next:\n    \
+                 {}",
+                printable(identity_hash),
                 printable(&found),
-                printable(identity_hash)
+                crate::eval::error::REPORT_A_BUG
             ));
         }
         graph
@@ -342,7 +348,12 @@ fn carried_sops<'a>(
     for (path, bytes) in &files {
         if store_path::method_of::<&str>(path, bytes, &[]).is_none() {
             return Err(format!(
-                "the SOPS file the build carries at {} is not made from its bytes",
+                "bundled SOPS file {} does not match the checksum recorded when the bundle was built\n  \
+                 Nothing was applied to the cluster.\n\n  \
+                 Why:\n    \
+                 The bundle file was modified or damaged after `kix bundle` created it.\n\n  \
+                 Next:\n    \
+                 Create a fresh bundle from your project with `kix bundle <cluster>` and run `kix deploy` with the new bundle.",
                 printable(path)
             ));
         }

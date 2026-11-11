@@ -29,8 +29,8 @@ pub(crate) enum SecretError {
     SourceNotFound { path: String },
 
     #[error(
-        "content hash mismatch for secret '{name}': expected {expected}. \
-         Check that you are using the intended SOPS file. If the change is intentional, update the secret's hash in its Nix definition and rebuild."
+        "decrypted content of secret '{name}' does not match the `hash` in its `mkSecret` declaration (expected {expected}). {}",
+        hash_mismatch_next(name)
     )]
     HashMismatch {
         name: String,
@@ -48,8 +48,23 @@ pub(crate) enum SecretError {
 
     /// A SOPS file the build carries is encrypted to something other than
     /// age recipients alone.
-    #[error("SOPS file {path} must be encrypted to age recipients only: {message}")]
+    #[error(
+        "cannot use bundled SOPS file {path}\n  \
+         Nothing was applied to the cluster.\n\n  \
+         Why:\n    \
+         {message}\n\n  \
+         Next:\n    \
+         Fix the SOPS file in your project, create a new bundle with `kix bundle <cluster>`, and run `kix deploy` again."
+    )]
     NotAgeOnly { path: String, message: String },
+}
+
+/// What to do about a secret whose decrypted data does not match its `hash`.
+/// Kix never prints the hash it computed, because it is a digest of secret data.
+pub(crate) fn hash_mismatch_next(name: &str) -> String {
+    format!(
+        "Check that the right SOPS file is in place. If you edited the SOPS file intentionally, update `hash` in the `mkSecret` declaration for '{name}' and run the command again (Kix does not print the new hash because it is computed over decrypted secret data)."
+    )
 }
 
 /// Result of hydrating a single secret.
@@ -234,7 +249,11 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
     };
     #[cfg(test)]
     AGE_CHECKS.with(|n| n.set(n.get() + 1));
-    let text = std::fs::read_to_string(path).map_err(|e| refuse(&e.to_string()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        refuse(&format!(
+            "Kix could not read the file from the bundle: {e}."
+        ))
+    })?;
     let input_type = match serde_json::from_str::<IgnoredAny>(&text) {
         Ok(_) => "json",
         Err(_) => "yaml",
@@ -264,7 +283,7 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         return Err(refuse(
             problem
                 .get()
-                .unwrap_or("only YAML or JSON SOPS files can come with a build"),
+                .unwrap_or("Bundles only support YAML or JSON SOPS files. Re-encrypt this secret as a YAML or JSON SOPS file."),
         ));
     }
     let doc: Value = match input_type {
@@ -272,7 +291,7 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         _ => serde_saphyr::from_str_with_options(&text, sops_read_options())
             .map_err(|e| e.to_string()),
     }
-    .map_err(|_| refuse("only YAML or JSON SOPS files can come with a build"))?;
+    .map_err(|_| refuse("Bundles only support YAML or JSON SOPS files. Re-encrypt this secret as a YAML or JSON SOPS file."))?;
     // Go's `encoding/json` matches `"sops"` case-insensitively.
     if let Some(key) = doc
         .as_object()
@@ -282,13 +301,13 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         .find(|k| *k != "sops" && folds_to_sops(k))
     {
         return Err(refuse(&format!(
-            "sops would read its key {key} as metadata"
+            "It contains a top-level key named `{key}`, which `sops` reserves for its own metadata and would not decrypt as secret data."
         )));
     }
     let sops = doc
         .get("sops")
         .and_then(Value::as_object)
-        .ok_or_else(|| refuse("it has no sops metadata"))?;
+        .ok_or_else(|| refuse("It has no `sops` metadata block, so it is not encrypted with `sops` (encrypt it with `sops` before bundling)."))?;
     for (field, value) in sops {
         let empty = match value {
             Value::Null => true,
@@ -297,12 +316,18 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
             _ => false,
         };
         if field != "age" && !NOT_KEYS.contains(&field.as_str()) && !empty {
-            return Err(refuse(&format!("it also names {field}")));
+            return Err(refuse(&format!(
+                "Its `sops` metadata uses `{field}`, and bundled SOPS files must be encrypted to `age` recipients only."
+            )));
         }
     }
     match sops.get("age") {
         Some(Value::Array(a)) if !a.is_empty() => {}
-        _ => return Err(refuse("it names no age recipient")),
+        _ => {
+            return Err(refuse(
+                "Its `sops` metadata lists no `age` recipients, and bundled SOPS files must be encrypted to at least one `age` recipient.",
+            ));
+        }
     }
     let keys = doc
         .as_object()
@@ -359,7 +384,7 @@ impl UniqueKeys<'_> {
                 Ok(())
             }
             None => self.refuse(
-                "its keys and values, each YAML alias counted as its anchor's, take more than 8 MiB",
+                "Its keys and values (counting each YAML alias at the full size of its target) exceed the 8 MiB limit for a bundled SOPS file.",
             ),
         }
     }
@@ -429,7 +454,7 @@ impl<'de> serde::de::Visitor<'de> for UniqueKeys<'_> {
         while let Some(key) = map.next_key::<String>()? {
             self.count(key.len())?;
             if !seen.insert(key) {
-                return self.refuse("an object in it repeats a key");
+                return self.refuse("A mapping in this file defines the same key more than once, which could cause Kix and `sops` to read different values.");
             }
             map.next_value_seed(self)?;
         }

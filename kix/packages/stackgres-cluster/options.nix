@@ -185,6 +185,18 @@
               default = null;
               description = "Backup compression. Null takes StackGres's default.";
             };
+            reconciliationTimeout = lib.mkOption {
+              type = lib.types.nullOr lib.types.ints.positive;
+              default = 3600;
+              description = ''
+                Seconds StackGres allows, after each backup, for deleting the
+                base backups and WAL that retention no longer keeps. StackGres's
+                own default is 300. A database that archives tens of thousands
+                of WAL segments a day cannot delete them in that time: the
+                delete is cut off, the backup still succeeds, and the bucket
+                grows without limit. Null takes StackGres's default.
+              '';
+            };
           };
         }
       )

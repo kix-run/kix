@@ -438,7 +438,14 @@ fn kix_literal(text: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProjectMismatch {
     #[error(
-        "{origin} sets builder = \"nix\", which this project's flake does not support. If flake.nix calls kixpkgs.lib.mkFlake, run `kix lib update` to update the Kix library in flake.lock. If flake.nix builds Kix outputs directly (for example with kixpkgs.lib.forPkgs), switch to kixpkgs.lib.mkFlake as shown in \"Use mkFlake in a consuming repo\" in the docs"
+        "{origin} sets `builder = \"nix\"`, which this project's flake did not configure\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Why:\n    \
+         Either the Kix library pinned in `flake.lock` is older than the `builder` setting, or `flake.nix` builds Kix outputs directly instead of calling `kix.lib.mkFlake`.\n\n  \
+         Next (choose one):\n    \
+         - If `flake.nix` already calls `kix.lib.mkFlake`, update the Kix library in `flake.lock` and run the command again:\n        \
+         kix lib update\n    \
+         - If `flake.nix` builds Kix outputs another way (for example with `kix.lib.forPkgs`), switch to `kix.lib.mkFlake` as shown in the `builder` section at https://kix.run/docs/reference/kix-toml/."
     )]
     NoBuilderSetting { origin: BuilderSource },
 
@@ -446,7 +453,15 @@ pub enum ProjectMismatch {
     NotVisible { origin: BuilderSource },
 
     #[error(
-        "the project's builder is `{cli}` ({origin}), but the flake evaluated with builder = \"{library}\". Check that Git tracks kix.toml, and that flake.nix passes its `self` input to kixpkgs.lib.mkFlake"
+        "builder mismatch: Kix selected the `{cli}` builder ({origin}), while the Kix library evaluated with the `{library}` builder\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Builder selected by Kix:         {cli} ({origin})\n  \
+         Builder read by the Kix library: {library}\n\n  \
+         Why:\n    \
+         Kix reads `kix.toml` from the current local directory before starting, while the Kix library reads `kix.toml` from `inputs.self` in `kix.lib.mkFlake`.\n\n  \
+         Next (choose one):\n    \
+         - If you passed `--flake` with a remote flake whose `kix.toml` sets `builder = \"{library}\"`, clone that repository locally and run `kix` inside it.\n    \
+         - Otherwise, check that `flake.nix` passes `inputs` to `kix.lib.mkFlake` (`kix.lib.mkFlake {{ inherit inputs; ... }}`)."
     )]
     Disagree {
         origin: BuilderSource,
@@ -645,7 +660,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("this project's flake does not support"),
+            err.contains("which this project's flake did not configure"),
             "{err}"
         );
         assert!(err.contains("kix lib update"), "{err}");
@@ -664,9 +679,9 @@ mod tests {
         let err = check_agreement(BuilderKind::Kix, &BuilderSource::Default, Some("nix"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("the project's builder is `kix`"), "{err}");
+        assert!(err.contains("Kix selected the `kix` builder"), "{err}");
         assert!(
-            err.contains("the flake evaluated with builder = \"nix\""),
+            err.contains("the Kix library evaluated with the `nix` builder"),
             "{err}"
         );
 

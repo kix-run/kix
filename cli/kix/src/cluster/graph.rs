@@ -19,7 +19,13 @@ pub enum GraphError {
     CycleDetected(String),
 
     #[error(
-        "{from} depends on a resource with identity hash {hash}, but that resource is missing from the manifest set. Include the dependency or remove the reference"
+        "internal error in Kix: a resource dependency is missing from the build\n  \
+         This is a bug in Kix or the Kix library. Nothing was applied to the cluster.\n\n  \
+         Detail:\n    \
+         {from} depends on resource hash {hash}, which is not in the build's manifest set\n\n  \
+         Next:\n    \
+         {}",
+        crate::eval::error::REPORT_A_BUG
     )]
     DanglingDependency { from: String, hash: String },
 }

@@ -48,7 +48,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.dry_run {
         return Ok(());
     }
-    if !confirm(args)? {
+    if !confirm(args, &from)? {
         return Ok(());
     }
 
@@ -57,7 +57,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
         .block_on(migrate::run(&ops, &args.cluster, &crds, false))
         .map_err(|e| miette!("{e}"))?;
 
-    print_report(&report);
+    print_report(&args.cluster, &report);
     Ok(())
 }
 
@@ -111,96 +111,94 @@ fn kix_crds(build: &InstallableBuild) -> Result<Vec<Value>> {
 }
 
 fn print_plan(cluster: &str, from: &str, plan: &migrate::Report) {
+    let to = keys::GROUP;
+    let pi_crd = migrate::crd_name(migrate::PACKAGE_INSTANCE, from);
+    let act_crd = migrate::crd_name(migrate::ACTIVATION, from);
     println!();
     println!(
-        "{} on '{}': {} → {}",
+        "{} on '{}': {from} -> {to}",
         output::bold("Domain migration"),
         output::bold(cluster),
-        from,
-        keys::GROUP,
     );
     println!();
-    println!("  {} activation records to copy:", plan.activations.len());
+    println!(
+        "  {} deployment record(s) to copy to {to}:",
+        plan.activations.len()
+    );
     for name in &plan.activations {
         println!("    {name}");
     }
     println!();
     println!("  Then, in the same run:");
-    println!("    clear the operator finalizer from the old records");
+    println!("    - remove any Kix operator marks from the old {from} records");
     println!(
-        "    delete {} and {}",
-        migrate::crd_name(migrate::PACKAGE_INSTANCE, from),
-        migrate::crd_name(migrate::ACTIVATION, from),
+        "    - delete the old {pi_crd} and {act_crd} resource types (package records under {pi_crd} are not copied; the next `kix deploy {cluster}` recreates them from the build)"
     );
     println!();
+    println!("  Before answering `y`:");
     println!(
-        "  {}",
-        output::dim(
-            "PackageInstance records are not copied. The next deploy re-creates \
-             them from the build, import markers included."
-        )
+        "    If the Kix operator runs on this cluster, scale its Deployment to 0 replicas first. While an older operator watches {from}, deleting {act_crd} would cause it to delete every live workload in the deployment."
     );
-    println!(
-        "  {}",
-        output::dim(
-            "Scale the kix operator to 0 first if this cluster runs one. While it \
-             watches the old group it re-adds its finalizer, and deleting the old \
-             CRDs would then make it delete every resource in the activation."
-        )
-    );
+    if plan.finalizers_present {
+        println!();
+        println!("  Note on operator marks:");
+        println!(
+            "    Some of these deployment records carry a mark written by the Kix operator. Any record the operator ever touched keeps that mark, so the mark alone does not mean an operator is running now. Before copying or deleting anything, this migration clears the marks on the old {from} records, waits briefly, and checks them again. If any mark comes back, an operator is running and the migration stops before copying or deleting anything."
+        );
+    }
     if plan.current_records.len() > 1 {
         println!();
         println!(
-            "  {} {} records are Active or Degraded at once: {}.",
-            output::yellow("Warning:"),
+            "  {} ({} records are marked Active or Degraded at once: {}):",
+            output::yellow("Warning"),
             plan.current_records.len(),
             plan.current_records.join(", "),
         );
-        println!("  The migration copies every phase as it finds it, so this is not its");
-        println!("  doing and it will not make it worse. But the deploy after it picks");
-        println!("  whichever the apiserver returns first, which may be the wrong build.");
-        println!("  Supersede the ones that are not current before deploying.");
-    }
-    if plan.finalizers_present {
-        println!();
-        println!("  Some of these records carry the operator's finalizer. That alone does");
-        println!("  not mean an operator is running: it is added on every reconcile and");
-        println!("  removed only when a record is deleted, so a record one ever touched");
-        println!("  keeps it. The migration clears them, waits, and reads them back. If any");
-        println!("  returns, an operator is running and the migration stops there, having");
-        println!("  copied and deleted nothing.");
+        println!(
+            "    The migration copies each deployment record as it is. When more than one record is Active or Degraded, the next `kix deploy {cluster}` compares against the most recently deployed one. If an older record is the one you want as current, or to clean this up before migrating, mark each record that should not be current as Superseded:"
+        );
+        for name in &plan.current_records {
+            println!(
+                "      kubectl patch {act_crd}/{name} --subresource=status --type=merge -p '{{\"status\":{{\"phase\":\"Superseded\"}}}}'"
+            );
+        }
     }
 }
 
-fn print_report(report: &migrate::Report) {
+fn print_report(cluster: &str, report: &migrate::Report) {
     println!();
     println!(
-        "{} {} copied, {} already present, {} CRDs deleted.",
-        output::bold("Migrated:"),
+        "{} {} deployment record(s) copied, {} already present, {} old resource type(s) deleted.",
+        output::bold(&format!("Migrated '{cluster}':")),
         report.copied.len(),
         report.already_present.len(),
         report.crds_deleted.len(),
     );
     println!();
     println!("Next:");
-    println!("  If this cluster runs the kix operator, upgrade its image and scale");
-    println!("  it back up. It watches the new group.");
-    println!("  Then deploy. Every resource is applied once, to move its annotations.");
-    println!("  Almost nothing restarts: a package that hashes a ConfigMap or Secret into");
-    println!("  its pod template rolls its pods once (for example valkey and coredns).");
+    println!(
+        "  1. If this cluster runs the Kix operator, upgrade its image to match this version of Kix (so it watches `{}`) and scale it back up.",
+        keys::GROUP
+    );
+    println!(
+        "  2. Run `kix deploy {cluster}`. Every resource is applied once to update its Kix tracking annotations. Only pods whose template hashes a ConfigMap or Secret (such as `valkey` or `coredns`) restart."
+    );
 }
 
 /// Prompt the user for confirmation unless `--yes` was passed.
 ///
 /// Exits with code 1 when stdin is not interactive and `--yes` is absent.
-fn confirm(args: &MigrateArgs) -> Result<bool> {
+fn confirm(args: &MigrateArgs, from: &str) -> Result<bool> {
     if args.yes {
         return Ok(true);
     }
     if !output::is_interactive() {
         output::refuse_unconfirmed(output::Unconfirmed::MigrateDomain, &args.cluster);
     }
-    print!("\nCopy the records and delete the old CRDs? [y/N] ");
+    print!(
+        "\nCopy the deployment records and delete the old {} resource types? [y/N] ",
+        from
+    );
     std::io::stdout().flush().into_diagnostic()?;
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).into_diagnostic()?;

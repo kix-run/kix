@@ -422,7 +422,7 @@ fn another_groups_activation_is_refused_by_the_build() {
     foreign["metadata"]["name"] = json!("foreign");
     add(&mut new, &path("foreign", "Activation-foreign"), foreign);
     let err = new.validate().unwrap_err().to_string();
-    assert!(err.contains("one Activation record"), "{err}");
+    assert!(err.contains("must hold 1 deployment record"), "{err}");
 }
 
 /// Another group's PackageInstance listed as a package is shown as that
