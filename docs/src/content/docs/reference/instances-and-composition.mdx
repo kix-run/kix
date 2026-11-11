@@ -67,11 +67,12 @@ instances.apps.photos.package = packages.experimental.immich;
 ```
 
 - **`packages.<name>`**: A stable package. `packages.stable.<name>` is the same package.
-- **`packages.experimental.<name>`**: An experimental package. `kix list packages` shows it as `experimental.<name>`.
+- **`packages.experimental.<name>`**: An experimental package. Writing `packages.<name>` for an experimental package fails with `[K0549]` and gives `packages.experimental.<name>`. `kix list packages` shows it as `experimental.<name>`.
 - **Reserved names**: No package can be named `stable` or `experimental`.
 - **A package that becomes stable**: `packages.experimental.<name>` then fails with the error "`packages.experimental.<name>` is stable now. Write `packages.<name>`."
 - **A shared name**: An experimental package may have the same name as a stable package. It is then a rework of that package, and replaces it in a minor release.
 - **Contracts**: A stable package reads only stable [dependency contracts](/docs/reference/dependency-contracts/#shared-contract-attributes-and-methods). An experimental package may read both stable and experimental contracts.
+- **Modules**: The monitoring module is experimental and is written `kix.modules.experimental.monitoring` (`kix/modules/experimental/monitoring.nix`). `kix.modules.monitoring` fails with `[K0549]`.
 - **Automatic instances**: [`availablePackages = packages`](/docs/reference/cluster-configuration/#availablepackages) offers only the stable packages. Name each experimental package that Kix may add.
 
 These packages are stable: `cnpg-cluster`, `cnpg-operator`, `echo-server`, `grafana`, `harbor`, `kube-state-metrics`, `node-exporter`, `persistent-volume-claim`, `priority-class`, `secret`, `secret-ref`, `storage-classes`, `valkey`, `victoria-metrics-agent`, `victoria-metrics-alert`, `victoria-metrics-cluster`, and `victoria-metrics-operator`. Every other package is experimental. A package becomes stable once it has run in production long enough to settle.

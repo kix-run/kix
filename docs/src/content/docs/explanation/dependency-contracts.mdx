@@ -23,8 +23,8 @@ When you deploy an application in Kubernetes, connecting it to backing services 
 
 In Kix, an application package declares *what* backing service it needs by naming a dependency argument on its `build` function (`database`, `redis`, `smtp`, `oidc`, `gateway`, or `otlp`). The package never inspects which operator or cloud service satisfies that argument. Instead, both sides agree on a contract in `kix.contracts.*`:
 
-- **Providers** (`cnpg-database`, `stackgres-database`, `valkey`, `oidc-client`, `envoy-gateway`, `traefik`, `tempo`, `otel-collector`) validate their `root.out` attribute set with `kix.contracts.<name>.check` before exposing it to the cluster.
-- **Consumers** (`grafana`, `harbor`, `immich`, `keycloak`, `metabase`, `n8n`, `plausible`, `vaultwarden`) validate the bound dependency with `kix.contracts.<name>.assertions` (or a contract helper such as `kix.contracts.smtp.helpers.settings` or `kix.contracts.oidc.helpers.client`) and read its fields to render their own environment variables, ConfigMaps, and network policies.
+- **Providers** (`cnpg-database`, `stackgres-database`, `valkey`, `oidc-client`, `envoy-gateway`, `traefik`, `tempo`, `otel-collector`) validate their `root.out` attribute set with `kix.contracts.<name>.check` (or `kix.contracts.experimental.<name>.check` for an experimental contract) before exposing it to the cluster.
+- **Consumers** (`grafana`, `harbor`, `immich`, `keycloak`, `metabase`, `n8n`, `plausible`, `vaultwarden`) validate the bound dependency with `kix.contracts.<name>.assertions` or `kix.contracts.experimental.<name>.assertions` (or a contract helper such as `kix.contracts.smtp.helpers.settings` or `kix.contracts.oidc.helpers.client`) and read its fields to render their own environment variables, ConfigMaps, and network policies.
 
 Because the contract sits between the two packages, changing how a backing service is provisioned requires zero changes to the application's configuration.
 

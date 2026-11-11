@@ -199,6 +199,7 @@ Clusters frequently rely on services or platform components that live outside th
   instances.app.rds-login = {
     package = packages.secret;
     config.source = ./secrets/rds-login.sops.yaml;
+    config.hash = "sha256-<base64>";
     config.keys = [ "username" "password" ];
   };
   instances.app.database.package = kix.mkImport {
@@ -237,8 +238,8 @@ A pod reads Secrets only from its own namespace, and Kix refuses a Secret from a
 ### Three ways to use `kix.mkImport`
 
 1. **Direct `out` import (`out = { ... }`)**: Provide the exact `.out` contract expected by consumers (such as `host`, `port`, `database`, and `credentials` for an external database, or `storageClassName = "gp3"` with `roles = [ "storageClasses" ]`).
-2. **Package-derived import (`from = pkgs.coredns; roles = [ "dns" ];`)**: Evaluates the referenced Kix package in an import scope to extract its default `.out` surface and root `kind`/`apiVersion` while discarding its deployment manifests. Pass `roles` or `crds` explicitly when the import should also claim platform roles or expose CRD ref markers.
-3. **Hybrid import (`from = pkgs.coredns; roles = [ "dns" ]; out = { ... };`)**: Starts from `from`'s default `.out` surface and overrides specific output fields in `out`.
+2. **Package-derived import (`from = packages.experimental.coredns; roles = [ "dns" ];`)**: Evaluates the referenced Kix package in an import scope to extract its default `.out` surface and root `kind`/`apiVersion` while discarding its deployment manifests. Pass `roles` or `crds` explicitly when the import should also claim platform roles or expose CRD ref markers.
+3. **Hybrid import (`from = packages.experimental.coredns; roles = [ "dns" ]; out = { ... };`)**: Starts from `from`'s default `.out` surface and overrides specific output fields in `out`.
 
 ### Role shadowing and `optional = true`
 

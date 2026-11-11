@@ -38,7 +38,8 @@ Use these fields to describe the package:
   `kix.mkImport` serve the whole cluster unless they set `scope = "namespace"`;
   when several imports answer one name, name the one you mean with `ref`.
   `meta.scope = "cluster"` also makes auto-instantiation place the package
-  once per cluster. An instance that Kix creates from
+  once per cluster in `autoNamespace` or the catalog entry's `namespace`
+  (without either, evaluation fails). An instance that Kix creates from
   `availablePackages` or enables via `optional = true` to satisfy a dependency binds
   from any namespace, unless its scope is `"namespace"`. `meta.scope = "namespace"` goes the
   other way: the package is never used from another namespace, not even with

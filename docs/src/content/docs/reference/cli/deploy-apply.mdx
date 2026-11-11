@@ -74,7 +74,9 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --prune-mode de
    applied. With `--current-activation` the plan is not sent to the cluster.
 5. Asks for confirmation, then creates the Activation record and applies.
    Unchanged resources are skipped. A deploy with nothing to change exits
-   without applying. Before the record is created, the run stops if the
+   without applying. When a Secret carries `kix.run/sops-source`, the deploy
+   decrypts the SOPS file and keeps any plain keys already in the Secret's
+   `stringData` or `data`. Before the record is created, the run stops if the
    cluster serves a resource's kind as namespaced and its manifest has no
    `metadata.namespace`, naming each such resource. Cross-resource
    [check 18](/docs/reference/validation-checks/)

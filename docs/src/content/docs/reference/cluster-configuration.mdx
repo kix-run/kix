@@ -368,7 +368,7 @@ availablePackages = packages // {
 
 - **Required dependencies only**: Only required build arguments (without `? null`) create demand against `availablePackages`. Optional build arguments resolve to an active instance or `null`. Explicit `deps.<arg>` overrides also bypass catalog lookup.
 - **Transitive resolution**: If an auto-instantiated package has its own required dependencies, Kix resolves them transitively using the same rules.
-- **One-per-cluster packages**: If a package claims a cluster-wide role (`meta.roles`) or lists `"cluster:<own-alias>"` in `meta.conflictsWith`, it can only be instantiated once in the cluster. If consumers in two different namespaces demand it and neither `autoNamespace` nor an entry `namespace` pins it to a single namespace, evaluation fails and asks you to declare the instance explicitly under `instances`.
+- **One-per-cluster packages**: A package that serves the whole cluster (`meta.scope = "cluster"`, a role in `meta.roles`, or a `"cluster:<name>"` entry in `meta.conflictsWith`) can only be instantiated once in the cluster and needs a namespace of its own. If an active consumer demands it from `availablePackages` and neither `autoNamespace` nor the catalog entry's `namespace` is set, evaluation fails with `[K2377]` and asks you to declare the instance under `instances` or set `autoNamespace`.
 - **Ambiguous catalog claimants**: If two or more entries in `availablePackages` answer the same demanded dependency name, evaluation fails and lists the claimants. Disambiguate by declaring an instance with `optional = true` under `instances` or by removing the duplicate entry from `availablePackages`.
 
 :::tip[Use it in a task]

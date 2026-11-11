@@ -31,15 +31,15 @@ Every contract in `kix.contracts.*` defines the default dependency alias, the re
 | [`kix.contracts.postgresDatabase`](#postgresql-database-kixcontractspostgresdatabase) | `"database"` | `cnpg-database`, `stackgres-database`, `kix.mkImport` | `firezone`, `harbor`, `immich`, `keycloak`, `metabase`, `n8n`, `plausible`, `vaultwarden` |
 | [`kix.contracts.redis`](#redis-kixcontractsredis) | `"redis"` | `valkey`, `kix.mkImport` | `harbor`, `immich`, `n8n` |
 | [`kix.contracts.smtp`](#mail-kixcontractssmtp) | `"smtp"` | `kix.mkImport` | `grafana`, `immich`, `keycloak`, `plausible`, `vaultwarden` |
-| [`kix.contracts.oidc`](#single-sign-on-kixcontractsoidc-and-kixcontractsoidcprovider) | `"oidc"` | `oidc-client`, `kix.mkImport` | `grafana`, `harbor`, `immich` |
-| [`kix.contracts.experimental.oidcProvider`](#multi-realm-providers-kixcontractsoidcprovider-and-packagesoidc-client) | `"oidcProvider"` | `keycloak`, `kix.mkImport` | `oidc-client` |
+| [`kix.contracts.oidc`](#single-sign-on-kixcontractsoidc-and-kixcontractsexperimentaloidcprovider) | `"oidc"` | `oidc-client`, `kix.mkImport` | `grafana`, `harbor`, `immich` |
+| [`kix.contracts.experimental.oidcProvider`](#multi-realm-providers-kixcontractsexperimentaloidcprovider-and-packagesexperimentaloidc-client) | `"oidcProvider"` | `keycloak`, `kix.mkImport` | `oidc-client` |
 | [`kix.contracts.gateway`](#gateway-api-kixcontractsgateway) | `"gateway"` | `envoy-gateway`, `traefik`, `kix.mkImport` | `kix.expose` |
-| [`kix.contracts.experimental.otlpEndpoint`](#opentelemetry-kixcontractsotlpendpoint) | `"otlp"` | `tempo`, `otel-collector`, `kix.mkImport` | `otel-collector` |
-| [`kix.contracts.experimental.clickhouse`](#clickhouse-kixcontractsclickhouse) | `"clickhouse"` | `clickhouse`, `clickhouse-cluster` | `clickhouse-database` |
+| [`kix.contracts.experimental.otlpEndpoint`](#opentelemetry-kixcontractsexperimentalotlpendpoint) | `"otlp"` | `tempo`, `otel-collector`, `kix.mkImport` | `otel-collector` |
+| [`kix.contracts.experimental.clickhouse`](#clickhouse-kixcontractsexperimentalclickhouse) | `"clickhouse"` | `clickhouse`, `clickhouse-cluster` | `clickhouse-database` |
 
 ### Shared contract attributes and methods
 
-Each contract is one file in `kix/contracts/stable/`, and the file name is the contract's name under `kix.contracts`. For example, `kix/contracts/stable/redis.nix` is `kix.contracts.redis`. Every file builds its contract with `mkContract` in `kix/lib/vocab/contract.nix`, so every contract has exactly these parts:
+Each stable contract is one file in `kix/contracts/stable/`, and the file name is the contract's name under `kix.contracts`. For example, `kix/contracts/stable/redis.nix` is `kix.contracts.redis`. Each experimental contract is one file in `kix/contracts/experimental/`, read as `kix.contracts.experimental.<name>`. Every file builds its contract with `mkContract` in `kix/lib/vocab/contract.nix`, so every contract has exactly these parts:
 
 | Attribute / method | Signature | Behavior |
 | --- | --- | --- |

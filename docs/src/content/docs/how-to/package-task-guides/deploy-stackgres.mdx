@@ -10,8 +10,9 @@ import stackgresClusterInstance from '/src/snippets/how-to/package-stacks/stackg
 import check from '/src/command-output/how-to/package-stackgres/check.json';
 import databaseResources from '/src/command-output/how-to/package-stackgres/database-resources.json';
 
-Use the `stackgres-operator` and `stackgres-cluster` packages to run PostgreSQL
-under the StackGres operator.
+Use `packages.experimental.stackgres-operator` and
+`packages.experimental.stackgres-cluster` to run PostgreSQL under the StackGres
+operator.
 
 This guide creates one PostgreSQL 17 instance with a 5 GiB volume. The target
 cluster must provide a default StorageClass, or the database instance must name
@@ -55,10 +56,10 @@ default is not suitable. PostgreSQL parameters go in `postgresqlConf`, and any o
 `SGCluster` field in `extraSpec`.
 
 Apps should not read the superuser Secret. Give each app a
-`stackgres-database` instance, which creates a role and a database on the
-cluster and puts the credentials in the app's namespace. Its `out` follows the
-Postgres database contract, `kix.contracts.postgresDatabase`, which the
-packages that take a `database` dependency check at evaluation.
+`packages.experimental.stackgres-database` instance, which creates a role and a
+database on the cluster and puts the credentials in the app's namespace. Its
+`out` follows the Postgres database contract, `kix.contracts.postgresDatabase`,
+which the packages that take a `database` dependency check at evaluation.
 
 ## Back up to object storage
 
