@@ -193,22 +193,20 @@ impl From<FileEntry> for (String, u64) {
 pub enum PlanFileError {
     #[error("the plan file cannot be read: {}", printable(.0))]
     Unreadable(String),
-    #[error(
-        "the file is not a .{EXTENSION} file: it does not end with a zstd seek table. `kix plan --save` writes one"
-    )]
+    #[error("the file is not a valid `.{EXTENSION}` archive (missing archive footer)")]
     NotAPlanFile,
     #[error(
-        "the plan file's format is '{}' version {version}; Kix {} reads '{FORMAT}' version {VERSION}",
+        "the plan file's format is '{}' version {version}, and Kix {} reads '{FORMAT}' version {VERSION}",
         printable(.format),
         crate::version::running().release()
     )]
     WrongFormat { format: String, version: u32 },
-    #[error("the plan file is too large: {}", printable(.0))]
+    #[error("the plan file is too large ({})", printable(.0))]
     TooLarge(String),
-    #[error("the plan file is malformed: {}", printable(.0))]
+    #[error("the plan file is corrupted or malformed ({})", printable(.0))]
     Malformed(String),
     #[error(
-        "file {} of the plan file does not hold the bytes it is named for",
+        "manifest {} inside the plan file is corrupted (its bytes do not match its SHA-256 digest)",
         printable(.0)
     )]
     FileMismatch(String),
@@ -278,21 +276,21 @@ pub fn write(mut plan: Plan, graph: GraphListing, out: impl Write) -> io::Result
     let over = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     if header.len() as u64 > MAX_HEADER_BYTES {
         return Err(over(format!(
-            "the plan's header is {} bytes, over MAX_HEADER_BYTES ({MAX_HEADER_BYTES})",
+            "the plan's summary header is {} bytes, over the 8 MiB limit ({MAX_HEADER_BYTES} bytes)",
             header.len()
         )));
     }
     count_values(&header).map_err(|e| over(e.to_string()))?;
     if files.len() > MAX_FILES {
         return Err(over(format!(
-            "the plan shows {} manifests, over MAX_FILES ({MAX_FILES})",
+            "the plan has {} manifests, over the 100,000-manifest limit ({MAX_FILES})",
             files.len()
         )));
     }
     let content: u64 = files.values().map(|f| f.len() as u64).sum();
     if content > MAX_CONTENT_BYTES {
         return Err(over(format!(
-            "the plan's manifests are {content} bytes, over MAX_CONTENT_BYTES ({MAX_CONTENT_BYTES})"
+            "the plan's manifests total {content} bytes, over the 512 MiB limit ({MAX_CONTENT_BYTES} bytes)"
         )));
     }
     let files: Vec<&[u8]> = files.values().map(Vec::as_slice).collect();
@@ -1030,6 +1028,6 @@ mod tests {
                 detail: huge,
             });
         let err = write(plan, graph, io::sink()).unwrap_err();
-        assert!(err.to_string().contains("MAX_HEADER_BYTES"), "{err}");
+        assert!(err.to_string().contains("over the 8 MiB limit"), "{err}");
     }
 }

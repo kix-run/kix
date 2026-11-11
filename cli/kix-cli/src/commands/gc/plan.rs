@@ -32,8 +32,12 @@ pub(super) enum GarbageReason {
 impl GarbageReason {
     pub(super) fn label(&self) -> &'static str {
         match self {
-            GarbageReason::HashNotExpected => "identity-hash not in expected set",
-            GarbageReason::NoIdentityHash => "missing identity-hash",
+            GarbageReason::HashNotExpected => {
+                "build hash is not in the build made from the current files"
+            }
+            GarbageReason::NoIdentityHash => {
+                "carries Kix's label but no Kix build annotation (`--include-unstamped`)"
+            }
             GarbageReason::RetiredActivation => "activation record retired by retention",
         }
     }
@@ -61,9 +65,9 @@ pub(super) struct RecordRetirement {
 impl RecordRetirement {
     pub(super) fn kept_note(&self) -> String {
         if self.records.is_none() {
-            "no Activation records on this cluster".to_string()
+            "no deployment records on this cluster".to_string()
         } else {
-            format!("{} activation records kept", self.plan.kept.len())
+            format!("{} deployment record(s) kept", self.plan.kept.len())
         }
     }
 }
@@ -259,7 +263,7 @@ pub(super) fn retention_policy(args: &GcArgs) -> Result<RetentionPolicy> {
         eprintln!(
             "{}",
             output::yellow(&format!(
-                "--keep-max {} is below --keep {}; keeping {}.",
+                "Warning: `--keep-max {}` is below `--keep {}`; keeping {}.",
                 args.keep_max, args.keep, args.keep
             ))
         );
@@ -268,7 +272,7 @@ pub(super) fn retention_policy(args: &GcArgs) -> Result<RetentionPolicy> {
         eprintln!(
             "{}",
             output::yellow(
-                "--keep 0: every rollback target older than --keep-for will be retired."
+                "Warning: `--keep 0` is set; every rollback target older than `--keep-for` will be retired."
             )
         );
     }

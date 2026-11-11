@@ -7,7 +7,6 @@ use miette::{IntoDiagnostic, Result};
 use crate::cli::GcArgs;
 use crate::output;
 use kix::cluster::activation::{Record, RetentionPolicy, RetireReason};
-use kix::manifest::keys;
 use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use super::plan::{GarbageEntry, RecordRetirement};
@@ -17,10 +16,9 @@ use super::plan::{GarbageEntry, RecordRetirement};
 pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
     println!();
     println!(
-        "{} {} resources carry the kix label but no {}:",
-        output::bold("Unstamped:"),
+        "{} {} object(s) carry Kix's label but no Kix build annotation:",
+        output::bold("No Kix build annotation:"),
         unstamped.len(),
-        keys::IDENTITY_HASH,
     );
     for entry in unstamped {
         println!(
@@ -34,8 +32,8 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
     println!(
         "  {}",
         output::dim(
-            "kix never applied these, so gc does not delete them. \
-             Pass --include-unstamped to delete them too."
+            "Kept running on the cluster, because Kix never applied them. \
+             Pass `--include-unstamped` to delete them too."
         ),
     );
 }
@@ -45,9 +43,9 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
 pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
-        "{} {} Kix objects name no Activation record on this cluster, and another \
-         Kix cluster deploys here, so Kix cannot tell whose they are:",
-        output::bold("Unattributed:"),
+        "{} {} Kix-labeled object(s) name no deployment record on this cluster, and \
+         another Kix cluster deploys here, so Kix cannot tell which cluster they belong to:",
+        output::bold("No deployment record on this cluster:"),
         objects.len(),
     );
     let mut ids: Vec<ResourceId> = objects
@@ -59,9 +57,9 @@ pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included:
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        "--include-unattributed: judged against this build like this cluster's own objects."
+        "--include-unattributed: objects that name no deployment record on this cluster are checked against this build like this cluster's own objects."
     } else {
-        "Kept. Review them and pass --include-unattributed to judge them against this build."
+        "Kept running on the cluster. Review them and pass `--include-unattributed` to check them against this build and delete any not in it."
     };
     println!("  {}", output::dim(note));
 }
@@ -71,9 +69,9 @@ pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included:
 pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
-        "{} {} objects carry Kix's labels, but Kix never wrote them. Another \
-         program, usually an operator, copied the labels from an object Kix made:",
-        output::bold("Copies:"),
+        "{} {} object(s) carry Kix's labels, but Kix never wrote them (another \
+         controller, usually an operator, copied the labels from an object Kix made):",
+        output::bold("Copied labels:"),
         objects.len(),
     );
     let mut ids: Vec<ResourceId> = objects
@@ -85,9 +83,9 @@ pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool)
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        "--include-copies: checked against this build like Kix's own objects."
+        "--include-copies: objects whose labels were copied by another program are checked against this build like Kix's own objects."
     } else {
-        "Kept, because Kix did not make them. Pass --include-copies to check them against this build too."
+        "Kept running on the cluster, because Kix did not make them. Pass `--include-copies` to check them against this build and delete any not in it."
     };
     println!("  {}", output::dim(note));
 }
@@ -98,8 +96,8 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry]) {
 
     println!();
     println!(
-        "{} {} resources to delete:",
-        output::bold("Garbage:"),
+        "{} ({} left the build, still running on the cluster):",
+        output::bold("Objects to delete"),
         garbage.len(),
     );
 
@@ -121,7 +119,7 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry]) {
                 let hash_short = entry
                     .identity_hash
                     .as_deref()
-                    .map(|h| format!(" hash={}", &h[..12.min(h.len())]))
+                    .map(|h| format!(" (build {})", &h[..12.min(h.len())]))
                     .unwrap_or_default();
                 println!(
                     "    {} {}/{}{}",
@@ -149,7 +147,7 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry]) {
                         .map(|a| a[..12.min(a.len())].to_string())
                         .collect();
                     if !acts_short.is_empty() {
-                        let line = format!("activations: {}", acts_short.join(", "));
+                        let line = format!("deployments: {}", acts_short.join(", "));
                         println!("        {}", output::dim(&line));
                     }
                 }
@@ -166,7 +164,7 @@ fn describe_policy(policy: &RetentionPolicy) -> String {
         None => String::new(),
     };
     format!(
-        "keeping at least the {} newest rollback targets, at most {} records{age}",
+        "keeping at least the {} newest rollback target(s), at most {} record(s){age}",
         policy.keep_min,
         policy.keep_max.max(policy.keep_min)
     )
@@ -218,7 +216,7 @@ pub(super) fn print_record_plan(retirement: &RecordRetirement, policy: &Retentio
     }
     println!();
     println!(
-        "{} {} activation record(s), {}:",
+        "{} {} deployment record(s), {}:",
         output::bold("Retire:"),
         plan.retire.len(),
         describe_policy(policy),
@@ -226,7 +224,7 @@ pub(super) fn print_record_plan(retirement: &RecordRetirement, policy: &Retentio
     for retired in &plan.retire {
         let when = judged_by(&retired.record);
         println!(
-            "  {} Activation/{} {}",
+            "  {} {} {}",
             output::red("-"),
             retired.record.name,
             output::dim(&format!("({when}; {})", describe_reason(&retired.reason)))
@@ -235,10 +233,9 @@ pub(super) fn print_record_plan(retirement: &RecordRetirement, policy: &Retentio
     println!(
         "  {}",
         output::dim(&format!(
-            "{} kept. Kix cannot roll back to a retired record. The next deploy drops its \
-             hash from {} on every resource.",
+            "{} deployment record(s) kept. Kix cannot roll back to a retired deployment \
+             record, and the next deploy removes it from tracking annotations on every object.",
             plan.kept.len(),
-            keys::ACTIVATIONS
         ))
     );
 }
@@ -275,9 +272,9 @@ pub(super) fn finish(
 /// `records` Activation records.
 pub(super) fn deletion_prompt(resources: usize, records: usize) -> String {
     match (resources, records) {
-        (0, r) => format!("Delete {r} activation record(s)? [y/N] "),
-        (n, 0) => format!("Delete {n} resources? [y/N] "),
-        (n, r) => format!("Delete {n} resources and {r} activation record(s)? [y/N] "),
+        (0, r) => format!("Delete {r} deployment record(s)? [y/N] "),
+        (n, 0) => format!("Delete {n} object(s)? [y/N] "),
+        (n, r) => format!("Delete {n} object(s) and {r} deployment record(s)? [y/N] "),
     }
 }
 
@@ -296,7 +293,7 @@ pub(super) fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
     std::io::stdin().read_line(&mut input).into_diagnostic()?;
     let input = input.trim().to_lowercase();
     if input != "y" && input != "yes" {
-        println!("GC cancelled.");
+        println!("GC cancelled. Nothing was deleted from the cluster.");
         return Ok(false);
     }
     Ok(true)

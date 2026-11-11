@@ -55,7 +55,7 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
             .iter()
             .flat_map(|r| r.clusters.iter().map(String::as_str))
             .collect();
-        print_text(&reports, clusters.len() > 1);
+        print_text(&reports, clusters.len() > 1, args.cluster.as_deref());
     }
 
     if drifted > 0 {
@@ -64,8 +64,8 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_text(reports: &[DriftReport], name_clusters: bool) {
-    crate::say!("{} kix-managed resources", reports.len());
+fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str>) {
+    crate::say!("{} Kix-managed resources", reports.len());
     crate::say!();
 
     for report in reports {
@@ -88,7 +88,10 @@ fn print_text(reports: &[DriftReport], name_clusters: bool) {
                     "  {} {:<50} {}",
                     output::dim("·"),
                     rid,
-                    output::dim("unstamped (no applied-hash; predates stamping)"),
+                    output::dim(&format!(
+                        "not checked (no {} annotation; the next deploy adds it)",
+                        kix::manifest::keys::APPLIED_HASH
+                    )),
                 );
             }
             DriftVerdict::NoFieldset => {
@@ -96,7 +99,7 @@ fn print_text(reports: &[DriftReport], name_clusters: bool) {
                     "  {} {:<50} {}",
                     output::yellow("?"),
                     rid,
-                    output::yellow("no managedFields. Check cannot run"),
+                    output::yellow("not checked (no Kubernetes field ownership entry for Kix)"),
                 );
             }
             DriftVerdict::Drifted {
@@ -118,7 +121,7 @@ fn print_text(reports: &[DriftReport], name_clusters: bool) {
                     println!(
                         "      {}",
                         output::dim(
-                            "fields managed by Kix have changed; Kubernetes has not recorded another tool as their owner"
+                            "fields Kix applied changed on the cluster (no other field manager recorded)"
                         ),
                     );
                 }
@@ -137,12 +140,26 @@ fn print_text(reports: &[DriftReport], name_clusters: bool) {
         print!(", {} drifted", output::red(&drifted.to_string()));
     }
     if unstamped > 0 {
-        print!(", {} unstamped", output::dim(&unstamped.to_string()));
+        print!(
+            ", {} missing applied-hash annotation",
+            output::dim(&unstamped.to_string())
+        );
     }
     if no_fieldset > 0 {
-        print!(", {} unreadable", output::yellow(&no_fieldset.to_string()));
+        print!(
+            ", {} missing field ownership entry",
+            output::yellow(&no_fieldset.to_string())
+        );
     }
     println!();
+    if drifted > 0 {
+        let cluster = cluster.unwrap_or("<cluster>");
+        println!();
+        println!("Next:");
+        println!(
+            "  Run `kix plan {cluster}` to see how a deploy handles these objects, or `kix deploy {cluster} --reconcile` to restore Kix's values (add `--force-conflicts` when another tool owns the field)."
+        );
+    }
 }
 
 fn print_owner(owner: &ForeignOwner) {
@@ -156,7 +173,7 @@ fn print_owner(owner: &ForeignOwner) {
         println!(
             "      {}",
             output::yellow(&format!(
-                "co-owned by {} ({}{}) at {}",
+                "co-owned by {} ({}{}, {}; no specific fields recorded)",
                 owner.manager, owner.operation, via, when
             )),
         );
@@ -165,7 +182,7 @@ fn print_owner(owner: &ForeignOwner) {
             println!(
                 "      {}",
                 output::yellow(&format!(
-                    "{} taken by {} ({}{}) at {}",
+                    "{} owned by {} ({}{}, {})",
                     path, owner.manager, owner.operation, via, when
                 )),
             );
@@ -178,13 +195,12 @@ fn print_owner(owner: &ForeignOwner) {
 fn scale_line(scale: &UnrecordedScale) -> String {
     if scale.deployed == scale.live {
         format!(
-            "{} is back at {} but no longer owned by Kix: a write through /scale took it, \
-             and Kubernetes records no owner for that write",
+            "{} is {} (matches deployed value, but a write via /scale took ownership from Kix)",
             scale.path, scale.live
         )
     } else {
         format!(
-            "{} changed from {} to {} through /scale; Kubernetes records no owner for that write",
+            "{} changed from {} to {} via /scale (no field manager recorded)",
             scale.path, scale.deployed, scale.live
         )
     }
@@ -266,7 +282,7 @@ mod tests {
     fn scale_line_names_both_values_when_they_differ() {
         assert_eq!(
             scale_line(&scale(2, 0)),
-            "spec.replicas changed from 2 to 0 through /scale; Kubernetes records no owner for that write"
+            "spec.replicas changed from 2 to 0 via /scale (no field manager recorded)"
         );
     }
 
@@ -274,8 +290,7 @@ mod tests {
     fn scale_line_says_the_value_is_back_when_it_matches() {
         assert_eq!(
             scale_line(&scale(2, 2)),
-            "spec.replicas is back at 2 but no longer owned by Kix: a write through /scale took it, \
-             and Kubernetes records no owner for that write"
+            "spec.replicas is 2 (matches deployed value, but a write via /scale took ownership from Kix)"
         );
     }
 }

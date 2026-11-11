@@ -18,6 +18,8 @@ pub(super) const EXIT_STALE: i32 = 4;
 /// flags.
 pub(super) struct SavedPlan {
     pub(super) path: String,
+    /// The cluster this deploy names, for the commands a refusal suggests.
+    pub(super) cluster: String,
     /// `sha256:<hex>` digest of the plan file.
     pub(super) sha256: String,
     pub(super) reviewed: kix::plan::document::Plan,
@@ -26,19 +28,44 @@ pub(super) struct SavedPlan {
 
 /// Load and verify a saved plan file, returning an error before any build if
 /// the plan cannot be used or `given` conflicts with its recorded flags.
-pub(super) fn load_saved_plan(path: &std::path::Path, given: &PlanFlags) -> Result<SavedPlan> {
+pub(super) fn load_saved_plan(
+    path: &std::path::Path,
+    given: &PlanFlags,
+    cluster: &str,
+) -> Result<SavedPlan> {
     let file = std::fs::File::open(path)
         .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+    let shown = path.display();
     let (file, sha256) = kix::plan::file::PlanFile::verify(std::io::BufReader::new(file))
-        .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+        .map_err(|e| {
+            use kix::plan::file::PlanFileError;
+            let next = match &e {
+                PlanFileError::TooLarge(_) => {
+                    "deploy without `--plan`, or plan fewer objects per cluster.".to_string()
+                }
+                PlanFileError::NotAPlanFile => {
+                    format!("create the file with `kix plan {cluster} --save {shown}`.")
+                }
+                PlanFileError::WrongFormat { .. } => format!(
+                    "save a new plan file with `kix plan {cluster} --save {shown}` using Kix {}.",
+                    kix::version::running().release()
+                ),
+                _ => format!("save a fresh plan with `kix plan {cluster} --save {shown}`."),
+            };
+            miette!(
+                "cannot read the plan {shown}: {e}. Nothing was applied to the cluster. Next: {next}"
+            )
+        })?;
     let reviewed = file.into_header().plan;
-    if let Some(why) = kix::plan::saved::unusable(&reviewed) {
-        return Err(miette!("cannot deploy from {}: {why}", path.display()));
+    let file_name = shown.to_string();
+    if let Some(why) = kix::plan::saved::unusable(&reviewed, &file_name, cluster) {
+        return Err(miette!("cannot deploy from {shown}: {why}"));
     }
-    let flags = kix::plan::saved::flags_for(&reviewed, given)
-        .map_err(|e| miette!("cannot deploy from {}: {e}", path.display()))?;
+    let flags = kix::plan::saved::flags_for(&reviewed, given, &file_name, cluster)
+        .map_err(|e| miette!("cannot deploy from {shown}: {e}"))?;
     Ok(SavedPlan {
         path: path.display().to_string(),
+        cluster: cluster.to_string(),
         sha256: format!("sha256:{sha256}"),
         reviewed,
         flags,
@@ -73,7 +100,12 @@ pub(super) fn check_saved_plan(
         }
         _ => print!(
             "{}",
-            plan::render::render_comparison(&comparison, &saved.reviewed, &saved.path)
+            plan::render::render_comparison(
+                &comparison,
+                &saved.reviewed,
+                &saved.path,
+                &saved.cluster
+            )
         ),
     }
     if !comparison.matches {

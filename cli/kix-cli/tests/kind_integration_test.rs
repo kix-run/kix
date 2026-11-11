@@ -227,7 +227,7 @@ fn deploy_and_gc() {
         "should detect everything unchanged via local DAG diff"
     );
     assert!(
-        stdout2.contains("Active activation:"),
+        stdout2.contains("Current deployment:"),
         "should plan against the cluster's Active record"
     );
 
@@ -451,7 +451,7 @@ fn deploy_and_gc() {
 
     assert!(gc_soft.status.success(), "soft gc should succeed");
     assert!(
-        gc_soft_out.contains("No garbage found"),
+        gc_soft_out.contains("Nothing to delete"),
         "soft gc should find no garbage when nothing changed, got:\n{gc_soft_out}"
     );
 
@@ -468,7 +468,7 @@ fn deploy_and_gc() {
 
     assert!(gc_hard.status.success(), "hard gc should succeed");
     assert!(
-        gc_hard_out.contains("No garbage found"),
+        gc_hard_out.contains("Nothing to delete"),
         "hard gc should find no garbage when cluster matches expected state, got:\n{gc_hard_out}"
     );
 
@@ -937,7 +937,10 @@ fn two_kix_clusters_share_one_kind_cluster() {
     flake.write_cluster("a", "hello again from sweep-a", true);
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
     assert!(ok, "{out}");
-    assert!(out.contains("Reconstructing previous state"), "{out}");
+    assert!(
+        out.contains("Reading live objects from the cluster"),
+        "{out}"
+    );
     assert_b_intact(&ctx);
 
     // 4. `kix gc sweep-a --hard --yes` deletes nothing of sweep-b's.

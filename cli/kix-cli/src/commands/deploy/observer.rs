@@ -1,7 +1,6 @@
 //! Render interactive deploy events, prune headers, migration warnings, and summary lines.
 
 use crate::output;
-use crate::plan;
 use kix::cluster::apply::ApplyAction;
 use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, DeployResult, HALTED_ON_FAILURE, NodeDetail, NodeId,
@@ -297,17 +296,16 @@ pub(super) fn render_prune_start(
         if delete {
             let _ = writeln!(
                 out,
-                "{} deleting {} orphaned resources...",
+                "{} deleting {} object(s) that left the build...",
                 output::bold("prune:"),
                 resources.len(),
             );
         } else {
             let _ = writeln!(
                 out,
-                "{} {} orphaned resources kept (warn-only; {})",
+                "{} {} object(s) left the build, still running on the cluster; run `kix deploy --prune` or `kix gc` to delete them:",
                 output::bold("prune:"),
                 resources.len(),
-                plan::KEPT_ORPHANS_HINT,
             );
         }
         for rid in resources {
@@ -318,7 +316,7 @@ pub(super) fn render_prune_start(
         let _ = writeln!(out);
         let _ = writeln!(
             out,
-            "{} {} orphaned resources are never deleted automatically",
+            "{} {} object(s) left the build and stay on the cluster (never deleted automatically; delete with `kubectl` if intended):",
             output::bold("prune:"),
             kept.len(),
         );

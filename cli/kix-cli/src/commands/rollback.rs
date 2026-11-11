@@ -121,7 +121,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
 
 fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Record]) {
     println!(
-        "{} activation history for '{}'",
+        "{} deployment history for '{}'",
         output::bold("Rollback:"),
         cluster,
     );
@@ -131,42 +131,47 @@ fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Rec
         let hash_preview = c
             .identity_hash
             .as_deref()
-            .map(|h| format!("{}...", &h[..8.min(h.len())]))
-            .unwrap_or_else(|| "no hash".to_string());
+            .map(|h| format!("build {}...", &h[..8.min(h.len())]))
+            .unwrap_or_else(|| "no build hash".to_string());
         println!(
             "  {} {} ({})  {}",
-            output::green("● active  "),
+            output::green("● current "),
             output::bold(&c.name),
             hash_preview,
-            output::dim("← you are here"),
+            output::dim("← live on the cluster"),
         );
         if let Some(path) = c.built_via.as_deref() {
-            println!("    {} {}", output::dim("source:  "), output::dim(path));
+            println!("    {} {}", output::dim("build:   "), output::dim(path));
         }
         println!();
     }
 
     if superseded.is_empty() {
         println!(
-            "  {}",
-            output::dim("No superseded activations. Nothing to roll back to.")
+            "{}",
+            output::dim(&format!(
+                "No earlier deployments recorded for '{cluster}'. Nothing to roll back to."
+            ))
         );
         return;
     }
 
-    println!("  {}", output::bold("Superseded (most recent first):"));
+    println!(
+        "  {}",
+        output::bold("Earlier deployments (most recent first):")
+    );
     println!();
     for (i, s) in superseded.iter().enumerate() {
         let hash_preview = s
             .identity_hash
             .as_deref()
-            .map(|h| format!("{}...", &h[..8.min(h.len())]))
-            .unwrap_or_else(|| "no hash".to_string());
+            .map(|h| format!("build {}...", &h[..8.min(h.len())]))
+            .unwrap_or_else(|| "no build hash".to_string());
         let ts = s
             .deployed_at
             .clone()
             .filter(|at| !at.is_empty())
-            .unwrap_or_else(|| output::dim("unknown").into_owned());
+            .unwrap_or_else(|| output::dim("unknown time").into_owned());
         let available = s
             .identity_hash
             .as_deref()
@@ -175,7 +180,7 @@ fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Rec
         let availability = if available {
             output::green("available")
         } else {
-            output::red("store path missing")
+            output::red("build not on this machine")
         };
         println!(
             "  {} {} ({})  deployed {}  [{}]",
@@ -186,18 +191,16 @@ fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Rec
             availability,
         );
         if let Some(path) = s.built_via.as_deref() {
-            println!("      {} {}", output::dim("source:  "), output::dim(path));
+            println!("      {} {}", output::dim("build:   "), output::dim(path));
         }
         if let Some(prev) = s.previous_activation.as_deref() {
             println!("      {} {}", output::dim("previous:"), output::dim(prev),);
         }
     }
     println!();
+    println!("Next:");
     println!(
-        "  {}",
-        output::dim(
-            "Run `kix rollback <cluster>` (or `--yes` for most recent) to switch activations."
-        )
+        "  Run `kix rollback {cluster}` to choose a deployment interactively, or `kix rollback {cluster} -y` to restore [1]."
     );
 }
 
@@ -221,8 +224,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| {
             miette!(
-                "no active deployment record found for cluster '{}'",
-                cluster
+                "cannot roll back '{cluster}': no current deployment record found on the cluster. Nothing was applied to the cluster. Next: run `kix deploy {cluster}` to deploy the cluster first."
             )
         })?;
 
@@ -235,7 +237,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     if superseded.is_empty() {
         return Err(miette!(
-            "no previous deployments are available to roll back to"
+            "cannot roll back: no earlier deployment records are available to roll back to. Nothing was applied to the cluster. Next: check out the git commit you want to restore and run `kix deploy {cluster}`."
         ));
     }
 
@@ -243,10 +245,10 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         &superseded[0]
     } else {
         println!();
-        println!("Available activations to rollback to:");
+        println!("Earlier deployments you can roll back to:");
         print_superseded_entries(cluster, &superseded);
 
-        print!("\nSelect activation [1]: ");
+        print!("\nSelect deployment to restore [1]: ");
         std::io::stdout().flush().into_diagnostic()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).into_diagnostic()?;
@@ -259,19 +261,23 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
                 .parse::<usize>()
                 .map_err(|_| {
                     miette!(
-                        "'{}' is not a valid selection. Enter a number from the list",
+                        "'{}' is not a valid selection. Nothing was applied to the cluster. Next: enter a number from the list.",
                         input
                     )
                 })?
                 .checked_sub(1)
-                .ok_or_else(|| miette!("enter a number from the list, starting at 1"))?
+                .ok_or_else(|| {
+                    miette!(
+                        "enter a number from the list, starting at 1. Nothing was applied to the cluster."
+                    )
+                })?
         };
 
         if idx >= superseded.len() {
             return Err(miette!(
-                "selection {} out of range (1-{})",
+                "selection {} is out of range (1-{max}). Nothing was applied to the cluster. Next: enter a number between 1 and {max}.",
                 idx + 1,
-                superseded.len()
+                max = superseded.len()
             ));
         }
 
@@ -293,7 +299,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     })?;
 
     crate::say!(
-        "Rollback target:   {} ({}...)",
+        "Rollback target:    {} (build {}...)",
         output::bold(&target_name),
         &target_hash[..8.min(target_hash.len())],
     );
@@ -325,7 +331,10 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     if args.dry_run {
         crate::say!();
-        crate::say!("{}", output::dim("Dry run. No changes applied."));
+        crate::say!(
+            "{}",
+            output::dim("Dry run. Nothing was applied to the cluster.")
+        );
         return Ok(());
     }
 
@@ -339,12 +348,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             Vec::new()
         };
         if failed_jobs.is_empty() {
-            crate::say!("Nothing to change. Cluster already matches target activation.");
+            crate::say!(
+                "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."
+            );
             return Ok(());
         }
         let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
         crate::say!(
-            "{} nothing changed, but {} failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
+            "{} nothing changed, but {} Job(s) failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
             output::yellow("↻"),
             failed_jobs.len(),
             kix::manifest::keys::RERUN,
@@ -362,7 +373,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         std::io::stdin().read_line(&mut input).into_diagnostic()?;
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
-            println!("Rollback cancelled.");
+            println!("Rollback cancelled. Nothing was applied to the cluster.");
             return Ok(());
         }
     }
@@ -452,8 +463,7 @@ async fn run_operator_async(
         .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| {
             miette!(
-                "no active deployment record found for cluster '{}'",
-                cluster
+                "cannot roll back '{cluster}': no current deployment record found on the cluster. Nothing was applied to the cluster. Next: run `kix deploy {cluster}` to deploy the cluster first."
             )
         })?;
 
@@ -466,7 +476,7 @@ async fn run_operator_async(
 
     if superseded.is_empty() {
         return Err(miette!(
-            "no previous deployments are available to roll back to"
+            "cannot roll back: no earlier deployment records are available to roll back to. Nothing was applied to the cluster. Next: check out the git commit you want to restore and run `kix deploy {cluster}`."
         ));
     }
 
@@ -474,10 +484,10 @@ async fn run_operator_async(
         &superseded[0]
     } else {
         println!();
-        println!("Available activations to rollback to:");
+        println!("Earlier deployments you can roll back to:");
         print_superseded_entries(cluster, &superseded);
 
-        print!("\nSelect activation [1]: ");
+        print!("\nSelect deployment to restore [1]: ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).into_diagnostic()?;
@@ -490,19 +500,23 @@ async fn run_operator_async(
                 .parse::<usize>()
                 .map_err(|_| {
                     miette!(
-                        "'{}' is not a valid selection. Enter a number from the list",
+                        "'{}' is not a valid selection. Nothing was applied to the cluster. Next: enter a number from the list.",
                         input
                     )
                 })?
                 .checked_sub(1)
-                .ok_or_else(|| miette!("enter a number from the list, starting at 1"))?
+                .ok_or_else(|| {
+                    miette!(
+                        "enter a number from the list, starting at 1. Nothing was applied to the cluster."
+                    )
+                })?
         };
 
         if idx >= superseded.len() {
             return Err(miette!(
-                "selection {} out of range (1-{})",
+                "selection {} is out of range (1-{max}). Nothing was applied to the cluster. Next: enter a number between 1 and {max}.",
                 idx + 1,
-                superseded.len()
+                max = superseded.len()
             ));
         }
 
@@ -536,7 +550,10 @@ async fn run_operator_async(
 
     if args.dry_run {
         crate::say!();
-        crate::say!("{}", output::dim("Dry run. No changes applied."));
+        crate::say!(
+            "{}",
+            output::dim("Dry run. Nothing was applied to the cluster.")
+        );
         return Ok(());
     }
 
@@ -550,13 +567,13 @@ async fn run_operator_async(
         std::io::stdin().read_line(&mut input).into_diagnostic()?;
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
-            println!("Rollback cancelled.");
+            println!("Rollback cancelled. Nothing was applied to the cluster.");
             return Ok(());
         }
     }
 
     crate::say!(
-        "Updating Activation CR '{}' to point to rollback target...",
+        "Updating deployment record '{}' to point to rollback target...",
         output::bold(&current.name),
     );
 
@@ -575,7 +592,7 @@ async fn run_operator_async(
     .await?;
 
     crate::say!(
-        "  {} Activation CR updated. Waiting for operator...",
+        "  {} Deployment record updated. Waiting for the Kix operator...",
         output::green("✓"),
     );
 
@@ -584,16 +601,23 @@ async fn run_operator_async(
     println!();
     match reconciled {
         super::operator::Reconciled::Active => println!(
-            "Rollback via operator {}: rolled back to '{}'",
+            "Rollback via operator {}: restored deployment '{}'.",
             output::green("complete"),
             output::bold(&target_name),
         ),
-        super::operator::Reconciled::Degraded => println!(
-            "Rollback via operator {}: rolled back to '{}', which is {}",
-            output::red("failed"),
-            output::bold(&target_name),
-            output::yellow("Degraded"),
-        ),
+        super::operator::Reconciled::Degraded => {
+            println!(
+                "Rollback via operator {}: deployment record '{current}' was updated to restore '{}', and '{current}' is {}.",
+                output::red("failed"),
+                output::bold(&target_name),
+                output::yellow("Degraded"),
+                current = current.name,
+            );
+            println!(
+                "  Inspect deployment record '{}' on the cluster to see which resources failed to reconcile.",
+                current.name
+            );
+        }
     }
 
     if reconciled == super::operator::Reconciled::Degraded {
@@ -607,10 +631,10 @@ fn print_current(current: &Record) {
     let hash_preview = current
         .identity_hash
         .as_deref()
-        .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
+        .map(|h| format!(" (build {}...)", &h[..8.min(h.len())]))
         .unwrap_or_default();
     crate::say!(
-        "Current activation: {}{}",
+        "Current deployment: {}{}",
         output::bold(&current.name),
         hash_preview,
     );
@@ -627,7 +651,7 @@ impl RollbackPlan {
     fn print(&self, cluster: &str, target_name: &str, prune: bool, verbose: bool) {
         println!();
         println!(
-            "{} Rolling back cluster '{}' to activation '{}'",
+            "{} restoring cluster '{}' to deployment '{}'",
             output::bold("Rollback:"),
             output::bold(cluster),
             output::bold(target_name),
@@ -635,9 +659,9 @@ impl RollbackPlan {
         plan::print_package_plan(self.checked.pkg_diff(), verbose);
         plan::print_plan_summary(self.checked.pkg_diff());
         let fate = if prune {
-            "will be deleted".to_string()
+            "to be deleted after the apply (`--prune`)".to_string()
         } else {
-            format!("kept; {}", plan::KEPT_ORPHANS_HINT)
+            plan::kept_orphans_fate(cluster)
         };
         print!(
             "{}",
@@ -757,13 +781,13 @@ fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
         let hash_preview = act
             .identity_hash
             .as_deref()
-            .map(|h| format!("{}...", &h[..8.min(h.len())]))
-            .unwrap_or_else(|| "no hash".to_string());
+            .map(|h| format!("build {}...", &h[..8.min(h.len())]))
+            .unwrap_or_else(|| "no build hash".to_string());
         let ts = act
             .deployed_at
             .clone()
             .filter(|at| !at.is_empty())
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| "unknown time".to_string());
         let available = act
             .identity_hash
             .as_deref()
@@ -772,7 +796,7 @@ fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
         let availability = if available {
             output::green("available")
         } else {
-            output::red("store path missing")
+            output::red("build not on this machine")
         };
         println!(
             "  {} {} ({}), deployed {} [{}]",
@@ -783,7 +807,7 @@ fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
             availability,
         );
         if let Some(path) = act.built_via.as_deref() {
-            println!("      {} {}", output::dim("source:  "), output::dim(path));
+            println!("      {} {}", output::dim("build:   "), output::dim(path));
         }
         if let Some(prev) = act.previous_activation.as_deref() {
             println!("      {} {}", output::dim("previous:"), output::dim(prev),);

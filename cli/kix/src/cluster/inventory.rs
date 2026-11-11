@@ -80,19 +80,15 @@ impl ManagedSweep {
                 } else {
                     "Kix cluster"
                 };
-                format!("Skipped {n} {objects} that {belong} to {clusters} {owner}.")
+                format!("Skipped {n} {objects} that {belong} to {clusters} '{owner}'.")
             })
             .collect();
         if !self.unattributed.is_empty() {
             let n = self.unattributed.len();
-            let (objects, name) = if n == 1 {
-                ("object", "names")
-            } else {
-                ("objects", "name")
-            };
             notes.push(format!(
-                "Skipped {n} Kix {objects} that {name} no Activation record on this cluster; \
-                 another Kix cluster deploys here, so Kix cannot tell whose they are."
+                "Skipped {n} Kix-labeled object(s) that name no deployment record on this \
+                 cluster; another Kix cluster deploys here, so Kix cannot tell which cluster \
+                 they belong to."
             ));
         }
         notes
@@ -1015,8 +1011,13 @@ mod tests {
     fn scope_notes_name_the_other_cluster() {
         let notes =
             scope_sweep(mixed_sweep(), SweepScope::Cluster("a"), two_clusters("a")).scope_notes();
-        assert_eq!(notes[0], "Skipped 1 object that belongs to Kix cluster b.");
-        assert!(notes[1].starts_with("Skipped 2 Kix objects that name no Activation record"));
+        assert_eq!(
+            notes[0],
+            "Skipped 1 object that belongs to Kix cluster 'b'."
+        );
+        assert!(
+            notes[1].starts_with("Skipped 2 Kix-labeled object(s) that name no deployment record")
+        );
     }
 
     /// The sweep lists the Activation records after every object LIST, so

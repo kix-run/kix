@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix diff 04-from-scratch",
-      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 10 resources across 60 resource types\nSkipped 7 objects that belong to Kix cluster 02-hello-world.\n2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
+      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 10 resources across 60 resource types\nSkipped 7 objects that belong to Kix cluster '02-hello-world'.\n2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
       "stderr": "",
-      "stdoutDrift": "2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\nFetched 10 resources across 60 resource types\nFetching managed resources (60 resource types)...\nNo differences found.\nSkipped 7 objects that belong to Kix cluster 02-hello-world.\n⠁ Fetching live cluster state... Discovering API resources...\n",
+      "stdoutDrift": "2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\nFetched 10 resources across 60 resource types\nFetching managed resources (60 resource types)...\nNo differences found.\nSkipped 7 objects that belong to Kix cluster '02-hello-world'.\n⠁ Fetching live cluster state... Discovering API resources...\n",
       "stderrDrift": "",
       "exitCode": 0
     }

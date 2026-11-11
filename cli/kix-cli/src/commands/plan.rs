@@ -776,26 +776,27 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         .collect();
     if !reruns.is_empty() {
         crate::say!(
-            "  {} {} under the rerun rule (deleted first when live): {}",
+            "  {} {} Job(s) with {} will be deleted and recreated so they run again: {}",
             output::yellow("↻"),
             reruns.len(),
+            kix::manifest::keys::RERUN,
             reruns.join(", "),
         );
     }
 
     let deletes = p.checked.flags().prune_policy() == PrunePolicy::Delete;
     let fate = if p.checked.flags().prune_mode == Some(PruneModeFlag::No) {
-        "kept (--prune-mode=no)".to_string()
+        "still running on the cluster (`--prune-mode no`, not deleted)".to_string()
     } else if deletes && p.client.is_none() {
         // `--current-activation` has not contacted the cluster, so it
         // cannot yet tell which orphans another Kix cluster deploys.
-        "will be deleted, except any another Kix cluster still deploys; \
-         checked once the deploy connects"
+        "to be deleted after the apply (`--prune`) except any still deployed by \
+         another Kix cluster (checked once connected)"
             .to_string()
     } else if deletes {
-        "will be deleted".to_string()
+        "to be deleted after the apply (`--prune`)".to_string()
     } else {
-        format!("kept; {}", plan::KEPT_ORPHANS_HINT)
+        plan::kept_orphans_fate(&p.build.graph().cluster_name)
     };
     // Shared orphans are listed with the prune section of `render::render_text`.
     output::progress_text(&plan::render_plan_orphans(p.checked.orphans(), &fate));
