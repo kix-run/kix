@@ -19,11 +19,12 @@
     kix.modules.experimental.monitoring
   ];
 
-  # Auto-instantiate dependencies from the stable packages, and from the
-  # experimental packages named here.
-  availablePackages = packages // {
-    inherit (packages.experimental) stackgres-operator;
-  };
+  # Auto-instantiate dependencies from the stable packages.
+  availablePackages = packages;
+
+  # The StackGres operator runs once per cluster, so it has a namespace of
+  # its own rather than sitting beside the first cluster that needs it.
+  instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
 
   cluster.domain = "homelab.lan";
   clusterLabels = {

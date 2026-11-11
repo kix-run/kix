@@ -1275,9 +1275,13 @@
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
         inherit allInstancesList;
-        extraWarnings = crossScorecardDiag.warnings ++ autoResult.besideConsumerWarnings;
+        extraWarnings = crossScorecardDiag.warnings;
         extraAssertions =
           crossScorecardDiag.assertions
+          ++ map (message: {
+            assertion = false;
+            inherit message;
+          }) autoResult.besideConsumerRefusals
           ++ sharedClusterObjectAssertions
           ++ podSecurityAssertions
           ++ quotaAssertions

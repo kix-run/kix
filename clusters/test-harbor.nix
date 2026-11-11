@@ -51,6 +51,9 @@ kix.buildCluster {
           package = packages.experimental."ingress-nginx";
         };
 
+        # cert-manager runs once per cluster, so it is declared in a
+        # namespace of its own rather than added beside the issuer.
+        instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
         instances.cert-manager.selfsigned = {
           package = packages.experimental.cluster-issuer;
           config.spec.selfSigned = { };
@@ -170,7 +173,8 @@ kix.buildCluster {
             config = {
               database = "registry";
               user = "harbor";
-              password = "dev-harbor-db-password";
+              passwordSource = ./dev-secrets/harbor-db.sops.yaml;
+              passwordHash = "sha256-nxxYCF5UR6Dn+PHqSeQFUVpn08f6zKlS+H/TYsfgu6Q=";
             };
           };
         };

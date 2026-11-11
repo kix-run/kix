@@ -1,8 +1,9 @@
 # Tests for auto-instantiating a shelf package that runs once per cluster
 # (a `cluster:<own key>` meta.conflictsWith entry, or a meta.roles claim).
-# Auto-instantiation places it in the requesting namespace and refuses a
-# cluster that would place it in more than one (eval/auto.nix
-# spreadRefusals). A declared instance that answers the dependency serves
+# Auto-instantiation needs a namespace for it (the shelf entry's
+# `namespace`, or `autoNamespace`), refuses to place it beside its only
+# consumer (eval/auto.nix besideConsumerRefusals), and refuses a cluster
+# that would place it in more than one namespace (spreadRefusals). A declared instance that answers the dependency serves
 # every namespace. A declared instance that claims the same key without
 # answering the consumer is refused by conflictsWith. Two instances that
 # render the same cluster-scoped object, such as a CRD, fail evaluation
@@ -156,32 +157,29 @@ let
       };
   };
 
-  besideConsumer =
-    cluster: builtins.filter (lib.hasInfix "runs once per cluster") cluster.diagnostics.warnings;
-
 in
 {
-  # A singleton added beside its only consumer builds, with a warning that
-  # names the consumer and the two ways to give it a namespace. A plain
-  # shelf package, autoNamespace, or a catalog namespace give no warning.
-  singleton-auto-beside-consumer-warns =
-    let
-      warned = besideConsumer (mkCluster [
+  # A singleton that would land beside its only consumer is refused. A
+  # plain shelf package, autoNamespace, or a catalog namespace are not.
+  # tryEval drops the message, which starts with the change record id.
+  singleton-auto-beside-consumer-refused =
+    (
+      fails (mkCluster [
         (shelfWith singleton)
         { instances.a.consumer.package = consumer; }
-      ]);
-      quietPlain = besideConsumer (mkCluster [
+      ])
+      && !fails (mkCluster [
         (shelfWith plain)
         { instances.a.consumer.package = consumer; }
-      ]);
-      quietAuto = besideConsumer (mkCluster [
+      ])
+      && !fails (mkCluster [
         (shelfWith singleton)
         {
           autoNamespace = "ops";
           instances.a.consumer.package = consumer;
         }
-      ]);
-      quietEntry = besideConsumer (mkCluster [
+      ])
+      && !fails (mkCluster [
         {
           availablePackages.op = {
             package = singleton;
@@ -189,42 +187,26 @@ in
           };
           instances.a.consumer.package = consumer;
         }
-      ]);
-      text = builtins.head warned;
-    in
-    (
-      builtins.length warned == 1
-      && lib.hasInfix "a/consumer" text
-      && lib.hasInfix "instances.<namespace>.op.package" text
-      && lib.hasInfix "autoNamespace" text
-      && quietPlain == [ ]
-      && quietAuto == [ ]
-      && quietEntry == [ ]
+      ])
     )
-    || throw "beside-consumer warning: ${
-      builtins.toJSON {
-        inherit
-          warned
-          quietPlain
-          quietAuto
-          quietEntry
-          ;
-      }
-    }";
+    || throw "beside-consumer refusal: a singleton beside its consumer evaluated, or a control failed";
 
-  # With no instance anywhere, the first consumer pulls the singleton into
-  # its own namespace, and a second consumer there shares it.
+  # With no instance anywhere, two consumers in one namespace pull the
+  # singleton into the shelf entry's namespace once, and both share it.
   singleton-auto-one-namespace-instantiates =
     let
       ms = manifests (mkCluster [
-        (shelfWith singleton)
         {
+          availablePackages.op = {
+            package = singleton;
+            namespace = "ops";
+          };
           instances.a.consumer.package = consumer;
           instances.a.other.package = mkConsumer "other";
         }
       ]);
     in
-    (opNamespaces ms == [ "a" ] && whoIn "a" ms == "a/op")
+    (opNamespaces ms == [ "ops" ] && whoIn "a" ms == "ops/op")
     || throw "singleton not auto-instantiated once: ${builtins.toJSON (opNamespaces ms)}";
 
   # Consumers in a and b with no declared instance: auto-instantiation would
@@ -370,25 +352,24 @@ in
     (opNamespaces ms == [ "ops" ] && op2Namespaces == [ "ops" ])
     || throw "expected op and op2 once in ops, got ${builtins.toJSON (opNamespaces ms)} and ${builtins.toJSON op2Namespaces}";
 
-  # An explicit binding to the instance in a also works.
-  singleton-auto-bound-consumer-shares-instance =
-    let
-      ms = manifests (mkCluster [
-        (shelfWith singleton)
-        (
-          { ref, ... }:
-          {
-            instances.a.consumer.package = consumer;
-            instances.b.consumer = {
-              package = consumer;
-              deps.op = ref.a.op;
-            };
-          }
-        )
-      ]);
-    in
-    (opNamespaces ms == [ "a" ] && whoIn "b" ms == "a/op")
-    || throw "bound consumer did not share the instance: ${builtins.toJSON (opNamespaces ms)}, b sees ${whoIn "b" ms}";
+  # A second consumer bound to the auto-added instance in a does not make
+  # the placement safe: removing a/consumer would still remove op, so the
+  # cluster is refused.
+  singleton-auto-bound-consumer-refused =
+    fails (mkCluster [
+      (shelfWith singleton)
+      (
+        { ref, ... }:
+        {
+          instances.a.consumer.package = consumer;
+          instances.b.consumer = {
+            package = consumer;
+            deps.op = ref.a.op;
+          };
+        }
+      )
+    ])
+    || throw "a consumer bound to a singleton auto-added beside another consumer evaluated";
 
   # One declared instance answers consumers in every namespace.
   singleton-auto-declared-instance-serves-every-namespace =

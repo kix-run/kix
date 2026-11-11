@@ -2006,7 +2006,12 @@ let
         ms = manifests (mkCluster [
           baseInstances
           {
-            availablePackages.stock-storage.package = stockStorage;
+            # A package that runs once per cluster needs a namespace of
+            # its own before Kix adds it.
+            availablePackages.stock-storage = {
+              package = stockStorage;
+              namespace = "storage";
+            };
             instances.ns1.consumer1.package = requiredScConsumer;
             instances.ns2.consumer2.package = requiredScConsumer;
           }
@@ -2056,7 +2061,10 @@ let
           baseInstances
           {
             availablePackages = {
-              stock-storage.package = stockStorage;
+              stock-storage = {
+                package = stockStorage;
+                namespace = "storage";
+              };
             }
             // extra;
             instances.appns.consumer.package = requiredScConsumer;
@@ -4681,7 +4689,10 @@ let
           name = "mkenv-role";
           modules = [
             {
-              availablePackages.stock-storage.package = stockStorage;
+              availablePackages.stock-storage = {
+                package = stockStorage;
+                namespace = "storage";
+              };
               instances =
                 publicKix.mkEnv "development" { } { app = application; }
                 // publicKix.mkEnv "production" { } { app = application; };

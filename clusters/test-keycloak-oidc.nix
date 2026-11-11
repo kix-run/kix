@@ -47,6 +47,9 @@ kix.buildCluster {
         instances.kube-system.cilium.package = packages.experimental.cilium;
 
         instances.ingress-system.ingress-nginx.package = packages.experimental.ingress-nginx;
+        # cert-manager runs once per cluster, so it is declared in a
+        # namespace of its own rather than added beside the issuer.
+        instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
         instances.cert-manager.selfsigned = {
           package = packages.experimental.cluster-issuer;
           config.spec.selfSigned = { };
@@ -65,7 +68,8 @@ kix.buildCluster {
           keycloak-db = {
             package = packages.experimental.stackgres-database;
             # Dev-only value; it protects nothing.
-            config.password = "dev-keycloak-db-password";
+            config.passwordSource = ./dev-secrets/keycloak-db.sops.yaml;
+            config.passwordHash = "sha256-rgn6JZpWdY4hK9Cs6xIUUsG71gsVbab0Da/CZ0N4kRA=";
           };
           # Test values only.
           keycloak-admin = {
@@ -204,7 +208,8 @@ kix.buildCluster {
             config = {
               database = "registry";
               user = "harbor";
-              password = "dev-harbor-db-password";
+              passwordSource = ./dev-secrets/harbor-db.sops.yaml;
+              passwordHash = "sha256-nxxYCF5UR6Dn+PHqSeQFUVpn08f6zKlS+H/TYsfgu6Q=";
             };
           };
         };
@@ -244,7 +249,8 @@ kix.buildCluster {
             config = {
               database = "immich";
               user = "immich";
-              password = "dev-immich-db-password";
+              passwordSource = ./dev-secrets/immich-oidc-db.sops.yaml;
+              passwordHash = "sha256-FLPsEp1yreYLSH/vE0eaQZWcLTzXswoNR+/lMsrP6EA=";
             };
           };
           valkey = {

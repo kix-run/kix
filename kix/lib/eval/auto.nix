@@ -551,11 +551,12 @@ rec {
         )
       ) (builtins.attrNames placementsByName);
 
-      # Warn about a package that runs once per cluster and lands beside the
-      # one consumer that needs it, because nothing names its namespace.
-      # Removing that consumer removes the package for the whole cluster.
-      # Two consumers in two namespaces are refused by spreadRefusals.
-      besideConsumerWarnings = builtins.concatMap (
+      # Refuse a package that runs once per cluster and would land beside
+      # the one consumer that needs it, because nothing names its namespace.
+      # Removing that consumer would remove the package for the whole
+      # cluster. Two consumers in two namespaces are refused by
+      # spreadRefusals.
+      besideConsumerRefusals = builtins.concatMap (
         name:
         let
           ps = placementsByName.${name};
@@ -566,13 +567,13 @@ rec {
         lib.optional (builtins.length namespaces == 1 && reason != null && !placed) (
           builtins.concatStringsSep "\n" (
             [
-              "${name} runs once per cluster (${reason}). Kix added it to namespace ${builtins.head namespaces}, because the package that needs it is there:"
+              "[K2377] ${name} runs once per cluster (${reason}), and nothing names its namespace. Kix would add it to namespace ${builtins.head namespaces}, beside the package that needs it:"
             ]
             ++ map (p: "  ${labelRequester p.requester}, for dependency '${p.depName}'") ps
             ++ [
-              "Removing that package would remove ${name} for the whole cluster. Declare it once, in a namespace of its own:"
+              "Removing that package would then remove ${name} for the whole cluster. Declare ${name} once, in a namespace of its own:"
               "  instances.<namespace>.${name}.package = packages.${name};"
-              "or set autoNamespace to place every package Kix adds there. Kix 0.10 will refuse this placement."
+              "or set autoNamespace to place every package Kix adds there."
             ]
           )
         )
@@ -602,6 +603,6 @@ rec {
       throw (builtins.concatStringsSep "\n" spreadRefusals)
     else
       (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
-        inherit autoInstances activatedOptionals besideConsumerWarnings;
+        inherit autoInstances activatedOptionals besideConsumerRefusals;
       };
 }
