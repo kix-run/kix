@@ -120,7 +120,7 @@ when a check fails or the path is not evaluated by default.
 - O23. Is a list option given a rich default, so users must restate it to add one entry? Fix: `attrsOf` keyed by name, rendered to a list.
 - O24. Can users override selector labels or spread constraints through options? Fix: delete.
 - O25. Does a refusal or a required input apply in modes where the user's own config makes it unnecessary (a pool required under a non-pool IPAM mode)? Fix: condition the check on the effective config.
-- O26. Does the refusal for a removed or renamed option lack a change record id? Fix: start the message with the id in brackets (`[K0001] <pkg>: ...`), take the id from `scripts/change-records.py next-id`, and add a `kind = "error"` record with that id under `changes/` (`changes/README.md`). Kix then prints a line naming `kix explain <id>` after the error.
+- O26. Does the refusal for a removed or renamed option lack a change record id? Fix: start the message with the id in brackets (`[K0001] <pkg>: ...`), take the id from `scripts/change-records.py next-id`, and add a `kind = "error"` record with that id under `changes/` (`changes/README.md`). People search CHANGELOG.md for the id, and tools match it.
 
 ### Dependencies and `out` (D)
 

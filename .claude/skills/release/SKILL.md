@@ -118,6 +118,11 @@ same unreleased records, with the version taken from the prerelease.
    `## <version> - <YYYY-MM-DD>`, with today's date, to the top of
    `CHANGELOG.md`. Check that the new section is the one you read. For a
    prerelease, skip this step.
+5. Required stops. When a record in the new section has
+   `required-stop = true`, add the version to `REQUIRED_STOPS` in
+   `cli/kix-cli/src/commands/deploy/stops.rs`. `kix deploy` then refuses a
+   cluster last deployed by an older Kix when the Kix deploying it is newer
+   than that release's minor. Skip this for a prerelease.
 
 ## 3. Open and merge the pull request
 

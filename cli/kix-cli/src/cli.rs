@@ -102,7 +102,6 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "compliance sbom",
             "compliance attest",
             "pin",
-            "explain",
         ],
     ),
     (
@@ -373,17 +372,6 @@ pub enum Command {
     #[command(subcommand)]
     Lib(LibCommand),
 
-    /// Print the change record behind an id such as K0001
-    ///
-    /// An error that a change in Kix or its library causes starts with the
-    /// change's id, such as K0001, in brackets. This command prints what
-    /// changed, the release it shipped in, and how to update. Kix knows the
-    /// records up to its own version. Exits 1 for an id it does not know.
-    Explain {
-        /// The id, such as K0001. Brackets and lower case are accepted.
-        id: String,
-    },
-
     /// Move this project to a newer version of Kix
     ///
     /// Builds every cluster with the version of Kix the project uses now,
@@ -449,7 +437,6 @@ impl Command {
             },
             Command::Completions(_)
             | Command::Doctor
-            | Command::Explain { .. }
             | Command::Drift(_)
             | Command::Pin(_)
             | Command::Lib(_)
@@ -467,11 +454,6 @@ pub struct UpgradeArgs {
     #[arg(long, value_name = "VERSION")]
     pub to: Option<String>,
 
-    /// Pick only releases at least this many days old, such as 7d. Overrides
-    /// `min-age` in the `[upgrade]` table of kix.toml
-    #[arg(long, value_name = "DAYS")]
-    pub min_age: Option<String>,
-
     /// Print what the upgrade would do and the change records that apply,
     /// and change nothing
     #[arg(long)]
@@ -479,7 +461,7 @@ pub struct UpgradeArgs {
 
     /// Acknowledge a change to stored data by its id or name, so that
     /// `kix deploy` goes ahead. Does nothing else
-    #[arg(long, value_name = "ID", num_args = 1.., conflicts_with_all = ["to", "min_age", "preview"])]
+    #[arg(long, value_name = "ID", num_args = 1.., conflicts_with_all = ["to", "preview"])]
     pub ack: Vec<String>,
 }
 

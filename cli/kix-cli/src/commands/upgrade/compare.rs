@@ -1,5 +1,5 @@
 //! Compare a cluster's manifests before and after an upgrade, and say which
-//! changes a change record explains and which touch access or encryption.
+//! changes touch access, network reach, or encryption.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -74,8 +74,6 @@ pub struct ObjectChange {
     pub id: String,
     pub change: Change,
     pub package: Option<String>,
-    /// A change record names the object's package.
-    pub explained: bool,
     /// The object controls access, network reach, or encryption.
     pub sensitive: bool,
 }
@@ -130,12 +128,10 @@ fn is_empty(v: &Value) -> bool {
     }
 }
 
-/// Compare one cluster's objects. A change is explained when `explaining`
-/// holds the object's package.
+/// Compare one cluster's objects.
 pub fn compare(
     before: &BTreeMap<String, Object>,
     after: &BTreeMap<String, Object>,
-    explaining: &BTreeSet<String>,
 ) -> Vec<ObjectChange> {
     let ids: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
     let mut out = Vec::new();
@@ -153,7 +149,6 @@ pub fn compare(
         out.push(ObjectChange {
             id: id.clone(),
             change,
-            explained: package.as_ref().is_some_and(|p| explaining.contains(p)),
             sensitive: sensitive(kind, old.map(|o| &o.manifest), new.map(|n| &n.manifest)),
             package,
         });
@@ -209,18 +204,17 @@ mod tests {
                 object("db", json!({"kind": "ClusterRole"})),
             ),
         ]);
-        let explaining = BTreeSet::from(["web".to_string()]);
-        let got = compare(&before, &after, &explaining);
-        let view: Vec<(&str, Change, bool, bool)> = got
+        let got = compare(&before, &after);
+        let view: Vec<(&str, Change, bool)> = got
             .iter()
-            .map(|c| (c.id.as_str(), c.change, c.explained, c.sensitive))
+            .map(|c| (c.id.as_str(), c.change, c.sensitive))
             .collect();
         assert_eq!(
             view,
             [
-                ("ClusterRole/new", Change::Added, false, true),
-                ("Deployment/web@shop", Change::Changed, true, false),
-                ("Secret/old@shop", Change::Removed, true, true),
+                ("ClusterRole/new", Change::Added, true),
+                ("Deployment/web@shop", Change::Changed, false),
+                ("Secret/old@shop", Change::Removed, true),
             ]
         );
     }

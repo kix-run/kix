@@ -215,7 +215,15 @@ impl Setup {
             "{}  {file}\n",
             hex(&Sha256::digest(std::fs::read(&archive).unwrap()))
         );
-        if let Some(records) = records {
+        if let Some(mut records) = records {
+            // The script always writes these two fields.
+            for r in records.as_array_mut().unwrap() {
+                for key in ["touchesData", "requiredStop"] {
+                    if r.get(key).is_none() {
+                        r[key] = serde_json::json!(false);
+                    }
+                }
+            }
             let doc = serde_json::json!({
                 "schema": kix::changes::SCHEMA,
                 "version": version,
@@ -370,8 +378,11 @@ fn preview_asks_the_installed_kix_which_packages_are_in_use() {
     std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let (code, out) = s.upgrade(&["--preview"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("[K0001]"), "{out}");
-    assert!(!out.contains("[K0002]"), "{out}");
+    // Every note is listed. The one whose package an instance is named
+    // after is marked as a likely match.
+    assert!(out.contains("2 changes between 9.1.0 and 9.3.0:\n  * may affect your 2 clusters (package name matches an instance in use)\n"), "{out}");
+    assert!(out.contains("  * [K0001] web (9.2.0):"), "{out}");
+    assert!(out.contains("    [K0002] echo-server (9.2.0):"), "{out}");
     assert!(
         s.calls().contains("9.1.0 list packages --cluster east"),
         "{}",
@@ -398,7 +409,8 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
     s.releases(vec![]);
     explained_change(&s);
     let (code, out) = s.upgrade(&[]);
-    assert_eq!(code, 0, "{out}");
+    // Any changed object needs a person.
+    assert_eq!(code, 3, "{out}");
     assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
     assert!(out.starts_with("Upgrading Kix 9.1.0 -> 9.3.0\n"), "{out}");
     assert!(
@@ -413,8 +425,10 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
         out.contains("  east, west:\n    ~ Deployment/web@shop (web)\n"),
         "{out}"
     );
-    // Objects changed, so the run does not say it is ready to deploy.
-    assert!(out.ends_with("Upgraded to Kix 9.3.0.\n"), "{out}");
+    assert!(
+        out.ends_with("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 2 objects changed in clusters east, west; read the changes above, or run\n     `kix diff <cluster>`, before you deploy.\n"),
+        "{out}"
+    );
     let calls = s.calls();
     assert!(calls.contains("9.1.0 export east"), "{calls}");
     assert!(calls.contains("9.3.0 export west"), "{calls}");
@@ -425,11 +439,14 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
         state["schema"],
         format!("{}/upgrade/v1", kix::manifest::keys::DOMAIN)
     );
-    assert_eq!(state["status"], "done");
+    assert_eq!(state["status"], "needs-person");
     assert_eq!(state["from"], "9.1.0");
     assert_eq!(state["to"], "9.3.0");
-    assert_eq!(state["records"]["error"], serde_json::json!(["K0001"]));
-    assert_eq!(state["unexplainedChanges"], 0);
+    assert_eq!(
+        state["records"]["error"],
+        serde_json::json!(["K0001", "K0002"])
+    );
+    assert!(state.get("unexplainedChanges").is_none());
     assert_eq!(state["sensitiveChanges"], 0);
 }
 
@@ -450,7 +467,7 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
         "{out}"
     );
     assert!(
-        out.contains("  Matching change in Kix 9.2.0:\n    [K0001] web:"),
+        out.contains("  Config changes required in Kix 9.2.0:\n    * may affect this project (package name matches an instance in use)\n  * [K0001] web:"),
         "{out}"
     );
     assert!(
@@ -534,7 +551,7 @@ fn a_required_stop_ends_the_upgrade_at_that_minor() {
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
     assert!(
-        out.ends_with("Next: deploy Kix 9.2.1 to all clusters with `kix deploy`, then run `kix upgrade` to continue to 9.3.0.\n"),
+        out.ends_with("Next: commit this 9.2.1 step and deploy every cluster with `kix deploy <cluster>`, then run `kix upgrade` to continue to 9.3.0.\n"),
         "{out}"
     );
     assert_eq!(s.read("kix.toml"), "kix = \"9.2.1\"\n");
@@ -542,7 +559,7 @@ fn a_required_stop_ends_the_upgrade_at_that_minor() {
 }
 
 #[test]
-fn min_age_skips_new_releases() {
+fn min_age_in_kix_toml_skips_new_releases() {
     let s = Setup::new();
     s.publish("9.1.0", "2026-01-01", None);
     s.publish("9.2.0", "2026-02-01", None);
@@ -551,23 +568,28 @@ fn min_age_skips_new_releases() {
         .format("%Y-%m-%d")
         .to_string();
     s.publish("9.3.0", &today, None);
-    let (_, out) = s.upgrade(&["--preview", "--min-age", "7d"]);
-    assert!(out.starts_with("Kix 9.1.0 -> 9.2.0 (preview"), "{out}");
+    let (_, out) = s.upgrade(&["--preview"]);
+    assert!(out.starts_with("Kix 9.1.0 -> 9.3.0 (preview"), "{out}");
     s.write(
         "kix.toml",
         "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"7d\"\n",
     );
     let (_, out) = s.upgrade(&["--preview"]);
     assert!(out.starts_with("Kix 9.1.0 -> 9.2.0 (preview"), "{out}");
-    // The flag wins over the file.
-    let (_, out) = s.upgrade(&["--preview", "--min-age", "0d"]);
-    assert!(out.starts_with("Kix 9.1.0 -> 9.3.0 (preview"), "{out}");
-    let (code, out) = s.upgrade(&["--preview", "--min-age", "1w"]);
+    // The flag is gone: the delay is a project setting.
+    let (code, out) = s.upgrade(&["--preview", "--min-age", "0d"]);
+    assert_eq!(code, 2, "{out}");
+    // A malformed value is refused.
+    s.write(
+        "kix.toml",
+        "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"1w\"\n",
+    );
+    let (code, out) = s.upgrade(&["--preview"]);
     assert_eq!(code, 1, "{out}");
 }
 
 #[test]
-fn unexplained_and_sensitive_changes_need_a_person() {
+fn a_sensitive_change_needs_a_person() {
     let s = Setup::new();
     s.releases(vec![]);
     s.out_for("9.3.0");
@@ -583,18 +605,15 @@ fn unexplained_and_sensitive_changes_need_a_person() {
     assert_eq!(code, 3, "{out}");
     assert!(out.contains("  east: no objects changed\n"), "{out}");
     assert!(
-        out.contains(
-            "  west:\n    ~ ClusterRole/db-reader (db) [review: ClusterRole] [unlisted change]\n"
-        ),
+        out.contains("  west:\n    ~ ClusterRole/db-reader (db) [review: ClusterRole]\n"),
         "{out}"
     );
     assert!(
-        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west (ClusterRole/db-reader).\n  2. 1 object changed"),
+        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west (ClusterRole/db-reader).\n  2. 1 object changed in cluster west; read the changes above, or run `kix diff\n     west`, before you deploy.\n"),
         "{out}"
     );
     let state = s.state();
     assert_eq!(state["status"], "needs-person");
-    assert_eq!(state["unexplainedChanges"], 1);
     assert_eq!(state["sensitiveChanges"], 1);
 }
 
@@ -889,13 +908,12 @@ fn an_explained_sensitive_change_still_needs_a_person() {
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
     let state = s.state();
-    assert_eq!(state["unexplainedChanges"], 0);
     assert_eq!(state["sensitiveChanges"], 2);
     assert_eq!(state["status"], "needs-person");
 }
 
 #[test]
-fn an_unexplained_plain_change_needs_a_person() {
+fn a_plain_change_needs_a_person() {
     let s = Setup::new();
     s.releases(vec![]);
     s.out_for("9.3.0");
@@ -911,9 +929,12 @@ fn an_unexplained_plain_change_needs_a_person() {
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
     let state = s.state();
-    // K0001 names `web`, so only the `cache` object is unexplained.
-    assert_eq!(state["unexplainedChanges"], 1);
+    assert_eq!(state["status"], "needs-person");
     assert_eq!(state["sensitiveChanges"], 0);
+    assert!(
+        out.contains("  1. 2 objects changed in cluster east;"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -1038,4 +1059,81 @@ fn a_project_that_does_not_build_now_is_left_alone() {
     );
     assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
     assert!(!s.project.join("kix-upgrade.json").exists());
+}
+
+#[test]
+fn a_security_note_shows_its_cves_and_workaround() {
+    let s = Setup::new();
+    s.releases(vec![serde_json::json!({
+        "name": "tls-fix",
+        "kind": "security",
+        "packages": ["web"],
+        "cve": ["CVE-2026-0001"],
+        "workaround": "Set `tls.minVersion` to 1.3.",
+        "body": "`web` no longer accepts TLS 1.0.",
+    })]);
+    let (code, out) = s.upgrade(&["--preview"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("  Security fixes (builds cleanly, recommended for this upgrade):\n    [tls-fix] web (9.3.0, CVE-2026-0001): `web` no longer accepts TLS 1.0.\n      Without upgrading: Set `tls.minVersion` to 1.3.\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_range_without_listed_notes_says_so() {
+    let s = Setup::new();
+    s.publish("9.1.0", "2026-01-01", Some(serde_json::json!([])));
+    s.publish(
+        "9.2.0",
+        "2026-02-01",
+        Some(serde_json::json!([{"name": "a", "kind": "fixed", "body": "Fixed."}])),
+    );
+    let (code, out) = s.upgrade(&["--preview"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("No breaking, security, or upgrade notes between 9.1.0 and 9.2.0.\n\n  1 minor feature or bugfix change"),
+        "{out}"
+    );
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.ends_with("Upgraded to Kix 9.2.0. Ready to deploy.\n"),
+        "{out}"
+    );
+    assert_eq!(s.state()["status"], "done");
+}
+
+#[test]
+fn the_kix_toml_delay_names_itself_when_nothing_is_old_enough() {
+    let s = Setup::new();
+    let today = chrono::Utc::now().date_naive();
+    let day = |ago: i64| {
+        (today - chrono::Duration::days(ago))
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+    s.publish("9.1.0", &day(10), None);
+    s.publish("9.2.0", &day(3), None);
+    s.write(
+        "kix.toml",
+        "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"30d\"\n",
+    );
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.starts_with("No Kix release for "), "{out}");
+    assert!(
+        out.contains("is at least 30 days old (`min-age = \"30d\"` in kix.toml; newest release is 3 days old).\nNext: lower `min-age` in kix.toml"),
+        "{out}"
+    );
+    s.write(
+        "kix.toml",
+        "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"7d\"\n",
+    );
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "Already on Kix 9.1.0 (matches target 9.1.0 for `min-age = \"7d\"` in kix.toml). Nothing to upgrade.\n"
+    );
 }

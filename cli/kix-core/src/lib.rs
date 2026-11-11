@@ -14,8 +14,8 @@
 //! [`legacy_domain`] reads objects stamped under Kix's retired API domains,
 //! [`text`] sanitizes untrusted text for terminal output, [`yaml`] reads and
 //! writes YAML, [`version`] parses Kix versions and holds the rule for
-//! which versions work together, and [`changes`] reads change records and
-//! holds the ones built into this Kix.
+//! which versions work together, and [`changes`] reads the change records a
+//! release publishes.
 //!
 //! `kix-lib` builds the cluster, plan, and release code on top of this crate
 //! and re-exports every module here under the same path.

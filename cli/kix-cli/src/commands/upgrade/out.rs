@@ -62,14 +62,29 @@ pub fn note(a: &Applying, indent: usize, preview: bool) -> Vec<String> {
     if r.touches_data {
         paren.push_str(", moves stored data");
     }
+    for cve in &r.cve {
+        paren.push_str(&format!(", {cve}"));
+    }
     let head = if r.packages.is_empty() {
         format!("[{}] ({paren}):", a.reference())
     } else {
         format!("[{}] {} ({paren}):", a.reference(), list(&r.packages))
     };
-    let pad = " ".repeat(indent);
-    let mut lines = wrap(&format!("{pad}{head}"), indent + 2, &r.body);
+    let mut lines = wrap(
+        &format!("{}{head}", gutter(indent, a.likely)),
+        indent + 2,
+        &r.body,
+    );
     let more = " ".repeat(indent + 2);
+    if r.kind == Kind::Security
+        && let Some(workaround) = &r.workaround
+    {
+        lines.extend(wrap(
+            &format!("{more}Without upgrading:"),
+            indent + 2,
+            workaround,
+        ));
+    }
     if preview && r.kind == Kind::Silent && r.touches_data {
         lines.push(format!(
             "{more}Requires `kix upgrade --ack {}` before `kix deploy`.",
@@ -88,17 +103,55 @@ pub fn note(a: &Applying, indent: usize, preview: bool) -> Vec<String> {
     lines
 }
 
+/// Return the indent of a note's first line, with a `*` in it when the
+/// note is a likely match.
+fn gutter(indent: usize, likely: bool) -> String {
+    if likely && indent >= 2 {
+        format!("{}* ", " ".repeat(indent - 2))
+    } else {
+        " ".repeat(indent)
+    }
+}
+
+/// Return whether Kix lists `a` one by one: a breaking, security, or
+/// upgrade note, or a release every cluster must deploy.
+fn is_listed(a: &Applying) -> bool {
+    a.record.required_stop
+        || matches!(
+            a.record.kind,
+            Kind::Error | Kind::Silent | Kind::Note | Kind::Security
+        )
+}
+
 /// The changes Kix lists one by one.
 pub fn listed(applying: &[Applying]) -> Vec<&Applying> {
-    applying
+    applying.iter().filter(|a| is_listed(a)).collect()
+}
+
+/// Return the group a listed note is shown under. A required stop of a
+/// minor kind is shown with the upgrade notes.
+fn group(a: &Applying) -> Kind {
+    match a.record.kind {
+        Kind::Added | Kind::Changed | Kind::Fixed => Kind::Note,
+        kind => kind,
+    }
+}
+
+/// Return the legend for likely matches, or `None` when no listed note is
+/// one. `clusters` is the number of clusters when Kix knows it.
+pub fn legend(applying: &[Applying], clusters: Option<usize>) -> Option<String> {
+    listed(applying)
         .iter()
-        .filter(|a| {
-            matches!(
-                a.record.kind,
-                Kind::Error | Kind::Silent | Kind::Note | Kind::Security
-            )
+        .any(|a| a.likely)
+        .then(|| match clusters {
+            Some(n) => format!(
+                "  * may affect your {n} {} (package name matches an instance in use)",
+                if n == 1 { "cluster" } else { "clusters" }
+            ),
+            None => {
+                "  * may affect this project (package name matches an instance in use)".to_string()
+            }
         })
-        .collect()
 }
 
 /// Return the release notes grouped by what the reader must do, then the
@@ -124,7 +177,10 @@ pub fn notes(applying: &[Applying], preview: bool, from: &Version, to: &Version)
     ];
     let mut lines = Vec::new();
     for (kind, in_preview, in_run) in groups {
-        let of: Vec<&Applying> = applying.iter().filter(|a| a.record.kind == kind).collect();
+        let of: Vec<&Applying> = listed(applying)
+            .into_iter()
+            .filter(|a| group(a) == kind)
+            .collect();
         if of.is_empty() {
             continue;
         }
@@ -277,9 +333,6 @@ pub fn change_line(c: &ObjectChange) -> String {
     if c.sensitive {
         line.push_str(&format!(" [review: {}]", review_label(c)));
     }
-    if !c.explained {
-        line.push_str(" [unlisted change]");
-    }
     line
 }
 
@@ -324,8 +377,10 @@ pub struct Review {
     /// Sensitive objects, by label and the ids of the objects, with the
     /// clusters they changed in.
     pub sensitive: BTreeMap<(String, Vec<String>), Vec<String>>,
-    pub unexplained: usize,
-    pub unexplained_clusters: Vec<String>,
+    /// How many objects changed, over every cluster.
+    pub changed: usize,
+    /// The clusters any object changed in.
+    pub changed_clusters: Vec<String>,
 }
 
 impl Review {
@@ -344,14 +399,13 @@ impl Review {
                 .or_default()
                 .push(cluster.to_string());
         }
-        let unexplained = changes.iter().filter(|c| !c.explained).count();
-        if unexplained > 0 {
-            self.unexplained += unexplained;
-            self.unexplained_clusters.push(cluster.to_string());
+        if !changes.is_empty() {
+            self.changed += changes.len();
+            self.changed_clusters.push(cluster.to_string());
         }
     }
 
-    /// Return the review items for sensitive and unexplained objects.
+    /// Return the review items for sensitive and changed objects.
     pub fn items(&self) -> Vec<Vec<String>> {
         let mut items = Vec::new();
         for ((label, ids), clusters) in &self.sensitive {
@@ -366,15 +420,19 @@ impl Review {
                 list(ids)
             )));
         }
-        if self.unexplained > 0 {
-            let what = if self.unexplained == 1 {
+        if self.changed > 0 {
+            let what = if self.changed == 1 {
                 "1 object".to_string()
             } else {
-                format!("{} objects", self.unexplained)
+                format!("{} objects", self.changed)
+            };
+            let command = match self.changed_clusters.as_slice() {
+                [one] => format!("kix diff {one}"),
+                _ => "kix diff <cluster>".to_string(),
             };
             items.push(wrap_item(&format!(
-                "{what} changed without a matching release note in {} (marked [unlisted change] above).",
-                in_clusters(&self.unexplained_clusters)
+                "{what} changed in {}; read the changes above, or run `{command}`, before you deploy.",
+                in_clusters(&self.changed_clusters)
             )));
         }
         items

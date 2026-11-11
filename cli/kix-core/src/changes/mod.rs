@@ -1,40 +1,130 @@
-//! Change records: one file per user-visible change under the repository's
-//! `changes/` folder, described in `changes/README.md`.
-//!
-//! `build.rs` checks every record and builds it into Kix, so [`compiled`]
-//! holds every record up to this version of Kix. An error a record
-//! describes prints the record's id in brackets, such as `[K0001]`, and
-//! [`find`] looks that id up.
+//! The change records a release publishes as `kix-<version>-changes.json`,
+//! which `kix upgrade` reads. `scripts/change-records.py json` writes the
+//! file from the records under the repository's `changes/` folder, described
+//! in `changes/README.md`.
 
-mod record;
+use std::fmt;
 
-use std::sync::OnceLock;
+use serde::{Deserialize, Serialize};
 
-pub use record::{Compiled, Document, DocumentError, Kind, Record, RecordError, SCHEMA, is_id};
+/// The `schema` of a change record document.
+pub const SCHEMA: &str = "kix.run/changes/v1";
 
-/// Return every record built into this Kix, sorted by folder and then by
-/// file name.
-pub fn compiled() -> &'static [Compiled] {
-    static RECORDS: OnceLock<Vec<Compiled>> = OnceLock::new();
-    RECORDS.get_or_init(|| {
-        serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/changes.json")))
-            .expect("build.rs writes valid change records")
-    })
+/// What kind of change a record describes. Each kind is one `CHANGELOG.md`
+/// heading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Error,
+    Silent,
+    Note,
+    Security,
+    Added,
+    Changed,
+    Fixed,
 }
 
-/// Return the record built into this Kix whose id is `id`. The id may be in
-/// brackets and in any case.
-pub fn find(id: &str) -> Option<&'static Compiled> {
-    find_in(compiled(), id)
+impl Kind {
+    /// Return the name a record's `kind` field uses.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Error => "error",
+            Kind::Silent => "silent",
+            Kind::Note => "note",
+            Kind::Security => "security",
+            Kind::Added => "added",
+            Kind::Changed => "changed",
+            Kind::Fixed => "fixed",
+        }
+    }
 }
 
-/// Return the record in `records` whose id is `id`. The id may be in
-/// brackets and in any case.
-pub fn find_in<'a>(records: &'a [Compiled], id: &str) -> Option<&'a Compiled> {
-    let id = normalize_id(id)?;
-    records
-        .iter()
-        .find(|c| c.record.id.as_deref() == Some(id.as_str()))
+/// One change record.
+///
+/// Reading skips fields this version does not know. The fields `kix
+/// upgrade` decides on (`kind`, `touchesData`, `requiredStop`) have no
+/// default, so a renamed key fails to read instead of reading as false.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Record {
+    /// The file name without `.md`, usually the branch name.
+    pub name: String,
+    pub kind: Kind,
+    /// Package names under `kix/packages/` the change touches.
+    #[serde(default)]
+    pub packages: Vec<String>,
+    /// Library symbols, such as `kix.contracts.redis`.
+    #[serde(default)]
+    pub library: Vec<String>,
+    /// CLI commands or flags removed or changed, as a user types them.
+    #[serde(default)]
+    pub cli: Vec<String>,
+    /// Whether the change touches the state Kix writes into a cluster.
+    #[serde(default)]
+    pub state: bool,
+    /// Whether the change moves or reinterprets stored data.
+    pub touches_data: bool,
+    /// Whether clusters must be deployed with this release before upgrading
+    /// further.
+    pub required_stop: bool,
+    /// `K` and four digits, printed in brackets at the start of the error
+    /// the change causes.
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub cve: Vec<String>,
+    /// How to get a security fix without upgrading.
+    #[serde(default)]
+    pub workaround: Option<String>,
+    /// The Markdown text of the record.
+    #[serde(default)]
+    pub body: String,
+}
+
+/// The change records of one release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Document {
+    pub schema: String,
+    pub version: String,
+    pub records: Vec<Record>,
+}
+
+/// A change record document that cannot be read.
+#[derive(Debug)]
+pub enum DocumentError {
+    Json(serde_json::Error),
+    /// The document names a `schema` other than [`SCHEMA`].
+    Schema(String),
+}
+
+impl fmt::Display for DocumentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DocumentError::Json(e) => write!(f, "the change records are not valid JSON: {e}"),
+            DocumentError::Schema(s) => write!(
+                f,
+                "the change records use schema `{s}`, and Kix reads only `{SCHEMA}`"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DocumentError {}
+
+impl Document {
+    /// Read a change record document.
+    pub fn parse(json: &str) -> Result<Document, DocumentError> {
+        let doc: Document = serde_json::from_str(json).map_err(DocumentError::Json)?;
+        if doc.schema != SCHEMA {
+            return Err(DocumentError::Schema(doc.schema));
+        }
+        Ok(doc)
+    }
+}
+
+/// Return whether `id` is `K` followed by four digits.
+pub fn is_id(id: &str) -> bool {
+    id.len() == 5 && id.starts_with('K') && id[1..].bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Return `input` as a record id (`K0001`), accepting brackets and any case,
@@ -49,255 +139,59 @@ pub fn normalize_id(input: &str) -> Option<String> {
     is_id(&id).then_some(id)
 }
 
-/// Return each id written in brackets in `text`, such as `[K0001]`, in the
-/// order they first appear.
-pub fn ids_in(text: &str) -> Vec<String> {
-    let mut ids: Vec<String> = Vec::new();
-    for (start, _) in text.match_indices("[K") {
-        let Some(candidate) = text.get(start + 1..start + 6) else {
-            continue;
-        };
-        if is_id(candidate)
-            && text[start + 6..].starts_with(']')
-            && !ids.iter().any(|i| i == candidate)
-        {
-            ids.push(candidate.to_owned());
-        }
-    }
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse(text: &str) -> Result<Record, RecordError> {
-        Record::parse("example", text)
-    }
-
-    /// Assert that `text` fails to parse with a problem containing `needle`.
-    fn refused(text: &str, needle: &str) {
-        let err = parse(text).expect_err("the record should be refused");
-        assert!(
-            err.0.iter().any(|p| p.contains(needle)),
-            "expected a problem containing {needle:?}, got {err}"
-        );
-    }
-
-    const ERROR_RECORD: &str = "+++\nkind = \"error\"\npackages = [\"echo-server\", \"dns-exporter\"]\nid = \"K0001\"\n+++\n`echo-server` renames `replicaCount` to `replicas`.\n";
-
     #[test]
-    fn changes_parse_a_full_record() {
-        let r = parse(ERROR_RECORD).unwrap();
-        assert_eq!(r.name, "example");
-        assert_eq!(r.kind, Kind::Error);
-        assert_eq!(r.packages, ["echo-server", "dns-exporter"]);
-        assert_eq!(r.id.as_deref(), Some("K0001"));
-        assert!(r.is_breaking());
-        assert_eq!(
-            r.body.trim(),
-            "`echo-server` renames `replicaCount` to `replicas`."
-        );
-    }
-
-    #[test]
-    fn changes_parse_every_field() {
-        let r = parse(
-            "+++\nkind = \"silent\"\nlibrary = [\"kix.contracts.redis\"]\ncli = [\"--old\"]\nstate = true\ntouches-data = true\nrequired-stop = true\n+++\nMoved.\n",
-        )
-        .unwrap();
-        assert_eq!(r.kind, Kind::Silent);
-        assert_eq!(r.library, ["kix.contracts.redis"]);
-        assert_eq!(r.cli, ["--old"]);
-        assert!(r.state && r.touches_data && r.required_stop);
-        assert_eq!(r.id, None);
-
-        let r = parse(
-            "+++\nkind = \"security\"\ncve = [\"CVE-2026-1\"]\nworkaround = \"Set x.\"\n+++\nFixed.\n",
-        )
-        .unwrap();
-        assert_eq!(r.cve, ["CVE-2026-1"]);
-        assert_eq!(r.workaround.as_deref(), Some("Set x."));
-        assert!(!r.is_breaking());
-    }
-
-    #[test]
-    fn changes_refuse_a_bad_layout() {
-        refused("kind = \"added\"\n", "must start with a `+++` line");
-        refused("+++\nkind = \"added\"\nText.\n", "no closing `+++` line");
-        refused("+++\nkind = \n+++\nText.\n", "not valid TOML");
-        refused(
-            "+++\nkind = \"added\"\n+++\n\n  \n",
-            "text below the header is empty",
-        );
-    }
-
-    #[test]
-    fn changes_refuse_bad_fields() {
-        refused("+++\n+++\nText.\n", "`kind` is required");
-        refused("+++\nkind = \"removed\"\n+++\nText.\n", "is unknown");
-        refused("+++\nkind = 1\n+++\nText.\n", "`kind` must be a string");
-        refused(
-            "+++\nkind = \"added\"\ntouchesData = true\n+++\nText.\n",
-            "unknown field `touchesData`",
-        );
-        refused(
-            "+++\nkind = \"added\"\npackages = \"caddy\"\n+++\nText.\n",
-            "`packages` must be a list of strings",
-        );
-        refused(
-            "+++\nkind = \"added\"\npackages = [1]\n+++\nText.\n",
-            "`packages` must be a list of strings",
-        );
-        refused(
-            "+++\nkind = \"added\"\nstate = \"yes\"\n+++\nText.\n",
-            "`state` must be true or false",
-        );
-    }
-
-    #[test]
-    fn changes_refuse_bad_kind_and_field_combinations() {
-        refused("+++\nkind = \"error\"\n+++\nText.\n", "needs an `id`");
-        refused(
-            "+++\nkind = \"added\"\nid = \"K001\"\n+++\nText.\n",
-            "must be K and four digits",
-        );
-        refused(
-            "+++\nkind = \"added\"\nid = \"k0001\"\n+++\nText.\n",
-            "must be K and four digits",
-        );
-        refused(
-            "+++\nkind = \"error\"\nid = \"K0001\"\ntouches-data = true\n+++\nText.\n",
-            "`touches-data` is only for",
-        );
-        refused(
-            "+++\nkind = \"note\"\nrequired-stop = true\n+++\nText.\n",
-            "`required-stop` needs `state = true`",
-        );
-        refused(
-            "+++\nkind = \"fixed\"\ncve = [\"CVE-1\"]\n+++\nText.\n",
-            "`cve` is only for",
-        );
-        refused(
-            "+++\nkind = \"security\"\n+++\nText.\n",
-            "needs a `workaround`",
-        );
-        refused(
-            "+++\nkind = \"security\"\nworkaround = \"  \"\n+++\nText.\n",
-            "needs a `workaround`",
-        );
-        refused(
-            "+++\nkind = \"fixed\"\nworkaround = \"x\"\n+++\nText.\n",
-            "`workaround` is only for",
-        );
-    }
-
-    #[test]
-    fn changes_report_every_problem() {
-        let err = parse("+++\nkind = \"error\"\ncolour = 1\n+++\n\n").unwrap_err();
-        assert_eq!(err.0.len(), 3, "{err}");
-    }
-
-    #[test]
-    fn changes_kinds_follow_the_changelog() {
-        assert_eq!(Kind::Error.heading(), "Breaking (shows an error)");
-        assert_eq!(Kind::Silent.heading(), "Breaking (no error)");
-        let breaking: Vec<_> = Kind::ALL.into_iter().filter(|k| k.is_breaking()).collect();
-        assert_eq!(breaking, [Kind::Error, Kind::Silent]);
-        for k in Kind::ALL {
-            assert_eq!(Kind::from_name(k.name()), Some(k));
-        }
-    }
-
-    #[test]
-    fn changes_read_the_json_document() {
+    fn a_document_skips_unknown_fields() {
         let doc = Document::parse(
             r#"{
               "schema": "kix.run/changes/v1",
               "version": "0.10.0",
               "future": {"x": 1},
               "records": [{
-                "name": "rename-replica-count",
-                "kind": "error",
-                "packages": ["echo-server"],
-                "library": [], "cli": [],
-                "state": false, "touchesData": false, "requiredStop": true,
-                "id": "K0001", "cve": [], "workaround": null,
-                "body": "Renamed.",
-                "addedLater": "skipped"
-              }, {"name": "minimal", "kind": "added"}]
+                "name": "a", "kind": "error", "touchesData": false,
+                "requiredStop": true, "id": "K0001", "addedLater": "skipped"
+              }]
             }"#,
         )
         .unwrap();
-        assert_eq!(doc.version, "0.10.0");
-        assert_eq!(doc.records.len(), 2);
-        let r = &doc.records[0];
-        assert_eq!(r.kind, Kind::Error);
-        assert!(r.required_stop);
-        assert_eq!(r.id.as_deref(), Some("K0001"));
-        assert_eq!(doc.records[1].body, "");
-
-        let json = serde_json::to_value(r).unwrap();
-        assert_eq!(json["touchesData"], false);
-        assert_eq!(json["requiredStop"], true);
+        assert_eq!(doc.records[0].kind, Kind::Error);
+        assert!(doc.records[0].required_stop);
+        assert_eq!(doc.records[0].body, "");
     }
 
     #[test]
-    fn changes_refuse_another_schema() {
+    fn a_missing_verdict_field_is_an_error() {
+        for record in [
+            r#"{"name": "a", "touchesData": false, "requiredStop": false}"#,
+            r#"{"name": "a", "kind": "silent", "requiredStop": false}"#,
+            r#"{"name": "a", "kind": "note", "touchesData": false}"#,
+            r#"{"name": "a", "kind": "silent", "touches_data": true, "requiredStop": false}"#,
+        ] {
+            let json = format!(
+                r#"{{"schema": "kix.run/changes/v1", "version": "1.0.0", "records": [{record}]}}"#
+            );
+            assert!(Document::parse(&json).is_err(), "{record}");
+        }
+    }
+
+    #[test]
+    fn another_schema_is_refused() {
         let err = Document::parse(
             r#"{"schema": "kix.run/changes/v2", "version": "1.0.0", "records": []}"#,
         )
         .unwrap_err();
         assert!(matches!(err, DocumentError::Schema(_)), "{err}");
-        assert!(Document::parse("{").is_err());
-    }
-
-    fn compiled_fixture() -> Vec<Compiled> {
-        vec![
-            Compiled {
-                release: Some("0.10.0".into()),
-                record: parse(ERROR_RECORD).unwrap(),
-            },
-            Compiled {
-                release: None,
-                record: Record::parse("plain", "+++\nkind = \"added\"\n+++\nNew.\n").unwrap(),
-            },
-        ]
     }
 
     #[test]
-    fn changes_find_by_id_in_any_form() {
-        let records = compiled_fixture();
+    fn ids_are_read_in_any_form() {
         for form in ["K0001", "k0001", "[K0001]", " [k0001] "] {
-            let found = find_in(&records, form).unwrap_or_else(|| panic!("{form}"));
-            assert_eq!(found.record.name, "example");
-            assert_eq!(found.release.as_deref(), Some("0.10.0"));
+            assert_eq!(normalize_id(form).as_deref(), Some("K0001"), "{form}");
         }
-        assert!(find_in(&records, "K0002").is_none());
-        assert!(find_in(&records, "K01").is_none());
-        assert!(find_in(&records, "plain").is_none());
-    }
-
-    #[test]
-    fn changes_find_ids_in_text() {
-        assert_eq!(
-            ids_in("[K0002] x [K0001] y [K0002] [K12] [k0003] K0004 [K00051]"),
-            ["K0002", "K0001"]
-        );
-        assert!(ids_in("no ids, and a trailing [K").is_empty());
-    }
-
-    #[test]
-    fn changes_compiled_records_are_valid() {
-        // Every compiled record passed `Record::parse` in build.rs, and
-        // the ids are unique.
-        let mut ids: Vec<_> = compiled()
-            .iter()
-            .filter_map(|c| c.record.id.clone())
-            .collect();
-        let n = ids.len();
-        ids.sort();
-        ids.dedup();
-        assert_eq!(ids.len(), n);
+        assert_eq!(normalize_id("K01"), None);
+        assert_eq!(normalize_id("move-data"), None);
     }
 }

@@ -43,7 +43,7 @@ the release notes that apply to your project under `Config changes required`,
 
 To move to a release other than the newest, pass `--to`, such as
 `--to 0.10` for the newest 0.10 patch. To wait until a release has been out
-for a while, pass `--min-age 7d`, or set it for the project in `kix.toml`:
+for a while, set `min-age` for the project in `kix.toml`:
 
 ```toml
 # kix.toml
@@ -86,12 +86,14 @@ tries that release again and continues to the newest one.
 read what changed before you deploy. It ends with a numbered list under
 `Upgraded to Kix 0.12.1, but review before deploying:`. An item names:
 
-- objects marked `[unlisted change]`, which no release note accounts for,
+- objects that changed in any cluster; read them, or run `kix diff <cluster>`
+  to see what deploying would change in the live cluster,
 - objects marked `[review: <Kind>]`, such as a Secret, a ClusterRole, or an
   Ingress whose TLS settings changed,
 - a change that alters behavior with no build error, or
 - a release that every cluster must deploy before the project upgrades
-  further. Deploy every cluster, then run `kix upgrade` again.
+  further. Commit the step, deploy every cluster, then run `kix upgrade`
+  again. `kix deploy` refuses a cluster that would skip that release.
 
 To see the field changes for a cluster, compare the new build with the
 cluster before you deploy:

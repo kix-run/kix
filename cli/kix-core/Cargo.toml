@@ -40,12 +40,6 @@ tempfile.workspace = true
 # Logging
 tracing.workspace = true
 
-[build-dependencies]
-# build.rs checks the change records and builds them in.
-serde.workspace = true
-serde_json.workspace = true
-toml.workspace = true
-
 [features]
 # Fixtures that kix-lib's tests share with this crate's own.
 test-util = []

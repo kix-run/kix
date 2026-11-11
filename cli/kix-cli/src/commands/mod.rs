@@ -8,7 +8,6 @@ pub mod deploy_log;
 pub mod diff;
 pub mod doctor;
 pub mod drift;
-pub mod explain;
 pub mod export;
 pub mod gc;
 pub mod graph;

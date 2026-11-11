@@ -32,6 +32,14 @@ fn old_enough(release: &Release, min_age: Option<u32>, today: NaiveDate) -> bool
         .is_some_and(|date| (today - date).num_days() >= i64::from(days))
 }
 
+/// Return how many days old the newest of `releases` is on `today`, when
+/// its date can be read.
+pub fn newest_age(releases: &[&Release], today: NaiveDate) -> Option<i64> {
+    let newest = releases.iter().max_by(|a, b| a.version.cmp(&b.version))?;
+    let date = NaiveDate::parse_from_str(newest.date.as_deref()?, "%Y-%m-%d").ok()?;
+    Some((today - date).num_days())
+}
+
 /// Return the release to upgrade to. `to` is the `--to` value as a
 /// requirement, or `None` for the newest release. `min_age` skips releases
 /// younger than that many days, except a version named exactly.
@@ -119,30 +127,20 @@ pub fn required_stop(
     (&until < target).then_some((stop, until))
 }
 
-/// Return whether `record` applies to a project that uses the packages
-/// `in_use`. A record that names no package applies to every project, and
-/// so does every record when Kix could not list the packages.
-///
-/// `in_use` holds instance names, which differ from package names when a
-/// cluster renames an instance. So a change with no error and a required
-/// stop always apply, since missing one of them is not safe.
-pub fn applies(record: &Record, in_use: Option<&BTreeSet<String>>) -> bool {
-    if record.kind == Kind::Silent || record.required_stop {
-        return true;
-    }
-    match in_use {
-        None => true,
-        Some(in_use) => {
-            record.packages.is_empty() || record.packages.iter().any(|p| in_use.contains(p))
-        }
-    }
+/// Return whether `record` names a package whose name is an instance in
+/// `in_use`. Records name packages and Kix sees only instance names, so a
+/// match is likely, never certain, and no match proves nothing.
+pub fn likely(record: &Record, in_use: Option<&BTreeSet<String>>) -> bool {
+    in_use.is_some_and(|in_use| record.packages.iter().any(|p| in_use.contains(p)))
 }
 
-/// One record that applies, with the release that shipped it.
+/// One record in the range of an upgrade, with the release that shipped it.
 #[derive(Debug, Clone)]
 pub struct Applying {
     pub release: Version,
     pub record: Record,
+    /// The record names a package that an instance in use is named after.
+    pub likely: bool,
 }
 
 impl Applying {
@@ -155,8 +153,8 @@ impl Applying {
     }
 }
 
-/// Return the records of the releases after `from` up to `to` that apply
-/// to the project.
+/// Return every record of the releases after `from` up to `to`, each
+/// marked when it is [`likely`] to touch the project.
 pub fn applying(
     records: &[ReleaseRecords],
     from: &Version,
@@ -173,9 +171,9 @@ pub fn applying(
                 .map(|rec| Applying {
                     release: r.version.clone(),
                     record: rec.clone(),
+                    likely: likely(rec, in_use),
                 })
         })
-        .filter(|a| applies(&a.record, in_use))
         .collect()
 }
 
@@ -346,8 +344,27 @@ mod tests {
         }
     }
 
+    /// Read a record from the file form, a TOML header between `+++` lines
+    /// and a body, through the JSON form a release publishes.
     fn record(name: &str, text: &str) -> Record {
-        Record::parse(name, text).unwrap()
+        let mut parts = text.splitn(3, "+++\n");
+        parts.next();
+        let header: toml::Table = toml::from_str(parts.next().unwrap()).unwrap();
+        let mut json = serde_json::json!({
+            "name": name,
+            "touchesData": false,
+            "requiredStop": false,
+            "body": parts.next().unwrap_or_default(),
+        });
+        for (key, value) in header {
+            let key = match key.as_str() {
+                "touches-data" => "touchesData".to_string(),
+                "required-stop" => "requiredStop".to_string(),
+                other => other.to_string(),
+            };
+            json[key] = serde_json::to_value(value).unwrap();
+        }
+        serde_json::from_value(json).unwrap()
     }
 
     #[test]
@@ -379,26 +396,16 @@ mod tests {
     }
 
     #[test]
-    fn records_apply_to_the_packages_in_use() {
+    fn every_record_counts_and_matches_are_marked() {
         let general = record("general", "+++\nkind = \"added\"\n+++\nNew.\n");
         let echo = record(
             "echo",
             "+++\nkind = \"error\"\nid = \"K0001\"\npackages = [\"echo-server\"]\n+++\nRenamed.\n",
         );
-        let in_use: BTreeSet<String> = ["caddy".to_string()].into();
-        assert!(applies(&general, Some(&in_use)));
-        assert!(!applies(&echo, Some(&in_use)));
-        assert!(applies(&echo, None));
-        let silent = record(
-            "silent",
-            "+++\nkind = \"silent\"\npackages = [\"echo-server\"]\n+++\nMoved.\n",
-        );
-        assert!(applies(&silent, Some(&in_use)));
-        let stop = record(
-            "stop",
-            "+++\nkind = \"note\"\npackages = [\"echo-server\"]\nstate = true\nrequired-stop = true\n+++\nMoved.\n",
-        );
-        assert!(applies(&stop, Some(&in_use)));
+        let in_use: BTreeSet<String> = ["caddy".to_string(), "echo-server".to_string()].into();
+        assert!(likely(&echo, Some(&in_use)));
+        assert!(!likely(&general, Some(&in_use)));
+        assert!(!likely(&echo, None));
 
         let records = vec![
             doc("0.9.1", vec![general.clone()]),
@@ -406,12 +413,13 @@ mod tests {
             doc("0.11.0", vec![echo]),
         ];
         let got = applying(&records, &v("0.9.1"), &v("0.10.1"), Some(&in_use));
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].release, v("0.10.0"));
-        assert_eq!(got[0].reference(), "general");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].reference(), "K0001");
+        assert!(got[0].likely);
+        assert!(!got[1].likely);
         let all = applying(&records, &v("0.9.0"), &v("0.11.1"), None);
         assert_eq!(all.len(), 4);
+        assert!(all.iter().all(|a| !a.likely));
         assert_eq!(of_kind(&all, Kind::Error).len(), 2);
-        assert_eq!(of_kind(&all, Kind::Error)[0].reference(), "K0001");
     }
 }

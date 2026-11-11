@@ -233,12 +233,6 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let has_failure = results.iter().any(|r| r.result == "fail");
-    // A failed evaluation can name a change record's id, for the hint.
-    let failures: Vec<String> = results
-        .iter()
-        .filter(|r| r.result == "fail")
-        .map(|r| r.details.clone())
-        .collect();
 
     if args.sarif {
         let sarif = if let Some(output) = &cluster_output {
@@ -266,7 +260,6 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         );
 
         if has_failure {
-            super::explain::print_hint(&failures.join("\n"));
             std::process::exit(1);
         }
         return Ok(());
@@ -276,7 +269,6 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     output::result(&response)?;
 
     if has_failure {
-        super::explain::print_hint(&failures.join("\n"));
         std::process::exit(1);
     }
 

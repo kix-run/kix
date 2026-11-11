@@ -113,9 +113,7 @@ min-age = "7d"
 
 | Key | Value | Effect |
 | --- | --- | --- |
-| `min-age` | A number of days, such as `"7d"` | `kix upgrade` picks only releases at least this old, by their release date. The `--min-age` flag overrides it. |
-
-Kix 0.9.1 and older do not recognize the `[upgrade]` table and reject any `kix.toml` that includes it with `unknown setting \`upgrade\``. If your project still uses Kix 0.9.1 or older, or steps through it during an upgrade, pass `--min-age` on the command line instead.
+| `min-age` | A number of days, such as `"7d"` | `kix upgrade` picks only releases at least this old, by their release date. |
 
 ## Tracking `kix.toml` in Git
 

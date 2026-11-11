@@ -78,7 +78,6 @@ pub struct UpgradeState {
     pub data_changes: Vec<DataChange>,
     #[serde(default)]
     pub acknowledged: Vec<String>,
-    pub unexplained_changes: usize,
     pub sensitive_changes: usize,
     #[serde(default)]
     pub cli_hits: Vec<CliHit>,
@@ -161,7 +160,6 @@ mod tests {
                 },
             ],
             acknowledged: vec!["K0002".into()],
-            unexplained_changes: 0,
             sensitive_changes: 1,
             cli_hits: vec![],
             before: "/cache/before".into(),

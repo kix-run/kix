@@ -101,26 +101,26 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             }
         },
     };
-    let min_age = match &args.min_age {
-        Some(text) => match kix::project::parse_min_age(text) {
-            Some(days) => Some(days),
-            None => {
-                return refuse(&format!(
-                    "Invalid `--min-age` value `{text}`: expected a number of days such as `7d`."
-                ));
-            }
-        },
-        None => config.upgrade_min_age,
-    };
+    let min_age = config.upgrade_min_age;
     let today = chrono::Utc::now().date_naive();
     let Some(target) = plan::choose_target(&releases, to.as_ref(), min_age, today) else {
+        let newest_age = plan::newest_age(&releases, today).map(|d| {
+            format!(
+                "newest release is {d} {} old",
+                if d == 1 { "day" } else { "days" }
+            )
+        });
         return refuse(&match (&to, min_age) {
-            (Some(to), Some(days)) => {
-                format!("No Kix release for {system} matches `--to {to}` and `--min-age {days}d`.")
-            }
-            (Some(to), None) => format!("No Kix release for {system} matches `--to {to}`."),
+            (Some(to), Some(days)) => format!(
+                "No Kix release for {system} matches `--to {to}` and `min-age = \"{days}d\"` in kix.toml{}.\nNext: pass an exact version with `--to`, or lower `min-age` in kix.toml.",
+                newest_age.map(|a| format!(" ({a})")).unwrap_or_default()
+            ),
+            (Some(to), None) => format!(
+                "No Kix release for {system} matches `--to {to}`.\nNext: pass an available version or minor series with `--to`, or omit `--to` for the latest release."
+            ),
             (None, Some(days)) => format!(
-                "No Kix release for {system} is at least {days} days old (`--min-age {days}d`)."
+                "No Kix release for {system} is at least {days} days old (`min-age = \"{days}d\"` in kix.toml{}).\nNext: lower `min-age` in kix.toml, or pass an exact version with `--to`.",
+                newest_age.map(|a| format!("; {a}")).unwrap_or_default()
             ),
             (None, None) => format!("No Kix release found for {system}."),
         });
@@ -137,6 +137,12 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             println!(
                 "Already on the latest Kix release ({}). Nothing to upgrade.",
                 from.release()
+            );
+        } else if let (None, Some(days)) = (&to, min_age) {
+            println!(
+                "Already on Kix {} (matches target {} for `min-age = \"{days}d\"` in kix.toml). Nothing to upgrade.",
+                from.release(),
+                target.release()
             );
         } else {
             println!(
@@ -309,7 +315,6 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .as_ref()
             .map(|s| s.acknowledged.clone())
             .unwrap_or_default(),
-        unexplained_changes: 0,
         sensitive_changes: 0,
         cli_hits: Vec::new(),
         before: before.clone(),
@@ -396,18 +401,16 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let mut state = run.state.take().expect("set above");
 
     let after = run.work.join(goal.release());
-    let explaining: BTreeSet<String> = applying
-        .iter()
-        .flat_map(|a| a.record.packages.iter().cloned())
-        .collect();
-    let report = report_changes(&before, &after, &explaining, &from, &goal)?;
-    state.unexplained_changes = report.review.unexplained;
+    let report = report_changes(&before, &after, &from, &goal)?;
     state.sensitive_changes = report.sensitive;
 
     let notes = out::notes(&applying, false, &from, &goal);
     if !notes.is_empty() {
         println!();
         println!("Release notes for this upgrade:");
+        if let Some(legend) = out::legend(&applying, None) {
+            println!("{legend}");
+        }
         for line in notes {
             println!("{line}");
         }
@@ -453,7 +456,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     }
     let silent = !plan::of_kind(&applying, Kind::Silent).is_empty();
     let needs_person = stop.is_some()
-        || report.review.unexplained > 0
+        || report.any_changed
         || report.sensitive > 0
         || silent
         || !state.unacknowledged().is_empty();
@@ -468,19 +471,20 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
 
     println!();
     if !needs_person {
-        if report.any_changed {
-            println!("Upgraded to Kix {}.", goal.release());
-        } else {
-            println!("Upgraded to Kix {}. Ready to deploy.", goal.release());
-        }
+        println!("Upgraded to Kix {}. Ready to deploy.", goal.release());
         return Ok(());
     }
     if let Some((r, _)) = &stop {
         items.push(vec![
             format!(
-                "Kix {} must be deployed to all clusters before continuing to {}.",
+                "Kix {} must be deployed to all clusters before continuing to {}",
                 r.release(),
                 target.release()
+            ),
+            format!(
+                "     (`kix deploy` on {} will refuse any cluster still on {}).",
+                target.release(),
+                from.release()
             ),
             format!(
                 "     kix.toml, flake.nix, and flake.lock are pinned to {}.",
@@ -497,7 +501,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     }
     if stop.is_some() {
         println!(
-            "Next: deploy Kix {} to all clusters with `kix deploy`, then run `kix upgrade` to continue to {}.",
+            "Next: commit this {} step and deploy every cluster with `kix deploy <cluster>`, then run `kix upgrade` to continue to {}.",
             goal.release(),
             target.release()
         );
@@ -1000,36 +1004,44 @@ fn print_failures(failures: &Failures) {
     }
 }
 
-/// Print the "Config changes required" notes that may explain why the
-/// build of `failing` failed.
+/// Print every "Config changes required" note of the releases the failed
+/// step moved through, with likely matches marked.
 fn print_matching(matching: &[Applying], previous: &Version, failing: &Version) {
     if matching.is_empty() {
         return;
     }
     let releases: BTreeSet<&Version> = matching.iter().map(|a| &a.release).collect();
+    let several = releases.len() > 1;
     println!();
-    match (matching.len(), releases.len()) {
+    match (matching.len(), several) {
         (1, _) => println!(
-            "  Matching change in Kix {}:",
+            "  Config change required in Kix {}:",
             matching[0].release.release()
         ),
-        (_, 1) => println!(
-            "  Matching changes in Kix {}:",
+        (_, false) => println!(
+            "  Config changes required in Kix {}:",
             matching[0].release.release()
         ),
         _ => println!(
-            "  Matching changes (Kix {} -> {}):",
+            "  Config changes required (Kix {} -> {}):",
             previous.release(),
             failing.release()
         ),
     }
+    if matching.iter().any(|a| a.likely) {
+        println!("    * may affect this project (package name matches an instance in use)");
+    }
     for a in matching {
-        let first = if a.record.packages.is_empty() {
-            format!("    [{}] ({}):", a.reference(), a.release.release())
-        } else {
-            format!("    [{}] {}:", a.reference(), out::list(&a.record.packages))
-        };
-        for line in out::wrap(&first, 6, &a.record.body) {
+        let gutter = if a.likely { "  * " } else { "    " };
+        let mut head = format!("{gutter}[{}]", a.reference());
+        if !a.record.packages.is_empty() {
+            head.push_str(&format!(" {}", out::list(&a.record.packages)));
+        }
+        if several || a.record.packages.is_empty() {
+            head.push_str(&format!(" ({})", a.release.release()));
+        }
+        head.push(':');
+        for line in out::wrap(&head, 6, &a.record.body) {
             println!("{line}");
         }
     }
@@ -1045,13 +1057,7 @@ struct Report {
 /// Compare the builds in `before` and `after`, print what changed, grouped
 /// by clusters that changed the same way, and return what the review list
 /// needs.
-fn report_changes(
-    before: &Path,
-    after: &Path,
-    explaining: &BTreeSet<String>,
-    from: &Version,
-    to: &Version,
-) -> Result<Report> {
+fn report_changes(before: &Path, after: &Path, from: &Version, to: &Version) -> Result<Report> {
     let names = |d: &Path| -> BTreeSet<String> {
         std::fs::read_dir(d)
             .into_iter()
@@ -1076,11 +1082,7 @@ fn report_changes(
         review: out::Review::default(),
     };
     for cluster in &clusters {
-        let changes = compare::compare(
-            &load(before.join(cluster))?,
-            &load(after.join(cluster))?,
-            explaining,
-        );
+        let changes = compare::compare(&load(before.join(cluster))?, &load(after.join(cluster))?);
         report.any_changed |= !changes.is_empty();
         report.sensitive += changes.iter().filter(|c| c.sensitive).count();
         report.review.add(cluster, &changes);
@@ -1180,36 +1182,27 @@ fn preview(p: &Preview) {
     let listed = out::listed(p.applying).len();
     let notes = out::notes(p.applying, true, p.from, p.target);
     if listed > 0 {
-        let (changes, affect) = if listed == 1 {
-            ("1 change".to_string(), "affects")
+        let changes = if listed == 1 {
+            "1 change".to_string()
         } else {
-            (format!("{listed} changes"), "affect")
+            format!("{listed} changes")
         };
         println!();
-        match p.known {
-            Known::Clusters(n) => println!(
-                "{changes} between {from} and {target} {affect} packages used by your {n} {}:",
-                if n == 1 { "cluster" } else { "clusters" }
-            ),
-            Known::Packages => println!(
-                "{changes} between {from} and {target} {affect} packages used by this project:"
-            ),
-            Known::Nothing => println!(
-                "{changes} between {from} and {target} (current Kix {from} is not installed, so changes for unused packages are included):"
-            ),
+        println!("{changes} between {from} and {target}:");
+        let legend = match p.known {
+            Known::Clusters(n) => out::legend(p.applying, Some(n)),
+            Known::Packages => out::legend(p.applying, None),
+            Known::Nothing => Some(format!(
+                "  (current Kix {from} is not installed, so likely matches are not marked)"
+            )),
+        };
+        if let Some(legend) = legend {
+            println!("{legend}");
         }
         println!();
     } else if p.without_notes.is_empty() {
         println!();
-        match p.known {
-            Known::Clusters(n) => println!(
-                "No changes between {from} and {target} affect packages used by your {n} {}.",
-                if n == 1 { "cluster" } else { "clusters" }
-            ),
-            _ => println!(
-                "No changes between {from} and {target} affect packages used by this project."
-            ),
-        }
+        println!("No breaking, security, or upgrade notes between {from} and {target}.");
     }
     if !notes.is_empty() {
         if listed == 0 {

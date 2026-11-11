@@ -62,8 +62,8 @@ Otherwise it is a patch release.
 
 ## Ids
 
-An `error` record needs an id, and Kix prints it in the error so that people
-and tools can look the change up. `scripts/change-records.py next-id` prints
+An `error` record needs an id, and the refusal starts with it in brackets,
+such as `[K0001]`. People search CHANGELOG.md for the id, and tools match it. `scripts/change-records.py next-id` prints
 an id no record uses. It picks one at random, so that branches worked on at
 the same time do not pick the same id.
 

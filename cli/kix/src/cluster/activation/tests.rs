@@ -184,6 +184,32 @@ mod orphans_kept_from_tests {
         );
     }
 
+    /// The Kix that made a deploy is read off its receipt: the deployer's
+    /// for a bundle, else the builder's, and none without a receipt.
+    #[test]
+    fn reads_the_kix_that_deployed() {
+        let with = |receipt: serde_json::Value| {
+            let obj: DynamicObject = serde_json::from_value(json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": { "name": "c-v1" },
+                "status": { (keys::RECEIPT_FIELD): receipt },
+            }))
+            .unwrap();
+            Record::of(&obj).deployed_with
+        };
+        assert_eq!(
+            with(json!({"builder": {"kixVersion": "0.10.0"}})).as_deref(),
+            Some("0.10.0")
+        );
+        assert_eq!(
+            with(json!({"builder": {"kixVersion": "0.9.0"}, "deployer": {"kixVersion": "0.10.1"}}))
+                .as_deref(),
+            Some("0.10.1")
+        );
+        assert_eq!(with(json!(null)), None);
+    }
+
     /// A consumer's pinned interfaces and a platform's published hashes are
     /// read off `spec`; a malformed entry is left out.
     #[test]
