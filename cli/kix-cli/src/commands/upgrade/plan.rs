@@ -122,7 +122,14 @@ pub fn required_stop(
 /// Return whether `record` applies to a project that uses the packages
 /// `in_use`. A record that names no package applies to every project, and
 /// so does every record when Kix could not list the packages.
+///
+/// `in_use` holds instance names, which differ from package names when a
+/// cluster renames an instance. So a change with no error and a required
+/// stop always apply, since missing one of them is not safe.
 pub fn applies(record: &Record, in_use: Option<&BTreeSet<String>>) -> bool {
+    if record.kind == Kind::Silent || record.required_stop {
+        return true;
+    }
     match in_use {
         None => true,
         Some(in_use) => {
@@ -382,6 +389,16 @@ mod tests {
         assert!(applies(&general, Some(&in_use)));
         assert!(!applies(&echo, Some(&in_use)));
         assert!(applies(&echo, None));
+        let silent = record(
+            "silent",
+            "+++\nkind = \"silent\"\npackages = [\"echo-server\"]\n+++\nMoved.\n",
+        );
+        assert!(applies(&silent, Some(&in_use)));
+        let stop = record(
+            "stop",
+            "+++\nkind = \"note\"\npackages = [\"echo-server\"]\nstate = true\nrequired-stop = true\n+++\nMoved.\n",
+        );
+        assert!(applies(&stop, Some(&in_use)));
 
         let records = vec![
             doc("0.9.1", vec![general.clone()]),

@@ -51,14 +51,29 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let index = release::fetch_index(&source).map_err(|e| miette!("{e}"))?;
     let releases = plan::usable(&index.releases, &system);
 
-    let resume = previous.clone().filter(|s| {
-        s.status == Status::FixNeeded
-            && s.steps.last().is_some_and(|step| {
-                config.kix.as_ref().is_some_and(
-                    |req| matches!(req, Requirement::Exact(v) if v.release() == step.version),
-                )
-            })
-    });
+    // A run that a build failure, a flake.nix edit, or an interruption
+    // stopped goes on from where it was.
+    let resume = previous
+        .clone()
+        .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
+    if resume.is_none()
+        && !args.preview
+        && let Some(p) = &previous
+        && !p.unacknowledged().is_empty()
+    {
+        let refs: Vec<&str> = p
+            .unacknowledged()
+            .iter()
+            .map(|d| d.reference.as_str())
+            .collect();
+        return Err(miette!(
+            "The last upgrade, to Kix {}, changes stored data, and no one has acknowledged it: {}. Read the changes in {}, run `kix upgrade --ack {}`, then run `kix upgrade` again.",
+            p.to,
+            refs.join(", "),
+            state::FILE,
+            refs.join(" ")
+        ));
+    }
 
     let from: Version = match &resume {
         Some(s) => s
@@ -67,38 +82,40 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
         None => current_version(&dir, &config)?,
     };
-    let target = match &resume {
-        Some(s) => {
-            s.to.parse()
-                .map_err(|_| miette!("{} names no version in `to`", state::FILE))?
-        }
-        None => {
-            let to = match args.to.as_deref() {
-                None | Some("latest") => None,
-                Some(text) => Some(
-                    text.parse::<Requirement>()
-                        .map_err(|e| miette!("--to: {e}"))?,
-                ),
-            };
-            let min_age = match &args.min_age {
-                Some(text) => Some(kix::project::parse_min_age(text).ok_or_else(|| {
-                    miette!("--min-age {text} is not a number of days. Write it as 7d")
-                })?),
-                None => config.upgrade_min_age,
-            };
-            let today = chrono::Utc::now().date_naive();
-            plan::choose_target(&releases, to.as_ref(), min_age, today).ok_or_else(|| {
-                miette!(
-                    "no Kix release matches{}{} for {system}",
-                    to.as_ref().map(|r| format!(" {r}")).unwrap_or_default(),
-                    min_age
-                        .map(|d| format!(" that is at least {d} days old"))
-                        .unwrap_or_default()
-                )
-            })?
-        }
+    let to = match args.to.as_deref() {
+        None | Some("latest") => None,
+        Some(text) => Some(
+            text.parse::<Requirement>()
+                .map_err(|e| miette!("--to: {e}"))?,
+        ),
     };
+    let min_age =
+        match &args.min_age {
+            Some(text) => Some(kix::project::parse_min_age(text).ok_or_else(|| {
+                miette!("--min-age {text} is not a number of days. Write it as 7d")
+            })?),
+            None => config.upgrade_min_age,
+        };
+    let today = chrono::Utc::now().date_naive();
+    let target = plan::choose_target(&releases, to.as_ref(), min_age, today).ok_or_else(|| {
+        miette!(
+            "no Kix release matches{}{} for {system}",
+            to.as_ref().map(|r| format!(" {r}")).unwrap_or_default(),
+            min_age
+                .map(|d| format!(" that is at least {d} days old"))
+                .unwrap_or_default()
+        )
+    })?;
     if target <= from {
+        if resume.is_some() {
+            return Err(miette!(
+                "{} holds an unfinished upgrade from Kix {}, and Kix {} is not newer. Choose a newer version with --to, or delete {} to start again.",
+                state::FILE,
+                from.release(),
+                target.release(),
+                state::FILE
+            ));
+        }
         println!(
             "This project uses Kix {}, and Kix {} is the newest release that matches. There is nothing to upgrade.",
             from.release(),
@@ -107,7 +124,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         return Ok(());
     }
 
-    let records = fetch_records(&source, &releases, &from, &target)?;
+    let records = fetch_records(&source, &index.releases, &from, &target)?;
     let stop = plan::required_stop(&releases, &records, &from, &target);
     let goal = stop
         .as_ref()
@@ -124,6 +141,12 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             Some(Requirement::Exact(v)) => v.clone(),
             _ => from.clone(),
         },
+        state: None,
+    };
+    let saved_in_use = |s: &UpgradeState| {
+        s.packages_in_use
+            .as_ref()
+            .map(|p| p.iter().cloned().collect::<BTreeSet<String>>())
     };
 
     if args.preview {
@@ -131,139 +154,113 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .into_iter()
             .find(|i| i.version == from)
             .map(|i| i.bin());
-        let in_use = match &from_kix {
-            Some(kix) => packages_in_use(kix, &dir),
-            None => None,
+        let (in_use, knew) = match (&resume, &from_kix) {
+            (Some(s), _) => (saved_in_use(s), s.packages_in_use.is_some()),
+            (None, Some(kix)) => (packages_in_use(kix, &dir), true),
+            (None, None) => (None, false),
         };
         let applying = plan::applying(&records, &from, &goal, in_use.as_ref());
-        preview(
-            &from,
-            &target,
-            &steps,
-            stop.as_ref(),
-            &applying,
-            from_kix.is_some(),
-        );
+        preview(&from, &target, &steps, stop.as_ref(), &applying, knew);
         return Ok(());
     }
 
-    let from_kix = run.kix(&from)?;
-    let in_use = packages_in_use(&from_kix, &dir);
-    let applying = plan::applying(&records, &from, &goal, in_use.as_ref());
-
     let before = run.work.join("before");
-    // A person was asked to edit flake.nix, and the project is still on
-    // the version it was built with then.
-    let edit_pending = previous
-        .as_ref()
-        .is_some_and(|s| s.status == Status::EditNeeded && s.from == from.release());
-    let reuse = (edit_pending || resume.is_some())
-        && previous
-            .as_ref()
-            .is_some_and(|s| s.before == before && before.is_dir());
-    if !reuse {
-        println!(
-            "Building every cluster with Kix {}, the version this project uses now.",
-            from.release()
-        );
-        if let Err(failures) = build_all(&from_kix, &dir, &before) {
-            print_failures(&failures);
-            println!(
-                "The project does not build with Kix {}. Fix the build first, then run `kix upgrade` again.",
-                from.release()
-            );
-            return exit(EXIT_BUILD_FAILED);
-        }
-    }
-
-    // Ask for the flake.nix edit only now. Once flake.nix names the new
-    // library, the version the project uses can no longer build it, so the
-    // build above has to come first.
-    if resume.is_none()
-        && let Some(message) = pin::needs_hand_edit(&dir, &from, &goal)
-    {
-        UpgradeState {
-            schema: state::SCHEMA.into(),
-            from: from.release(),
-            to: goal.release(),
-            status: Status::EditNeeded,
-            steps: Vec::new(),
-            records: by_kind(&applying),
-            data_changes: data_changes(&applying),
-            acknowledged: previous.map(|p| p.acknowledged).unwrap_or_default(),
-            unexplained_changes: 0,
-            sensitive_changes: 0,
-            cli_hits: Vec::new(),
-            before: before.clone(),
-        }
-        .write(&dir)
-        .map_err(|e| miette!("{e}"))?;
-        println!("{message}");
-        return exit(EXIT_NEEDS_PERSON);
-    }
-
-    let mut done: Vec<Step> = Vec::new();
-    let result = match &resume {
+    let in_use = match &resume {
+        // After the first pin, the version the upgrade started from can no
+        // longer evaluate the project, so it is never asked again.
         Some(s) => {
-            let failed: Version = s
-                .steps
-                .last()
-                .expect("checked above")
-                .version
-                .parse()
-                .map_err(|_| miette!("{} names no version in its last step", state::FILE))?;
-            done.extend(s.steps.iter().filter(|st| st.result == "ok").cloned());
-            println!(
-                "Resuming the upgrade to Kix {} at Kix {}.",
-                goal.release(),
-                failed.release()
-            );
-            let remaining: Vec<Version> = steps.iter().filter(|v| **v >= failed).cloned().collect();
-            run.step_through(&remaining, &mut done)?
+            if s.before != before || !before.is_dir() {
+                return Err(miette!(
+                    "{} holds an unfinished upgrade from Kix {}, but the builds made with Kix {} at its start are gone ({}). Delete {} and run `kix upgrade` again. The comparison then starts from the version the project is pinned to now.",
+                    state::FILE,
+                    from.release(),
+                    from.release(),
+                    before.display(),
+                    state::FILE
+                ));
+            }
+            saved_in_use(s)
         }
         None => {
-            println!("Upgrading to Kix {}.", goal.release());
-            match run.step(&goal)? {
-                Ok(()) => {
-                    done.push(ok_step(&goal));
-                    Ok(goal.clone())
-                }
-                Err(failures) if steps.len() <= 1 => {
-                    done.push(failed_step(&goal, &failures));
-                    Err((goal.clone(), failures))
-                }
-                Err(failures) => {
-                    done.push(failed_step(&goal, &failures));
-                    println!(
-                        "The project does not build with Kix {}. Trying one minor release at a time.",
-                        goal.release()
-                    );
-                    run.step_through(&steps, &mut done)?
-                }
+            let from_kix = run.kix(&from)?;
+            let names = clusters(&from_kix, &dir).map_err(|e| miette!("{e}"))?;
+            if names.is_empty() {
+                return Err(miette!(
+                    "Kix {} lists no clusters in this project, so Kix has nothing to build or compare.",
+                    from.release()
+                ));
             }
+            let in_use = packages_in_use(&from_kix, &dir);
+            println!(
+                "Building every cluster with Kix {}, the version this project uses now.",
+                from.release()
+            );
+            if let Err(failures) = build_all(&from_kix, &dir, &before) {
+                print_failures(&failures);
+                println!(
+                    "The project does not build with Kix {}. Fix the build first, then run `kix upgrade` again.",
+                    from.release()
+                );
+                return exit(EXIT_BUILD_FAILED);
+            }
+            in_use
         }
     };
+    let applying = plan::applying(&records, &from, &goal, in_use.as_ref());
 
-    let mut state = UpgradeState {
+    // Written before the first pin and after each step, so a project left
+    // pinned part of the way always has a state to resume from.
+    run.state = Some(UpgradeState {
         schema: state::SCHEMA.into(),
         from: from.release(),
         to: goal.release(),
-        status: Status::Done,
-        steps: done,
+        status: Status::FixNeeded,
+        steps: resume.as_ref().map(|s| s.steps.clone()).unwrap_or_default(),
         records: by_kind(&applying),
         data_changes: data_changes(&applying),
-        acknowledged: previous.map(|p| p.acknowledged).unwrap_or_default(),
+        acknowledged: resume
+            .as_ref()
+            .map(|s| s.acknowledged.clone())
+            .unwrap_or_default(),
         unexplained_changes: 0,
         sensitive_changes: 0,
         cli_hits: Vec::new(),
         before: before.clone(),
+        packages_in_use: in_use.as_ref().map(|p| p.iter().cloned().collect()),
+    });
+    run.save()?;
+
+    let last = run.state().steps.last().cloned();
+    let result = match last {
+        None => {
+            println!("Upgrading to Kix {}.", goal.release());
+            run.jump(&goal, &steps)?
+        }
+        Some(last) => {
+            let at: Version = last
+                .version
+                .parse()
+                .map_err(|_| miette!("{} names no version in its last step", state::FILE))?;
+            println!(
+                "Resuming the upgrade to Kix {} at Kix {}.",
+                goal.release(),
+                at.release()
+            );
+            let remaining: Vec<Version> = if last.result == "ok" {
+                steps.iter().filter(|v| **v > at).cloned().collect()
+            } else {
+                run.state_mut().steps.pop();
+                steps.iter().filter(|v| **v >= at).cloned().collect()
+            };
+            if remaining.is_empty() || (run.state().steps.is_empty() && at == goal) {
+                run.jump(&goal, &steps)?
+            } else {
+                run.step_through(&remaining)?
+            }
+        }
     };
 
-    let (failing, failures) = match result {
-        Ok(_) => (None, Vec::new()),
-        Err((v, failures)) => (Some(v), failures),
-    };
-    if let Some(failing) = failing {
+    if let Err((failing, failures)) = result {
         print_failures(&failures);
         let previous_step = steps
             .iter()
@@ -280,11 +277,12 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             failing.release(),
             goal.release()
         );
-        state.status = Status::FixNeeded;
+        run.state_mut().status = Status::FixNeeded;
+        run.save()?;
         run.prune(&from, &failing);
-        state.write(&dir).map_err(|e| miette!("{e}"))?;
         return exit(EXIT_BUILD_FAILED);
     }
+    let mut state = run.state.take().expect("set above");
 
     let after = run.work.join(goal.release());
     let explaining: BTreeSet<String> = applying
@@ -439,19 +437,24 @@ fn work_dir(dir: &Path) -> PathBuf {
         .join(key)
 }
 
-/// Fetch the change records of every release after `from` up to `target`.
+/// Fetch the change records of every release after `from` up to `target`
+/// that is not a prerelease, whichever systems it was built for: a change
+/// applies to a project whatever machine upgrades it.
 fn fetch_records(
     source: &Source,
-    releases: &[&release::index::Release],
+    releases: &[release::index::Release],
     from: &Version,
     target: &Version,
 ) -> Result<Vec<ReleaseRecords>> {
     let mut out = Vec::new();
     let mut without: Vec<String> = Vec::new();
-    for r in releases
+    let mut in_range: Vec<&release::index::Release> = releases
         .iter()
-        .filter(|r| &r.version > from && &r.version <= target)
-    {
+        .filter(|r| !r.version.is_prerelease() && &r.version > from && &r.version <= target)
+        .collect();
+    in_range.sort_by(|a, b| a.version.cmp(&b.version));
+    in_range.dedup_by(|a, b| a.version == b.version);
+    for r in in_range {
         let document = release::changes(source, r).map_err(|e| miette!("{e}"))?;
         if document.is_none() {
             without.push(r.version.release());
@@ -482,12 +485,29 @@ struct Run {
     /// The version the project is pinned to now, whose release tag
     /// `flake.nix` may name.
     pinned: Version,
+    /// What `kix-upgrade.json` holds, once the steps begin.
+    state: Option<UpgradeState>,
 }
 
 /// The clusters that failed to build, each with its error.
 type Failures = Vec<(String, String)>;
 
+/// The version the steps reached, or the step that failed and why.
+type Outcome = std::result::Result<Version, (Version, Failures)>;
+
 impl Run {
+    fn state(&self) -> &UpgradeState {
+        self.state.as_ref().expect("the steps run with a state")
+    }
+
+    fn state_mut(&mut self) -> &mut UpgradeState {
+        self.state.as_mut().expect("the steps run with a state")
+    }
+
+    fn save(&self) -> Result<()> {
+        self.state().write(&self.dir).map_err(|e| miette!("{e}"))
+    }
+
     /// Return the `kix` of `version`, installing it first when needed.
     fn kix(&mut self, version: &Version) -> Result<PathBuf> {
         if let Some(i) = installs::installed()
@@ -510,8 +530,44 @@ impl Run {
         Ok(installed.install.bin())
     }
 
-    /// Install `version`, pin the project to it, and build every cluster.
+    /// Save the state as `status`, print `message`, remove what this run
+    /// installed, and exit with `code`.
+    fn stop(&mut self, status: Status, message: &str, code: i32) -> Result<()> {
+        self.state_mut().status = status;
+        self.save()?;
+        println!("{message}");
+        let (from, pinned) = (self.from.clone(), self.pinned.clone());
+        self.prune(&from, &pinned);
+        exit(code)
+    }
+
+    /// Set the result of the step in progress, and save the state.
+    fn finish_step(&mut self, result: &str, failures: &Failures) -> Result<()> {
+        let step = self
+            .state_mut()
+            .steps
+            .last_mut()
+            .expect("a step is in progress");
+        step.result = result.to_string();
+        step.failed = failures.iter().map(|(c, _)| c.clone()).collect();
+        self.save()
+    }
+
+    /// Pin the project to `version` and build every cluster. The target is
+    /// installed only after Kix knows it can make the flake.nix edit.
     fn step(&mut self, version: &Version) -> Result<std::result::Result<(), Failures>> {
+        self.state_mut().steps.push(Step {
+            version: version.release(),
+            result: "started".into(),
+            failed: Vec::new(),
+        });
+        self.state_mut().status = Status::FixNeeded;
+        self.save()?;
+        if let Some(message) = pin::needs_hand_edit(&self.dir, &self.pinned, version) {
+            return self
+                .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
+                .map(|()| Ok(()));
+        }
         let kix = self.kix(version)?;
         match pin::pin(&self.dir, &self.pinned, version) {
             Ok(notes) => {
@@ -521,45 +577,51 @@ impl Run {
                 self.pinned = version.clone();
             }
             Err(pin::PinError::Lock(message)) => {
-                println!("{message}");
-                let pinned = self.pinned.clone();
-                self.prune(&self.from.clone(), &pinned);
-                exit(EXIT_BUILD_FAILED)?;
+                self.finish_step("failed", &Vec::new())?;
+                return self
+                    .stop(Status::FixNeeded, &message, EXIT_BUILD_FAILED)
+                    .map(|()| Ok(()));
             }
             Err(pin::PinError::ByHand(message)) => {
-                println!("{message}");
-                let pinned = self.pinned.clone();
-                self.prune(&self.from.clone(), &pinned);
-                exit(EXIT_NEEDS_PERSON)?;
+                return self
+                    .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
+                    .map(|()| Ok(()));
             }
             Err(e) => return Err(miette!("{e}")),
         }
         println!("Building every cluster with Kix {}.", version.release());
-        Ok(build_all(
-            &kix,
-            &self.dir,
-            &self.work.join(version.release()),
-        ))
+        let built = build_all(&kix, &self.dir, &self.work.join(version.release()));
+        match &built {
+            Ok(()) => self.finish_step("ok", &Vec::new())?,
+            Err(failures) => self.finish_step("failed", failures)?,
+        }
+        Ok(built)
+    }
+
+    /// Move straight to `goal`. When the project does not build with it,
+    /// take `steps` one at a time.
+    fn jump(&mut self, goal: &Version, steps: &[Version]) -> Result<Outcome> {
+        match self.step(goal)? {
+            Ok(()) => Ok(Ok(goal.clone())),
+            Err(failures) if steps.len() <= 1 => Ok(Err((goal.clone(), failures))),
+            Err(_) => {
+                println!(
+                    "The project does not build with Kix {}. Trying one minor release at a time.",
+                    goal.release()
+                );
+                self.step_through(steps)
+            }
+        }
     }
 
     /// Take each of `steps` in turn, and stop at the first that fails.
-    fn step_through(
-        &mut self,
-        steps: &[Version],
-        done: &mut Vec<Step>,
-    ) -> Result<std::result::Result<Version, (Version, Failures)>> {
+    fn step_through(&mut self, steps: &[Version]) -> Result<Outcome> {
         let mut last = None;
         for v in steps {
-            match self.step(v)? {
-                Ok(()) => {
-                    done.push(ok_step(v));
-                    last = Some(v.clone());
-                }
-                Err(failures) => {
-                    done.push(failed_step(v, &failures));
-                    return Ok(Err((v.clone(), failures)));
-                }
+            if let Err(failures) = self.step(v)? {
+                return Ok(Err((v.clone(), failures)));
             }
+            last = Some(v.clone());
         }
         Ok(Ok(last.expect("a stepping upgrade has at least one step")))
     }
@@ -580,22 +642,6 @@ impl Run {
                 }
             }
         }
-    }
-}
-
-fn ok_step(v: &Version) -> Step {
-    Step {
-        version: v.release(),
-        result: "ok".into(),
-        failed: Vec::new(),
-    }
-}
-
-fn failed_step(v: &Version, failures: &Failures) -> Step {
-    Step {
-        version: v.release(),
-        result: "failed".into(),
-        failed: failures.iter().map(|(c, _)| c.clone()).collect(),
     }
 }
 
@@ -634,7 +680,8 @@ fn clusters(kix: &Path, dir: &Path) -> std::result::Result<Vec<String>, String> 
 }
 
 /// Return the packages the project's clusters install, or `None` when `kix`
-/// cannot list them. Instance names stand in for package names.
+/// cannot list them. `kix list packages --cluster` names instances, so
+/// instance names stand in for package names.
 fn packages_in_use(kix: &Path, dir: &Path) -> Option<BTreeSet<String>> {
     let mut in_use = BTreeSet::new();
     for cluster in clusters(kix, dir).ok()? {
@@ -649,9 +696,11 @@ fn packages_in_use(kix: &Path, dir: &Path) -> Option<BTreeSet<String>> {
         }
         let rows: Vec<serde_json::Value> = serde_json::from_str(&out).ok()?;
         for row in rows {
-            if row["status"].as_str().is_some_and(|s| s != "available")
-                && let Some(name) = row["name"].as_str()
-            {
+            // A row this Kix cannot read leaves the list unknown.
+            let (Some(name), Some(status)) = (row["name"].as_str(), row["status"].as_str()) else {
+                return None;
+            };
+            if status != "available" {
                 in_use.insert(name.to_string());
             }
         }

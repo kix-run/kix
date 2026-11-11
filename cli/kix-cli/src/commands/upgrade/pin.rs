@@ -7,8 +7,10 @@ use std::path::Path;
 use kix::version::Version;
 
 /// Return `text`, a `kix.toml`, with its `kix` setting set to `version`.
-/// The setting is added at the top when the file has none.
-pub fn set_kix(text: &str, version: &str) -> String {
+/// The setting is added at the top when the file has none, and a comment
+/// after it stays. Refuse when the result does not read back as that
+/// version, such as when `kix` is written across lines.
+pub fn set_kix(text: &str, version: &str) -> Result<String, String> {
     let line = format!("kix = \"{version}\"");
     let mut out = Vec::new();
     let mut done = false;
@@ -23,7 +25,10 @@ pub fn set_kix(text: &str, version: &str) -> String {
                 .strip_prefix("kix")
                 .is_some_and(|rest| rest.trim_start().starts_with('='));
         if is_kix && !done {
-            out.push(line.clone());
+            match l.find('#') {
+                Some(at) => out.push(format!("{line} {}", &l[at..])),
+                None => out.push(line.clone()),
+            }
             done = true;
         } else if !is_kix {
             out.push(l.to_string());
@@ -34,7 +39,15 @@ pub fn set_kix(text: &str, version: &str) -> String {
     }
     let mut joined = out.join("\n");
     joined.push('\n');
-    joined
+    let reads_back = toml::from_str::<toml::Table>(&joined)
+        .ok()
+        .and_then(|t| t.get("kix").and_then(|v| v.as_str()).map(str::to_string));
+    if reads_back.as_deref() != Some(version) {
+        return Err(format!(
+            "Kix could not set kix = \"{version}\" in kix.toml. Set it by hand, then run `kix upgrade` again."
+        ));
+    }
+    Ok(joined)
 }
 
 /// The input names that mark the Kix library when `flake.lock` has more
@@ -162,9 +175,13 @@ fn library_input(
     let root = lock["root"].as_str().unwrap_or("root");
     let node = lock["nodes"][root]["inputs"][&name]
         .as_str()
-        .map(|key| &lock["nodes"][key]["original"]);
+        .map(|key| &lock["nodes"][key]);
     let tag = node
-        .and_then(|o| o["ref"].as_str())
+        .and_then(|n| {
+            n["original"]["ref"]
+                .as_str()
+                .or(n["locked"]["ref"].as_str())
+        })
         .map(|r| r.strip_prefix("refs/tags/").unwrap_or(r).to_string())
         .filter(|r| r.starts_with('v') && r[1..].starts_with(|c: char| c.is_ascii_digit()));
     Ok((name, tag))
@@ -233,14 +250,26 @@ fn flake_edit(
     };
     let parsed: serde_json::Value = serde_json::from_str(lock_text)
         .map_err(|e| format!("could not read {}: {e}", lock.0.display()))?;
-    let locked_tag = library_input(&parsed, release)
-        .ok()
-        .and_then(|(_, tag)| tag);
-    if locked_tag.is_some_and(|t| t == format!("v{}", current.release())) {
+    if !kix_tags(flake_text, release).is_empty() {
+        return Ok(Retag::AlreadyMoved);
+    }
+    if locked_tag(&parsed, release).is_some_and(|t| t == format!("v{}", current.release())) {
         Ok(retag_flake(flake_text, &current.release(), release))
     } else {
         Ok(Retag::NoTag)
     }
+}
+
+/// Return the tag the Kix library input of `lock` is locked to, if any.
+fn locked_tag(lock: &serde_json::Value, release: &str) -> Option<String> {
+    library_input(lock, release).ok().and_then(|(_, tag)| tag)
+}
+
+/// Return the tag the library input of the `flake.lock` in `dir` names.
+fn tag_on_disk(dir: &Path, release: &str) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join("flake.lock")).ok()?;
+    let lock: serde_json::Value = serde_json::from_str(&text).ok()?;
+    locked_tag(&lock, release)
 }
 
 /// Return what a person must change in `flake.nix` before Kix can move the
@@ -259,21 +288,22 @@ pub fn needs_hand_edit(dir: &Path, current: &Version, version: &Version) -> Opti
 /// `kix.toml`, `flake.nix`, and `flake.lock` back.
 pub fn pin(dir: &Path, current: &Version, version: &Version) -> Result<Vec<String>, PinError> {
     let release = version.release();
+    let target_tag = format!("v{release}");
     let mut notes = Vec::new();
     let toml = Saved::take(dir.join(kix::project::FILE))?;
     let flake = Saved::take(dir.join("flake.nix"))?;
     let lock = Saved::take(dir.join("flake.lock"))?;
 
-    // Work out the flake.nix edit before writing anything.
+    // Work out every change before writing anything.
     let (new_flake, hand_edited) = match flake_edit(&flake, &lock, current, &release)? {
         Retag::Moved(text) => (Some(text), false),
         Retag::AlreadyMoved => (None, true),
         Retag::NoTag => (None, false),
         Retag::ByHand(message) => return Err(PinError::ByHand(message)),
     };
-
     let old = toml.1.clone().unwrap_or_default();
-    let new = set_kix(&old, &release);
+    let new = set_kix(&old, &release).map_err(PinError::ByHand)?;
+
     if new != old {
         std::fs::write(&toml.0, new)
             .map_err(|e| format!("could not write {}: {e}", toml.0.display()))?;
@@ -284,45 +314,51 @@ pub fn pin(dir: &Path, current: &Version, version: &Version) -> Result<Vec<Strin
             .map_err(|e| format!("could not write {}: {e}", flake.0.display()))?;
         notes.push(format!("flake.nix: the Kix library input names v{release}"));
     }
-    if lock.1.is_none() {
+    if lock.1.is_none() || tag_on_disk(dir, &release).as_deref() == Some(target_tag.as_str()) {
         return Ok(notes);
     }
 
-    let moved = (|| -> Result<bool, String> {
+    let moved = (|| -> Result<(), String> {
         crate::commands::select_builder_for(dir)?;
         kix::runtime::runtime().map_err(|e| e.to_string())?;
         if new_flake.is_some() || hand_edited {
             // The changed url is enough for Nix to lock the new tag.
-            kix::library::lock(dir, &release).map_err(|e| e.to_string())?;
-            return Ok(true);
+            kix::library::lock(dir, &release).map_err(|e| e.to_string())
+        } else {
+            kix::library::update_to(&dir.display().to_string(), &release, false)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         }
-        kix::library::update_to(&dir.display().to_string(), &release, false)
-            .map(|u| u.changed)
-            .map_err(|e| e.to_string())
     })();
-    match moved {
-        Ok(changed) => {
-            if changed {
-                notes.push(format!("flake.lock: the Kix library is {release}"));
-            }
-            Ok(notes)
+    let restore = |what: String| -> String {
+        match toml
+            .restore()
+            .and_then(|()| flake.restore())
+            .and_then(|()| lock.restore())
+        {
+            Ok(()) => format!(
+                "{what} Kix put kix.toml, flake.nix, and flake.lock back as they were before this step."
+            ),
+            Err(io) => format!(
+                "{what} Kix could not put kix.toml, flake.nix, and flake.lock back: {io}. Restore them with git."
+            ),
         }
-        Err(e) => {
-            let restored = toml
-                .restore()
-                .and_then(|()| flake.restore())
-                .and_then(|()| lock.restore());
-            let mut message = format!(
-                "Kix could not move the Kix library to the tag v{release}. Check that the repository the library input names has that tag. Kix put kix.toml, flake.nix, and flake.lock back as they were.\n{e}"
-            );
-            if let Err(io) = restored {
-                message.push_str(&format!(
-                    "\nKix could not put the files back: {io}. Restore kix.toml, flake.nix, and flake.lock with git."
-                ));
-            }
-            Err(PinError::Lock(message))
-        }
+    };
+    if let Err(e) = moved {
+        return Err(PinError::Lock(restore(format!(
+            "Kix could not move the Kix library to the tag {target_tag}. Check that the repository the library input names has that tag.\n{e}\n"
+        ))));
     }
+    // A lock naming any other tag means the library did not move.
+    if let Some(tag) = tag_on_disk(dir, &release)
+        && tag != target_tag
+    {
+        return Err(PinError::ByHand(restore(format!(
+            "flake.lock still locks the Kix library to {tag}, not {target_tag}, so the library did not move. Point the Kix library input in flake.nix at {target_tag}, then run `kix upgrade` again."
+        ))));
+    }
+    notes.push(format!("flake.lock: the Kix library is {release}"));
+    Ok(notes)
 }
 
 #[cfg(test)]
@@ -331,21 +367,57 @@ mod tests {
 
     #[test]
     fn set_kix_replaces_or_adds_the_setting() {
-        assert_eq!(set_kix("", "0.10.1"), "kix = \"0.10.1\"\n");
+        let set = |text: &str, v: &str| set_kix(text, v).unwrap();
+        assert_eq!(set("", "0.10.1"), "kix = \"0.10.1\"\n");
         assert_eq!(
-            set_kix("builder = \"nix\"\nkix = \"0.9\"\n", "0.10.1"),
+            set("builder = \"nix\"\nkix = \"0.9\"\n", "0.10.1"),
             "builder = \"nix\"\nkix = \"0.10.1\"\n"
         );
         assert_eq!(
-            set_kix(
+            set(
                 "# project\nbuilder = \"kix\"\n\n[upgrade]\nmin-age = \"7d\"\n",
                 "0.10.1"
             ),
             "kix = \"0.10.1\"\n# project\nbuilder = \"kix\"\n\n[upgrade]\nmin-age = \"7d\"\n"
         );
         assert_eq!(
-            set_kix("kixx = 1\nkix=\"0.9.0\"\n", "1.0.0"),
+            set("kixx = 1\nkix=\"0.9.0\"\n", "1.0.0"),
             "kixx = 1\nkix = \"1.0.0\"\n"
+        );
+        assert_eq!(
+            set("kix = \"0.9\" # the team's version\n", "0.10.1"),
+            "kix = \"0.10.1\" # the team's version\n"
+        );
+    }
+
+    #[test]
+    fn set_kix_refuses_what_it_cannot_read_back() {
+        assert!(set_kix("kix = \"\"\"\n0.9\n\"\"\"\n", "0.10.1").is_err());
+        assert!(set_kix("not toml = = \n", "0.10.1").is_err());
+    }
+
+    #[test]
+    fn a_lock_already_at_the_target_needs_no_nix() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let lock = serde_json::json!({
+            "root": "root",
+            "nodes": {
+                "root": {"inputs": {"kix": "kix"}},
+                "kix": {"original": {"type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.10.0"}}
+            }
+        });
+        std::fs::write(d.join("kix.toml"), "kix = \"0.9.1\"\n").unwrap();
+        std::fs::write(
+            d.join("flake.nix"),
+            "{ inputs.kix.url = \"github:kix-run/kix/v0.10.0\"; }",
+        )
+        .unwrap();
+        std::fs::write(d.join("flake.lock"), lock.to_string()).unwrap();
+        pin(d, &"0.9.1".parse().unwrap(), &"0.10.0".parse().unwrap()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.join("kix.toml")).unwrap(),
+            "kix = \"0.10.0\"\n"
         );
     }
 

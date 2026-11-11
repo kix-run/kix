@@ -400,41 +400,54 @@ version it reads only `-o json list clusters`, `-o json list packages
 - `plan.rs` (pure): `usable` (releases for this system, no prereleases),
   `choose_target` (`--to`, `--min-age`, `[upgrade] min-age` from
   `ProjectConfig::upgrade_min_age`), `steps` (the newest patch of each
-  minor after the project's, ending at the target), `required_stop` (the
+  minor after the project's, ending at the target; a prerelease `from`
+  takes the newest release of its own minor first), `required_stop` (the
   earliest release in (from, target) with a `requiredStop` record ends the
   upgrade at the newest patch of its minor), and `applying` (a record
-  applies when it names no package or one in use).
+  applies when it names no package or one in use; a `silent` record and a
+  required stop always apply, since the package list holds instance names).
 - `compare.rs` (pure): `load_dir` reads an export, keeps the
   `kix.run/package` annotation, strips Kix's annotations, and drops
   Activation and PackageInstance; `compare` gives added, removed, and
   changed objects, each `explained` (an applying record names its package)
   and `sensitive` (RBAC, Secret, NetworkPolicy, Cilium policies,
   Certificate, or an Ingress or Gateway whose TLS changed).
-- `pin.rs`: `set_kix` writes the exact version into `kix.toml`,
-  `retag_flake(text, input, from, to)` moves the tag `v<from>` in the url
-  of one input: the top-level library input `library::library_inputs`
-  finds (preferring the name `kix` or `kixpkgs` when there are several),
-  set as `inputs.<n>.url`, `<n>.url` in `inputs`, or `url` in
-  `<n> = { ... }`. A url it cannot find once, or one built from a variable,
-  is `Retag::ByHand`, which stops the upgrade with exit 3 when the lock
-  names another tag than the target. After a retag `pin` runs
-  `library::lock`, or else `library::update_to`. When either fails, `pin`
-  puts `kix.toml`, `flake.nix`, and `flake.lock` back (`PinError::Lock`,
-  exit 2). A project with no `flake.lock` runs no Nix. A prerelease `from` steps through the
-  newest release of its own minor first (`plan::steps`).
+- `pin.rs`: reads no Nix syntax. `set_kix` writes the exact version into
+  `kix.toml` and refuses when the result does not read back as that
+  version. `retag_flake(text, from, to)` moves `v<from>` to `v<to>` only
+  when exactly one string in `flake.nix` that looks like a Kix url (a `:`
+  and `kix` in it) names that tag (after `/` or `=`, at the end or before
+  `&` or `?`). Two or more is `Retag::ByHand`, and a url that already names
+  `v<to>` is `AlreadyMoved`, a person's edit. `flake_edit` retags only
+  when the lock's library input (`library::library_inputs`, preferring
+  `kix` or `kixpkgs`) is on `v<from>`. `pin` works out every change first,
+  does no lock operation when `flake.lock` already holds `v<to>`, runs
+  `library::lock` after a retag or an edit and `library::update_to`
+  otherwise, then reads `flake.lock` again. A failed lock
+  (`PinError::Lock`, exit 2) or a lock still on another tag
+  (`PinError::ByHand`, exit 3) puts `kix.toml`, `flake.nix`, and
+  `flake.lock` back as they were at the start of the step. A project with
+  no `flake.lock` runs no Nix.
 - `search.rs`: `git ls-files` and a line search for each `cli` string of
   the applying records.
-- `state.rs`: `kix-upgrade.json` (`kix.run/upgrade/v1`). A run whose last
-  state is `fix-needed`, with `kix.toml` still at the failed step's exact
-  version, resumes: same `from`, `to`, and `before`, retrying from that
-  step. `check_deploy` (called from `main` for a real deploy, before the
-  runtime check) refuses while `dataChanges` holds a reference not in
-  `acknowledged`; `--ack` adds to it.
+- `state.rs`: `kix-upgrade.json` (`kix.run/upgrade/v1`). The run writes it
+  before the first pin (`fix-needed`, the step `started`) and after each
+  step, so a project left part of the way always has one. A state that is
+  `fix-needed` or `edit-needed` resumes: `from`, `before`, the steps, the
+  acknowledgements, and `packagesInUse` come from the file, and the target
+  and any required stop are worked out again. A resume never runs the
+  version the upgrade started from, and refuses when `before` is gone.
+  Another run refuses while the last state has unacknowledged
+  `dataChanges`. `check_deploy` (called from `main` for every deploy but a
+  dry run, before the runtime check) refuses while `dataChanges` holds a
+  reference not in `acknowledged`; `--ack` adds to it.
 - `mod.rs`: the run. The builds live under
   `default_cache_dir()/upgrade/<sha256 of the project path, 16 hex>/`
-  (`before/`, and one directory per version). Exit 2 on a failed build, 3
-  when a person should read the result, and the versions this run
-  downloaded, other than `from` and the pinned one, are removed.
+  (`before/`, and one directory per version). `Run::step` checks for a
+  `flake.nix` edit before it installs the version, then pins and builds.
+  Exit 2 on a failed build or lock, 3 when a person should read the result
+  or edit `flake.nix`, and the versions this run downloaded, other than
+  `from` and the pinned one, are removed.
 
 Tests: `kix-cli/tests/upgrade_test.rs` publishes fake releases (shell
 scripts that list and export from files in the project) with signed change

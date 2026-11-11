@@ -640,11 +640,22 @@ fn a_data_change_stops_deploys_until_acknowledged() {
         .stdout("Acknowledged move-data.\n");
     assert_eq!(s.state()["acknowledged"], serde_json::json!(["move-data"]));
 
-    // The deploy now goes past the check, and stops later for want of a
-    // Kix runtime or a cluster.
-    let out = chosen(s.kix()).args(["deploy", "east"]).output().unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("move-data"), "{stderr}");
+    // The deploy now goes past the check and starts to build, which stops
+    // at once for want of a Kix runtime.
+    let runtime = s.cache.join("empty-runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let out = chosen(s.kix())
+        .env("KIX_RUNTIME_DIR", &runtime)
+        .args(["deploy", "east"])
+        .output()
+        .unwrap();
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(all.contains("Building cluster 'east'"), "{all}");
+    assert!(!all.contains("move-data"), "{all}");
 }
 
 #[test]
@@ -664,4 +675,277 @@ fn a_prerelease_project_steps_through_its_own_release() {
         out.contains("Kix takes these steps: 9.1.0, 9.2.1, 9.3.0."),
         "{out}"
     );
+}
+
+/// Run `kix deploy east` as the Kix selection chose, with an empty Kix
+/// runtime so that a deploy past the check stops as it starts to build,
+/// and return its exit code and output.
+fn deploy(s: &Setup) -> (i32, String) {
+    let runtime = s.cache.join("empty-runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let out = s
+        .kix()
+        .env("KIX_SELECTED_BY", "/usr/bin/kix")
+        .env("KIX_RUNTIME_DIR", &runtime)
+        .args(["deploy", "east"])
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+fn data_record(name: &str, package: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "kind": "silent",
+        "packages": [package],
+        "touchesData": true,
+        "body": "Data moves.",
+    })
+}
+
+#[test]
+fn a_silent_record_applies_whatever_the_instance_is_called() {
+    let s = Setup::new();
+    // No instance is called `postgres`: the cluster's database instance is `db`.
+    s.releases(vec![data_record("move-pg-data", "postgres")]);
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    let state = s.state();
+    assert_eq!(state["status"], "needs-person");
+    assert_eq!(state["dataChanges"][0]["reference"], "move-pg-data");
+    let (code, out) = deploy(&s);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("move-pg-data"), "{out}");
+}
+
+#[test]
+fn a_silent_record_without_data_needs_a_person_and_does_not_block_deploys() {
+    let s = Setup::new();
+    s.releases(vec![serde_json::json!({
+        "name": "new-default",
+        "kind": "silent",
+        "packages": ["web"],
+        "body": "A default changes.",
+    })]);
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    let state = s.state();
+    assert_eq!(state["status"], "needs-person");
+    assert_eq!(
+        state["records"]["silent"],
+        serde_json::json!(["new-default"])
+    );
+    assert_eq!(state["dataChanges"], serde_json::json!([]));
+    let (_, out) = deploy(&s);
+    assert!(out.contains("Building cluster 'east'"), "{out}");
+}
+
+#[test]
+fn a_second_upgrade_waits_for_acknowledged_data_changes() {
+    let s = Setup::new();
+    s.releases(vec![data_record("move-data", "db")]);
+    let (code, _) = s.upgrade(&["--to", "9.2.1"]);
+    // 9.2.1 carries no data change; the first upgrade stops at 9.2.1.
+    assert_eq!(code, 0);
+    s.upgrade(&[]);
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+    let before = s.read("kix-upgrade.json");
+
+    s.publish("9.4.0", "2026-04-01", Some(serde_json::json!([])));
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("--ack move-data"), "{out}");
+    assert_eq!(s.read("kix-upgrade.json"), before);
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+
+    s.kix()
+        .args(["upgrade", "--ack", "move-data"])
+        .assert()
+        .success();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.4.0\"\n");
+    // An acknowledgement belongs to the upgrade it was given for.
+    assert_eq!(s.state()["acknowledged"], serde_json::json!([]));
+}
+
+#[test]
+fn resuming_works_out_a_required_stop_again() {
+    let s = Setup::new();
+    s.publish("9.1.0", "2026-01-01", None);
+    s.publish(
+        "9.2.0",
+        "2026-02-01",
+        Some(serde_json::json!([{
+            "name": "move-records",
+            "kind": "note",
+            "state": true,
+            "requiredStop": true,
+            "body": "Kix moves its records.",
+        }])),
+    );
+    s.publish("9.2.1", "2026-02-10", None);
+    s.publish("9.3.0", "2026-03-01", None);
+    s.write("fake/fail-9.2.1", "");
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 2, "{out}");
+    assert_eq!(s.state()["status"], "fix-needed");
+    assert_eq!(s.state()["to"], "9.2.1");
+
+    std::fs::remove_file(s.project.join("fake/fail-9.2.1")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    assert_eq!(s.state()["status"], "required-stop");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.2.1\"\n");
+}
+
+#[test]
+fn resuming_without_the_first_builds_is_refused() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("fake/fail-9.3.0", "");
+    s.write("fake/fail-9.2.1", "");
+    let (code, _) = s.upgrade(&[]);
+    assert_eq!(code, 2);
+    let before = std::path::PathBuf::from(s.state()["before"].as_str().unwrap());
+    std::fs::remove_dir_all(&before).unwrap();
+    std::fs::remove_file(s.project.join("fake/calls.log")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("kix-upgrade.json"), "{out}");
+    assert_eq!(s.calls(), "", "Kix built nothing");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.2.1\"\n");
+}
+
+#[test]
+fn pruning_leaves_a_version_installed_before_the_run() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    let bin = s.data.join("9.2.1/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("kix"), FAKE.replace("__VERSION__", "9.2.1")).unwrap();
+    std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    s.write("fake/fail-9.3.0", "");
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 2, "{out}");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+    assert_eq!(s.installed(), ["9.1.0", "9.2.1", "9.3.0"]);
+}
+
+#[test]
+fn an_explained_sensitive_change_still_needs_a_person() {
+    let s = Setup::new();
+    s.releases(vec![serde_json::json!({
+        "name": "db-reader-rules",
+        "kind": "changed",
+        "packages": ["db"],
+        "body": "`db` reads more.",
+    })]);
+    s.out_for("9.3.0");
+    for cluster in ["east", "west"] {
+        s.manifest(
+            "out-9.3.0",
+            cluster,
+            "ClusterRole",
+            "db-reader",
+            "db",
+            "rules: [x]",
+        );
+    }
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    let state = s.state();
+    assert_eq!(state["unexplainedChanges"], 0);
+    assert_eq!(state["sensitiveChanges"], 2);
+    assert_eq!(state["status"], "needs-person");
+}
+
+#[test]
+fn an_unexplained_plain_change_needs_a_person() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.out_for("9.3.0");
+    s.manifest("out-9.3.0", "east", "ConfigMap", "extra", "web", "data: {}");
+    s.manifest(
+        "out-9.3.0",
+        "east",
+        "ConfigMap",
+        "cache",
+        "cache",
+        "data: {}",
+    );
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    let state = s.state();
+    // K0001 names `web`, so only the `cache` object is unexplained.
+    assert_eq!(state["unexplainedChanges"], 1);
+    assert_eq!(state["sensitiveChanges"], 0);
+}
+
+#[test]
+fn an_interrupted_run_leaves_a_state_and_resumes() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("fake/fail-9.3.0", "");
+    let system = kix::release::system().unwrap();
+    let archive = s.site.join(format!("download/9.2.1/kix-{system}.tar.gz"));
+    let hidden = archive.with_extension("hidden");
+    std::fs::rename(&archive, &hidden).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    let state = s.state();
+    assert_eq!(state["status"], "fix-needed");
+    let last = state["steps"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["version"], "9.2.1");
+    assert_eq!(last["result"], "started");
+
+    std::fs::rename(&hidden, &archive).unwrap();
+    std::fs::remove_file(s.project.join("fake/fail-9.3.0")).unwrap();
+    std::fs::remove_file(s.project.join("fake/calls.log")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!s.calls().contains("9.1.0 "), "{}", s.calls());
+    assert!(s.calls().contains("9.2.1 export"), "{}", s.calls());
+    assert_eq!(s.state()["status"], "done");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+}
+
+#[test]
+fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    let url = "git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v9.1.0";
+    let flake = format!(
+        "{{\n  inputs = {{\n    kixpkgs.url = \"{url}\";\n    image-kix = {{ url = \"{url}\"; flake = false; }};\n  }};\n}}\n"
+    );
+    let node = serde_json::json!({
+        "locked": {"type": "git", "url": "ssh://git@git.example:30232/org/kixpkgs.git", "rev": "abc", "ref": "refs/tags/v9.1.0"},
+        "original": {"type": "git", "url": "ssh://git@git.example:30232/org/kixpkgs.git", "ref": "refs/tags/v9.1.0"},
+    });
+    let lock = serde_json::json!({
+        "root": "root",
+        "version": 7,
+        "nodes": {
+            "root": {"inputs": {"kixpkgs": "kixpkgs", "image-kix": "image-kix"}},
+            "kixpkgs": node.clone(),
+            "image-kix": node,
+        }
+    })
+    .to_string();
+    s.write("flake.nix", &flake);
+    s.write("flake.lock", &lock);
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    assert_eq!(s.state()["status"], "edit-needed");
+    assert_eq!(s.read("flake.nix"), flake);
+    assert_eq!(s.read("flake.lock"), lock);
+    assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
+    assert_eq!(s.installed(), ["9.1.0"]);
 }

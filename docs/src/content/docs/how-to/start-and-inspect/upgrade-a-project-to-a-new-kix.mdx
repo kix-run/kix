@@ -14,6 +14,22 @@ new version changes before you deploy.
 - [`kix upgrade` reference](/docs/reference/cli/upgrade/): every flag, the steps of a run, and `kix-upgrade.json`.
 :::
 
+## Leave the version out of `flake.nix`
+
+Write the Kix library input without a tag, so that the version lives only
+in `flake.lock`:
+
+```nix
+inputs.kix.url = "github:kix-run/kix";
+```
+
+`kix upgrade` then moves the library in `flake.lock` and never edits
+`flake.nix`, and a later `nix flake lock` keeps the version it locked. When
+`flake.nix` names a tag, such as `github:kix-run/kix/v0.9.1`, `kix upgrade`
+moves the tag when it is the only Kix url that names it. When another input
+names the same tag, it stops and asks you to change the library's url
+yourself.
+
 ## Preview the upgrade
 
 Start from a clean git working tree, so that you can see each file the

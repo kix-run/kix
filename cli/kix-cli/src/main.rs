@@ -200,7 +200,6 @@ fn run() -> miette::Result<()> {
     // that the last `kix upgrade` found.
     if let Command::Deploy(args) = &cli.command
         && !args.dry_run
-        && !args.operator
         && let Some(dir) = commands::project_dir(&cli.global.flake)
     {
         commands::upgrade::check_deploy(&dir)?;

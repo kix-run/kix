@@ -59,7 +59,9 @@ A record applies to the project when it names no package, or names a package
 one of the project's clusters installs. `kix upgrade` asks the Kix the
 project uses now for the packages with `kix list packages --cluster <name>`.
 It compares instance names, so an instance that has another name than its
-package does not match the package's records.
+package does not match the package's records. A change that works
+differently with no error, and a release every cluster must deploy first,
+apply to every project for that reason.
 
 ## What a run does
 
@@ -68,20 +70,20 @@ package does not match the package's records.
    `~/.cache/kix/upgrade/<project>/before/`. When a cluster does not build,
    it stops with exit status `2`. Fix the project on its current version
    first.
-2. Installs the target, pins the project to it, and builds every cluster.
-   Pinning writes the exact version into `kix.toml`, moves the Kix library
-   input's release tag in `flake.nix` to the target's tag, and moves the Kix
+2. Pins the project to the target, installs it, and builds every cluster.
+   Pinning writes the exact version into `kix.toml` and moves the Kix
    library in `flake.lock` as [`kix lib update`](/docs/reference/cli/lib/)
-   does. Only the url of the Kix library input changes, the input that
-   `kix lib update` finds. Its tag can take the form
-   `github:<owner>/<repo>/v0.9.1`, `?ref=refs/tags/v0.9.1`, or
-   `?ref=v0.9.1`, on any host, so an input that reads a mirror of the Kix
-   library moves too. When Kix cannot find that url, or the url is built
-   from a variable, it says which line to change. If the url names a tag
-   other than the project's version, it changes nothing and exits `3`.
-   When the library's repository has no tag for the new version, Kix puts
-   `kix.toml`, `flake.nix`, and `flake.lock` back, names the tag, and exits
-   `2`.
+   does. When the library input in `flake.nix` names the project's version
+   as a tag, such as `github:kix-run/kix/v0.9.1`, `?ref=refs/tags/v0.9.1`,
+   or `?ref=v0.9.1` on any host, Kix moves that tag too, but only when
+   exactly one Kix url in `flake.nix` names it. When two or more do, such as
+   a second input that pins the Kix built into an image, Kix changes
+   nothing, names the lines, writes `edit-needed` into `kix-upgrade.json`,
+   and exits `3` before it installs the target. Change the library input's
+   url yourself, leave the others, and run `kix upgrade` again. When Nix
+   cannot lock the new tag, or `flake.lock` still names another tag
+   afterwards, Kix puts `kix.toml`, `flake.nix`, and `flake.lock` back as
+   they were before that step, names the tag, and exits `2` or `3`.
 3. When a cluster does not build with the target, takes one minor release at
    a time: the newest patch of each minor after the project's, ending with
    the target. A project on a prerelease, such as `0.9.0-rc.1`, takes the
@@ -89,7 +91,11 @@ package does not match the package's records.
    prints each error and that release's change records, leaves the project
    pinned to that release, and exits `2`. Fix the errors against that
    release, then run `kix upgrade` again. The next run reuses the builds from
-   step 1, tries that release again, and continues.
+   step 1 and the package list made then, tries that release again, and
+   continues. So does a run after an interruption, since Kix writes
+   `kix-upgrade.json` before it first pins the project. When those builds
+   are gone, Kix refuses. Delete `kix-upgrade.json` and run again; the
+   comparison then starts from the version the project is pinned to now.
 4. Compares the first build with the last, cluster by cluster, and prints the
    objects added, removed, and changed. Clusters that changed the same way
    are printed together. A change is marked `no change record` unless a
@@ -124,6 +130,7 @@ Read each change, then run `kix upgrade --ack K0012` and deploy again.
 
 `kix upgrade --ack K0012` records the acknowledgement in
 `kix-upgrade.json`. `kix deploy --dry-run` and `kix plan` do not check.
+Another `kix upgrade` also refuses until each change is acknowledged.
 
 ## `kix-upgrade.json`
 
@@ -131,14 +138,15 @@ Read each change, then run `kix upgrade --ack K0012` and deploy again.
 | --- | --- |
 | `schema` | `kix.run/upgrade/v1` |
 | `from`, `to` | The version the upgrade started from, and the version it moved to. |
-| `status` | `done`, `fix-needed` (a build failed), `needs-person`, or `required-stop`. |
-| `steps` | Each version the project was built with: `version`, `result` (`ok` or `failed`), and `failed`, the clusters that did not build. |
+| `status` | `done`, `fix-needed` (a build failed, or the run stopped part of the way), `edit-needed` (a person must edit `flake.nix`), `needs-person`, or `required-stop`. |
+| `steps` | Each version the project was built with: `version`, `result` (`ok`, `failed`, or `started` for a step that stopped before it built), and `failed`, the clusters that did not build. |
 | `records` | The ids (or names, for a record without an id) of the applying records, by kind. |
 | `dataChanges` | The changes to stored data: `reference`, `release`, and `body`. |
 | `acknowledged` | The data changes someone acknowledged with `--ack`. |
 | `unexplainedChanges`, `sensitiveChanges` | How many changed objects have no record, and how many are sensitive. |
 | `cliHits` | Each project line that uses a changed command or flag: `text`, `file`, `line`. |
 | `before` | The directory of the builds made with the version the upgrade started from. |
+| `packagesInUse` | The instances the project's clusters install, as the version the upgrade started from listed them. Absent when Kix could not list them. |
 
 Programs that read the file must skip fields they do not know.
 
