@@ -129,6 +129,19 @@ fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
 }
 
 fn main() -> miette::Result<()> {
+    let Err(report) = run() else {
+        return Ok(());
+    };
+    // Printed as Rust prints the error `main` returns, then the hint, which
+    // must come after it.
+    eprintln!("Error: {report:?}");
+    let text: Vec<String> = report.chain().map(ToString::to_string).collect();
+    commands::explain::print_hint(&text.join("\n"));
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    std::process::exit(1);
+}
+
+fn run() -> miette::Result<()> {
     // Wrapping helps only a person reading a terminal. In a log or a pipe, a
     // line break can fall inside a path or a command, which breaks searching
     // and copying, and makes the text depend on how long its paths are.
@@ -160,6 +173,10 @@ fn main() -> miette::Result<()> {
 
     if let Command::SelfCmd(command) = &cli.command {
         return commands::self_cmd::run(command);
+    }
+
+    if let Command::Explain { id } = &cli.command {
+        return commands::explain::run(id);
     }
 
     // Doctor reports a broken runtime instead of stopping on it.
@@ -227,6 +244,7 @@ fn main() -> miette::Result<()> {
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
         Command::Completions(_)
         | Command::Doctor
+        | Command::Explain { .. }
         | Command::Drift(_)
         | Command::Pin(_)
         | Command::Lib(_)

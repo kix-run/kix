@@ -102,6 +102,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "compliance sbom",
             "compliance attest",
             "pin",
+            "explain",
         ],
     ),
     (
@@ -371,6 +372,17 @@ pub enum Command {
     #[command(subcommand)]
     Lib(LibCommand),
 
+    /// Print the change record behind an id such as K0001
+    ///
+    /// An error that a change in Kix or its library causes starts with the
+    /// change's id, such as K0001, in brackets. This command prints what
+    /// changed, the release it shipped in, and how to update. Kix knows the
+    /// records up to its own version. Exits 1 for an id it does not know.
+    Explain {
+        /// The id, such as K0001. Brackets and lower case are accepted.
+        id: String,
+    },
+
     /// Install, list, and remove versions of Kix
     ///
     /// Versions live under ~/.local/share/kix/<version>. A project names the
@@ -419,6 +431,7 @@ impl Command {
             },
             Command::Completions(_)
             | Command::Doctor
+            | Command::Explain { .. }
             | Command::Drift(_)
             | Command::Pin(_)
             | Command::Lib(_)

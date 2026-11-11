@@ -13,13 +13,15 @@
 //! [`system_nix`] checks the machine's Nix for the `nix` builder,
 //! [`legacy_domain`] reads objects stamped under Kix's retired API domains,
 //! [`text`] sanitizes untrusted text for terminal output, [`yaml`] reads and
-//! writes YAML, and [`version`] parses Kix versions and holds the rule for
-//! which versions work together.
+//! writes YAML, [`version`] parses Kix versions and holds the rule for
+//! which versions work together, and [`changes`] reads change records and
+//! holds the ones built into this Kix.
 //!
 //! `kix-lib` builds the cluster, plan, and release code on top of this crate
 //! and re-exports every module here under the same path.
 
 pub mod build_source;
+pub mod changes;
 pub mod eval;
 pub mod legacy_domain;
 pub mod library;
