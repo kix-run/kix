@@ -1003,6 +1003,12 @@
       "unverifiedNixBlocks": 4
     },
     {
+      "page": "start-and-inspect/upgrade-a-project-to-a-new-kix",
+      "scenario": "application",
+      "status": "implemented",
+      "unverifiedNixBlocks": 1
+    },
+    {
       "page": "start-and-inspect/use-mkflake-in-a-consuming-repo",
       "scenario": "application",
       "status": "implemented",
