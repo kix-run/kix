@@ -214,9 +214,8 @@
           declared
         else if declaredRank != null && declaredRank > mostPermissive.rank then
           throw (
-            "namespace '${nsName}' sets podSecurity = \"${declared}\", but instance "
-            + "'${mostPermissive.instName}' declares meta.podSecurity = \"${mostPermissive.level}\": "
-            + "its pods would be refused. Raise the namespace level, or move the instance."
+            "${nsName}/${mostPermissive.instName}: package sets meta.podSecurity = \"${mostPermissive.level}\", which is more permissive than namespaces.${nsName}.podSecurity = \"${declared}\". Kubernetes would refuse its pods in namespace '${nsName}'."
+            + "\nFix: set `namespaces.${nsName}.podSecurity = \"${mostPermissive.level}\";` in your cluster definition, or move '${mostPermissive.instName}' to a namespace that allows \"${mostPermissive.level}\"."
           )
         else
           mostPermissive.level;
@@ -936,7 +935,7 @@
         map
           (f: {
             assertion = false;
-            message = "[validate] ${f}";
+            message = f;
           })
           (
             validate.crossResourceFailures {

@@ -191,8 +191,9 @@ let
       _substrateCheck =
         if overSubstrate && sub.certain then
           throw (
-            "[${where}] ${requestedFrom} = \"${requested}\" but the cluster can offer at most "
-            + "\"${sub.level}\": it needs ${needs}. Lower the availability level, or update the capability declaration if the cluster supports it."
+            "${where}: ${requestedFrom} = \"${requested}\", which requires ${needs}, and this cluster's capabilities offer at most \"${sub.level}\"."
+            + "\nFix: lower ${requestedFrom} to \"${sub.level}\" (or lower)."
+            + "\nIf this cluster has the required nodes or zones, declare ${needs} in your cluster definition."
           )
         else
           null;

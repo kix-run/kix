@@ -278,9 +278,9 @@ rec {
       describeDemand =
         item:
         if builtins.elem item.depName roles.roleNames then
-          "role '${item.depName}', needed by ${item.requester}, has no provider"
+          "needs role '${item.depName}', which has no active provider"
         else
-          "dependency '${item.depName}' of ${item.requester} has no instance";
+          "needs dependency '${item.depName}', which has no active instance";
 
       # Select the optional instance matching a demand. A demand from any
       # namespace switches on an optional instance, because the cluster
@@ -306,11 +306,16 @@ rec {
         else if builtins.length tier == 1 then
           builtins.head tier
         else
-          throw "kix: dependency '${item.depName}' of ${item.requester} matches ${toString (builtins.length tier)} optional instances${
-            lib.optionalString (sameNs != [ ]) " in namespace '${item.requesterNs}'"
-          }: ${
-            builtins.concatStringsSep ", " (map (o: "${o.ns}/${o.instName}") tier)
-          }. Keep one of them, or set deps.${item.depName} on ${item.requester} to the intended one.";
+          throw (
+            "${item.requester}: dependency '${item.depName}' matches ${toString (builtins.length tier)} optional instances${
+              lib.optionalString (sameNs != [ ]) " in namespace '${item.requesterNs}'"
+            }: ${builtins.concatStringsSep ", " (map (o: "${o.ns}/${o.instName}") tier)}."
+            + "\nFix: wire the one ${item.requester} should use in instances.${
+              builtins.replaceStrings [ "/" ] [ "." ] item.requester
+            }:"
+            + "\n  deps.${item.depName} = ref.${(builtins.head tier).ns}.${(builtins.head tier).instName};"
+            + "\nIf this cluster needs only one of those optional instances, remove the others."
+          );
 
       # Return the optional instance that `item` activates, or null.
       activatedBy =
@@ -336,17 +341,17 @@ rec {
           throw (
             builtins.concatStringsSep "\n" (
               [
-                "kix: ${describeDemand item}, and ${toString (builtins.length claimants)} packages in availablePackages provide it:"
+                "${item.requester}: ${describeDemand item}, and ${toString (builtins.length claimants)} packages in availablePackages match '${item.depName}':"
               ]
               ++ map (
                 name: "  ${name} (${builtins.concatStringsSep ", " (claimSources name item.depName)})"
               ) claimants
               ++ [
-                "Kix does not choose between them. Declare the one this cluster uses as an optional instance, which is created only when something depends on it:"
+                "Fix: declare the package this cluster should use as an optional instance (created only when something depends on it):"
                 "  instances.<namespace>.${item.depName} = { package = packages.<one of the above>; optional = true; };"
-                "or remove the others from availablePackages."
+                "If the other matching packages are not used in this cluster, remove them from availablePackages."
               ]
-              ++ lib.optional (builtins.elem item.depName roles.roleNames) "If the environment provides this role, set cluster.roles.${item.depName}.binding instead."
+              ++ lib.optional (builtins.elem item.depName roles.roleNames) "If the cluster environment already provides '${item.depName}', set `cluster.roles.${item.depName}.binding = \"shadowable\";` (or `\"exclusive\";`) in your cluster definition instead."
             )
           );
 

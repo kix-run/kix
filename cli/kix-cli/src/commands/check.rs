@@ -188,7 +188,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
             Some(output)
         }
         Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
-            return Err(miette::miette!("cluster '{}' not found", name));
+            return Err(miette::miette!("{}", ctx.cluster_not_found(name)));
         }
         Err(e) => {
             results.push(CheckResult {

@@ -408,7 +408,7 @@ rec {
           null
         else
           throw (
-            "Cluster '${clusterName}' has ${toString (builtins.length failedAssertions)} failed assertion(s):\n"
+            "cluster '${clusterName}' has ${toString (builtins.length failedAssertions)} problem(s):\n"
             + builtins.concatStringsSep "\n" (map (a: "  - ${a.message}") failedAssertions)
           );
     in

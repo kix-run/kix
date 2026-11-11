@@ -61,7 +61,7 @@ Check 21 also verifies that the custom resource's API version is served by the d
 When a Helm chart renders a custom resource belonging to another package's CRD (such as a `ServiceMonitor` enabled via chart `values`), check 21 fails because the chart resource has no dependency link to the `prometheus-operator` CRD marker. Disable the chart's built-in toggle and use `kix.monitor` or `scope.mkCR` in the Kix package instead.
 
 ```text
-- [validate] ServiceMonitor apps/web (instance apps/web) does not depend on the CRD ref crd-ref-prometheus-operator-servicemonitors-monitoring-coreos-com for servicemonitors.monitoring.coreos.com (instance monitoring/prometheus-operator), which declares its kind, so the deploy can apply it before the CRD is served. ...
+- ServiceMonitor apps/web (instance apps/web) does not depend on the CRD ref crd-ref-prometheus-operator-servicemonitors-monitoring-coreos-com for servicemonitors.monitoring.coreos.com (instance monitoring/prometheus-operator), which declares its kind, so the deploy can apply it before the CRD is served. ...
 ```
 
 ## Check 22: named Secret and ConfigMap keys
@@ -88,8 +88,9 @@ The following markers satisfy existence and selector checks:
 When one or more checks fail, cluster evaluation stops and lists every violation:
 
 ```text
-error: Cluster 'homelab-kind' has 1 failed assertion(s):
-  - [validate] Service data/postgres-metrics selector {"app":"pg"} matches no workload pod template
+error: cluster 'homelab-kind' has 1 problem(s):
+  - Service data/postgres-metrics selector {"app":"pg"} matches no workload pod template in namespace 'data'.
+    Fix: update spec.selector to match the target workload's pod labels, or build the Service with kix.service.fromWorkload.
 ```
 
 :::note[Explanation]
