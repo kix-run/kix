@@ -115,6 +115,19 @@ impl CommandContext {
         })
     }
 
+    /// Return the error for a cluster name the project does not define,
+    /// listing the clusters it does define when the flake can list them.
+    pub fn cluster_not_found(&mut self, name: String) -> String {
+        let clusters = self.evaluator.list_clusters().unwrap_or_default();
+        if clusters.is_empty() {
+            return kix::eval::error::KixEvalError::ClusterNotFound { name }.to_string();
+        }
+        format!(
+            "cluster '{name}' is not defined in this project. Nothing was built or changed.\nAvailable clusters: {}\nNext: run the command again with one of the cluster names above, or pass --flake <path> to point to another project.",
+            clusters.join(", ")
+        )
+    }
+
     /// Evaluate a cluster, or return an error listing available clusters when `name` is not found.
     pub fn eval_cluster_or_suggest(
         &mut self,
@@ -124,12 +137,7 @@ impl CommandContext {
         match self.evaluator.eval_cluster(name) {
             Ok(o) => Ok(o),
             Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
-                let clusters = self.evaluator.list_clusters().unwrap_or_default();
-                let mut msg = format!("cluster '{}' not found", name);
-                if !clusters.is_empty() {
-                    msg.push_str(&format!(". Available clusters: {}", clusters.join(", ")));
-                }
-                Err(miette::miette!("{}", msg))
+                Err(miette::miette!("{}", self.cluster_not_found(name)))
             }
             Err(e) => Err(e).into_diagnostic(),
         }
@@ -164,9 +172,14 @@ fn resolve_identity(
         Ok(Some(name)) => Ok(name),
         Ok(None) => Ok(arg.to_string()),
         Err(e) => match lookup {
-            Lookup::Mutating => Err(miette::miette!(
-                "no Activation record in this context carries cluster name '{arg}', and evaluating the name that flake attribute '{arg}' gives its cluster failed: {e}"
-            )),
+            Lookup::Mutating => match e {
+                kix::eval::error::KixEvalError::ClusterNotFound { .. } => Err(miette::miette!(
+                    "no deploy history for cluster '{arg}' was found on the Kubernetes cluster, and cluster '{arg}' is not defined in this project. Nothing on the cluster was changed.\nNext: run `kix list clusters` to see the clusters in this project, or pass --flake <path> to point to another project."
+                )),
+                e => Err(miette::miette!(
+                    "no deploy history for cluster '{arg}' was found on the Kubernetes cluster, and evaluating cluster '{arg}' from this project failed:\n{e}\nNothing on the cluster was changed.\nNext: fix the evaluation error above and run the command again."
+                )),
+            },
             Lookup::ReadOnly => {
                 eprintln!(
                     "warning: could not evaluate the name of cluster '{arg}', so looking it up as '{arg}': {e}"
@@ -187,6 +200,9 @@ pub(crate) fn build_flake(
 ) -> miette::Result<Build> {
     let flake_path = resolve_flake_path(&global.flake)?;
     Build::of_flake(&flake_path, cluster, &global.input_overrides(), status).map_err(|e| match e {
+        FlakeBuildError::Build(e @ kix::eval::error::KixEvalError::ClusterNotFound { .. }) => {
+            miette::miette!("{e}")
+        }
         FlakeBuildError::Build(e) => miette::miette!("{build_failed}: {e}"),
         FlakeBuildError::Load(e) => miette::miette!("{e}"),
     })

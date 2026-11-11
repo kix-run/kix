@@ -223,7 +223,11 @@ rec {
           if entry.namespace == nsName && entry.instanceName == instName then
             throw "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
           else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
-            throw "${who} names ${refText}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${entry.namespace}.${entry.instanceName}."
+            throw (
+              "${who} lists ${refText}, which is not a declared instance. '${entry.instanceName}' is in availablePackages, and a ref pointer in extraDeps does not create it automatically."
+              + "\nFix: declare the instance in your cluster definition:"
+              + "\n  instances.${entry.namespace}.${entry.instanceName}.package = packages.<package>;"
+            )
           else
             null
         else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
@@ -235,12 +239,15 @@ rec {
         nsName: instName: instCfg:
         let
           entries = instCfg.extraDeps or [ ];
-          who = "kix: instances.${nsName}.${instName}.extraDeps";
+          who = "${nsName}/${instName}: instances.${nsName}.${instName}.extraDeps";
         in
         if entries == [ ] then
           null
         else if (instCfg.package._type or "") != "kix-import" then
-          throw "${who} is set on a managed instance. Instance-level extraDeps adds dependencies to a kix.mkImport marker only. Put the dependency on the resource that needs it, as `requires` or `extraDeps` in its scope builder call."
+          throw (
+            "${who} is set, and this instance is not a kix.mkImport. Instance-level extraDeps orders only kix.mkImport instances."
+            + "\nFix: remove instances.${nsName}.${instName}.extraDeps, and set `requires` or `extraDeps` on the `scope.mk*` resource builder call in the package instead."
+          )
         else
           builtins.foldl' (acc: e: builtins.seq (checkEntry who nsName instName e) acc) null entries;
     in
@@ -287,7 +294,12 @@ rec {
             depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
             mkDepProxy =
               depName:
-              builtins.throw "Import instance '${instanceName}': package accessed dependency '${depName}', but imports run without dependency resolution. Either use a raw 'out' override (mkImport { out = { ... }; }) or use a mixed import (mkImport { from = ...; out = { fieldThatNeedsDep = \"value\"; }; }).";
+              builtins.throw (
+                "${namespaceName}/${instanceName}: kix.mkImport { from = ...; } tried to read dependency '${depName}' while deriving 'out' from the package. Imports represent external services and do not resolve package dependencies."
+                + "\nFix: set the output fields that depend on '${depName}' directly in instances.${namespaceName}.${instanceName}.package:"
+                + "\n  kix.mkImport { from = ...; out = { <field> = \"...\"; }; }"
+                + "\nIf you know all output fields, omit 'from' and write `kix.mkImport { out = { ... }; }`."
+              );
             nullDeps = builtins.listToAttrs (
               map (name: {
                 inherit name;

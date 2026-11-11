@@ -934,7 +934,7 @@ in
   # A namespaced kind's marker does not: a Service marker in kube-system
   # is no witness for namespace a (control for the case above).
   lib-reference-checks-namespaced-marker-stays-in-its-namespace =
-    expectFailures [ "references Service 'db'" ]
+    expectFailures [ "routes to Service 'db'" ]
       {
         ms = [
           (importMarkerOf "kube-system" "service-ref-x-db" "Service" "db" { })

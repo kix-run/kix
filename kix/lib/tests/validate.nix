@@ -443,7 +443,7 @@ in
 {
   v00-consistent-set-is-clean = clean (base "a");
 
-  v01-missing-serviceaccount = onlyFailure "references ServiceAccount 'sa-typo'" (
+  v01-missing-serviceaccount = onlyFailure "sets serviceAccountName 'sa-typo'" (
     base "a" ++ [ (deployment "a" "api" { spec.template.spec.serviceAccountName = "sa-typo"; }) ]
   );
 
@@ -474,7 +474,7 @@ in
   );
 
   v03-configmap-volume-missing =
-    onlyFailure "mounts ConfigMap 'cfg-typo' which is not in the cluster build"
+    onlyFailure "mounts ConfigMap 'cfg-typo', which no resource in namespace"
       (
         base "a"
         ++ [
@@ -496,7 +496,7 @@ in
   v03b-cluster-scoped-namesake-does-not-satisfy-namespaced-lookup =
     failuresInclude
       [
-        "mounts ConfigMap 'shared' which is not in the cluster build"
+        "mounts ConfigMap 'shared', which no resource in namespace"
         "ConfigMap shared (v1) is a namespaced kind"
       ]
       (
@@ -549,7 +549,7 @@ in
   # The declaration is namespaced: the CR must be in the Service's namespace.
   v04d-operand-of-is-namespaced =
     onlyFailure
-      "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but that custom resource"
+      "sets ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom, which no custom resource"
       (
         base "a"
         ++ base "b"
@@ -564,7 +564,7 @@ in
 
   # Keyed by group: a kind of the same name in another group does not count.
   v04e-operand-of-checks-the-group =
-    onlyFailure "declares ${kixKeys.operandOf}=other.example/Prometheus/prom"
+    onlyFailure "sets ${kixKeys.operandOf}=other.example/Prometheus/prom"
       (
         base "a"
         ++ promCr "Prometheus" "prometheuses" "a" "prom"
@@ -577,7 +577,7 @@ in
       );
 
   # A declaration that is not group/Kind/name is reported as such.
-  v04g-operand-of-malformed = onlyFailure "which is not of the form <group>/<Kind>/<name>" (
+  v04g-operand-of-malformed = onlyFailure "which is not in the form <group>/<Kind>/<name>" (
     base "a"
     ++ [
       (service "a" "prom-thanos" { operated = "yes"; } {
@@ -654,7 +654,7 @@ in
     base "a" ++ [ (deployment "a" "api" { spec.selector.matchLabels.tier = "api"; }) ]
   );
 
-  v10-ingress-backend-missing = onlyFailure "references Service 'nowhere'" (
+  v10-ingress-backend-missing = onlyFailure "routes to Service 'nowhere'" (
     base "a"
     ++ [
       (res "Ingress" "a" "ing" {
@@ -673,7 +673,7 @@ in
     ]
   );
 
-  v11-namespace-missing = onlyFailure "Namespace 'b' is referenced" (
+  v11-namespace-missing = onlyFailure "Namespace 'b' is used by resources" (
     base "a" ++ [ (res "ConfigMap" "b" "stray" { }) ]
   );
 
@@ -899,7 +899,7 @@ in
   # A cluster-scoped CR (no namespace) cannot be the operand source of a namespaced Service.
   p04d-cluster-scoped-cr-does-not-exempt =
     onlyFailure
-      "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but that custom resource"
+      "sets ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom, which no custom resource"
       (
         base "a"
         # A ref that declares the kind cluster-scoped, so check 18 accepts
@@ -969,7 +969,7 @@ in
     ]
   );
 
-  p10b-ingress-default-backend-missing = onlyFailure "references Service 'gone'" (
+  p10b-ingress-default-backend-missing = onlyFailure "routes to Service 'gone'" (
     base "a"
     ++ [
       (res "Ingress" "a" "ing" {
@@ -1035,7 +1035,7 @@ in
         };
       };
     in
-    (builtins.length fs == 1 && lib.hasInfix "references ServiceAccount 'provided'" (builtins.head fs))
+    (builtins.length fs == 1 && lib.hasInfix "sets serviceAccountName 'provided'" (builtins.head fs))
     || throw "namespace key ignored: ${builtins.toJSON fs}";
 
   # A ServiceRef's declared pod selector is a witness for checks 4 and 12.
@@ -1101,7 +1101,7 @@ in
   );
 
   # The marker is namespaced: a ref in another namespace does not count.
-  e02b-import-marker-is-namespaced = onlyFailure "references Service 'db'" (
+  e02b-import-marker-is-namespaced = onlyFailure "routes to Service 'db'" (
     base "a"
     ++ base "b"
     ++ [

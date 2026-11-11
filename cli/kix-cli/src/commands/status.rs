@@ -347,26 +347,29 @@ fn interface_note(
         Ok(live) => live,
         Err(e) if e.forbidden() => {
             return Ok(Some(format!(
-                "Cannot check {cluster}'s interface from {platform}: this context may not read \
-                 {platform}'s Activation records (HTTP 403)."
+                "note: cannot verify whether '{cluster}' matches platform '{platform}': this \
+                 Kubernetes account is not allowed to read '{platform}'s deploy record (HTTP 403)."
             )));
         }
         Err(e) => return Err(e).into_diagnostic(),
     };
     let Some(live) = live else {
         return Ok(Some(format!(
-            "Cannot check {cluster}'s interface from {platform}: {platform} has no live deploy."
+            "note: cannot verify whether '{cluster}' matches platform '{platform}': '{platform}' \
+             has no active deploy on this Kubernetes cluster."
         )));
     };
     Ok(match live.published_interfaces.get(&pinned.consumer) {
         None => Some(format!(
-            "{platform}'s live deploy has no interface for consumer {}. {cluster} was built \
-             against one it no longer publishes.",
-            pinned.consumer
+            "warning: platform '{platform}' no longer publishes an interface for consumer '{consumer}', \
+             which '{cluster}' was built with.\n  Next: ask the '{platform}' platform team to restore \
+             `consumers.{consumer}`, or update '{cluster}'s `kix.interface` file and redeploy '{cluster}'.",
+            consumer = pinned.consumer
         )),
         Some(sha256) if *sha256 != pinned.sha256 => Some(format!(
-            "{cluster} was built against a different interface from the one {platform} runs \
-             now. Commit {platform}'s current {} and deploy {cluster} to take it up.",
+            "warning: '{cluster}' was built with an older interface file than platform '{platform}' \
+             is running now.\n  Next: copy '{platform}'s current interface file to `{}`, commit it, \
+             and run `kix deploy {cluster}`.",
             pinned.path
         )),
         Some(_) => None,
@@ -855,9 +858,9 @@ mod tests {
         assert_eq!(
             note(Ok(Some(publishing("bb")))).as_deref(),
             Some(
-                "acme-prod was built against a different interface from the one prod runs \
-                 now. Commit prod's current kix-interface/prod.json and deploy acme-prod to \
-                 take it up."
+                "warning: 'acme-prod' was built with an older interface file than platform \
+                 'prod' is running now.\n  Next: copy 'prod's current interface file to \
+                 `kix-interface/prod.json`, commit it, and run `kix deploy acme-prod`."
             )
         );
     }
@@ -867,8 +870,10 @@ mod tests {
         assert_eq!(
             note(Ok(Some(Record::default()))).as_deref(),
             Some(
-                "prod's live deploy has no interface for consumer acme. acme-prod was built \
-                 against one it no longer publishes."
+                "warning: platform 'prod' no longer publishes an interface for consumer 'acme', \
+                 which 'acme-prod' was built with.\n  Next: ask the 'prod' platform team to \
+                 restore `consumers.acme`, or update 'acme-prod's `kix.interface` file and \
+                 redeploy 'acme-prod'."
             )
         );
     }
@@ -877,7 +882,10 @@ mod tests {
     fn no_live_platform_says_so() {
         assert_eq!(
             note(Ok(None)).as_deref(),
-            Some("Cannot check acme-prod's interface from prod: prod has no live deploy.")
+            Some(
+                "note: cannot verify whether 'acme-prod' matches platform 'prod': 'prod' has no \
+                 active deploy on this Kubernetes cluster."
+            )
         );
     }
 
@@ -886,8 +894,8 @@ mod tests {
         assert_eq!(
             note(Err(refused(403))).as_deref(),
             Some(
-                "Cannot check acme-prod's interface from prod: this context may not read \
-                 prod's Activation records (HTTP 403)."
+                "note: cannot verify whether 'acme-prod' matches platform 'prod': this \
+                 Kubernetes account is not allowed to read 'prod's deploy record (HTTP 403)."
             )
         );
         assert!(interface_note("acme-prod", "prod", &pinned("aa"), Err(refused(500))).is_err());

@@ -83,8 +83,8 @@ in
           throw message
         else if value == null then
           builtins.trace (
-            "[kix] warning: [${instanceName}] needs a cluster capability that has not been declared: "
-            + "cluster.capabilities.${cap}. Set it to true or false in the cluster definition to match your environment. Kix cannot verify this requirement while it is null."
+            "warning: instance '${instanceName}': requires cluster.capabilities.${cap} = true, which is not set in the cluster definition, so Kix skipped verifying this requirement."
+            + "\nFix: set `cluster.capabilities.${cap} = true;` (or `false;`) in the cluster definition to match your cluster."
           ) null
         else
           null;
@@ -94,22 +94,24 @@ in
         subject:
         let
           status = roleStatus "metricsApi";
-          desc = "[${instanceName}] ${subject} reads the resource metrics API (metrics.k8s.io)";
+          desc = "instance '${instanceName}': ${subject} requires the Kubernetes Metrics API (metrics.k8s.io), and";
         in
         if capabilities == { } then
           null
         else if status == "absent" then
           throw (
             desc
-            + " but nothing serves it (cluster.roles.metricsApi.binding = \"absent\", no provider instance). "
-            + "Add a metrics-server instance, or configure cluster.roles.metricsApi.binding to match your environment."
+            + " nothing in this cluster provides it (cluster.roles.metricsApi.binding = \"absent\" and no metrics-server instance is declared)."
+            + "\nFix: add a metrics-server instance to your cluster definition:"
+            + "\n  instances.kube-system.metrics-server.package = packages.metrics-server;"
+            + "\nIf your cluster environment already runs metrics-server, set `cluster.roles.metricsApi.binding = \"exclusive\";` in your cluster definition instead."
           )
         else if status == "unknown" then
           builtins.trace (
-            "[kix] warning: "
+            "warning: "
             + desc
-            + " but Kix cannot verify that this cluster serves it. Set "
-            + "cluster.roles.metricsApi.binding to match your environment, or add a metrics-server instance."
+            + " cluster.roles.metricsApi.binding is unset, so Kix skipped checking for a provider."
+            + "\nFix: set `cluster.roles.metricsApi.binding = \"exclusive\";` (or `\"absent\";`) in your cluster definition, or add a metrics-server instance."
           ) null
         else
           null;
@@ -153,10 +155,10 @@ in
               [ ]
             else
               [
-                (
-                  throw "[${instanceName}] Container '${c.name}' has duplicate env var name(s): "
+                (throw (
+                  "[${instanceName}] Container '${c.name}' has duplicate env var name(s): "
                   + "[${builtins.concatStringsSep ", " d}]."
-                )
+                ))
               ]
           ) allContainers;
 
@@ -170,27 +172,31 @@ in
               [ ]
             else
               [
-                (
-                  throw "[${instanceName}] Container '${c.name}' has duplicate named port(s): "
+                (throw (
+                  "[${instanceName}] Container '${c.name}' has duplicate named port(s): "
                   + "[${builtins.concatStringsSep ", " d}]."
-                )
+                ))
               ]
           ) allContainers;
 
           containerNameCheck =
             if containerNameDups != [ ] then
-              throw "[${instanceName}] Pod has duplicate container name(s): "
-              + "[${builtins.concatStringsSep ", " containerNameDups}]. "
-              + "Container names must be unique within a pod."
+              throw (
+                "[${instanceName}] Pod has duplicate container name(s): "
+                + "[${builtins.concatStringsSep ", " containerNameDups}]. "
+                + "Container names must be unique within a pod."
+              )
             else
               null;
 
           volumeNameCheck =
             if volumeNameDups != [ ] then
-              throw "[${instanceName}] Pod has duplicate volume name(s): "
-              + "[${builtins.concatStringsSep ", " volumeNameDups}]. "
-              + "Volume names must be unique within a pod (common cause: "
-              + "multiple mounts auto-derived from resources with the same name)."
+              throw (
+                "[${instanceName}] Pod has duplicate volume name(s): "
+                + "[${builtins.concatStringsSep ", " volumeNameDups}]. "
+                + "Volume names must be unique within a pod (common cause: "
+                + "multiple mounts auto-derived from resources with the same name)."
+              )
             else
               null;
 
@@ -265,7 +271,7 @@ in
         let
           specType = args.spec.type or (args.extra.spec.type or null);
           status = roleStatus "loadBalancer";
-          serviceDesc = "[${instanceName}] Service '${args.name or "unknown"}' uses type=LoadBalancer";
+          serviceDesc = "instance '${instanceName}': Service '${args.name or "unknown"}' sets type = \"LoadBalancer\", and";
         in
         if
           (args.kind or "") == "Service"
@@ -276,16 +282,17 @@ in
           if status == "absent" then
             throw (
               serviceDesc
-              + " but no load balancer provider is configured (cluster.roles.loadBalancer.binding = \"absent\", "
-              + "no provider instance). Use type=ClusterIP or NodePort, add a provider instance, "
-              + "or configure cluster.roles.loadBalancer.binding to match your environment."
+              + " this cluster has no load balancer configured (cluster.roles.loadBalancer.binding = \"absent\")."
+              + "\nFix: if your cluster environment provides a load balancer (such as a cloud controller or MetalLB), add this line to your cluster definition:"
+              + "\n  cluster.roles.loadBalancer.binding = \"shadowable\";"
+              + "\nIf this cluster has no load balancer, change the Service to `type = \"ClusterIP\";` (or `\"NodePort\"`)."
             )
           else if status == "unknown" then
             builtins.trace (
-              "[kix] warning: "
+              "warning: "
               + serviceDesc
-              + " but Kix cannot verify that this cluster has a load balancer provider. Set "
-              + "cluster.roles.loadBalancer.binding to match your environment, or add a provider instance."
+              + " cluster.roles.loadBalancer.binding is unset, so Kix skipped checking for a load balancer."
+              + "\nFix: set `cluster.roles.loadBalancer.binding = \"shadowable\";` (or `\"absent\";`) in your cluster definition."
             ) null
           else
             null
@@ -420,19 +427,17 @@ in
               refReflected = fragment._kix.reflected or false;
             in
             if builtins.getContext refName == { } then
-              throw "[${instanceName}] Untracked ${kind} reference in ${fieldDesc}: "
-              + "\"${plainName}\". "
-              + "Use the resource's out.name or other out helpers so Kix can track the dependency, "
-              + "or kix.untrackedRef to opt out explicitly."
+              throw (
+                "instance '${instanceName}': ${fieldDesc} uses a plain string \"${plainName}\" for a ${kind} name, so Kix cannot order the workload after the ${kind} or verify that it exists."
+                + "\nFix: reference the ${kind} resource's .out.name (or use kix.mount.${kind} / .out.keyRef)."
+                + "\nIf \"${plainName}\" is created outside Kix, wrap it in kix.untrackedRef \"${plainName}\"."
+              )
             else if refNs != null && refNs != namespaceName && !refReflected then
-              throw "[${instanceName}] Cross-namespace ${kind} reference in ${fieldDesc}: "
-              + "${kind} \"${plainName}\" is declared in namespace \"${refNs}\" "
-              + "but the consuming workload is in namespace \"${namespaceName}\". "
-              + "Kubernetes requires this ${kind} to be in the workload's namespace. "
-              + "Create or mirror the ${kind} in \"${namespaceName}\" "
-              + "(e.g. via scope.forNamespace \"${namespaceName}\"), "
-              + "or replicate it with an ExternalSecret / Reflector "
-              + "(producers can opt in via `scope.mkSecretRef { reflect = true; }`)."
+              throw (
+                "instance '${instanceName}': ${fieldDesc} references ${kind} \"${plainName}\" in namespace \"${refNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a mounted or referenced ${kind} to be in the workload's own namespace."
+                + "\nFix: create the ${kind} in namespace \"${namespaceName}\" (or in a dependency instance in \"${namespaceName}\")."
+                + "\nIf this is a Secret replicated across namespaces by a controller such as Reflector, set reflect = true on its scope.mkSecretRef call."
+              )
             else
               null;
 
@@ -494,21 +499,18 @@ in
               in
               if builtins.getContext saName == { } then
                 [
-                  (
-                    throw "[${instanceName}] Untracked serviceAccount reference in spec.template.spec.serviceAccountName: "
-                    + "\"${plainName}\". "
-                    + "Use `serviceAccount = self.serviceAccount;` (kix shorthand that also enables "
-                    + "cross-namespace validation) or kix.untrackedRef for an externally managed ServiceAccount."
-                  )
+                  (throw (
+                    "instance '${instanceName}': spec.template.spec.serviceAccountName uses a plain string \"${plainName}\", so Kix cannot order the workload after the ServiceAccount or verify its namespace."
+                    + "\nFix: pass the ServiceAccount resource as serviceAccount = self.<part>; in spec.template.spec (or set serviceAccountName = self.<part>.out.name;)."
+                    + "\nIf \"${plainName}\" is created outside Kix, set serviceAccountName = kix.untrackedRef \"${plainName}\";."
+                  ))
                 ]
               else if saNs != null && saNs != namespaceName then
                 [
-                  (
-                    throw "[${instanceName}] Cross-namespace serviceAccount reference: "
-                    + "ServiceAccount \"${plainName}\" is declared in namespace \"${saNs}\" "
-                    + "but the consuming workload is in namespace \"${namespaceName}\". "
-                    + "Kubernetes requires a Pod's ServiceAccount to live in the Pod's own namespace."
-                  )
+                  (throw (
+                    "instance '${instanceName}': spec.template.spec.serviceAccount references ServiceAccount \"${plainName}\" in namespace \"${saNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a pod's ServiceAccount to be in the pod's own namespace."
+                    + "\nFix: define a ServiceAccount part in this package with `serviceAccount = scope.mkResource { apiVersion = \"v1\"; kind = \"ServiceAccount\"; ... };` and set `serviceAccount = self.serviceAccount;` in spec.template.spec."
+                  ))
                 ]
               else
                 [ null ]
@@ -531,15 +533,19 @@ in
             "{ ${builtins.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${toString v}") labels)} }";
         in
         if missingKeys != [ ] then
-          throw "[${instanceName}] ${kind} pod labels do not include all labels in spec.selector.matchLabels: "
-          + "selector key(s) ${builtins.concatStringsSep ", " missingKeys} are missing from template labels. "
-          + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}. "
-          + "Add the missing selector labels to spec.template.metadata.labels. "
-          + "Kubernetes requires every selector label to match the pod template."
+          throw (
+            "[${instanceName}] ${kind} pod labels do not include all labels in spec.selector.matchLabels: "
+            + "selector key(s) ${builtins.concatStringsSep ", " missingKeys} are missing from template labels. "
+            + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}. "
+            + "Add the missing selector labels to spec.template.metadata.labels. "
+            + "Kubernetes requires every selector label to match the pod template."
+          )
         else if mismatchedKeys != [ ] then
-          throw "[${instanceName}] ${kind} spec.selector.matchLabels value mismatch on key(s) "
-          + "${builtins.concatStringsSep ", " mismatchedKeys}: "
-          + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}."
+          throw (
+            "[${instanceName}] ${kind} spec.selector.matchLabels value mismatch on key(s) "
+            + "${builtins.concatStringsSep ", " mismatchedKeys}: "
+            + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}."
+          )
         else
           null;
 
@@ -592,12 +598,12 @@ in
                 [ ]
               else if !(builtins.elem portName names) then
                 [
-                  (
-                    throw "[${instanceName}] Container '${c.name}' ${p.name} references named port "
+                  (throw (
+                    "[${instanceName}] Container '${c.name}' ${p.name} references named port "
                     + "\"${portName}\" which is not declared by the container. "
                     + "Declared named ports: [${builtins.concatStringsSep ", " names}]. "
                     + "Add `ports = [ (kix.port \"${portName}\" <N>) ]` or use a numeric port."
-                  )
+                  ))
                 ]
               else
                 [ null ]
@@ -646,8 +652,10 @@ in
                   else if l == null || r == null then
                     null
                   else if l < r then
-                    throw "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) is lower than resources.requests.${res} (${toString requests.${res}}). "
-                    + "Increase the limit or lower the request. Kubernetes requires the limit to be at least the request."
+                    throw (
+                      "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) is lower than resources.requests.${res} (${toString requests.${res}}). "
+                      + "Increase the limit or lower the request. Kubernetes requires the limit to be at least the request."
+                    )
                   else
                     null;
             in
@@ -689,12 +697,12 @@ in
                 in
                 if fp != null && !(isAllowed fp) then
                   [
-                    (
-                      throw "[${instanceName}] env '${e.name}' in container '${c.name}' uses "
+                    (throw (
+                      "[${instanceName}] env '${e.name}' in container '${c.name}' uses "
                       + "unsupported fieldRef.fieldPath \"${fp}\". Allowed: "
                       + "${builtins.concatStringsSep ", " _allowedFieldPaths}, "
                       + "metadata.labels['<key>'], metadata.annotations['<key>']."
-                    )
+                    ))
                   ]
                 else
                   [ null ]

@@ -115,12 +115,13 @@ rec {
             if (mergedInstances.${r.namespace} or { }) ? ${r.instanceName} then
               acc
             else
-              throw "kix: ${nsName}/${instName} ${
-                if builtins.isList v then
-                  "lists ref.${r.namespace}.${r.instanceName} in deps.${arg}"
-                else
-                  "sets deps.${arg} = ref.${r.namespace}.${r.instanceName}"
-              }, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${r.namespace}.${r.instanceName}."
+              throw (
+                "${nsName}/${instName}: ${
+                  if builtins.isList v then "deps.${arg} lists" else "deps.${arg} ="
+                } ref.${r.namespace}.${r.instanceName}, which is not a declared instance. '${r.instanceName}' is in availablePackages, and a ref pointer does not create it automatically."
+                + "\nFix: declare the instance in your cluster definition:"
+                + "\n  instances.${r.namespace}.${r.instanceName}.package = packages.<package>;"
+              )
           ) acc (refsOf v)
         ) acc (instCfg.deps or { })
       ) acc nsInsts
@@ -173,7 +174,11 @@ rec {
           c = indexed t;
         in
         if t.namespace != requesterNamespace && c != null && (c.meta.scope or null) == "namespace" then
-          throw "${prefix}deps.${argName} = ref.${t.namespace}.${t.instanceName} names an instance in another namespace whose package declares meta.scope = \"namespace\", so it serves only namespace '${t.namespace}'. Use an instance in namespace '${requesterNamespace}', or set meta.scope = \"cluster\" in its package if every namespace may use it."
+          throw (
+            "${prefix}deps.${argName} = ref.${t.namespace}.${t.instanceName} points to an instance in namespace '${t.namespace}' whose package sets meta.scope = \"namespace\", so it cannot be used from namespace '${requesterNamespace}'."
+            + "\nFix: declare a separate instance in namespace '${requesterNamespace}' and point ${consumerPath}.deps.${argName} to it."
+            + "\nIf the package can safely serve every namespace, set meta.scope = \"cluster\" in its package instead."
+          )
         else
           t;
     in
@@ -197,7 +202,10 @@ rec {
             direct = false;
           }
         else
-          throw "${prefix}deps.${argName} is a list that mixes ref.<namespace>.<instance> entries with other values. Make every entry a ref, or set deps.${argName} to a value without refs."
+          throw (
+            "${prefix}${consumerPath}.deps.${argName} is a list that mixes ref.<namespace>.<instance> entries with plain values."
+            + "\nFix: make every list entry a ref.<namespace>.<instance>, or pass a list of plain values without refs."
+          )
       else
         {
           found = true;
@@ -240,51 +248,68 @@ rec {
           instanceName = c.instName;
           direct = false;
         };
-        none = "dependency '${argName}' has no instance in namespace '${requesterNamespace}'.";
+        none = "${prefix}dependency '${argName}' has no instance in namespace '${requesterNamespace}', and";
         several =
           cs:
-          "${toString (builtins.length cs)} instances in other namespaces match: ${labels cs}. Kix does not choose between them. Add one of these lines to ${consumerPath}:\n${depLines cs}";
+          "${none} ${toString (builtins.length cs)} instances in other namespaces match: ${labels cs}."
+          + "\nFix: choose one by adding one of these lines to ${consumerPath}:"
+          + "\n${depLines cs}";
       in
       if builtins.length own == 1 then
         bind (builtins.head own)
 
       else if builtins.length own > 1 then
-        throw "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
-          builtins.concatStringsSep ", " (map (c: c.instName) own)
-        }. Set deps.${argName} explicitly to the intended instance."
+        throw (
+          "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
+            builtins.concatStringsSep ", " (map (c: c.instName) own)
+          }."
+          + "\nFix: choose one by adding one of these lines to ${consumerPath}:"
+          + "\n${depLines own}"
+        )
 
       else if builtins.length shared == 1 then
         bind (builtins.head shared)
 
       else if builtins.length shared > 1 then
-        throw "${prefix}${none} ${several (shared ++ nameable)}"
+        throw (several (shared ++ nameable))
 
       else if hasDefault then
         {
           found = false;
           warnings = lib.optional (nameable != [ ]) (
-            "${prefix}optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skips it. "
+            "${prefix}optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
             + (
               if builtins.length nameable == 1 then
-                "${labels nameable} matches in another namespace. To use it, add this line to ${consumerPath}:"
+                "${labels nameable} matches in another namespace.\nFix: to use it, add this line to ${consumerPath}:"
               else
-                "${labels nameable} match in other namespaces. To use one, add one of these lines to ${consumerPath}:"
+                "${labels nameable} match in other namespaces.\nFix: to use one, add one of these lines to ${consumerPath}:"
             )
             + "\n${depLines nameable}"
           );
         }
 
       else if builtins.length nameable == 1 then
-        throw "${prefix}${none} One instance in another namespace matches: ${labels nameable}. Kix uses an instance from another namespace only when the cluster definition names it or its package serves the whole cluster. To use it, add this line to ${consumerPath}:\n${depLines nameable}\nIf this package serves the whole cluster, set meta.scope = \"cluster\" in its package instead."
+        throw (
+          "${none} 1 instance in another namespace matches: ${labels nameable}."
+          + "\nFix: to use ${labels nameable}, add this line to ${consumerPath}:"
+          + "\n${depLines nameable}"
+          + "\nIf this package serves every namespace in the cluster, set meta.scope = \"cluster\" in its package instead."
+        )
 
       else if builtins.length nameable > 1 then
-        throw "${prefix}${none} ${several nameable}"
+        throw (several nameable)
 
       else
-        throw "${prefix}dependency '${argName}' was not found for namespace '${requesterNamespace}'.${
-          lib.optionalString (namespaced != [ ])
-            " Instances in other namespaces (${labels namespaced}) declare meta.scope = \"namespace\" and serve only their own namespace."
-        } Add an instance with that name or alias, or set deps.${argName} explicitly.";
+        throw (
+          "${prefix}dependency '${argName}' has no matching instance in namespace '${requesterNamespace}'."
+          +
+            lib.optionalString (namespaced != [ ])
+              " Matching instances in other namespaces (${labels namespaced}) set meta.scope = \"namespace\" and serve only their own namespace."
+          + "\nFix: declare an instance named '${argName}' in namespace '${requesterNamespace}':"
+          + "\n  instances.${requesterNamespace}.${argName}.package = packages.<package>;"
+          + "\nIf another instance in '${requesterNamespace}' provides '${argName}', wire it in ${consumerPath}:"
+          + "\n  deps.${argName} = ref.${requesterNamespace}.<instance>;"
+        );
 
   # Unwrap `deferredModule` definitions into `{ file, value }` pairs,
   # preserving the innermost `_file` for error reporting.
@@ -391,9 +416,19 @@ rec {
       _lockedCheck =
         if lockedConflicts != [ ] then
           let
-            msgs = map (c: "'${c.key}' (injected by ${c.source})") lockedConflicts;
+            configPath =
+              if named then "instances.${namespaceName}.${instanceName}.config" else "the instance config";
           in
-          throw "dependency configuration tries to override locked fields: ${builtins.concatStringsSep ", " msgs}"
+          throw (
+            "${instanceText}: config option(s) ${
+              builtins.concatStringsSep ", " (map (c: "'${c.key}' (set by consumer ${c.source})") lockedConflicts)
+            } cannot be changed by a dependency because ${configPath} locks ${
+              if builtins.length lockedConflicts == 1 then "it" else "them"
+            } with kix.mkLocked."
+            + "\nFix: update the locked value in ${configPath} to include what ${
+              builtins.concatStringsSep " and " (lib.unique (map (c: c.source) lockedConflicts))
+            } needs, or remove kix.mkLocked so the consumer can set it."
+          )
         else
           null;
 

@@ -188,11 +188,15 @@ in
           if svc == null then
             removeAttrs spec [ "headlessService" ]
           else if (svc._type or "") != "k8s-resource" || svc.kind or "" != "Service" then
-            throw "[${instanceName}] mkStatefulSet headlessService must be a Service resource "
-            + "(got ${svc._type or "non-resource"}, kind=${svc.kind or "?"})"
+            throw (
+              "[${instanceName}] mkStatefulSet headlessService must be a Service resource "
+              + "(got ${svc._type or "non-resource"}, kind=${svc.kind or "?"})"
+            )
           else if svcNs != null && svcNs != namespaceName then
-            throw "[${instanceName}] StatefulSet headlessService '${svc.name}' is in namespace "
-            + "\"${svcNs}\" but the StatefulSet is in namespace \"${namespaceName}\"."
+            throw (
+              "[${instanceName}] StatefulSet headlessService '${svc.name}' is in namespace "
+              + "\"${svcNs}\" but the StatefulSet is in namespace \"${namespaceName}\"."
+            )
           else
             (removeAttrs spec [ "headlessService" ])
             // {
@@ -395,8 +399,10 @@ in
           rawSpec = attrs.spec or { };
           spec = if kind == "StatefulSet" then _expandHeadlessService rawSpec else rawSpec;
           selector =
-            spec.selector.matchLabels
-              or (throw "mkWorkload (${kind}): spec.selector.matchLabels is required. Use scope.selectorLabels");
+            spec.selector.matchLabels or (throw (
+              "${namespaceName}/${instanceName}: ${kind} '${attrs.name or "?"}' (built with ${builderFor.${kind}}) is missing spec.selector.matchLabels."
+              + "\nFix: set `spec.selector.matchLabels = scope.selectorLabels;` in the ${builderFor.${kind}} call."
+            ));
           templateMeta = spec.template.metadata or { };
           rawTemplateSpec = spec.template.spec or { };
           templateSpec = _expandServiceAccount rawTemplateSpec;

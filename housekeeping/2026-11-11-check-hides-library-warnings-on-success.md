@@ -1,0 +1,3 @@
+# 2026-11-11 · `cli/kix-core/src/eval` · `kix check` and `kix build` never show the Kix library's warnings when the build succeeds.
+
+The library reports warnings with `builtins.trace`, for example `[kix] warning: [gateway] Service 'gateway' uses type=LoadBalancer but Kix cannot verify that this cluster has a load balancer provider`. Kix keeps Nix's stderr only for a failed evaluation, so on success these lines never reach the user, even with `-v` and `--no-cache`. Running `nix eval` on the cluster's `activationIndex` shows them. Seen with a kind cluster whose `cluster.roles.loadBalancer.binding` was null.

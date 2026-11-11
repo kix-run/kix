@@ -332,8 +332,10 @@ in
         );
 
         rawRoot =
-          parts.root
-            or (throw "Instance '${instanceName}' in namespace '${namespaceName}' must define 'root'");
+          parts.root or (throw (
+            "${namespaceName}/${instanceName}: package build returned no 'root' attribute. Every package must set 'root' to the primary resource that other instances depend on."
+            + "\nFix: add `root = self.<part>;` to the attribute set returned by `build` in the package."
+          ));
 
         rootRes =
           if rawRoot ? resource then
@@ -341,7 +343,10 @@ in
           else if rawRoot ? _type && rawRoot._type == "k8s-resource" then
             rawRoot
           else
-            throw "Instance '${instanceName}': root must be a resource or { resource, requires, postHooks }";
+            throw (
+              "${namespaceName}/${instanceName}: package 'root' must be a resource (from scope.mk*) or `{ resource, requires?, postHooks?, out? }`."
+              + "\nFix: set `root = self.<part>;` or `root = { resource = self.<part>; requires = [ ... ]; };` in the package's `build`."
+            );
 
         # Monitor and rule objects reference nothing else in the instance,
         # so the PackageInstance requires them directly. Matching by kind
@@ -394,11 +399,10 @@ in
             null
           else
             throw (
-              "Instance '${instanceName}' in namespace '${namespaceName}': `root` points at "
-              + "${rootRes.kind or "a resource"}/${rootRes.name or "?"}, which is not assigned to "
-              + "any named part, so its manifest will not be included in the build. "
-              + "Assign the resource to a named part and reference it from root, for example "
-              + "`myPart = scope.mkResource { ... }; root = self.myPart;`."
+              "${namespaceName}/${instanceName}: package 'root' points to ${rootRes.kind or "a resource"} '${rootRes.name or "?"}', which is not one of this package's named parts (for example, it was built inline on 'root' or taken from a dependency). Kix renders only named parts of the package, so a resource built inline on 'root' would be left out of the build."
+              + "\nFix: define the resource as a named part of this package and point 'root' to it:"
+              + "\n  main = scope.mkResource { ... };"
+              + "\n  root = self.main;"
             );
 
         allPartResources = builtins.seq _rootRendersCheck (

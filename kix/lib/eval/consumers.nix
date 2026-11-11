@@ -119,9 +119,12 @@ let
         text = builtins.unsafeDiscardStringContext v;
       in
       if carried != [ ] || lib.hasInfix builtins.storeDir text then
-        throw "kix: ${field} refers to a store path (${
-          if carried != [ ] then builtins.head carried else text
-        }). An interface carries data only; a store path can hold a secret or the platform's code. Give the consumer the value it needs instead."
+        throw (
+          "${field} contains a file path from Kix's local store (${
+            if carried != [ ] then builtins.head carried else text
+          }). A consumer interface file can carry only plain strings, numbers, booleans, lists, and attribute sets, because a local store path is not available in the consumer project and may hold a secret."
+          + "\nFix: change the package or `out` field of the service so ${field} is a plain string value (or Secret name) rather than a file path."
+        )
       else
         text
     else
@@ -242,11 +245,20 @@ in
           instCfg = (mergedInstances.${ns} or { }).${inst} or null;
         in
         if builtins.length parts != 2 || instCfg == null then
-          throw "kix: consumers.${consumer}.services names '${key}', which is not an instance of cluster '${name}'. Name a service as \"namespace/instance\"."
+          throw (
+            "cluster '${name}' (platform): consumers.${consumer}.services lists '${key}', which is not an instance in cluster '${name}'."
+            + "\nFix: write the service as \"<namespace>/<instance>\" matching an instance in `instances.<namespace>.<instance>`, or remove '${key}' from consumers.${consumer}.services."
+          )
         else if (instCfg.package._type or "") == "kix-import" then
-          throw "kix: consumers.${consumer}.services names '${key}', an import. A consumer can import what the environment provides itself."
+          throw (
+            "cluster '${name}' (platform): consumers.${consumer}.services lists '${key}', which is a kix.mkImport instance for an external service. Platform interfaces publish only services that cluster '${name}' manages."
+            + "\nFix: remove '${key}' from consumers.${consumer}.services in cluster '${name}', and declare `kix.mkImport` for '${key}' directly in consumer '${consumer}'s cluster definition."
+          )
         else if !(isActive ns inst) then
-          throw "kix: consumers.${consumer}.services names '${key}', an optional instance that is not active."
+          throw (
+            "cluster '${name}' (platform): consumers.${consumer}.services lists '${key}', which is an optional instance (`optional = true`) that nothing in cluster '${name}' activates."
+            + "\nFix: set `instances.${ns}.${inst}.optional = false;` in cluster '${name}' so it is always deployed for consumers, or remove '${key}' from consumers.${consumer}.services."
+          )
         else
           {
             inherit ns inst;
@@ -344,7 +356,7 @@ in
       ) consumers;
     in
     if refusals != [ ] then
-      throw "kix: cluster '${name}' grants its consumers what it cannot:\n  ${builtins.concatStringsSep "\n  " refusals}"
+      throw "cluster '${name}' (platform): invalid consumer grant(s) in `consumers`:\n  ${builtins.concatStringsSep "\n  " refusals}"
     else
       {
         resources = ingressPolicies;
@@ -519,7 +531,10 @@ in
     if loaded == [ ] then
       null
     else if builtins.length loaded > 1 then
-      throw "kix: cluster '${name}' loads interfaces of ${builtins.concatStringsSep " and " (builtins.attrNames cfg.interfaces)}. A cluster is one platform's consumer; load one interface."
+      throw (
+        "cluster '${name}' (consumer): loads multiple platform interfaces (${builtins.concatStringsSep " and " (builtins.attrNames cfg.interfaces)}). A consumer cluster can belong to only one platform cluster."
+        + "\nFix: keep one `kix.interface` module in cluster '${name}' and remove the others."
+      )
     else
       {
         # Stamp namespace `ns` with the consumer label and any Pod Security
