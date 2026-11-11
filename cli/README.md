@@ -428,6 +428,20 @@ version it reads only `-o json list clusters`, `-o json list packages
   (`PinError::ByHand`, exit 3) puts `kix.toml`, `flake.nix`, and
   `flake.lock` back as they were at the start of the step. A project with
   no `flake.lock` runs no Nix.
+- `out.rs`: the text a run prints, from the approved output design: the
+  `Upgrading Kix <from> -> <to>` line, one line per phase (`Building 6
+  clusters with current Kix 0.10.0 (ja1, ...)... ok`, `Installing Kix
+  0.12.1... ok`, `Pinned project to Kix 0.12.1 (updated kix.toml)`), the
+  release notes grouped as `Config changes required`, `Behavior & data
+  changes`, `Security fixes`, and `Notes`, the `Manifest changes` lines
+  (`+`, `~`, `-`, `[review: <Kind>]`, `[unlisted change]`), and the
+  numbered "review before deploying" list. `excerpt` keeps a failed
+  build's output from its last `error:` line (miette's `│` gutter removed),
+  or its last 15 lines, and the whole output goes to
+  `<work dir>/logs/<version>/<cluster>.log`. Every stop ends with a `Next:`
+  line, refusals exit 1, and the user-facing text never says "change
+  record". The preview's stepping plan and the removal of temporary
+  versions print only with `-v`.
 - `search.rs`: `git ls-files` and a line search for each `cli` string of
   the applying records.
 - `state.rs`: `kix-upgrade.json` (`kix.run/upgrade/v1`). The run writes it

@@ -334,30 +334,27 @@ fn preview_lists_the_steps_and_records_and_changes_nothing() {
     let (code, out) = s.upgrade(&["--preview"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("This project uses Kix 9.1.0. The newest release that matches is Kix 9.3.0."),
+        out.starts_with("Kix 9.1.0 -> 9.3.0 (preview, no files changed)\n"),
         "{out}"
     );
     assert!(
-        out.contains("Kix takes these steps: 9.2.1, 9.3.0. That installs 2 versions of Kix."),
+        out.contains("Release 9.2.1 predated structured release notes"),
         "{out}"
     );
+    // Kix 9.1.0 is not installed, so every change counts.
+    assert!(out.contains("current Kix 9.1.0 is not installed"), "{out}");
     assert!(
-        out.contains(
-            "These releases have no change records: 9.2.1. Read their sections of CHANGELOG.md."
-        ),
+        out.contains("    [K0001] web (9.2.0): `web` renames"),
         "{out}"
     );
-    // Kix 9.1.0 is not installed, so every record counts.
-    assert!(out.contains("Kix 9.1.0 is not installed"), "{out}");
-    assert!(out.contains("[K0001] Kix 9.2.0: `web` renames"), "{out}");
+    assert!(out.contains("    [K0002] echo-server (9.2.0)"), "{out}");
     assert!(
-        out.contains("changes the command or flag --old-flag"),
+        out.contains("Check scripts and CI for `--old-flag`."),
         "{out}"
     );
-    assert!(
-        out.contains("1 other records add, change, or fix things"),
-        "{out}"
-    );
+    assert!(out.ends_with("Next: run `kix upgrade`.\n"), "{out}");
+    // The steps are printed only with -v.
+    assert!(!out.contains("Stepping plan"), "{out}");
     assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
     assert!(!s.project.join("kix-upgrade.json").exists());
     assert!(s.installed().is_empty());
@@ -389,7 +386,10 @@ fn nothing_to_upgrade_exits_0() {
     s.write("kix.toml", "kix = \"9.3.0\"\n");
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("There is nothing to upgrade."), "{out}");
+    assert_eq!(
+        out,
+        "Already on the latest Kix release (9.3.0). Nothing to upgrade.\n"
+    );
 }
 
 #[test]
@@ -400,11 +400,17 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
-    assert!(out.contains("Clusters east, west:"), "{out}");
+    assert!(out.starts_with("Upgrading Kix 9.1.0 -> 9.3.0\n"), "{out}");
     assert!(
-        out.contains("1 changed:\n    Deployment/web@shop\n"),
+        out.contains("Building 2 clusters with current Kix 9.1.0 (east, west)... ok"),
         "{out}"
     );
+    assert!(
+        out.contains("  east, west:\n    ~ Deployment/web@shop (web)\n"),
+        "{out}"
+    );
+    // Objects changed, so the run does not say it is ready to deploy.
+    assert!(out.ends_with("Upgraded to Kix 9.3.0.\n"), "{out}");
     let calls = s.calls();
     assert!(calls.contains("9.1.0 export east"), "{calls}");
     assert!(calls.contains("9.3.0 export west"), "{calls}");
@@ -431,11 +437,26 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
     s.write("fake/fail-9.3.0", "");
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("Trying one minor release at a time."), "{out}");
-    assert!(out.contains("Cluster east:\n  error: [K0001] cluster east sets replicaCount, which Kix 9.2.1 renamed"), "{out}");
-    assert!(out.contains("Change records of Kix 9.2.1:"), "{out}");
-    assert!(out.contains("[K0001] Kix 9.2.0"), "{out}");
-    assert!(out.contains("is pinned to it"), "{out}");
+    assert!(
+        out.contains("Building 2 clusters with Kix 9.3.0... failed (east, west)\nStepping one minor release at a time (9.2.1 -> 9.3.0):"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  Cluster east:\n    error: [K0001] cluster east sets replicaCount, which Kix 9.2.1 renamed\n    Full build log: "),
+        "{out}"
+    );
+    assert!(
+        out.contains("  Matching change in Kix 9.2.0:\n    [K0001] web:"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Stopped at Kix 9.2.1 (step 1 of 2 toward 9.3.0)."),
+        "{out}"
+    );
+    assert!(
+        out.ends_with("Next: fix the error above, then run `kix upgrade` to continue to 9.3.0.\n"),
+        "{out}"
+    );
     assert_eq!(s.read("kix.toml"), "kix = \"9.2.1\"\n");
     let state = s.state();
     assert_eq!(state["status"], "fix-needed");
@@ -467,7 +488,9 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 2, "{out}");
     assert!(
-        out.contains("Resuming the upgrade to Kix 9.3.0 at Kix 9.2.1."),
+        out.starts_with(
+            "Resuming upgrade Kix 9.1.0 -> 9.3.0 (from 9.2.1, reusing 9.1.0 baseline)\n"
+        ),
         "{out}"
     );
     assert!(!s.calls().contains("9.1.0 export"), "{}", s.calls());
@@ -500,7 +523,7 @@ fn a_required_stop_ends_the_upgrade_at_that_minor() {
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
     assert!(
-        out.contains("Deploy every cluster with Kix 9.2.1, then run `kix upgrade` again."),
+        out.ends_with("Next: deploy Kix 9.2.1 to all clusters with `kix deploy`, then run `kix upgrade` to continue to 9.3.0.\n"),
         "{out}"
     );
     assert_eq!(s.read("kix.toml"), "kix = \"9.2.1\"\n");
@@ -518,25 +541,16 @@ fn min_age_skips_new_releases() {
         .to_string();
     s.publish("9.3.0", &today, None);
     let (_, out) = s.upgrade(&["--preview", "--min-age", "7d"]);
-    assert!(
-        out.contains("The newest release that matches is Kix 9.2.0."),
-        "{out}"
-    );
+    assert!(out.starts_with("Kix 9.1.0 -> 9.2.0 (preview"), "{out}");
     s.write(
         "kix.toml",
         "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"7d\"\n",
     );
     let (_, out) = s.upgrade(&["--preview"]);
-    assert!(
-        out.contains("The newest release that matches is Kix 9.2.0."),
-        "{out}"
-    );
+    assert!(out.starts_with("Kix 9.1.0 -> 9.2.0 (preview"), "{out}");
     // The flag wins over the file.
     let (_, out) = s.upgrade(&["--preview", "--min-age", "0d"]);
-    assert!(
-        out.contains("The newest release that matches is Kix 9.3.0."),
-        "{out}"
-    );
+    assert!(out.starts_with("Kix 9.1.0 -> 9.3.0 (preview"), "{out}");
     let (code, out) = s.upgrade(&["--preview", "--min-age", "1w"]);
     assert_eq!(code, 1, "{out}");
 }
@@ -556,18 +570,17 @@ fn unexplained_and_sensitive_changes_need_a_person() {
     );
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
-    assert!(out.contains("Cluster east: no objects changed."), "{out}");
+    assert!(out.contains("  east: no objects changed\n"), "{out}");
     assert!(
         out.contains(
-            "Cluster west:\n  1 changed:\n    ClusterRole/db-reader (no change record, sensitive)"
+            "  west:\n    ~ ClusterRole/db-reader (db) [review: ClusterRole] [unlisted change]\n"
         ),
         "{out}"
     );
     assert!(
-        out.contains("1 changed object has no change record that explains it."),
+        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west (ClusterRole/db-reader).\n  2. 1 object changed"),
         "{out}"
     );
-    assert!(out.contains("1 changed object controls access"), "{out}");
     let state = s.state();
     assert_eq!(state["status"], "needs-person");
     assert_eq!(state["unexplainedChanges"], 1);
@@ -592,7 +605,12 @@ fn lines_that_use_a_changed_flag_are_listed() {
     git(&["add", "-A"]);
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("  ci/deploy.sh:2: --old-flag"), "{out}");
+    assert!(
+        out.contains(
+            "Project files matching changed commands or flags:\n  ci/deploy.sh:2: --old-flag"
+        ),
+        "{out}"
+    );
     assert!(!out.contains("CHANGELOG.md:"), "{out}");
     assert_eq!(s.state()["cliHits"][0]["file"], "ci/deploy.sh");
 }
@@ -620,24 +638,24 @@ fn a_data_change_stops_deploys_until_acknowledged() {
         .args(["deploy", "east"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("[move-data] Kix 9.3.0:"))
-        .stderr(predicate::str::contains(
-            "`db` keeps its data in a new volume.",
+        .stderr(predicate::str::starts_with(
+            "Deploy blocked: upgrade to Kix 9.3.0 includes an unacknowledged data migration.",
         ))
         .stderr(predicate::str::contains(
-            "run `kix upgrade --ack move-data`",
-        ));
+            "  [move-data] (9.3.0, moves stored data):\n    `db` keeps its data in a new volume.",
+        ))
+        .stderr(predicate::str::contains("  kix upgrade --ack move-data\n"));
 
     s.kix()
         .args(["upgrade", "--ack", "nope"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("It lists: move-data."));
+        .stdout(predicate::str::contains("(pending: move-data)"));
     s.kix()
         .args(["upgrade", "--ack", "move-data"])
         .assert()
         .success()
-        .stdout("Acknowledged move-data.\n");
+        .stdout("Acknowledged move-data in kix-upgrade.json. You can now run `kix deploy`.\n");
     assert_eq!(s.state()["acknowledged"], serde_json::json!(["move-data"]));
 
     // The deploy now goes past the check and starts to build, which stops
@@ -663,16 +681,14 @@ fn a_prerelease_project_steps_through_its_own_release() {
     let s = Setup::new();
     s.releases(vec![]);
     s.write("kix.toml", "kix = \"9.1.0-rc.1\"\n");
-    let (code, out) = s.upgrade(&["--preview"]);
+    let (code, out) = s.upgrade(&["--preview", "-v"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains(
-            "This project uses Kix 9.1.0-rc.1. The newest release that matches is Kix 9.3.0."
-        ),
+        out.starts_with("Kix 9.1.0-rc.1 -> 9.3.0 (preview, no files changed)\n"),
         "{out}"
     );
     assert!(
-        out.contains("Kix takes these steps: 9.1.0, 9.2.1, 9.3.0."),
+        out.contains("Stepping plan if direct jump fails: 9.1.0, 9.2.1, 9.3.0 (3 versions would be installed)."),
         "{out}"
     );
 }
@@ -911,6 +927,10 @@ fn an_interrupted_run_leaves_a_state_and_resumes() {
     std::fs::remove_file(s.project.join("fake/calls.log")).unwrap();
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 0, "{out}");
+    assert!(
+        out.ends_with("Upgraded to Kix 9.3.0. Ready to deploy.\n"),
+        "{out}"
+    );
     assert!(!s.calls().contains("9.1.0 "), "{}", s.calls());
     assert!(s.calls().contains("9.2.1 export"), "{}", s.calls());
     assert_eq!(s.state()["status"], "done");
@@ -943,9 +963,42 @@ fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
     s.write("flake.lock", &lock);
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
+    assert!(
+        out.contains(&format!(
+            "Cannot update flake.nix automatically: two inputs use tag v9.1.0:\n  flake.nix:3:   kixpkgs.url = \"{url}\";\n  flake.nix:4:   image-kix"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("No project files were modified (the 9.1.0 baseline build is cached)."),
+        "{out}"
+    );
+    assert!(
+        out.trim_end().ends_with("then run `kix upgrade` again."),
+        "{out}"
+    );
     assert_eq!(s.state()["status"], "edit-needed");
     assert_eq!(s.read("flake.nix"), flake);
     assert_eq!(s.read("flake.lock"), lock);
     assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
     assert_eq!(s.installed(), ["9.1.0"]);
+}
+
+#[test]
+fn a_project_that_does_not_build_now_is_left_alone() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("fake/fail-9.1.0", "");
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("Building 2 clusters with current Kix 9.1.0 (east, west)... failed (2 of 2 failed: east, west)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Cannot start upgrade: clusters east, west do not build with your current Kix 9.1.0.\nNo project files were modified.\nNext: fix the build on Kix 9.1.0, then run `kix upgrade` again.\n"),
+        "{out}"
+    );
+    assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
+    assert!(!s.project.join("kix-upgrade.json").exists());
 }

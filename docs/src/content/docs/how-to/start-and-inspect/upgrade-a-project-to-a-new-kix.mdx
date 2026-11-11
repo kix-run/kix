@@ -1,6 +1,6 @@
 ---
 title: "Upgrade a project to a new version of Kix"
-description: "Move a project to a newer Kix with kix upgrade: preview the change records, fix build errors one release at a time, review what changed, and acknowledge changes to stored data."
+description: "Move a project to a newer Kix with kix upgrade: preview the release notes, fix build errors one release at a time, review what changed, and acknowledge changes to stored data."
 ---
 
 import Command from '../../../../components/Command.astro';
@@ -37,10 +37,10 @@ upgrade changes. Then preview it:
 
 <Command commands={["kix upgrade --preview"]} cwd="my-project/" />
 
-The preview names the version the project uses and the release it would move
-to. It lists the change records that apply to your project: edits you will
-need to make, changes that work differently with no error, upgrade notes, and
-security fixes. It changes nothing.
+The preview opens with the version the project uses and the release it would
+move to, such as `Kix 0.10.0 -> 0.12.1 (preview, no files changed)`. It lists
+the release notes that apply to your project under `Config changes required`,
+`Behavior & data changes`, `Security fixes`, and `Notes`. It changes nothing.
 
 To move to a release other than the newest, pass `--to`, such as
 `--to 0.10` for the newest 0.10 patch. To wait until a release has been out
@@ -59,32 +59,38 @@ min-age = "7d"
 <Command commands={["kix upgrade"]} cwd="my-project/" />
 
 When every cluster builds with the new version, the project is pinned to it:
-`kix.toml`, and the Kix library in `flake.lock`. Read the summary of what
-changed in each cluster, then commit the changed files with
-`kix-upgrade.json`.
+`kix.toml`, and the Kix library in `flake.lock`. Read the `Manifest changes`
+summary for each cluster, then commit the changed files with
+`kix-upgrade.json`. When no object changed and nothing needs a review, the
+run ends with `Upgraded to Kix 0.12.1. Ready to deploy.`
 
 ## Fix a build that fails
 
 When a cluster does not build with the new version, `kix upgrade` moves one
 minor release at a time and stops at the first release the cluster does not
-build with. It prints the errors and that release's change records, and
-leaves the project pinned to that release. An error that a change in Kix
-causes starts with the change's id, such as `[K0012]`. Print the whole
-record with `kix explain`:
+build with. It prints the end of each error, the matching config changes,
+and where the full build log is, and leaves the project pinned to that
+release:
 
-<Command commands={["kix explain K0012"]} cwd="my-project/" />
+```text
+Stopped at Kix 0.11.2 (step 1 of 2 toward 0.12.1).
+kix.toml, flake.nix, and flake.lock are pinned to 0.11.2 so you can fix this step first.
+Next: fix the error above, then run `kix upgrade` to continue to 0.12.1.
+```
 
-Make the edit the record describes, then run `kix upgrade` again. It tries
-that release again and continues to the newest one.
+Make the edit the release note describes, then run `kix upgrade` again. It
+tries that release again and continues to the newest one.
 
 ## Review what needs a person
 
 `kix upgrade` exits with status `3` when the project builds but you should
-read what changed before you deploy. It says why:
+read what changed before you deploy. It ends with a numbered list under
+`Upgraded to Kix 0.12.1, but review before deploying:`. An item names:
 
-- an object changed and no change record explains it,
-- an object that controls access, network reach, or certificates changed,
-- a change works differently with no error, or
+- objects marked `[unlisted change]`, which no release note accounts for,
+- objects marked `[review: <Kind>]`, such as a Secret, a ClusterRole, or an
+  Ingress whose TLS settings changed,
+- a change that alters behavior with no build error, or
 - a release changes cluster state, and every cluster must deploy it before
   the project upgrades further. Deploy every cluster, then run
   `kix upgrade` again.
@@ -97,7 +103,7 @@ cluster before you deploy:
 ## Acknowledge a change to stored data
 
 When a change moves or reinterprets the data a package stores, `kix deploy`
-refuses until someone acknowledges it. The refusal prints the change record.
+refuses until someone acknowledges it. The refusal prints the release note.
 Read it, take any backup it asks for, then acknowledge it by its id:
 
 <Command commands={["kix upgrade --ack K0012"]} cwd="my-project/" />

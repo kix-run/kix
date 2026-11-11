@@ -7,6 +7,7 @@
 //! manifest directory.
 
 mod compare;
+mod out;
 mod pin;
 mod plan;
 mod search;
@@ -24,6 +25,7 @@ use kix::version::policy::Requirement;
 use miette::{Result, miette};
 
 use crate::cli::{GlobalArgs, UpgradeArgs};
+use out::Failed;
 use plan::{Applying, ReleaseRecords};
 use state::{DataChange, Status, Step, UpgradeState};
 
@@ -31,16 +33,17 @@ use state::{DataChange, Status, Step, UpgradeState};
 const EXIT_BUILD_FAILED: i32 = 2;
 /// The upgrade finished, and a person should read what changed.
 const EXIT_NEEDS_PERSON: i32 = 3;
+/// Kix refused to start.
+const EXIT_REFUSED: i32 = 1;
 
 pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
-    let dir = super::project_dir(&global.flake)
-        .filter(|d| d.is_dir())
-        .ok_or_else(|| {
-            miette!(
-                "`kix upgrade` changes the project's files, so --flake must name a local directory, not {}",
-                global.flake
-            )
-        })?;
+    let verbose = global.verbose > 0;
+    let Some(dir) = super::project_dir(&global.flake).filter(|d| d.is_dir()) else {
+        return refuse(&format!(
+            "Cannot run `kix upgrade` on non-local flake `{}`: `kix upgrade` must edit kix.toml, flake.nix, and flake.lock in a local directory.\nNext: clone the project locally and run `kix upgrade` from that directory.",
+            global.flake
+        ));
+    };
     if !args.ack.is_empty() {
         return acknowledge(&dir, &args.ack);
     }
@@ -66,11 +69,16 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .iter()
             .map(|d| d.reference.as_str())
             .collect();
-        return Err(miette!(
-            "The last upgrade, to Kix {}, changes stored data, and no one has acknowledged it: {}. Read the changes in {}, run `kix upgrade --ack {}`, then run `kix upgrade` again.",
+        let migration = if refs.len() == 1 {
+            "an unacknowledged data migration"
+        } else {
+            "unacknowledged data migrations"
+        };
+        return refuse(&format!(
+            "Cannot start a new upgrade: the previous upgrade to Kix {} has {migration} ({}).\nNo project files were modified.\nNext: review {} in kix-upgrade.json, run `kix upgrade --ack {}`, then run `kix upgrade` again.",
             p.to,
-            refs.join(", "),
-            state::FILE,
+            out::list(&refs),
+            out::list(&refs),
             refs.join(" ")
         ));
     }
@@ -84,47 +92,63 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     };
     let to = match args.to.as_deref() {
         None | Some("latest") => None,
-        Some(text) => Some(
-            text.parse::<Requirement>()
-                .map_err(|e| miette!("--to: {e}"))?,
-        ),
+        Some(text) => match text.parse::<Requirement>() {
+            Ok(req) => Some(req),
+            Err(_) => {
+                return refuse(&format!(
+                    "Invalid `--to` value `{text}`: expected a version (such as `0.12.1`), a minor series (such as `0.12`), or `latest`."
+                ));
+            }
+        },
     };
-    let min_age =
-        match &args.min_age {
-            Some(text) => Some(kix::project::parse_min_age(text).ok_or_else(|| {
-                miette!("--min-age {text} is not a number of days. Write it as 7d")
-            })?),
-            None => config.upgrade_min_age,
-        };
+    let min_age = match &args.min_age {
+        Some(text) => match kix::project::parse_min_age(text) {
+            Some(days) => Some(days),
+            None => {
+                return refuse(&format!(
+                    "Invalid `--min-age` value `{text}`: expected a number of days such as `7d`."
+                ));
+            }
+        },
+        None => config.upgrade_min_age,
+    };
     let today = chrono::Utc::now().date_naive();
-    let target = plan::choose_target(&releases, to.as_ref(), min_age, today).ok_or_else(|| {
-        miette!(
-            "no Kix release matches{}{} for {system}",
-            to.as_ref().map(|r| format!(" {r}")).unwrap_or_default(),
-            min_age
-                .map(|d| format!(" that is at least {d} days old"))
-                .unwrap_or_default()
-        )
-    })?;
+    let Some(target) = plan::choose_target(&releases, to.as_ref(), min_age, today) else {
+        return refuse(&match (&to, min_age) {
+            (Some(to), Some(days)) => {
+                format!("No Kix release for {system} matches `--to {to}` and `--min-age {days}d`.")
+            }
+            (Some(to), None) => format!("No Kix release for {system} matches `--to {to}`."),
+            (None, Some(days)) => format!(
+                "No Kix release for {system} is at least {days} days old (`--min-age {days}d`)."
+            ),
+            (None, None) => format!("No Kix release found for {system}."),
+        });
+    };
     if target <= from {
         if resume.is_some() {
-            return Err(miette!(
-                "{} holds an unfinished upgrade from Kix {}, and Kix {} is not newer. Choose a newer version with --to, or delete {} to start again.",
-                state::FILE,
-                from.release(),
-                target.release(),
-                state::FILE
+            return refuse(&format!(
+                "Cannot resume upgrade from Kix {from}: target Kix {target} is not newer than {from}.\nNo project files were modified.\nNext: pass a version newer than {from} with `--to`, or delete kix-upgrade.json to start a new upgrade.",
+                from = from.release(),
+                target = target.release()
             ));
         }
-        println!(
-            "This project uses Kix {}, and Kix {} is the newest release that matches. There is nothing to upgrade.",
-            from.release(),
-            target.release()
-        );
+        if to.is_none() && min_age.is_none() {
+            println!(
+                "Already on the latest Kix release ({}). Nothing to upgrade.",
+                from.release()
+            );
+        } else {
+            println!(
+                "Already on Kix {} (matches target {}). Nothing to upgrade.",
+                from.release(),
+                target.release()
+            );
+        }
         return Ok(());
     }
 
-    let records = fetch_records(&source, &index.releases, &from, &target)?;
+    let (records, without_notes) = fetch_records(&source, &index.releases, &from, &target)?;
     let stop = plan::required_stop(&releases, &records, &from, &target);
     let goal = stop
         .as_ref()
@@ -142,6 +166,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             _ => from.clone(),
         },
         state: None,
+        verbose,
     };
     let saved_in_use = |s: &UpgradeState| {
         s.packages_in_use
@@ -154,13 +179,30 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .into_iter()
             .find(|i| i.version == from)
             .map(|i| i.bin());
-        let (in_use, knew) = match (&resume, &from_kix) {
-            (Some(s), _) => (saved_in_use(s), s.packages_in_use.is_some()),
-            (None, Some(kix)) => (packages_in_use(kix, &dir), true),
-            (None, None) => (None, false),
+        let (in_use, known) = match (&resume, &from_kix) {
+            (Some(s), _) => (
+                saved_in_use(s),
+                Known::of(s.packages_in_use.is_some(), None),
+            ),
+            (None, Some(kix)) => {
+                let in_use = packages_in_use(kix, &dir);
+                let count = clusters(kix, &dir).ok().map(|c| c.len());
+                let known = Known::of(in_use.is_some(), count);
+                (in_use, known)
+            }
+            (None, None) => (None, Known::Nothing),
         };
         let applying = plan::applying(&records, &from, &goal, in_use.as_ref());
-        preview(&from, &target, &steps, stop.as_ref(), &applying, knew);
+        preview(&Preview {
+            from: &from,
+            target: &target,
+            steps: &steps,
+            stop: stop.as_ref(),
+            applying: &applying,
+            known,
+            without_notes: &without_notes,
+            verbose,
+        });
         return Ok(());
     }
 
@@ -170,35 +212,72 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         // longer evaluate the project, so it is never asked again.
         Some(s) => {
             if s.before != before || !before.is_dir() {
-                return Err(miette!(
-                    "{} holds an unfinished upgrade from Kix {}, but the builds made with Kix {} at its start are gone ({}). Delete {} and run `kix upgrade` again. The comparison then starts from the version the project is pinned to now.",
-                    state::FILE,
-                    from.release(),
-                    from.release(),
+                return refuse(&format!(
+                    "Cannot resume upgrade from Kix {from}: cached baseline builds were not found at {}.\nkix.toml, flake.nix, and flake.lock remain at Kix {pinned}.\nNext: delete kix-upgrade.json and run `kix upgrade` to start a new comparison from Kix {pinned}.",
                     before.display(),
-                    state::FILE
+                    from = from.release(),
+                    pinned = run.pinned.release()
                 ));
             }
+            let at = s.steps.last().map_or(from.release(), |l| l.version.clone());
+            println!(
+                "Resuming upgrade Kix {} -> {} (from {at}, reusing {} baseline)",
+                from.release(),
+                goal.release(),
+                from.release()
+            );
+            if !without_notes.is_empty() {
+                println!("{}", out::without_notes_line(&without_notes));
+            }
+            println!();
             saved_in_use(s)
         }
         None => {
+            println!("Upgrading Kix {} -> {}", from.release(), goal.release());
+            if !without_notes.is_empty() {
+                println!("{}", out::without_notes_line(&without_notes));
+            }
+            println!();
             let from_kix = run.kix(&from)?;
             let names = clusters(&from_kix, &dir).map_err(|e| miette!("{e}"))?;
             if names.is_empty() {
-                return Err(miette!(
-                    "Kix {} lists no clusters in this project, so Kix has nothing to build or compare.",
+                return refuse(&format!(
+                    "Cannot upgrade: Kix {} found no clusters in this project.\nNo project files were modified.\nNext: add at least one cluster to the project, then run `kix upgrade` again.",
                     from.release()
                 ));
             }
             let in_use = packages_in_use(&from_kix, &dir);
+            let built = run.build_all(&from_kix, &from, &before);
+            let failed: Vec<String> = built.failures.iter().map(|f| f.cluster.clone()).collect();
             println!(
-                "Building every cluster with Kix {}, the version this project uses now.",
-                from.release()
+                "{}",
+                out::build_line(
+                    built.clusters.len(),
+                    &from,
+                    true,
+                    Some(&built.clusters),
+                    (!failed.is_empty()).then_some(Failed::Count(&failed, built.clusters.len())),
+                )
             );
-            if let Err(failures) = build_all(&from_kix, &dir, &before) {
-                print_failures(&failures);
+            if !failed.is_empty() {
+                print_failures(&built.failures);
+                println!();
+                if failed.len() == 1 {
+                    println!(
+                        "Cannot start upgrade: cluster {} does not build with your current Kix {}.",
+                        failed[0],
+                        from.release()
+                    );
+                } else {
+                    println!(
+                        "Cannot start upgrade: clusters {} do not build with your current Kix {}.",
+                        out::list(&failed),
+                        from.release()
+                    );
+                }
+                println!("No project files were modified.");
                 println!(
-                    "The project does not build with Kix {}. Fix the build first, then run `kix upgrade` again.",
+                    "Next: fix the build on Kix {}, then run `kix upgrade` again.",
                     from.release()
                 );
                 return exit(EXIT_BUILD_FAILED);
@@ -232,20 +311,12 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
 
     let last = run.state().steps.last().cloned();
     let result = match last {
-        None => {
-            println!("Upgrading to Kix {}.", goal.release());
-            run.jump(&goal, &steps)?
-        }
+        None => run.jump(&goal, &steps)?,
         Some(last) => {
             let at: Version = last
                 .version
                 .parse()
                 .map_err(|_| miette!("{} names no version in its last step", state::FILE))?;
-            println!(
-                "Resuming the upgrade to Kix {} at Kix {}.",
-                goal.release(),
-                at.release()
-            );
             let remaining: Vec<Version> = if last.result == "ok" {
                 steps.iter().filter(|v| **v > at).cloned().collect()
             } else {
@@ -267,14 +338,29 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .filter(|v| **v < failing)
             .max()
             .unwrap_or(&from);
-        let explaining = plan::applying(&records, previous_step, &failing, in_use.as_ref());
-        print_records(
-            &format!("Change records of Kix {}", failing.release()),
-            &explaining,
+        let matching: Vec<Applying> =
+            plan::applying(&records, previous_step, &failing, in_use.as_ref())
+                .into_iter()
+                .filter(|a| a.record.kind == Kind::Error)
+                .collect();
+        print_matching(&matching, previous_step, &failing);
+        let position = steps
+            .iter()
+            .position(|v| *v == failing)
+            .map_or(1, |i| i + 1);
+        println!();
+        println!(
+            "Stopped at Kix {} (step {position} of {} toward {}).",
+            failing.release(),
+            steps.len(),
+            goal.release()
         );
         println!(
-            "The project does not build with Kix {}, and is pinned to it. Fix the errors above, then run `kix upgrade` again to continue to Kix {}.",
-            failing.release(),
+            "kix.toml, flake.nix, and flake.lock are pinned to {} so you can fix this step first.",
+            failing.release()
+        );
+        println!(
+            "Next: fix the error above, then run `kix upgrade` to continue to {}.",
             goal.release()
         );
         run.state_mut().status = Status::FixNeeded;
@@ -289,11 +375,18 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         .iter()
         .flat_map(|a| a.record.packages.iter().cloned())
         .collect();
-    let (unexplained, sensitive) = report_changes(&before, &after, &explaining)?;
-    state.unexplained_changes = unexplained;
-    state.sensitive_changes = sensitive;
+    let report = report_changes(&before, &after, &explaining, &from, &goal)?;
+    state.unexplained_changes = report.review.unexplained;
+    state.sensitive_changes = report.sensitive;
 
-    print_records("Change records that apply to this project", &applying);
+    let notes = out::notes(&applying, false, &from, &goal);
+    if !notes.is_empty() {
+        println!();
+        println!("Release notes for this upgrade:");
+        for line in notes {
+            println!("{line}");
+        }
+    }
 
     let needles: Vec<String> = applying
         .iter()
@@ -304,12 +397,16 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     if !needles.is_empty() {
         match search::tracked(&dir) {
             Some(files) => state.cli_hits = search::search(&dir, &files, &needles),
-            None => println!(
-                "The project is not in a git repository, so Kix did not search it for changed commands."
-            ),
+            None => {
+                println!();
+                println!(
+                    "Note: skipped searching project files for changed commands or flags (not a git repository)."
+                );
+            }
         }
         if !state.cli_hits.is_empty() {
-            println!("\nLines that use a command or flag that changed:");
+            println!();
+            println!("Project files matching changed commands or flags:");
             for hit in &state.cli_hits {
                 println!("  {}:{}: {}", hit.file, hit.line, hit.text);
             }
@@ -318,87 +415,75 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
 
     run.prune(&from, &goal);
 
-    let silent = plan::of_kind(&applying, Kind::Silent);
-    let mut reasons = Vec::new();
-    if let Some((r, _)) = &stop {
-        reasons.push(format!(
-            "Deploy every cluster with Kix {}, then run `kix upgrade` again. Kix {} has a change that every cluster must deploy before it upgrades further.",
-            goal.release(),
-            r.release()
-        ));
-    }
-    if unexplained > 0 {
-        reasons.push(format!(
-            "{} no change record that explains {}. Read {} before you deploy.",
-            objects(unexplained, "has", "have"),
-            them(unexplained),
-            them(unexplained)
-        ));
-    }
-    if sensitive > 0 {
-        reasons.push(format!(
-            "{} access, network reach, or certificates. Read {} before you deploy.",
-            objects(sensitive, "controls", "control"),
-            them(sensitive)
-        ));
-    }
-    if !silent.is_empty() {
-        reasons.push(format!(
-            "Some things work differently with no error: {}. Read these records before you deploy.",
-            silent
-                .iter()
-                .map(|a| a.reference())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
     state
         .acknowledged
         .retain(|a| state.data_changes.iter().any(|d| &d.reference == a));
-    let unack: Vec<String> = state
-        .unacknowledged()
-        .iter()
-        .map(|d| d.reference.clone())
-        .collect();
-    if !unack.is_empty() {
-        reasons.push(format!(
-            "`kix deploy` waits until you acknowledge each change to stored data: kix upgrade --ack {}",
-            unack.join(" ")
-        ));
+    let mut items = report.review.items();
+    for a in plan::of_kind(&applying, Kind::Silent) {
+        if !a.record.touches_data {
+            items.push(out::silent_item(a));
+        } else if !state.acknowledged.contains(&a.reference()) {
+            items.push(out::data_item(a));
+        }
     }
+    let silent = !plan::of_kind(&applying, Kind::Silent).is_empty();
+    let needs_person = stop.is_some()
+        || report.review.unexplained > 0
+        || report.sensitive > 0
+        || silent
+        || !state.unacknowledged().is_empty();
     state.status = if stop.is_some() {
         Status::RequiredStop
-    } else if reasons.is_empty() {
-        Status::Done
-    } else {
+    } else if needs_person {
         Status::NeedsPerson
+    } else {
+        Status::Done
     };
     state.write(&dir).map_err(|e| miette!("{e}"))?;
 
-    println!(
-        "\nThe project builds with Kix {} and is pinned to it.",
-        goal.release()
-    );
-    if reasons.is_empty() {
+    println!();
+    if !needs_person {
+        if report.any_changed {
+            println!("Upgraded to Kix {}.", goal.release());
+        } else {
+            println!("Upgraded to Kix {}. Ready to deploy.", goal.release());
+        }
         return Ok(());
     }
-    for r in &reasons {
-        println!("{r}");
+    if let Some((r, _)) = &stop {
+        items.push(vec![
+            format!(
+                "Kix {} must be deployed to all clusters before continuing to {}.",
+                r.release(),
+                target.release()
+            ),
+            format!(
+                "     kix.toml, flake.nix, and flake.lock are pinned to {}.",
+                goal.release()
+            ),
+        ]);
+    }
+    println!(
+        "Upgraded to Kix {}, but review before deploying:",
+        goal.release()
+    );
+    for line in out::numbered(&items) {
+        println!("{line}");
+    }
+    if stop.is_some() {
+        println!(
+            "Next: deploy Kix {} to all clusters with `kix deploy`, then run `kix upgrade` to continue to {}.",
+            goal.release(),
+            target.release()
+        );
     }
     exit(EXIT_NEEDS_PERSON)
 }
 
-/// Return "1 changed object has" or "2 changed objects have".
-fn objects(n: usize, one: &str, many: &str) -> String {
-    if n == 1 {
-        format!("1 changed object {one}")
-    } else {
-        format!("{n} changed objects {many}")
-    }
-}
-
-fn them(n: usize) -> &'static str {
-    if n == 1 { "it" } else { "them" }
+/// Print `text` and exit with [`EXIT_REFUSED`].
+fn refuse(text: &str) -> Result<()> {
+    println!("{text}");
+    exit(EXIT_REFUSED)
 }
 
 /// Flush stdout and exit with `code`.
@@ -415,15 +500,16 @@ fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<V
     }
     super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
     kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
-    match kix::library::eval_version(dir, &[]) {
-        kix::library::LibraryVersion::Known(v) => v.parse().map_err(|_| {
-            miette!("the project's Kix library names version {v}, which is not a Kix version")
-        }),
-        _ => Err(miette!(
-            "Kix cannot tell which version of Kix this project uses. Set the exact version in kix.toml, such as kix = \"{}\", then run `kix upgrade` again",
-            kix::version::running().release()
-        )),
+    if let kix::library::LibraryVersion::Known(v) = kix::library::eval_version(dir, &[])
+        && let Ok(version) = v.parse()
+    {
+        return Ok(version);
     }
+    refuse(&format!(
+        "Cannot determine the current Kix version for this project from kix.toml or flake.lock.\nNo project files were modified.\nNext: set the exact version in kix.toml (for example `kix = \"{}\"`), then run `kix upgrade` again.",
+        kix::version::running().release()
+    ))?;
+    unreachable!("refuse exits")
 }
 
 /// Return the directory `kix upgrade` keeps its builds of the project in
@@ -439,13 +525,14 @@ fn work_dir(dir: &Path) -> PathBuf {
 
 /// Fetch the change records of every release after `from` up to `target`
 /// that is not a prerelease, whichever systems it was built for: a change
-/// applies to a project whatever machine upgrades it.
+/// applies to a project whatever machine upgrades it. Also return the
+/// releases that shipped no records.
 fn fetch_records(
     source: &Source,
     releases: &[release::index::Release],
     from: &Version,
     target: &Version,
-) -> Result<Vec<ReleaseRecords>> {
+) -> Result<(Vec<ReleaseRecords>, Vec<String>)> {
     let mut out = Vec::new();
     let mut without: Vec<String> = Vec::new();
     let mut in_range: Vec<&release::index::Release> = releases
@@ -464,15 +551,29 @@ fn fetch_records(
             document,
         });
     }
-    if !without.is_empty() {
-        without.sort_by_key(|v| v.parse::<Version>().ok());
-        println!(
-            "These releases have no change records: {}. Read their sections of CHANGELOG.md.",
-            without.join(", ")
-        );
-    }
-    Ok(out)
+    Ok((out, without))
 }
+
+/// One cluster that failed to build.
+struct Failure {
+    cluster: String,
+    /// What the build printed.
+    output: String,
+    /// The file that holds `output`.
+    log: Option<PathBuf>,
+}
+
+/// The clusters that failed to build.
+type Failures = Vec<Failure>;
+
+/// What [`Run::build_all`] did.
+struct Built {
+    clusters: Vec<String>,
+    failures: Failures,
+}
+
+/// The version the steps reached, or the step that failed and why.
+type Outcome = std::result::Result<Version, (Version, Failures)>;
 
 /// One `kix upgrade` run: what it installed, and where it builds.
 struct Run {
@@ -487,13 +588,8 @@ struct Run {
     pinned: Version,
     /// What `kix-upgrade.json` holds, once the steps begin.
     state: Option<UpgradeState>,
+    verbose: bool,
 }
-
-/// The clusters that failed to build, each with its error.
-type Failures = Vec<(String, String)>;
-
-/// The version the steps reached, or the step that failed and why.
-type Outcome = std::result::Result<Version, (Version, Failures)>;
 
 impl Run {
     fn state(&self) -> &UpgradeState {
@@ -521,10 +617,17 @@ impl Run {
             &Requirement::Exact(version.clone()),
             &system,
             &self.source,
-            &|v| println!("Installing Kix {}.", v.release()),
-        )
-        .map_err(|e| miette!("{e}"))?;
+            &|_| {},
+        );
+        let installed = match installed {
+            Ok(i) => i,
+            Err(e) => {
+                println!("Installing Kix {}... failed", version.release());
+                return Err(miette!("{e}"));
+            }
+        };
         if installed.downloaded {
+            println!("Installing Kix {}... ok", version.release());
             self.installed_here.push(installed.install.clone());
         }
         Ok(installed.install.bin())
@@ -535,10 +638,46 @@ impl Run {
     fn stop(&mut self, status: Status, message: &str, code: i32) -> Result<()> {
         self.state_mut().status = status;
         self.save()?;
+        println!();
         println!("{message}");
         let (from, pinned) = (self.from.clone(), self.pinned.clone());
         self.prune(&from, &pinned);
         exit(code)
+    }
+
+    /// Return the text of the stop for an edit a person must make in
+    /// `flake.nix`.
+    fn edit_message(&self, edit: &pin::HandEdit) -> String {
+        let count = match edit.lines.len() {
+            2 => "two".to_string(),
+            3 => "three".to_string(),
+            n => n.to_string(),
+        };
+        let mut text = format!(
+            "Cannot update flake.nix automatically: {count} inputs use tag {}:\n",
+            edit.from_tag
+        );
+        for (n, line) in &edit.lines {
+            text.push_str(&format!("  flake.nix:{n}:   {line}\n"));
+        }
+        text.push('\n');
+        if self.pinned == self.from {
+            text.push_str(&format!(
+                "No project files were modified (the {} baseline build is cached).\n",
+                self.from.release()
+            ));
+        } else {
+            text.push_str(&format!(
+                "kix.toml, flake.nix, and flake.lock are pinned to Kix {} (the {} baseline build is cached).\n",
+                self.pinned.release(),
+                self.from.release()
+            ));
+        }
+        text.push_str(&format!(
+            "Next: change the Kix library input's tag to {} in flake.nix, leave the\nother input on {}, then run `kix upgrade` again.",
+            edit.to_tag, edit.from_tag
+        ));
+        text
     }
 
     /// Set the result of the step in progress, and save the state.
@@ -549,13 +688,14 @@ impl Run {
             .last_mut()
             .expect("a step is in progress");
         step.result = result.to_string();
-        step.failed = failures.iter().map(|(c, _)| c.clone()).collect();
+        step.failed = failures.iter().map(|f| f.cluster.clone()).collect();
         self.save()
     }
 
     /// Pin the project to `version` and build every cluster. The target is
-    /// installed only after Kix knows it can make the flake.nix edit.
-    fn step(&mut self, version: &Version) -> Result<std::result::Result<(), Failures>> {
+    /// installed only after Kix knows it can make the flake.nix edit. A
+    /// first try of the target (`jump`) names the failed clusters only.
+    fn step(&mut self, version: &Version, jump: bool) -> Result<std::result::Result<(), Failures>> {
         self.state_mut().steps.push(Step {
             version: version.release(),
             result: "started".into(),
@@ -563,16 +703,21 @@ impl Run {
         });
         self.state_mut().status = Status::FixNeeded;
         self.save()?;
-        if let Some(message) = pin::needs_hand_edit(&self.dir, &self.pinned, version) {
+        if let Some(edit) = pin::needs_hand_edit(&self.dir, &self.pinned, version) {
+            let message = self.edit_message(&edit);
             return self
                 .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
                 .map(|()| Ok(()));
         }
         let kix = self.kix(version)?;
         match pin::pin(&self.dir, &self.pinned, version) {
-            Ok(notes) => {
-                for note in notes {
-                    println!("  {note}");
+            Ok(files) => {
+                if !files.is_empty() {
+                    println!(
+                        "Pinned project to Kix {} (updated {})",
+                        version.release(),
+                        out::list(&files)
+                    );
                 }
                 self.pinned = version.clone();
             }
@@ -587,27 +732,49 @@ impl Run {
                     .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
                     .map(|()| Ok(()));
             }
+            Err(pin::PinError::Edit(edit)) => {
+                let message = self.edit_message(&edit);
+                return self
+                    .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
+                    .map(|()| Ok(()));
+            }
             Err(e) => return Err(miette!("{e}")),
         }
-        println!("Building every cluster with Kix {}.", version.release());
-        let built = build_all(&kix, &self.dir, &self.work.join(version.release()));
-        match &built {
-            Ok(()) => self.finish_step("ok", &Vec::new())?,
-            Err(failures) => self.finish_step("failed", failures)?,
+        let out_dir = self.work.join(version.release());
+        let built = self.build_all(&kix, version, &out_dir);
+        let failed: Vec<String> = built.failures.iter().map(|f| f.cluster.clone()).collect();
+        let how = if failed.is_empty() {
+            None
+        } else if jump {
+            Some(Failed::Names(&failed))
+        } else {
+            Some(Failed::Count(&failed, built.clusters.len()))
+        };
+        println!(
+            "{}",
+            out::build_line(built.clusters.len(), version, false, None, how)
+        );
+        if built.failures.is_empty() {
+            self.finish_step("ok", &Vec::new())?;
+            Ok(Ok(()))
+        } else {
+            self.finish_step("failed", &built.failures)?;
+            Ok(Err(built.failures))
         }
-        Ok(built)
     }
 
     /// Move straight to `goal`. When the project does not build with it,
     /// take `steps` one at a time.
     fn jump(&mut self, goal: &Version, steps: &[Version]) -> Result<Outcome> {
-        match self.step(goal)? {
+        let single = steps.len() <= 1;
+        match self.step(goal, !single)? {
             Ok(()) => Ok(Ok(goal.clone())),
-            Err(failures) if steps.len() <= 1 => Ok(Err((goal.clone(), failures))),
+            Err(failures) if single => Ok(Err((goal.clone(), failures))),
             Err(_) => {
+                let plan: Vec<String> = steps.iter().map(Version::release).collect();
                 println!(
-                    "The project does not build with Kix {}. Trying one minor release at a time.",
-                    goal.release()
+                    "Stepping one minor release at a time ({}):",
+                    plan.join(" -> ")
                 );
                 self.step_through(steps)
             }
@@ -618,12 +785,74 @@ impl Run {
     fn step_through(&mut self, steps: &[Version]) -> Result<Outcome> {
         let mut last = None;
         for v in steps {
-            if let Err(failures) = self.step(v)? {
+            if let Err(failures) = self.step(v, false)? {
                 return Ok(Err((v.clone(), failures)));
             }
             last = Some(v.clone());
         }
         Ok(Ok(last.expect("a stepping upgrade has at least one step")))
+    }
+
+    /// Build every cluster of the project with `kix`, Kix `version`, into
+    /// `out/<cluster>`, keeping each failed cluster's output in a log file.
+    fn build_all(&self, kix: &Path, version: &Version, out: &Path) -> Built {
+        let failure = |cluster: &str, output: String| Failure {
+            cluster: cluster.to_string(),
+            output,
+            log: None,
+        };
+        if out.exists()
+            && let Err(e) = installs::remove_tree(out)
+        {
+            return Built {
+                clusters: Vec::new(),
+                failures: vec![failure(
+                    "(cluster list)",
+                    format!("could not clear {}: {e}", out.display()),
+                )],
+            };
+        }
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let names = match clusters(kix, &self.dir) {
+            Ok(names) => names,
+            Err(e) => {
+                return Built {
+                    clusters: Vec::new(),
+                    failures: vec![failure("(cluster list)", e)],
+                };
+            }
+        };
+        let logs = self.work.join("logs").join(version.release());
+        let mut failures = Vec::new();
+        for cluster in &names {
+            let dest = out.join(cluster);
+            let dest_text = dest.display().to_string();
+            if let Err(output) = run_kix(
+                kix,
+                &self.dir,
+                &["export", cluster, "--out", &dest_text, "--for", "audit"],
+            ) {
+                let path = logs.join(format!("{cluster}.log"));
+                let log = std::fs::create_dir_all(&logs)
+                    .and_then(|()| std::fs::write(&path, &output))
+                    .ok()
+                    .map(|()| path);
+                failures.push(Failure {
+                    cluster: cluster.clone(),
+                    output,
+                    log,
+                });
+            }
+        }
+        if failures.is_empty() {
+            let _ = std::fs::create_dir_all(out);
+        }
+        Built {
+            clusters: names,
+            failures,
+        }
     }
 
     /// Remove each version this run installed, except `from` and `kept`.
@@ -633,10 +862,10 @@ impl Run {
                 continue;
             }
             match installs::remove_tree(&i.dir) {
-                Ok(()) => println!(
-                    "Removed Kix {}, which this upgrade installed only to build with.",
-                    i.version.release()
-                ),
+                Ok(()) if self.verbose => {
+                    println!("Removed temporary Kix {}.", i.version.release())
+                }
+                Ok(()) => {}
                 Err(e) => {
                     tracing::warn!(path = %i.dir.display(), error = %e, "could not remove a version of Kix")
                 }
@@ -708,57 +937,72 @@ fn packages_in_use(kix: &Path, dir: &Path) -> Option<BTreeSet<String>> {
     Some(in_use)
 }
 
-/// Build every cluster of the project with `kix` into `out/<cluster>`.
-fn build_all(kix: &Path, dir: &Path, out: &Path) -> std::result::Result<(), Failures> {
-    if out.exists() {
-        installs::remove_tree(out).map_err(|e| {
-            vec![(
-                String::new(),
-                format!("could not clear {}: {e}", out.display()),
-            )]
-        })?;
-    }
-    if let Some(parent) = out.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let names = clusters(kix, dir).map_err(|e| vec![("(cluster list)".to_string(), e)])?;
-    let mut failures = Vec::new();
-    for cluster in &names {
-        let dest = out.join(cluster);
-        let dest_text = dest.display().to_string();
-        if let Err(e) = run_kix(
-            kix,
-            dir,
-            &["export", cluster, "--out", &dest_text, "--for", "audit"],
-        ) {
-            failures.push((cluster.clone(), e));
+/// Print each failed cluster's error, and where its full output is.
+fn print_failures(failures: &Failures) {
+    for f in failures {
+        println!();
+        println!("  Cluster {}:", f.cluster);
+        for line in out::excerpt(&f.output) {
+            println!("    {line}");
         }
-    }
-    if failures.is_empty() {
-        let _ = std::fs::create_dir_all(out);
-        Ok(())
-    } else {
-        Err(failures)
+        if let Some(log) = &f.log {
+            println!("    Full build log: {}", log.display());
+        }
     }
 }
 
-fn print_failures(failures: &Failures) {
-    for (cluster, error) in failures {
-        println!("\nCluster {cluster}:");
-        for line in error.lines() {
-            println!("  {line}");
+/// Print the "Config changes required" notes that may explain why the
+/// build of `failing` failed.
+fn print_matching(matching: &[Applying], previous: &Version, failing: &Version) {
+    if matching.is_empty() {
+        return;
+    }
+    let releases: BTreeSet<&Version> = matching.iter().map(|a| &a.release).collect();
+    println!();
+    match (matching.len(), releases.len()) {
+        (1, _) => println!(
+            "  Matching change in Kix {}:",
+            matching[0].release.release()
+        ),
+        (_, 1) => println!(
+            "  Matching changes in Kix {}:",
+            matching[0].release.release()
+        ),
+        _ => println!(
+            "  Matching changes (Kix {} -> {}):",
+            previous.release(),
+            failing.release()
+        ),
+    }
+    for a in matching {
+        let first = if a.record.packages.is_empty() {
+            format!("    [{}] ({}):", a.reference(), a.release.release())
+        } else {
+            format!("    [{}] {}:", a.reference(), out::list(&a.record.packages))
+        };
+        for line in out::wrap(&first, 6, &a.record.body) {
+            println!("{line}");
         }
     }
+}
+
+/// What the comparison of the builds found.
+struct Report {
+    any_changed: bool,
+    sensitive: usize,
+    review: out::Review,
 }
 
 /// Compare the builds in `before` and `after`, print what changed, grouped
-/// by clusters that changed the same way, and return the counts of
-/// unexplained and sensitive changes.
+/// by clusters that changed the same way, and return what the review list
+/// needs.
 fn report_changes(
     before: &Path,
     after: &Path,
     explaining: &BTreeSet<String>,
-) -> Result<(usize, usize)> {
+    from: &Version,
+    to: &Version,
+) -> Result<Report> {
     let names = |d: &Path| -> BTreeSet<String> {
         std::fs::read_dir(d)
             .into_iter()
@@ -777,37 +1021,38 @@ fn report_changes(
         }
     };
     let mut groups: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
-    let (mut unexplained, mut sensitive) = (0, 0);
+    let mut report = Report {
+        any_changed: false,
+        sensitive: 0,
+        review: out::Review::default(),
+    };
     for cluster in &clusters {
         let changes = compare::compare(
             &load(before.join(cluster))?,
             &load(after.join(cluster))?,
             explaining,
         );
-        unexplained += changes.iter().filter(|c| !c.explained).count();
-        sensitive += changes.iter().filter(|c| c.sensitive).count();
+        report.any_changed |= !changes.is_empty();
+        report.sensitive += changes.iter().filter(|c| c.sensitive).count();
+        report.review.add(cluster, &changes);
         groups
-            .entry(compare::summary(&changes))
+            .entry(out::change_lines(&changes))
             .or_default()
             .push(cluster.clone());
     }
     println!();
-    for (summary, clusters) in &groups {
-        let label = if clusters.len() == 1 {
-            "Cluster"
-        } else {
-            "Clusters"
-        };
-        if summary.is_empty() {
-            println!("{label} {}: no objects changed.", clusters.join(", "));
-        } else {
-            println!("{label} {}:", clusters.join(", "));
-            for line in summary {
-                println!("  {line}");
-            }
+    println!("Manifest changes ({} -> {}):", from.release(), to.release());
+    let (same, changed): (Vec<_>, Vec<_>) = groups.iter().partition(|(lines, _)| lines.is_empty());
+    for (_, clusters) in same {
+        println!("  {}: no objects changed", out::list(clusters));
+    }
+    for (lines, clusters) in changed {
+        println!("  {}:", out::list(clusters));
+        for line in lines {
+            println!("    {line}");
         }
     }
-    Ok((unexplained, sensitive))
+    Ok(report)
 }
 
 /// Return the references of the applying records by kind name.
@@ -834,138 +1079,182 @@ fn data_changes(applying: &[Applying]) -> Vec<DataChange> {
         .collect()
 }
 
-/// Print the records in `applying` under `title`, grouped by what the
-/// reader must do. Added, changed, and fixed records print as a count.
-fn print_records(title: &str, applying: &[Applying]) {
-    if applying.is_empty() {
-        return;
-    }
-    println!("\n{title}:");
-    let groups = [
-        (Kind::Error, "Edits needed"),
-        (Kind::Silent, "Changes with no error"),
-        (Kind::Note, "Upgrade notes"),
-        (Kind::Security, "Security"),
-    ];
-    for (kind, heading) in groups {
-        let of = plan::of_kind(applying, kind);
-        if of.is_empty() {
-            continue;
+/// What a preview knows about the project.
+#[derive(Clone, Copy)]
+enum Known {
+    /// The packages in use and how many clusters there are.
+    Clusters(usize),
+    /// The packages in use only.
+    Packages,
+    /// Neither: every change in the range counts.
+    Nothing,
+}
+
+impl Known {
+    fn of(packages: bool, clusters: Option<usize>) -> Self {
+        match (packages, clusters) {
+            (true, Some(n)) => Known::Clusters(n),
+            (true, None) => Known::Packages,
+            (false, _) => Known::Nothing,
         }
-        println!("  {heading}:");
-        for a in of {
-            println!(
-                "    [{}] Kix {}: {}",
-                a.reference(),
-                a.release.release(),
-                one_line(&a.record.body)
-            );
-            for c in &a.record.cli {
-                println!("      changes the command or flag {c}");
-            }
-            if a.record.required_stop {
-                println!(
-                    "      every cluster must deploy Kix {} before upgrading further",
-                    a.release.release()
-                );
-            }
-        }
-    }
-    let rest = applying
-        .iter()
-        .filter(|a| matches!(a.record.kind, Kind::Added | Kind::Changed | Kind::Fixed))
-        .count();
-    if rest > 0 {
-        println!("  {rest} other records add, change, or fix things. Read them in the CHANGELOG.");
     }
 }
 
-fn one_line(body: &str) -> String {
-    body.split_whitespace().collect::<Vec<_>>().join(" ")
+struct Preview<'a> {
+    from: &'a Version,
+    target: &'a Version,
+    steps: &'a [Version],
+    stop: Option<&'a (Version, Version)>,
+    applying: &'a [Applying],
+    known: Known,
+    without_notes: &'a [String],
+    verbose: bool,
 }
 
-fn preview(
-    from: &Version,
-    target: &Version,
-    steps: &[Version],
-    stop: Option<&(Version, Version)>,
-    applying: &[Applying],
-    knew_packages: bool,
-) {
-    println!(
-        "This project uses Kix {}. The newest release that matches is Kix {}.",
-        from.release(),
-        target.release()
-    );
-    if let Some((r, until)) = stop {
+fn preview(p: &Preview) {
+    let (from, target) = (p.from.release(), p.target.release());
+    println!("Kix {from} -> {target} (preview, no files changed)");
+    if let Some((stop, until)) = p.stop {
+        println!();
         println!(
-            "Kix {} has a change that every cluster must deploy before it upgrades further, so this upgrade stops at Kix {}.",
-            r.release(),
+            "Kix {} must be deployed to every cluster before upgrading further, so this upgrade will stop at Kix {} on the way to {target}.",
+            stop.release(),
             until.release()
         );
     }
-    let to_install = steps
-        .iter()
-        .filter(|v| !installs::installed().iter().any(|i| &i.version == *v))
-        .count();
-    let list: Vec<String> = steps.iter().map(Version::release).collect();
-    println!(
-        "If the project does not build with the newest version at once, Kix takes these steps: {}. {}",
-        list.join(", "),
-        match to_install {
-            0 => "Every one of those versions is installed.".to_string(),
-            1 => "That installs 1 version of Kix.".to_string(),
-            n => format!("That installs {n} versions of Kix."),
+    if !p.without_notes.is_empty() {
+        println!();
+        for line in out::without_notes_paragraph(p.without_notes) {
+            println!("{line}");
         }
-    );
-    if !knew_packages {
-        println!(
-            "Kix {} is not installed, so the list below counts every record, including those for packages this project may not use.",
-            from.release()
-        );
     }
-    if applying.is_empty() {
-        println!("No change records apply to this project.");
-    } else {
-        print_records("Change records that apply to this project", applying);
+    let listed = out::listed(p.applying).len();
+    let notes = out::notes(p.applying, true, p.from, p.target);
+    if listed > 0 {
+        let (changes, affect) = if listed == 1 {
+            ("1 change".to_string(), "affects")
+        } else {
+            (format!("{listed} changes"), "affect")
+        };
+        println!();
+        match p.known {
+            Known::Clusters(n) => println!(
+                "{changes} between {from} and {target} {affect} packages used by your {n} {}:",
+                if n == 1 { "cluster" } else { "clusters" }
+            ),
+            Known::Packages => println!(
+                "{changes} between {from} and {target} {affect} packages used by this project:"
+            ),
+            Known::Nothing => println!(
+                "{changes} between {from} and {target} (current Kix {from} is not installed, so changes for unused packages are included):"
+            ),
+        }
+        println!();
+    } else if p.without_notes.is_empty() {
+        println!();
+        println!("No changes between {from} and {target} affect packages used by this project.");
     }
+    if !notes.is_empty() {
+        if listed == 0 {
+            println!();
+        }
+        for line in notes {
+            println!("{line}");
+        }
+    }
+    if p.verbose {
+        let to_install = p
+            .steps
+            .iter()
+            .filter(|v| !installs::installed().iter().any(|i| &i.version == *v))
+            .count();
+        let versions: Vec<String> = p.steps.iter().map(Version::release).collect();
+        let versions = out::list(&versions);
+        println!();
+        match to_install {
+            0 => println!("Stepping plan if direct jump fails: {versions} (all installed)."),
+            1 => println!(
+                "Stepping plan if direct jump fails: {versions} (1 version would be installed)."
+            ),
+            n => println!(
+                "Stepping plan if direct jump fails: {versions} ({n} versions would be installed)."
+            ),
+        }
+    }
+    let config: Vec<String> = p
+        .applying
+        .iter()
+        .filter(|a| a.record.kind == Kind::Error)
+        .map(Applying::reference)
+        .collect();
+    println!();
+    match config.as_slice() {
+        [] => {}
+        [one] => println!(
+            "`kix upgrade` will stop at the step for [{one}] until you make the config change above."
+        ),
+        many => println!(
+            "`kix upgrade` will stop for [{}] until you make the config changes above.",
+            many.join("], [")
+        ),
+    }
+    println!("Next: run `kix upgrade`.");
 }
 
 /// Add `refs` to the acknowledged data changes in `kix-upgrade.json`.
 fn acknowledge(dir: &Path, refs: &[String]) -> Result<()> {
-    let mut state = UpgradeState::read(dir)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| {
-            miette!(
-                "{} has no {}, so there is nothing to acknowledge. Run `kix upgrade` first",
-                dir.display(),
-                state::FILE
-            )
-        })?;
+    let Some(mut state) = UpgradeState::read(dir).map_err(|e| miette!("{e}"))? else {
+        return refuse(&format!(
+            "No kix-upgrade.json found in {}; nothing to acknowledge.",
+            dir.display()
+        ));
+    };
+    let mut wanted = Vec::new();
     for r in refs {
-        let wanted = kix::changes::normalize_id(r).unwrap_or_else(|| r.clone());
-        if !state.data_changes.iter().any(|d| d.reference == wanted) {
-            let known: Vec<&str> = state
-                .data_changes
+        let id = kix::changes::normalize_id(r).unwrap_or_else(|| r.clone());
+        if !state.data_changes.iter().any(|d| d.reference == id) {
+            let pending: Vec<&str> = state
+                .unacknowledged()
                 .iter()
                 .map(|d| d.reference.as_str())
                 .collect();
-            return Err(miette!(
-                "{r} is not a change to stored data in {}. {}",
-                state::FILE,
-                if known.is_empty() {
-                    "It lists none.".to_string()
-                } else {
-                    format!("It lists: {}.", known.join(", "))
-                }
-            ));
+            return refuse(&if pending.is_empty() {
+                format!(
+                    "`{r}` is not a pending data migration in kix-upgrade.json (no pending data migrations)."
+                )
+            } else {
+                format!(
+                    "`{r}` is not a pending data migration in kix-upgrade.json (pending: {}).",
+                    out::list(&pending)
+                )
+            });
         }
-        if !state.acknowledged.contains(&wanted) {
-            state.acknowledged.push(wanted.clone());
-        }
-        println!("Acknowledged {wanted}.");
+        wanted.push(id);
     }
-    state.write(dir).map_err(|e| miette!("{e}"))
+    for id in &wanted {
+        if !state.acknowledged.contains(id) {
+            state.acknowledged.push(id.clone());
+        }
+    }
+    state.write(dir).map_err(|e| miette!("{e}"))?;
+    let acked = out::list(&wanted);
+    let remaining: Vec<&str> = state
+        .unacknowledged()
+        .iter()
+        .map(|d| d.reference.as_str())
+        .collect();
+    match remaining.len() {
+        0 => println!("Acknowledged {acked} in kix-upgrade.json. You can now run `kix deploy`."),
+        1 => println!(
+            "Acknowledged {acked} in kix-upgrade.json. 1 data migration still requires `--ack` before `kix deploy`: {}.",
+            remaining[0]
+        ),
+        n => println!(
+            "Acknowledged {acked} in kix-upgrade.json. {n} data migrations still require `--ack` before `kix deploy`: {}.",
+            out::list(&remaining)
+        ),
+    }
+    Ok(())
 }
 
 /// Refuse a deploy while `kix-upgrade.json` in `dir` lists a change to
@@ -978,25 +1267,38 @@ pub fn check_deploy(dir: &Path) -> Result<()> {
     if open.is_empty() {
         return Ok(());
     }
+    let one = open.len() == 1;
     let mut text = format!(
-        "The upgrade to Kix {} changes how stored data is kept, and no one has acknowledged it ({}).",
+        "Deploy blocked: upgrade to Kix {} includes {}.\nNo clusters were contacted.\n",
         state.to,
-        state::FILE
+        if one {
+            "an unacknowledged data migration"
+        } else {
+            "unacknowledged data migrations"
+        }
     );
     for d in &open {
+        text.push('\n');
         text.push_str(&format!(
-            "\n\n[{}] Kix {}:\n{}",
-            d.reference, d.release, d.body
+            "  [{}] ({}, moves stored data):\n",
+            d.reference, d.release
         ));
+        for line in out::wrap("    ", 4, &d.body) {
+            text.push_str(&format!("{line}\n"));
+        }
     }
+    let refs: Vec<&str> = open.iter().map(|d| d.reference.as_str()).collect();
     text.push_str(&format!(
-        "\n\nRead each change, then run `kix upgrade --ack {}` and deploy again.",
-        open.iter()
-            .map(|d| d.reference.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
+        "\nNext: once you are ready for {}, run:\n  kix upgrade --ack {}\nThen run `kix deploy` again.",
+        if one {
+            "this migration"
+        } else {
+            "these migrations"
+        },
+        refs.join(" ")
     ));
-    Err(miette!("{text}"))
+    eprintln!("{text}");
+    exit(EXIT_REFUSED)
 }
 
 #[cfg(test)]

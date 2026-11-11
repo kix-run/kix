@@ -68,16 +68,6 @@ pub enum Change {
     Changed,
 }
 
-impl Change {
-    pub fn word(self) -> &'static str {
-        match self {
-            Change::Added => "added",
-            Change::Removed => "removed",
-            Change::Changed => "changed",
-        }
-    }
-}
-
 /// One object that differs after the upgrade.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectChange {
@@ -171,37 +161,6 @@ pub fn compare(
     out
 }
 
-/// Return a summary line per change kind, such as `2 added: a, b`, which two
-/// clusters share when their changes are the same.
-pub fn summary(changes: &[ObjectChange]) -> Vec<String> {
-    let mut lines = Vec::new();
-    for change in [Change::Added, Change::Removed, Change::Changed] {
-        let ids: Vec<String> = changes
-            .iter()
-            .filter(|c| c.change == change)
-            .map(|c| {
-                let mut notes = Vec::new();
-                if !c.explained {
-                    notes.push("no change record");
-                }
-                if c.sensitive {
-                    notes.push("sensitive");
-                }
-                if notes.is_empty() {
-                    c.id.clone()
-                } else {
-                    format!("{} ({})", c.id, notes.join(", "))
-                }
-            })
-            .collect();
-        if !ids.is_empty() {
-            lines.push(format!("{} {}:", ids.len(), change.word()));
-            lines.extend(ids.into_iter().map(|id| format!("  {id}")));
-        }
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,17 +221,6 @@ mod tests {
                 ("ClusterRole/new", Change::Added, false, true),
                 ("Deployment/web@shop", Change::Changed, true, false),
                 ("Secret/old@shop", Change::Removed, true, true),
-            ]
-        );
-        assert_eq!(
-            summary(&got),
-            [
-                "1 added:",
-                "  ClusterRole/new (no change record, sensitive)",
-                "1 removed:",
-                "  Secret/old@shop (sensitive)",
-                "1 changed:",
-                "  Deployment/web@shop",
             ]
         );
     }

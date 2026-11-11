@@ -81,8 +81,20 @@ pub enum Retag {
     AlreadyMoved,
     /// No Kix url names the old tag, so the lock alone moves the library.
     NoTag,
-    /// Kix cannot tell which url to change. The text names the lines.
-    ByHand(String),
+    /// Kix cannot tell which url to change.
+    ByHand(HandEdit),
+}
+
+/// A `flake.nix` edit Kix leaves to a person: more than one Kix url names
+/// the tag the project uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandEdit {
+    /// The tag the urls name now, such as `v0.8.0-rc.1`.
+    pub from_tag: String,
+    /// The tag the library input must name, such as `v0.9.1`.
+    pub to_tag: String,
+    /// Each line that names `from_tag`: its number and its text.
+    pub lines: Vec<(usize, String)>,
 }
 
 /// Return the span of the tag `v<version>` in each url in `text`, a
@@ -126,14 +138,19 @@ pub fn retag_flake(text: &str, from: &str, to: &str) -> Retag {
         [] => Retag::NoTag,
         [(start, end)] => Retag::Moved(format!("{}v{to}{}", &text[..*start], &text[*end..])),
         many => {
-            let lines: Vec<String> = many
+            let lines = many
                 .iter()
-                .map(|(start, _)| (text[..*start].matches('\n').count() + 1).to_string())
+                .map(|(start, _)| {
+                    let number = text[..*start].matches('\n').count() + 1;
+                    let line = text.lines().nth(number - 1).unwrap_or_default();
+                    (number, line.trim().to_string())
+                })
                 .collect();
-            Retag::ByHand(format!(
-                "flake.nix names the tag v{from} on lines {}, and Kix cannot tell which one is the Kix library. Change the library's url to v{to}, leave the others, then run `kix upgrade` again.",
-                lines.join(" and ")
-            ))
+            Retag::ByHand(HandEdit {
+                from_tag: format!("v{from}"),
+                to_tag: format!("v{to}"),
+                lines,
+            })
         }
     }
 }
@@ -187,13 +204,17 @@ fn library_input(
     Ok((name, tag))
 }
 
-/// Why Kix could not pin the project.
+/// Why Kix could not pin the project. Each message is ready to print and
+/// ends with a `Next:` line.
 #[derive(Debug)]
 pub enum PinError {
-    /// Nix could not move `flake.lock`. Kix put the project's files back.
+    /// Nix could not move `flake.lock`. Kix tried to put the files back.
     Lock(String),
-    /// `flake.nix` needs an edit Kix cannot make. Kix changed nothing.
+    /// A person must change a file. Kix changed nothing, or put it back.
     ByHand(String),
+    /// More than one Kix url in `flake.nix` names the tag. Kix changed
+    /// nothing.
+    Edit(HandEdit),
     Other(String),
 }
 
@@ -207,6 +228,7 @@ impl std::fmt::Display for PinError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PinError::Lock(m) | PinError::ByHand(m) | PinError::Other(m) => f.write_str(m),
+            PinError::Edit(e) => write!(f, "flake.nix names {} more than once", e.from_tag),
         }
     }
 }
@@ -274,19 +296,23 @@ fn tag_on_disk(dir: &Path, release: &str) -> Option<String> {
 
 /// Return what a person must change in `flake.nix` before Kix can move the
 /// project from `current` to `version`, or `None` when Kix can do it.
-pub fn needs_hand_edit(dir: &Path, current: &Version, version: &Version) -> Option<String> {
+pub fn needs_hand_edit(dir: &Path, current: &Version, version: &Version) -> Option<HandEdit> {
     let flake = Saved::take(dir.join("flake.nix")).ok()?;
     let lock = Saved::take(dir.join("flake.lock")).ok()?;
     match flake_edit(&flake, &lock, current, &version.release()) {
-        Ok(Retag::ByHand(message)) => Some(message),
+        Ok(Retag::ByHand(edit)) => Some(edit),
         _ => None,
     }
 }
 
 /// Pin the project in `dir`, now pinned to `current`, to `version`. Return
-/// a note for each file Kix changed. When moving `flake.lock` fails, put
+/// the name of each file Kix changed. When moving `flake.lock` fails, put
 /// `kix.toml`, `flake.nix`, and `flake.lock` back.
-pub fn pin(dir: &Path, current: &Version, version: &Version) -> Result<Vec<String>, PinError> {
+pub fn pin(
+    dir: &Path,
+    current: &Version,
+    version: &Version,
+) -> Result<Vec<&'static str>, PinError> {
     let release = version.release();
     let target_tag = format!("v{release}");
     let mut notes = Vec::new();
@@ -299,20 +325,25 @@ pub fn pin(dir: &Path, current: &Version, version: &Version) -> Result<Vec<Strin
         Retag::Moved(text) => (Some(text), false),
         Retag::AlreadyMoved => (None, true),
         Retag::NoTag => (None, false),
-        Retag::ByHand(message) => return Err(PinError::ByHand(message)),
+        Retag::ByHand(edit) => return Err(PinError::Edit(edit)),
     };
+    let pinned = current.release();
     let old = toml.1.clone().unwrap_or_default();
-    let new = set_kix(&old, &release).map_err(PinError::ByHand)?;
+    let new = set_kix(&old, &release).map_err(|_| {
+        PinError::ByHand(format!(
+            "Cannot update the `kix` version field in kix.toml automatically.\nkix.toml, flake.nix, and flake.lock remain at Kix {pinned}.\nNext: set `kix = \"{release}\"` on a single line in kix.toml, then run `kix upgrade` again."
+        ))
+    })?;
 
     if new != old {
         std::fs::write(&toml.0, new)
             .map_err(|e| format!("could not write {}: {e}", toml.0.display()))?;
-        notes.push(format!("kix.toml: kix = \"{release}\""));
+        notes.push("kix.toml");
     }
     if let Some(text) = &new_flake {
         std::fs::write(&flake.0, text)
             .map_err(|e| format!("could not write {}: {e}", flake.0.display()))?;
-        notes.push(format!("flake.nix: the Kix library input names v{release}"));
+        notes.push("flake.nix");
     }
     if lock.1.is_none() || tag_on_disk(dir, &release).as_deref() == Some(target_tag.as_str()) {
         return Ok(notes);
@@ -330,34 +361,45 @@ pub fn pin(dir: &Path, current: &Version, version: &Version) -> Result<Vec<Strin
                 .map_err(|e| e.to_string())
         }
     })();
-    let restore = |what: String| -> String {
-        match toml
-            .restore()
+    let restore = || {
+        toml.restore()
             .and_then(|()| flake.restore())
             .and_then(|()| lock.restore())
-        {
-            Ok(()) => format!(
-                "{what} Kix put kix.toml, flake.nix, and flake.lock back as they were before this step."
-            ),
-            Err(io) => format!(
-                "{what} Kix could not put kix.toml, flake.nix, and flake.lock back: {io}. Restore them with git."
-            ),
-        }
+            .is_ok()
+    };
+    let not_restored = |tag: &str| {
+        format!(
+            "Could not restore kix.toml, flake.nix, and flake.lock to Kix {pinned} automatically.\nNext: run `git checkout -- kix.toml flake.nix flake.lock`, make sure tag {tag} is reachable, then run `kix upgrade` again."
+        )
     };
     if let Err(e) = moved {
-        return Err(PinError::Lock(restore(format!(
-            "Kix could not move the Kix library to the tag {target_tag}. Check that the repository the library input names has that tag.\n{e}\n"
-        ))));
+        let error: String = e.lines().map(|l| format!("  {l}\n")).collect();
+        let head =
+            format!("Cannot lock Kix library tag {target_tag} for Kix {release}:\n{error}\n");
+        return Err(PinError::Lock(if restore() {
+            format!(
+                "{head}Restored kix.toml, flake.nix, and flake.lock to Kix {pinned}.\nNext: check that tag {target_tag} is reachable in your Kix input repository, then run `kix upgrade` again."
+            )
+        } else {
+            format!("{head}{}", not_restored(&target_tag))
+        }));
     }
     // A lock naming any other tag means the library did not move.
-    if let Some(tag) = tag_on_disk(dir, &release)
-        && tag != target_tag
+    if let Some(locked) = tag_on_disk(dir, &release)
+        && locked != target_tag
     {
-        return Err(PinError::ByHand(restore(format!(
-            "flake.lock still locks the Kix library to {tag}, not {target_tag}, so the library did not move. Point the Kix library input in flake.nix at {target_tag}, then run `kix upgrade` again."
-        ))));
+        let head = format!(
+            "Locked flake.lock, but the Kix library input is still on {locked} instead of {target_tag}.\n"
+        );
+        return Err(PinError::ByHand(if restore() {
+            format!(
+                "{head}Restored kix.toml, flake.nix, and flake.lock to Kix {pinned}.\nNext: update the Kix library input in flake.nix to use tag {target_tag}, then run `kix upgrade` again."
+            )
+        } else {
+            format!("{head}{}", not_restored(&target_tag))
+        }));
     }
-    notes.push(format!("flake.lock: the Kix library is {release}"));
+    notes.push("flake.lock");
     Ok(notes)
 }
 
@@ -478,11 +520,16 @@ mod tests {
     fn retag_flake_leaves_two_inputs_on_one_tag_to_a_person() {
         // A project that also pins the Kix inside its images.
         let both = "inputs = {\n  kixpkgs = {\n    url = \"git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v0.8.0-rc.1\";\n  };\n  image-kix = {\n    url = \"git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v0.8.0-rc.1\";\n  };\n};\n";
-        let Retag::ByHand(message) = retag_flake(both, "0.8.0-rc.1", "0.9.1") else {
+        let Retag::ByHand(edit) = retag_flake(both, "0.8.0-rc.1", "0.9.1") else {
             panic!("expected Kix to leave the edit to a person");
         };
-        assert!(message.contains("lines 3 and 6"), "{message}");
-        assert!(message.contains("v0.9.1"), "{message}");
+        let numbers: Vec<usize> = edit.lines.iter().map(|(n, _)| *n).collect();
+        assert_eq!(numbers, [3, 6]);
+        assert!(
+            edit.lines[0].1.starts_with("url = \"git+ssh://"),
+            "{edit:?}"
+        );
+        assert_eq!(edit.to_tag, "v0.9.1");
 
         // After the person moved the library's url, Kix changes nothing,
         // and does not move the other input.
