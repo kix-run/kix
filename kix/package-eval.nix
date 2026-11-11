@@ -789,7 +789,7 @@ in
   # package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a package folder under kix/packages/";
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions`, or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a package folder under kix/packages/";
     assert checkOptionContracts packages;
     builtins.deepSeq evaluated evaluated;
 }
