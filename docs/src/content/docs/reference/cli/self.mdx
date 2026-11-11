@@ -116,6 +116,7 @@ Kix knows the install script installed it, and which link it made, from
 | --- | --- |
 | `XDG_DATA_HOME` | Versions are installed under `$XDG_DATA_HOME/kix/` in place of `~/.local/share/kix/`. |
 | `KIX_AUTO_INSTALL` | `0`, `false`, or `no` stops Kix from downloading a version on its own when a project needs one. `kix self install` still downloads. |
+| `KIX_RELEASE_SOURCE` | A site laid out like `https://kix.run`, such as an internal mirror, that Kix fetches the release index, `SHA256SUMS`, signatures, release archives, and release notes from. Kix still checks every file against the signing key built into Kix, so a mirror only needs to copy the files. |
 
 ## Exit status
 

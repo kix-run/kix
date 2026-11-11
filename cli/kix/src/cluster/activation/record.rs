@@ -58,6 +58,11 @@ pub struct Record {
     /// `spec.consumers.<consumer>.sha256`: published interface hashes keyed by
     /// consumer name.
     pub published_interfaces: BTreeMap<String, String>,
+    /// The version of Kix that made this deploy, from the receipt in
+    /// `status.receipt`: `deployer.kixVersion` for a deploy from a bundle,
+    /// else `builder.kixVersion`. `None` when the record has no receipt, as
+    /// an operator deploy's record does.
+    pub deployed_with: Option<String>,
 }
 
 /// Platform interface file metadata pinned by a consumer build.
@@ -125,6 +130,9 @@ impl Record {
             }),
             published_interfaces: spec_map(obj, "/spec/consumers", |v| {
                 v.get("sha256").and_then(Value::as_str).map(str::to_string)
+            }),
+            deployed_with: ["deployer", "builder"].into_iter().find_map(|who| {
+                status(&format!("/status/{}/{who}/kixVersion", keys::RECEIPT_FIELD))
             }),
         }
     }

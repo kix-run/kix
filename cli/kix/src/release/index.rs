@@ -57,6 +57,8 @@ pub struct Release {
     pub signature: Option<String>,
     /// The site path the archive names are appended to.
     pub download: String,
+    /// The release date, `YYYY-MM-DD`, as the index gives it.
+    pub date: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -76,6 +78,8 @@ struct RawRelease {
     #[serde(default)]
     signature: Option<String>,
     download: String,
+    #[serde(default)]
+    date: Option<String>,
 }
 
 impl Index {
@@ -92,6 +96,7 @@ impl Index {
                     sums: r.sums,
                     signature: r.signature,
                     download: r.download,
+                    date: r.date,
                 })
             })
             .collect();
@@ -182,6 +187,7 @@ mod tests {
             Some("/releases/v0.10.0/SHA256SUMS.sig")
         );
         assert_eq!(first.download, "/download/0.10.0/");
+        assert_eq!(first.date.as_deref(), Some("2026-11-07"));
     }
 
     #[test]

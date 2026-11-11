@@ -27,6 +27,8 @@ pub mod scheduler;
 #[cfg(any(test, feature = "test-util"))]
 pub use ops::scripted;
 pub(crate) mod secrets;
+#[cfg(test)]
+mod state_fixtures;
 pub mod stream;
 pub mod tenancy;
 pub mod topology;

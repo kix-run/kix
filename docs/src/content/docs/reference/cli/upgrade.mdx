@@ -1,0 +1,270 @@
+---
+title: "`upgrade`"
+description: "Reference for kix upgrade, which moves a project to a newer version of Kix, builds every cluster before and after, and lists the release notes that apply."
+---
+
+`kix upgrade` moves a project to a newer version of Kix. It builds every
+cluster with the version the project uses now, pins the project to the new
+version, and builds every cluster again. Then it compares the two builds and
+lists the release notes that apply to the project.
+
+`kix upgrade` runs in the Kix version you invoke directly, even when
+`kix.toml` pins an older version. For each version it tests, it installs that
+version of Kix if needed and runs the build with it. It does not contact any
+cluster.
+
+:::note
+This page is hand-maintained from `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/upgrade/`. When flag definitions or behavior change
+in the Rust source, update this page in the same change.
+:::
+
+## Synopsis
+
+```text
+kix upgrade [--to <VERSION>] [--preview]
+kix upgrade --ack <ID>...
+```
+
+## Flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--to <VERSION>` | `latest` | The version to move to: an exact version such as `0.10.2`, a minor such as `0.10` (its newest patch), or `latest`, the newest release that is not a prerelease. |
+| `--preview` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. |
+| `--ack <ID>...` | none | Acknowledge a change to stored data by its id or name, so that `kix deploy` goes ahead. Does nothing else. |
+
+## The version the project uses
+
+`kix upgrade` starts from the exact version in `kix.toml`, such as
+`kix = "0.9.1"`. When `kix.toml` names a minor or no version, it starts from
+the version of the project's Kix library in `flake.lock`. When the target is
+not newer than that, it prints this and exits `0`:
+
+```text
+Already on the latest Kix release (0.12.1). Nothing to upgrade.
+```
+
+## Release notes
+
+Every release of Kix publishes structured release notes beside its release
+archives, as `kix-<version>-changes.json`, listed in the release's signed
+`SHA256SUMS`. `kix upgrade` fetches the notes of every release after the
+project's version up to the target and checks each file against
+`SHA256SUMS`. A release made before structured release notes existed has
+none, and the first run of an upgrade says so:
+
+```text
+Note: Kix 0.9.1 has no release notes; see CHANGELOG.md.
+```
+
+`kix upgrade --preview` lists every breaking, security, and upgrade note in
+the range, and every release that every cluster must deploy, grouped by what
+you must do. Added, changed, and fixed notes are counted. It changes
+nothing:
+
+```text
+Kix 0.10.0 -> 0.12.1 (preview, no files changed)
+
+6 changes between 0.10.0 and 0.12.1:
+  * may affect your 6 clusters (package name matches an instance in use)
+
+  Config changes required (will fail the build until updated):
+  * [K0003] caddy (0.11.0): `replicaCount` was renamed to `replicas`.
+    [K0005] echo-server (0.11.0): `port` was renamed to `servicePort`.
+
+  Behavior & data changes (builds cleanly, requires review before deploy):
+    [K0009] (0.11.0): Cluster-wide default network policy mode now drops
+      unmatched egress traffic in namespaces with at least one workload.
+  * [K0007] harbor (0.12.0, moves stored data): Registry blob metadata moved
+      to v2 layout; existing PVCs are migrated in place on first start.
+      Requires `kix upgrade --ack K0007` before `kix deploy`.
+
+  Security fixes (builds cleanly, recommended for this upgrade):
+  * [K0008] caddy (0.11.2, CVE-2026-4102): Fixes HTTP/2 CONTINUATION frame
+      flood.
+      Without upgrading: Set `caddy.http2 = false` in the cluster.
+
+  Notes:
+  * [metrics-port] caddy (0.11.2): Admin metrics endpoint now binds to
+      127.0.0.1:2019 by default.
+
+  14 minor feature and bugfix changes between 0.10.0 and 0.12.1 are not shown (see CHANGELOG.md).
+
+`kix upgrade` will stop for [K0003], [K0005] until you make the config changes above.
+Next: run `kix upgrade`.
+```
+
+A note names packages, and Kix sees only the instance names a cluster uses
+(from `kix list packages --cluster <name>`, run with the project's current
+Kix). So Kix cannot tell which notes affect a project. It lists them all,
+and marks with `*` a note whose package name equals the name of an instance
+in use. An unmarked note can still affect an instance with another name.
+When the current Kix is not installed, the preview marks nothing. When the
+range has no breaking, security, or upgrade notes, it says
+`No breaking, security, or upgrade notes between 0.10.0 and 0.12.1.`
+
+## What a run does
+
+1. Builds every cluster with the version the project uses now, with
+   `kix export <cluster> --for audit`, into
+   `~/.cache/kix/upgrade/<project>/before/`. When a cluster does not build,
+   it stops with exit status `2`. Fix the project on its current version
+   first.
+2. Pins the project to the target, installs it, and builds every cluster.
+   Pinning writes the exact version into `kix.toml` and moves the Kix
+   library in `flake.lock` as [`kix lib update`](/docs/reference/cli/lib/)
+   does. When the library input in `flake.nix` names the project's version
+   as a tag, such as `github:kix-run/kix/v0.9.1`, `?ref=refs/tags/v0.9.1`,
+   or `?ref=v0.9.1` on any host, Kix moves that tag too, but only when
+   exactly one Kix URL in `flake.nix` names it. When two or more do, such as
+   a second input that pins a version of Kix built into an image, Kix changes
+   nothing, names the lines, writes `edit-needed` into `kix-upgrade.json`,
+   and exits `3` before it installs the target. Change the library input's
+   URL yourself, leave the others, and run `kix upgrade` again. When Kix
+   cannot lock the new tag in `flake.lock`, or `flake.lock` still names
+   another tag afterwards, Kix puts `kix.toml`, `flake.nix`, and `flake.lock`
+   back as they were before that step, names the tag, and exits `2` or `3`.
+3. When a cluster does not build with the target, takes one minor release at
+   a time: the newest patch of each minor after the project's, ending with
+   the target. A project on a prerelease, such as `0.9.0-rc.1`, takes the
+   newest release of its own minor first. It stops at the first release a cluster does not build with,
+   prints the end of each error and that release's matching config changes,
+   keeps each cluster's full build output in a log file, leaves the project
+   pinned to that release, and exits `2`:
+
+   ```text
+   Building 6 clusters with Kix 0.12.1... failed (lt1)
+   Stepping one minor release at a time (0.11.2 -> 0.12.1):
+   Building 6 clusters with Kix 0.11.2... failed (1 of 6 failed: lt1)
+
+     Cluster lt1:
+       error: The option `packages.caddy.replicaCount` does not exist.
+       Full build log: ~/.cache/kix/upgrade/<project>/logs/0.11.2/lt1.log
+
+     Matching change in Kix 0.11.0:
+       [K0003] caddy: `replicaCount` was renamed to `replicas`.
+
+   Stopped at Kix 0.11.2 (step 1 of 2 toward 0.12.1).
+   kix.toml, flake.nix, and flake.lock are pinned to 0.11.2 so you can fix this step first.
+   Next: fix the error above, then run `kix upgrade` to continue to 0.12.1.
+   ```
+
+   Fix the errors against that
+   release, then run `kix upgrade` again. The next run reuses the builds from
+   step 1 and the package list made then, tries that release again, and
+   continues. So does a run after an interruption, since Kix writes
+   `kix-upgrade.json` before it first pins the project. If the cached builds
+   from step 1 are missing, Kix stops with an error. Delete `kix-upgrade.json`
+   and run `kix upgrade` again; the comparison then starts from the version
+   the project is pinned to now.
+4. Compares the first build with the last, cluster by cluster, and prints the
+   objects added, removed, and changed. Clusters that changed the same way
+   are printed together, with `+`, `~`, and `-` for added, changed, and
+   removed objects. A change is marked `[review: <Kind>]` when the object is a
+   Secret, Role, ClusterRole, RoleBinding, ClusterRoleBinding,
+   NetworkPolicy, CiliumNetworkPolicy, CiliumClusterwideNetworkPolicy, or
+   Certificate, or an Ingress or Gateway whose TLS settings changed.
+5. Searches the files git tracks in the project for each command or flag a
+   release note says was removed or changed, and prints `file:line` for each.
+   It skips `flake.lock`, `CHANGELOG.md`, `changes/`, and files over 1 MB.
+6. Removes each version of Kix it installed only to build with, keeping the
+   version the project used and the version it is now pinned to. It says so
+   only with `-v`.
+7. Writes `kix-upgrade.json` in the project, and ends with what to review
+   before you deploy:
+
+   ```text
+   Upgraded to Kix 0.12.1, but review before deploying:
+     1. 3 Secrets changed in cluster xdi1 (Secret/harbor-core@registry,
+        Secret/harbor-exporter@registry, Secret/harbor-jobservice@registry).
+     2. 5 objects changed in clusters lt1, xdi1; read the changes above, or run
+        `kix diff <cluster>`, before you deploy.
+     3. [K0007] moves stored data in harbor. Once you are ready for the
+        migration, unblock deploy with:
+          kix upgrade --ack K0007
+   ```
+
+   Any object that changed in any cluster is on this list, and the run
+   exits `3`. Only when no object changed and nothing needs a review does it
+   end with `Upgraded to Kix 0.12.1. Ready to deploy.` and exit `0`.
+
+When a release between the project's version and the target has a change
+that every cluster must deploy before it upgrades further, the upgrade ends
+at the newest patch of that release's minor, and exits `3`:
+
+```text
+Upgraded to Kix 0.11.2, but review before deploying:
+  1. Kix 0.11.0 must be deployed to all clusters before continuing to 0.12.1
+     (`kix deploy` on 0.12.1 will refuse any cluster still on 0.10.0).
+     kix.toml, flake.nix, and flake.lock are pinned to 0.11.2.
+Next: commit this 0.11.2 step and deploy every cluster with `kix deploy <cluster>`, then run `kix upgrade` to continue to 0.12.1.
+```
+
+[`kix deploy`](/docs/reference/cli/deploy-apply/#required-stops) refuses a
+cluster that would skip the release.
+
+## Changes to stored data
+
+A change that moves or reinterprets stored data with no error goes into
+`kix-upgrade.json`. Until someone acknowledges it, `kix deploy` refuses to
+run, prints the note, and names the command:
+
+```text
+Deploy blocked: upgrade to Kix 0.12.1 includes an unacknowledged data migration.
+No clusters were contacted.
+
+  [K0007] (0.12.0, moves stored data):
+    Registry blob metadata moved to v2 layout; existing PVCs are migrated in
+    place on first start.
+
+Next: once you are ready for this migration, run:
+  kix upgrade --ack K0007
+Then run `kix deploy` again.
+```
+
+`kix upgrade --ack K0007` records the acknowledgement in
+`kix-upgrade.json`:
+
+```text
+Acknowledged K0007 in kix-upgrade.json. You can now run `kix deploy`.
+```
+
+`kix deploy --dry-run` and `kix plan` are not blocked.
+Another `kix upgrade` also refuses until each change is acknowledged.
+
+This check reads `kix-upgrade.json`, so it protects only a project that was
+upgraded with `kix upgrade` and kept the file. A project whose pins were
+moved by hand gets no refusal. Commit `kix-upgrade.json` with the upgrade.
+
+## `kix-upgrade.json`
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | `kix.run/upgrade/v1` |
+| `from`, `to` | The version the upgrade started from, and the version it moved to. |
+| `status` | `done`, `fix-needed` (a build failed, or the run stopped part of the way), `edit-needed` (a person must edit `flake.nix`), `needs-person`, or `required-stop`. |
+| `steps` | Each version the project was built with: `version`, `result` (`ok`, `failed`, or `started` for a step that stopped before it built), and `failed`, the clusters that did not build. |
+| `records` | The ids (or names, for a note without an id) of the release notes that apply, by kind. |
+| `dataChanges` | The changes to stored data: `reference`, `release`, and `body`. |
+| `acknowledged` | The data changes someone acknowledged with `--ack`. |
+| `sensitiveChanges` | How many changed objects are sensitive. |
+| `cliHits` | Each project line that uses a changed command or flag: `text`, `file`, `line`. |
+| `before` | The directory of the builds made with the version the upgrade started from. |
+| `packagesInUse` | The instances the project's clusters install, as the version the upgrade started from listed them. Absent when Kix could not list them. |
+
+Programs that read the file must skip fields they do not know.
+
+## Environment
+
+| Variable | Effect |
+| --- | --- |
+| `KIX_RELEASE_SOURCE` | A site laid out like kix.run to fetch releases from, such as an internal mirror. See [`kix self`](/docs/reference/cli/self/#environment). |
+| `XDG_CACHE_HOME` | The builds go under `$XDG_CACHE_HOME/kix/upgrade/` in place of `~/.cache/kix/upgrade/`. |
+
+## Exit status
+
+- `0` when the project builds with the target, no object changed in any cluster, and nothing needs a person, and with `--preview` or `--ack`.
+- `1` when the release index or a release's notes cannot be fetched or verified, a version cannot be installed, or the project cannot be pinned.
+- `2` when a cluster does not build, with the version the project used or with a release the upgrade tried.
+- `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first.

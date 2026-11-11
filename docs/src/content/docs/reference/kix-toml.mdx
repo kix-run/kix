@@ -30,7 +30,7 @@ The file and both keys are optional. An absent `kix.toml` or an empty `kix.toml`
 builder = "kix"
 ```
 
-`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `kix` and `builder`. Unknown keys, unknown builder names, a `kix` value that is not a version, and TOML syntax errors stop the command before evaluation starts.
+`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `kix`, `builder`, and the [`[upgrade]` table](#the-upgrade-table). Unknown keys, unknown builder names, a `kix` value that is not a version, and TOML syntax errors stop the command before evaluation starts.
 
 ## The `kix` setting
 
@@ -101,6 +101,19 @@ Even when `builder = "nix"`, Kix still runs `kubectl`, `sops`, and any direct CL
 ```text
 <path>/kix.toml sets builder = "remote", but remote builders are not supported yet. Set builder = "kix", or remove the setting
 ```
+
+## The `[upgrade]` table
+
+The `[upgrade]` table sets how [`kix upgrade`](/docs/reference/cli/upgrade/) picks the release it moves the project to:
+
+```toml
+[upgrade]
+min-age = "7d"
+```
+
+| Key | Value | Effect |
+| --- | --- | --- |
+| `min-age` | A number of days, such as `"7d"` | `kix upgrade` picks only releases at least this old, by their release date. |
 
 ## Tracking `kix.toml` in Git
 

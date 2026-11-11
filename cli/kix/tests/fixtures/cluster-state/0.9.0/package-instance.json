@@ -1,0 +1,29 @@
+{
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+    "annotations": {
+      "kix.run/activations": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
+      "kix.run/depends-on": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb,requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
+      "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
+      "kix.run/package": "fixtures",
+      "kix.run/package-namespace": "drift-fixtures",
+      "kix.run/root": "fixtures"
+    },
+    "creationTimestamp": "2026-11-03T16:02:20Z",
+    "generation": 1,
+    "labels": {
+      "app.kubernetes.io/instance": "fixtures",
+      "app.kubernetes.io/managed-by": "kix"
+    },
+    "name": "fixtures",
+    "namespace": "drift-fixtures",
+    "resourceVersion": "2001",
+    "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000e5"
+  },
+  "spec": {
+    "instanceName": "fixtures",
+    "namespaceName": "drift-fixtures",
+    "version": "1.0.0"
+  }
+}

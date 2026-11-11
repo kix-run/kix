@@ -27,6 +27,7 @@ pub mod rollback;
 pub mod self_cmd;
 pub mod snapshot;
 pub mod status;
+pub mod upgrade;
 pub mod workload;
 
 use std::path::PathBuf;
@@ -230,6 +231,15 @@ pub(crate) fn select_builder(global: &GlobalArgs) -> miette::Result<()> {
         .map_err(|e| miette::miette!("{e}"))?;
     kix::runtime::select_builder(config.builder, config.builder_source)
         .map_err(|e| miette::miette!("{e}"))?;
+    Ok(())
+}
+
+/// Choose the Nix runner for the project in `dir`, as [`select_builder`]
+/// does for `--flake`.
+pub(crate) fn select_builder_for(dir: &std::path::Path) -> Result<(), String> {
+    let config = kix::project::ProjectConfig::load(Some(dir)).map_err(|e| e.to_string())?;
+    kix::runtime::select_builder(config.builder, config.builder_source)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
