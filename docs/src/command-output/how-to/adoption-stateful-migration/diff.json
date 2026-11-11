@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix diff how-to-stateful-migration --from stateful-before",
-      "stdout": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\n- PersistentVolumeClaim/media-v1@data\n+ PersistentVolumeClaim/media-v2@data\nData migration is not automated: Kix does not copy data, and PersistentVolumeClaim/media-v2@data sees only data already present in its storage.\n",
+      "stdout": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\nStateful workload replacements (1):\ndata/volume (size changed: 5Gi -> 10Gi):\n- PersistentVolumeClaim/media-v1@data\n+ PersistentVolumeClaim/media-v2@data\nData migration is not automated: Kix does not copy data, and PersistentVolumeClaim/media-v2@data sees only data already present in its storage.\n`kix deploy` requires `--accept-migrations`.\n",
       "stderr": "",
-      "stdoutDrift": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\nData migration is not automated: Kix does not copy data, and PersistentVolumeClaim/media-v2@data sees only data already present in its storage.\n",
+      "stdoutDrift": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\nData migration is not automated: Kix does not copy data, and PersistentVolumeClaim/media-v2@data sees only data already present in its storage.\nStateful workload replacements (1):\n`kix deploy` requires `--accept-migrations`.\ndata/volume (size changed: 5Gi -> 10Gi):\n",
       "stderrDrift": "",
       "exitCode": 2
     }

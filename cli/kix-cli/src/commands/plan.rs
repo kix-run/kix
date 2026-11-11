@@ -750,8 +750,8 @@ fn print_migrations(doc: &Plan, accepted: bool) {
     if pairs.is_empty() {
         return;
     }
-    print!("{}", plan::migrations::plan(&pairs, accepted));
     println!();
+    print!("{}", plan::migrations::plan(&pairs, accepted));
 }
 
 /// Print the human-readable plan summary and details.

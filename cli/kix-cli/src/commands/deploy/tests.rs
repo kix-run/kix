@@ -449,6 +449,11 @@ mod run_end_tests {
             "{text}"
         );
         assert!(!text.contains("rollback"), "{text}");
+        assert!(text.contains(", 4 not started"), "{text}");
+        assert!(
+            text.contains("1 failed (during apply or after being applied), and 4 were never sent to the cluster."),
+            "{text}"
+        );
         let first = super::observer::closing(&counts, &closing(Previous::FirstDeploy, None));
         assert!(first.contains("no Active deployment record yet"), "{first}");
         let stopped =

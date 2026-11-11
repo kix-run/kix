@@ -333,6 +333,12 @@ pub(super) fn render_prune_start(
 /// then the objects that did not finish when `not_finished` is set, then the
 /// pruned ones when any were.
 pub(crate) fn counts(r: &DeployResult, not_finished: bool) -> String {
+    counts_labelled(r, not_finished.then_some("not finished"))
+}
+
+/// Format the counts as [`counts`] does, naming the held-back objects with
+/// `held_back` when it is set.
+fn counts_labelled(r: &DeployResult, held_back: Option<&str>) -> String {
     let failed_str = r.failed.to_string();
     let mut text = format!(
         "{} created, {} configured, {} unchanged, {} failed",
@@ -345,9 +351,9 @@ pub(crate) fn counts(r: &DeployResult, not_finished: bool) -> String {
             output::dim(&failed_str)
         },
     );
-    if not_finished {
+    if let Some(label) = held_back {
         text.push_str(&format!(
-            ", {} not finished",
+            ", {} {label}",
             output::dim(&r.cancelled.to_string())
         ));
     }
@@ -511,14 +517,18 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
             );
         }
         None => {
-            let _ = writeln!(out, "Deploy of '{cluster}' failed: {}", counts(r, true));
+            let _ = writeln!(
+                out,
+                "Deploy of '{cluster}' failed: {}",
+                counts_labelled(r, Some("not started"))
+            );
             failures(&mut out);
             let _ = writeln!(out);
             let _ = writeln!(out, "  Cluster state:");
             let _ = writeln!(
                 out,
-                "    - {} created and {} configured object(s) from this run were applied to the cluster; {} object(s) did not finish.",
-                r.created, r.configured, r.cancelled
+                "    - {} created and {} configured object(s) from this run finished and are ready on the cluster, {} failed (during apply or after being applied), and {} were never sent to the cluster.",
+                r.created, r.configured, r.failed, r.cancelled
             );
             if let Some(line) = record_line {
                 let _ = writeln!(out, "    - {line}");
