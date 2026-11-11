@@ -374,19 +374,26 @@ pub enum Command {
 
     /// Move this project to a newer version of Kix
     ///
-    /// Builds every cluster with the version of Kix the project uses now,
-    /// then pins the project to the newest release (or `--to`) and builds
-    /// every cluster again. When that build fails, it moves one minor release
-    /// at a time and stops at the first release the project does not build
-    /// with, so its errors and change records explain what to edit. Then it
-    /// compares the manifests before and after, lists the change records that
-    /// apply to the project, and writes kix-upgrade.json.
+    /// Builds every cluster with the current Kix, pins the project to the
+    /// target (the newest release or `--to`, delayed by `[upgrade] min-age` in
+    /// kix.toml), and builds again. When that fails, it goes one minor release
+    /// at a time and stops at the first release that does not build, leaving
+    /// the project pinned there; fix the build and run `kix upgrade` again to
+    /// continue. Compares the manifests before and after, lists every breaking,
+    /// security, and upgrade note in the range (marking notes whose package
+    /// name matches an instance the clusters use with `*` as likely matches,
+    /// since Kix cannot tell for certain which notes affect the project), and
+    /// writes kix-upgrade.json.
     ///
-    /// Exits 0 when the upgrade is done and nothing needs a person, 2 when a
-    /// build fails, and 3 when a person should read what changed: a change
-    /// no record explains, a change to access, network policy, or
-    /// certificates, a change that works differently with no error, or a
-    /// release every cluster must deploy before upgrading further.
+    /// Exits 0 when the project builds on the target, no object changed in any
+    /// cluster, and nothing needs review; 1 when Kix refused or could not start
+    /// (bad input, network error, missing baseline builds, or unacknowledged
+    /// data migrations from the last upgrade); 2 when a build failed (with the
+    /// current Kix or at a step) or the library could not be locked at the new
+    /// tag; and 3 when a person must review: any object changed in any cluster,
+    /// a breaking change that shows no build error, a release every cluster
+    /// must deploy before upgrading further, or a flake.nix edit you must make
+    /// by hand.
     Upgrade(UpgradeArgs),
 
     /// Install, list, and remove versions of Kix
@@ -449,18 +456,18 @@ impl Command {
 
 #[derive(clap::Args)]
 pub struct UpgradeArgs {
-    /// The version to move to: an exact version such as 0.10.2, a minor
-    /// such as 0.10 (its newest patch), or `latest`
+    /// The version to move to: an exact version such as 0.12.1, a minor such as
+    /// 0.12 (its newest patch), or `latest`
     #[arg(long, value_name = "VERSION")]
     pub to: Option<String>,
 
-    /// Print what the upgrade would do and the change records that apply,
-    /// and change nothing
+    /// Print the target version and the release notes in the range with likely
+    /// matches marked, and change nothing
     #[arg(long)]
     pub preview: bool,
 
-    /// Acknowledge a change to stored data by its id or name, so that
-    /// `kix deploy` goes ahead. Does nothing else
+    /// Acknowledge a data migration by its id or name so `kix deploy` goes ahead, and
+    /// do nothing else
     #[arg(long, value_name = "ID", num_args = 1.., conflicts_with_all = ["to", "preview"])]
     pub ack: Vec<String>,
 }
