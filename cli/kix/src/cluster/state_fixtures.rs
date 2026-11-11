@@ -9,7 +9,8 @@
 //!
 //! A Kix release must read the state written by the previous minor release,
 //! and by any release from the last six months. The release skill adds a
-//! folder for each minor release.
+//! folder only for a release that changes cluster state, so a folder stands
+//! for every release up to the next folder.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,10 +23,6 @@ use crate::cluster::drift::{self, DriftVerdict};
 use crate::cluster::tenancy::Tenancy;
 use crate::manifest::keys;
 use crate::manifest::lifecycle;
-
-/// The first minor release with a fixture folder. Releases up to this one
-/// have no previous minor to require.
-const FIRST_FIXTURES: (u64, u64) = (0, 9);
 
 /// How long a release's state must stay readable, in days (six months).
 const READABLE_FOR_DAYS: i64 = 183;
@@ -248,13 +245,16 @@ fn cluster_state_from_earlier_releases_reads_back() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
-/// There is a fixture folder for the minor release before this one. A folder
-/// older than both the previous minor and six months is printed as safe to
-/// delete.
+/// Print each folder that no release Kix must still read stands for.
+///
+/// A folder stands for its release and every later one up to the next
+/// folder. It is safe to delete when the next folder is no newer than the
+/// previous minor release and is more than six months old. No folder is
+/// required for any particular release.
 #[test]
 // The note about folders that are safe to delete goes to the test output.
 #[allow(clippy::print_stdout)]
-fn cluster_state_fixtures_cover_the_previous_minor() {
+fn cluster_state_folders_safe_to_delete() {
     let (major, minor, _) = parse_version(env!("CARGO_PKG_VERSION"));
     let folders = folders();
     let previous = if minor > 0 {
@@ -266,31 +266,15 @@ fn cluster_state_fixtures_cover_the_previous_minor() {
             .max()
             .unwrap_or((0, 0))
     };
-
-    if (major, minor) > FIRST_FIXTURES {
-        assert!(
-            folders
-                .iter()
-                .any(|f| (f.version.0, f.version.1) == previous),
-            "{} has no folder for Kix {}.{}. The release of {}.{} should have added one \
-             (.claude/skills/release/SKILL.md). Add the objects Kix {}.{} writes, with a \
-             written.toml.",
-            fixtures_root().display(),
-            previous.0,
-            previous.1,
-            previous.0,
-            previous.1,
-            previous.0,
-            previous.1,
-        );
-    }
-
     let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::days(READABLE_FOR_DAYS);
-    for f in &folders {
-        if (f.version.0, f.version.1) < previous && f.date < cutoff {
+    for pair in folders.windows(2) {
+        let (old, next) = (&pair[0], &pair[1]);
+        if (next.version.0, next.version.1) <= previous && next.date < cutoff {
             println!(
-                "{} is older than Kix {}.{} and than six months. It is safe to delete.",
-                f.path.display(),
+                "{} is safe to delete. {} and the folders after it cover Kix {}.{} and \
+                 every release from the last six months.",
+                old.path.display(),
+                next.path.display(),
                 previous.0,
                 previous.1,
             );

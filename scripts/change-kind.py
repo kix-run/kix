@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Check that a pull request's change records match what it changes for users.
 
-    scripts/change-kind.py --base <dir> --head <dir> [--kix <kix>] [--labels a,b]
-                           [--cluster <name> ...]
+    scripts/change-kind.py --base <dir> --head <dir> [--head-build <dir>]
+                           [--kix <kix>] [--labels a,b] [--cluster <name> ...]
 
 `--base` and `--head` are checkouts of the pull request's base and head
-commits. The script builds each fixture cluster at both with the head's
-`kix`, and compares the CLI surface files of the two checkouts.
+commits. The script reads the change records and the CLI surface files from
+them. It builds each fixture cluster at `--base` and at `--head-build`, with
+the head's `kix`. `--head-build` defaults to `--head`. The workflow passes a
+checkout of the head commit whose `clusters/` comes from the base, so the
+base's cluster definitions are built with the pull request's library. A pull
+request that removes an option and also fixes `clusters/` then still shows
+the removal as a failure.
 
 - A cluster that builds at the base and fails at the head needs a record of
   kind `error`, and the failure message must contain that record's id.
@@ -51,7 +56,7 @@ CLUSTERS = [
 ]
 
 REVIEWED_LABEL = "manifest-change-reviewed"
-HELP_SNAPSHOT = "cli/kix-cli/tests/snapshots/cli_surface_help.snap"
+SURFACE_SNAPSHOT = "cli/kix-cli/tests/snapshots/cli_surface.snap"
 SCHEMA_DIR = "cli/kix-cli/schema"
 MAX_LISTED = 20
 
@@ -210,21 +215,21 @@ def flatten(value, path: str = "") -> dict[str, object]:
 def surface_removals(base: pathlib.Path, head: pathlib.Path) -> list[str]:
     """Return the CLI surface the head removes or changes, compared with the base.
 
-    The help snapshot is compared line by line, ignoring order and spacing.
+    The surface snapshot is compared line by line, ignoring order and spacing.
     Each JSON schema is compared leaf by leaf, so a new field alone is no
     removal. A file the base does not have is skipped.
     """
     found: list[str] = []
-    base_help = base / HELP_SNAPSHOT
-    if base_help.is_file():
-        head_help = head / HELP_SNAPSHOT
+    base_surface = base / SURFACE_SNAPSHOT
+    if base_surface.is_file():
+        head_surface = head / SURFACE_SNAPSHOT
         after = (
-            normalized_lines(head_help.read_text())
-            if head_help.is_file()
+            normalized_lines(head_surface.read_text())
+            if head_surface.is_file()
             else collections.Counter()
         )
-        gone = normalized_lines(base_help.read_text()) - after
-        found += [f"{HELP_SNAPSHOT}: {line}" for line in sorted(gone)]
+        gone = normalized_lines(base_surface.read_text()) - after
+        found += [f"{SURFACE_SNAPSHOT}: {line}" for line in sorted(gone)]
     base_schemas = base / SCHEMA_DIR
     if base_schemas.is_dir():
         for path in sorted(base_schemas.glob("*.json")):
@@ -248,8 +253,8 @@ def surface_problems(removals: list[str], added: list[cr.Record]) -> list[str]:
     if not removals or any(r.cli for r in added):
         return []
     return [
-        "This pull request removes or changes part of the CLI surface (help text or JSON "
-        "schema). Add a change record whose `cli` field names each command or flag that "
+        "This pull request removes or changes part of the CLI surface (a command, a flag, "
+        "or a JSON schema field). Add a change record whose `cli` field names each command or flag that "
         'changed, such as `cli = ["--old-flag"]`.'
     ]
 
@@ -311,6 +316,11 @@ def main(argv: list[str] | None = None) -> int:
         "--head", type=pathlib.Path, required=True, help="checkout of the head commit"
     )
     parser.add_argument(
+        "--head-build",
+        type=pathlib.Path,
+        help="checkout to build the clusters from in place of --head",
+    )
+    parser.add_argument(
         "--kix",
         default=os.environ.get("KIX", "kix"),
         help="the kix to build with (default: $KIX or kix)",
@@ -339,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     for cluster in args.cluster or CLUSTERS:
         print(f"building {cluster} at the base and the head", file=sys.stderr)
         base = render(args.kix, args.base, cluster)
-        head = render(args.kix, args.head, cluster)
+        head = render(args.kix, args.head_build or args.head, cluster)
         outcomes.append(decide(cluster, base, head, added, labels))
 
     removals = surface_removals(args.base, args.head)

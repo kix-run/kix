@@ -169,13 +169,13 @@ class Surface(unittest.TestCase):
         self.base, self.head = root / "base", root / "head"
         for side in (self.base, self.head):
             (side / CK.SCHEMA_DIR).mkdir(parents=True)
-            (side / CK.HELP_SNAPSHOT).parent.mkdir(parents=True)
+            (side / CK.SURFACE_SNAPSHOT).parent.mkdir(parents=True)
 
     def tearDown(self):
         self._tmp.cleanup()
 
     def write(self, side: pathlib.Path, help_text: str, schema: dict) -> None:
-        (side / CK.HELP_SNAPSHOT).write_text(help_text)
+        (side / CK.SURFACE_SNAPSHOT).write_text(help_text)
         (side / CK.SCHEMA_DIR / "plan.schema.json").write_text(json.dumps(schema))
 
     def test_added_lines_and_fields_are_not_removals(self):
@@ -202,7 +202,7 @@ class Surface(unittest.TestCase):
         self.assertEqual(
             removals,
             [
-                f"{CK.HELP_SNAPSHOT}: --b",
+                f"{CK.SURFACE_SNAPSHOT}: --b",
                 f"{CK.SCHEMA_DIR}/plan.schema.json: changed /properties/a/type",
             ],
         )
@@ -212,7 +212,7 @@ class Surface(unittest.TestCase):
         )
 
     def test_a_base_without_the_snapshot_is_skipped(self):
-        (self.head / CK.HELP_SNAPSHOT).write_text("## kix\n")
+        (self.head / CK.SURFACE_SNAPSHOT).write_text("## kix\n")
         self.assertEqual(CK.surface_removals(self.base, self.head), [])
 
 
@@ -275,6 +275,42 @@ class Main(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("| `minimal` | changed (needs action) |", out.getvalue())
             self.assertEqual(summary_file.read_text(), out.getvalue())
+
+    def test_clusters_build_from_head_build_and_records_come_from_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            base, head, build = root / "base", root / "head", root / "build"
+            for side in (base, head, build):
+                (side / "changes").mkdir(parents=True)
+            (head / "changes" / "gone.md").write_text(
+                '+++\nkind = "error"\nid = "K0042"\n+++\nThe option is gone.\n'
+            )
+            renders = {
+                str(base): built(deployment()),
+                str(build): failed("error: option `x` was removed [K0042]"),
+            }
+            out = io.StringIO()
+            with (
+                mock.patch.object(
+                    CK, "render", lambda kix, checkout, cluster: renders[str(checkout)]
+                ),
+                mock.patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                code = CK.main(
+                    [
+                        "--base",
+                        str(base),
+                        "--head",
+                        str(head),
+                        "--head-build",
+                        str(build),
+                    ]
+                    + ["--cluster", "minimal"]
+                )
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertIn("| `minimal` | fails-at-head |", out.getvalue())
 
 
 if __name__ == "__main__":
