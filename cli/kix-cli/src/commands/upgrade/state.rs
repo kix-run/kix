@@ -25,6 +25,9 @@ pub enum Status {
     NeedsPerson,
     /// The upgrade stopped at a release clusters must deploy first.
     RequiredStop,
+    /// Kix built the project as it was, and a person must edit `flake.nix`
+    /// before the upgrade can go on.
+    EditNeeded,
 }
 
 /// One version the upgrade built the project with.

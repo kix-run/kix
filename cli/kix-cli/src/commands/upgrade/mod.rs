@@ -152,9 +152,15 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let applying = plan::applying(&records, &from, &goal, in_use.as_ref());
 
     let before = run.work.join("before");
-    let reuse = resume
+    // A person was asked to edit flake.nix, and the project is still on
+    // the version it was built with then.
+    let edit_pending = previous
         .as_ref()
-        .is_some_and(|s| s.before == before && before.is_dir());
+        .is_some_and(|s| s.status == Status::EditNeeded && s.from == from.release());
+    let reuse = (edit_pending || resume.is_some())
+        && previous
+            .as_ref()
+            .is_some_and(|s| s.before == before && before.is_dir());
     if !reuse {
         println!(
             "Building every cluster with Kix {}, the version this project uses now.",
@@ -168,6 +174,32 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             );
             return exit(EXIT_BUILD_FAILED);
         }
+    }
+
+    // Ask for the flake.nix edit only now. Once flake.nix names the new
+    // library, the version the project uses can no longer build it, so the
+    // build above has to come first.
+    if resume.is_none()
+        && let Some(message) = pin::needs_hand_edit(&dir, &from, &goal)
+    {
+        UpgradeState {
+            schema: state::SCHEMA.into(),
+            from: from.release(),
+            to: goal.release(),
+            status: Status::EditNeeded,
+            steps: Vec::new(),
+            records: by_kind(&applying),
+            data_changes: data_changes(&applying),
+            acknowledged: previous.map(|p| p.acknowledged).unwrap_or_default(),
+            unexplained_changes: 0,
+            sensitive_changes: 0,
+            cli_hits: Vec::new(),
+            before: before.clone(),
+        }
+        .write(&dir)
+        .map_err(|e| miette!("{e}"))?;
+        println!("{message}");
+        return exit(EXIT_NEEDS_PERSON);
     }
 
     let mut done: Vec<Step> = Vec::new();
@@ -415,21 +447,26 @@ fn fetch_records(
     target: &Version,
 ) -> Result<Vec<ReleaseRecords>> {
     let mut out = Vec::new();
+    let mut without: Vec<String> = Vec::new();
     for r in releases
         .iter()
         .filter(|r| &r.version > from && &r.version <= target)
     {
         let document = release::changes(source, r).map_err(|e| miette!("{e}"))?;
         if document.is_none() {
-            println!(
-                "Kix {} has no change records. Read its CHANGELOG section.",
-                r.version.release()
-            );
+            without.push(r.version.release());
         }
         out.push(ReleaseRecords {
             version: r.version.clone(),
             document,
         });
+    }
+    if !without.is_empty() {
+        without.sort_by_key(|v| v.parse::<Version>().ok());
+        println!(
+            "These releases have no change records: {}. Read their sections of CHANGELOG.md.",
+            without.join(", ")
+        );
     }
     Ok(out)
 }
@@ -824,8 +861,13 @@ fn preview(
         .count();
     let list: Vec<String> = steps.iter().map(Version::release).collect();
     println!(
-        "If the project does not build with the newest version at once, Kix takes these steps: {}. That installs {to_install} versions of Kix.",
-        list.join(", ")
+        "If the project does not build with the newest version at once, Kix takes these steps: {}. {}",
+        list.join(", "),
+        match to_install {
+            0 => "Every one of those versions is installed.".to_string(),
+            1 => "That installs 1 version of Kix.".to_string(),
+            n => format!("That installs {n} versions of Kix."),
+        }
     );
     if !knew_packages {
         println!(

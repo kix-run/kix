@@ -342,7 +342,9 @@ fn preview_lists_the_steps_and_records_and_changes_nothing() {
         "{out}"
     );
     assert!(
-        out.contains("Kix 9.2.1 has no change records. Read its CHANGELOG section."),
+        out.contains(
+            "These releases have no change records: 9.2.1. Read their sections of CHANGELOG.md."
+        ),
         "{out}"
     );
     // Kix 9.1.0 is not installed, so every record counts.

@@ -216,6 +216,44 @@ impl Saved {
     }
 }
 
+/// Work out the change to `flake.nix` that moves the project from `current`
+/// to `release`.
+///
+/// Kix touches `flake.nix` only when the lock says the library is pinned to
+/// the tag the project uses now. An unpinned library moves in the lock
+/// alone.
+fn flake_edit(
+    flake: &Saved,
+    lock: &Saved,
+    current: &Version,
+    release: &str,
+) -> Result<Retag, String> {
+    let (Some(lock_text), Some(flake_text)) = (&lock.1, &flake.1) else {
+        return Ok(Retag::NoTag);
+    };
+    let parsed: serde_json::Value = serde_json::from_str(lock_text)
+        .map_err(|e| format!("could not read {}: {e}", lock.0.display()))?;
+    let locked_tag = library_input(&parsed, release)
+        .ok()
+        .and_then(|(_, tag)| tag);
+    if locked_tag.is_some_and(|t| t == format!("v{}", current.release())) {
+        Ok(retag_flake(flake_text, &current.release(), release))
+    } else {
+        Ok(Retag::NoTag)
+    }
+}
+
+/// Return what a person must change in `flake.nix` before Kix can move the
+/// project from `current` to `version`, or `None` when Kix can do it.
+pub fn needs_hand_edit(dir: &Path, current: &Version, version: &Version) -> Option<String> {
+    let flake = Saved::take(dir.join("flake.nix")).ok()?;
+    let lock = Saved::take(dir.join("flake.lock")).ok()?;
+    match flake_edit(&flake, &lock, current, &version.release()) {
+        Ok(Retag::ByHand(message)) => Some(message),
+        _ => None,
+    }
+}
+
 /// Pin the project in `dir`, now pinned to `current`, to `version`. Return
 /// a note for each file Kix changed. When moving `flake.lock` fails, put
 /// `kix.toml`, `flake.nix`, and `flake.lock` back.
@@ -227,26 +265,12 @@ pub fn pin(dir: &Path, current: &Version, version: &Version) -> Result<Vec<Strin
     let lock = Saved::take(dir.join("flake.lock"))?;
 
     // Work out the flake.nix edit before writing anything.
-    let mut new_flake = None;
-    let mut hand_edited = false;
-    if let (Some(lock_text), Some(flake_text)) = (&lock.1, &flake.1) {
-        let parsed: serde_json::Value = serde_json::from_str(lock_text)
-            .map_err(|e| format!("could not read {}: {e}", lock.0.display()))?;
-        // Touch flake.nix only when the lock says the library is pinned to
-        // the tag the project uses now. An unpinned library moves in the
-        // lock alone.
-        let locked_tag = library_input(&parsed, &release)
-            .ok()
-            .and_then(|(_, tag)| tag);
-        if locked_tag.is_some_and(|t| t == format!("v{}", current.release())) {
-            match retag_flake(flake_text, &current.release(), &release) {
-                Retag::Moved(text) => new_flake = Some(text),
-                Retag::AlreadyMoved => hand_edited = true,
-                Retag::NoTag => {}
-                Retag::ByHand(message) => return Err(PinError::ByHand(message)),
-            }
-        }
-    }
+    let (new_flake, hand_edited) = match flake_edit(&flake, &lock, current, &release)? {
+        Retag::Moved(text) => (Some(text), false),
+        Retag::AlreadyMoved => (None, true),
+        Retag::NoTag => (None, false),
+        Retag::ByHand(message) => return Err(PinError::ByHand(message)),
+    };
 
     let old = toml.1.clone().unwrap_or_default();
     let new = set_kix(&old, &release);
