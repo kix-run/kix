@@ -267,11 +267,13 @@ pub async fn run(
         let after = ops.list_records(&from_group, ACTIVATION).await?;
         if let Some(held) = after.iter().find(|r| has_legacy_finalizer(r)) {
             return Err(format!(
-                "the kix operator is running and watching {from_group}: the finalizer on \
-                 activation {} came back after being cleared. Deleting the old CRDs while \
-                 it watches them would make it delete every resource in the activation.\n\
-                 Scale it to 0, then run this again. Nothing has been copied or deleted.",
-                name_of(held).unwrap_or("<unnamed>")
+                "domain migration stopped: the Kix operator is running on this cluster and still watching `{from_group}`\n  \
+                 Nothing was copied or deleted on the cluster.\n\n  \
+                 Why:\n    \
+                 Kix cleared the operator's mark on deployment record {name}, and the running operator added it back. Deleting the old `{from_group}` resource types while the operator watches them would cause the operator to delete every live workload in that deployment.\n\n  \
+                 Next:\n    \
+                 Scale the Kix operator Deployment on this cluster to 0 replicas, then run `kix migrate domain {cluster}` again.",
+                name = name_of(held).unwrap_or("<unnamed>")
             ));
         }
     }
@@ -367,12 +369,13 @@ pub async fn run(
     };
     if let Some(held) = before_delete.iter().find(|r| has_legacy_finalizer(r)) {
         return Err(format!(
-            "activation {} has a Kix finalizer again, so the kix operator started \
-             while this was running and is watching {from_group}. Deleting the old \
-             CRDs now would make it delete every resource in that activation.\n\
-             Scale it to 0, then run this again. Nothing has been deleted; the \
-             records already copied are skipped.",
-            name_of(held).unwrap_or("<unnamed>")
+            "domain migration stopped before deleting the old `{from_group}` resource types: the Kix operator is running and watching `{from_group}`\n  \
+             No `{from_group}` resource types or cluster workloads were deleted (the deployment records already copied were kept).\n\n  \
+             Why:\n    \
+             The Kix operator added its mark back to deployment record {name} while the migration was running. Deleting the old `{from_group}` resource types while the operator watches them would cause the operator to delete every live workload in that deployment.\n\n  \
+             Next:\n    \
+             Scale the Kix operator Deployment on this cluster to 0 replicas, then run `kix migrate domain {cluster}` again (records already copied will be skipped).",
+            name = name_of(held).unwrap_or("<unnamed>")
         ));
     }
 
@@ -820,7 +823,7 @@ mod tests {
             .unwrap()
             .replace((legacy.to_string(), finalizer));
         let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
-        assert!(err.contains("Scale it to 0"), "{err}");
+        assert!(err.contains("Scale the Kix operator Deployment"), "{err}");
         assert!(
             !fake
                 .calls()
@@ -848,7 +851,7 @@ mod tests {
             .unwrap()
             .replace((legacy.to_string(), format!("{legacy}/operator-gc")));
         let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
-        assert!(err.contains("Scale it to 0"), "{err}");
+        assert!(err.contains("Scale the Kix operator Deployment"), "{err}");
         assert!(
             !fake.calls().iter().any(|c| c.starts_with("delete_crd")),
             "no CRD may be deleted: {:?}",

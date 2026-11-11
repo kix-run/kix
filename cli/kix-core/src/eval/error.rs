@@ -20,21 +20,47 @@ pub enum KixEvalError {
     /// The flake has no `attr` output for this binary's system and provides
     /// nothing for any other system either.
     #[error(
-        "this flake defines no Kix outputs (no {attr}). Run kix in a directory whose flake.nix uses kix.lib.mkFlake, or pass --flake <path>"
+        "this flake defines no Kix clusters (no `{attr}` output in `flake.nix`)\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Why:\n    \
+         The `flake.nix` in the current directory (or at the path passed to `--flake`) does not export `{attr}`, which `kix.lib.mkFlake` creates.\n\n  \
+         Next (choose one):\n    \
+         - Change into the directory that holds your Kix project's `flake.nix` (or pass `--flake <path>`) and run the command again.\n    \
+         - If this directory is your Kix project, check that `flake.nix` creates its outputs with `kix.lib.mkFlake`."
     )]
     NoKixOutputs { attr: String },
 
     /// The cluster exists, but its Kix library is older than this binary
     /// and writes no `activationIndex`.
     #[error(
-        "cluster '{cluster}' uses a Kix library older than Kix {}. Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
-        crate::version::running().release(),
-        crate::version::running().release()
+        "cluster '{cluster}' uses a Kix library older than Kix {kix}\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Next (choose one):\n    \
+         - Run `kix lib update` to move the project to the {kix} library and commit `flake.lock`.\n    \
+         - {KEEP_LIBRARY}",
+        kix = crate::version::running().release()
     )]
     NoActivationIndex { cluster: String },
 
     #[error("could not read the built resources and their dependencies: {message}")]
     StoreGraphError { message: String },
+
+    /// A check that only a bug in Kix (or, with `library`, in the Kix
+    /// library) can fail. `detail` is for the maintainers.
+    #[error(
+        "internal error in Kix: {summary}\n  \
+         This is a bug in Kix{}. No project files or cluster resources were changed.\n\n  \
+         Detail:\n    \
+         {detail}\n\n  \
+         Next:\n    \
+         {REPORT_A_BUG}",
+        if *library { " or the Kix library" } else { "" }
+    )]
+    Internal {
+        summary: &'static str,
+        library: bool,
+        detail: String,
+    },
 
     #[error(transparent)]
     Nix(#[from] super::nix::NixCommandError),
@@ -66,6 +92,12 @@ pub enum KixEvalError {
     #[error("could not read the built resources and their dependencies: {0}")]
     NotJson(#[from] super::manifest_json::NotJson),
 }
+
+/// The choice, in a library mismatch, to keep the project's Kix library.
+pub(crate) const KEEP_LIBRARY: &str = "To keep this project on its current Kix library instead, set `kix = \"<major.minor>\"` in `kix.toml` (using the Kix library's minor version, such as `\"0.8\"`).";
+
+/// The next step after an error that reports a bug in Kix.
+pub const REPORT_A_BUG: &str = "Run your command again with `-v` to capture the full trace and report the output to the Kix maintainers.";
 
 impl KixEvalError {
     pub(crate) fn not_found(name: impl Into<String>) -> Self {

@@ -167,10 +167,8 @@ impl Refusal {
     pub(crate) fn of_hydration(err: &SecretError) -> Refusal {
         let message = match err {
             SecretError::HashMismatch { name, .. } => format!(
-                "content hash mismatch for secret '{name}': the SOPS file does not hold \
-                 the data the build expects. Check that you are using the intended SOPS \
-                 file. If the change is intentional, update the secret's hash in its Nix \
-                 definition and rebuild."
+                "decrypted content of secret '{name}' does not match the `hash` in its `mkSecret` declaration. {}",
+                super::secrets::hash_mismatch_next(name)
             ),
             _ => err.to_string(),
         };

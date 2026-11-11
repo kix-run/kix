@@ -212,6 +212,22 @@ pub(crate) fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     }
 }
 
+/// Return the error for a command that needs `cluster`'s current deployment
+/// record when this Kubernetes cluster has none.
+pub(crate) fn no_active_record(cluster: &str) -> miette::Report {
+    miette::miette!(
+        "cluster '{cluster}' has no active deployment record on this Kubernetes cluster\n  \
+         Nothing was changed on the cluster.\n\n  \
+         Why:\n    \
+         Either '{cluster}' has never completed a successful deploy on this Kubernetes cluster (so there is no active deployment to inspect or roll back to), or your kubeconfig points at a different cluster.\n\n  \
+         Next (choose one):\n    \
+         - If your kubeconfig points at the wrong cluster, pass `--context <name>` and run the command again.\n    \
+         - Inspect the deployment status of '{cluster}' on this cluster, or deploy '{cluster}':\n        \
+         kix status {cluster}\n        \
+         kix deploy {cluster}"
+    )
+}
+
 /// Return the local project directory `flake` names, or `None` for a remote
 /// flake reference.
 pub(crate) fn project_dir(flake: &str) -> Option<PathBuf> {
