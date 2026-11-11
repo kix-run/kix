@@ -1,4 +1,4 @@
-# Tests for the Postgres database contract (kix/lib/vocab/postgres-database.nix):
+# Tests for the Postgres database contract (kix/contracts/stable/postgresDatabase.nix):
 # `check` on the provider side, `assertions` on the consumer side, the
 # `deps.database.assertions` of every package that consumes it, and a
 # cluster whose database provider publishes a misshapen field.

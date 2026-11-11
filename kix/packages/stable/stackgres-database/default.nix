@@ -41,7 +41,7 @@
 #     DB_PASSWORD = "password";
 #   });
 #
-# Exposes the Postgres database contract (kix/lib/vocab/postgres-database.nix,
+# Exposes the Postgres database contract (kix/contracts/stable/postgresDatabase.nix,
 # `kix.contracts.postgresDatabase`), which root.out passes through `check`:
 #   out.host, out.port      the cluster's primary Service. They carry the
 #                           Job, so a consumer's workload waits for it and

@@ -3,7 +3,7 @@
 # an application depends on; it never depends on the server directly.
 #
 # Works against either implementation of the `clickhouse` contract
-# (../clickhouse/contract.nix), because everything it runs is replicated DDL
+# (`kix.contracts.clickhouse`), because everything it runs is replicated DDL
 # (`ON CLUSTER '{cluster}'`), which a bare single node with embedded Keeper
 # and an operator-run cluster both accept. The dep is held to the contract
 # at eval time, and to a minimum server version, since the SQL the Job runs

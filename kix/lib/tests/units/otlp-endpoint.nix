@@ -1,4 +1,4 @@
-# Tests for the OTLP endpoint contract (kix/lib/vocab/otlp-endpoint.nix):
+# Tests for the OTLP endpoint contract (kix/contracts/stable/otlpEndpoint.nix):
 # `check` on the provider side and `assertions` on the consumer side.
 
 {

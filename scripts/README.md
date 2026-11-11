@@ -36,7 +36,9 @@ from the public URLs in that directory's `sources.txt` (one per line, with
 optional CRD names to take from a bundle). `--check` fails on drift and runs
 in CI on every pull request that touches a package. A package whose upstream
 is not a public URL ships `crds/update.py` instead, exposing
-`crds() -> list[dict]` against `scripts/vendor_crds/`. The maintainer is the
+`crds() -> list[dict]` against `scripts/vendor_crds/`. An experimental
+package's CRDs live under `kix/packages/experimental/<pkg>/crds/`, and the
+script reads both folders. The maintainer is the
 `crd-vendoring` skill.
 
 ```bash

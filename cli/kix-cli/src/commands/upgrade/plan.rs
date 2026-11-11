@@ -129,9 +129,16 @@ pub fn required_stop(
 
 /// Return whether `record` names a package whose name is an instance in
 /// `in_use`. Records name packages and Kix sees only instance names, so a
-/// match is likely, never certain, and no match proves nothing.
+/// match is likely, never certain, and no match proves nothing. A record
+/// names an experimental package as `experimental/<name>`, and an instance
+/// of it is usually called `<name>`.
 pub fn likely(record: &Record, in_use: Option<&BTreeSet<String>>) -> bool {
-    in_use.is_some_and(|in_use| record.packages.iter().any(|p| in_use.contains(p)))
+    in_use.is_some_and(|in_use| {
+        record
+            .packages
+            .iter()
+            .any(|p| in_use.contains(p.strip_prefix("experimental/").unwrap_or(p)))
+    })
 }
 
 /// One record in the range of an upgrade, with the release that shipped it.
@@ -406,6 +413,11 @@ mod tests {
         assert!(likely(&echo, Some(&in_use)));
         assert!(!likely(&general, Some(&in_use)));
         assert!(!likely(&echo, None));
+        let experimental = record(
+            "experimental",
+            "+++\nkind = \"silent\"\npackages = [\"experimental/caddy\"]\n+++\nMoved.\n",
+        );
+        assert!(likely(&experimental, Some(&in_use)));
 
         let records = vec![
             doc("0.9.1", vec![general.clone()]),

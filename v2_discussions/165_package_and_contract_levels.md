@@ -1,6 +1,6 @@
 # 165: Stability levels for packages and contracts
 
-**Status:** Accepted (direction agreed 2026-11-11). Not implemented.
+**Status:** Accepted (direction agreed 2026-11-11). Implemented on branch `package-levels` for 0.10.0, except the items under "Not built". Archive when 0.10.0 ships.
 **Related:** `archive/164_versioning_at_agent_speed.md` (the version rules this amends), `archive/164a_versioning_review_record.md`, `166_contracts_as_first_class.md` (where contracts live and what shape they have), `140_catalogue_versions_and_upgrade_windows.md`
 
 ## Context
@@ -180,25 +180,43 @@ experiments show the output does not change.
 
 ### Step 2: the experimental level
 
-- Add `kix/packages/experimental/` and the merged set above.
-- Change records: add a way to say that a record is about an experimental
-  package or contract. `bump` in `scripts/change_records/__init__.py`
-  returns `minor` for any `error` or `silent` record today. It returns
-  `patch` when every breaking record is experimental.
-- `CHANGELOG.md`: add a heading for experimental breaks.
-- `scripts/change-kind.py`: a cluster that fails with the pull request's
-  library demands an `error` record today. Decide which clusters it builds
-  with experimental packages, and what it demands for them.
-- `kix upgrade`: `likely` in `cli/kix-cli/src/commands/upgrade/plan.rs`
-  matches a record's package names against instance names. A stable and an
-  experimental `immich` need to be told apart.
-- `kix lib update`: print the experimental breaks in the range for the
-  packages the project uses. Without this, a patch delivers them with no
-  notice.
-- Reword the patch rule in `CLAUDE.md`, the `CHANGELOG.md` header,
-  `changes/README.md`, and the release skill.
-- Update the `package-authoring`, `package-review`, and `kix-migration`
-  skills, and the docs pages for package anatomy and instances.
+Built:
+
+- `kix/packages/experimental/`, `kix/contracts/experimental/`, and the merged
+  sets, in `kix/lib/core/levels.nix`.
+- Change records name an experimental package as `experimental/<name>` and
+  an experimental contract as `kix.contracts.experimental.<name>`. A
+  breaking record that names only those gives a patch release (`bump`) and
+  is listed under "Breaking in experimental packages and contracts".
+- `kix upgrade` matches a record for `experimental/<name>` against an
+  instance called `<name>`.
+- `kix list packages` shows an experimental package as
+  `experimental.<name>`.
+- A unit test refuses a stable package that reads
+  `kix.contracts.experimental`.
+- The patch rule is reworded in `CLAUDE.md`, the `CHANGELOG.md` header, and
+  `changes/README.md`.
+
+Two things turned out differently from the plan:
+
+- **`packages.experimental` cannot be walked.** It holds an error for every
+  stable name that has no experimental package, which is how a graduated
+  name gets its message. Code that walks the experimental packages reads
+  `kix/packages/by-level.nix`. `packages.stable` holds only packages.
+- **`kix lib update` prints nothing new.** Kix builds a library only when
+  Kix's patch is at least the library's, so a project needs the newer Kix
+  before the newer library, and `kix upgrade` lists the change records in
+  the range when Kix moves. A project that upgrades Kix first and runs
+  `kix lib update` on a later day sees no list at that point. That gap is
+  listed under "Not built".
+
+Not built:
+
+- The check that builds every package skips experimental packages.
+- `scripts/change-kind.py` has no rule for clusters that use experimental
+  packages.
+- `kix lib update` does not list the experimental breaks between the old
+  and the new library.
 
 ## Deferred
 

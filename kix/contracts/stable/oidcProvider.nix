@@ -2,7 +2,7 @@
 # (`kix.contracts.oidcProvider`): an identity provider that can serve several
 # realms, such as keycloak. Applications do not take it directly. An
 # `oidc-client` instance pairs it with a realm and a client secret, and
-# answers the application's `oidc` dependency (`vocab/oidc.nix`).
+# answers the application's `oidc` dependency (`kix.contracts.oidc`).
 #
 # Both `issuerUrl` and `endpoints` take a realm name because a single Keycloak
 # instance can serve multiple realms. Providers with a single issuer ignore the

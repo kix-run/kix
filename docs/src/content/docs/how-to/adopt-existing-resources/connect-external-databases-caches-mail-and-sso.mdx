@@ -24,9 +24,9 @@ Applications that require PostgreSQL take a `database` dependency checked agains
 
 `port` must be a string (such as `"5432"`). If the consuming package requires specific PostgreSQL extensions (for example, `immich`), list the extensions installed on the external server in `out.extensions`.
 
-## Connect an external Redis server (`valkey`)
+## Connect an external Redis server (`redis`)
 
-Applications that use Redis (`harbor`, `immich`, and `n8n`) take a `valkey` dependency checked against [`kix.contracts.redis`](/docs/reference/dependency-contracts/#redis-kixcontractsredis). Declare a secret with key `password` and reference it from `out.credentials` on a namespaced `valkey` import:
+Applications that use Redis (`harbor`, `immich`, and `n8n`) take a `redis` dependency checked against [`kix.contracts.redis`](/docs/reference/dependency-contracts/#redis-kixcontractsredis). Declare a secret with key `password` and reference it from `out.credentials` on a namespaced `redis` import:
 
 <Snippet {...importedRedisCache} />
 
@@ -34,7 +34,7 @@ Omit `credentials` and `scope = "namespace"` when the Redis server takes no pass
 
 ## Connect an SMTP mail server (`smtp`)
 
-Applications that send email (`grafana`, `immich`, `keycloak`, `plausible`, and `vaultwarden`) take an optional `smtp` dependency checked against [`kix.contracts.smtp`](/docs/reference/dependency-contracts/#mail-kixcontractssmtp-and-kixoptionsmail).
+Applications that send email (`grafana`, `immich`, `keycloak`, `plausible`, and `vaultwarden`) take an optional `smtp` dependency checked against [`kix.contracts.smtp`](/docs/reference/dependency-contracts/#mail-kixcontractssmtp).
 
 ### Unauthenticated cluster-wide relay
 

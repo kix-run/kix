@@ -1,4 +1,4 @@
-# Tests for the Redis contract (kix/lib/vocab/redis.nix): the fields it
+# Tests for the Redis contract (kix/contracts/stable/redis.nix): the fields it
 # accepts, the refusal of TLS for a consumer that cannot use it, and the
 # `out` valkey publishes with and without Sentinel. The consumers are
 # tested in units/n8n.nix and units/immich.nix.

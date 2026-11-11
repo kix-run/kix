@@ -50,7 +50,9 @@ pub struct Record {
     /// The file name without `.md`, usually the branch name.
     pub name: String,
     pub kind: Kind,
-    /// Package names under `kix/packages/` the change touches.
+    /// The packages the change touches: a folder name under
+    /// `kix/packages/stable/`, or `experimental/<name>` for one under
+    /// `kix/packages/experimental/`.
     #[serde(default)]
     pub packages: Vec<String>,
     /// Library symbols, such as `kix.contracts.redis`.

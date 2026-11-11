@@ -58,6 +58,12 @@
 - [ ] Rethink package CR (PackageInstance) wiring and store path visibility — currently `mkCRDRef` creates standalone `crd-ref-*` store paths with no back-reference to the providing package's PackageInstance. Cross-package CRD dependencies don't show up in the Nix store DAG. Need to decide: should the providing package's store path be threaded through the CRD ref context, or should cross-package deps be tracked at a different level?
 
 ### Open design questions
+- [ ] **Stability levels, what doc 165 left open** (`v2_discussions/165_package_and_contract_levels.md`, 2026-11-11).
+  - Which packages and contracts start as experimental. None do yet.
+  - The check that builds every package skips `kix/packages/experimental/` (`housekeeping/2026-11-11-package-eval-skips-experimental-packages.md`).
+  - Whether `scripts/change-kind.py` should build clusters that use experimental packages, and what it demands when one fails.
+  - Narrowing what a reader receives to the fields of the contract it takes, so a stable package cannot read the extra fields an experimental provider publishes.
+  - Whether experimental packages and each contract get docs pages.
 - [ ] **Versioning, what doc 164 left open** (`v2_discussions/archive/164_versioning_at_agent_speed.md` § 4, 2026-11-11).
   - Signing-key rotation breaks stepping: `kix upgrade` cannot verify an older release once its key is dropped. Keep every past public key, or sign the index of past releases with the current key.
   - How long a refusal for a removed option or flag lives. One minor is the floor, and `kix upgrade` relies on it.

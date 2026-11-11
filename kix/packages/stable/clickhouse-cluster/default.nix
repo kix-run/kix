@@ -65,7 +65,7 @@
 # kube-prometheus rules. The operator's metrics exporter scrapes the same
 # servers under other names (chi_clickhouse_*); no rule reads those.
 #
-# Exposes the clickhouse contract (../clickhouse/contract.nix, which checks
+# Exposes the clickhouse contract (`kix.contracts.clickhouse`, which checks
 # it). `out.replicas` is the `replicas` option, and `out.replicaHosts` the
 # operator's per-replica Services, replica 0 first.
 #

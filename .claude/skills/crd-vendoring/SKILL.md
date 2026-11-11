@@ -14,7 +14,10 @@ The rules live in `v2_discussions/146_crd_vendoring_and_upgrades.md`. Read
   (required). Never a competing copy.
 - Every other operator package vendors the full upstream objects under
   `kix/packages/stable/<pkg>/crds/`, one `<metadata.name>.json` per CRD, from the
-  public URLs in `crds/sources.txt`.
+  public URLs in `crds/sources.txt`. An experimental package keeps them
+  under `kix/packages/experimental/<pkg>/crds/` and `rbac/`. The script reads
+  both folders, and a package name given to it selects the package of that
+  name at either level.
 - `scope.crd.fromKind` stubs are for kinds Kix invents. A stub for an
   upstream kind is a defect; the migration table in doc 146 §6 lists the
   ones that remain.

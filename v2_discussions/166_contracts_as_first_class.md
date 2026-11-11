@@ -1,6 +1,6 @@
 # 166: Contracts as a first-class part of Kix
 
-**Status:** Accepted (direction agreed 2026-11-11). Not implemented.
+**Status:** Accepted (direction agreed 2026-11-11). Implemented on branch `package-levels` for 0.10.0. Archive when 0.10.0 ships.
 **Related:** `165_package_and_contract_levels.md` (the stable and experimental levels), `148_clickhouse_packages_plan.md` (two packages behind one contract)
 
 ## Context
@@ -154,26 +154,24 @@ contract: `database`, `otlp`, `oidcProvider`, `oidc`, `gateway`, `smtp`, and
 Today the only users are Lithus and one personal cluster, so these are cheap
 now and get more expensive with each new user.
 
-## Work
+## What was built
 
-This is part of step 1 in doc 165, in the same pull request as the package
-move or the one after it.
-
-1. Create `kix/contracts/stable/` and move the seven library contracts and
-   the ClickHouse contract into it. Build `kix.contracts` from the folder
-   listing in `kix/lib/vocab/default.nix`.
-2. Change the ClickHouse packages and `kix/lib/tests/units/clickhouse.nix`
-   to read `kix.contracts.clickhouse`.
-3. Give every contract the shape above. Add a test that every file in the
-   folder returns exactly those keys.
-4. Update `kix/lib/architecture.md`, `changes/README.md` (its `library`
-   field gives `kix.contracts.redis` as the example), the
-   `package-authoring`, `package-review`, and `kix-migration` skills, and
-   the docs pages that name contracts.
-5. Write the change records for the rows above that show an error.
-
-`kix/contracts/experimental/` and `kix.contracts.experimental` arrive with
-step 2 of doc 165.
+- `kix/contracts/stable/` holds the eight contracts, and
+  `kix/contracts/default.nix` builds `kix.contracts` from the folder
+  listing.
+- `mkContract` takes `helpers` and `options` and returns the nine parts in
+  the table above. The loader sets `here`, so a contract file does not name
+  its own path. A field without `required` is required.
+- `credentialKeys` is gone. A contract's credential keys are
+  `fields.credentials.keys`.
+- `kix/contracts/moved.nix` refuses the old helper names, and
+  `kix/lib/vocab/default.nix` refuses `kix.options.oidc` and
+  `kix.options.mail`.
+- A package that renames a dependency sets `deps.<arg>.renamedFrom`, and the
+  error for a missing dependency then says what it was called before. The
+  Redis contract provides the value as `helpers.renamedFrom`.
+- The test `levels-contract-shape` checks that every contract file returns
+  the nine parts and no others.
 
 ## Open questions
 

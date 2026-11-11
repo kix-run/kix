@@ -1,4 +1,4 @@
-# Tests for the SMTP contract (kix/lib/vocab/smtp.nix), the `ref` an
+# Tests for the SMTP contract (kix/contracts/stable/smtp.nix), the `ref` an
 # import's `out` can carry (kix/lib/eval/import.nix), and their consumers:
 # vaultwarden and grafana mail, and vaultwarden on an outside PostgreSQL
 # such as RDS. Plausible's mail is tested in units/plausible.nix.

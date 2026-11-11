@@ -1,5 +1,5 @@
 # Tests for single sign-on through an OIDC provider: the contract
-# (kix/lib/vocab/oidc-provider.nix), keycloak's `out` under it, and the
+# (kix/contracts/stable/oidcProvider.nix), keycloak's `out` under it, and the
 # `oidc` option of grafana, harbor, and immich.
 #
 # The applications bind a kix.mkImport stand-in aliased `oidcProvider`,

@@ -3,7 +3,7 @@
 # One of two implementations behind the `clickhouse` alias. This one is a
 # StatefulSet Kix renders in full and it stays at one replica for good; a
 # replicated install is the operator packages' job. Both expose the `out`
-# that ./contract.nix defines and checks, so a consumer written against one
+# that `kix.contracts.clickhouse` defines and checks, so a consumer written against one
 # works against the other.
 #
 # The part of that promise that takes work is schema. Single-node and

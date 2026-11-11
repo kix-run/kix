@@ -1,4 +1,4 @@
-# Tests for the gateway contract (kix/lib/vocab/gateway.nix): `check` on
+# Tests for the gateway contract (kix/contracts/stable/gateway.nix): `check` on
 # the provider side, `claims` and `require` on the consumer side,
 # kix.expose against envoy-gateway, traefik, and kix.mkImport gateways, and
 # the traefik package's refusals and alert rules.

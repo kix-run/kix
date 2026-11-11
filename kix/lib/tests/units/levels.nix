@@ -106,6 +106,31 @@ in
       builtins.toJSON (lib.mapAttrs (name: c: builtins.attrNames (partsOf name c)) wrong)
     }";
 
+  # A stable package breaks only in a minor release, so it reads no
+  # experimental contract.
+  levels-stable-packages-read-stable-contracts =
+    let
+      nixFiles =
+        dir:
+        lib.concatLists (
+          lib.mapAttrsToList (
+            name: type:
+            if type == "directory" then
+              nixFiles (dir + "/${name}")
+            else
+              lib.optional (lib.hasSuffix ".nix" name) (dir + "/${name}")
+          ) (builtins.readDir dir)
+        );
+      readers = lib.filterAttrs (
+        name: _:
+        lib.any (file: lib.hasInfix "contracts.experimental" (builtins.readFile file)) (
+          nixFiles (../../../packages/stable + "/${name}")
+        )
+      ) packagesByLevel.stable;
+    in
+    readers == { }
+    || throw "stable packages that read kix.contracts.experimental: ${builtins.toJSON (builtins.attrNames readers)}. Move the package to kix/packages/experimental, or move the contract to kix/contracts/stable.";
+
   # A helper's old name is refused, and its new name works.
   levels-moved-helper-is-refused =
     (fails contracts.redis.usesSentinel && builtins.isFunction contracts.redis.helpers.usesSentinel)

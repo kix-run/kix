@@ -65,7 +65,7 @@ An instance alias list replaces `meta.defaultAliases` for that instance, and
 `aliases = [ ]` removes them. Include any package defaults you still need:
 
 ```nix title="cluster.nix"
-aliases = [ "cache" "valkey" ];
+aliases = [ "cache" "redis" ];
 ```
 
 Package roles remain available as aliases even when instance aliases replace

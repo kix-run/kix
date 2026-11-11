@@ -1,6 +1,6 @@
 # kixpkgs
 
-Kix is a Kubernetes compiler. Packages in `packages/` produce K8s resources; cluster definitions in `clusters/` wire them together.
+Kix is a Kubernetes compiler. Packages in `kix/packages/` produce K8s resources; contracts in `kix/contracts/` say what a package publishes for other packages to read; cluster definitions in `clusters/` wire them together.
 
 ## Key rule
 
@@ -108,7 +108,7 @@ consensus on dev-tool hero anatomy.
 
 ## Versioning and breaking changes
 
-Kix uses semantic versioning and is still below 1.0. A breaking change may go in a minor release (0.5 to 0.6), never in a patch release. Prefer a clean design to keeping old behavior. Do not count a change as breaking just to be safe.
+Kix uses semantic versioning and is still below 1.0. A breaking change to anything stable may go in a minor release (0.5 to 0.6), never in a patch release. An experimental package or contract may break in any release (see Stability levels below). Prefer a clean design to keeping old behavior. Do not count a change as breaking just to be safe.
 
 A change is breaking when a user who upgrades must change something, or gets a different result from the same definition. These are breaking:
 
@@ -138,6 +138,28 @@ Kix and the Kix library a project pins must have a matching version. Before 1.0,
 Every pull request that changes something a Kix user sees adds a change record: one file, `changes/<name>.md`, usually named after the branch. Its TOML header gives the `kind` (`error`, `silent`, `note`, `security`, `added`, `changed`, or `fixed`) and what the change touches, and its text is the line users read. `changes/README.md` has the format, and `scripts/change-records.py check` validates it. Do not edit the release sections of `CHANGELOG.md`: the release writes them from the records and moves the records to `changes/<version>/`. The Changelog workflow checks every record's format, and checks that pull requests that change `cli/` or `kix/` add one. Label a pull request `no-changelog` when nothing a user sees changes, such as tests, CI, or an internal refactor. To cut a release, use the `release` skill (`.claude/skills/release/SKILL.md`).
 
 The Change kind workflow (`scripts/change-kind.py`) builds a set of clusters twice: at the pull request's base, and with the pull request's library and the base's cluster definitions (`clusters/`). It then checks the records against what changed. Because the definitions come from the base, fixing `clusters/` in the same pull request does not hide a change. A cluster that builds at the base and fails with the pull request's library needs an `error` record, and the error message must contain its id. A cluster whose manifests change needs a record and the label `manifest-change-reviewed`. Only the maintainer adds that label, after reviewing the change. In the pull request description, say which kind you propose for the change and why. A pull request that removes or changes a line of `cli/kix-cli/tests/snapshots/cli_surface.snap` (commands, flags, and their values) or a field of `cli/kix-cli/schema/` needs a record with a `cli` field. The check has two known limits. It sees only the packages that the clusters it builds use, so a change to a package none of them uses passes with no finding. The label records that the maintainer looked, and nothing checks that the kind in the record is right.
+
+## Stability levels
+
+A package or a contract is stable or experimental. The folder it is in sets the level, and the name a user types shows it.
+
+| | Stable | Experimental |
+|---|---|---|
+| Package folder | `kix/packages/stable/<name>/` | `kix/packages/experimental/<name>/` |
+| In a cluster | `packages.<name>` (also `packages.stable.<name>`) | `packages.experimental.<name>` |
+| Contract file | `kix/contracts/stable/<name>.nix` | `kix/contracts/experimental/<name>.nix` |
+| In a package | `kix.contracts.<name>` (also `kix.contracts.stable.<name>`) | `kix.contracts.experimental.<name>` |
+| May break in | a minor release | any release |
+
+- A stable package reads only stable contracts. An experimental package may read both. The test `levels-stable-packages-read-stable-contracts` checks this.
+- An experimental package may publish a stable contract. A stable package can then take it as a dependency.
+- Graduation is a folder move, in any release, and it changes nothing that is deployed. After it, the experimental name fails with an error that gives the stable one. Do not add a forwarding name.
+- An experimental package may have the name of a stable package. It is a rework of that package and replaces it in a minor release.
+- No package or contract is named `stable` or `experimental`.
+- The library has no experimental level. A break to a library function needs a minor release.
+- A change record names an experimental package as `experimental/<name>` in `packages`, and an experimental contract as `kix.contracts.experimental.<name>` in `library`. A breaking record that names only those gives a patch release, and `CHANGELOG.md` lists it under `### Breaking in experimental packages and contracts`.
+
+`kix/lib/core/levels.nix` builds the sets. `kix/packages/default.nix` and `kix/contracts/default.nix` list the folders, so adding a package or a contract is adding a folder or a file. Every contract file returns the result of `mkContract` (`kix/lib/vocab/contract.nix`), with the contract's own functions under `helpers` and its option set under `options`.
 
 ## User-facing text: Argon copy pass
 

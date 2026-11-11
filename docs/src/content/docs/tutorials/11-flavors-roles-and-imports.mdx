@@ -93,7 +93,7 @@ Later, if you migrate `legacy-api` into a native Kix package, you only replace `
 
 ## Shared Dependency Contracts For Backing Services
 
-In the `legacy-api` example above, `client-package.nix` only read two fields (`fqdn` and `port`). Catalog applications such as `grafana`, `harbor`, `immich`, `metabase`, `n8n`, `plausible`, and `vaultwarden` go further: when they ask for a backing service (`database`, `valkey`, `smtp`, `oidc`, `gateway`, or `otlp`), they validate the provider's `out` attributes against a shared **dependency contract** in `kix.contracts.*`.
+In the `legacy-api` example above, `client-package.nix` only read two fields (`fqdn` and `port`). Catalog applications such as `grafana`, `harbor`, `immich`, `metabase`, `n8n`, `plausible`, and `vaultwarden` go further: when they ask for a backing service (`database`, `redis`, `smtp`, `oidc`, `gateway`, or `otlp`), they validate the provider's `out` attributes against a shared **dependency contract** in `kix.contracts.*`.
 
 Whether a `database` dependency is satisfied by an in-cluster operator (`cnpg-database` or `stackgres-database`) or by an external cloud database declared with `kix.mkImport`, Kix checks that `out` exposes `host`, `port`, `database`, and a `credentials` secret declaring the keys `username` and `password`:
 

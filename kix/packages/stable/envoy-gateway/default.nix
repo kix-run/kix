@@ -291,7 +291,7 @@ in
 
       root = {
         resource = self.gateway;
-        # The gateway contract (kix/lib/vocab/gateway.nix), read by
+        # The gateway contract (kix/contracts/stable/gateway.nix), read by
         # kix.expose.
         out = kix.contracts.gateway.check "envoy-gateway ${scope.namespaceName}/${name}" {
           gatewayRef = {

@@ -2,8 +2,9 @@
 
 What changed in each Kix release. Kix uses semantic versioning and is still
 below 1.0: a minor release (0.5 to 0.6) may break things, and a patch release
-(0.5.0 to 0.5.1) does not. Each breaking entry explains what to update when
-you upgrade.
+(0.5.0 to 0.5.1) breaks nothing stable. An experimental package or contract,
+which a cluster names as `packages.experimental.<name>`, may break in any
+release. Each breaking entry explains what to update when you upgrade.
 
 Each release groups changes under these headings:
 
@@ -11,6 +12,8 @@ Each release groups changes under these headings:
   change.
 - **Breaking (no error):** nothing fails, but behavior or output changes. Read
   these first.
+- **Breaking in experimental packages and contracts:** changes of either kind
+  above to something experimental. These can appear in a patch release.
 - **Upgrade notes:** nothing to change in your code, but worth knowing before
   you upgrade.
 - **Security:** a fix for a vulnerability, with a way to get it without

@@ -11,7 +11,7 @@ name: CRD vendoring check
 on:
   pull_request:
     paths:
-      - 'kix/packages/stable/**'
+      - 'kix/packages/**'
       - 'scripts/vendor-crds.py'
       - 'scripts/vendor_crds/**'
       - 'pyproject.toml'

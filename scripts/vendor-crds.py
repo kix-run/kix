@@ -43,6 +43,7 @@ from vendor_crds import (
 )
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
+# Packages sit one level down, in `stable/` or `experimental/`.
 PACKAGES = REPO / "kix" / "packages"
 
 
@@ -52,7 +53,7 @@ def discover(names: list[str]) -> list[pathlib.Path]:
     `sources.txt`."""
     dirs = sorted(
         d
-        for d in [*PACKAGES.glob("*/crds"), *PACKAGES.glob("*/rbac")]
+        for d in [*PACKAGES.glob("*/*/crds"), *PACKAGES.glob("*/*/rbac")]
         if (d / "sources.txt").exists()
         or (d.name == "crds" and (d / "update.py").exists())
     )
