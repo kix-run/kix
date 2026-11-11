@@ -21,6 +21,16 @@ Changes that are not released yet are in [`changes/`](changes/), one file per
 change. Each release moves its files to `changes/<version>/` and writes its
 section here from them.
 
+## 0.9.2 - 2026-11-11
+
+### Added
+
+- `kix upgrade` moves a project to a newer version of Kix. It builds every cluster with the project's version and the new one, moves one minor release at a time when the new one does not build, and lists the release notes in the range, marking those that likely affect the project, and the objects that changed. `--preview` changes nothing, and `[upgrade] min-age = "7d"` in `kix.toml` waits until a release is that old. `kix deploy` waits until each change to stored data is acknowledged with `kix upgrade --ack`, and refuses a cluster that would skip a release every cluster must deploy. `KIX_RELEASE_SOURCE` names a mirror of kix.run to fetch releases from.
+
+### Changed
+
+- `kix deploy`, `kix plan`, `kix rollback`, and `kix gc` now explain what happened when a run stops or fails, state whether anything on the cluster was modified, and give the next step to recover or continue.
+
 ## 0.9.1 - 2026-11-10
 
 ### Added
