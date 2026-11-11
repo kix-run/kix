@@ -58,9 +58,10 @@
 - [ ] Rethink package CR (PackageInstance) wiring and store path visibility — currently `mkCRDRef` creates standalone `crd-ref-*` store paths with no back-reference to the providing package's PackageInstance. Cross-package CRD dependencies don't show up in the Nix store DAG. Need to decide: should the providing package's store path be threaded through the CRD ref context, or should cross-package deps be tracked at a different level?
 
 ### Open design questions
-- [ ] **Stability levels, what doc 165 left open** (`v2_discussions/165_package_and_contract_levels.md`, 2026-11-11).
-  - Which packages and contracts start as experimental. None do yet.
-  - The check that builds every package skips `kix/packages/experimental/` (`housekeeping/2026-11-11-package-eval-skips-experimental-packages.md`).
+- [ ] **Stability levels, what docs 165 and 166 left open** (`v2_discussions/archive/165_package_and_contract_levels.md`, `archive/166_contracts_as_first_class.md`, 2026-11-11).
+  - Which experimental packages graduate as Lithus moves its clusters onto Kix packages. Graduation is a folder move, in any release.
+  - Remove the `[K0549]` refusals for the names that moved to experimental (`kix/packages/was-stable.nix`, the lists in `kix/contracts/default.nix` and `kix/modules/default.nix`, the marker checks in `kix/lib/eval/auto.nix`, `kix/lib/meta.nix`, and `kix/lib/modules.nix`) in 0.11.
+  - `kix lib update` does not list the experimental breaks between the old and the new library.
   - Whether `scripts/change-kind.py` should build clusters that use experimental packages, and what it demands when one fails.
   - Narrowing what a reader receives to the fields of the contract it takes, so a stable package cannot read the extra fields an experimental provider publishes.
   - Whether experimental packages and each contract get docs pages.

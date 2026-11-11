@@ -1,6 +1,6 @@
 # 166: Contracts as a first-class part of Kix
 
-**Status:** Accepted (direction agreed 2026-11-11). Implemented on branch `package-levels` for 0.10.0. Archive when 0.10.0 ships.
+**Status:** Implemented (branch `package-levels`, Kix 0.10.0, 2026-11-11). Open items are in `ROADMAP.md § Open design questions`.
 **Related:** `165_package_and_contract_levels.md` (the stable and experimental levels), `148_clickhouse_packages_plan.md` (two packages behind one contract)
 
 ## Context
@@ -54,8 +54,9 @@ kix/
   `postgres-database.nix` becomes `postgresDatabase.nix`.
 - No contract can be named `stable` or `experimental`.
 
-Which level each of the eight contracts starts at is decided with the
-package levels (doc 165, step 2). The tree above is an illustration.
+Five contracts are stable (`gateway`, `oidc`, `postgresDatabase`, `redis`,
+`smtp`) and three experimental (`clickhouse`, `oidcProvider`,
+`otlpEndpoint`). Doc 165, step 3, gives the reason.
 
 ### One shape for every contract
 
@@ -156,7 +157,7 @@ now and get more expensive with each new user.
 
 ## What was built
 
-- `kix/contracts/stable/` holds the eight contracts, and
+- `kix/contracts/stable/` and `kix/contracts/experimental/` hold the eight contracts, and
   `kix/contracts/default.nix` builds `kix.contracts` from the folder
   listing.
 - `mkContract` takes `helpers` and `options` and returns the nine parts in

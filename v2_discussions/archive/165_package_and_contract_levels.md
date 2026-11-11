@@ -1,6 +1,6 @@
 # 165: Stability levels for packages and contracts
 
-**Status:** Accepted (direction agreed 2026-11-11). Implemented on branch `package-levels` for 0.10.0, except the items under "Not built". Archive when 0.10.0 ships.
+**Status:** Implemented (branch `package-levels`, Kix 0.10.0, 2026-11-11). Open items are in `ROADMAP.md § Open design questions`.
 **Related:** `archive/164_versioning_at_agent_speed.md` (the version rules this amends), `archive/164a_versioning_review_record.md`, `166_contracts_as_first_class.md` (where contracts live and what shape they have), `140_catalogue_versions_and_upgrade_windows.md`
 
 ## Context
@@ -210,11 +210,60 @@ Two things turned out differently from the plan:
   `kix lib update` on a later day sees no list at that point. That gap is
   listed under "Not built".
 
+### Step 3: which packages are experimental
+
+Rule used for the first split: a package Lithus runs in more than one of its
+clusters (JA1, LI1, XDI1) is stable. A cluster deploys it, and the package
+has had to stay steady for that. Four small packages with no moving parts
+joined them: `secret`, `storage-classes`, `priority-class`, and
+`echo-server`. Every other package, 66 of 83, is experimental. New packages
+start experimental, and Lithus moving its clusters onto Kix packages is
+expected to graduate more.
+
+| Level | Packages |
+|---|---|
+| Stable (17) | `cnpg-cluster`, `cnpg-operator`, `echo-server`, `grafana`, `harbor`, `kube-state-metrics`, `node-exporter`, `persistent-volume-claim`, `priority-class`, `secret`, `secret-ref`, `storage-classes`, `valkey`, `victoria-metrics-agent`, `victoria-metrics-alert`, `victoria-metrics-cluster`, `victoria-metrics-operator` |
+| Experimental (66) | Everything else |
+
+Contracts: `gateway`, `oidc`, `postgresDatabase`, `redis`, and `smtp` are
+stable, because stable packages read them. `clickhouse`, `oidcProvider`, and
+`otlpEndpoint` are experimental, because only experimental packages read
+them.
+
+The monitoring module moved out of the library to
+`kix/modules/experimental/monitoring.nix`, reached as
+`kix.modules.experimental.monitoring`. It names experimental packages, and a
+module in the library would have tied the library to them. `kix/modules/`
+has the same two levels as packages and contracts.
+
+Choices made while building it:
+
+- **The old names fail with `[K0549]`.** `packages.<name>` for a package
+  that moved, `kix.contracts.oidcProvider`, `kix.contracts.otlpEndpoint`,
+  and `kix.modules.monitoring` give the new name. The list is static
+  (`kix/packages/was-stable.nix` and two short lists in the other loaders)
+  and goes in 0.11. A graduation needs no list: the merged set makes the
+  experimental name of every stable entry fail.
+- **A package's old name is a marker, not a throw.** `availablePackages =
+  packages` walks the top of the set, so a throw there would break every
+  cluster that uses it. The marker is skipped by the registry, refused by an
+  instance's `package` option, and used to name the package when a
+  dependency that the registry used to answer goes unanswered.
+- **`availablePackages = packages` offers stable packages only.** Kix never
+  adds an experimental package the user did not name. A cluster adds them
+  with `packages // { inherit (packages.experimental) cert-manager; }`.
+- **Shared files belong to the stable package.** `victoria-metrics-alert`
+  imported three Alertmanager files from `alertmanager`. They moved into
+  `victoria-metrics-alert`, and `alertmanager` imports them from there. The
+  test `levels-stable-packages-read-stable-contracts` also refuses a stable
+  package that names an `/experimental/` path.
+- **The check that builds every package covers both levels.**
+
+Every test cluster renders byte for byte as on `main`, except the two whose
+import instance was renamed from `valkey` to `redis`.
+
 Not built:
 
-- The check that builds every package skips experimental packages.
-- `scripts/change-kind.py` has no rule for clusters that use experimental
-  packages.
 - `kix lib update` does not list the experimental breaks between the old
   and the new library.
 
@@ -225,7 +274,6 @@ Not built:
   fields an experimental publisher offers. Until then, review catches a
   stable package that reads beyond its contract. Not checked: how much
   packages use from a dependency beyond its contract fields.
-- **Which packages start as experimental.** Decided when step 2 lands.
 
 ## Open questions
 
