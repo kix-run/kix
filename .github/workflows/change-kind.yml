@@ -1,0 +1,85 @@
+name: Change kind
+
+# Checks that a pull request's change records match what it changes for
+# users. scripts/change-kind.py builds a fixed set of clusters twice with
+# the head's Kix: at the base commit, and with the head's library and the
+# base's `clusters/`. The second build is a head checkout whose `clusters/`
+# comes from the base, so an old cluster definition meets the new library.
+# A pull request that removes an option and fixes `clusters/` in the same
+# change still shows the removal. The script also compares the committed CLI
+# surface (cli/kix-cli/tests/snapshots/cli_surface.snap and
+# cli/kix-cli/schema/). A cluster that newly fails needs an `error` record
+# whose id is in the message. Changed manifests need a record and the label
+# `manifest-change-reviewed`, which only the maintainer adds. A removed or
+# changed command or flag needs a record with a `cli` field. Rules:
+# CLAUDE.md § Versioning and breaking changes.
+#
+# `labeled` and `unlabeled` run the check again when the label changes.
+#
+# Same runner and Nix setup as bundle-checks.yml. Kix is built from the
+# head with cargo in the dev shell.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'cli/**'
+      - 'kix/**'
+      - 'clusters/**'
+      - 'scripts/change-kind.py'
+      - 'scripts/change_records/**'
+      - '.github/workflows/change-kind.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: change-kind-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  change-kind:
+    runs-on: [self-hosted, spindle-8c-16g]
+    timeout-minutes: 60
+    env:
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Script tests
+        run: python3 -m unittest -v change_records.test_change_kind
+        working-directory: scripts
+
+      # A worktree outside the checkout, so the head's flake does not copy it.
+      - name: Check out the base
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
+
+      # The head commit with the base's `clusters/`, exactly: files the head
+      # adds there are removed first. Nix reads the worktree's index, so the
+      # change needs no commit.
+      - name: Check out the head with the base's clusters
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/head-build" HEAD
+          git -C "$RUNNER_TEMP/head-build" rm -rq clusters
+          git -C "$RUNNER_TEMP/head-build" checkout "$BASE" -- clusters
+
+      - name: Change kind
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            (cd cli && cargo build -p kix-cli --bin kix)
+            KIX="${CARGO_TARGET_DIR:-$PWD/cli/target}/debug/kix"
+            python3 scripts/change-kind.py --base "$RUNNER_TEMP/base" --head . \
+              --head-build "$RUNNER_TEMP/head-build" --kix "$KIX"'

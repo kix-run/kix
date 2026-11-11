@@ -1,0 +1,417 @@
+---
+source: kix-cli/src/cli_surface.rs
+---
+kix
+kix --output -o <value> [text|json|yaml|markdown]
+kix --verbose -v
+kix --quiet -q
+kix --no-color
+kix --context <value>
+kix --flake <value>
+kix --no-cache
+kix --override-input <value>
+kix build
+kix build <cluster> required
+kix build --output -o <value> [text|json|yaml|markdown]
+kix build --verbose -v
+kix build --quiet -q
+kix build --no-color
+kix build --flake <value>
+kix build --no-cache
+kix build --override-input <value>
+kix diff
+kix diff <cluster> required
+kix diff --from <value>
+kix diff --bundle <value>
+kix diff --from-bundle <value>
+kix diff --detail <value> [plain|fields|manifests]
+kix diff --save <value>
+kix diff --output -o <value> [text|json|yaml|markdown]
+kix diff --verbose -v
+kix diff --quiet -q
+kix diff --no-color
+kix diff --context <value>
+kix diff --flake <value>
+kix diff --override-input <value>
+kix plan
+kix plan <cluster> required
+kix plan --current-activation
+kix plan --reconcile
+kix plan --prune
+kix plan --prune-mode <value> [default|no]
+kix plan --force-conflicts
+kix plan --accept-migrations
+kix plan --bundle <value>
+kix plan --deployed-bundle <value>
+kix plan --save <value>
+kix plan --output -o <value> [text|json|yaml|markdown]
+kix plan --verbose -v
+kix plan --quiet -q
+kix plan --no-color
+kix plan --context <value>
+kix plan --flake <value>
+kix plan --override-input <value>
+kix check
+kix check <cluster> required
+kix check --sarif
+kix check --output -o <value> [text|json|yaml|markdown]
+kix check --verbose -v
+kix check --quiet -q
+kix check --no-color
+kix check --flake <value>
+kix check --no-cache
+kix check --override-input <value>
+kix deploy
+kix deploy <cluster> required
+kix deploy --current-activation
+kix deploy --reconcile
+kix deploy --prune
+kix deploy --prune-mode <value> [default|no]
+kix deploy --force-conflicts
+kix deploy --accept-migrations
+kix deploy --bundle <value>
+kix deploy --deployed-bundle <value>
+kix deploy --yes -y
+kix deploy --dry-run
+kix deploy --plan <value>
+kix deploy --on-error <value> [stop|continue]
+kix deploy --timeout <value>
+kix deploy --operator
+kix deploy --record-annotation <value>
+kix deploy --tui
+kix deploy --group-by-ns
+kix deploy --fold-height <value>
+kix deploy --log-format <value> [pretty|line|json]
+kix deploy --output -o <value> [text|json|yaml|markdown]
+kix deploy --verbose -v
+kix deploy --quiet -q
+kix deploy --no-color
+kix deploy --context <value>
+kix deploy --flake <value>
+kix deploy --override-input <value>
+kix status
+kix status <cluster> required
+kix status --operator
+kix status --output -o <value> [text|json|yaml|markdown]
+kix status --verbose -v
+kix status --quiet -q
+kix status --no-color
+kix status --context <value>
+kix status --flake <value>
+kix status --no-cache
+kix status --override-input <value>
+kix list
+kix list --output -o <value> [text|json|yaml|markdown]
+kix list --verbose -v
+kix list --quiet -q
+kix list --no-color
+kix list --flake <value>
+kix list --no-cache
+kix list --override-input <value>
+kix list clusters
+kix list clusters --output -o <value> [text|json|yaml|markdown]
+kix list clusters --verbose -v
+kix list clusters --quiet -q
+kix list clusters --no-color
+kix list clusters --flake <value>
+kix list clusters --no-cache
+kix list clusters --override-input <value>
+kix list packages
+kix list packages --cluster <value>
+kix list packages --output -o <value> [text|json|yaml|markdown]
+kix list packages --verbose -v
+kix list packages --quiet -q
+kix list packages --no-color
+kix list packages --flake <value>
+kix list packages --no-cache
+kix list packages --override-input <value>
+kix graph
+kix graph <cluster> required
+kix graph --format <value> [tree|dot|json]
+kix graph --bundle <value>
+kix graph --output -o <value> [text|json|yaml|markdown]
+kix graph --verbose -v
+kix graph --quiet -q
+kix graph --no-color
+kix graph --flake <value>
+kix graph --no-cache
+kix graph --override-input <value>
+kix bundle
+kix bundle <cluster> required
+kix bundle <file>
+kix bundle --verbose -v
+kix bundle --quiet -q
+kix bundle --no-color
+kix inspect
+kix inspect <cluster> required
+kix inspect --output -o <value> [text|json|yaml|markdown]
+kix inspect --verbose -v
+kix inspect --quiet -q
+kix inspect --no-color
+kix inspect --flake <value>
+kix inspect --no-cache
+kix inspect --override-input <value>
+kix gc
+kix gc <cluster> required
+kix gc --yes -y
+kix gc --hard
+kix gc --operator
+kix gc --include-unstamped
+kix gc --include-unattributed
+kix gc --include-copies
+kix gc --keep <value>
+kix gc --keep-max <value>
+kix gc --keep-for <value>
+kix gc --verbose -v
+kix gc --quiet -q
+kix gc --no-color
+kix gc --context <value>
+kix gc --flake <value>
+kix gc --override-input <value>
+kix migrate
+kix migrate --verbose -v
+kix migrate --quiet -q
+kix migrate --no-color
+kix migrate --context <value>
+kix migrate --flake <value>
+kix migrate --override-input <value>
+kix migrate domain
+kix migrate domain <cluster> required
+kix migrate domain --dry-run
+kix migrate domain --yes -y
+kix migrate domain --verbose -v
+kix migrate domain --quiet -q
+kix migrate domain --no-color
+kix migrate domain --context <value>
+kix migrate domain --flake <value>
+kix migrate domain --override-input <value>
+kix rollback
+kix rollback <cluster> required
+kix rollback --list
+kix rollback --yes -y
+kix rollback --dry-run
+kix rollback --prune
+kix rollback --operator
+kix rollback --output -o <value> [text|json|yaml|markdown]
+kix rollback --verbose -v
+kix rollback --quiet -q
+kix rollback --no-color
+kix rollback --context <value>
+kix rollback --flake <value>
+kix rollback --override-input <value>
+kix export
+kix export <cluster> required
+kix export --out <value>
+kix export --for <value> [exit|audit]
+kix export --force
+kix export --verbose -v
+kix export --quiet -q
+kix export --no-color
+kix export --flake <value>
+kix export --override-input <value>
+kix logs
+kix logs <cluster> required
+kix logs <package> required
+kix logs --follow -f
+kix logs --tail <value>
+kix logs --container -c <value>
+kix logs --since <value>
+kix logs --previous -p
+kix logs --verbose -v
+kix logs --quiet -q
+kix logs --no-color
+kix logs --context <value>
+kix logs --flake <value>
+kix logs --override-input <value>
+kix pf
+kix pf <cluster> required
+kix pf <package> required
+kix pf <ports> required
+kix pf --address <value>
+kix pf --verbose -v
+kix pf --quiet -q
+kix pf --no-color
+kix pf --context <value>
+kix pf --flake <value>
+kix pf --override-input <value>
+kix health
+kix health <cluster> required
+kix health --verbose -v
+kix health --quiet -q
+kix health --no-color
+kix health --context <value>
+kix health --flake <value>
+kix health --override-input <value>
+kix drift
+kix drift --cluster <value>
+kix drift --output -o <value> [text|json|yaml|markdown]
+kix drift --verbose -v
+kix drift --quiet -q
+kix drift --no-color
+kix drift --context <value>
+kix snapshot
+kix snapshot --verbose -v
+kix snapshot --quiet -q
+kix snapshot --no-color
+kix snapshot --context <value>
+kix snapshot save
+kix snapshot save <cluster> required
+kix snapshot save <dir> required
+kix snapshot save --verbose -v
+kix snapshot save --quiet -q
+kix snapshot save --no-color
+kix snapshot save --context <value>
+kix images
+kix images <cluster> required
+kix images --sources
+kix images --output -o <value> [text|json|yaml|markdown]
+kix images --verbose -v
+kix images --quiet -q
+kix images --no-color
+kix images --flake <value>
+kix images --no-cache
+kix images --override-input <value>
+kix completions
+kix completions <shell> required [bash|elvish|fish|powershell|zsh]
+kix completions --verbose -v
+kix completions --quiet -q
+kix completions --no-color
+kix doctor
+kix doctor --verbose -v
+kix doctor --quiet -q
+kix doctor --no-color
+kix doctor --flake <value>
+kix compliance
+kix compliance --output -o <value> [text|json|yaml|markdown]
+kix compliance --verbose -v
+kix compliance --quiet -q
+kix compliance --no-color
+kix compliance --context <value>
+kix compliance --flake <value>
+kix compliance --no-cache
+kix compliance --override-input <value>
+kix compliance sbom
+kix compliance sbom <cluster> required
+kix compliance sbom --output -o <value> [text|json|yaml|markdown]
+kix compliance sbom --verbose -v
+kix compliance sbom --quiet -q
+kix compliance sbom --no-color
+kix compliance sbom --flake <value>
+kix compliance sbom --override-input <value>
+kix compliance attest
+kix compliance attest <cluster> required
+kix compliance attest --builder-id <value>
+kix compliance attest --invocation-id <value>
+kix compliance attest --from-cluster
+kix compliance attest --output -o <value> [text|json|yaml|markdown]
+kix compliance attest --verbose -v
+kix compliance attest --quiet -q
+kix compliance attest --no-color
+kix compliance attest --context <value>
+kix compliance attest --flake <value>
+kix compliance attest --override-input <value>
+kix compliance audit
+kix compliance audit <cluster> required
+kix compliance audit --out <value>
+kix compliance audit --force
+kix compliance audit --framework <value> [soc2|iso27001|dora|nis2]
+kix compliance audit --builder-id <value>
+kix compliance audit --verbose -v
+kix compliance audit --quiet -q
+kix compliance audit --no-color
+kix compliance audit --flake <value>
+kix compliance audit --no-cache
+kix compliance audit --override-input <value>
+kix pin
+kix pin --output -o <value> [text|json|yaml|markdown]
+kix pin --verbose -v
+kix pin --quiet -q
+kix pin --no-color
+kix pin --flake <value>
+kix pin set
+kix pin set <key> required
+kix pin set --option <value>
+kix pin set --tag <value>
+kix pin set --repository <value>
+kix pin set --digest <value>
+kix pin set --no-resolve
+kix pin set --source-rev <value>
+kix pin set --promoted-by <value>
+kix pin set --note <value>
+kix pin set --init
+kix pin set --force
+kix pin set --pins-file <value>
+kix pin set --output -o <value> [text|json|yaml|markdown]
+kix pin set --verbose -v
+kix pin set --quiet -q
+kix pin set --no-color
+kix pin set --flake <value>
+kix pin rm
+kix pin rm <key> required
+kix pin rm --option <value>
+kix pin rm --force
+kix pin rm --pins-file <value>
+kix pin rm --output -o <value> [text|json|yaml|markdown]
+kix pin rm --verbose -v
+kix pin rm --quiet -q
+kix pin rm --no-color
+kix pin rm --flake <value>
+kix pin check
+kix pin check --key <value>
+kix pin check --source-rev <value>
+kix pin check --allow-unresolved
+kix pin check --offline
+kix pin check --pins-file <value>
+kix pin check --output -o <value> [text|json|yaml|markdown]
+kix pin check --verbose -v
+kix pin check --quiet -q
+kix pin check --no-color
+kix pin check --flake <value>
+kix pin list
+kix pin list --pins-file <value>
+kix pin list --output -o <value> [text|json|yaml|markdown]
+kix pin list --verbose -v
+kix pin list --quiet -q
+kix pin list --no-color
+kix pin list --flake <value>
+kix lib
+kix lib --verbose -v
+kix lib --quiet -q
+kix lib --no-color
+kix lib --flake <value>
+kix lib update
+kix lib update --dry-run
+kix lib update --verbose -v
+kix lib update --quiet -q
+kix lib update --no-color
+kix lib update --flake <value>
+kix upgrade
+kix upgrade --to <value>
+kix upgrade --preview
+kix upgrade --ack <value>
+kix upgrade --verbose -v
+kix upgrade --quiet -q
+kix upgrade --no-color
+kix upgrade --flake <value>
+kix self
+kix self --verbose -v
+kix self --quiet -q
+kix self --no-color
+kix self install
+kix self install --verbose -v
+kix self install --quiet -q
+kix self install --no-color
+kix self list
+kix self list --verbose -v
+kix self list --quiet -q
+kix self list --no-color
+kix self prune
+kix self prune --keep <value>
+kix self prune --dry-run
+kix self prune --verbose -v
+kix self prune --quiet -q
+kix self prune --no-color
+kix self update
+kix self update --verbose -v
+kix self update --quiet -q
+kix self update --no-color
