@@ -1,0 +1,88 @@
+{
+  "schema": "kix.run/changes/v1",
+  "version": "0.10.0",
+  "records": [
+    {
+      "name": "move-data",
+      "kind": "silent",
+      "packages": [
+        "postgres"
+      ],
+      "library": [],
+      "cli": [],
+      "state": false,
+      "touchesData": true,
+      "requiredStop": false,
+      "id": "K0002",
+      "cve": [],
+      "workaround": null,
+      "body": "`postgres` keeps its data in a new volume.\n"
+    },
+    {
+      "name": "move-state",
+      "kind": "note",
+      "packages": [],
+      "library": [],
+      "cli": [],
+      "state": true,
+      "touchesData": false,
+      "requiredStop": true,
+      "id": null,
+      "cve": [],
+      "workaround": null,
+      "body": "Kix records deploys in a new form. Deploy every cluster with this release before upgrading further.\n"
+    },
+    {
+      "name": "new-thing",
+      "kind": "added",
+      "packages": [],
+      "library": [
+        "kix.contracts.redis"
+      ],
+      "cli": [],
+      "state": false,
+      "touchesData": false,
+      "requiredStop": false,
+      "id": null,
+      "cve": [],
+      "workaround": null,
+      "body": "A new contract for Redis.\n"
+    },
+    {
+      "name": "rename-replicas",
+      "kind": "error",
+      "packages": [
+        "echo-server"
+      ],
+      "library": [],
+      "cli": [
+        "--old-flag"
+      ],
+      "state": false,
+      "touchesData": false,
+      "requiredStop": false,
+      "id": "K0001",
+      "cve": [],
+      "workaround": null,
+      "body": "`echo-server` renames `replicaCount` to `replicas`. Set `replicas` instead.\n"
+    },
+    {
+      "name": "tls-fix",
+      "kind": "security",
+      "packages": [
+        "caddy"
+      ],
+      "library": [],
+      "cli": [],
+      "state": false,
+      "touchesData": false,
+      "requiredStop": false,
+      "id": null,
+      "cve": [
+        "CVE-2026-0001"
+      ],
+      "workaround": "Set `tls.minVersion = \"1.3\"` on the `caddy` instance.",
+      "body": "`caddy` no longer accepts TLS 1.0.\n"
+    }
+  ]
+}

@@ -130,6 +130,28 @@ are covered in [API server retries and request limits](/docs/reference/cli/api-s
 Set `KIX_NO_INTERACTIVE` to any value to treat the terminal as
 non-interactive.
 
+## Required stops
+
+A few releases change what Kix stores in the cluster, and every cluster must
+be deployed with them once before it moves to a newer minor. `kix deploy`
+reads which Kix made the cluster's last deploy from its deploy receipt. It
+refuses before it applies anything when that version is older than such a
+release and the Kix deploying now is newer than the release's minor:
+
+```text
+Deploy blocked: cluster lt1 was last deployed with Kix 0.10.0, and cannot skip required stop Kix 0.11.0 on the way to Kix 0.12.1.
+Nothing was applied to cluster lt1.
+
+Every cluster deployed with Kix older than 0.11.0 must be deployed once with Kix 0.11.x before deploying Kix 0.12.1.
+
+Next: check out the commit where this project was pinned to Kix 0.11.x (for example with `git worktree add` or `git checkout`), run `kix deploy lt1` from there, then return here and run `kix deploy lt1` again.
+```
+
+A deploy with a Kix of the release's own minor passes, and so does a cluster
+with no receipt: a first deploy, or one the in-cluster operator applied.
+`kix deploy --dry-run` and `kix plan` do not check. [`kix upgrade`](/docs/reference/cli/upgrade/)
+stops at such a release, so a project normally deploys it on the way.
+
 ## Deploy a reviewed plan
 
 Save the plan a reviewer approves as a
@@ -212,7 +234,7 @@ status is non-zero.
 | Code | Meaning |
 | --- | --- |
 | `0` | Deploy complete, nothing to apply, or the prompt was declined |
-| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; or a build, evaluation, or cluster error |
+| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); `kix-upgrade.json` lists a change to stored data that no one has acknowledged with [`kix upgrade --ack`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
 
 With `--dry-run` the exit status is [`kix plan`'s](/docs/reference/cli/plan/#exit-status):
 `0` when nothing would change, `2` when something would, and `3` when the

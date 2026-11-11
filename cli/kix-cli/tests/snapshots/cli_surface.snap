@@ -385,6 +385,14 @@ kix lib update --verbose -v
 kix lib update --quiet -q
 kix lib update --no-color
 kix lib update --flake <value>
+kix upgrade
+kix upgrade --to <value>
+kix upgrade --preview
+kix upgrade --ack <value>
+kix upgrade --verbose -v
+kix upgrade --quiet -q
+kix upgrade --no-color
+kix upgrade --flake <value>
 kix self
 kix self --verbose -v
 kix self --quiet -q

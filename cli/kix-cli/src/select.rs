@@ -133,12 +133,13 @@ pub fn scan(args: &[OsString]) -> Scan {
 
 impl Scan {
     /// Return whether this command runs in whatever Kix the user started:
-    /// managing versions, shell completions, project setup, and help.
+    /// managing versions, upgrading the project, shell completions, project
+    /// setup, and help.
     pub fn skips_selection(&self) -> bool {
         self.help
             || matches!(
                 self.command.as_deref(),
-                Some("self" | "completions" | "init" | "help")
+                Some("self" | "upgrade" | "completions" | "init" | "help")
             )
     }
 }
@@ -403,6 +404,7 @@ mod tests {
         for line in [
             "self list",
             "--flake p self install 0.8",
+            "--flake p upgrade --preview",
             "completions bash",
             "init",
             "help",

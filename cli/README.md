@@ -311,7 +311,7 @@ or installs it. `FIRST_SELECTING` (0.8) is the first minor that reads
   and `exec` it, or stop with
   `This project needs Kix {req} (kix.toml), and no Kix {req} is installed. Automatic installs are off (KIX_AUTO_INSTALL={value}). Run \`kix self install {req}\`.`
   A `kix` value older than 0.8 stops it with the `kix.toml` error.
-  `self`, `completions`, `init`, `help`, and `--help` skip it. When the
+  `self`, `upgrade`, `completions`, `init`, `help`, and `--help` skip it. When the
   running Kix satisfies the project, selection does not list the installs,
   runs no Nix, and makes no network request. `kix --version` (`-V`) execs an
   installed match but never installs. Without one, it prints the version
@@ -340,6 +340,12 @@ or installs it. `FIRST_SELECTING` (0.8) is the first minor that reads
   an archive at 500 MB. `latest` returns the newest release that lists this
   system. It refuses archive entries with
   an absolute path, `..`, or a link that leaves the archive's top directory.
+- **Change records of a release**: `release::changes` fetches
+  `kix-<version>-changes.json` from the release's `download` path, after
+  checking `SHA256SUMS` against its signature (`verified_sums`, shared with
+  `install`), and checks the file's SHA-256. `Ok(None)` means `SHA256SUMS`
+  lists no such file, which is true of every release made before change
+  records. `fetch_index` reads the index, whose releases carry `date`.
 - **`kix self`** (`kix-cli/src/commands/self_cmd.rs`): `install <version>`,
   `list`, `prune` (keeps the newest two, the running one, and the first
   `kix` on `PATH`), and `update` (installs the newest release for this
@@ -351,7 +357,7 @@ or installs it. `FIRST_SELECTING` (0.8) is the first minor that reads
 | `KIX_SELECTED_BY` | selection, `--version`, `doctor` | Set by the Kix that chose this one, to its own path. Suppresses selection. |
 | `KIX_AUTO_INSTALL` | selection | `0`, `false`, or `no` stops Kix from downloading a version. Selection then stops with the `kix self install` hint. |
 | `KIX_DATA_DIR` | `installs::data_dir` | Tests only, and not documented for users: replaces the data directory. |
-| `KIX_RELEASE_SOURCE` | `release::Source` | Tests only: a directory laid out like kix.run, in place of `https://kix.run`. |
+| `KIX_RELEASE_SOURCE` | `release::Source` | A site laid out like kix.run, such as a mirror, in place of `https://kix.run` (documented for users). An absolute path is a directory with that layout, which only tests use. |
 | `KIX_RELEASE_TEST_KEY` | `release::verify` | Tests only: a hex Ed25519 public key trusted beside `KEYS`, honoured only with a directory `KIX_RELEASE_SOURCE`. |
 
 The install script reads `KIX_VERSION`, `KIX_INSTALL_DIR`, and
@@ -366,6 +372,102 @@ from a directory source, and `kix self`, without Nix), the integration test in
 `kix-cli/tests/lib_update_test.rs` for the library check (needs
 `KIX_RUNTIME_DIR`), and the unit tests in `version/`, `installs.rs`, and
 `release/`.
+
+## Change records
+
+`changes/README.md` describes the records: one Markdown file per
+user-visible change, with a TOML header. `scripts/change-records.py json`
+writes a release's records as `kix-<version>-changes.json`, which the
+release publishes. `kix-core/src/changes/` holds the serde types `kix
+upgrade` reads that file with (`Document`, `Record`, `Kind`, and the schema
+check). `kind`, `touchesData`, and `requiredStop` have no default, so a key
+the script renames fails to read. `kix-core/tests/changes_json.rs` reads a
+fixture the script wrote, so the two stay in step.
+
+A refusal for a removed or renamed option starts with the record's id in
+brackets, and the id comes from `scripts/change-records.py next-id`. People
+search CHANGELOG.md for the id, and tools match it.
+
+### `kix upgrade`
+
+`kix-cli/src/commands/upgrade/` moves a project to a newer Kix. It skips
+selection, and the Kix that runs it evaluates nothing: every list and build
+is a subprocess of the installed Kix of the version being tried (`run_kix`,
+with `KIX_SELECTED_BY` set, per the hand-over contract). From another
+version it reads only `-o json list clusters`, `-o json list packages
+--cluster <c>` (the packages in use: rows whose `status` is not
+`available`, by instance name), and the directory `export <c> --out <dir>
+--for audit` writes.
+
+- `plan.rs` (pure): `usable` (releases for this system, no prereleases),
+  `choose_target` (`--to`, and `[upgrade] min-age` from
+  `ProjectConfig::upgrade_min_age`), `steps` (the newest patch of each
+  minor after the project's, ending at the target; a prerelease `from`
+  takes the newest release of its own minor first), `required_stop` (the
+  earliest release in (from, target) with a `requiredStop` record ends the
+  upgrade at the newest patch of its minor), and `applying` (which
+  lists every record in range and marks it `likely` when it names a
+  package an instance in use is named after; the package list holds
+  instance names, so a match is never certain and no record is left out).
+- `compare.rs` (pure): `load_dir` reads an export, keeps the
+  `kix.run/package` annotation, strips Kix's annotations, and drops
+  Activation and PackageInstance; `compare` gives added, removed, and
+  changed objects, each `sensitive` (RBAC, Secret, NetworkPolicy, Cilium policies,
+  Certificate, or an Ingress or Gateway whose TLS changed).
+- `pin.rs`: reads no Nix syntax. `set_kix` writes the exact version into
+  `kix.toml` and refuses when the result does not read back as that
+  version. `retag_flake(text, from, to)` moves `v<from>` to `v<to>` only
+  when exactly one string in `flake.nix` that looks like a Kix url (a `:`
+  and `kix` in it) names that tag (after `/` or `=`, at the end or before
+  `&` or `?`). Two or more is `Retag::ByHand`, and a url that already names
+  `v<to>` is `AlreadyMoved`, a person's edit. `flake_edit` retags only
+  when the lock's library input (`library::library_inputs`, preferring
+  `kix` or `kixpkgs`) is on `v<from>`. `pin` works out every change first,
+  does no lock operation when `flake.lock` already holds `v<to>`, runs
+  `library::lock` after a retag or an edit and `library::update_to`
+  otherwise, then reads `flake.lock` again. A failed lock
+  (`PinError::Lock`, exit 2) or a lock still on another tag
+  (`PinError::ByHand`, exit 3) puts `kix.toml`, `flake.nix`, and
+  `flake.lock` back as they were at the start of the step. A project with
+  no `flake.lock` runs no Nix.
+- `out.rs`: the text a run prints, from the approved output design: the
+  `Upgrading Kix <from> -> <to>` line, one line per phase (`Building 6
+  clusters with current Kix 0.10.0 (ja1, ...)... ok`, `Installing Kix
+  0.12.1... ok`, `Pinned project to Kix 0.12.1 (updated kix.toml)`), the
+  release notes grouped as `Config changes required`, `Behavior & data
+  changes`, `Security fixes`, and `Notes`, the `Manifest changes` lines
+  (`+`, `~`, `-`, `[review: <Kind>]`), and the
+  numbered "review before deploying" list. `excerpt` keeps a failed
+  build's output from its last `error:` line (miette's `│` gutter removed),
+  or its last 15 lines, and the whole output goes to
+  `<work dir>/logs/<version>/<cluster>.log`. Every stop ends with a `Next:`
+  line, refusals exit 1, and the user-facing text never says "change
+  record". The preview's stepping plan and the removal of temporary
+  versions print only with `-v`.
+- `search.rs`: `git ls-files` and a line search for each `cli` string of
+  the applying records.
+- `state.rs`: `kix-upgrade.json` (`kix.run/upgrade/v1`). The run writes it
+  before the first pin (`fix-needed`, the step `started`) and after each
+  step, so a project left part of the way always has one. A state that is
+  `fix-needed` or `edit-needed` resumes: `from`, `before`, the steps, the
+  acknowledgements, and `packagesInUse` come from the file, and the target
+  and any required stop are worked out again. A resume never runs the
+  version the upgrade started from, and refuses when `before` is gone.
+  Another run refuses while the last state has unacknowledged
+  `dataChanges`. `check_deploy` (called from `main` for every deploy but a
+  dry run, before the runtime check) refuses while `dataChanges` holds a
+  reference not in `acknowledged`; `--ack` adds to it.
+- `mod.rs`: the run. The builds live under
+  `default_cache_dir()/upgrade/<sha256 of the project path, 16 hex>/`
+  (`before/`, and one directory per version). `Run::step` checks for a
+  `flake.nix` edit before it installs the version, then pins and builds.
+  Exit 2 on a failed build or lock, 3 when a person should read the result
+  or edit `flake.nix`, and the versions this run downloaded, other than
+  `from` and the pinned one, are removed.
+
+Tests: `kix-cli/tests/upgrade_test.rs` publishes fake releases (shell
+scripts that list and export from files in the project) with signed change
+records on a directory source, and the unit tests in each module.
 
 ## Deploy pipeline
 
@@ -961,6 +1063,7 @@ a record line need regenerating.
 - `commands/pin/locate.rs`: finds the pin file when `--pins-file` is absent. It checks the working directory, then the directory named by `--flake` without evaluating the flake, then the git root. At the git root it accepts `pins.json`, or a single `*pins.json` file whose header declares `managedBy`. The marker prevents unrelated JSON files from becoming candidates. The scan does not follow symlinks or run outside a repository, and it refuses to choose when several candidates remain. A flake cannot declare the source path directly because a path literal evaluates to a Nix store path; recovering the original path would require evaluating the flake, which this command avoids
 - `select.rs`: chooses which installed Kix runs before clap parses the arguments, and hands over with `exec` and `KIX_SELECTED_BY`. See "Versions, selection, and installs"
 - `commands/self_cmd.rs`: `kix self install|list|prune|update`, over `kix::installs` and `kix::release`
+- `commands/upgrade/`: `kix upgrade`, and the check `kix deploy` runs on `kix-upgrade.json`. See "`kix upgrade`"
 - `commands/compliance/`: compliance exports for auditors, CI, and compliance platforms. Three subcommands, all built on the same `shared::build_and_load` helper that runs `nix build` + loads the StoreGraph:
   - `sbom` emits a CycloneDX 1.6 SBOM to stdout. Walks the StoreGraph to produce a `platform` root component for the cluster, one `application` component per package (`pkg:kix/<ns>/<name>@<version>` purl), one `container` component per unique image (deduped, with optional SHA-256 digest from `@sha256:` refs, `pkg:docker/...?repository_url=<host>` purl), and one `library` component per flake input read from `flake.lock` (`pkg:nix/<name>@<rev>`). The dependency graph is derived from `StoreGraph::cross_deps` plus per-package image edges.
   - `attest` emits an unsigned in-toto Statement with a SLSA v1 provenance predicate. Subject is the activation identity hash (`nixStoreHash` digest type). `externalParameters` include the flake ref and a BLAKE3 digest of the on-disk `flake.lock`; `resolvedDependencies` carry the git HEAD, every flake input's rev/narHash, and every container image, with a `sha256` digest only when the reference actually carries one. `--builder-id` and `--invocation-id` override the `runDetails` block so CI can stamp its workflow URL. `--from-cluster` reads the deploy receipt off the cluster's active Activation instead of building, so the statement describes what **was** deployed rather than what would be, from a machine that has never built this cluster. Both routes go through `receipt::attestation_from_receipt`, so they cannot drift apart.
@@ -978,7 +1081,7 @@ a record line need regenerating.
 
 #### project (`kix-core/src/project.rs`)
 
-- `project.rs`: reads `kix.toml` beside `flake.nix` in the `--flake` directory (`ProjectConfig::load`). Its keys are `builder` and `kix`. `builder` is `kix` (the default when the file or key is missing), `nix`, or `remote` (`BuilderKind`); `builder_source` records where the choice came from (`BuilderSource`). `kix` is the project's `Requirement` (`"0.8"` or `"0.8.3"`), which selection reads, and anything else is `BadKixVersion`. Unknown keys, unknown values, and invalid TOML are errors that name the file. `ProjectConfig::check_supported` is the one place that refuses `remote`. `check_agreement` compares the builder with `legacyPackages.<system>.kixConfig.builder`, which the library reads from the same file through Nix and so misses while git does not track `kix.toml`; `eval::nix::eval_activation_index` runs it once per run before it evaluates a cluster (skipped for `KIX_TEST_BUILDER`), and its `ProjectMismatch` names the fix (`git add kix.toml`, `kix lib update` or merging `mkFlake` for a flake without `kixConfig`, or both values). `KIX_TEST_BUILDER` overrides the file, for Kix's own tests only. A remote flake reference gets the default.
+- `project.rs`: reads `kix.toml` beside `flake.nix` in the `--flake` directory (`ProjectConfig::load`). Its keys are `builder`, `kix`, and the `[upgrade]` table (`min-age = "7d"`, `upgrade_min_age` in days, read only by `kix upgrade`). `builder` is `kix` (the default when the file or key is missing), `nix`, or `remote` (`BuilderKind`); `builder_source` records where the choice came from (`BuilderSource`). `kix` is the project's `Requirement` (`"0.8"` or `"0.8.3"`), which selection reads, and anything else is `BadKixVersion`. Unknown keys, unknown values, and invalid TOML are errors that name the file. `ProjectConfig::check_supported` is the one place that refuses `remote`. `check_agreement` compares the builder with `legacyPackages.<system>.kixConfig.builder`, which the library reads from the same file through Nix and so misses while git does not track `kix.toml`; `eval::nix::eval_activation_index` runs it once per run before it evaluates a cluster (skipped for `KIX_TEST_BUILDER`), and its `ProjectMismatch` names the fix (`git add kix.toml`, `kix lib update` or merging `mkFlake` for a flake without `kixConfig`, or both values). `KIX_TEST_BUILDER` overrides the file, for Kix's own tests only. A remote flake reference gets the default.
 
 #### system_nix (`kix-core/src/system_nix.rs`)
 
@@ -986,7 +1089,7 @@ a record line need regenerating.
 
 #### library (`kix-core/src/library.rs`)
 
-- `library.rs`: checks that the flake's Kix library expects the same Helm 3 and Helm 4 versions as the running Kix (`check_helm_versions`, reading `kix/lib/helm-versions.json` via `nix eval` before rendering a Helm chart and returning `HelmMismatch` with instructions to run `kix lib update` or upgrade `kix`), and implements `kix lib update` (`library::update`), which reads and parses `flake.lock` directly, walks the `nodes` graph from the root (skipping `follows` aliases so it finds the declaring input path), refuses pinned tags/commits, forks, or `path:` inputs in `flake.nix` with manual instructions, and updates `flake.lock` to `github:kix-run/kixpkgs/v<version>` via `nix flake lock --override-input`.
+- `library.rs`: checks that the flake's Kix library expects the same Helm 3 and Helm 4 versions as the running Kix (`check_helm_versions`, reading `kix/lib/helm-versions.json` via `nix eval` before rendering a Helm chart and returning `HelmMismatch` with instructions to run `kix lib update` or upgrade `kix`), and implements `kix lib update` (`library::update`), which reads and parses `flake.lock` directly, walks the `nodes` graph from the root (skipping `follows` aliases so it finds the declaring input path), refuses pinned tags/commits, forks, or `path:` inputs in `flake.nix` with manual instructions, and updates `flake.lock` to `github:kix-run/kixpkgs/v<version>` via `nix flake lock --override-input`. `update_to` does the same for another version (`kix upgrade`), and `lock` runs a plain `nix flake lock` after `flake.nix` changed.
 
 #### version, installs, and release (`kix-core/src/version/`, `kix/src/installs.rs`, `kix/src/release/`)
 
