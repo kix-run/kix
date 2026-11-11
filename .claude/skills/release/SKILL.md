@@ -118,6 +118,12 @@ same unreleased records, with the version taken from the prerelease.
    `## <version> - <YYYY-MM-DD>`, with today's date, to the top of
    `CHANGELOG.md`. Check that the new section is the one you read. For a
    prerelease, skip this step.
+5. The cluster state fixtures in `cli/kix/tests/fixtures/cluster-state/`,
+   only when a record of this release has `state = true`. Copy the newest
+   folder to `<version>/`, set `version` and `date` in its `written.toml`,
+   and replace the objects with ones this release writes. Delete
+   `expected.json`, run `cargo test -p kix-lib cluster_state` to write a new
+   one, and check each value in it.
 
 ## 3. Open and merge the pull request
 

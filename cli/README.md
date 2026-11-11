@@ -70,6 +70,28 @@ reads plan files through `kix::plan::file`.
   (20 seconds per target), and weekly (two minutes per target). Every
   release pull request runs them.
 
+### Compatibility checks
+
+- `kix-cli/src/cli_surface.rs` snapshots every visible command and its
+  arguments into `kix-cli/tests/snapshots/cli_surface.snap`: flag names,
+  positional names, whether an argument takes a value or is required, and
+  enum values. It leaves out descriptions. Refresh it with
+  `INSTA_UPDATE=always cargo test -p kix-cli cli_surface`.
+- `scripts/change-kind.py`, run by `.github/workflows/change-kind.yml`,
+  builds the clusters in its `CLUSTERS` list with the head's `kix` at a
+  pull request's base, and at `--head-build`: a head checkout whose
+  `clusters/` comes from the base. It compares that snapshot and
+  `kix-cli/schema/*.json`. It checks the pull request's change records
+  against what changed (`CLAUDE.md`, Versioning and breaking changes).
+- `kix/src/cluster/state_fixtures.rs` (`cargo test -p kix-lib cluster_state`)
+  reads the cluster state kept in
+  `kix/tests/fixtures/cluster-state/<version>/`, with today's readers:
+  `activation::Record::of`, `current_record`, `Tenancy`,
+  `drift::check_object`, and `lifecycle_of`. It compares the result with
+  that folder's `expected.json`, and writes the file when it is missing. A
+  release adds a folder only when it changes cluster state, and the test
+  prints the folders that are safe to delete.
+
 ### Releases
 
 Kix uses semantic versioning. Each change is a change record under
