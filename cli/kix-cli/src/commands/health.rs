@@ -114,7 +114,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .active(&cluster)
             .await
             .map_err(|e| miette!("{e}"))?
-            .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
+            .ok_or_else(|| super::no_active_record(&cluster))?;
 
         let live_objects = inventory::fetch_managed_resources(
             &client,

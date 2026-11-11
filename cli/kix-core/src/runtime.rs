@@ -122,7 +122,18 @@ pub enum Want<'a> {
 /// Why Kix could not find or prepare a program.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
-    #[error("the Kix runtime in {} has no {program}. Install bin/kix and libexec/kix from the release archive, or point {RUNTIME_DIR_VAR} at a complete Kix runtime directory", dir.display())]
+    #[error(
+        "the Kix runtime in {} is missing `{program}`\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Why:\n    \
+         The Kix runtime in {} is incomplete (`libexec/kix` in the release archive includes Nix, Helm, kubectl, and sops).\n\n  \
+         Next (choose one):\n    \
+         - Remove the incomplete version directory under `~/.local/share/kix/` and run the install script again:\n        \
+         curl -fsSL https://kix.run/install | sh\n    \
+         - If `KIX_RUNTIME_DIR` is set, unset it or point it at a complete `libexec/kix` directory from the release archive.",
+        dir.display(),
+        dir.display()
+    )]
     Missing { program: String, dir: PathBuf },
 
     #[error(
@@ -149,19 +160,20 @@ pub enum RuntimeError {
     },
 
     #[error(
-        "Kix could not find its runtime, the directory that holds the nix, helm, kubectl, and sops programs Kix runs. It looked in: {}. Install Kix from its release archive, which keeps bin/kix and libexec/kix together, or set {RUNTIME_DIR_VAR} to a Kix runtime directory",
+        "could not find the Kix runtime\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Looked in: {}\n\n  \
+         Why:\n    \
+         The Kix runtime is the `libexec/kix` directory from the release archive (it holds the Nix, Helm, kubectl, and sops programs that Kix runs). It is missing when `bin/kix` is copied to another directory on its own.\n\n  \
+         Next (choose one):\n    \
+         - Install Kix with the install script, which unpacks `bin/kix` and `libexec/kix` together:\n        \
+         curl -fsSL https://kix.run/install | sh\n    \
+         - If the Kix runtime is already unpacked in another directory, set `{RUNTIME_DIR_VAR}` to that directory's path and run the command again.",
         searched.join(", ")
     )]
     NotFound { searched: Vec<String> },
 
-    #[error(
-        "the Kix runtime in {} ({found_by}) does not match Kix {}. It ships {found}, but Kix {} expects {expected}. Install bin/kix and libexec/kix from the release archive of Kix {}{}",
-        dir.display(),
-        crate::version::running().release(),
-        crate::version::running().release(),
-        crate::version::running().release(),
-        if *found_by == FoundBy::Env { format!(", or point {RUNTIME_DIR_VAR} at the Kix runtime of that version") } else { String::new() }
-    )]
+    #[error("{}", mismatch_message(dir, *found_by, found, expected))]
     Mismatch {
         dir: PathBuf,
         found_by: FoundBy,
@@ -169,7 +181,7 @@ pub enum RuntimeError {
         expected: String,
     },
 
-    #[error("could not read the Kix runtime manifest {}: {message}", path.display())]
+    #[error("cannot read the Kix runtime manifest at {}{message}", path.display())]
     Manifest { path: PathBuf, message: String },
 
     #[error("could not read the Kix runtime directory {}: {source}", dir.display())]
@@ -189,6 +201,36 @@ pub enum RuntimeError {
 
     #[error(transparent)]
     SystemNix(#[from] crate::system_nix::SystemNixError),
+}
+
+fn mismatch_message(dir: &Path, found_by: FoundBy, found: &str, expected: &str) -> String {
+    let dir = dir.display();
+    let kix = crate::version::running().release();
+    let head = format!(
+        "the Kix runtime in {dir} ({found_by}) does not match Kix {kix}\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Found in {dir}:        {found}\n  \
+         Expected by Kix {kix}: {expected}\n\n  \
+         Why:\n    "
+    );
+    let tail = if found_by == FoundBy::Env {
+        format!(
+            "`KIX_RUNTIME_DIR` points at a Kix runtime from another version of Kix.\n\n  \
+             Next (choose one):\n    \
+             - Unset `KIX_RUNTIME_DIR` so Kix {kix} uses the Kix runtime unpacked next to `bin/kix`, then run the command again.\n    \
+             - Point `KIX_RUNTIME_DIR` at the `libexec/kix` directory from the release archive for Kix {kix}, then run the command again."
+        )
+    } else {
+        format!(
+            "`bin/kix` and the Kix runtime in {dir} come from different versions of Kix.\n\n  \
+             Next (choose the one that matches how you installed Kix):\n    \
+             - Installed with the install script (or by Kix itself): remove that version's directory and reinstall Kix {kix}:\n        \
+             rm -rf ~/.local/share/kix/{kix} && curl -fsSL https://kix.run/install | KIX_VERSION={kix} sh\n    \
+             - Unpacked from a release archive into another directory: replace both `bin/kix` and {dir} with the files from the Kix {kix} release archive.\n    \
+             - Installed with Nix (`nix profile install`): reinstall or upgrade Kix with `nix profile` so `bin/kix` and the Kix runtime come from the same build."
+        )
+    };
+    head + &tail
 }
 
 fn versions(shipped: &[String]) -> String {
@@ -634,13 +676,22 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, RuntimeError> {
         path: path.clone(),
         message,
     };
-    let bytes = std::fs::read(&path).map_err(|e| invalid(e.to_string()))?;
-    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+    let bytes = std::fs::read(&path).map_err(|e| invalid(format!(": {e}")))?;
+    let manifest: Manifest =
+        serde_json::from_slice(&bytes).map_err(|e| invalid(format!(": {e}")))?;
     if let Some(v) = manifest.manifest_version
         && v != MANIFEST_VERSION
     {
+        let kix = crate::version::running().release();
         return Err(invalid(format!(
-            "it has format version {v}, and Kix reads version {MANIFEST_VERSION}. Install bin/kix and libexec/kix from one release archive"
+            " (format version {v}; Kix {kix} reads version {MANIFEST_VERSION})\n  \
+             No project files or cluster resources were changed.\n\n  \
+             Why:\n    \
+             `bin/kix` and the Kix runtime in `libexec/kix` come from different versions of Kix.\n\n  \
+             Next (choose one):\n    \
+             - Remove the mismatched version directory under `~/.local/share/kix/` and install Kix from its release archive:\n        \
+             curl -fsSL https://kix.run/install | sh\n    \
+             - If `KIX_RUNTIME_DIR` is set, unset it or point it at the `libexec/kix` directory from the Kix {kix} release archive."
         )));
     }
     for program in &manifest.programs {
@@ -649,7 +700,7 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, RuntimeError> {
         for relative in program.bin.values().chain(program.files.keys()) {
             if !inside(relative) {
                 return Err(invalid(format!(
-                    "{} {} lists {}, which is not a path inside the runtime directory",
+                    ": {} {} lists {}, which is not a path inside the runtime directory",
                     program.name,
                     program.version,
                     relative.display()
@@ -908,7 +959,7 @@ mod tests {
         for part in [
             "KIX_RUNTIME_DIR (not set), /opt/kix/libexec/kix",
             "release archive",
-            "set KIX_RUNTIME_DIR",
+            "set `KIX_RUNTIME_DIR`",
         ] {
             assert!(text.contains(part), "{part}: {text}");
         }
@@ -1086,7 +1137,11 @@ mod tests {
         assert!(matches!(err, RuntimeError::Mismatch { .. }), "{err}");
         let text = err.to_string();
         assert!(text.contains("kubectl 0.0.1"), "{text}");
-        assert!(text.contains("the release archive of Kix"), "{text}");
+        let kix = crate::version::running().release();
+        assert!(
+            text.contains(&format!("the Kix {kix} release archive")),
+            "{text}"
+        );
         assert!(!text.contains(RUNTIME_DIR_VAR), "{text}");
 
         let err = check_manifest(&Runtime {

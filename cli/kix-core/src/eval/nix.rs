@@ -305,9 +305,11 @@ pub fn eval_with_helm(
             super::helm::realise(&placeholder)?;
         }
     }
-    Err(KixEvalError::StoreGraphError {
-        message: format!(
-            "evaluating {} still needed Helm charts after rendering charts {MAX_EVALUATIONS} times",
+    Err(KixEvalError::Internal {
+        summary: "Helm chart rendering did not finish",
+        library: true,
+        detail: format!(
+            "evaluating {} still requested Helm charts after {MAX_EVALUATIONS} rendering rounds",
             args.join(" ")
         ),
     })
@@ -475,8 +477,10 @@ fn library_facts(
         cmd.arg("--override-input").arg(name).arg(url);
     }
     match output(cmd.current_dir(flake_path)) {
-        Ok(out) => serde_json::from_slice(&out).map_err(|e| KixEvalError::StoreGraphError {
-            message: format!("the Kix library's settings are not the expected JSON: {e}"),
+        Ok(out) => serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
+            summary: "could not read the Kix library's settings",
+            library: true,
+            detail: format!("the Kix library's settings are not the expected JSON: {e}"),
         }),
         Err(e) if e.missing_attribute() => {
             match system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
@@ -644,8 +648,10 @@ pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError
             .arg(path),
     )?;
     let info: serde_json::Value =
-        serde_json::from_slice(&out).map_err(|e| KixEvalError::StoreGraphError {
-            message: format!("nix path-info printed something other than JSON: {e}"),
+        serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
+            summary: "could not read build dependency metadata",
+            library: false,
+            detail: format!("nix path-info printed something other than JSON: {e}"),
         })?;
     Ok(path_info_references(&info))
 }
@@ -712,8 +718,10 @@ pub fn flake_revision(flake_dir: &Path) -> Result<Option<FlakeRevision>, KixEval
             .arg(flake_dir),
     )?;
     let metadata: serde_json::Value =
-        serde_json::from_slice(&out).map_err(|e| KixEvalError::StoreGraphError {
-            message: format!("nix flake metadata printed something other than JSON: {e}"),
+        serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
+            summary: "could not read project flake metadata",
+            library: false,
+            detail: format!("nix flake metadata printed something other than JSON: {e}"),
         })?;
     Ok(revision_of(&metadata))
 }

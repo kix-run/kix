@@ -24,6 +24,7 @@ use serde::Deserialize;
 use sha2::Digest as _;
 
 use super::derivation::{self, Derivation};
+use super::error::KEEP_LIBRARY;
 use super::nix::{NixCommandError, command, output};
 use super::store::real_path;
 use crate::runtime::{self, RuntimeError, Tool, Want};
@@ -40,10 +41,15 @@ const SPEC_VERSION: u64 = 1;
 #[derive(Debug, thiserror::Error)]
 pub enum HelmError {
     #[error(
-        "Helm {wanted} is not in the Kix runtime (Kix {} has {}). Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
-        crate::version::running().release(),
+        "this project's Kix library requires Helm {wanted}, while the Kix runtime in Kix {kix} ships {}\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Why:\n    \
+         Each version of the Kix library is paired with the Helm versions in that version's Kix runtime.\n\n  \
+         Next (choose one):\n    \
+         - Run `kix lib update` to move the project to the {kix} library and commit `flake.lock`.\n    \
+         - {KEEP_LIBRARY}",
         shipped_text(shipped),
-        crate::version::running().release()
+        kix = crate::version::running().release()
     )]
     VersionNotShipped {
         wanted: String,
@@ -54,9 +60,14 @@ pub enum HelmError {
     LibraryMismatch(Box<crate::library::HelmMismatch>),
 
     #[error(
-        "this cluster's Kix library does not match Kix {} (Helm format {found}, expected {SPEC_VERSION}). Run `kix lib update` to update the Kix library in flake.lock to {}, or use the version of Kix that matches the library",
-        crate::version::running().release(),
-        crate::version::running().release()
+        "this project's Kix library does not match Kix {kix}\n  \
+         No project files or cluster resources were changed.\n\n  \
+         Why:\n    \
+         The Kix library pinned in `flake.lock` and Kix {kix} come from different versions and use incompatible Helm chart formats.\n\n  \
+         Next (choose one):\n    \
+         - Run `kix lib update` to move the project to the {kix} library and commit `flake.lock`.\n    \
+         - {KEEP_LIBRARY}",
+        kix = crate::version::running().release()
     )]
     SpecVersion { found: u64 },
 
@@ -107,21 +118,31 @@ pub enum HelmError {
         source: std::io::Error,
     },
 
-    #[error(
-        "evaluation still could not read {} after writing it to Kix's local store{}",
-        path.display(),
-        remove_store_hint()
-    )]
+    #[error("{}", stuck_message())]
     Stuck { path: PathBuf },
 }
 
-fn remove_store_hint() -> String {
+fn stuck_message() -> String {
     match super::store::store_root() {
-        Some(root) => format!(
-            " ({}). Remove Kix's local store directory and run the command again",
-            root.display()
-        ),
-        None => String::new(),
+        Some(root) => {
+            let root = root.display();
+            format!(
+                "could not read a rendered Helm chart from Kix's local store ({root})\n  \
+                 No project files or cluster resources were changed.\n\n  \
+                 Why:\n    \
+                 Kix wrote a rendered Helm chart to Kix's local store at {root}, but could not read it back during evaluation. Kix's local store at {root} is likely damaged.\n\n  \
+                 Next:\n    \
+                 Remove Kix's local store directory and run the command again (this is safe; Kix will download and render what it needs on the next run):\n      \
+                 rm -rf {root}"
+            )
+        }
+        None => "could not read a rendered Helm chart from Kix's local store\n  \
+                 No project files or cluster resources were changed.\n\n  \
+                 Why:\n    \
+                 Kix wrote a rendered Helm chart to Kix's local store, but could not read it back during evaluation. Kix's local store is likely damaged.\n\n  \
+                 Next:\n    \
+                 Remove Kix's local store directory (`~/.cache/kix/store`, or the directory named by `KIX_STORE_ROOT`) and run the command again (this is safe; Kix will download and render what it needs on the next run)."
+            .to_string(),
     }
 }
 
@@ -784,11 +805,16 @@ mod tests {
             shipped: vec!["4.3.2".into()],
         };
         let v = crate::version::running().release();
-        assert_eq!(
-            err.to_string(),
-            format!(
-                "Helm 4.3.1 is not in the Kix runtime (Kix {v} has Helm 4.3.2). Run `kix lib update` to update the Kix library in flake.lock to {v}, or use the version of Kix that matches the library"
-            )
+        let text = err.to_string();
+        assert!(
+            text.starts_with(&format!(
+                "this project's Kix library requires Helm 4.3.1, while the Kix runtime in Kix {v} ships Helm 4.3.2\n"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("move the project to the {v} library")),
+            "{text}"
         );
     }
 }

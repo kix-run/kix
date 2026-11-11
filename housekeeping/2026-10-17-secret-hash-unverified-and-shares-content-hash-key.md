@@ -8,3 +8,4 @@ the decrypted SOPS data; `sops.rs` contains no hash code, so a wrong
 `kix.run/content-hash` among the stamps the deploy writes itself, so the
 two meanings share one key. The option descriptions on `cnpg-database`,
 `stackgres-database`, and `clickhouse-database` promise the comparison.
+- Checked again 2026-11-11: `cli/kix/src/cluster/secrets.rs` now compares the hash on deploy (`SecretError::HashMismatch`), so the first half looks fixed; the shared annotation key was not checked.

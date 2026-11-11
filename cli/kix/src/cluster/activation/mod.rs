@@ -109,7 +109,14 @@ pub enum OpenError {
     Domain(#[from] LegacyDomainError),
 
     #[error(
-        "the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."
+        "no Kix deployment records exist on this Kubernetes cluster (the deployment record resource type is not installed)\n  \
+         Nothing was changed on the cluster.\n\n  \
+         Why:\n    \
+         Either Kix has never deployed to this Kubernetes cluster, or your kubeconfig points at a different cluster than you intended.\n\n  \
+         Next (choose one):\n    \
+         - Check which cluster your kubeconfig points at (`kubectl config current-context`), or pass `--context <name>` and run the command again.\n    \
+         - If this is the right Kubernetes cluster and it has never been deployed with Kix, run its first deploy (which installs the deployment record resource type):\n        \
+         kix deploy <cluster>"
     )]
     NotInstalled,
 }

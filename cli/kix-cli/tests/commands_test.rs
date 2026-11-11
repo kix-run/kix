@@ -300,14 +300,14 @@ fn without_a_runtime_kix_refuses_to_run_programs() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("Kix could not find its runtime")
+            predicate::str::contains("could not find the Kix runtime")
                 .and(predicate::str::contains("KIX_RUNTIME_DIR (not set)"))
                 .and(predicate::str::contains("fake nix ran").not()),
         );
 
     without_runtime().arg("doctor").assert().failure().stdout(
-        predicate::str::contains("✗ Kix runtime not found")
-            .and(predicate::str::contains("Kix could not find its runtime")),
+        predicate::str::contains("✗ Kix runtime: not usable")
+            .and(predicate::str::contains("could not find the Kix runtime")),
     );
 
     without_runtime().arg("--version").assert().success();

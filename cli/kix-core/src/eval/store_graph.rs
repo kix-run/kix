@@ -506,7 +506,13 @@ impl StoreGraph {
     ///   shows each other resource under the one package that lists it, or
     ///   as cluster-level.
     pub fn validate(&self) -> Result<(), KixEvalError> {
-        let fail = |message: String| Err(KixEvalError::StoreGraphError { message });
+        let fail = |detail: String| {
+            Err(KixEvalError::Internal {
+                summary: "built cluster output failed an internal consistency check",
+                library: true,
+                detail,
+            })
+        };
         let mut paths: Vec<&PathBuf> = self.resources.keys().collect();
         paths.sort();
         let mut objects: HashMap<ResourceId, &PathBuf> = HashMap::new();
@@ -533,7 +539,7 @@ impl StoreGraph {
         }
         if records != [&self.activation_path] {
             return fail(format!(
-                "the build must hold one Activation record, at {}; it holds {}",
+                "the build must hold 1 deployment record, at {}; it holds {}",
                 shown(&self.activation_path),
                 records.len()
             ));
@@ -542,7 +548,7 @@ impl StoreGraph {
         let label = keys::label(record, keys::CLUSTER_LABEL).unwrap_or_default();
         if label != self.cluster_name {
             return fail(format!(
-                "the Activation record is for cluster '{}', but kix-packages.json says '{}'",
+                "the deployment record is for cluster '{}', but kix-packages.json says '{}'",
                 printable(label),
                 printable(&self.cluster_name)
             ));
@@ -555,7 +561,10 @@ impl StoreGraph {
             };
             let kind = pi.manifest.get("kind");
             if kind.and_then(|k| k.as_str()) != Some(lifecycle::PACKAGE_INSTANCE_KIND) {
-                return fail(format!("{} is not a PackageInstance", shown(pi_path)));
+                return fail(format!(
+                    "{} is not a PackageInstance record",
+                    shown(pi_path)
+                ));
             }
             if package.namespace.is_empty() || package.namespace.contains('/') {
                 return fail(format!(
@@ -566,7 +575,7 @@ impl StoreGraph {
             let key = (package.namespace.as_str(), package.instance_name.as_str());
             if let Some(other) = keys.insert(key, pi_path) {
                 return fail(format!(
-                    "{} and {} are both package {}/{}, which plan would show as one",
+                    "{} and {} are both package {}/{}, which the plan would show as one package",
                     shown(other),
                     shown(pi_path),
                     printable(key.0),
@@ -576,7 +585,7 @@ impl StoreGraph {
             for path in &package.resource_paths {
                 if !self.resources.contains_key(path) {
                     return fail(format!(
-                        "{} lists {}, which is not among the resources",
+                        "{} lists {}, which is not among the built resources",
                         shown(pi_path),
                         shown(path)
                     ));
@@ -592,7 +601,7 @@ impl StoreGraph {
         shared.sort();
         if let Some(path) = shared.first() {
             return fail(format!(
-                "{} is listed by more than one package, which only an import marker may be",
+                "{} is listed by more than one package, which is only valid for an external resource reference",
                 shown(path)
             ));
         }
@@ -999,7 +1008,11 @@ mod tests {
             let err = build(&[("a", "x"), ("b", "y")], false)
                 .validate()
                 .unwrap_err();
-            assert!(err.to_string().contains("only an import marker"), "{err}");
+            assert!(
+                err.to_string()
+                    .contains("only valid for an external resource reference"),
+                "{err}"
+            );
         }
 
         /// Plan keys packages by namespace and instance.
@@ -1064,7 +1077,10 @@ mod tests {
             let pkg = g.packages.values_mut().next().unwrap();
             pkg.resource_paths.push(path("ConfigMap-absent"));
             let err = g.validate().unwrap_err();
-            assert!(err.to_string().contains("not among the resources"), "{err}");
+            assert!(
+                err.to_string().contains("not among the built resources"),
+                "{err}"
+            );
         }
     }
 
