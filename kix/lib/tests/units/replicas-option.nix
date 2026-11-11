@@ -15,8 +15,8 @@
 
 let
   packages = {
-    echo-server = import ../../../packages/echo-server;
-    dns-exporter = import ../../../packages/dns-exporter;
+    echo-server = import ../../../packages/stable/echo-server;
+    dns-exporter = import ../../../packages/stable/dns-exporter;
   };
 
   withConfig =

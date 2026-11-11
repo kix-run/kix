@@ -16,7 +16,7 @@
 }:
 
 let
-  smartctlPackage = import ../../../packages/smartctl-exporter;
+  smartctlPackage = import ../../../packages/stable/smartctl-exporter;
   serviceName = "smartctl-exporter-prometheus-smartctl-exporter";
   labels."app.kubernetes.io/name" = "prometheus-smartctl-exporter";
 

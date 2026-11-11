@@ -31,7 +31,7 @@ Because Helm chart fetching and rendering (`fetchHelmChart` and `importChart`) a
 
 ## vendor-crds.py
 
-Refreshes the CRDs every package vendors under `kix/packages/<pkg>/crds/`
+Refreshes the CRDs every package vendors under `kix/packages/stable/<pkg>/crds/`
 from the public URLs in that directory's `sources.txt` (one per line, with
 optional CRD names to take from a bundle). `--check` fails on drift and runs
 in CI on every pull request that touches a package. A package whose upstream

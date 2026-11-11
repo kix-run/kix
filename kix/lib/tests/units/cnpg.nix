@@ -25,17 +25,17 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/cnpg-operator;
-  clusterPackage = import ../../../packages/cnpg-cluster;
-  databasePackage = import ../../../packages/cnpg-database;
-  stackgresOperatorPackage = import ../../../packages/stackgres-operator;
-  stackgresClusterPackage = import ../../../packages/stackgres-cluster;
-  barmanPackage = import ../../../packages/cnpg-barman-cloud;
-  poolerPackage = import ../../../packages/cnpg-pooler;
-  certManagerPackage = import ../../../packages/cert-manager;
-  ciliumPackage = import ../../../packages/cilium;
-  secretPackage = import ../../../packages/secret;
-  serviceRefPackage = import ../../../packages/service-ref;
+  operatorPackage = import ../../../packages/stable/cnpg-operator;
+  clusterPackage = import ../../../packages/stable/cnpg-cluster;
+  databasePackage = import ../../../packages/stable/cnpg-database;
+  stackgresOperatorPackage = import ../../../packages/stable/stackgres-operator;
+  stackgresClusterPackage = import ../../../packages/stable/stackgres-cluster;
+  barmanPackage = import ../../../packages/stable/cnpg-barman-cloud;
+  poolerPackage = import ../../../packages/stable/cnpg-pooler;
+  certManagerPackage = import ../../../packages/stable/cert-manager;
+  ciliumPackage = import ../../../packages/stable/cilium;
+  secretPackage = import ../../../packages/stable/secret;
+  serviceRefPackage = import ../../../packages/stable/service-ref;
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read
@@ -418,7 +418,7 @@ in
           kix = kixlib;
           availability = "none";
         }).meta.version;
-      dir = ../../../packages/cnpg-operator;
+      dir = ../../../packages/stable/cnpg-operator;
       stray = builtins.filter (u: !(lib.hasInfix "/v${release}/" u)) (
         urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
       );
@@ -1387,7 +1387,7 @@ in
           inherit lib;
           kix = kixlib;
         }).meta.version;
-      dir = ../../../packages/cnpg-barman-cloud;
+      dir = ../../../packages/stable/cnpg-barman-cloud;
       stray = builtins.filter (u: !(lib.hasInfix "/${release}/" u)) (
         urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
       );

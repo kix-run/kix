@@ -176,19 +176,19 @@ let
           {
             instances.velero = {
               cloud = {
-                package = import ../../../packages/secret;
+                package = import ../../../packages/stable/secret;
                 aliases = [ "cloudCredentials" ];
                 config.stringData = cloud;
               };
               velero = {
-                package = import ../../../packages/velero;
+                package = import ../../../packages/stable/velero;
                 config = lib.recursiveUpdate { backupStorageLocation.objectStorage.bucket = "b"; } config;
               }
               // lib.optionalAttrs withStore { deps.objectStorage = ref.dbns.db; };
             }
             // lib.optionalAttrs (repository != null) {
               ${repository} = {
-                package = import ../../../packages/secret;
+                package = import ../../../packages/stable/secret;
                 aliases = [ "repositoryPassword" ];
                 config.stringData.repository-password = "key";
               };
@@ -203,7 +203,7 @@ let
   # The package's assertions, evaluated against `config` merged over a
   # bucket. A failed assertion fails the whole cluster before its
   # diagnostics can be read, so the messages are taken from here.
-  veleroPackage = import ../../../packages/velero {
+  veleroPackage = import ../../../packages/stable/velero {
     inherit lib;
     kix = kixlib;
     scope = {

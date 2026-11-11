@@ -55,9 +55,9 @@ const kixApplyPattern = /\bkix apply\b/g;
 const repoSourceRefPattern =
   /(?<![a-zA-Z0-9_./-])((?:kix|cli|clusters|scripts|docs|\.claude|kix-cli|kix-kube|kix-helm)\/[a-zA-Z0-9_{}.,/-]+\.(?:nix|rs|py|sh|mdx|md|json|toml))(?:\b|(?=:))(?::(\d+)(?:[-–](\d+))?)?/g;
 const placeholderPaths = new Set([
-  'kix/packages/pkg/default.nix',
-  'kix/packages/foo/default.nix',
-  'kix/packages/bar/default.nix',
+  'kix/packages/stable/pkg/default.nix',
+  'kix/packages/stable/foo/default.nix',
+  'kix/packages/stable/bar/default.nix',
 ]);
 const docsUrlPattern = /(?:https:\/\/kix\.run)?\/docs\/([a-zA-Z0-9_./-]*)/g;
 const generatedFiles = new Set(['llms.txt', 'llms-small.txt', 'llms-full.txt', 'sitemap-0.xml']);

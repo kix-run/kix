@@ -1,5 +1,5 @@
 # Tests for kix.operandPolicy, the network policy for pods an operator
-# creates, and for kix/packages/kubevirt and kix/packages/cdi: the
+# creates, and for kix/packages/stable/kubevirt and kix/packages/stable/cdi: the
 # VirtualMachine and DataVolume builders, the importer policy builder,
 # operand replicas, the extraSpec guard, images, RBAC, the vendored sources'
 # release, and operand policies. kubevirt runs in namespace `kubevirt`, cdi
@@ -64,9 +64,9 @@ let
 
   policyIn = cluster: byName "operand-peers" (manifests cluster);
 
-  kubevirtPackage = import ../../../packages/kubevirt;
-  cdiPackage = import ../../../packages/cdi;
-  ciliumPackage = import ../../../packages/cilium;
+  kubevirtPackage = import ../../../packages/stable/kubevirt;
+  cdiPackage = import ../../../packages/stable/cdi;
+  ciliumPackage = import ../../../packages/stable/cilium;
   metaLib = import ../../meta.nix { inherit lib; };
 
   # The real cilium package in environment mode, so policies carry the
@@ -648,8 +648,8 @@ in
           urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
         );
       got = {
-        kubevirt = stray kubevirtPackage ../../../packages/kubevirt;
-        cdi = stray cdiPackage ../../../packages/cdi;
+        kubevirt = stray kubevirtPackage ../../../packages/stable/kubevirt;
+        cdi = stray cdiPackage ../../../packages/stable/cdi;
       };
     in
     got == {

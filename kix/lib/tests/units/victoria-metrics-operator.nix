@@ -1,4 +1,4 @@
-# Tests for kix/packages/victoria-metrics-operator: the readiness rules its
+# Tests for kix/packages/stable/victoria-metrics-operator: the readiness rules its
 # custom resources carry, and the options it removed.
 
 {
@@ -18,8 +18,8 @@ let
   readinessOf = m: builtins.fromJSON ((m.metadata.annotations or { }).${kixKeys.readiness} or "null");
   ms = manifests (mkCluster [
     {
-      instances.monitoring.vm-operator.package = import ../../../packages/victoria-metrics-operator;
-      instances.monitoring.vm-cluster.package = import ../../../packages/victoria-metrics-cluster;
+      instances.monitoring.vm-operator.package = import ../../../packages/stable/victoria-metrics-operator;
+      instances.monitoring.vm-cluster.package = import ../../../packages/stable/victoria-metrics-cluster;
     }
   ]);
 in
@@ -57,7 +57,7 @@ in
   # the log level.
   victoria-metrics-operator-removed-options =
     let
-      package = import ../../../packages/victoria-metrics-operator;
+      package = import ../../../packages/stable/victoria-metrics-operator;
       attrs = package {
         scope = {
           instanceName = "vm-operator";

@@ -448,7 +448,7 @@ class PullRequestTest(RepoTest):
         self.assertIn("changes/0.9.0/, a release that has shipped", err)
 
     def test_a_package_that_does_not_exist_is_refused(self):
-        self.repo.write("kix/packages/caddy/default.nix", "{}\n")
+        self.repo.write("kix/packages/stable/caddy/default.nix", "{}\n")
         self.repo.write(
             "changes/x.md", record('kind = "fixed"\npackages = ["caddy", "cady"]')
         )
@@ -458,7 +458,7 @@ class PullRequestTest(RepoTest):
         self.assertNotIn("`caddy` in", err)
 
     def test_an_error_record_needs_its_id_in_an_error_message(self):
-        self.repo.write("kix/packages/caddy/default.nix", "{}\n")
+        self.repo.write("kix/packages/stable/caddy/default.nix", "{}\n")
         self.repo.write(
             "changes/x.md", record('kind = "error"\nid = "K0007"\npackages = ["caddy"]')
         )
@@ -466,7 +466,8 @@ class PullRequestTest(RepoTest):
         self.assertEqual(code, 1)
         self.assertIn("prints [K0007]", err)
         self.repo.write(
-            "kix/packages/caddy/default.nix", '{ x = throw "[K0007] caddy: gone"; }\n'
+            "kix/packages/stable/caddy/default.nix",
+            '{ x = throw "[K0007] caddy: gone"; }\n',
         )
         self.assertEqual(self.repo.run("check")[0], 0)
 

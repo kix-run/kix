@@ -20,8 +20,8 @@
 }:
 
 let
-  corednsPackage = import ../../../packages/coredns;
-  corefile = import ../../../packages/coredns/corefile.nix { inherit lib; };
+  corednsPackage = import ../../../packages/stable/coredns;
+  corefile = import ../../../packages/stable/coredns/corefile.nix { inherit lib; };
 
   # A cluster with one coredns instance. `module` adds cluster settings.
   corednsCluster =

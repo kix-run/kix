@@ -28,12 +28,12 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/stackgres-operator;
-  clusterPackage = import ../../../packages/stackgres-cluster;
-  objectStoragePackage = import ../../../packages/stackgres-object-storage;
-  databasePackage = import ../../../packages/stackgres-database;
-  secretPackage = import ../../../packages/secret;
-  releaseTable = import ../../../packages/stackgres-operator/release.nix { inherit lib; };
+  operatorPackage = import ../../../packages/stable/stackgres-operator;
+  clusterPackage = import ../../../packages/stable/stackgres-cluster;
+  objectStoragePackage = import ../../../packages/stable/stackgres-object-storage;
+  databasePackage = import ../../../packages/stable/stackgres-database;
+  secretPackage = import ../../../packages/stable/secret;
+  releaseTable = import ../../../packages/stable/stackgres-operator/release.nix { inherit lib; };
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read

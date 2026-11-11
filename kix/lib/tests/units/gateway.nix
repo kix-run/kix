@@ -23,8 +23,8 @@
 
 let
   contract = kixlib.contracts.gateway;
-  envoyGateway = import ../../../packages/envoy-gateway;
-  traefik = import ../../../packages/traefik;
+  envoyGateway = import ../../../packages/stable/envoy-gateway;
+  traefik = import ../../../packages/stable/traefik;
 
   importOut.gatewayRef = {
     name = "shared";
@@ -208,7 +208,7 @@ in
         ];
       alone = manifests (clusterWith { });
       withIngress = manifests (clusterWith {
-        instances.ingress.ingress-nginx.package = import ../../../packages/ingress-nginx;
+        instances.ingress.ingress-nginx.package = import ../../../packages/stable/ingress-nginx;
       });
     in
     ofKind "HTTPRoute" alone == [ ]

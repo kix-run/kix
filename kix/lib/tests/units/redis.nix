@@ -15,8 +15,8 @@
 
 let
   contract = kixlib.contracts.redis;
-  valkeyPackage = import ../../../packages/valkey;
-  secretPackage = import ../../../packages/secret;
+  valkeyPackage = import ../../../packages/stable/valkey;
+  secretPackage = import ../../../packages/stable/secret;
 
   plain = {
     host = "valkey.example.net";

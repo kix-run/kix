@@ -109,7 +109,7 @@ let
     kind: name: ms:
     builtins.filter (m: m.metadata.name == name) (ofKind kind ms);
 
-  echoPackage = import ../../../packages/echo-server;
+  echoPackage = import ../../../packages/stable/echo-server;
 
   # A Deployment whose container is `container`.
   deploymentPackage = container: {

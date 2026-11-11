@@ -2,7 +2,7 @@
 
 Complex applications like Harbor have multiple sub-services (core, portal, registry, jobservice, exporter). These are all defined in **one package**, not split into separate packages, because they share config, secrets, and internal URLs. The exception is a sub-component that is independently reusable (Harbor's PostgreSQL database and Valkey cache): that is a DI dep (`database`, `valkey`), not a sub-component (`docs/src/content/docs/explanation/packages-and-clusters.mdx` `#packages-versus-instances`).
 
-Reference implementation: `kix/packages/harbor/`.
+Reference implementation: `kix/packages/stable/harbor/`.
 
 ## Key patterns
 

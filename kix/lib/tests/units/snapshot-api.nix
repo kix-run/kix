@@ -164,8 +164,8 @@ let
   annotationsOf = m: m.metadata.annotations or { };
   dependsOn = m: (annotationsOf m).${kixKeys.dependsOn} or "";
 
-  zfsLocalPvPackage = import ../../../packages/zfs-localpv;
-  snapshotControllerPackage = import ../../../packages/snapshot-controller;
+  zfsLocalPvPackage = import ../../../packages/stable/zfs-localpv;
+  snapshotControllerPackage = import ../../../packages/stable/snapshot-controller;
   kindFlavor = import ../../flavors/kind.nix;
   rke2Flavor = import ../../flavors/rke2.nix;
 

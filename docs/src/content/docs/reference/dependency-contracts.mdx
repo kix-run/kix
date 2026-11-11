@@ -4,8 +4,8 @@ description: "Field schemas, credential rules, and validation helpers for Kix de
 ---
 
 import Snippet from '/src/components/Snippet.astro';
-import postgresDatabaseCheck from '/src/snippets/kix/packages/cnpg-database/default/postgresDatabaseCheck.json';
-import postgresDatabaseAssertions from '/src/snippets/kix/packages/metabase/default/postgresDatabaseAssertions.json';
+import postgresDatabaseCheck from '/src/snippets/kix/packages/stable/cnpg-database/default/postgresDatabaseCheck.json';
+import postgresDatabaseAssertions from '/src/snippets/kix/packages/stable/metabase/default/postgresDatabaseAssertions.json';
 import importedPostgresDatabase from '/src/snippets/clusters/test-doc-how-tos/importedPostgresDatabase.json';
 import importedRedisCache from '/src/snippets/clusters/test-doc-how-tos/importedRedisCache.json';
 import clusterWideSmtpRelay from '/src/snippets/clusters/test-doc-how-tos/clusterWideSmtpRelay.json';
@@ -249,4 +249,4 @@ Unlike the other contracts, `kix.contracts.gateway` exposes `require` and `claim
 
 ## Package-family contracts (`clickhouse`)
 
-In addition to the framework-wide `kix.contracts.*` vocabulary, the ClickHouse package family shares an internal contract at `kix/packages/clickhouse/contract.nix` (default alias `"clickhouse"`), implemented by both single-node `clickhouse` and operator-managed `clickhouse-cluster` and consumed by `clickhouse-database`. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (`"YY.M"`), `replicas`, and `replicaHosts`.
+In addition to the framework-wide `kix.contracts.*` vocabulary, the ClickHouse package family shares an internal contract at `kix/packages/stable/clickhouse/contract.nix` (default alias `"clickhouse"`), implemented by both single-node `clickhouse` and operator-managed `clickhouse-cluster` and consumed by `clickhouse-database`. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (`"YY.M"`), `replicas`, and `replicaHosts`.

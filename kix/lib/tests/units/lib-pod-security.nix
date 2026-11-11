@@ -55,7 +55,7 @@ let
   withContainer =
     change: restrictedPod // { containers = [ (lib.recursiveUpdate restrictedContainer change) ]; };
 
-  echoPackage = import ../../../packages/echo-server;
+  echoPackage = import ../../../packages/stable/echo-server;
 in
 {
   lib-pod-security-restricted-pod-passes =

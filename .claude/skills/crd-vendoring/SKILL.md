@@ -13,13 +13,13 @@ The rules live in `v2_discussions/146_crd_vendoring_and_upgrades.md`. Read
   markers only, each with the `version` the operator's CRD serves
   (required). Never a competing copy.
 - Every other operator package vendors the full upstream objects under
-  `kix/packages/<pkg>/crds/`, one `<metadata.name>.json` per CRD, from the
+  `kix/packages/stable/<pkg>/crds/`, one `<metadata.name>.json` per CRD, from the
   public URLs in `crds/sources.txt`.
 - `scope.crd.fromKind` stubs are for kinds Kix invents. A stub for an
   upstream kind is a defect; the migration table in doc 146 §6 lists the
   ones that remain.
 - An operator whose upstream bundle ships its RBAC vendors those roles
-  under `kix/packages/<pkg>/rbac/`, one `<kind>-<name>.json` per ClusterRole
+  under `kix/packages/stable/<pkg>/rbac/`, one `<kind>-<name>.json` per ClusterRole
   or Role (`:` in a name becomes `_`), from `rbac/sources.txt`. Every URL
   there names the roles to take as `Kind/name`; other kinds are refused,
   because the package builds its own ServiceAccount and bindings. The

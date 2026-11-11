@@ -23,10 +23,10 @@
 
 let
   inherit (import ../../vocab { inherit lib; }) untrackedRef;
-  certManagerPackage = import ../../../packages/cert-manager;
-  issuerPackage = import ../../../packages/cluster-issuer;
-  secretPackage = import ../../../packages/secret;
-  secretRefPackage = import ../../../packages/secret-ref;
+  certManagerPackage = import ../../../packages/stable/cert-manager;
+  issuerPackage = import ../../../packages/stable/cluster-issuer;
+  secretPackage = import ../../../packages/stable/secret;
+  secretRefPackage = import ../../../packages/stable/secret-ref;
 
   certManager.instances.cert-manager.cert-manager.package = certManagerPackage;
 
@@ -158,7 +158,7 @@ let
           issuerModule
           {
             cluster.domain = "test.local";
-            instances.ingress.ingress-nginx.package = import ../../../packages/ingress-nginx;
+            instances.ingress.ingress-nginx.package = import ../../../packages/stable/ingress-nginx;
             instances.appns.web.package = backend;
           }
         ])

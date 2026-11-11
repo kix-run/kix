@@ -24,13 +24,13 @@
 
 let
   contract = kixlib.contracts.oidcProvider;
-  secretPackage = import ../../../packages/secret;
-  keycloakPackage = import ../../../packages/keycloak;
-  grafanaPackage = import ../../../packages/grafana;
-  harborPackage = import ../../../packages/harbor;
-  oidcClientPackage = import ../../../packages/oidc-client;
+  secretPackage = import ../../../packages/stable/secret;
+  keycloakPackage = import ../../../packages/stable/keycloak;
+  grafanaPackage = import ../../../packages/stable/grafana;
+  harborPackage = import ../../../packages/stable/harbor;
+  oidcClientPackage = import ../../../packages/stable/oidc-client;
   clientContract = kixlib.contracts.oidc;
-  immichPackage = import ../../../packages/immich;
+  immichPackage = import ../../../packages/stable/immich;
 
   issuer = realm: "https://auth.example.com/realms/${realm}";
   providerOut = {

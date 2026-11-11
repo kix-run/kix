@@ -1,4 +1,4 @@
-# Tests for kix/packages/loki-logs, kix/packages/clickhouse-logs and the
+# Tests for kix/packages/stable/loki-logs, kix/packages/stable/clickhouse-logs and the
 # Vector agent they share (clickhouse-logs/vector-agent.nix): the locked
 # `settings` paths, the refused flags and env variables, the deps.loki
 # guard, the monitoring module's lokiLogs guard, the priorityClass
@@ -62,12 +62,12 @@ let
       kix = kix // renderingKix;
     };
 
-  lokiLogsDir = ../../../packages/loki-logs;
-  clickhouseLogsDir = ../../../packages/clickhouse-logs;
+  lokiLogsDir = ../../../packages/stable/loki-logs;
+  clickhouseLogsDir = ../../../packages/stable/clickhouse-logs;
   lokiLogsPackage = import lokiLogsDir;
   clickhouseLogsPackage = import clickhouseLogsDir;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
-  secretPackage = import ../../../packages/secret;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
+  secretPackage = import ../../../packages/stable/secret;
 
   # loki-logs in `logs` with a loki to ship to. `loki` replaces the loki
   # instance's package, `instance` is merged into loki-logs' instance, and
@@ -76,7 +76,7 @@ let
     {
       package ? lokiLogsPackage,
       config ? { },
-      loki ? import ../../../packages/loki,
+      loki ? import ../../../packages/stable/loki,
       instance ? { },
       extra ? { },
     }:
@@ -109,7 +109,7 @@ let
     mkCluster [
       {
         instances.chlogs = {
-          clickhouse.package = import ../../../packages/clickhouse;
+          clickhouse.package = import ../../../packages/stable/clickhouse;
           storage = {
             package = pvcPackage;
             config = {
@@ -124,7 +124,7 @@ let
             config.stringData.password = "password";
           };
           clickhouse-database = {
-            package = import ../../../packages/clickhouse-database;
+            package = import ../../../packages/stable/clickhouse-database;
             config.password = "password";
           };
           clickhouse-logs = {
@@ -388,7 +388,7 @@ in
   log-agents-loki-logs-priority-class =
     let
       ship = {
-        package = import ../../../packages/priority-class;
+        package = import ../../../packages/stable/priority-class;
         config.value = 1000;
       };
       dependsOn =
@@ -404,7 +404,7 @@ in
           { ref, ... }:
           {
             instances.logs = {
-              loki.package = import ../../../packages/loki;
+              loki.package = import ../../../packages/stable/loki;
               storage = {
                 package = pvcPackage;
                 config = {
@@ -471,7 +471,7 @@ in
         "prometheus"
         "prometheus-default-rules"
         "prometheus-operator"
-      ] (name: import (../../../packages + "/${name}"));
+      ] (name: import (../../../packages/stable + "/${name}"));
       withModule =
         monitoring:
         mkCluster [

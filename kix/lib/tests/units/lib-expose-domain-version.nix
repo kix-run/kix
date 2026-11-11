@@ -21,7 +21,7 @@ let
   helmDag = import ../../helm-dag.nix { inherit lib; };
   normalize = import ../../core/normalize.nix { inherit lib; };
   rules = import ../../rules/architecture.nix { inherit lib; };
-  envoyGatewayPackage = import ../../../packages/envoy-gateway;
+  envoyGatewayPackage = import ../../../packages/stable/envoy-gateway;
 
   # A web Deployment and Service exposed through kix.expose. The Deployment
   # reads the record's `urlField` of the same instance into PUBLIC_URL.

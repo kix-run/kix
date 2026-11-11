@@ -25,10 +25,10 @@
 
 let
   contract = kixlib.contracts.smtp;
-  secretPackage = import ../../../packages/secret;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
-  vaultwardenPackage = import ../../../packages/vaultwarden;
-  grafanaPackage = import ../../../packages/grafana;
+  secretPackage = import ../../../packages/stable/secret;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
+  vaultwardenPackage = import ../../../packages/stable/vaultwarden;
+  grafanaPackage = import ../../../packages/stable/grafana;
 
   login = {
     username = "app";

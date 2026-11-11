@@ -674,7 +674,7 @@ in
       ms = manifests (mkCluster [
         {
           instances.monitoring-system.victoria-metrics-operator = {
-            package = import ../../../packages/victoria-metrics-operator;
+            package = import ../../../packages/stable/victoria-metrics-operator;
             config = {
               prometheusOperatorCRDs = "reference";
               convert = {
@@ -1538,7 +1538,7 @@ in
     let
       instance = name: value: globalDefault: {
         instances.infra.${name} = {
-          package = import ../../../packages/priority-class;
+          package = import ../../../packages/stable/priority-class;
           config = { inherit value globalDefault; };
         };
       };
@@ -1632,7 +1632,7 @@ in
           {
             cluster.domain = "example.test";
             instances.gwns.gateway = {
-              package = import ../../../packages/envoy-gateway;
+              package = import ../../../packages/stable/envoy-gateway;
               config.listeners = [
                 {
                   name = "http";
@@ -1765,7 +1765,7 @@ in
         mkDeployment = d: d;
         selectorLabels = { };
       };
-      pkg = import ../../../packages/cloudflared {
+      pkg = import ../../../packages/stable/cloudflared {
         scope = stubScope;
         inherit lib;
         kix = kixlib;

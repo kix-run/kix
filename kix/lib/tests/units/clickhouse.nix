@@ -1,4 +1,4 @@
-# Tests for kix/packages/clickhouse-keeper, clickhouse-cluster, and
+# Tests for kix/packages/stable/clickhouse-keeper, clickhouse-cluster, and
 # clickhouse: the contract's replicas and replicaHosts fields, the refusals of an even Keeper
 # quorum and of a cluster with no memory limit, the health check's
 # addresses for each replica, Keeper's metrics endpoint, and the alert
@@ -25,13 +25,13 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/clickhouse-operator;
-  keeperPackage = import ../../../packages/clickhouse-keeper;
-  clusterPackage = import ../../../packages/clickhouse-cluster;
-  secretPackage = import ../../../packages/secret;
-  barePackage = import ../../../packages/clickhouse;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
-  databasePackage = import ../../../packages/clickhouse-database;
+  operatorPackage = import ../../../packages/stable/clickhouse-operator;
+  keeperPackage = import ../../../packages/stable/clickhouse-keeper;
+  clusterPackage = import ../../../packages/stable/clickhouse-cluster;
+  secretPackage = import ../../../packages/stable/secret;
+  barePackage = import ../../../packages/stable/clickhouse;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
+  databasePackage = import ../../../packages/stable/clickhouse-database;
 
   withPrometheus = {
     instances.monitoring.prometheus.package = prometheusStub;
@@ -263,7 +263,7 @@ in
   # an integer, and "0" each give one problem; "2" gives none.
   clickhouse-contract-replicas =
     let
-      contract = import ../../../packages/clickhouse/contract.nix { inherit lib; };
+      contract = import ../../../packages/stable/clickhouse/contract.nix { inherit lib; };
       replicasProblems = out: builtins.filter (p: lib.hasPrefix "replicas " p) (contract.problems out);
     in
     (
@@ -284,7 +284,7 @@ in
   # missing, empty, and a non-string entry each give one problem.
   clickhouse-contract-replica-hosts =
     let
-      contract = import ../../../packages/clickhouse/contract.nix { inherit lib; };
+      contract = import ../../../packages/stable/clickhouse/contract.nix { inherit lib; };
       hostProblems = out: builtins.filter (p: lib.hasPrefix "replicaHosts " p) (contract.problems out);
     in
     (

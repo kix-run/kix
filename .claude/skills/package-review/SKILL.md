@@ -280,7 +280,7 @@ when a check fails or the path is not evaluated by default.
 - Mo16. Does a rule lack `summary` or `description`, template the `summary`, put a value or other changing text in a label, or set `runbook_url` to anything but a maintained upstream runbook for the same condition? Fix: a fixed `summary`; a `description` naming the instance, the value, the meaning, and the first thing to check.
 - Mo17. Is `for` missing or under `5m` without a comment saying the expression's window already spans the restart time? Is a range window under four scrape intervals, or is `rate()` applied after `sum`? Fix: `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`).
 - Mo18. Is a threshold a literal tuned for one site, when the evaluated configuration knows it (memory limit, replica count, schedule) or an instance would need to change it? Fix: derive it, or add a typed option to `metrics` (velero's `maxBackupAge`) whose description says where the default comes from.
-- Mo19. Does an alert restate a kube-prometheus rule from `prometheus-default-rules` (crash looping, replicas mismatch, volume filling up, Job failed, TargetDown)? Detection: `grep -h '"alert"' kix/packages/prometheus-default-rules/rules/*.json`. Fix: delete it; alert on what only the package's own metrics show.
+- Mo19. Does an alert restate a kube-prometheus rule from `prometheus-default-rules` (crash looping, replicas mismatch, volume filling up, Job failed, TargetDown)? Detection: `grep -h '"alert"' kix/packages/stable/prometheus-default-rules/rules/*.json`. Fix: delete it; alert on what only the package's own metrics show.
 - Mo20. Does a rule break under Prometheus or vmalert: a template function one of them lacks, such as `float64` (prometheus-operator refuses the whole PrometheusRule, the VM converter the whole group), `query_offset`, or an exact comparison of `rate()` or `increase()`? Fix: `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`).
 - Mo23. Does a ratio alert (errors over requests) lack a traffic floor, so one failure at low traffic fires it? Does a down alert fire when the component runs zero replicas by design or its metrics Service is off? Does a last-success alert lack a missing-metric partner? Fix: `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`).
 - Mo21. Does an alert use a metric name not found in the program's source or a scrape at the pinned version? Upstream renames metrics between releases, and a rule over a missing metric never fires. Fix: cite where each metric is defined in the pull request; recheck on version bumps.
@@ -446,7 +446,7 @@ read only the hits. Each line is prefixed with the item it serves; a hit is a
 lead, not a finding.
 
 ```bash
-PKG=kix/packages/<name>
+PKG=kix/packages/stable/<name>
 while read -r id re; do
   rg -n --no-heading -g '!**/crds/**' -g '!**/rbac/**' -e "$re" "$PKG" | sed "s|^|$id |"
 done <<'EOF'
@@ -510,7 +510,7 @@ before signing off.
 finding, most severe first:
 
 ```
-[blocker] kix/packages/foo/default.nix:42 S4: checks key "token" in deps.apiToken.assertions; keyRef throws first. Fix: bind through kix.checkSecretKeys.
+[blocker] kix/packages/stable/foo/default.nix:42 S4: checks key "token" in deps.apiToken.assertions; keyRef throws first. Fix: bind through kix.checkSecretKeys.
 ```
 
 - **blocker**: wrong at runtime, unsafe default, credential exposure, site

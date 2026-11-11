@@ -1,4 +1,4 @@
-# Evaluates every package under kix/packages/ in a synthetic kind cluster
+# Evaluates every package under kix/packages/stable/ in a synthetic kind cluster
 # of its own, so a package that no cluster names still runs through the
 # builders, the validators and the scorecard.
 #
@@ -47,17 +47,8 @@ let
   # The clusterDomain of every synthetic cluster.
   evalClusterDomain = "eval.kix.test";
 
-  packages =
-    let
-      entries = builtins.readDir ./packages;
-      dirs = lib.filterAttrs (_: type: type == "directory") entries;
-    in
-    # Every package cluster reads every package through `availablePackages`,
-    # so a parse error would otherwise be reported under whichever package
-    # happens to be evaluated first.
-    lib.mapAttrs (
-      name: _: builtins.addErrorContext "while loading kix/packages/${name}" (import ./packages/${name})
-    ) dirs;
+  # Every package cluster reads every package through `availablePackages`.
+  packages = (import ./packages/by-level.nix { inherit lib; }).stable;
 
   # Auto-instantiation refuses a key that two shelf packages answer, so the
   # shelf keeps one implementation per contested required key: the
@@ -593,7 +584,7 @@ let
   sourceDomainLiterals =
     name:
     let
-      dir = ./packages + "/${name}";
+      dir = ./packages/stable + "/${name}";
       nixFiles =
         rel:
         lib.concatLists (
@@ -617,7 +608,7 @@ let
             i: line:
             lib.optional (
               !(lib.hasPrefix "#" (lib.trimWith { start = true; } line)) && lib.hasInfix "cluster.local" line
-            ) "kix/packages/${name}/${file}:${toString i}"
+            ) "kix/packages/stable/${name}/${file}:${toString i}"
           ) (lib.splitString "\n" (builtins.readFile (dir + "/${file}")))
         );
     in
@@ -652,15 +643,15 @@ let
     in
     if versionExceptions ? ${name} then
       lib.assertMsg (!ok)
-        "kix/packages/${name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
+        "kix/packages/stable/${name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
     else
-      lib.assertMsg ok "kix/packages/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
+      lib.assertMsg ok "kix/packages/stable/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
 
   checkOptions =
     name: package:
     kix.checkPackageOptions {
       inherit package;
-      who = "kix/packages/${name}";
+      who = "kix/packages/stable/${name}";
       scope = {
         instanceName = name;
         namespaceName = name;
@@ -724,7 +715,7 @@ let
     assert checkSource name;
     assert checkVersion name package;
     builtins.addErrorContext
-      "while evaluating kix/packages/${name} in its synthetic cluster at availability \"${level}\""
+      "while evaluating kix/packages/stable/${name} in its synthetic cluster at availability \"${level}\""
       (
         builtins.deepSeq cluster.rawManifests (
           builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
@@ -784,7 +775,7 @@ in
   # package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/stable/";
     assert checkOptionContracts packages;
     builtins.deepSeq evaluated evaluated;
 }

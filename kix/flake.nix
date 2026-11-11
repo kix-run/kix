@@ -19,9 +19,7 @@
           { pkgs, lib }:
           let
             kix = import ./lib { inherit pkgs lib; };
-            entries = builtins.readDir ./packages;
-            dirs = lib.filterAttrs (_: type: type == "directory") entries;
-            packages = lib.mapAttrs (name: _: import ./packages/${name}) dirs;
+            packages = import ./packages { inherit lib; };
           in
           {
             inherit kix packages;

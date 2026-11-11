@@ -115,15 +115,15 @@
           ref.mkAllReferences {
             packages = [
               {
-                path = ../kix/packages/echo-server;
+                path = ../kix/packages/stable/echo-server;
                 name = "echo-server";
               }
               {
-                path = ../kix/packages/cert-manager;
+                path = ../kix/packages/stable/cert-manager;
                 name = "cert-manager";
               }
               {
-                path = ../kix/packages/cilium;
+                path = ../kix/packages/stable/cilium;
                 name = "cilium";
               }
             ];

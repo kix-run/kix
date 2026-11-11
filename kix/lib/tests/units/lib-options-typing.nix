@@ -26,7 +26,7 @@ let
       modules = [ { options.o = o; } ] ++ map (d: { config.o = d; }) defs;
     }).config.o;
 
-  pkg = name: import (../../../packages + "/${name}");
+  pkg = name: import (../../../packages/stable + "/${name}");
 
   # The VictoriaMetrics operator plus one instance of `package` in
   # monitoring-system, with `config`.
@@ -976,7 +976,7 @@ in
   lib-options-typing-check-throws =
     throws (
       eval.checkOptionContract {
-        who = "kix/packages/example";
+        who = "kix/packages/stable/example";
         options.x = lib.mkOption {
           type = t.anything;
           default.a = 1;
@@ -985,7 +985,7 @@ in
     )
     &&
       eval.checkOptionContract {
-        who = "kix/packages/example";
+        who = "kix/packages/stable/example";
         options = { };
       } == null;
 
@@ -1165,7 +1165,7 @@ in
       settings = builtins.fromJSON secret.stringData."alertmanager.yaml";
     in
     (
-      settings == import ../../../packages/alertmanager/default-settings.nix
+      settings == import ../../../packages/stable/alertmanager/default-settings.nix
       && evalFails' (alert {
         extraSpec.datasource.url = "http://elsewhere";
       })

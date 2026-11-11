@@ -20,7 +20,7 @@
 }:
 
 let
-  pkg = name: import ../../../packages/${name};
+  pkg = name: import ../../../packages/stable/${name};
 
   show = builtins.toJSON;
 
@@ -292,7 +292,7 @@ in
   # its presence.
   monitoring-stack-alertmanager-receiver-ports =
     let
-      portsOf = import ../../../packages/alertmanager/receiver-ports.nix {
+      portsOf = import ../../../packages/stable/alertmanager/receiver-ports.nix {
         inherit lib;
         who = "alertmanager test/test";
       };

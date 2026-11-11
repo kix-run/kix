@@ -15,7 +15,7 @@
 
 let
   contract = kixlib.contracts.postgresDatabase;
-  secretPackage = import ../../../packages/secret;
+  secretPackage = import ../../../packages/stable/secret;
 
   # A credentials Secret as mkSecret publishes it.
   credentials = keys: {
@@ -69,7 +69,7 @@ let
   consumers = lib.genAttrs [ "harbor" "immich" "keycloak" "metabase" "n8n" "vaultwarden" ] (
     pname:
     let
-      package = import ../../../packages/${pname};
+      package = import ../../../packages/stable/${pname};
     in
     package (
       builtins.intersectAttrs (builtins.functionArgs package) {
@@ -130,7 +130,7 @@ let
     mkCluster [
       {
         instances.bi = {
-          metabase.package = import ../../../packages/metabase;
+          metabase.package = import ../../../packages/stable/metabase;
           metabase-db.package = stubPackage out;
           metabase-key = {
             package = secretPackage;

@@ -19,9 +19,9 @@
 }:
 
 let
-  n8nPackage = import ../../../packages/n8n;
-  valkeyPackage = import ../../../packages/valkey;
-  secretPackage = import ../../../packages/secret;
+  n8nPackage = import ../../../packages/stable/n8n;
+  valkeyPackage = import ../../../packages/stable/valkey;
+  secretPackage = import ../../../packages/stable/secret;
 
   # The package's top-level attributes. `deps` and `config` read no
   # instance scope.

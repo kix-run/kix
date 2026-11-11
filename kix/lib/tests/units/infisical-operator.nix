@@ -1,4 +1,4 @@
-# Tests for kix/packages/infisical-operator: the custom resource builders,
+# Tests for kix/packages/stable/infisical-operator: the custom resource builders,
 # readiness, ordering, metrics and alert gating, address handling, the
 # egress check, and refusals. The operator and a consumer both run in namespace
 # `infisical`.
@@ -19,8 +19,8 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/infisical-operator;
-  egress = import ../../../packages/infisical-operator/egress.nix { inherit lib; };
+  operatorPackage = import ../../../packages/stable/infisical-operator;
+  egress = import ../../../packages/stable/infisical-operator/egress.nix { inherit lib; };
 
   # The package header's consumer pattern, plus an InfisicalSecret and an
   # InfisicalPushSecret built from out.crds. `extraParts` adds parts for

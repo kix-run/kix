@@ -1274,11 +1274,11 @@ let
       (cluster.scorecardReport or { findings = [ ]; }).findings
     );
 
-  # The real kix/packages/envoy-gateway, not a synthetic stand-in: its
+  # The real kix/packages/stable/envoy-gateway, not a synthetic stand-in: its
   # EnvoyProxy/GatewayClass/Gateway wiring is what decides whether a
   # Gateway can program on a cluster with no LoadBalancer, so the tests
   # want the shipped package, field names and all.
-  envoyGatewayPackage = import ../../packages/envoy-gateway;
+  envoyGatewayPackage = import ../../packages/stable/envoy-gateway;
 
   # What a kind scenario opts into. Envoy Gateway's own default is a
   # LoadBalancer Service for the proxy, which stock kind never gives an
@@ -6058,7 +6058,7 @@ let
     # declaration and not the other.
     t128-shipped-package-config-keeps-declared-images =
       let
-        packagesDir = ../../packages;
+        packagesDir = ../../packages/stable;
         names = builtins.attrNames (
           lib.filterAttrs (
             n: t: t == "directory" && builtins.pathExists (packagesDir + "/${n}/default.nix")
@@ -6147,7 +6147,7 @@ let
             ms = manifests (mkCluster [
               {
                 instances.cert-manager.cert-manager = {
-                  package = import ../../packages/cert-manager;
+                  package = import ../../packages/stable/cert-manager;
                   inherit config;
                 };
               }

@@ -133,7 +133,7 @@ and declare those agents in a namespace of their own.
 
 The loki package takes its volume through a `storage` dependency. Declare a
 `persistent-volume-claim` instance with a `size` beside it; the header of
-`kix/packages/loki/default.nix` shows the form. When another package in the
+`kix/packages/stable/loki/default.nix` shows the form. When another package in the
 same namespace has an optional `storage` dependency (Grafana does), give
 Loki's claim its own instance name and `aliases`, and wire it with
 `deps.storage = ref.<namespace>.<claim>`. Otherwise both pods mount the one

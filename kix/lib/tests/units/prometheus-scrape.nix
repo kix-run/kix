@@ -21,7 +21,7 @@
 }:
 
 let
-  pkg = name: import (../../../packages + "/${name}");
+  pkg = name: import (../../../packages/stable + "/${name}");
 
   # A Deployment with a named metrics port behind a Service whose
   # targetPort is that name, a ServiceMonitor over the Service, and a

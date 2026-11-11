@@ -116,7 +116,7 @@ Collect a whole class at once rather than meeting it one deploy at a time:
 reads, every `CREATE`, `DROP`, or `GRANT` of an object outside the app's
 database, every `System.get_env`/`os.environ` name.
 
-Worked example, Plausible CE (`kix/packages/plausible`):
+Worked example, Plausible CE (`kix/packages/stable/plausible`):
 `config/runtime.exs` takes `DATABASE_URL` and `CLICKHOUSE_DATABASE_URL` as
 URLs, so the credentials are `$(VAR)` expansions into owned variables. It
 reads every setting from a file in `CONFIG_DIR` before the environment, so
@@ -205,7 +205,7 @@ the defaults fails there.
   grafana, plausible, immich); one that keeps mail settings elsewhere calls
   `kix.contracts.smtp.server` for the egress only (keycloak). One that signs users in takes `oidc ? null` and calls
   `kix.contracts.oidc.client` (grafana, harbor, immich).
-  Package-local: `kix/packages/clickhouse/contract.nix`. Consumers hold the
+  Package-local: `kix/packages/stable/clickhouse/contract.nix`. Consumers hold the
   dependency with `assertions`, providers pass `root.out` through `check`
   (D30; pattern table, "Contracts").
 - A consumer that reads an optional field (`username`, `extensions`, `tls`)
@@ -336,7 +336,7 @@ deploy says where it was observed. Operators add
 ### Pattern to reference package
 
 The only place in this skill with package line numbers. `pkg:N` is
-`kix/packages/pkg/default.nix:N`.
+`kix/packages/stable/pkg/default.nix:N`.
 
 | Pattern | Reference |
 |---|---|
@@ -386,7 +386,7 @@ definition.
 
 Mandatory:
 
-1. `kix/packages/<pkg>/default.nix`.
+1. `kix/packages/stable/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
    config to evaluate at `none` and `zone` (`:105`; keycloak at `:290-308`).
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
@@ -432,7 +432,7 @@ Cheap first. Each step assumes the earlier ones pass.
 
 ```bash
 F=--extra-experimental-features; P=pipe-operators
-git add -A kix/packages/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
+git add -A kix/packages/stable/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
 nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh ./clusters <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls
