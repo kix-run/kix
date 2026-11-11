@@ -255,7 +255,7 @@ cluster.roles.cni = {
   binding = "absent";
   provider = null;
 };
-instances.kube-system.cilium.package = packages.cilium;
+instances.kube-system.cilium.package = packages.experimental.cilium;
 ```
 
 ## Cluster factBehavior
@@ -344,7 +344,7 @@ A package that runs once per cluster, such as an operator, needs a namespace of 
 ```nix
 availablePackages = packages // {
   prometheus = {
-    package = packages.prometheus;
+    package = packages.experimental.prometheus;
     namespace = "monitoring";
     aliases = [ "metrics" ];
   };

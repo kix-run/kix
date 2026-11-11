@@ -51,7 +51,7 @@ kix.buildCluster {
         database = {
           postgres = {
             package = kix.mkImport {
-              from = packages."stackgres-cluster";
+              from = packages.experimental."stackgres-cluster";
               # The extensions the external cluster has installed. The
               # stackgres-database below checks the ones immich asks for
               # against this list.
@@ -87,7 +87,7 @@ kix.buildCluster {
           # immich adds the extensions it needs to this instance, which
           # checks them against the imported cluster's out.extensions.
           immich-db = {
-            package = packages."stackgres-database";
+            package = packages.experimental."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "immich";
@@ -97,11 +97,11 @@ kix.buildCluster {
           };
 
           immich = {
-            package = packages.immich;
+            package = packages.experimental.immich;
           };
 
           machine-learning = {
-            package = packages."immich-machine-learning";
+            package = packages.experimental."immich-machine-learning";
           };
         };
       };

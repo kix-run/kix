@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/caddy: the default image is the official one, the
+# Tests for kix/packages/experimental/caddy: the default image is the official one, the
 # deprecated `replicaCount` and `configSecretName` still work and warn, the
 # Caddyfile comes from a `caddyfile` dependency, and a `storage` dependency
 # backs /data. Caddy runs in namespace `edge`.
@@ -15,7 +15,7 @@
 }:
 
 let
-  caddyPackage = import ../../../packages/stable/caddy;
+  caddyPackage = import ../../../packages/experimental/caddy;
   secretPackage = import ../../../packages/stable/secret;
   pvcPackage = import ../../../packages/stable/persistent-volume-claim;
 

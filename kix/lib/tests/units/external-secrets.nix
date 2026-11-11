@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/external-secrets: the webhook check gate on every
+# Tests for kix/packages/experimental/external-secrets: the webhook check gate on every
 # custom resource, the builders' pinning and edges, the webhook
 # configurations, metrics gating, the alert rules of the three components,
 # the release checks, and refusals. The
@@ -20,7 +20,7 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/stable/external-secrets;
+  operatorPackage = import ../../../packages/experimental/external-secrets;
   secretRefPackage = import ../../../packages/stable/secret-ref;
 
   # The package header's consumer pattern, plus a Password generator, an
@@ -460,7 +460,9 @@ in
           availability = null;
         }).meta.version;
       urls = builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
-        lib.splitString "\n" (builtins.readFile ../../../packages/stable/external-secrets/crds/sources.txt)
+        lib.splitString "\n" (
+          builtins.readFile ../../../packages/experimental/external-secrets/crds/sources.txt
+        )
       );
     in
     (urls != [ ] && lib.all (lib.hasInfix "/${release}/") urls)

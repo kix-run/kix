@@ -19,7 +19,7 @@
 }:
 
 let
-  ciliumPackage = import ../../../packages/stable/cilium;
+  ciliumPackage = import ../../../packages/experimental/cilium;
   rke2 = import ../../flavors/rke2.nix;
 
   # Stands in for kix/lib/helm.nix, whose renders only `kix` can produce.

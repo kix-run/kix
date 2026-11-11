@@ -27,7 +27,7 @@ let
   contract = kixlib.contracts.smtp;
   secretPackage = import ../../../packages/stable/secret;
   pvcPackage = import ../../../packages/stable/persistent-volume-claim;
-  vaultwardenPackage = import ../../../packages/stable/vaultwarden;
+  vaultwardenPackage = import ../../../packages/experimental/vaultwarden;
   grafanaPackage = import ../../../packages/stable/grafana;
 
   login = {

@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/otel-collector: the pipelines each dependency and
+# Tests for kix/packages/experimental/otel-collector: the pipelines each dependency and
 # toggle adds, the refusal of a configuration without a pipeline, events in
 # daemonset mode, the events receiver's objects, the locked settings paths,
 # the refused Kubernetes components, and owned flags, the OTLP addresses in
@@ -20,7 +20,7 @@
 }:
 
 let
-  otelPackage = import ../../../packages/stable/otel-collector;
+  otelPackage = import ../../../packages/experimental/otel-collector;
 
   # An OTLP endpoint provider in the contract's shape. `tls` is published
   # only when it is not "absent".

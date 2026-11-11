@@ -4,8 +4,8 @@ description: "Field schemas, credential rules, and validation helpers for Kix de
 ---
 
 import Snippet from '/src/components/Snippet.astro';
-import postgresDatabaseCheck from '/src/snippets/kix/packages/stable/cnpg-database/default/postgresDatabaseCheck.json';
-import postgresDatabaseAssertions from '/src/snippets/kix/packages/stable/metabase/default/postgresDatabaseAssertions.json';
+import postgresDatabaseCheck from '/src/snippets/kix/packages/experimental/cnpg-database/default/postgresDatabaseCheck.json';
+import postgresDatabaseAssertions from '/src/snippets/kix/packages/experimental/metabase/default/postgresDatabaseAssertions.json';
 import importedPostgresDatabase from '/src/snippets/clusters/test-doc-how-tos/importedPostgresDatabase.json';
 import importedRedisCache from '/src/snippets/clusters/test-doc-how-tos/importedRedisCache.json';
 import clusterWideSmtpRelay from '/src/snippets/clusters/test-doc-how-tos/clusterWideSmtpRelay.json';
@@ -32,10 +32,10 @@ Every contract in `kix.contracts.*` defines the default dependency alias, the re
 | [`kix.contracts.redis`](#redis-kixcontractsredis) | `"redis"` | `valkey`, `kix.mkImport` | `harbor`, `immich`, `n8n` |
 | [`kix.contracts.smtp`](#mail-kixcontractssmtp) | `"smtp"` | `kix.mkImport` | `grafana`, `immich`, `keycloak`, `plausible`, `vaultwarden` |
 | [`kix.contracts.oidc`](#single-sign-on-kixcontractsoidc-and-kixcontractsoidcprovider) | `"oidc"` | `oidc-client`, `kix.mkImport` | `grafana`, `harbor`, `immich` |
-| [`kix.contracts.oidcProvider`](#multi-realm-providers-kixcontractsoidcprovider-and-packagesoidc-client) | `"oidcProvider"` | `keycloak`, `kix.mkImport` | `oidc-client` |
+| [`kix.contracts.experimental.oidcProvider`](#multi-realm-providers-kixcontractsoidcprovider-and-packagesoidc-client) | `"oidcProvider"` | `keycloak`, `kix.mkImport` | `oidc-client` |
 | [`kix.contracts.gateway`](#gateway-api-kixcontractsgateway) | `"gateway"` | `envoy-gateway`, `traefik`, `kix.mkImport` | `kix.expose` |
-| [`kix.contracts.otlpEndpoint`](#opentelemetry-kixcontractsotlpendpoint) | `"otlp"` | `tempo`, `otel-collector`, `kix.mkImport` | `otel-collector` |
-| [`kix.contracts.clickhouse`](#clickhouse-kixcontractsclickhouse) | `"clickhouse"` | `clickhouse`, `clickhouse-cluster` | `clickhouse-database` |
+| [`kix.contracts.experimental.otlpEndpoint`](#opentelemetry-kixcontractsotlpendpoint) | `"otlp"` | `tempo`, `otel-collector`, `kix.mkImport` | `otel-collector` |
+| [`kix.contracts.experimental.clickhouse`](#clickhouse-kixcontractsclickhouse) | `"clickhouse"` | `clickhouse`, `clickhouse-cluster` | `clickhouse-database` |
 
 ### Shared contract attributes and methods
 
@@ -170,12 +170,12 @@ With a login, place the import in the consumer's namespace beside its secret wit
 
 ---
 
-## Single sign-on (`kix.contracts.oidc` and `kix.contracts.oidcProvider`)
+## Single sign-on (`kix.contracts.oidc` and `kix.contracts.experimental.oidcProvider`)
 
 Applications that sign users in with OpenID Connect (`grafana`, `harbor`, and `immich`) take an optional `oidc ? null` dependency checked against `kix.contracts.oidc` (`kix/contracts/stable/oidc.nix`). Single sign-on is enabled whenever `oidc` is bound.
 
 Two kinds of instance satisfy `oidc`, both placed in the application's namespace beside the client secret:
-1. **`packages.oidc-client`**: Pairs a multi-realm identity provider (`kix.contracts.oidcProvider`, such as `keycloak`) with one realm name and one client secret (`oidcClient`).
+1. **`packages.experimental.oidc-client`**: Pairs a multi-realm identity provider (`kix.contracts.experimental.oidcProvider`, such as `keycloak`) with one realm name and one client secret (`oidcClient`).
 2. **A namespaced `kix.mkImport`**: Declares an external single-issuer provider directly in the application's namespace with `scope = "namespace"` and `credentials = ref.<namespace>.<secret>`.
 
 ### `oidc` fields (`kix.contracts.oidc`)
@@ -195,16 +195,16 @@ Two kinds of instance satisfy `oidc`, both placed in the application's namespace
 | `kix.contracts.oidc.fields.credentials.keys` | `[ "clientId" "clientSecret" ]` | Required key names on `out.credentials`. |
 | `kix.contracts.oidc.helpers.endpointKeys` | `[ "authorizationUrl" "tokenUrl" "userinfoUrl" ]` | Required attribute names when `out.endpoints` is set. |
 
-### Multi-realm providers (`kix.contracts.oidcProvider` and `packages.oidc-client`)
+### Multi-realm providers (`kix.contracts.experimental.oidcProvider` and `packages.experimental.oidc-client`)
 
-A multi-realm identity provider such as `keycloak` publishes functions of the realm name on `root.out`, checked by `kix.contracts.oidcProvider` (`kix/contracts/stable/oidcProvider.nix`):
+A multi-realm identity provider such as `keycloak` publishes functions of the realm name on `root.out`, checked by `kix.contracts.experimental.oidcProvider` (`kix/contracts/experimental/oidcProvider.nix`):
 
 | Field | Required | Type / shape | Description |
 | --- | --- | --- | --- |
 | `issuerUrl` | Yes | `realm -> url` | Function taking a realm name string and returning that realm's issuer URL (`https?://...`). |
 | `endpoints` | No (required on provider `check`) | `realm -> { authorizationUrl; tokenUrl; userinfoUrl; }` | Function taking a realm name string and returning that realm's authorization, token, and userinfo URLs. |
 
-`packages.oidc-client` (`meta.scope = "namespace"`, `meta.defaultAliases = [ "oidc" ]`) connects a consumer namespace to an `oidcProvider`:
+`packages.experimental.oidc-client` (`meta.scope = "namespace"`, `meta.defaultAliases = [ "oidc" ]`) connects a consumer namespace to an `oidcProvider`:
 - **`config.realm`** (`str`, required): Realm name passed to `oidcProvider.out.issuerUrl` and `oidcProvider.out.endpoints`.
 - **`deps.oidcProvider`** (required): Explicit `ref.<namespace>.<provider>` pointing to the `keycloak` instance (or `oidcProvider` import).
 - **`oidcClient` dependency** (required): Secret or `secret-ref` instance in the same namespace declaring `keys = [ "clientId" "clientSecret" ]`.
@@ -240,9 +240,9 @@ When the external identity provider has a single issuer URL, declare a `kix.mkIm
 
 ---
 
-## OpenTelemetry (`kix.contracts.otlpEndpoint`)
+## OpenTelemetry (`kix.contracts.experimental.otlpEndpoint`)
 
-`kix.contracts.otlpEndpoint` (`kix/contracts/stable/otlpEndpoint.nix`) defines the contract for OpenTelemetry receivers that answer the `otlp` alias (`tempo`, `otel-collector`, or `kix.mkImport`).
+`kix.contracts.experimental.otlpEndpoint` (`kix/contracts/experimental/otlpEndpoint.nix`) defines the contract for OpenTelemetry receivers that answer the `otlp` alias (`tempo`, `otel-collector`, or `kix.mkImport`).
 
 ### `otlpEndpoint` fields
 
@@ -254,6 +254,6 @@ When the external identity provider has a single issuer URL, declare a `kix.mkIm
 
 ---
 
-## ClickHouse (`kix.contracts.clickhouse`)
+## ClickHouse (`kix.contracts.experimental.clickhouse`)
 
-`kix.contracts.clickhouse` (`kix/contracts/stable/clickhouse.nix`) defines the contract for ClickHouse servers that answer the `clickhouse` alias. Both single-node `clickhouse` and operator-managed `clickhouse-cluster` provide it, and `clickhouse-database` consumes it. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (`"YY.M"`), `replicas`, and `replicaHosts`.
+`kix.contracts.experimental.clickhouse` (`kix/contracts/experimental/clickhouse.nix`) defines the contract for ClickHouse servers that answer the `clickhouse` alias. Both single-node `clickhouse` and operator-managed `clickhouse-cluster` provide it, and `clickhouse-database` consumes it. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (`"YY.M"`), `replicas`, and `replicaHosts`.

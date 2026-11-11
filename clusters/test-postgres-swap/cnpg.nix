@@ -14,7 +14,7 @@ kix.buildCluster {
         instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
         instances.db.pg.package = packages.cnpg-cluster;
         instances.app.metabase-db = {
-          package = packages.cnpg-database;
+          package = packages.experimental.cnpg-database;
           deps.postgres = ref.db.pg;
           # Test values only.
           config.password = "swap-fixture-password";

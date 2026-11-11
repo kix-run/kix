@@ -38,7 +38,7 @@ kix.buildCluster {
 
           # Echo server that proves secrets were injected.
           secret-echo = {
-            package = packages.secret-echo;
+            package = packages.experimental.secret-echo;
           };
         };
       };

@@ -108,7 +108,7 @@ kix.buildCluster {
       # Optional coredns in infra ns, activated by needs-coredns.
       instances.infra = {
         coredns = {
-          package = packages.coredns;
+          package = packages.experimental.coredns;
           optional = true;
           config.clusterIP = "10.96.0.10";
         };

@@ -17,7 +17,7 @@ let
     specialArgs = { inherit packages kix; };
     modules = [
       kix.flavors.kind
-      kix.modules.monitoring
+      kix.modules.experimental.monitoring
       {
         monitoring = {
           enabled = true;

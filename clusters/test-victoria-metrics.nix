@@ -125,7 +125,7 @@ kix.buildCluster {
         binding = "absent";
         provider = null;
       };
-      instances.kube-system.cilium.package = packages.cilium;
+      instances.kube-system.cilium.package = packages.experimental.cilium;
 
       namespaces.monitoring-system = { };
 

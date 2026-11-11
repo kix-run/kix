@@ -127,7 +127,7 @@ Collect a whole class at once rather than meeting it one deploy at a time:
 reads, every `CREATE`, `DROP`, or `GRANT` of an object outside the app's
 database, every `System.get_env`/`os.environ` name.
 
-Worked example, Plausible CE (`kix/packages/stable/plausible`):
+Worked example, Plausible CE (`kix/packages/experimental/plausible`):
 `config/runtime.exs` takes `DATABASE_URL` and `CLICKHOUSE_DATABASE_URL` as
 URLs, so the credentials are `$(VAR)` expansions into owned variables. It
 reads every setting from a file in `CONFIG_DIR` before the environment, so
@@ -401,7 +401,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Literal credentials refused in `env` | plausible:337-357 |
 | Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:711-736; cnpg-cluster:596-661 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:517-560, 604-605; `plausible/replicate.py` |
-| One alias, two implementations, a contract file | `kix/contracts/stable/clickhouse.nix`; clickhouse:98, clickhouse-cluster:87 |
+| One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:98, clickhouse-cluster:87 |
 | Renamed dependency with `renamedFrom` | immich:191-194; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 
 A script of more than a few lines is a sibling file read with

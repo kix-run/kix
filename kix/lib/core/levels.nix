@@ -28,16 +28,32 @@ rec {
       prefix,
       stable,
       experimental,
+      # Return the value that stands at the top for an experimental entry
+      # that used to be stable, given the error message for its old name.
+      # Null leaves those names out.
+      demoted ? null,
+      # Names of experimental entries that used to be stable, and the change
+      # record id their error starts with.
+      demotedNames ? [ ],
+      demotedId ? null,
     }:
     let
       reserved = lib.filter (name: stable ? ${name} || experimental ? ${name}) names;
       graduated = lib.mapAttrs (
         name: _: throw "`${prefix}.experimental.${name}` is stable now. Write `${prefix}.${name}`."
       ) (removeAttrs stable (builtins.attrNames experimental));
+      unknownDemoted = lib.filter (name: !(experimental ? ${name}) || stable ? ${name}) demotedNames;
+      wasStable = lib.genAttrs demotedNames (
+        name:
+        demoted "${demotedId} `${prefix}.${name}` is experimental now, so it may change in any release. Write `${prefix}.experimental.${name}`."
+      );
     in
     assert lib.assertMsg (reserved == [ ])
       "${prefix}: ${lib.concatStringsSep " and " reserved} cannot be the name of an entry, because `${prefix}.stable` and `${prefix}.experimental` hold the two levels.";
-    stable
+    assert lib.assertMsg (unknownDemoted == [ ])
+      "${prefix}: ${lib.concatStringsSep ", " unknownDemoted} is listed as moved to experimental, but it is not an experimental entry, or it is also a stable one. Remove it from the list.";
+    lib.optionalAttrs (demoted != null) wasStable
+    // stable
     // {
       inherit stable;
       experimental = graduated // experimental;

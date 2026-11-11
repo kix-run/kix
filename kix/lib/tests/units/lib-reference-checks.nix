@@ -1632,7 +1632,7 @@ in
           {
             cluster.domain = "example.test";
             instances.gwns.gateway = {
-              package = import ../../../packages/stable/envoy-gateway;
+              package = import ../../../packages/experimental/envoy-gateway;
               config.listeners = [
                 {
                   name = "http";
@@ -1765,7 +1765,7 @@ in
         mkDeployment = d: d;
         selectorLabels = { };
       };
-      pkg = import ../../../packages/stable/cloudflared {
+      pkg = import ../../../packages/experimental/cloudflared {
         scope = stubScope;
         inherit lib;
         kix = kixlib;

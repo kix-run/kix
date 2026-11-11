@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/falco: the DaemonSet's privileges and host mounts,
+# Tests for kix/packages/experimental/falco: the DaemonSet's privileges and host mounts,
 # falco.yaml, the rules option and its refusals, the locked settings paths,
 # the container runtime sockets, the metrics toggle, and the refusal of
 # clusters that forbid node agents. Falco runs in namespace `security`.
@@ -16,8 +16,8 @@
 }:
 
 let
-  falcoPackage = import ../../../packages/stable/falco;
-  platformRefusal = import ../../../packages/stable/falco/platform.nix { inherit lib; };
+  falcoPackage = import ../../../packages/experimental/falco;
+  platformRefusal = import ../../../packages/experimental/falco/platform.nix { inherit lib; };
 
   clusterWith =
     {

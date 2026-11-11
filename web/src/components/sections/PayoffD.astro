@@ -21,9 +21,9 @@ const profiles = [
 type SwapLine = { kind: 'comment' | 'removed' | 'added'; text: string };
 const swap: SwapLine[] = [
   { kind: 'comment', text: '# single-node ClickHouse provider' },
-  { kind: 'removed', text: 'instances.data.olap.package = packages.clickhouse;' },
+  { kind: 'removed', text: 'instances.data.olap.package = packages.experimental.clickhouse;' },
   { kind: 'comment', text: '# operator-managed ClickHouse provider (with its operator and Keeper)' },
-  { kind: 'added', text: 'instances.data.olap.package = packages.clickhouse-cluster;' },
+  { kind: 'added', text: 'instances.data.olap.package = packages.experimental.clickhouse-cluster;' },
 ];
 ---
 

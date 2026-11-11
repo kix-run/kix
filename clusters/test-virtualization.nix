@@ -204,12 +204,12 @@ kix.buildCluster {
         };
 
         instances = {
-          kube-system.cilium.package = packages.cilium;
+          kube-system.cilium.package = packages.experimental.cilium;
           kubevirt.kubevirt = {
-            package = packages.kubevirt;
+            package = packages.experimental.kubevirt;
             availability = "node";
           };
-          cdi.cdi.package = packages.cdi;
+          cdi.cdi.package = packages.experimental.cdi;
           vm-demo.vm-demo.package = vmDemoPackage;
           vm-clone.vm-clone = {
             package = vmClonePackage;

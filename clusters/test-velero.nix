@@ -139,7 +139,7 @@ kix.buildCluster {
 
       instances = {
         kube-system.cilium = {
-          package = packages.cilium;
+          package = packages.experimental.cilium;
           config.values = {
             kubeProxyReplacement = false;
             prometheus.enabled = false;
@@ -169,7 +169,7 @@ kix.buildCluster {
             description = "S3 test store for the velero kind run";
           };
           velero = {
-            package = packages.velero;
+            package = packages.experimental.velero;
             config = {
               backupStorageLocation = {
                 objectStorage.bucket = "velero";
@@ -199,7 +199,7 @@ kix.buildCluster {
         };
 
         velero-smoke.smoke.package = smokePackage;
-        monitoring.prometheus-operator.package = packages.prometheus-operator;
+        monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
       };
     }
   ];

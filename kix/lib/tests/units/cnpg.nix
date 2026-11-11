@@ -27,15 +27,15 @@
 let
   operatorPackage = import ../../../packages/stable/cnpg-operator;
   clusterPackage = import ../../../packages/stable/cnpg-cluster;
-  databasePackage = import ../../../packages/stable/cnpg-database;
-  stackgresOperatorPackage = import ../../../packages/stable/stackgres-operator;
-  stackgresClusterPackage = import ../../../packages/stable/stackgres-cluster;
-  barmanPackage = import ../../../packages/stable/cnpg-barman-cloud;
-  poolerPackage = import ../../../packages/stable/cnpg-pooler;
-  certManagerPackage = import ../../../packages/stable/cert-manager;
-  ciliumPackage = import ../../../packages/stable/cilium;
+  databasePackage = import ../../../packages/experimental/cnpg-database;
+  stackgresOperatorPackage = import ../../../packages/experimental/stackgres-operator;
+  stackgresClusterPackage = import ../../../packages/experimental/stackgres-cluster;
+  barmanPackage = import ../../../packages/experimental/cnpg-barman-cloud;
+  poolerPackage = import ../../../packages/experimental/cnpg-pooler;
+  certManagerPackage = import ../../../packages/experimental/cert-manager;
+  ciliumPackage = import ../../../packages/experimental/cilium;
   secretPackage = import ../../../packages/stable/secret;
-  serviceRefPackage = import ../../../packages/stable/service-ref;
+  serviceRefPackage = import ../../../packages/experimental/service-ref;
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read
@@ -1387,7 +1387,7 @@ in
           inherit lib;
           kix = kixlib;
         }).meta.version;
-      dir = ../../../packages/stable/cnpg-barman-cloud;
+      dir = ../../../packages/experimental/cnpg-barman-cloud;
       stray = builtins.filter (u: !(lib.hasInfix "/${release}/" u)) (
         urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
       );

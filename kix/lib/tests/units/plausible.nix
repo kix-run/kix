@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/plausible: the variables the package owns, the
+# Tests for kix/packages/experimental/plausible: the variables the package owns, the
 # routed or explicit BASE_URL, the privileges it asks of its
 # clickhouse-database and the ClickHouse stand-ins it refuses, the citext
 # request and sslmode, the migrations and replicate init container on a
@@ -28,10 +28,10 @@
 }:
 
 let
-  plausiblePackage = import ../../../packages/stable/plausible;
+  plausiblePackage = import ../../../packages/experimental/plausible;
   secretPackage = import ../../../packages/stable/secret;
-  clickhousePackage = import ../../../packages/stable/clickhouse;
-  facadePackage = import ../../../packages/stable/clickhouse-database;
+  clickhousePackage = import ../../../packages/experimental/clickhouse;
+  facadePackage = import ../../../packages/experimental/clickhouse-database;
   pvcPackage = import ../../../packages/stable/persistent-volume-claim;
 
   # A `database` provider with cnpg-database's out shape. Its ConfigMap

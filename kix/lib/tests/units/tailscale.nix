@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/tailscale (refusals, the operator Deployment, the
+# Tests for kix/packages/experimental/tailscale (refusals, the operator Deployment, the
 # custom resource builders, out.mkIngress, out.mkBackendPolicy, and the
 # CRD source tag) and for
 # Services whose loadBalancerClass comes from kix.providedLoadBalancerClass:
@@ -22,7 +22,7 @@
 }:
 
 let
-  tailscalePackage = import ../../../packages/stable/tailscale;
+  tailscalePackage = import ../../../packages/experimental/tailscale;
   secretPackage = import ../../../packages/stable/secret;
   inherit (import ../../vocab { inherit lib; }) untrackedRef providedLoadBalancerClass;
 
@@ -806,7 +806,7 @@ in
           kix = { };
         }).meta.version;
       urls = builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
-        lib.splitString "\n" (builtins.readFile ../../../packages/stable/tailscale/crds/sources.txt)
+        lib.splitString "\n" (builtins.readFile ../../../packages/experimental/tailscale/crds/sources.txt)
       );
     in
     (builtins.length urls == 8 && builtins.all (lib.hasInfix "/v${version}/") urls)

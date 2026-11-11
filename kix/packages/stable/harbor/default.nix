@@ -59,7 +59,7 @@
 #       config = { source = ./valkey.sops.yaml; keys = [ "password" ]; };
 #     };
 #     harbor-db = {
-#       package = packages.stackgres-database;
+#       package = packages.experimental.stackgres-database;
 #       aliases = [ "database" ];
 #       config = { database = "registry"; passwordSource = ./harbor-db.sops.yaml; passwordHash = "..."; };
 #     };

@@ -37,13 +37,13 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
 
-        instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
+        instances.ingress-system.ingress-nginx.package = packages.experimental.ingress-nginx;
         instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
 
         instances.clickhouse-system = {
-          clickhouse-operator.package = packages.clickhouse-operator;
+          clickhouse-operator.package = packages.experimental.clickhouse-operator;
           clickhouse-operator-credentials = {
             package = packages.secret;
             aliases = [ "credentials" ];
@@ -56,11 +56,11 @@ kix.buildCluster {
 
         instances.events = {
           keeper = {
-            package = packages.clickhouse-keeper;
+            package = packages.experimental.clickhouse-keeper;
             config.storage.size = "1Gi";
           };
           clickhouse = {
-            package = packages.clickhouse-cluster;
+            package = packages.experimental.clickhouse-cluster;
             config = {
               replicas = 2;
               storage.size = "2Gi";
@@ -76,7 +76,7 @@ kix.buildCluster {
 
         instances.analytics = {
           plausible = {
-            package = packages.plausible;
+            package = packages.experimental.plausible;
             config.ingress.host = "plausible.localtest.me";
           };
           plausible-pg = {
@@ -85,11 +85,11 @@ kix.buildCluster {
             config.storage.size = "1Gi";
           };
           plausible-db = {
-            package = packages.cnpg-database;
+            package = packages.experimental.cnpg-database;
             config.password = "plausible-db-dev-password";
           };
           plausible-events = {
-            package = packages.clickhouse-database;
+            package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.events.clickhouse;
             config.password = "plausible-events-dev-password";
           };

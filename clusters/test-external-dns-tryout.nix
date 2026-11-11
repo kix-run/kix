@@ -18,7 +18,7 @@ kix.buildCluster {
     {
       # region:externalDnsKindTryout
       instances.external-dns.nodes = {
-        package = packages.external-dns;
+        package = packages.experimental.external-dns;
         config = {
           provider = "inmemory";
           policy = "sync";

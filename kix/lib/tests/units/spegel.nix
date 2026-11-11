@@ -18,7 +18,7 @@
 }:
 
 let
-  spegelPackage = import ../../../packages/stable/spegel;
+  spegelPackage = import ../../../packages/experimental/spegel;
   kindFlavor = import ../../flavors/kind.nix;
   k3sFlavor = import ../../flavors/k3s.nix;
   rke2Flavor = import ../../flavors/rke2.nix;

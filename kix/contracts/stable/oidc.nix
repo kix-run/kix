@@ -6,7 +6,7 @@
 # the issuer, the endpoints, and the client id and secret. Two kinds of
 # instance answer it:
 # - an `oidc-client` instance, which pairs a provider that serves several
-#   realms (`kix.contracts.oidcProvider`, such as keycloak) with a realm and
+#   realms (`kix.contracts.experimental.oidcProvider`, such as keycloak) with a realm and
 #   the client's secret;
 # - a `kix.mkImport` in the application's namespace whose out sets
 #   `issuerUrl` and `credentials = ref.<namespace>.<secret>`.

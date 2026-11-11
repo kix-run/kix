@@ -181,7 +181,7 @@ let
                 config.stringData = cloud;
               };
               velero = {
-                package = import ../../../packages/stable/velero;
+                package = import ../../../packages/experimental/velero;
                 config = lib.recursiveUpdate { backupStorageLocation.objectStorage.bucket = "b"; } config;
               }
               // lib.optionalAttrs withStore { deps.objectStorage = ref.dbns.db; };
@@ -203,7 +203,7 @@ let
   # The package's assertions, evaluated against `config` merged over a
   # bucket. A failed assertion fails the whole cluster before its
   # diagnostics can be read, so the messages are taken from here.
-  veleroPackage = import ../../../packages/stable/velero {
+  veleroPackage = import ../../../packages/experimental/velero {
     inherit lib;
     kix = kixlib;
     scope = {

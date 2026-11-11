@@ -36,7 +36,7 @@ kix.buildCluster {
             config.keys = [ "repository-password" ];
           };
           velero = {
-            package = packages.velero;
+            package = packages.experimental.velero;
             config = {
               features = [ "EnableCSI" ];
               backupStorageLocation = {
@@ -70,7 +70,7 @@ kix.buildCluster {
         };
         kube-system = {
           coredns = {
-            package = packages.coredns;
+            package = packages.experimental.coredns;
 
             config = {
               replicas = 3;
@@ -134,7 +134,7 @@ kix.buildCluster {
 
         cert-manager = {
           cert-manager = {
-            package = packages.cert-manager;
+            package = packages.experimental.cert-manager;
 
           };
         };

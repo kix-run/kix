@@ -19,7 +19,7 @@
 }:
 
 let
-  n8nPackage = import ../../../packages/stable/n8n;
+  n8nPackage = import ../../../packages/experimental/n8n;
   valkeyPackage = import ../../../packages/stable/valkey;
   secretPackage = import ../../../packages/stable/secret;
 

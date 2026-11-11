@@ -25,12 +25,12 @@ kix.buildCluster {
         binding = "absent";
         provider = null;
       };
-      instances.kube-system.cilium.package = packages.cilium;
+      instances.kube-system.cilium.package = packages.experimental.cilium;
 
-      instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
+      instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
       instances.security.falco = {
-        package = packages.falco;
+        package = packages.experimental.falco;
         config.rules."50-shell-in-pod" = [
           {
             rule = "Shell in a pod of the security namespace";

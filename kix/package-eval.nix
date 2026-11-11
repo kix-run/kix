@@ -1,4 +1,4 @@
-# Evaluates every package under kix/packages/stable/ in a synthetic kind cluster
+# Evaluates every package under kix/packages/ in a synthetic kind cluster
 # of its own, so a package that no cluster names still runs through the
 # builders, the validators and the scorecard.
 #
@@ -47,8 +47,22 @@ let
   # The clusterDomain of every synthetic cluster.
   evalClusterDomain = "eval.kix.test";
 
-  # Every package cluster reads every package through `availablePackages`.
-  packages = (import ./packages/by-level.nix { inherit lib; }).stable;
+  byLevel = import ./packages/by-level.nix { inherit lib; };
+
+  # Every package of both levels by name. Every package cluster reads every
+  # package through `availablePackages`, experimental ones included.
+  packages =
+    let
+      both = builtins.attrNames (builtins.intersectAttrs byLevel.stable byLevel.experimental);
+    in
+    assert lib.assertMsg (both == [ ])
+      "kix/package-eval.nix: ${lib.concatStringsSep ", " both} is both a stable and an experimental package. Give the experimental rework a key of its own here.";
+    byLevel.stable // byLevel.experimental;
+
+  levelOf = name: if byLevel.stable ? ${name} then "stable" else "experimental";
+
+  # The folder of a package, relative to the repository root.
+  folderOf = name: "kix/packages/${levelOf name}/${name}";
 
   # Auto-instantiation refuses a key that two shelf packages answer, so the
   # shelf keeps one implementation per contested required key: the
@@ -584,7 +598,7 @@ let
   sourceDomainLiterals =
     name:
     let
-      dir = ./packages/stable + "/${name}";
+      dir = ./packages + "/${levelOf name}/${name}";
       nixFiles =
         rel:
         lib.concatLists (
@@ -608,7 +622,7 @@ let
             i: line:
             lib.optional (
               !(lib.hasPrefix "#" (lib.trimWith { start = true; } line)) && lib.hasInfix "cluster.local" line
-            ) "kix/packages/stable/${name}/${file}:${toString i}"
+            ) "${folderOf name}/${file}:${toString i}"
           ) (lib.splitString "\n" (builtins.readFile (dir + "/${file}")))
         );
     in
@@ -643,15 +657,15 @@ let
     in
     if versionExceptions ? ${name} then
       lib.assertMsg (!ok)
-        "kix/packages/stable/${name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
+        "${folderOf name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
     else
-      lib.assertMsg ok "kix/packages/stable/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
+      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
 
   checkOptions =
     name: package:
     kix.checkPackageOptions {
       inherit package;
-      who = "kix/packages/stable/${name}";
+      who = folderOf name;
       scope = {
         instanceName = name;
         namespaceName = name;
@@ -715,7 +729,7 @@ let
     assert checkSource name;
     assert checkVersion name package;
     builtins.addErrorContext
-      "while evaluating kix/packages/stable/${name} in its synthetic cluster at availability \"${level}\""
+      "while evaluating ${folderOf name} in its synthetic cluster at availability \"${level}\""
       (
         builtins.deepSeq cluster.rawManifests (
           builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
@@ -775,7 +789,7 @@ in
   # package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/stable/";
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a package folder under kix/packages/";
     assert checkOptionContracts packages;
     builtins.deepSeq evaluated evaluated;
 }

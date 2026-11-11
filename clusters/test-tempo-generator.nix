@@ -32,7 +32,7 @@ let
             binding = "absent";
             provider = null;
           };
-          instances.kube-system.cilium.package = packages.cilium;
+          instances.kube-system.cilium.package = packages.experimental.cilium;
 
           instances.monitoring = {
             vm-operator.package = packages.victoria-metrics-operator;
@@ -45,7 +45,7 @@ let
               config.size = "1Gi";
             };
             tempo = {
-              package = packages.tempo;
+              package = packages.experimental.tempo;
               config.metricsGenerator.enabled = true;
             };
           };

@@ -24,7 +24,9 @@ kix.buildCluster {
         ...
       }:
       {
-        availablePackages = packages;
+        availablePackages = packages // {
+          inherit (packages.experimental) cert-manager cluster-issuer;
+        };
         # `*.localhost` resolves to loopback, so the port-forwarded Ingress
         # needs no /etc/hosts entry.
         cluster.domain = "localhost";
@@ -42,24 +44,24 @@ kix.buildCluster {
           provider = null;
         };
         instances.kube-system.cilium = {
-          package = packages.cilium;
+          package = packages.experimental.cilium;
         };
 
         instances.ingress-system.ingress-nginx = {
-          package = packages."ingress-nginx";
+          package = packages.experimental."ingress-nginx";
         };
 
         instances.cert-manager.selfsigned = {
-          package = packages.cluster-issuer;
+          package = packages.experimental.cluster-issuer;
           config.spec.selfSigned = { };
         };
 
         instances.monitoring.prometheus-operator = {
-          package = packages."prometheus-operator";
+          package = packages.experimental."prometheus-operator";
         };
 
         instances.stackgres-system.stackgres-operator = {
-          package = packages."stackgres-operator";
+          package = packages.experimental."stackgres-operator";
         };
 
         instances.harbor = {
@@ -156,14 +158,14 @@ kix.buildCluster {
             config.sentinel.enabled = false;
           };
           harbor-pg = {
-            package = packages."stackgres-cluster";
+            package = packages.experimental."stackgres-cluster";
             aliases = [ "postgres" ];
             # kind has one node and the pods anti-affine, so a second
             # instance never schedules.
             config.instances = 1;
           };
           harbor-db = {
-            package = packages."stackgres-database";
+            package = packages.experimental."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "registry";

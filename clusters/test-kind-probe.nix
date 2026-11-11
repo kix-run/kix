@@ -28,7 +28,7 @@ kix.buildCluster {
         networkPolicy.enable = true;
 
         instances.kube-system.cilium = {
-          package = packages.cilium;
+          package = packages.experimental.cilium;
         };
 
         namespaces.probe = { };

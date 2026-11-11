@@ -30,23 +30,23 @@ kix.buildCluster {
         binding = "absent";
         provider = null;
       };
-      instances.kube-system.cilium.package = packages.cilium;
+      instances.kube-system.cilium.package = packages.experimental.cilium;
 
-      instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
+      instances.ingress-system.ingress-nginx.package = packages.experimental.ingress-nginx;
 
       # The operator is cluster-wide; one instance serves every namespace.
-      instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+      instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
 
       # Test values only; they protect nothing.
       instances.n8n = {
         # StackGres and CloudNativePG both answer `postgres`; this
         # optional instance picks StackGres for the database below.
         stackgres-cluster = {
-          package = packages.stackgres-cluster;
+          package = packages.experimental.stackgres-cluster;
           optional = true;
         };
         n8n = {
-          package = packages.n8n;
+          package = packages.experimental.n8n;
           config = {
             ingress.host = "n8n.localtest.me";
             # The route serves plain http, where a browser drops n8n's
@@ -55,7 +55,7 @@ kix.buildCluster {
           };
         };
         database = {
-          package = packages.stackgres-database;
+          package = packages.experimental.stackgres-database;
           config.password = "n8n-test-db-password";
         };
         n8n-encryption-key = {

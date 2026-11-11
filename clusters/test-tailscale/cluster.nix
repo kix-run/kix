@@ -57,7 +57,7 @@ kix.buildCluster {
         };
 
         instances.tailscale = {
-          cilium.package = packages.cilium;
+          cilium.package = packages.experimental.cilium;
           platform-cilium.package = kix.mkImport {
             roles = [ "cni" ];
             out.helmChartConfig = null;
@@ -71,7 +71,7 @@ kix.buildCluster {
               fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
             };
           };
-          tailscale.package = packages.tailscale;
+          tailscale.package = packages.experimental.tailscale;
           oauth-credentials = {
             package = packages.secret-ref;
             aliases = [ "oauthCredentials" ];
@@ -82,7 +82,7 @@ kix.buildCluster {
           };
         };
 
-        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
+        instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
         instances.tailnet-demo.web.package = import ./consumer.nix;
       }

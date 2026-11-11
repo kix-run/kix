@@ -54,7 +54,7 @@ kix.buildCluster {
 
         instances.ingress-system = {
           cilium = {
-            package = packages.cilium;
+            package = packages.experimental.cilium;
           };
           platform-cilium.package = kix.mkImport {
             roles = [ "cni" ];
@@ -84,7 +84,7 @@ kix.buildCluster {
             };
           };
           ingress-nginx = {
-            package = packages."ingress-nginx";
+            package = packages.experimental."ingress-nginx";
           };
         };
 
@@ -92,7 +92,7 @@ kix.buildCluster {
         # case a same-namespace fallback would hide.
         instances.files = {
           filebrowser = {
-            package = packages.filebrowser;
+            package = packages.experimental.filebrowser;
             config.ingress.host = "files.lt.test";
           };
           filebrowser-data = {

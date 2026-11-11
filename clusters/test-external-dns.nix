@@ -28,7 +28,7 @@ kix.buildCluster {
 
     {
       instances.external-dns.nodes = {
-        package = packages.external-dns;
+        package = packages.experimental.external-dns;
         config = {
           provider = "inmemory";
           policy = "sync";
@@ -43,7 +43,7 @@ kix.buildCluster {
       };
 
       instances.external-dns.services = {
-        package = packages.external-dns;
+        package = packages.experimental.external-dns;
         config = {
           provider = "inmemory";
           policy = "sync";
@@ -54,7 +54,7 @@ kix.buildCluster {
 
       instances.external-dns-gateway = {
         public = {
-          package = packages.external-dns;
+          package = packages.experimental.external-dns;
           config = {
             provider = "inmemory";
             policy = "sync";
@@ -64,7 +64,7 @@ kix.buildCluster {
           };
         };
         private = {
-          package = packages.external-dns;
+          package = packages.experimental.external-dns;
           config = {
             provider = "inmemory";
             policy = "sync";
@@ -75,7 +75,7 @@ kix.buildCluster {
         };
       };
 
-      instances.monitoring.prometheus-operator.package = packages."prometheus-operator";
+      instances.monitoring.prometheus-operator.package = packages.experimental."prometheus-operator";
 
       instances.other.other-dns-token = {
         package = packages.secret-ref;

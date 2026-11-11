@@ -52,7 +52,7 @@ kix.buildCluster {
 
       instances = {
         kube-system.cilium = {
-          package = packages.cilium;
+          package = packages.experimental.cilium;
           config.values = {
             kubeProxyReplacement = false;
             cni.chainingMode = "portmap";
@@ -61,10 +61,10 @@ kix.buildCluster {
           };
         };
 
-        monitoring.prometheus-operator.package = packages.prometheus-operator;
+        monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
         spegel.spegel = {
-          package = packages.spegel;
+          package = packages.experimental.spegel;
           config = {
             mirroredRegistries = [
               "https://docker.io"

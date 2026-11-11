@@ -559,7 +559,7 @@ in
       use =
         part:
         declaredUse {
-          package = import ../../../packages/stable/clickhouse-operator;
+          package = import ../../../packages/experimental/clickhouse-operator;
           path = [
             "crds"
             part
@@ -674,7 +674,7 @@ in
       use =
         part:
         declaredUse {
-          package = import ../../../packages/stable/stackgres-operator;
+          package = import ../../../packages/experimental/stackgres-operator;
           path = [
             "crds"
             part
@@ -738,7 +738,7 @@ in
       use =
         part:
         declaredUse {
-          package = import ../../../packages/stable/prometheus-operator;
+          package = import ../../../packages/experimental/prometheus-operator;
           path = [
             "crds"
             part
@@ -879,7 +879,7 @@ in
   quota-use-arc =
     let
       use = declaredUse {
-        package = import ../../../packages/stable/arc;
+        package = import ../../../packages/experimental/arc;
         path = [
           "crds"
           "autoscalingRunnerSets"
@@ -908,13 +908,15 @@ in
   quota-use-rabbitmq-operator =
     let
       use = declaredUse {
-        package = import ../../../packages/stable/rabbitmq-operator;
+        package = import ../../../packages/experimental/rabbitmq-operator;
         path = [
           "crds"
           "rabbitmqClusters"
         ];
         modules = [
-          { instances.cert-manager.cert-manager.package = import ../../../packages/stable/cert-manager; }
+          {
+            instances.cert-manager.cert-manager.package = import ../../../packages/experimental/cert-manager;
+          }
         ];
       };
     in
@@ -967,7 +969,7 @@ in
   quota-use-kubevirt =
     let
       use = declaredUse {
-        package = import ../../../packages/stable/kubevirt;
+        package = import ../../../packages/experimental/kubevirt;
         path = [
           "crds"
           "virtualMachines"

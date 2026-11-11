@@ -45,8 +45,8 @@ let
             binding = "absent";
             provider = null;
           };
-          instances.kube-system.cilium.package = packages.cilium;
-          instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
+          instances.kube-system.cilium.package = packages.experimental.cilium;
+          instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
           instances.tracing = {
             storage = {
@@ -67,7 +67,7 @@ let
               description = "S3 test store for the Tempo blocks";
             };
             tempo = {
-              package = packages.tempo;
+              package = packages.experimental.tempo;
               deps.endpointService = ref.tracing.s3;
               config = {
                 retention = "72h";
@@ -82,7 +82,7 @@ let
               package = packages.persistent-volume-claim;
               config.size = "1Gi";
             };
-            loki.package = packages.loki;
+            loki.package = packages.experimental.loki;
           };
 
           instances.grafana = {

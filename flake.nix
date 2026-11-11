@@ -221,7 +221,7 @@
       # namespace, plus the facade's bootstrap Job next to the server, must
       # match except for the ClickHouse hostname. The contract itself is
       # defined and checked at evaluation time in
-      # kix/packages/stable/clickhouse/contract.nix; this is the rendering regression
+      # kix/contracts/experimental/clickhouse.nix; this is the rendering regression
       # test. Kix's own dependency bookkeeping is stripped first because it
       # records upstream hashes that legitimately differ between providers.
       clickhouseSwap = lib.genAttrs systems (system: {

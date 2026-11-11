@@ -23,7 +23,7 @@ kix.buildCluster {
 
       namespaces.cert-manager = { };
 
-      instances.cert-manager.cert-manager.package = packages.cert-manager;
+      instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
     }
   ];
 }

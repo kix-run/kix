@@ -39,4 +39,12 @@ levels.merge {
   prefix = "kix.contracts";
   stable = load "stable";
   experimental = load "experimental";
+  # Contracts that were stable before Kix 0.10. Remove these names once the
+  # refusals have been in a minor release.
+  demoted = throw;
+  demotedNames = [
+    "oidcProvider"
+    "otlpEndpoint"
+  ];
+  demotedId = "[K0549]";
 }

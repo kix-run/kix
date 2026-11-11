@@ -119,11 +119,11 @@
                 name = "echo-server";
               }
               {
-                path = ../kix/packages/stable/cert-manager;
+                path = ../kix/packages/experimental/cert-manager;
                 name = "cert-manager";
               }
               {
-                path = ../kix/packages/stable/cilium;
+                path = ../kix/packages/experimental/cilium;
                 name = "cilium";
               }
             ];

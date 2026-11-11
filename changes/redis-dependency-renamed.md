@@ -1,6 +1,6 @@
 +++
 kind = "error"
-packages = ["harbor", "immich", "n8n", "valkey"]
+packages = ["harbor", "experimental/immich", "experimental/n8n", "valkey"]
 library = ["kix.contracts.redis"]
 id = "K9191"
 +++

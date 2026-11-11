@@ -20,7 +20,7 @@
 }:
 
 let
-  pkg = name: import ../../../packages/stable/${name};
+  pkg = name: (import ../../../packages/by-level.nix { inherit lib; }).byName.${name};
 
   show = builtins.toJSON;
 
@@ -292,7 +292,7 @@ in
   # its presence.
   monitoring-stack-alertmanager-receiver-ports =
     let
-      portsOf = import ../../../packages/stable/alertmanager/receiver-ports.nix {
+      portsOf = import ../../../packages/stable/victoria-metrics-alert/alertmanager-receiver-ports.nix {
         inherit lib;
         who = "alertmanager test/test";
       };
@@ -769,20 +769,12 @@ in
   # managed control plane hide.
   monitoring-stack-module-unreachable-monitors =
     let
-      packages = lib.genAttrs [
-        "alertmanager"
-        "kube-state-metrics"
-        "node-exporter"
-        "prometheus"
-        "prometheus-default-rules"
-        "prometheus-operator"
-        "secret"
-      ] pkg;
+      packages = import ../../../packages { inherit lib; };
       monitorsOn =
         cluster:
         map (m: m.metadata.name) (
           kindIn "ServiceMonitor" (mkCluster [
-            ../../modules/monitoring.nix
+            ../../../modules/experimental/monitoring.nix
             {
               _module.args.packages = packages;
               monitoring = {

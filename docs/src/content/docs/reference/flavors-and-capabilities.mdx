@@ -51,7 +51,7 @@ Kix ships 12 built-in flavor modules under `kix.flavors`:
 
 The `rke2` flavor adds the option `cluster.flavor.rke2.cni` (`listOf ("multus" | "canal" | "calico" | "cilium" | "flannel" | "none")`, default `[ "canal" ]`). Set it to match the `cni` list in your RKE2 server configuration:
 - `"canal"`, `"calico"`, or `"flannel"`: binds `cluster.roles.cni` as `"exclusive"`.
-- `"cilium"`: binds `cluster.roles.cni` as `"shadowable"` and declares `instances.kube-system.platform-cilium` with `out.helmChartConfig = { name = "rke2-cilium"; namespace = "kube-system"; }`, allowing a `packages.cilium` instance to configure RKE2's bundled Cilium chart via a `HelmChartConfig` resource.
+- `"cilium"`: binds `cluster.roles.cni` as `"shadowable"` and declares `instances.kube-system.platform-cilium` with `out.helmChartConfig = { name = "rke2-cilium"; namespace = "kube-system"; }`, allowing a `packages.experimental.cilium` instance to configure RKE2's bundled Cilium chart via a `HelmChartConfig` resource.
 - `[ "none" ]`: binds `cluster.roles.cni` as `"absent"` so a managed CNI can be installed from scratch.
 - `"multus"` may precede one primary CNI (for example, `[ "multus" "cilium" ]`).
 
@@ -78,7 +78,7 @@ Each flavor sets defaults under [`cluster.capabilities`](/docs/reference/cluster
 
 ### Role bindings by flavor
 
-Each flavor configures [`cluster.roles.<role>.binding`](/docs/reference/cluster-configuration/#cluster-roles). No flavor binds `network-policy-enforcer`; declare an enforcer package such as `packages.cilium` when enabling `networkPolicy.enable`.
+Each flavor configures [`cluster.roles.<role>.binding`](/docs/reference/cluster-configuration/#cluster-roles). No flavor binds `network-policy-enforcer`; declare an enforcer package such as `packages.experimental.cilium` when enabling `networkPolicy.enable`.
 
 | Flavor | `cni` | `dns` | `storageClasses` | `loadBalancer` | `metricsApi` | `snapshotController` | `registryMirror` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -97,7 +97,7 @@ Each flavor configures [`cluster.roles.<role>.binding`](/docs/reference/cluster-
 
 ## Platform imports
 
-Flavors declare [`kix.mkImport`](/docs/reference/helm-and-imports/) instances to represent services and CRDs that the platform installs out of band. Because dependency resolution prefers managed instances over imports, deploying a managed package that claims the same role (such as `packages.coredns` or `packages.storage-classes`) shadows a `"shadowable"` platform import automatically.
+Flavors declare [`kix.mkImport`](/docs/reference/helm-and-imports/) instances to represent services and CRDs that the platform installs out of band. Because dependency resolution prefers managed instances over imports, deploying a managed package that claims the same role (such as `packages.experimental.coredns` or `packages.storage-classes`) shadows a `"shadowable"` platform import automatically.
 
 | Import instance | Claimed role | Declared by flavors | `optional` | Purpose |
 | --- | --- | --- | --- | --- |

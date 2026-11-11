@@ -20,7 +20,7 @@ kix.buildCluster {
   specialArgs = { inherit packages kix; };
   modules = [
     kix.flavors.kind
-    kix.modules.monitoring
+    kix.modules.experimental.monitoring
 
     {
       cluster.availability.default = "none";
@@ -31,16 +31,16 @@ kix.buildCluster {
         provider = null;
       };
       networkPolicy.enable = true;
-      instances.kube-system.cilium.package = packages.cilium;
+      instances.kube-system.cilium.package = packages.experimental.cilium;
 
       monitoring.enabled = true;
       monitoring.grafana.enabled = false;
 
-      instances.reloader.reloader.package = packages.reloader;
+      instances.reloader.reloader.package = packages.experimental.reloader;
 
-      instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+      instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
       instances.data.pg = {
-        package = packages.stackgres-cluster;
+        package = packages.experimental.stackgres-cluster;
         # kind has one node and the pods anti-affine, so a second instance
         # never schedules.
         config.instances = 1;

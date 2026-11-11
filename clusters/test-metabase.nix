@@ -36,26 +36,26 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
 
-        instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
-        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
-        instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+        instances.ingress-system.ingress-nginx.package = packages.experimental.ingress-nginx;
+        instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
+        instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
 
         instances.analytics = {
           metabase = {
-            package = packages.metabase;
+            package = packages.experimental.metabase;
             config.ingress.host = "metabase.localtest.me";
           };
           metabase-pg = {
-            package = packages.stackgres-cluster;
+            package = packages.experimental.stackgres-cluster;
             aliases = [ "postgres" ];
             # kind has one node and the pods anti-affine, so a second
             # instance never schedules.
             config.instances = 1;
           };
           metabase-db = {
-            package = packages.stackgres-database;
+            package = packages.experimental.stackgres-database;
             # Dev-only value; it protects nothing.
             config.password = "dev-metabase-db-password";
           };
@@ -84,7 +84,7 @@ kix.buildCluster {
             description = "S3 test store for the StackGres backups";
           };
           backups = {
-            package = packages.stackgres-object-storage;
+            package = packages.experimental.stackgres-object-storage;
             deps.endpointService = ref.data.s3;
             config = {
               type = "s3Compatible";
@@ -92,7 +92,7 @@ kix.buildCluster {
             };
           };
           pg-replicated = {
-            package = packages.stackgres-cluster;
+            package = packages.experimental.stackgres-cluster;
             config = {
               instances = 2;
               instanceProfile = {

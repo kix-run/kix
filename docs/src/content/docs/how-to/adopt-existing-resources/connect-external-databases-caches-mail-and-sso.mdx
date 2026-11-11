@@ -58,11 +58,11 @@ Applications that support OpenID Connect (`grafana`, `harbor`, and `immich`) tak
 
 ### Multi-realm provider (`keycloak` with `oidc-client`)
 
-When a multi-realm provider such as `keycloak` runs in the cluster (or is imported via `kix.contracts.oidcProvider`), add an `oidc-client` instance and an `oidcClient` secret (`keys = [ "clientId" "clientSecret" ]`) in the application's namespace:
+When a multi-realm provider such as `keycloak` runs in the cluster (or is imported via `kix.contracts.experimental.oidcProvider`), add an `oidc-client` instance and an `oidcClient` secret (`keys = [ "clientId" "clientSecret" ]`) in the application's namespace:
 
 <Snippet {...keycloakOidcClient} />
 
-`packages.oidc-client` has `meta.scope = "namespace"` and `meta.defaultAliases = [ "oidc" ]`, so the application in that namespace binds to it automatically.
+`packages.experimental.oidc-client` has `meta.scope = "namespace"` and `meta.defaultAliases = [ "oidc" ]`, so the application in that namespace binds to it automatically.
 
 ### Single-issuer external provider
 

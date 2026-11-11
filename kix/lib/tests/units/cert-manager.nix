@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/cert-manager: the flag and env guards, the release
+# Tests for kix/packages/experimental/cert-manager: the flag and env guards, the release
 # check, the gated CRD handles, the metrics gate, and the `apiserver` ingress
 # intent source in the cilium package. cert-manager runs as instance
 # `cert-manager` in namespace `cert-manager`.
@@ -18,8 +18,8 @@
 }:
 
 let
-  certManagerPackage = import ../../../packages/stable/cert-manager;
-  ciliumPackage = import ../../../packages/stable/cilium;
+  certManagerPackage = import ../../../packages/experimental/cert-manager;
+  ciliumPackage = import ../../../packages/experimental/cilium;
 
   clusterWith =
     {

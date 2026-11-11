@@ -96,7 +96,7 @@ kix.buildCluster {
       namespaces.demo = { };
 
       instances.reloader.reloader = {
-        package = packages.reloader;
+        package = packages.experimental.reloader;
         availability = "node";
       };
 

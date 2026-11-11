@@ -7,6 +7,6 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (import ./consumer.nix { inherit packages; })
-    { instances.envoy-system.envoy.package = packages.envoy-gateway; }
+    { instances.envoy-system.envoy.package = packages.experimental.envoy-gateway; }
   ];
 }

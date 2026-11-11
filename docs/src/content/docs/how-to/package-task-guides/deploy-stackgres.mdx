@@ -75,7 +75,7 @@ instances.database = {
   };
 
   backups = {
-    package = packages.stackgres-object-storage;
+    package = packages.experimental.stackgres-object-storage;
     config = {
       type = "s3Compatible";
       bucket = "pg-backups";

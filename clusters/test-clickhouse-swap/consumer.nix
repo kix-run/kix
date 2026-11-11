@@ -6,7 +6,7 @@
 {
   instances.app = {
     events-db = {
-      package = packages.clickhouse-database;
+      package = packages.experimental.clickhouse-database;
       config = {
         database = "events";
         user = "events";

@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/openbao: the self-initialization config and the
+# Tests for kix/packages/experimental/openbao: the self-initialization config and the
 # reconcile Job's role and policy, the Raft join addresses, the shamir mode,
 # the package's refusals, `out.externalSecretsProvider` with its
 # refusals, and the metrics listener, ServiceMonitor, and alert rules that a
@@ -24,9 +24,9 @@
 }:
 
 let
-  openbaoPackage = import ../../../packages/stable/openbao;
-  certManagerPackage = import ../../../packages/stable/cert-manager;
-  externalSecretsPackage = import ../../../packages/stable/external-secrets;
+  openbaoPackage = import ../../../packages/experimental/openbao;
+  certManagerPackage = import ../../../packages/experimental/cert-manager;
+  externalSecretsPackage = import ../../../packages/experimental/external-secrets;
   secretPackage = import ../../../packages/stable/secret;
 
   # The instance config of the test cluster: one engine, one policy, and a

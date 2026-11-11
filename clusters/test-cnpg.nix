@@ -52,12 +52,12 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
-        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
-        instances.cert-manager.cert-manager.package = packages.cert-manager;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
+        instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
+        instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
         instances.cnpg-system = {
           cnpg-operator.package = packages.cnpg-operator;
-          cnpg-barman-cloud.package = packages.cnpg-barman-cloud;
+          cnpg-barman-cloud.package = packages.experimental.cnpg-barman-cloud;
         };
 
         instances.data = {
@@ -96,7 +96,7 @@ kix.buildCluster {
             };
           };
           pg-pooler = {
-            package = packages.cnpg-pooler;
+            package = packages.experimental.cnpg-pooler;
             deps.postgres = ref.data.pg;
             config = {
               metrics.enabled = true;
@@ -104,7 +104,7 @@ kix.buildCluster {
             };
           };
           pg-source = {
-            package = packages.service-ref;
+            package = packages.experimental.service-ref;
             config = {
               name = "pg-rw";
               selector = {
@@ -147,7 +147,7 @@ kix.buildCluster {
             };
           };
           app-db = {
-            package = packages.cnpg-database;
+            package = packages.experimental.cnpg-database;
             deps.postgres = ref.data.pg-pooler;
             config = {
               database = "app";
@@ -164,7 +164,7 @@ kix.buildCluster {
             };
           };
           metabase = {
-            package = packages.metabase;
+            package = packages.experimental.metabase;
             deps.database = ref.data.app-db;
           };
           metabase-encryption-key = {

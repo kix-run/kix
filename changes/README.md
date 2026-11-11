@@ -20,7 +20,7 @@ code block.
 ```markdown
 +++
 kind = "error"
-packages = ["echo-server", "dns-exporter"]
+packages = ["echo-server", "experimental/dns-exporter"]
 id = "K0001"
 +++
 `echo-server` and `dns-exporter` rename `replicaCount` to `replicas`. Set

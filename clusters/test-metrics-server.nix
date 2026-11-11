@@ -32,7 +32,7 @@ kix.buildCluster {
 
       instances = {
         kube-system.cilium = {
-          package = packages.cilium;
+          package = packages.experimental.cilium;
           config.values = {
             kubeProxyReplacement = false;
             prometheus.enabled = false;
@@ -41,12 +41,12 @@ kix.buildCluster {
         };
 
         metrics-server.metrics-server = {
-          package = packages.metrics-server;
+          package = packages.experimental.metrics-server;
           config.extraArgs = [ "--kubelet-insecure-tls" ];
         };
 
         descheduler.descheduler = {
-          package = packages.descheduler;
+          package = packages.experimental.descheduler;
           config.policy = {
             metricsProviders = [ { source = "KubernetesMetrics"; } ];
             profiles.default.pluginConfig.LowNodeUtilization.metricsUtilization.source = "KubernetesMetrics";

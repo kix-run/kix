@@ -24,7 +24,7 @@ kix.buildCluster {
       };
 
       instances.clickhouse-system = {
-        clickhouse-operator.package = packages.clickhouse-operator;
+        clickhouse-operator.package = packages.experimental.clickhouse-operator;
 
         # The user the operator creates in every installation and then logs
         # in as. The package has no default for it.

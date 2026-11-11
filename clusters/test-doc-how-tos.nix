@@ -102,12 +102,12 @@ kix.buildCluster {
         # endregion:configuredPersistentVolumeClaim
 
         instances.ingress-system."ingress-nginx" = {
-          package = packages."ingress-nginx";
+          package = packages.experimental."ingress-nginx";
         };
 
         # region:acmeClusterIssuer
         instances.cert-manager.cert-manager = {
-          package = packages.cert-manager;
+          package = packages.experimental.cert-manager;
         };
 
         # A Secret created outside Kix that holds the Cloudflare API token
@@ -118,7 +118,7 @@ kix.buildCluster {
         };
 
         instances.cert-manager.letsencrypt = {
-          package = packages.cluster-issuer;
+          package = packages.experimental.cluster-issuer;
           deps.issuerCredentials = ref.cert-manager.cloudflare-api-token;
           config.spec.acme = {
             server = "https://acme-v02.api.letsencrypt.org/directory";
@@ -135,7 +135,7 @@ kix.buildCluster {
 
         # region:stagingClusterIssuer
         instances.cert-manager.letsencrypt-staging = {
-          package = packages.cluster-issuer;
+          package = packages.experimental.cluster-issuer;
           # An empty list replaces the default alias `clusterIssuer`, so
           # only the production issuer answers it.
           aliases = [ ];
@@ -188,7 +188,7 @@ kix.buildCluster {
           };
 
           external-dns = {
-            package = packages.external-dns;
+            package = packages.experimental.external-dns;
             deps.providerCredentials = ref.external-dns.cloudflare-api-token;
             config = {
               provider = "cloudflare";
@@ -240,7 +240,7 @@ kix.buildCluster {
             config.keys = [ "key" ];
           };
 
-          metabase.package = packages.metabase;
+          metabase.package = packages.experimental.metabase;
         };
         # endregion:importedPostgresDatabase
 
@@ -287,7 +287,7 @@ kix.buildCluster {
             config.keys = [ "key" ];
           };
 
-          n8n.package = packages.n8n;
+          n8n.package = packages.experimental.n8n;
         };
 
         # region:clusterWideSmtpRelay
@@ -347,7 +347,7 @@ kix.buildCluster {
           };
 
           vaultwarden = {
-            package = packages.vaultwarden;
+            package = packages.experimental.vaultwarden;
             config = {
               domain = "https://vault.example.org";
               mail.from = "vault@example.org";
@@ -396,7 +396,7 @@ kix.buildCluster {
           };
 
           oidc = {
-            package = packages.oidc-client;
+            package = packages.experimental.oidc-client;
             deps.oidcProvider = ref.auth.keycloak;
             config.realm = "main";
           };

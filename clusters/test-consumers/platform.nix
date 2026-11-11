@@ -86,7 +86,7 @@ kix.buildCluster {
     {
       namespaces.kube-system = { };
       instances.kube-system.coredns = {
-        package = packages.coredns;
+        package = packages.experimental.coredns;
         config.clusterIP = "10.96.0.10";
       };
 

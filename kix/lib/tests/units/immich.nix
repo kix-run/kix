@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/immich and immich-machine-learning, and the
+# Tests for kix/packages/experimental/immich and immich-machine-learning, and the
 # kix/lib behaviour they rely on: kix.monitor gives each extra endpoint the
 # instance's scrape interval and the default scheme and path; the env
 # groups, settings paths, release check, and chown guard refuse what the
@@ -23,8 +23,8 @@
 }:
 
 let
-  immichPackage = import ../../../packages/stable/immich;
-  mlPackage = import ../../../packages/stable/immich-machine-learning;
+  immichPackage = import ../../../packages/experimental/immich;
+  mlPackage = import ../../../packages/experimental/immich-machine-learning;
   secretPackage = import ../../../packages/stable/secret;
   rules = import ../../rules { inherit lib; };
 
@@ -293,7 +293,7 @@ in
             config.image.tag = tag;
           };
         };
-      release = (import ../../../packages/stable/immich/release.nix).tag;
+      release = (import ../../../packages/experimental/immich/release.nix).tag;
       url = (serverEnv (withWorker release)).IMMICH_MACHINE_LEARNING_URL or "";
     in
     (

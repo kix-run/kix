@@ -82,9 +82,9 @@ let
 
   resolvedDep = cluster: (byName "consumer" (ofKind "ConfigMap" (manifests cluster))).data.dep;
 
-  externalDnsPackage = import ../../../packages/stable/external-dns;
+  externalDnsPackage = import ../../../packages/experimental/external-dns;
   secretPackage = import ../../../packages/stable/secret;
-  prometheusOperatorPackage = import ../../../packages/stable/prometheus-operator;
+  prometheusOperatorPackage = import ../../../packages/experimental/prometheus-operator;
 
   # The package's `assertions` and `warnings` called directly, with a config
   # evaluated against its options. tryEval drops a throw's message, so this

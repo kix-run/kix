@@ -36,7 +36,7 @@
 #                                (`kix.run/classification`), since the
 #                                operator mounts the configuration from a
 #                                Secret. Credential keys written inline are
-#                                refused (alertmanager's inline-secrets.nix).
+#                                refused (alertmanager-inline-secrets.nix).
 #   alertmanager.configRawYaml   the same configuration written into the
 #                                CR's `configRawYaml`, so no Secret is
 #                                rendered. Same refusal of inline credentials.
@@ -83,9 +83,9 @@ let
     crImageVersionTag
     ;
 
-  defaultAlertmanagerSettings = import ../alertmanager/default-settings.nix;
-  refuseInlineSecrets = import ../alertmanager/inline-secrets.nix { inherit lib who; };
-  receiverPorts = import ../alertmanager/receiver-ports.nix { inherit lib who; };
+  defaultAlertmanagerSettings = import ./alertmanager-default-settings.nix;
+  refuseInlineSecrets = import ./alertmanager-inline-secrets.nix { inherit lib who; };
+  receiverPorts = import ./alertmanager-receiver-ports.nix { inherit lib who; };
 in
 {
   meta = {

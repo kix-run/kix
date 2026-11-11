@@ -186,7 +186,7 @@ Setting `optional = true` keeps a declared instance dormant unless an active ins
 
 ```nix
 instances.data.clickhouse = {
-  package = packages.clickhouse-cluster;
+  package = packages.experimental.clickhouse-cluster;
   optional = true;
   config.shards = 2;
 };

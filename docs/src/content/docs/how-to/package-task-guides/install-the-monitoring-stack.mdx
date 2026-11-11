@@ -10,7 +10,7 @@ import lokiStack from '/src/snippets/how-to/package-stacks/monitoring-loki-clust
 import check from '/src/command-output/how-to/package-monitoring/check.json';
 import packages from '/src/command-output/how-to/package-monitoring/packages.json';
 
-Use `kix.modules.monitoring` to install the native Kix monitoring stack. The
+Use `kix.modules.experimental.monitoring` to install the native Kix monitoring stack. The
 module configures Prometheus Operator, Prometheus, Alertmanager, Grafana,
 node-exporter, and kube-state-metrics as related package instances.
 
@@ -133,7 +133,7 @@ and declare those agents in a namespace of their own.
 
 The loki package takes its volume through a `storage` dependency. Declare a
 `persistent-volume-claim` instance with a `size` beside it; the header of
-`kix/packages/stable/loki/default.nix` shows the form. When another package in the
+`kix/packages/experimental/loki/default.nix` shows the form. When another package in the
 same namespace has an optional `storage` dependency (Grafana does), give
 Loki's claim its own instance name and `aliases`, and wire it with
 `deps.storage = ref.<namespace>.<claim>`. Otherwise both pods mount the one

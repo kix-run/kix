@@ -1,4 +1,4 @@
-# Tests for kix/packages/stable/reloader: the `out.withReloadOn` transformer, the
+# Tests for kix/packages/experimental/reloader: the `out.withReloadOn` transformer, the
 # refused flags and env variables, the namespace checks, the one-instance
 # guards, the replica count, and metrics gating. The reloader runs in
 # namespace `reloader`, the consumer in `demo`.
@@ -15,7 +15,7 @@
 }:
 
 let
-  reloaderPackage = import ../../../packages/stable/reloader;
+  reloaderPackage = import ../../../packages/experimental/reloader;
   secretPackage = import ../../../packages/stable/secret;
   secretRefPackage = import ../../../packages/stable/secret-ref;
   rules = import ../../rules { inherit lib; };

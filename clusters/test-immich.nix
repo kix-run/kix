@@ -30,12 +30,12 @@ kix.buildCluster {
 
       # The operator is cluster-scoped: declare it once to avoid duplicate CRDs.
       instances.stackgres-system.stackgres-operator = {
-        package = packages.stackgres-operator;
+        package = packages.experimental.stackgres-operator;
       };
 
       instances.immich = {
         immich = {
-          package = packages.immich;
+          package = packages.experimental.immich;
         };
 
         immich-library = {
@@ -50,7 +50,7 @@ kix.buildCluster {
         # namespace does not resolve to firezone's postgres. It sets no
         # `extensions`: immich's arrive through immich-db.
         immich-pg = {
-          package = packages.stackgres-cluster;
+          package = packages.experimental.stackgres-cluster;
           aliases = [ "postgres" ];
         };
 
@@ -58,7 +58,7 @@ kix.buildCluster {
         # immich adds its extensions to `extensions`, and stackgres-database
         # forwards them to immich-pg.
         immich-db = {
-          package = packages.stackgres-database;
+          package = packages.experimental.stackgres-database;
           aliases = [ "database" ];
           config = {
             database = "immich";
@@ -80,16 +80,16 @@ kix.buildCluster {
       # real cluster gives each secret a SOPS `source` or a `secret-ref`.
       instances.firezone = {
         firezone-pg = {
-          package = packages.stackgres-cluster;
+          package = packages.experimental.stackgres-cluster;
           aliases = [ "postgres" ];
         };
         firezone-db = {
-          package = packages.stackgres-database;
+          package = packages.experimental.stackgres-database;
           config.password = "firezone-dev-password";
         };
 
         firezone = {
-          package = packages.firezone;
+          package = packages.experimental.firezone;
           config = {
             domain = "vpn.example.com";
             admin.email = "admin@example.com";

@@ -69,7 +69,7 @@ let
   consumers = lib.genAttrs [ "harbor" "immich" "keycloak" "metabase" "n8n" "vaultwarden" ] (
     pname:
     let
-      package = import ../../../packages/stable/${pname};
+      package = (import ../../../packages/by-level.nix { inherit lib; }).byName.${pname};
     in
     package (
       builtins.intersectAttrs (builtins.functionArgs package) {
@@ -130,7 +130,7 @@ let
     mkCluster [
       {
         instances.bi = {
-          metabase.package = import ../../../packages/stable/metabase;
+          metabase.package = import ../../../packages/experimental/metabase;
           metabase-db.package = stubPackage out;
           metabase-key = {
             package = secretPackage;

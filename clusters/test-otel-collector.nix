@@ -29,9 +29,9 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
 
-        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
+        instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
         instances.observability = {
           # A trace backend Kix does not manage, listening for OTLP. A
@@ -47,13 +47,13 @@ kix.buildCluster {
           };
 
           gateway = {
-            package = packages.otel-collector;
+            package = packages.experimental.otel-collector;
             config.events.enabled = true;
             deps.otlp = ref.observability.tempo;
           };
 
           agent = {
-            package = packages.otel-collector;
+            package = packages.experimental.otel-collector;
             config.mode = "daemonset";
             deps.otlp = ref.observability.gateway;
           };
