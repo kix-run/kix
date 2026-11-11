@@ -80,8 +80,8 @@ rewrites the later ones.
   `kix.contracts.experimental.<name>` too, and may share a stable package's
   name as a rework of it. No package is named `stable` or `experimental`.
   The package graduates when its folder moves to `stable/`. This skill
-  writes paths as `kix/packages/stable/<pkg>`. Read `experimental` there for
-  an experimental package.
+  writes paths as `kix/packages/experimental/<pkg>`. Read `stable` there for
+  a stable package.
 - One package per upstream unit. A multi-component application stays one
   package (`docs/src/content/docs/explanation/packages-and-clusters.mdx` `#packages-versus-instances`). A component other packages would
   reuse becomes a dependency instead.
@@ -418,7 +418,7 @@ definition.
 
 Mandatory:
 
-1. `kix/packages/stable/<pkg>/default.nix`.
+1. `kix/packages/experimental/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
    config to evaluate at `none` and `zone` (`:105`; keycloak at `:290-308`).
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
@@ -463,7 +463,7 @@ Cheap first. Each step assumes the earlier ones pass.
 
 ```bash
 F=--extra-experimental-features; P=pipe-operators
-git add -A kix/packages/stable/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
+git add -A kix/packages/experimental/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
 nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh ./clusters <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls

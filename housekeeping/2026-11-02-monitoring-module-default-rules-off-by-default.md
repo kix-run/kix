@@ -1,4 +1,4 @@
-# 2026-11-02 · `kix/lib/modules/monitoring.nix` · The monitoring module leaves `defaultRules.enabled` off, so its stack alerts on no crash-looping pod or down target.
+# 2026-11-02 · `kix/modules/experimental/monitoring.nix` · The monitoring module leaves `defaultRules.enabled` off, so its stack alerts on no crash-looping pod or down target.
 
 Package alerts leave those conditions to prometheus-default-rules
 (package-review item Mo19). node-exporter keeps its two disk alerts while

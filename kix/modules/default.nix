@@ -20,7 +20,7 @@ levels.merge {
   prefix = "kix.modules";
   stable = load "stable";
   experimental = load "experimental";
-  demoted = throw;
+  demoted = _: throw;
   demotedNames = [ "monitoring" ];
   demotedId = "[K0549]";
 }

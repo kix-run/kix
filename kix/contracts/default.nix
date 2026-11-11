@@ -41,7 +41,7 @@ levels.merge {
   experimental = load "experimental";
   # Contracts that were stable before Kix 0.10. Remove these names once the
   # refusals have been in a minor release.
-  demoted = throw;
+  demoted = _: throw;
   demotedNames = [
     "oidcProvider"
     "otlpEndpoint"

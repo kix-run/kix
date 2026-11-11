@@ -356,6 +356,14 @@ availablePackages = packages // {
 | `availablePackages.<name> = <package>;` | Shorthand for `{ package = <package>; }`. |
 | `availablePackages.<name> = { package, namespace?, aliases? };` | Full catalog entry with an optional fixed `namespace` (`nullOr str`) and additional `aliases` (`listOf str`). |
 
+`availablePackages = packages` offers the stable packages only, so Kix never adds an experimental package you did not name. Name each experimental package you want Kix to add:
+
+```nix
+availablePackages = packages // {
+  inherit (packages.experimental) cert-manager cluster-issuer;
+};
+```
+
 ### Auto-instantiation rules
 
 - **Required dependencies only**: Only required build arguments (without `? null`) create demand against `availablePackages`. Optional build arguments resolve to an active instance or `null`. Explicit `deps.<arg>` overrides also bypass catalog lookup.

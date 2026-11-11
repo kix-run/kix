@@ -53,7 +53,7 @@ Each contract is one file in `kix/contracts/stable/`, and the file name is the c
 | `helpers` | `attrset` | The contract's own functions and values for its consumers, such as `kix.contracts.redis.helpers.usesSentinel`. An empty attribute set when the contract has none. |
 | `options` | option attrset, a function that returns one, or `null` | The option set a consumer package adds to its own `options`, such as `kix.contracts.smtp.options`. `null` when the contract has none. |
 
-The contracts on this page are stable, so they break only in a minor release. An experimental contract is a file in `kix/contracts/experimental/` and is read as `kix.contracts.experimental.<name>`. It may break in any release, including a patch release. A stable package reads only stable contracts, and an experimental package may read both. No experimental contract exists yet. See [Stable and experimental packages](/docs/reference/instances-and-composition/#stable-and-experimental-packages) for the two levels.
+A stable contract breaks only in a minor release. An experimental contract is a file in `kix/contracts/experimental/` and is read as `kix.contracts.experimental.<name>`. It may break in any release, including a patch release. A stable package reads only stable contracts, and an experimental package may read both. `oidcProvider`, `otlpEndpoint`, and `clickhouse` are experimental. The other contracts on this page are stable. See [Stable and experimental packages](/docs/reference/instances-and-composition/#stable-and-experimental-packages) for the two levels.
 
 In a provider package, pass `root.out` through `check` so Kix validates every required and optional field:
 

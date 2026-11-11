@@ -58,12 +58,12 @@ Each entry under `instances.<namespace>.<name>` places a managed package instanc
 
 A package is stable or experimental. A stable package breaks only in a minor release. An experimental package may break in any release, including a patch release, and the break may be one that shows no error. `CHANGELOG.md` lists these breaks under the heading "Breaking in experimental packages and contracts".
 
-The name you write in `package` shows the level. In this example, `<name>` stands for the name of an experimental package:
+The name you write in `package` shows the level:
 
 ```nix
 instances.apps.cache.package = packages.valkey;
 instances.apps.cache-2.package = packages.stable.valkey;
-instances.apps.trial.package = packages.experimental.<name>;
+instances.apps.photos.package = packages.experimental.immich;
 ```
 
 - **`packages.<name>`**: A stable package. `packages.stable.<name>` is the same package.
@@ -72,8 +72,9 @@ instances.apps.trial.package = packages.experimental.<name>;
 - **A package that becomes stable**: `packages.experimental.<name>` then fails with the error "`packages.experimental.<name>` is stable now. Write `packages.<name>`."
 - **A shared name**: An experimental package may have the same name as a stable package. It is then a rework of that package, and replaces it in a minor release.
 - **Contracts**: A stable package reads only stable [dependency contracts](/docs/reference/dependency-contracts/#shared-contract-attributes-and-methods). An experimental package may read both stable and experimental contracts.
+- **Automatic instances**: [`availablePackages = packages`](/docs/reference/cluster-configuration/#availablepackages) offers only the stable packages. Name each experimental package that Kix may add.
 
-No experimental package exists yet.
+These packages are stable: `cnpg-cluster`, `cnpg-operator`, `echo-server`, `grafana`, `harbor`, `kube-state-metrics`, `node-exporter`, `persistent-volume-claim`, `priority-class`, `secret`, `secret-ref`, `storage-classes`, `valkey`, `victoria-metrics-agent`, `victoria-metrics-alert`, `victoria-metrics-cluster`, and `victoria-metrics-operator`. Every other package is experimental. A package becomes stable once it has run in production long enough to settle.
 
 ## config
 

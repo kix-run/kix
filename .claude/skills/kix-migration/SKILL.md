@@ -18,7 +18,7 @@ When creating a Kix package, the primary sources are:
 3. **Upstream docs / charts**: for understanding what fields mean and what the defaults are.
 
 If migrating from Ansible, ask the user where the roles are on disk. The typical mapping is:
-- Ansible role → Kix package (`kix/packages/stable/<name>/default.nix`)
+- Ansible role → Kix package (`kix/packages/experimental/<name>/default.nix`, since new packages start experimental)
 - Ansible group_vars / host_vars → cluster definition overrides (`clusters/<name>.nix`)
 - Ansible `templates/*.yaml.j2` → `scope.mkResource { ... }` calls
 
@@ -41,7 +41,7 @@ Take time to understand what Kix gives you before implementing. The right approa
 ```
 1. Read the source config        →  understand what resources are needed
 2. Ensure a cluster dump exists  →  cluster-dump/
-3. Write the Kix package         →  kix/packages/stable/<name>/default.nix
+3. Write the Kix package         →  kix/packages/experimental/<name>/default.nix
 4. Wire into cluster definition  →  clusters/<name>.nix
 5. Build + diff                  →  identify gaps
 6. Iterate until diff is clean
@@ -609,7 +609,7 @@ Cluster definitions can be **single-file** (one `{ kix, packages }:` function ca
 
 Each module file receives `{ config, lib, ref, packages, ... }` and can declare `options` and set `config.instances`.
 
-A package is stable or experimental. `packages.<name>` and `packages.stable.<name>` both name the stable package in `kix/packages/stable/<name>/`. `packages.experimental.<name>` names the package in `kix/packages/experimental/<name>/`, which may break in any release, where a stable package breaks only in a minor release. An experimental package may share a stable package's name, as a rework of it. Once a package graduates, `packages.experimental.<name>` fails with an error that says to write `packages.<name>`.
+A package is stable or experimental. `packages.<name>` and `packages.stable.<name>` both name the stable package in `kix/packages/stable/<name>/`. `packages.experimental.<name>` names the package in `kix/packages/experimental/<name>/`, which may break in any release, where a stable package breaks only in a minor release. An experimental package may share a stable package's name, as a rework of it. Once a package graduates, `packages.experimental.<name>` fails with an error that says to write `packages.<name>`. New packages start experimental. `availablePackages = packages` offers stable packages only; add experimental ones by name (`packages // { inherit (packages.experimental) cert-manager; }`). The monitoring module is `kix.modules.experimental.monitoring`.
 
 ```nix
 # clusters/<name>/platform.nix: sets cluster-wide options

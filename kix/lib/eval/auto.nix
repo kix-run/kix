@@ -136,6 +136,47 @@ rec {
         )
       );
 
+      # Map each key to the packages that `availablePackages = packages`
+      # offered before they moved to experimental. Their old names are
+      # markers there, which the shelf skips.
+      movedByKey = builtins.zipAttrsWith (_: names: names) (
+        lib.concatLists (
+          lib.mapAttrsToList (
+            name: marker:
+            map (key: { ${key} = marker.name; }) (
+              lib.unique (
+                [ name ]
+                ++ meta.peekPackageAliases {
+                  availEntry = {
+                    package = marker.experimentalPackage;
+                    aliases = [ ];
+                    namespace = null;
+                  };
+                  inherit kixlib;
+                  context = "availablePackages.${name}";
+                }
+              )
+            )
+          ) (lib.filterAttrs (_: v: (v._type or "") == "kix-moved") availablePackages)
+        )
+      );
+
+      # Refuse a demand that only a package which moved to experimental would
+      # answer, naming the package to add.
+      refuseMoved =
+        item:
+        let
+          names = lib.unique movedByKey.${item.depName};
+        in
+        throw (
+          "[K0549] ${item.requester} needs dependency '${item.depName}'. `availablePackages = packages` offered ${
+            lib.concatMapStringsSep " or " (n: "`${n}`") names
+          } for it, but that package is experimental now, and `packages` offers only stable packages."
+          + "\nFix: add it by name:"
+          + "\n  availablePackages = packages // { inherit (packages.experimental) ${builtins.head names}; };"
+          + "\nOr declare the instance under `instances` with `packages.experimental.${builtins.head names}`."
+        );
+
       # Return the reasons an availablePackages entry matches `key`, for error
       # messages.
       claimSources =
@@ -394,6 +435,9 @@ rec {
               shelf = shelfInstance item;
             in
             demandsOf { inherit (shelf.avPkg) package; } shelf.ns shelf.canonicalName
+
+          else if movedByKey ? ${item.depName} then
+            refuseMoved item
 
           else
             [ ];

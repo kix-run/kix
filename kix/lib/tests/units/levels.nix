@@ -8,6 +8,7 @@
   lib,
   kixlib,
   mkCluster,
+  mkCmPackage,
   evalFails,
   manifests,
   ...
@@ -181,7 +182,7 @@ in
         prefix = "things";
         stable.a = 1;
         experimental = { };
-        demoted = throw;
+        demoted = _: throw;
         demotedNames = [ "a" ];
         demotedId = "[K0000]";
       }
@@ -200,4 +201,60 @@ in
       && modules.stable == { }
     )
     || throw "levels: an old contract or module name evaluated";
+
+  # A dependency that only a package which moved to experimental would answer
+  # from `availablePackages = packages` fails, and naming the package fixes
+  # it.
+  levels-moved-package-leaves-the-registry =
+    let
+      provider = mkCmPackage {
+        name = "provider";
+        metaExtra.defaultAliases = [ "thing" ];
+        out.ok = true;
+      };
+      consumer = {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            thing,
+            ...
+          }:
+          {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "consumer";
+              extra.data.ok = builtins.toJSON thing.out.ok;
+            };
+            root = self.cm;
+          };
+      };
+      shelf = levels.merge {
+        prefix = "packages";
+        stable = { };
+        experimental.provider = provider;
+        demoted = name: message: {
+          _type = "kix-moved";
+          inherit name message;
+          experimentalPackage = provider;
+        };
+        demotedNames = [ "provider" ];
+        demotedId = "[K0549]";
+      };
+      withShelf =
+        availablePackages:
+        mkCluster [
+          {
+            inherit availablePackages;
+            instances.a.consumer.package = consumer;
+          }
+        ];
+    in
+    (
+      evalFails (withShelf shelf)
+      && manifests (withShelf (shelf // { inherit (shelf.experimental) provider; })) != [ ]
+    )
+    || throw "levels: a moved package was still offered, or naming it did not help";
 }

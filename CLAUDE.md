@@ -141,7 +141,7 @@ The Change kind workflow (`scripts/change-kind.py`) builds a set of clusters twi
 
 ## Stability levels
 
-A package or a contract is stable or experimental. The folder it is in sets the level, and the name a user types shows it.
+A package, a contract, or a module is stable or experimental. The folder it is in sets the level, and the name a user types shows it.
 
 | | Stable | Experimental |
 |---|---|---|
@@ -149,9 +149,13 @@ A package or a contract is stable or experimental. The folder it is in sets the 
 | In a cluster | `packages.<name>` (also `packages.stable.<name>`) | `packages.experimental.<name>` |
 | Contract file | `kix/contracts/stable/<name>.nix` | `kix/contracts/experimental/<name>.nix` |
 | In a package | `kix.contracts.<name>` (also `kix.contracts.stable.<name>`) | `kix.contracts.experimental.<name>` |
+| Module file | `kix/modules/stable/<name>.nix` | `kix/modules/experimental/<name>.nix` |
+| In a cluster | `kix.modules.<name>` | `kix.modules.experimental.<name>` |
 | May break in | a minor release | any release |
 
-- A stable package reads only stable contracts. An experimental package may read both. The test `levels-stable-packages-read-stable-contracts` checks this.
+- A stable package reads only stable contracts and imports no file of an experimental package. An experimental package may read both. The test `levels-stable-packages-read-stable-contracts` checks this. A file two packages share lives in the stable one when either is stable.
+- A package becomes stable once it has run in production long enough to settle, such as in more than one Lithus cluster. New packages start experimental.
+- `availablePackages = packages` offers stable packages only. A cluster names each experimental package Kix may add: `packages // { inherit (packages.experimental) cert-manager; }`.
 - An experimental package may publish a stable contract. A stable package can then take it as a dependency.
 - Graduation is a folder move, in any release, and it changes nothing that is deployed. After it, the experimental name fails with an error that gives the stable one. Do not add a forwarding name.
 - An experimental package may have the name of a stable package. It is a rework of that package and replaces it in a minor release.
@@ -159,7 +163,7 @@ A package or a contract is stable or experimental. The folder it is in sets the 
 - The library has no experimental level. A break to a library function needs a minor release.
 - A change record names an experimental package as `experimental/<name>` in `packages`, and an experimental contract as `kix.contracts.experimental.<name>` in `library`. A breaking record that names only those gives a patch release, and `CHANGELOG.md` lists it under `### Breaking in experimental packages and contracts`.
 
-`kix/lib/core/levels.nix` builds the sets. `kix/packages/default.nix` and `kix/contracts/default.nix` list the folders, so adding a package or a contract is adding a folder or a file. Every contract file returns the result of `mkContract` (`kix/lib/vocab/contract.nix`), with the contract's own functions under `helpers` and its option set under `options`.
+`kix/lib/core/levels.nix` builds the sets. `kix/packages/default.nix`, `kix/contracts/default.nix`, and `kix/modules/default.nix` list the folders. The old names of what moved to experimental in 0.10 fail with `[K0549]` (`kix/packages/was-stable.nix` and the lists in the two other loaders); remove them in 0.11. Adding a package or a contract is adding a folder or a file, Every contract file returns the result of `mkContract` (`kix/lib/vocab/contract.nix`), with the contract's own functions under `helpers` and its option set under `options`.
 
 ## User-facing text: Argon copy pass
 

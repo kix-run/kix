@@ -29,8 +29,8 @@ rec {
       stable,
       experimental,
       # Return the value that stands at the top for an experimental entry
-      # that used to be stable, given the error message for its old name.
-      # Null leaves those names out.
+      # that used to be stable, given its name and the error message for its
+      # old name. Null leaves those names out.
       demoted ? null,
       # Names of experimental entries that used to be stable, and the change
       # record id their error starts with.
@@ -45,7 +45,7 @@ rec {
       unknownDemoted = lib.filter (name: !(experimental ? ${name}) || stable ? ${name}) demotedNames;
       wasStable = lib.genAttrs demotedNames (
         name:
-        demoted "${demotedId} `${prefix}.${name}` is experimental now, so it may change in any release. Write `${prefix}.experimental.${name}`."
+        demoted name "${demotedId} `${prefix}.${name}` is experimental now, so it may change in any release. Write `${prefix}.experimental.${name}`."
       );
     in
     assert lib.assertMsg (reserved == [ ])
