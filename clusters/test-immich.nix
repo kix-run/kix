@@ -63,7 +63,8 @@ kix.buildCluster {
           config = {
             database = "immich";
             user = "immich";
-            password = "immich-dev-password";
+            passwordSource = ./dev-secrets/immich-db.sops.yaml;
+            passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
           };
         };
 
@@ -85,7 +86,8 @@ kix.buildCluster {
         };
         firezone-db = {
           package = packages.experimental.stackgres-database;
-          config.password = "firezone-dev-password";
+          config.passwordSource = ./dev-secrets/firezone-db.sops.yaml;
+          config.passwordHash = "sha256-mkPnt4ugMrbK4xcSsIwaPsOYAmwzzg4wD5ydQAY9g5Q=";
         };
 
         firezone = {

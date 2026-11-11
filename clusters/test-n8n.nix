@@ -56,7 +56,8 @@ kix.buildCluster {
         };
         database = {
           package = packages.experimental.stackgres-database;
-          config.password = "n8n-test-db-password";
+          config.passwordSource = ./dev-secrets/n8n-db.sops.yaml;
+          config.passwordHash = "sha256-c/LhiT1y1tj/rrThho5Q6XdskPC0Kt1DbkruTzTUfI0=";
         };
         n8n-encryption-key = {
           package = packages.secret;

@@ -160,7 +160,8 @@ kix.buildCluster {
                 }
               ];
               # Test values only.
-              password = "test-cnpg-password";
+              passwordSource = ./dev-secrets/cnpg-app-db.sops.yaml;
+              passwordHash = "sha256-M4b7ISu/Z6SShWDjhi3Hn8OAfI6U8VTLWyiI7J7vNvg=";
             };
           };
           metabase = {

@@ -73,7 +73,8 @@ kix.buildCluster {
             config = {
               database = "immich";
               user = "immich";
-              password = "immich-dev-password";
+              passwordSource = ./dev-secrets/immich-db.sops.yaml;
+              passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
             };
           };
 

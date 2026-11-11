@@ -24,8 +24,7 @@
 #   cnpgOperator (required)  the cnpg-operator whose DatabaseRole and
 #                            Database handles the package builds from.
 #
-# Config: `passwordSource` with `passwordHash` (a SOPS file), or the
-# deprecated `password` (a literal), which Kix 0.10 removes.
+# Config: `passwordSource` with `passwordHash` (a SOPS file).
 #
 # Minimal instance, beside an app that takes deps.database:
 #
@@ -67,8 +66,7 @@
 # Limits: the role's password comes from options rather than a secret
 # dependency, because the same value has to reach a Secret in each of two
 # namespaces. CloudNativePG reads the role's password in the Cluster's
-# namespace. A literal `password` lands in the Nix store, so the package
-# warns when it is set. The password should come from a secret dependency
+# namespace. The password should come from a secret dependency
 # with a declared `password` key, as in other packages. That needs Kix to
 # copy a dependency's Secret into a second namespace, which Kix cannot do
 # yet.
@@ -164,11 +162,6 @@ in
       }
     ];
 
-  warnings =
-    { config, ... }:
-    lib.optional (config.password != null)
-      "`password` puts the password in plain text in Kix's local store and in the built Secrets. This build still uses it, but Kix 0.10 removes the option. Set `passwordSource` to a SOPS-encrypted file with a `password` key, and `passwordHash` to the content hash of the decrypted password.";
-
   options = {
     database = lib.mkOption {
       type = identifier;
@@ -211,14 +204,10 @@ in
     };
 
     password = lib.mkOption {
-      type = lib.types.nullOr lib.types.nonEmptyStr;
+      type = lib.types.nullOr lib.types.str;
       default = null;
-      description = ''
-        Deprecated, and Kix 0.10 removes it. Literal password. Mutually
-        exclusive with passwordSource. The plaintext lands in Kix's local
-        store and the rendered Secrets, so the build warns. Use
-        passwordSource with passwordHash instead.
-      '';
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names `passwordSource` and `passwordHash`.";
     };
 
     passwordSource = lib.mkOption {
@@ -266,11 +255,11 @@ in
           throw "${who}: the cnpgOperator dependency publishes no out.crds, as with an import. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
 
       _passwordCheck =
-        if config.password == null && config.passwordSource == null then
-          throw "${who}: neither password nor passwordSource is set. Set password (a literal, for development) or passwordSource (a SOPS file) with passwordHash."
-        else if config.password != null && config.passwordSource != null then
-          throw "${who}: both password and passwordSource are set. Remove one."
-        else if config.passwordSource != null && config.passwordHash == null then
+        if config.password != null then
+          throw "[K9503] ${who}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
+        else if config.passwordSource == null then
+          throw "${who}: passwordSource is not set. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
+        else if config.passwordHash == null then
           throw "${who}: passwordSource is set without passwordHash, which the deploy compares to find a changed password. Set passwordHash."
         else
           null;
@@ -288,9 +277,6 @@ in
         ${kix.keys.dbCluster} = cluster.clusterName;
       };
 
-      passwordData = lib.optionalAttrs (config.password != null) {
-        password = config.password;
-      };
       secretMeta = {
         classification = "credential";
         rotationPolicy = "manual";
@@ -312,8 +298,7 @@ in
           database = dbName;
           host = cluster.fqdn;
           port = cluster.port;
-        }
-        // passwordData;
+        };
         source = config.passwordSource;
         hash = config.passwordHash;
         inherit labels;
@@ -331,8 +316,7 @@ in
         ];
         stringData = {
           username = userName;
-        }
-        // passwordData;
+        };
         source = config.passwordSource;
         hash = config.passwordHash;
         inherit labels;

@@ -3,8 +3,8 @@
 # quorum and of a cluster with no memory limit, the health check's
 # addresses for each replica, Keeper's metrics endpoint, and the alert
 # rules of the operator, Keeper, and both server packages and what each
-# rule is gated on, and clickhouse-database's warning on a literal
-# `password`.
+# rule is gated on, and clickhouse-database's refusal of the removed
+# `password` option.
 # The operator runs in `clickhouse-system`, Keeper and the servers in `db`,
 # the prometheus stub in `monitoring`.
 # tryEval drops a throw's message, so each refusal is checked with
@@ -17,6 +17,7 @@
   ofKind,
   byName,
   evalFails,
+  kixKeys,
   alertRulesOf,
   allSelect,
   prometheusStub,
@@ -376,9 +377,9 @@ in
       builtins.toJSON (if rules3 == null then null else builtins.attrNames rules3)
     }, one ${builtins.toJSON (if rules1 == null then null else builtins.attrNames rules1)}";
 
-  # A literal `password` still fills both Secrets, and warns that Kix 0.10
-  # removes it. `passwordSource` gives no such warning.
-  clickhouse-database-password-warns =
+  # The removed `password` option fails the build. `passwordSource` fills
+  # both Secrets from the SOPS file at deploy.
+  clickhouse-database-password-refused =
     let
       withDatabase =
         config:
@@ -396,25 +397,19 @@ in
             )
           ];
         };
-      literal = withDatabase { password = "pw"; };
-      sops = withDatabase {
+      sopsPassword = {
         passwordSource = ./clickhouse.nix;
         passwordHash = "hash";
       };
-      warningsOf = cluster: cluster.instances.apps.app-db._diagnostics.warnings;
-      warns = cluster: builtins.any (lib.hasInfix "Kix 0.10 removes") (warningsOf cluster);
-      passwordIn = name: (byName name (ofKind "Secret" (manifests literal))).stringData.password;
+      literal = withDatabase (sopsPassword // { password = "pw"; });
+      secretIn = name: byName name (ofKind "Secret" (manifests (withDatabase sopsPassword)));
+      fromSops =
+        name:
+        let
+          secret = secretIn name;
+        in
+        secret.metadata.annotations ? ${kixKeys.sopsSource} && !(secret.stringData or { } ? password);
     in
-    (
-      warns literal
-      && !(warns sops)
-      && passwordIn "app-db-credentials" == "pw"
-      && passwordIn "app-db-apps-bootstrap-password" == "pw"
-    )
-    || throw "clickhouse-database password warning: ${
-      builtins.toJSON {
-        literal = warningsOf literal;
-        sops = warningsOf sops;
-      }
-    }";
+    (evalFails literal && fromSops "app-db-credentials" && fromSops "app-db-apps-bootstrap-password")
+    || throw "clickhouse-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
 }

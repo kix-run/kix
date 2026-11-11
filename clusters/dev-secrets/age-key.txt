@@ -1,0 +1,5 @@
+# A test-only age key. It decrypts the development passwords in this
+# folder, which the test clusters use. Deploy one of them with
+# SOPS_AGE_KEY_FILE=clusters/dev-secrets/age-key.txt. Never encrypt a real
+# secret to it.
+AGE-SECRET-KEY-17GL4UCEWMVTVSTEJKYL6PA4KMKC88MEV9E5CG8E8UQ7TSY4WA2HQ9XDQMR

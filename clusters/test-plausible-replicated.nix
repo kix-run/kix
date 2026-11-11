@@ -86,12 +86,14 @@ kix.buildCluster {
           };
           plausible-db = {
             package = packages.experimental.cnpg-database;
-            config.password = "plausible-db-dev-password";
+            config.passwordSource = ./dev-secrets/plausible-db.sops.yaml;
+            config.passwordHash = "sha256-Fx4LekxcnAr8/CrtSEqLMisM7ElvkqCo+jSeVrr6xqw=";
           };
           plausible-events = {
             package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.events.clickhouse;
-            config.password = "plausible-events-dev-password";
+            config.passwordSource = ./dev-secrets/plausible-events.sops.yaml;
+            config.passwordHash = "sha256-n8fiYw1YaJ4eWkduVI5s+ugSbn3FLfwuRJ+WpySotvg=";
           };
           plausible-secret-key-base = {
             package = packages.secret;

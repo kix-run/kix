@@ -91,8 +91,7 @@
 # Limits: the user's password comes from options rather than a secret
 # dependency, because the same value has to reach a Secret in each of two
 # namespaces. The bootstrap Job runs in the server's namespace and reads
-# it there. A literal `password` lands in the Nix store, so the package
-# warns when it is set. The password should come from a secret dependency
+# it there. The password should come from a secret dependency
 # with a declared `password` key, as in other packages. That needs Kix to
 # copy a dependency's Secret into a second namespace, which Kix cannot do
 # yet.
@@ -147,11 +146,6 @@ in
           message = "${who} needs ClickHouse ${supportedFrom} or newer for the SQL its bootstrap runs, and the clickhouse instance it resolved to is ${dep.out.version}.";
         };
   };
-
-  warnings =
-    { config, ... }:
-    lib.optional (config.password != null)
-      "`password` puts the password in plain text in Kix's local store and in the built Secrets. This build still uses it, but Kix 0.10 removes the option. Set `passwordSource` to a SOPS-encrypted file with a `password` key, and `passwordHash` to the content hash of the decrypted password.";
 
   options = {
     database = lib.mkOption {
@@ -221,11 +215,8 @@ in
     password = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = ''
-        Deprecated, and Kix 0.10 removes it. Literal password. The
-        plaintext lands in Kix's local store and the rendered Secrets, so
-        the build warns. Use passwordSource with passwordHash instead.
-      '';
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names `passwordSource` and `passwordHash`.";
     };
 
     passwordSource = lib.mkOption {
@@ -259,12 +250,12 @@ in
     }:
     let
       _passwordCheck =
-        if config.password == null && config.passwordSource == null then
-          throw "clickhouse-database '${name}': set `password` (literal, development) or `passwordSource` (SOPS path)."
-        else if config.password != null && config.passwordSource != null then
-          throw "clickhouse-database '${name}': set `password` or `passwordSource`, not both."
-        else if config.passwordSource != null && config.passwordHash == null then
-          throw "clickhouse-database '${name}': `passwordHash` is required with `passwordSource`."
+        if config.password != null then
+          throw "[K9503] clickhouse-database ${scope.namespaceName}/${name}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
+        else if config.passwordSource == null then
+          throw "clickhouse-database ${scope.namespaceName}/${name}: passwordSource is not set. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
+        else if config.passwordHash == null then
+          throw "clickhouse-database ${scope.namespaceName}/${name}: passwordSource is set without passwordHash, which the deploy compares to find a changed password. Set passwordHash."
         else
           null;
 
@@ -297,7 +288,7 @@ in
             image = kix.image.ref config.image;
             script = bootstrapScript;
             sql = bootstrapSql;
-            passwordFingerprint = if config.passwordHash != null then config.passwordHash else config.password;
+            passwordFingerprint = config.passwordHash;
           }
         )
       );
@@ -378,8 +369,7 @@ in
             host = server.host;
             httpPort = server.ports.http;
             nativePort = server.ports.native;
-          }
-          // lib.optionalAttrs (config.password != null) { inherit (config) password; };
+          };
           source = config.passwordSource;
           hash = config.passwordHash;
           inherit labels;
@@ -389,7 +379,6 @@ in
         bootstrapPassword = backendScope.mkSecret {
           name = "${serverSideName}-bootstrap-password";
           keys = [ "password" ];
-          stringData = lib.optionalAttrs (config.password != null) { inherit (config) password; };
           source = config.passwordSource;
           hash = config.passwordHash;
           inherit labels;

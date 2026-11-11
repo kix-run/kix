@@ -125,7 +125,8 @@ let
           };
           clickhouse-database = {
             package = import ../../../packages/experimental/clickhouse-database;
-            config.password = "password";
+            config.passwordSource = ./log-agents.nix;
+            config.passwordHash = "hash";
           };
           clickhouse-logs = {
             inherit package config;

@@ -230,7 +230,8 @@ let
               # The server lives in `events`, so the cluster names it.
               deps.clickhouse = ref.events.clickhouse;
               config = {
-                password = "events-pw";
+                passwordSource = ./plausible.nix;
+                passwordHash = "events-hash";
               }
               // facadeConfig;
             }

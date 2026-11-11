@@ -53,7 +53,8 @@ kix.buildCluster {
         keycloak-db = {
           package = packages.experimental.stackgres-database;
           # Dev-only value; it protects nothing.
-          config.password = "dev-keycloak-db-password";
+          config.passwordSource = ./dev-secrets/keycloak-db.sops.yaml;
+          config.passwordHash = "sha256-rgn6JZpWdY4hK9Cs6xIUUsG71gsVbab0Da/CZ0N4kRA=";
         };
         # Test values only.
         keycloak-admin = {

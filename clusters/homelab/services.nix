@@ -73,7 +73,8 @@ in
         config = {
           database = "immich";
           user = "immich";
-          password = "immich-dev-password";
+          passwordSource = ../dev-secrets/immich-db.sops.yaml;
+          passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
         };
       };
 
@@ -132,15 +133,16 @@ in
         config.size = "1Gi";
       };
 
-      # A literal password; a deployment with real users sets
-      # passwordSource and passwordHash instead.
+      # A development password, encrypted to the test-only key in
+      # clusters/dev-secrets. A deployment with real users encrypts its own.
       vaultwarden.vaultwarden-db = {
         package = packages.experimental.stackgres-database;
         deps.postgres = ref.data.postgres;
         config = {
           database = "vaultwarden";
           user = "vaultwarden";
-          password = "vaultwarden-dev-password";
+          passwordSource = ../dev-secrets/vaultwarden-db.sops.yaml;
+          passwordHash = "sha256-vSRCg4c2Q8jZrB+qWUa7YhXrpdZOoafVsi2KtKkZPRQ=";
         };
       };
 

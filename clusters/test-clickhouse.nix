@@ -87,7 +87,8 @@ kix.buildCluster {
               database = "events";
               user = "events_writer";
               privileges = [ "INSERT" ];
-              password = "writer-dev-password";
+              passwordSource = ./dev-secrets/clickhouse-writer.sops.yaml;
+              passwordHash = "sha256-3SzwB0cSxd5FydzhTnlpDbzeo5RVDcyKAYozycJTFjM=";
               schema."01-events.sql" = ''
                 CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
                 (ts DateTime, message String)
@@ -104,7 +105,8 @@ kix.buildCluster {
               database = "events";
               user = "events_reader";
               privileges = [ "SELECT" ];
-              password = "reader-rotated-password";
+              passwordSource = ./dev-secrets/clickhouse-reader.sops.yaml;
+              passwordHash = "sha256-dmv/EC/7xd7edSv4+fNenSCjIX4tphprqkcNLmDH/zE=";
             };
           };
         };
@@ -128,7 +130,8 @@ kix.buildCluster {
               database = "logs";
               user = "logs_writer";
               privileges = [ "INSERT" ];
-              password = "logs-writer-dev-password";
+              passwordSource = ./dev-secrets/clickhouse-logs-writer.sops.yaml;
+              passwordHash = "sha256-5VldXrruCH+ik7THWptuUkRraB5hs2yD5LN4ElBNQQU=";
             };
           };
         };
@@ -140,7 +143,8 @@ kix.buildCluster {
             database = "logs";
             user = "logs_reader";
             privileges = [ "SELECT" ];
-            password = "logs-reader-dev-password";
+            passwordSource = ./dev-secrets/clickhouse-logs-reader.sops.yaml;
+            passwordHash = "sha256-MLJxrpprts1rhcwcWhUK7+11Dfknfm02ALwcUnYQ5l4=";
           };
         };
 
@@ -189,7 +193,8 @@ kix.buildCluster {
               "INSERT"
               "SELECT"
             ];
-            password = "ha-writer-dev-password";
+            passwordSource = ./dev-secrets/clickhouse-ha-writer.sops.yaml;
+            passwordHash = "sha256-hDC5NC5WiiYwb6xbofK+j/LaBpZ5P/a+ni8ttdUnevs=";
             schema."01-events.sql" = ''
               CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
               (ts DateTime, message String)

@@ -4,7 +4,7 @@
 # backups, and Pooler, the webhook check that every postgresql.cnpg.io
 # custom resource waits for, the vendored sources' release, and the alert
 # rules of cnpg-operator and cnpg-cluster and what each is gated on, and
-# cnpg-database's warning on a literal `password`.
+# cnpg-database's refusal of the removed `password` option.
 
 {
   lib,
@@ -79,7 +79,8 @@ let
       operatorConfig ? { },
       clusterConfig ? { },
       database ? {
-        password = "password";
+        passwordSource = ./cnpg.nix;
+        passwordHash = "hash";
       },
       extra ? { },
     }:
@@ -245,7 +246,8 @@ let
               app-db = {
                 package = databasePackage;
                 deps.postgres = ref.${poolerNamespace}.pooler;
-                config.password = "password";
+                config.passwordSource = ./cnpg.nix;
+                config.passwordHash = "hash";
               };
             };
           }
@@ -609,7 +611,8 @@ in
     let
       all = ms (cnpg {
         database = {
-          password = "password";
+          passwordSource = ./cnpg.nix;
+          passwordHash = "hash";
           user = "app_user";
           extensions = [
             "citext"
@@ -656,33 +659,37 @@ in
     )
     || throw "cnpg-database resources: ${builtins.toJSON { inherit role database secret; }}";
 
-  # A literal `password` still fills both Secrets, and warns that Kix 0.10
-  # removes it. `passwordSource` gives no such warning.
-  cnpg-database-password-warns =
+  # The removed `password` option fails the build. `passwordSource` fills
+  # both Secrets from the SOPS file at deploy.
+  cnpg-database-password-refused =
     let
-      literal = cnpg { database.password = "pw"; };
-      sops = cnpg {
-        database = {
-          passwordSource = ./cnpg.nix;
-          passwordHash = "hash";
+      sopsPassword = {
+        passwordSource = ./cnpg.nix;
+        passwordHash = "hash";
+      };
+      literal = cnpg {
+        database = sopsPassword // {
+          password = "pw";
         };
       };
-      warningsOf = cluster: cluster.instances.data.app-db._diagnostics.warnings;
-      warns = cluster: builtins.any (lib.hasInfix "Kix 0.10 removes") (warningsOf cluster);
-      passwordIn = name: (byName name (ofKind "Secret" (ms literal))).stringData.password;
+      secretIn =
+        name:
+        byName name (
+          ofKind "Secret" (
+            ms (cnpg {
+              database = sopsPassword;
+            })
+          )
+        );
+      fromSops =
+        name:
+        let
+          secret = secretIn name;
+        in
+        secret.metadata.annotations ? ${kixKeys.sopsSource} && !(secret.stringData or { } ? password);
     in
-    (
-      warns literal
-      && !(warns sops)
-      && passwordIn "app-db-credentials" == "pw"
-      && passwordIn "data-app-db-role" == "pw"
-    )
-    || throw "cnpg-database password warning: ${
-      builtins.toJSON {
-        literal = warningsOf literal;
-        sops = warningsOf sops;
-      }
-    }";
+    (evalFails literal && fromSops "app-db-credentials" && fromSops "data-app-db-role")
+    || throw "cnpg-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
 
   # A name listed twice, as when a consumer's deps.database.config.extensions
   # repeats one of the instance's, renders once, keeping the one version
@@ -695,7 +702,8 @@ in
           ofKind "Database" (
             ms (cnpg {
               database = {
-                password = "password";
+                passwordSource = ./cnpg.nix;
+                passwordHash = "hash";
                 inherit extensions;
               };
             })
@@ -725,7 +733,8 @@ in
       ]
       && evalFails (cnpg {
         database = {
-          password = "password";
+          passwordSource = ./cnpg.nix;
+          passwordHash = "hash";
           extensions = [
             {
               name = "vector";
@@ -741,7 +750,7 @@ in
     )
     || throw "cnpg-database extensions merge: ${builtins.toJSON merged.spec}";
 
-  # The password checks of stackgres-database, and the reserved role and
+  # The password checks of cnpg-database, and the reserved role and
   # database names.
   cnpg-database-refusals =
     let
@@ -813,7 +822,8 @@ in
         postgres.package = stackgresClusterPackage;
         app-db = {
           package = databasePackage;
-          config.password = "password";
+          config.passwordSource = ./cnpg.nix;
+          config.passwordHash = "hash";
         };
       };
     }

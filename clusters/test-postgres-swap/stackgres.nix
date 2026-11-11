@@ -17,7 +17,8 @@ kix.buildCluster {
           package = packages.experimental.stackgres-database;
           deps.postgres = ref.db.pg;
           # Test values only.
-          config.password = "swap-fixture-password";
+          config.passwordSource = ../dev-secrets/swap-fixture-db.sops.yaml;
+          config.passwordHash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
         };
       }
       # endregion:postgresSwapStackgres
