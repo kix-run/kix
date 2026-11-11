@@ -1,0 +1,665 @@
+//! `kix upgrade` against a release site and a data directory in temporary
+//! directories. Each released Kix is a shell script that lists the
+//! project's clusters and packages from files in `fake/`, and exports a
+//! cluster by copying `fake/out-<version>/<cluster>` (or `fake/out`). A file
+//! `fake/fail-<version>` makes that version's builds fail. Needs no Nix and
+//! no network.
+
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+use assert_cmd::Command;
+use base64::Engine;
+use predicates::prelude::*;
+use ring::signature::{Ed25519KeyPair, KeyPair};
+use sha2::{Digest, Sha256};
+
+const FAKE: &str = r#"#!/bin/sh
+V=__VERSION__
+flake=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --flake) flake="$2"; shift 2 ;;
+    -o) shift 2 ;;
+    *) break ;;
+  esac
+done
+f="$flake/fake"
+echo "$V $*" >> "$f/calls.log"
+case "$1" in
+  list)
+    if [ "$2" = clusters ]; then cat "$f/clusters.json"; else cat "$f/packages.json"; fi ;;
+  export)
+    c="$2"; out="$4"
+    if [ -e "$f/fail-$V" ]; then
+      echo "error: [K0001] cluster $c sets replicaCount, which Kix $V renamed" >&2
+      exit 1
+    fi
+    src="$f/out-$V"; [ -d "$src" ] || src="$f/out"
+    mkdir -p "$out"; cp -R "$src/$c/." "$out/" ;;
+  *) echo "fake kix $V: $*" ;;
+esac
+"#;
+
+struct Setup {
+    _tmp: tempfile::TempDir,
+    data: PathBuf,
+    project: PathBuf,
+    site: PathBuf,
+    cache: PathBuf,
+    signer: Ed25519KeyPair,
+}
+
+impl Setup {
+    /// A project on Kix 9.1.0 with clusters `east` and `west`, which install
+    /// the packages `web` and `db`.
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let s = Setup {
+            data: root.join("data"),
+            project: root.join("project"),
+            site: root.join("site"),
+            cache: root.join("cache"),
+            signer: {
+                let rng = ring::rand::SystemRandom::new();
+                let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+                Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap()
+            },
+            _tmp: tmp,
+        };
+        for d in [&s.data, &s.site, &s.cache] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        s.write("kix.toml", "kix = \"9.1.0\"\n");
+        s.write("fake/clusters.json", r#"["east", "west"]"#);
+        s.write(
+            "fake/packages.json",
+            r#"[{"name": "web", "status": "installed [shop]"},
+                {"name": "db", "status": "installed [shop]"},
+                {"name": "echo-server", "status": "available"}]"#,
+        );
+        for cluster in ["east", "west"] {
+            s.manifest("out", cluster, "Deployment", "web", "web", "image: web:1");
+            s.manifest(
+                "out",
+                cluster,
+                "ClusterRole",
+                "db-reader",
+                "db",
+                "rules: []",
+            );
+        }
+        s
+    }
+
+    fn write(&self, rel: &str, text: &str) {
+        let path = self.project.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn read(&self, rel: &str) -> String {
+        std::fs::read_to_string(self.project.join(rel)).unwrap()
+    }
+
+    /// Write one exported object of `cluster` under `fake/<out>`.
+    fn manifest(
+        &self,
+        out: &str,
+        cluster: &str,
+        kind: &str,
+        name: &str,
+        package: &str,
+        spec: &str,
+    ) {
+        let namespace = if kind == "ClusterRole" {
+            "_cluster"
+        } else {
+            "shop"
+        };
+        let ns_line = if kind == "ClusterRole" {
+            String::new()
+        } else {
+            "  namespace: shop\n".to_string()
+        };
+        self.write(
+            &format!("fake/{out}/{cluster}/{namespace}/{kind}-{name}.yaml"),
+            &format!(
+                "apiVersion: v1\nkind: {kind}\nmetadata:\n  name: {name}\n{ns_line}  annotations:\n    {key}: {package}\nspec:\n  {spec}\n",
+                key = kix::manifest::keys::PACKAGE
+            ),
+        );
+    }
+
+    /// Copy `fake/out` to `fake/out-<version>` so a test can change one
+    /// version's builds.
+    fn out_for(&self, version: &str) {
+        let from = self.project.join("fake/out");
+        let to = self.project.join(format!("fake/out-{version}"));
+        copy_dir(&from, &to);
+    }
+
+    fn calls(&self) -> String {
+        std::fs::read_to_string(self.project.join("fake/calls.log")).unwrap_or_default()
+    }
+
+    fn kix(&self) -> Command {
+        let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("kix"));
+        cmd.env("NO_COLOR", "true")
+            .env("KIX_DATA_DIR", &self.data)
+            .env("KIX_RELEASE_SOURCE", &self.site)
+            .env(
+                "KIX_RELEASE_TEST_KEY",
+                hex(self.signer.public_key().as_ref()),
+            )
+            .env("XDG_CACHE_HOME", &self.cache)
+            .env_remove("KIX_SELECTED_BY")
+            .env_remove("KIX_AUTO_INSTALL")
+            .env_remove("KIX_FLAKE")
+            .arg("--flake")
+            .arg(&self.project);
+        cmd
+    }
+
+    fn upgrade(&self, args: &[&str]) -> (i32, String) {
+        let out = self.kix().arg("upgrade").args(args).output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code().unwrap_or(-1), text)
+    }
+
+    fn state(&self) -> serde_json::Value {
+        serde_json::from_str(&self.read("kix-upgrade.json")).unwrap()
+    }
+
+    fn installed(&self) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(&self.data)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Publish a fake Kix `version` of `date` on the site, with `records` as
+    /// its change records, or none when `records` is `None`.
+    fn publish(&self, version: &str, date: &str, records: Option<serde_json::Value>) {
+        let system = kix::release::system().unwrap();
+        let file = format!("kix-{system}.tar.gz");
+        let download = self.site.join("download").join(version);
+        std::fs::create_dir_all(&download).unwrap();
+        let archive = download.join(&file);
+        let script = FAKE.replace("__VERSION__", version);
+        let gz = flate2::write::GzEncoder::new(
+            std::fs::File::create(&archive).unwrap(),
+            flate2::Compression::fast(),
+        );
+        let mut tar = tar::Builder::new(gz);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(script.len() as u64);
+        header.set_mode(0o755);
+        tar.append_data(
+            &mut header,
+            format!("kix-{version}-{system}/bin/kix"),
+            script.as_bytes(),
+        )
+        .unwrap();
+        tar.into_inner().unwrap().finish().unwrap();
+
+        let mut sums = format!(
+            "{}  {file}\n",
+            hex(&Sha256::digest(std::fs::read(&archive).unwrap()))
+        );
+        if let Some(records) = records {
+            let doc = serde_json::json!({
+                "schema": kix::changes::SCHEMA,
+                "version": version,
+                "records": records,
+            })
+            .to_string();
+            let name = format!("kix-{version}-changes.json");
+            std::fs::write(download.join(&name), &doc).unwrap();
+            sums.push_str(&format!(
+                "{}  {name}\n",
+                hex(&Sha256::digest(doc.as_bytes()))
+            ));
+        }
+        let releases = self.site.join("releases").join(format!("v{version}"));
+        std::fs::create_dir_all(&releases).unwrap();
+        std::fs::write(releases.join("SHA256SUMS"), &sums).unwrap();
+        let key: [u8; 32] = self.signer.public_key().as_ref().try_into().unwrap();
+        std::fs::write(
+            releases.join("SHA256SUMS.sig"),
+            format!(
+                "kix-release-signature v1\nkeyid={}\nsignature={}\n",
+                kix::release::verify::keyid(&key),
+                base64::engine::general_purpose::STANDARD
+                    .encode(self.signer.sign(sums.as_bytes()).as_ref())
+            ),
+        )
+        .unwrap();
+
+        let index_path = self.site.join("releases").join("index.json");
+        let mut index: serde_json::Value = std::fs::read_to_string(&index_path)
+            .map(|t| serde_json::from_str(&t).unwrap())
+            .unwrap_or_else(|_| serde_json::json!({"latest": null, "releases": []}));
+        index["latest"] = serde_json::json!(version);
+        index["releases"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "version": version,
+                "date": date,
+                "systems": [system],
+                "sums": format!("/releases/v{version}/SHA256SUMS"),
+                "signature": format!("/releases/v{version}/SHA256SUMS.sig"),
+                "download": format!("/download/{version}/"),
+            }));
+        std::fs::write(index_path, index.to_string()).unwrap();
+    }
+
+    /// Publish 9.1.0, 9.2.0, 9.2.1, and 9.3.0, each dated long ago. 9.2.0
+    /// renames an option of `web` (K0001) and the flag `--old-flag`. 9.2.1
+    /// has no change records. `extra` adds records to 9.3.0.
+    fn releases(&self, extra: Vec<serde_json::Value>) {
+        self.publish("9.1.0", "2026-01-01", Some(serde_json::json!([])));
+        self.publish(
+            "9.2.0",
+            "2026-02-01",
+            Some(serde_json::json!([{
+                "name": "rename-replica-count",
+                "kind": "error",
+                "id": "K0001",
+                "packages": ["web"],
+                "cli": ["--old-flag"],
+                "body": "`web` renames `replicaCount` to `replicas`. Set `replicas` instead.",
+            }, {
+                "name": "echo-only",
+                "kind": "error",
+                "id": "K0002",
+                "packages": ["echo-server"],
+                "body": "`echo-server` renames `port`.",
+            }, {
+                "name": "new-thing",
+                "kind": "added",
+                "body": "A new thing.",
+            }])),
+        );
+        self.publish("9.2.1", "2026-02-10", None);
+        self.publish("9.3.0", "2026-03-01", Some(serde_json::Value::Array(extra)));
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), dest).unwrap();
+        }
+    }
+}
+
+/// Change the web Deployment in 9.3.0's builds, which K0001 explains.
+fn explained_change(s: &Setup) {
+    s.out_for("9.3.0");
+    for cluster in ["east", "west"] {
+        s.manifest(
+            "out-9.3.0",
+            cluster,
+            "Deployment",
+            "web",
+            "web",
+            "image: web:2",
+        );
+    }
+}
+
+#[test]
+fn preview_lists_the_steps_and_records_and_changes_nothing() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    let (code, out) = s.upgrade(&["--preview"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("This project uses Kix 9.1.0. The newest release that matches is Kix 9.3.0."),
+        "{out}"
+    );
+    assert!(
+        out.contains("Kix takes these steps: 9.2.1, 9.3.0. That installs 2 versions of Kix."),
+        "{out}"
+    );
+    assert!(
+        out.contains("Kix 9.2.1 has no change records. Read its CHANGELOG section."),
+        "{out}"
+    );
+    // Kix 9.1.0 is not installed, so every record counts.
+    assert!(out.contains("Kix 9.1.0 is not installed"), "{out}");
+    assert!(out.contains("[K0001] Kix 9.2.0: `web` renames"), "{out}");
+    assert!(
+        out.contains("changes the command or flag --old-flag"),
+        "{out}"
+    );
+    assert!(
+        out.contains("1 other records add, change, or fix things"),
+        "{out}"
+    );
+    assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
+    assert!(!s.project.join("kix-upgrade.json").exists());
+    assert!(s.installed().is_empty());
+}
+
+#[test]
+fn preview_asks_the_installed_kix_which_packages_are_in_use() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    let bin = s.data.join("9.1.0/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0")).unwrap();
+    std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (code, out) = s.upgrade(&["--preview"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("[K0001]"), "{out}");
+    assert!(!out.contains("[K0002]"), "{out}");
+    assert!(
+        s.calls().contains("9.1.0 list packages --cluster east"),
+        "{}",
+        s.calls()
+    );
+}
+
+#[test]
+fn nothing_to_upgrade_exits_0() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("kix.toml", "kix = \"9.3.0\"\n");
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("There is nothing to upgrade."), "{out}");
+}
+
+#[test]
+fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    explained_change(&s);
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+    assert!(out.contains("Clusters east, west:"), "{out}");
+    assert!(
+        out.contains("1 changed:\n    Deployment/web@shop\n"),
+        "{out}"
+    );
+    let calls = s.calls();
+    assert!(calls.contains("9.1.0 export east"), "{calls}");
+    assert!(calls.contains("9.3.0 export west"), "{calls}");
+    assert!(!calls.contains("9.2.1"), "{calls}");
+    assert_eq!(s.installed(), ["9.1.0", "9.3.0"]);
+    let state = s.state();
+    assert_eq!(
+        state["schema"],
+        format!("{}/upgrade/v1", kix::manifest::keys::DOMAIN)
+    );
+    assert_eq!(state["status"], "done");
+    assert_eq!(state["from"], "9.1.0");
+    assert_eq!(state["to"], "9.3.0");
+    assert_eq!(state["records"]["error"], serde_json::json!(["K0001"]));
+    assert_eq!(state["unexplainedChanges"], 0);
+    assert_eq!(state["sensitiveChanges"], 0);
+}
+
+#[test]
+fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("fake/fail-9.2.1", "");
+    s.write("fake/fail-9.3.0", "");
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("Trying one minor release at a time."), "{out}");
+    assert!(out.contains("Cluster east:\n  error: [K0001] cluster east sets replicaCount, which Kix 9.2.1 renamed"), "{out}");
+    assert!(out.contains("Change records of Kix 9.2.1:"), "{out}");
+    assert!(out.contains("[K0001] Kix 9.2.0"), "{out}");
+    assert!(out.contains("is pinned to it"), "{out}");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.2.1\"\n");
+    let state = s.state();
+    assert_eq!(state["status"], "fix-needed");
+    let steps: Vec<(String, String)> = state["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|st| {
+            (
+                st["version"].as_str().unwrap().into(),
+                st["result"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            ("9.3.0".to_string(), "failed".to_string()),
+            ("9.2.1".to_string(), "failed".to_string())
+        ]
+    );
+    // 9.3.0 was installed only to try the jump.
+    assert_eq!(s.installed(), ["9.1.0", "9.2.1"]);
+
+    // The user fixes the project for 9.2.1. The next run reuses the builds
+    // from 9.1.0 and stops at 9.3.0.
+    std::fs::remove_file(s.project.join("fake/fail-9.2.1")).unwrap();
+    std::fs::remove_file(s.project.join("fake/calls.log")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("Resuming the upgrade to Kix 9.3.0 at Kix 9.2.1."),
+        "{out}"
+    );
+    assert!(!s.calls().contains("9.1.0 export"), "{}", s.calls());
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+
+    std::fs::remove_file(s.project.join("fake/fail-9.3.0")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(s.state()["status"], "done");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+}
+
+#[test]
+fn a_required_stop_ends_the_upgrade_at_that_minor() {
+    let s = Setup::new();
+    s.publish("9.1.0", "2026-01-01", None);
+    s.publish(
+        "9.2.0",
+        "2026-02-01",
+        Some(serde_json::json!([{
+            "name": "move-records",
+            "kind": "note",
+            "state": true,
+            "requiredStop": true,
+            "body": "Kix moves its records.",
+        }])),
+    );
+    s.publish("9.2.1", "2026-02-10", None);
+    s.publish("9.3.0", "2026-03-01", None);
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    assert!(
+        out.contains("Deploy every cluster with Kix 9.2.1, then run `kix upgrade` again."),
+        "{out}"
+    );
+    assert_eq!(s.read("kix.toml"), "kix = \"9.2.1\"\n");
+    assert_eq!(s.state()["status"], "required-stop");
+}
+
+#[test]
+fn min_age_skips_new_releases() {
+    let s = Setup::new();
+    s.publish("9.1.0", "2026-01-01", None);
+    s.publish("9.2.0", "2026-02-01", None);
+    let today = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    s.publish("9.3.0", &today, None);
+    let (_, out) = s.upgrade(&["--preview", "--min-age", "7d"]);
+    assert!(
+        out.contains("The newest release that matches is Kix 9.2.0."),
+        "{out}"
+    );
+    s.write(
+        "kix.toml",
+        "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"7d\"\n",
+    );
+    let (_, out) = s.upgrade(&["--preview"]);
+    assert!(
+        out.contains("The newest release that matches is Kix 9.2.0."),
+        "{out}"
+    );
+    // The flag wins over the file.
+    let (_, out) = s.upgrade(&["--preview", "--min-age", "0d"]);
+    assert!(
+        out.contains("The newest release that matches is Kix 9.3.0."),
+        "{out}"
+    );
+    let (code, out) = s.upgrade(&["--preview", "--min-age", "1w"]);
+    assert_eq!(code, 1, "{out}");
+}
+
+#[test]
+fn unexplained_and_sensitive_changes_need_a_person() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.out_for("9.3.0");
+    s.manifest(
+        "out-9.3.0",
+        "west",
+        "ClusterRole",
+        "db-reader",
+        "db",
+        "rules: [x]",
+    );
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    assert!(out.contains("Cluster east: no objects changed."), "{out}");
+    assert!(
+        out.contains(
+            "Cluster west:\n  1 changed:\n    ClusterRole/db-reader (no change record, sensitive)"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("1 changed object has no change record that explains it."),
+        "{out}"
+    );
+    assert!(out.contains("1 changed object controls access"), "{out}");
+    let state = s.state();
+    assert_eq!(state["status"], "needs-person");
+    assert_eq!(state["unexplainedChanges"], 1);
+    assert_eq!(state["sensitiveChanges"], 1);
+}
+
+#[test]
+fn lines_that_use_a_changed_flag_are_listed() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("ci/deploy.sh", "set -e\nkix deploy east --old-flag\n");
+    s.write("CHANGELOG.md", "--old-flag\n");
+    let git = |args: &[&str]| {
+        let st = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&s.project)
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "{st:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("  ci/deploy.sh:2: --old-flag"), "{out}");
+    assert!(!out.contains("CHANGELOG.md:"), "{out}");
+    assert_eq!(s.state()["cliHits"][0]["file"], "ci/deploy.sh");
+}
+
+#[test]
+fn a_data_change_stops_deploys_until_acknowledged() {
+    let s = Setup::new();
+    s.releases(vec![serde_json::json!({
+        "name": "move-data",
+        "kind": "silent",
+        "packages": ["db"],
+        "touchesData": true,
+        "body": "`db` keeps its data in a new volume.",
+    })]);
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 3, "{out}");
+    assert!(out.contains("kix upgrade --ack move-data"), "{out}");
+
+    // Set as if selection chose this Kix, which it does in a real project.
+    let chosen = |mut cmd: Command| {
+        cmd.env("KIX_SELECTED_BY", "/usr/bin/kix");
+        cmd
+    };
+    chosen(s.kix())
+        .args(["deploy", "east"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("[move-data] Kix 9.3.0:"))
+        .stderr(predicate::str::contains(
+            "`db` keeps its data in a new volume.",
+        ))
+        .stderr(predicate::str::contains(
+            "run `kix upgrade --ack move-data`",
+        ));
+
+    s.kix()
+        .args(["upgrade", "--ack", "nope"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("It lists: move-data."));
+    s.kix()
+        .args(["upgrade", "--ack", "move-data"])
+        .assert()
+        .success()
+        .stdout("Acknowledged move-data.\n");
+    assert_eq!(s.state()["acknowledged"], serde_json::json!(["move-data"]));
+
+    // The deploy now goes past the check, and stops later for want of a
+    // Kix runtime or a cluster.
+    let out = chosen(s.kix()).args(["deploy", "east"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("move-data"), "{stderr}");
+}
+
+#[test]
+fn a_prerelease_project_steps_through_its_own_release() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("kix.toml", "kix = \"9.1.0-rc.1\"\n");
+    let (code, out) = s.upgrade(&["--preview"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(
+            "This project uses Kix 9.1.0-rc.1. The newest release that matches is Kix 9.3.0."
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("Kix takes these steps: 9.1.0, 9.2.1, 9.3.0."),
+        "{out}"
+    );
+}

@@ -366,6 +366,8 @@ mod tests {
             // label.
             "scripts/change_records/",
             "cli/kix-core/src/changes/",
+            // Names the schema of kix-upgrade.json. It spells no annotation.
+            "cli/kix-cli/src/commands/upgrade/state.rs",
         ];
 
         let domains = ["kix.dev", "kix.run"];

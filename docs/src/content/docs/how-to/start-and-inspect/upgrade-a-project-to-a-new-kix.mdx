@@ -1,0 +1,90 @@
+---
+title: "Upgrade a project to a new version of Kix"
+description: "Move a project to a newer Kix with kix upgrade: preview the change records, fix build errors one release at a time, review what changed, and acknowledge changes to stored data."
+---
+
+import Command from '../../../../components/Command.astro';
+
+A project names its version of Kix in `kix.toml`. `kix upgrade` moves it to
+a newer one. It builds every cluster before and after, so you see what the
+new version changes before you deploy.
+
+:::note[Helpful background]
+- [`kix.toml`](/docs/reference/kix-toml/): how a project names its version of Kix.
+- [`kix upgrade` reference](/docs/reference/cli/upgrade/): every flag, the steps of a run, and `kix-upgrade.json`.
+:::
+
+## Preview the upgrade
+
+Start from a clean git working tree, so that you can see each file the
+upgrade changes. Then preview it:
+
+<Command commands={["kix upgrade --preview"]} cwd="my-project/" />
+
+The preview names the version the project uses and the release it would move
+to. It lists the change records that apply to your project: edits you will
+need to make, changes that work differently with no error, upgrade notes, and
+security fixes. It changes nothing.
+
+To move to a release other than the newest, pass `--to`, such as
+`--to 0.10` for the newest 0.10 patch. To wait until a release has been out
+for a while, pass `--min-age 7d`, or set it for the project in `kix.toml`:
+
+```toml
+# kix.toml
+kix = "0.9.2"
+
+[upgrade]
+min-age = "7d"
+```
+
+## Run the upgrade
+
+<Command commands={["kix upgrade"]} cwd="my-project/" />
+
+When every cluster builds with the new version, the project is pinned to it:
+`kix.toml`, and the Kix library in `flake.lock`. Read the summary of what
+changed in each cluster, then commit the changed files with
+`kix-upgrade.json`.
+
+## Fix a build that fails
+
+When a cluster does not build with the new version, `kix upgrade` moves one
+minor release at a time and stops at the first release the cluster does not
+build with. It prints the errors and that release's change records, and
+leaves the project pinned to that release. An error that a change in Kix
+causes starts with the change's id, such as `[K0012]`. Print the whole
+record with `kix explain`:
+
+<Command commands={["kix explain K0012"]} cwd="my-project/" />
+
+Make the edit the record describes, then run `kix upgrade` again. It tries
+that release again and continues to the newest one.
+
+## Review what needs a person
+
+`kix upgrade` exits with status `3` when the project builds but you should
+read what changed before you deploy. It says why:
+
+- an object changed and no change record explains it,
+- an object that controls access, network reach, or certificates changed,
+- a change works differently with no error, or
+- a release changes cluster state, and every cluster must deploy it before
+  the project upgrades further. Deploy every cluster, then run
+  `kix upgrade` again.
+
+To see the field changes for a cluster, compare the new build with the
+cluster before you deploy:
+
+<Command commands={["kix plan my-cluster"]} cwd="my-project/" />
+
+## Acknowledge a change to stored data
+
+When a change moves or reinterprets the data a package stores, `kix deploy`
+refuses until someone acknowledges it. The refusal prints the change record.
+Read it, take any backup it asks for, then acknowledge it by its id:
+
+<Command commands={["kix upgrade --ack K0012"]} cwd="my-project/" />
+
+Commit `kix-upgrade.json`, so that whoever deploys next sees the
+acknowledgement.

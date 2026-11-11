@@ -7,6 +7,9 @@
 //! ```toml
 //! builder = "kix"   # "kix" (the default), "nix", or "remote"
 //! kix = "0.8"       # a minor such as "0.8", or an exact version such as "0.8.3"
+//!
+//! [upgrade]
+//! min-age = "7d"    # `kix upgrade` picks only releases at least this old
 //! ```
 //!
 //! Both belong to the project, so everyone who builds it, and its CI, uses
@@ -30,7 +33,10 @@ pub const FILE: &str = "kix.toml";
 pub const TEST_BUILDER_VAR: &str = "KIX_TEST_BUILDER";
 
 /// The keys this version of Kix reads from `kix.toml`.
-const KNOWN_KEYS: &[&str] = &["builder", "kix"];
+const KNOWN_KEYS: &[&str] = &["builder", "kix", "upgrade"];
+
+/// The keys of the `[upgrade]` table.
+const UPGRADE_KEYS: &[&str] = &["min-age"];
 
 /// How Kix builds a project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -98,6 +104,8 @@ pub struct ProjectConfig {
     pub kix: Option<Requirement>,
     /// The `kix.toml` that set [`Self::kix`].
     pub kix_source: Option<PathBuf>,
+    /// `min-age` in the `[upgrade]` table, in days.
+    pub upgrade_min_age: Option<u32>,
 }
 
 impl Default for ProjectConfig {
@@ -107,6 +115,7 @@ impl Default for ProjectConfig {
             builder_source: BuilderSource::Default,
             kix: None,
             kix_source: None,
+            upgrade_min_age: None,
         }
     }
 }
@@ -177,6 +186,45 @@ pub enum ProjectError {
         path.display()
     )]
     KixNotQuoted { path: PathBuf, literal: String },
+
+    #[error(
+        "{} has a bad [upgrade] table: {problem}. Kix {} reads only min-age, a number of days such as min-age = \"7d\"",
+        path.display(),
+        crate::version::running().release()
+    )]
+    BadUpgrade { path: PathBuf, problem: String },
+}
+
+/// Parse a minimum release age such as `7d` into days.
+pub fn parse_min_age(text: &str) -> Option<u32> {
+    text.trim().strip_suffix('d')?.parse().ok()
+}
+
+/// Read the `[upgrade]` table's `min-age`.
+fn parse_upgrade(path: &Path, value: Option<&toml::Value>) -> Result<Option<u32>, ProjectError> {
+    let bad = |problem: String| ProjectError::BadUpgrade {
+        path: path.to_path_buf(),
+        problem,
+    };
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let table = value
+        .as_table()
+        .ok_or_else(|| bad("upgrade must be a table".to_string()))?;
+    if let Some(key) = table.keys().find(|k| !UPGRADE_KEYS.contains(&k.as_str())) {
+        return Err(bad(format!("`{key}` is not a setting")));
+    }
+    match table.get("min-age") {
+        None => Ok(None),
+        Some(toml::Value::String(text)) => parse_min_age(text)
+            .map(Some)
+            .ok_or_else(|| bad(format!("min-age = \"{text}\" is not a number of days"))),
+        Some(other) => Err(bad(format!(
+            "min-age = {} is not a number of days",
+            toml_text(other)
+        ))),
+    }
 }
 
 fn builder_names() -> String {
@@ -268,10 +316,12 @@ impl ProjectConfig {
             }
         };
         let kix_source = kix.is_some().then(|| path.to_path_buf());
+        let upgrade_min_age = parse_upgrade(path, table.get("upgrade"))?;
         let Some(value) = table.get("builder") else {
             return Ok(Self {
                 kix,
                 kix_source,
+                upgrade_min_age,
                 ..Self::default()
             });
         };
@@ -297,6 +347,7 @@ impl ProjectConfig {
             builder_source: origin,
             kix,
             kix_source,
+            upgrade_min_age,
         })
     }
 
@@ -500,6 +551,28 @@ mod tests {
                 BuilderSource::File(dir.path().join(FILE))
             );
         }
+    }
+
+    #[test]
+    fn the_upgrade_table_sets_a_minimum_age() {
+        let config = read(Some("kix = \"0.9\"\n[upgrade]\nmin-age = \"7d\"\n")).unwrap();
+        assert_eq!(config.upgrade_min_age, Some(7));
+        assert_eq!(read(Some("[upgrade]\n")).unwrap().upgrade_min_age, None);
+        for bad in [
+            "upgrade = 1\n",
+            "[upgrade]\nmin-age = \"7\"\n",
+            "[upgrade]\nmin-age = 7\n",
+            "[upgrade]\nmax-age = \"7d\"\n",
+        ] {
+            let err = read(Some(bad)).unwrap_err();
+            assert!(
+                matches!(err, ProjectError::BadUpgrade { .. }),
+                "{bad}: {err}"
+            );
+        }
+        assert_eq!(parse_min_age("14d"), Some(14));
+        assert_eq!(parse_min_age("d"), None);
+        assert_eq!(parse_min_age("1w"), None);
     }
 
     #[test]

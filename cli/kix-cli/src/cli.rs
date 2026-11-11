@@ -147,6 +147,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "pin",
             "lib",
             "doctor",
+            "upgrade",
         ],
     ),
     // Only commands that evaluate through the SQLite eval cache.
@@ -383,6 +384,23 @@ pub enum Command {
         id: String,
     },
 
+    /// Move this project to a newer version of Kix
+    ///
+    /// Builds every cluster with the version of Kix the project uses now,
+    /// then pins the project to the newest release (or `--to`) and builds
+    /// every cluster again. When that build fails, it moves one minor release
+    /// at a time and stops at the first release the project does not build
+    /// with, so its errors and change records explain what to edit. Then it
+    /// compares the manifests before and after, lists the change records that
+    /// apply to the project, and writes kix-upgrade.json.
+    ///
+    /// Exits 0 when the upgrade is done and nothing needs a person, 2 when a
+    /// build fails, and 3 when a person should read what changed: a change
+    /// no record explains, a change to access, network policy, or
+    /// certificates, a change that works differently with no error, or a
+    /// release every cluster must deploy before upgrading further.
+    Upgrade(UpgradeArgs),
+
     /// Install, list, and remove versions of Kix
     ///
     /// Versions live under ~/.local/share/kix/<version>. A project names the
@@ -435,10 +453,34 @@ impl Command {
             | Command::Drift(_)
             | Command::Pin(_)
             | Command::Lib(_)
+            | Command::Upgrade(_)
             | Command::SelfCmd(_)
             | Command::Plugin(_) => None,
         }
     }
+}
+
+#[derive(clap::Args)]
+pub struct UpgradeArgs {
+    /// The version to move to: an exact version such as 0.10.2, a minor
+    /// such as 0.10 (its newest patch), or `latest`
+    #[arg(long, value_name = "VERSION")]
+    pub to: Option<String>,
+
+    /// Pick only releases at least this many days old, such as 7d. Overrides
+    /// `min-age` in the `[upgrade]` table of kix.toml
+    #[arg(long, value_name = "DAYS")]
+    pub min_age: Option<String>,
+
+    /// Print what the upgrade would do and the change records that apply,
+    /// and change nothing
+    #[arg(long)]
+    pub preview: bool,
+
+    /// Acknowledge a change to stored data by its id or name, so that
+    /// `kix deploy` goes ahead. Does nothing else
+    #[arg(long, value_name = "ID", num_args = 1.., conflicts_with_all = ["to", "min_age", "preview"])]
+    pub ack: Vec<String>,
 }
 
 /// Manage the Kix library this project pins in flake.lock.

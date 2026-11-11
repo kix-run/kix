@@ -190,6 +190,22 @@ fn run() -> miette::Result<()> {
         return commands::pin::run(command, &cli.global);
     }
 
+    // `kix upgrade` runs every evaluation in the Kix version of each step,
+    // so it needs no evaluator, and no runtime unless it moves flake.lock.
+    if let Command::Upgrade(args) = &cli.command {
+        return commands::upgrade::run(args, &cli.global);
+    }
+
+    // A deploy waits for a person to acknowledge each change to stored data
+    // that the last `kix upgrade` found.
+    if let Command::Deploy(args) = &cli.command
+        && !args.dry_run
+        && !args.operator
+        && let Some(dir) = commands::project_dir(&cli.global.flake)
+    {
+        commands::upgrade::check_deploy(&dir)?;
+    }
+
     // Drift uses only the cluster: no flake or Nix backend is needed, and
     // it must work from a bare kubeconfig outside any Kix repository.
     if let Command::Drift(args) = &cli.command {
@@ -248,6 +264,7 @@ fn run() -> miette::Result<()> {
         | Command::Drift(_)
         | Command::Pin(_)
         | Command::Lib(_)
+        | Command::Upgrade(_)
         | Command::SelfCmd(_)
         | Command::Plugin(_) => unreachable!(),
     }

@@ -6,7 +6,8 @@
 //! which the site redirects to wherever they are stored. Kix trusts none of
 //! those locations. It checks the signature of `SHA256SUMS` against a key
 //! compiled into Kix ([`verify`]) and the archive against `SHA256SUMS`
-//! before it unpacks anything ([`download`]).
+//! before it unpacks anything ([`download`]). [`changes`] fetches a
+//! release's change records the same way.
 //!
 //! An install unpacks into a `tmp-*` directory beside the installed versions
 //! and renames the result into place, so `<data dir>/<version>` is either a
@@ -18,12 +19,15 @@ pub mod verify;
 
 use std::path::{Path, PathBuf};
 
+use sha2::Digest;
+
 use crate::installs::{self, Install};
 use crate::version::policy::Requirement;
 use crate::version::{self, Version};
 
-/// The environment variable that points Kix at another release source. Kix's
-/// own tests set it to a directory. Do not document it for users.
+/// The environment variable that points Kix at another release source: a
+/// mirror of kix.run, or a directory in Kix's own tests. Kix checks a
+/// mirror's files against the keys built into Kix, as it does kix.run's.
 pub const SOURCE_VAR: &str = "KIX_RELEASE_SOURCE";
 
 /// The site Kix fetches releases from.
@@ -127,6 +131,9 @@ pub enum InstallError {
 
     #[error("the release archive of Kix {version} cannot be installed: {reason}")]
     BadArchive { version: String, reason: String },
+
+    #[error("the change records of Kix {version} cannot be read: {message}")]
+    BadChanges { version: String, message: String },
 
     #[error("{}", installs::NO_HOME)]
     NoHome,
@@ -255,30 +262,12 @@ pub fn install(
     }
     starting(&release.version);
 
-    let no_signature = || InstallError::NoSignature { version: v.clone() };
-    let sig_path = release.signature.as_deref().ok_or_else(no_signature)?;
-    let sig_text = match fetcher.get(sig_path) {
-        Ok(bytes) => bytes,
-        Err(download::FetchError::NotFound(_)) => return Err(no_signature()),
-        Err(e) => return Err(e.into_install_error(&unreachable)),
-    };
-    let sums = fetcher
-        .get(&release.sums)
-        .map_err(|e| e.into_install_error(&unreachable))?;
-    let bad_signature = |reason| InstallError::BadSignature {
-        version: v.clone(),
-        reason,
-    };
-    let signature =
-        verify::parse_signature(&String::from_utf8_lossy(&sig_text)).map_err(bad_signature)?;
-    verify::verify_sums(&sums, &signature, &keys).map_err(bad_signature)?;
+    let sums = verified_sums(&mut fetcher, release, &keys, &unreachable)?;
 
     let file = format!("kix-{system}.tar.gz");
-    let expected = verify::sum_for(&String::from_utf8_lossy(&sums), &file).ok_or_else(|| {
-        InstallError::NotInSums {
-            version: v.clone(),
-            file: file.clone(),
-        }
+    let expected = verify::sum_for(&sums, &file).ok_or_else(|| InstallError::NotInSums {
+        version: v.clone(),
+        file: file.clone(),
     })?;
 
     let tmp = TempDir::create(&data.join(format!("tmp-{v}-{}", std::process::id())))?;
@@ -315,6 +304,97 @@ pub fn install(
         },
         downloaded: true,
     })
+}
+
+/// Fetch the `SHA256SUMS` of `release` and check its signature against
+/// `keys`. Return its text.
+fn verified_sums(
+    fetcher: &mut download::Fetcher,
+    release: &index::Release,
+    keys: &[(String, [u8; 32])],
+    unreachable: &dyn Fn(String) -> InstallError,
+) -> Result<String, InstallError> {
+    let v = release.version.release();
+    let no_signature = || InstallError::NoSignature { version: v.clone() };
+    let sig_path = release.signature.as_deref().ok_or_else(no_signature)?;
+    let sig_text = match fetcher.get(sig_path) {
+        Ok(bytes) => bytes,
+        Err(download::FetchError::NotFound(_)) => return Err(no_signature()),
+        Err(e) => return Err(e.into_install_error(unreachable)),
+    };
+    let sums = fetcher
+        .get(&release.sums)
+        .map_err(|e| e.into_install_error(unreachable))?;
+    let bad_signature = |reason| InstallError::BadSignature {
+        version: v.clone(),
+        reason,
+    };
+    let signature =
+        verify::parse_signature(&String::from_utf8_lossy(&sig_text)).map_err(bad_signature)?;
+    verify::verify_sums(&sums, &signature, keys).map_err(bad_signature)?;
+    Ok(String::from_utf8_lossy(&sums).into_owned())
+}
+
+/// Return the release index at `source`.
+pub fn fetch_index(source: &Source) -> Result<index::Index, InstallError> {
+    let mut fetcher = download::Fetcher::new(source.clone());
+    let bytes = fetcher.get(index::PATH).map_err(|e| {
+        e.into_install_error(&|message| InstallError::Download {
+            url: format!("{source}{}", index::PATH),
+            message,
+        })
+    })?;
+    index::Index::parse(&bytes).map_err(|message| InstallError::BadIndex {
+        site: source.to_string(),
+        message,
+    })
+}
+
+/// Return the name of the change records file of Kix `version`.
+pub fn changes_file(version: &Version) -> String {
+    format!("kix-{}-changes.json", version.release())
+}
+
+/// Fetch the change records of `release` from `source`, from the file
+/// [`changes_file`] names beside its archives. The file is checked against
+/// the signed `SHA256SUMS`. Return `None` when `SHA256SUMS` does not list
+/// it, since releases made before change records have none.
+pub fn changes(
+    source: &Source,
+    release: &index::Release,
+) -> Result<Option<crate::changes::Document>, InstallError> {
+    let keys = verify::trusted_keys(source, std::env::var(verify::TEST_KEY_VAR).ok().as_deref());
+    if keys.is_empty() {
+        return Err(InstallError::NoKeys);
+    }
+    let mut fetcher = download::Fetcher::new(source.clone());
+    let unreachable = |message: String| InstallError::Download {
+        url: source.to_string(),
+        message,
+    };
+    let sums = verified_sums(&mut fetcher, release, &keys, &unreachable)?;
+    let file = changes_file(&release.version);
+    let Some(expected) = verify::sum_for(&sums, &file) else {
+        return Ok(None);
+    };
+    let bytes = fetcher
+        .get(&format!("{}{file}", release.download))
+        .map_err(|e| e.into_install_error(&unreachable))?;
+    let got = verify::hex(&sha2::Sha256::digest(&bytes));
+    if got != expected {
+        return Err(InstallError::ShaMismatch {
+            file,
+            expected,
+            got,
+        });
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    crate::changes::Document::parse(&text)
+        .map(Some)
+        .map_err(|e| InstallError::BadChanges {
+            version: release.version.release(),
+            message: e.to_string(),
+        })
 }
 
 /// Move the unpacked release at `new` to `dest`. Another process may install

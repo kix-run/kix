@@ -209,11 +209,15 @@ pub enum UpdateError {
     )]
     NotFound,
 
-    #[error("Kix cannot move this project's Kix library to {} by itself.\n{}", crate::version::running().release(), .0.iter().map(|s| format!("- {s}")).collect::<Vec<_>>().join("\n"))]
-    ByHand(Vec<String>),
+    #[error("Kix cannot move this project's Kix library to {version} by itself.\n{}", .steps.iter().map(|s| format!("- {s}")).collect::<Vec<_>>().join("\n"))]
+    ByHand { version: String, steps: Vec<String> },
 
-    #[error("could not move the Kix library to v{}: {}", crate::version::running().release(), .0)]
-    Nix(#[source] NixCommandError),
+    #[error("could not move the Kix library to v{version}: {source}")]
+    Nix {
+        version: String,
+        #[source]
+        source: NixCommandError,
+    },
 }
 
 /// One Kix library input in `flake.lock`.
@@ -475,6 +479,12 @@ pub struct Updated {
 /// running now, the tag `v<release>`. With `dry_run`, work out the new lock
 /// without writing it.
 pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
+    update_to(flake, &crate::version::running().release(), dry_run)
+}
+
+/// Move the Kix library inputs of the flake in `flake` to the tag
+/// `v<release>`. With `dry_run`, work out the new lock without writing it.
+pub fn update_to(flake: &str, release: &str, dry_run: bool) -> Result<Updated, UpdateError> {
     let dir = Path::new(flake);
     if !dir.is_dir() {
         return Err(UpdateError::NotLocal(flake.to_string()));
@@ -485,7 +495,7 @@ pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
     }
     let lock = read_lock(&lock_path)?;
     let test_repo = std::env::var(TEST_REPO_VAR).ok().filter(|v| !v.is_empty());
-    let release = crate::version::running().release();
+    let release = release.to_string();
     let inputs = library_inputs(&lock, &release, test_repo.as_deref());
     if inputs.is_empty() {
         return Err(UpdateError::NotFound);
@@ -498,11 +508,18 @@ pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
         })
         .collect();
     if !by_hand.is_empty() {
-        return Err(UpdateError::ByHand(by_hand));
+        return Err(UpdateError::ByHand {
+            version: release,
+            steps: by_hand,
+        });
     }
 
     let from = eval_version(dir, &[]);
-    let mut cmd = command(Tool::Nix).map_err(UpdateError::Nix)?;
+    let nix_error = |source| UpdateError::Nix {
+        version: release.clone(),
+        source,
+    };
+    let mut cmd = command(Tool::Nix).map_err(nix_error)?;
     if dry_run {
         cmd.args(["flake", "metadata", "--json", "--no-write-lock-file"]);
     } else {
@@ -517,7 +534,7 @@ pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
         }
     }
     cmd.current_dir(dir);
-    let out = output(&mut cmd).map_err(UpdateError::Nix)?;
+    let out = output(&mut cmd).map_err(nix_error)?;
     let new_lock = if dry_run {
         let metadata: Value = serde_json::from_slice(&out).map_err(|e| UpdateError::BadLock {
             path: lock_path.clone(),
@@ -533,6 +550,24 @@ pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
         to: release,
         changed,
     })
+}
+
+/// Run `nix flake lock` in `dir`, which locks each input whose entry in
+/// `flake.nix` changed, such as a Kix library input moved to another tag.
+pub fn lock(dir: &Path, release: &str) -> Result<(), UpdateError> {
+    let nix_error = |source| UpdateError::Nix {
+        version: release.to_string(),
+        source,
+    };
+    let mut cmd = command(Tool::Nix).map_err(nix_error)?;
+    cmd.args([
+        "flake",
+        "lock",
+        "--extra-experimental-features",
+        "nix-command flakes",
+    ])
+    .current_dir(dir);
+    output(&mut cmd).map(|_| ()).map_err(nix_error)
 }
 
 fn read_lock(path: &Path) -> Result<Value, UpdateError> {
