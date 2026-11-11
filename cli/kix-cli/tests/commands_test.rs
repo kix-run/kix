@@ -214,7 +214,7 @@ fn nonexistent_cluster_fails() {
         .args(["build", "nonexistent"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("not found").or(predicate::str::contains("not a valid")));
+        .stderr(predicate::str::contains("is not defined in this project"));
 }
 
 #[test]

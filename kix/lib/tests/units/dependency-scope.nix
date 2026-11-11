@@ -199,7 +199,7 @@ in
         }
       ];
       warnings = cluster.instances.a.consumer._diagnostics.warnings;
-      message = "optional dependency 'svc' has no instance in namespace 'a', so Kix skips it. b/svc matches in another namespace. To use it, add this line to instances.a.consumer:\n  deps.svc = ref.b.svc;";
+      message = "optional dependency 'svc' has no instance in namespace 'a', so Kix skipped it. b/svc matches in another namespace.\nFix: to use it, add this line to instances.a.consumer:\n  deps.svc = ref.b.svc;";
       expected = "a/consumer: ${message}";
       # With the scorecard on, the same text is a warning-level finding, so
       # `kix check` shows it.

@@ -35,9 +35,10 @@ rec {
               unknown = builtins.filter (k: !(builtins.elem k validKixKeys)) (builtins.attrNames value._kix);
             in
             if unknown != [ ] then
-              throw "unknown _kix marker key(s): ${builtins.concatStringsSep ", " unknown}. "
-              + "Valid keys: ${builtins.concatStringsSep ", " validKixKeys}. "
-              + "Check the field names in the fragment that sets _kix."
+              throw (
+                "resource manifest contains an internal `_kix` attribute with unknown key(s): ${builtins.concatStringsSep ", " unknown} (expected only: ${builtins.concatStringsSep ", " validKixKeys})."
+                + "\nFix: remove `_kix` from your manifest data, or if you are constructing a reference helper fragment, use only the keys above."
+              )
             else
               null
           else
@@ -281,12 +282,15 @@ rec {
 
       _extraShadowCheck =
         if _shadowedPaths != [ ] then
-          throw "k8s-resource '${kind}/${name}': extra.* shadows managed field(s) "
-          + "${builtins.concatStringsSep ", " (map (p: builtins.concatStringsSep "." p) _shadowedPaths)}. "
-          + "Fields under `spec`, `data`, `stringData`, `metadata.{name,namespace,labels,annotations}` "
-          + "are set via dedicated args so Kix can track dependencies. Move your customizations into "
-          + "those args (e.g. `spec = { ... }` instead of `extra.spec = { ... }`), or use `extra` only "
-          + "for sibling fields Kix doesn't manage explicitly."
+          let
+            topArgs = builtins.concatStringsSep ", " (lib.unique (map (p: builtins.head p) _shadowedPaths));
+          in
+          throw (
+            "${kind} '${name}': extra sets ${
+              builtins.concatStringsSep ", " (map (p: "extra.${builtins.concatStringsSep "." p}") _shadowedPaths)
+            }, which conflicts with the top-level ${topArgs} argument on this builder call."
+            + "\nFix: move those fields into the top-level ${topArgs} argument (for example, `spec = { ... };` instead of `extra.spec = { ... };`), and use `extra` only for top-level manifest fields that have no dedicated builder argument."
+          )
         else
           null;
 
