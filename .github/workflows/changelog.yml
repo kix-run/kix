@@ -1,17 +1,23 @@
 name: Changelog
 
-# A pull request that changes `cli/` or `kix/` also changes CHANGELOG.md,
-# with a line under `## Unreleased`, unless it carries the `no-changelog`
-# label. A release's notes are that section, so a change with no line is
-# one users never hear about. Rules: CLAUDE.md § Versioning and breaking
-# changes.
+# Every change record under `changes/` must follow the format in
+# changes/README.md, on every pull request. A pull request that changes
+# `cli/` or `kix/` must also add or change a record, unless it carries the
+# `no-changelog` label. A release's CHANGELOG.md section is written from the
+# records, so a change with no record is one users never hear about. A pull
+# request that adds entries to CHANGELOG.md itself fails, unless it is the
+# release pull request that moves the records into `changes/<version>/`.
+# Rules: CLAUDE.md § Versioning and breaking changes.
 #
-# `labeled` and `unlabeled` run the check again when the label changes. A
-# job skipped by its `if` counts as passing.
+# `labeled` and `unlabeled` run the check again when the label changes.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # Two pull requests can each pass with the same new id. The run on main
+  # catches the pair once both have merged.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -22,23 +28,29 @@ concurrency:
 
 jobs:
   changelog:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
-    runs-on: [self-hosted, spindle-2c-4g]
+    # A Linux VM on the Mac Studio. Its python3 is 3.11 or newer, which the
+    # script needs for tomllib (the `version` job in cli-tests.yml relies on
+    # the same).
+    runs-on: kix-linux-nonix
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: CHANGELOG.md changed
+      - name: Script tests
+        run: python3 -m unittest -v change_records.test_change_records
+        working-directory: scripts
+
+      - name: Change records
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          NO_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
         run: |
-          changed=$(git diff --name-only "$BASE...$HEAD")
-          grep -qE '^(cli|kix)/' <<<"$changed" || exit 0
-          grep -qx 'CHANGELOG.md' <<<"$changed" && exit 0
-          echo "This pull request changes cli/ or kix/ and not CHANGELOG.md."
-          echo "Add a line under '## Unreleased', in a section such as Added, Changed, or Fixed,"
-          echo "or label the pull request no-changelog if nothing a Kix user sees changes."
-          exit 1
+          if [ -z "$BASE" ]; then
+            python3 scripts/change-records.py check
+            exit
+          fi
+          if [ "$NO_CHANGELOG" = true ]; then set -- --no-record-required; fi
+          python3 scripts/change-records.py check --base "$BASE" --head "$HEAD" "$@"

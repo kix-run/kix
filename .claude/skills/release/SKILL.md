@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a Kix release. Picks the next version from CHANGELOG.md, bumps it, opens and merges the release pull request, and confirms CI published the binaries. Use when asked to release Kix, cut a release, or publish a new version.
+description: Cut a Kix release. Picks the next version from the change records in changes/, bumps it, writes the CHANGELOG.md section, opens and merges the release pull request, and confirms CI published the binaries. Use when asked to release Kix, cut a release, or publish a new version.
 ---
 
 # Releasing Kix
@@ -8,7 +8,8 @@ description: Cut a Kix release. Picks the next version from CHANGELOG.md, bumps 
 Merging a change to the workspace version in `cli/Cargo.toml` releases Kix.
 After the merge, CI builds the binaries, publishes them to
 `kix-run/kix-releases` with that version's `CHANGELOG.md` section as the
-release notes, and tags the commit `v<version>`. `cli/README.md` § Releases
+release notes and its change records as `kix-<version>-changes.json`, and
+tags the commit `v<version>`. `cli/README.md` § Releases
 explains how the job decides.
 
 You may merge the release pull request yourself once its checks pass.
@@ -22,8 +23,10 @@ You may merge the release pull request yourself once its checks pass.
   last run failed, tell the person and stop.
 - Check that no release pull request is open:
   `gh pr list --search 'Release in:title'`.
-- Read `## Unreleased` in `CHANGELOG.md`. If it has no entries, there is
-  nothing to release. Tell the person and stop.
+- Run `scripts/change-records.py check`, then
+  `scripts/change-records.py bump`. If `bump` prints `none`, there are no
+  unreleased change records and nothing to release. Tell the person and
+  stop.
 - If signing, the install script, or the release index changed since the
   last release, rehearse first:
   `gh workflow run cli-tests.yml --ref main -f rehearse=0.0.1`, and check
@@ -32,38 +35,38 @@ You may merge the release pull request yourself once its checks pass.
 
 ## 1. Pick the version
 
-Read every entry under `## Unreleased`, and check that each one is under
-the right heading. `CLAUDE.md` § Versioning and breaking changes says what
-counts as breaking. Use these headings, in this order, and leave out any
-that would be empty:
+Each unreleased change is one file directly under `changes/`
+(`changes/README.md` has the format). Read every one, and check that its
+`kind` is right. `CLAUDE.md` § Versioning and breaking changes says what
+counts as breaking. The kind picks the `CHANGELOG.md` heading:
 
-1. `### Breaking (shows an error)`: Kix stops with an error that says what
-   to change, such as a build that fails until a package sets a new value.
-2. `### Breaking (no error)`: nothing fails, but the result is different,
-   such as a package that now looks for its files in another folder.
-3. `### Upgrade notes`: nothing to change, but worth knowing, such as a
-   first deploy that restarts some pods once.
-4. `### Added`, `### Changed`, and `### Fixed`.
+1. `error`, `### Breaking (shows an error)`: Kix stops with an error that
+   says what to change, such as a build that fails until a package sets a
+   new value.
+2. `silent`, `### Breaking (no error)`: nothing fails, but the result is
+   different, such as a package that now looks for its files in another
+   folder.
+3. `note`, `### Upgrade notes`: nothing to change, but worth knowing, such
+   as a first deploy that restarts some pods once.
+4. `security`, `### Security`: a vulnerability fix. Its `workaround` says
+   how to get the fix without upgrading.
+5. `added`, `changed`, and `fixed`: `### Added`, `### Changed`, and
+   `### Fixed`.
 
-`## Unreleased` may start with a **Before you upgrade** list, above the
-first heading. It is not a heading, so it stays where it is and moves with
-the release. Check that it has one bullet for each action that a Breaking
-entry asks of users, and no others.
+Fix a record whose kind is wrong. Adding a field, event type, annotation,
+option, or command is not breaking. Removing or renaming one is. Each
+breaking record says what users change when they upgrade. If a `silent`
+record could have shown an error with little work, tell the person. Run
+`scripts/change-records.py check` again after any edit.
 
-Move an entry that is under the wrong heading. Adding a field, event type,
-annotation, option, or command is not breaking. Removing or renaming one is.
-Each breaking entry says what users change when they upgrade. If an entry
-under `### Breaking (no error)` could have shown an error with little work,
-tell the person.
-
-Then read `version` under `[workspace.package]` in `cli/Cargo.toml`. Kix is
-below 1.0, so:
+Then read `version` under `[workspace.package]` in `cli/Cargo.toml`, and run
+`scripts/change-records.py bump`. Kix is below 1.0, so:
 
 - If the version is a prerelease, `X.Y.Z-rc.N`, the release is `X.Y.Z`
-  (§ Prereleases), whatever `## Unreleased` holds.
-- If `## Unreleased` has either `### Breaking` section, raise the minor version
-  and set the patch to 0: `0.3.2` becomes `0.4.0`.
-- Otherwise raise the patch version: `0.3.2` becomes `0.3.3`.
+  (§ Prereleases), whatever `bump` prints.
+- If `bump` prints `minor`, raise the minor version and set the patch to 0:
+  `0.3.2` becomes `0.4.0`.
+- If it prints `patch`, raise the patch version: `0.3.2` becomes `0.3.3`.
 
 Make no other choice: no skipped numbers. If the person names a version, use
 it only if it is higher than the current one.
@@ -76,15 +79,17 @@ When the person asks for a prerelease (a release candidate, beta, or "rc"):
   add `-rc.1`: `0.7.1` with breaking entries becomes `0.8.0-rc.1`.
 - If the current version is already a prerelease, `X.Y.Z-rc.N`, the next
   prerelease is `X.Y.Z-rc.<N+1>` and the release is `X.Y.Z`. Do not apply
-  the rules above again. `## Unreleased` still holds the entries that made
-  `X.Y.Z` a minor or patch release, and raising again would skip it.
+  the rules above again. The unreleased records still include the ones that
+  made `X.Y.Z` a minor or patch release, and raising again would skip it.
 
 A prerelease is published like a release, with these differences, all
 automatic:
 
-- Its notes are `## Unreleased`, so in step 2 leave `CHANGELOG.md` alone.
-  The Changelog check fails a pull request that changes `cli/` and not
-  `CHANGELOG.md`, so label the release pull request `no-changelog`.
+- Its notes are written from the unreleased change records
+  (`scripts/change-records.py changelog`), so in step 2 skip step 4: the
+  records stay where they are, and `CHANGELOG.md` is left alone. The
+  Changelog check fails a pull request that changes `cli/` and adds no
+  record, so label the release pull request `no-changelog`.
 - kix.run lists it as a prerelease and never as the latest release, and the
   docs site keeps serving the last release's docs.
 - Kix installs it only when it is named in full:
@@ -92,7 +97,7 @@ automatic:
   script, or `kix = "0.8.0-rc.1"` in `kix.toml`. `kix = "0.8"` never picks it.
 
 The release that follows the prereleases (`0.8.0`) is cut as usual, from the
-same `## Unreleased` section, with the version taken from the prerelease.
+same unreleased records, with the version taken from the prerelease.
 
 ## 2. Edit the files
 
@@ -105,10 +110,14 @@ same `## Unreleased` section, with the version taken from the prerelease.
    sidecar that shows it: `git grep -l -e 'kix <old version>' -e
    'kix-<old version>' docs/src/command-output`. Without this, the Documentation captures check
    fails on the release pull request.
-4. `CHANGELOG.md`: rename `## Unreleased` to `## <version> - <YYYY-MM-DD>`
-   with today's date, and put a new, empty `## Unreleased` above it. Remove
-   empty sections. Leave the wording of the entries alone. For a prerelease,
-   skip this step.
+4. The change records. First read the section they make:
+   `scripts/change-records.py changelog`. If a bullet reads wrongly, fix
+   the wording in its record. Then run
+   `scripts/change-records.py release <version>`. It moves the unreleased
+   records into `changes/<version>/` and adds the section
+   `## <version> - <YYYY-MM-DD>`, with today's date, to the top of
+   `CHANGELOG.md`. Check that the new section is the one you read. For a
+   prerelease, skip this step.
 
 ## 3. Open and merge the pull request
 
@@ -126,7 +135,8 @@ Follow the run with `gh run watch`. Then check:
 
 - `gh release view v<version> --repo kix-run/kix-releases` lists the three
   platform release archives (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
-  `kix-<version>-third-party-sources.tar.zst`, `SHA256SUMS`, and
+  `kix-<version>-third-party-sources.tar.zst`,
+  `kix-<version>-changes.json`, `SHA256SUMS`, and
   `SHA256SUMS.sig`, and shows the changelog section as the notes.
 - `git ls-remote --tags origin v<version>` shows the tag.
 - The site rebuild that `publish` starts writes `kix.run/releases/index.json`.

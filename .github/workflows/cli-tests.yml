@@ -205,26 +205,35 @@ jobs:
 
           # The release notes: this version's CHANGELOG.md section, without
           # its heading. A prerelease has no section of its own, so its notes
-          # are the Unreleased section that its release will take.
+          # are written from the unreleased change records in changes/, which
+          # its release will take.
           case $base in
             *-*)
               prerelease=true
-              section=Unreleased
               # The backticks are Markdown for the release page.
               # shellcheck disable=SC2016
               printf 'Prerelease of Kix %s. Install it by name: `kix self install %s`, or `curl -fsSL https://kix.run/install | KIX_VERSION=%s sh`.\n\n' \
                 "${base%%-*}" "$base" "$base" > release-notes.md
+              python3 scripts/change-records.py changelog >> release-notes.md
+              missing="changes/ has no unreleased change records."
               ;;
             *)
               prerelease=false
-              section=$base
+              # A record merged after the release pull request moved the
+              # others would ship in this release and be listed in the next.
+              if [ ! -d "changes/$base" ] || [ "$(python3 scripts/change-records.py bump)" != none ]; then
+                echo "changes/$base/ is missing, or changes/ still holds unreleased records."
+                echo "Move them with: scripts/change-records.py release $base (the release skill)."
+                exit 1
+              fi
               : > release-notes.md
+              awk -v v="$base" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
+                CHANGELOG.md >> release-notes.md
+              missing="CHANGELOG.md has no '## $base' section, or it lists no changes. The release skill writes it."
               ;;
           esac
-          awk -v v="$section" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
-            CHANGELOG.md >> release-notes.md
           if ! grep -q '^[-*] ' release-notes.md; then
-            echo "CHANGELOG.md has no '## $section' section, or it lists no changes. The release skill writes it."
+            echo "$missing"
             exit 1
           fi
           printf '\nBuilt from kix-run/kix@%s.\n' "$GITHUB_SHA" >> release-notes.md
@@ -447,6 +456,13 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      # The change records and scripts/change-records.py, kept apart from
+      # the packaging folders below.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          path: src
+
       # `cargo audit` reads each binary's crate list and needs cargo to run.
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
@@ -521,6 +537,10 @@ jobs:
             tar -xf "runtime/sources-$system.tar" -C "$sources"
           done
           tar -I 'zstd -19 -T0' -cf "dist/$sources.tar.zst" "$sources"
+
+          # The change records of this release, for `kix upgrade` and other
+          # tools. changes/README.md has the format.
+          python3 src/scripts/change-records.py json --version "$VERSION" > "dist/kix-$VERSION-changes.json"
 
           (cd dist && sha256sum -- *.tar.gz *.tar.zst *.json > SHA256SUMS)
           cat dist/SHA256SUMS

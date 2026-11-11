@@ -13,9 +13,13 @@ Each release groups changes under these headings:
   these first.
 - **Upgrade notes:** nothing to change in your code, but worth knowing before
   you upgrade.
+- **Security:** a fix for a vulnerability, with a way to get it without
+  upgrading.
 - **Added**, **Changed**, and **Fixed**.
 
-## Unreleased
+Changes that are not released yet are in [`changes/`](changes/), one file per
+change. Each release moves its files to `changes/<version>/` and writes its
+section here from them.
 
 ## 0.9.1 - 2026-11-10
 
