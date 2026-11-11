@@ -741,35 +741,17 @@ fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec
 }
 
 fn print_migrations(doc: &Plan, accepted: bool) {
-    let pairs = doc.migrations.items();
+    let pairs: Vec<plan::migrations::Replacement> = doc
+        .migrations
+        .items()
+        .iter()
+        .map(plan::migrations::Replacement::from)
+        .collect();
     if pairs.is_empty() {
         return;
     }
-    println!(
-        "{}",
-        output::bold(&format!("Stateful migrations detected ({}):", pairs.len()))
-    );
-    for m in pairs {
-        println!("  {} {}: {}", output::yellow("~"), m.slot, m.reason);
-        println!("      source: {}", m.source);
-        println!("      target: {}", m.target);
-    }
+    print!("{}", plan::migrations::plan(&pairs, accepted));
     println!();
-    if accepted {
-        println!(
-            "{}",
-            output::yellow(
-                "--accept-migrations set: the deploy continues. Kix will not copy data."
-            )
-        );
-    } else {
-        println!(
-            "{}",
-            output::yellow(
-                "The deploy stops on these. Migrate the data, then deploy with --accept-migrations."
-            )
-        );
-    }
 }
 
 /// Print the human-readable plan summary and details.

@@ -269,7 +269,8 @@ pub enum DeployEvent {
         previous: Option<String>,
     },
     /// Scheduler stopped because of caller cancellation or a halting failure
-    /// under `halt-on-first-failure`.
+    /// under `halt-on-first-failure`. A halting failure's reason starts with
+    /// [`HALTED_ON_FAILURE`] and repeats the failed node's message.
     Stopped { reason: String },
     /// Nothing has happened for `idle`. Names every node in flight, what it
     /// is doing, and for how long, so a stuck run is never silent. Emitted by
@@ -374,6 +375,11 @@ impl DeployObserver for NullObserver {
     fn on_event(&self, _event: &DeployEvent) {}
 }
 
+/// The start of a [`DeployEvent::Stopped`] reason when a failed node halted
+/// the run. The rest repeats the message the node's own `Failed` verdict
+/// carried, so a person-facing renderer can leave the line out.
+pub const HALTED_ON_FAILURE: &str = "halt-on-first-failure: ";
+
 /// Summary of a completed deploy run.
 ///
 /// Counts are computed from terminal Verdicts rather than apply-time outcomes.
@@ -387,4 +393,15 @@ pub struct DeployResult {
     pub failed: usize,
     pub cancelled: usize,
     pub pruned: usize,
+    /// Every node counted in `failed`, in the order it failed, for the text
+    /// that closes a run.
+    pub failures: Vec<NodeFailure>,
+}
+
+/// A node that failed in a run, and the message its `Failed` verdict gave
+/// before the engine added what the failure cost.
+#[derive(Debug, Clone)]
+pub struct NodeFailure {
+    pub node: NodeId,
+    pub message: String,
 }

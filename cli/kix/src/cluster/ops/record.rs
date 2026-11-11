@@ -149,8 +149,8 @@ impl ActivationRecord {
                 tracing::warn!(
                     activation = %name,
                     error = %e,
-                    "could not create the Activation record up front; a failure part way \
-                     through this run will leave nothing to say what it applied",
+                    "could not create this run's deployment record before applying; continuing, \
+                     but if the deploy fails part way, no deployment record will list what it applied",
                 );
             }
         }

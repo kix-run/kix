@@ -427,13 +427,17 @@ impl Baseline {
             Some(hash) => match record_graph(None, cluster, hash, current.built_via.as_deref()) {
                 Ok(Some(graph)) => Some(graph),
                 Ok(None) => {
-                    report(PlanEvent::ActiveUnresolved { record: current });
+                    report(PlanEvent::ActiveUnresolved {
+                        record: current,
+                        cluster,
+                    });
                     None
                 }
                 Err(error) => {
                     report(PlanEvent::ActiveBuildUnusable {
                         activation: &current.name,
                         error: &error,
+                        cluster,
                     });
                     None
                 }
@@ -780,10 +784,27 @@ pub fn target_build(
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<StoreGraph, String> {
-    record_graph(None, cluster, identity_hash, built_via)?.ok_or_else(|| {
+    let found = record_graph(None, cluster, identity_hash, built_via).map_err(|error| {
         format!(
-            "store path for activation '{name}' not found locally (hash: {identity_hash}). \
-             The build may have been garbage-collected or created on another machine. Restore it to the local Nix store or run the rollback on a machine that still has it."
+            "rollback target {name}'s build (hash: {identity_hash}) could not be loaded\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Cause:\n    {error}\n\n  \
+             Next (choose one):\n    \
+             - Run `kix rollback {cluster}` on a machine with a working build for {name}.\n    \
+             - Run `kix rollback {cluster}` interactively and pick another deployment record marked `[available]`.\n    \
+             - Check out the git commit that deployed {name} and run `kix deploy {cluster}`."
+        )
+    })?;
+    found.ok_or_else(|| {
+        format!(
+            "rollback target {name}'s build is not on this machine (hash: {identity_hash})\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Why:\n    \
+             The build for {name} is not in Kix's local store on this machine (it may have been removed or built on another machine, such as CI).\n\n  \
+             Next (choose one):\n    \
+             - Run `kix rollback {cluster}` on a machine that has {name}'s build.\n    \
+             - Run `kix rollback {cluster}` interactively on this machine and pick a deployment record marked `[available]` (or run `kix rollback {cluster} --list` to inspect them).\n    \
+             - Check out the git commit that deployed {name} and run `kix deploy {cluster}`."
         )
     })
 }
@@ -1481,7 +1502,9 @@ mod tests {
         let hash = "eeeeuuuueeeeuuuueeeeuuuueeeeuuuu";
         let err = target_build("c", "rec-x", hash, None).unwrap_err();
         assert!(
-            err.contains(&format!("'rec-x' not found locally (hash: {hash})")),
+            err.contains(&format!(
+                "rec-x's build is not on this machine (hash: {hash})"
+            )),
             "{err}"
         );
     }

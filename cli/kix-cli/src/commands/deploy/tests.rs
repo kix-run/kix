@@ -144,17 +144,23 @@ mod cached_baseline_tests {
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open(&client, &discovery).unwrap().into_records();
         let records = records.as_ref();
-        assert!(check_cached_baseline(records, "a", "a2").await.is_ok());
-        let err = check_cached_baseline(records, "a", "p9")
+        assert!(
+            check_cached_baseline(records, "a", "a2", None)
+                .await
+                .is_ok()
+        );
+        let err = check_cached_baseline(records, "a", "p9", Some("prod-eu"))
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("Active build is a2"), "{err}");
-        let err = check_cached_baseline(records, "b", "p9")
+        assert!(err.contains("(build a2)"), "{err}");
+        assert!(err.contains("Nothing was applied to the cluster."), "{err}");
+        assert!(err.contains("kix deploy a --context prod-eu"), "{err}");
+        let err = check_cached_baseline(records, "b", "p9", None)
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("no Active record"), "{err}");
+        assert!(err.contains("has no active deployment record"), "{err}");
     }
 
     /// Verify that `refuse_name_taken` rejects an Activation name already bound
@@ -174,7 +180,11 @@ mod cached_baseline_tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("identity hash a2, this build is n1"), "{err}");
+        assert!(err.contains("on cluster:  a2\n"), "{err}");
+        assert!(
+            err.contains("This build:                           n1"),
+            "{err}"
+        );
     }
 
     /// Verify that `refuse_namespaceless` rejects a namespaced resource with no
@@ -396,6 +406,58 @@ mod run_end_tests {
         assert!(stopped.starts_with("Deploy stopped: "), "{stopped}");
         let ok = summary_line(&DeployResult::default(), true, true);
         assert!(ok.starts_with("Dry run complete: "), "{ok}");
+    }
+
+    /// A failed deploy closes with the failed resources, the records, and a
+    /// next step that does not offer a rollback.
+    #[test]
+    fn a_failed_deploy_says_what_is_live_and_what_to_do() {
+        let counts = DeployResult {
+            created: 3,
+            configured: 12,
+            failed: 1,
+            cancelled: 4,
+            failures: vec![kix::cluster::stream::NodeFailure {
+                node: NodeId::Resource(ResourceId {
+                    kind: "Deployment".into(),
+                    namespace: "app".into(),
+                    name: "api".into(),
+                }),
+                message: "ImagePullBackOff\nsecond line".into(),
+            }],
+            ..DeployResult::default()
+        };
+        let closing = |previous, interrupted| Closing {
+            cluster: "prod",
+            record: Some("prod-8a1f3c20"),
+            previous,
+            interrupted,
+            current: false,
+            on_error_continue: false,
+        };
+        let text = super::observer::closing(
+            &counts,
+            &closing(Previous::Active("prod-4be1c09a".into()), None),
+        );
+        assert!(text.starts_with("Deploy of 'prod' failed: "), "{text}");
+        assert!(
+            text.contains("    - Deployment/api@app: ImagePullBackOff\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Deployment record prod-8a1f3c20 is marked Failed, and prod-4be1c09a remains the Active deployment record."),
+            "{text}"
+        );
+        assert!(!text.contains("rollback"), "{text}");
+        let first = super::observer::closing(&counts, &closing(Previous::FirstDeploy, None));
+        assert!(first.contains("no Active deployment record yet"), "{first}");
+        let stopped =
+            super::observer::closing(&counts, &closing(Previous::Unknown, Some("interrupted")));
+        assert!(
+            stopped.starts_with("Deploy of 'prod' stopped (interrupted): "),
+            "{stopped}"
+        );
+        assert!(stopped.contains("4 object(s) did not finish"), "{stopped}");
     }
 }
 

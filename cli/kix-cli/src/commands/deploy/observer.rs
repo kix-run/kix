@@ -3,10 +3,9 @@
 use crate::output;
 use crate::plan;
 use kix::cluster::apply::ApplyAction;
-use kix::cluster::migrate::MigrationPair;
 use kix::cluster::stream::{
-    CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeId, TransitionKind,
-    Verdict,
+    CancelReason, DeployEvent, DeployObserver, DeployResult, HALTED_ON_FAILURE, NodeDetail, NodeId,
+    TransitionKind, Verdict,
 };
 use kix::manifest::types::ResourceId;
 
@@ -57,9 +56,11 @@ impl DeployObserver for StreamCliObserver {
                     activation,
                 );
             }
-            DeployEvent::Stopped { reason } => {
+            // The failed node's line already carries a halting failure.
+            DeployEvent::Stopped { reason } if !reason.starts_with(HALTED_ON_FAILURE) => {
                 eprintln!("\n{} {}", output::red("✗"), output::red(reason));
             }
+            DeployEvent::Stopped { .. } => {}
             DeployEvent::Stalled {
                 idle,
                 in_flight,
@@ -235,15 +236,11 @@ impl StreamCliObserver {
             }
             Verdict::Cancelled { because } => {
                 if self.verbose {
-                    let because = match because {
-                        CancelReason::PredecessorFailed(rid) => format!("predecessor {rid} failed"),
-                        CancelReason::External => "external cancel".to_string(),
-                    };
                     println!(
                         "  {} {} {}",
                         output::dim("⊘"),
                         label,
-                        output::dim(&format!("cancelled ({because})")),
+                        output::dim(&held_back(because)),
                     );
                 }
             }
@@ -264,6 +261,14 @@ impl StreamCliObserver {
                 );
             }
         }
+    }
+}
+
+/// Describe a node held back by `because`.
+pub(crate) fn held_back(because: &CancelReason) -> String {
+    match because {
+        CancelReason::PredecessorFailed(rid) => format!("not started ({rid} failed)"),
+        CancelReason::External => "interrupted".to_string(),
     }
 }
 
@@ -324,28 +329,13 @@ pub(super) fn render_prune_start(
     out
 }
 
-/// Format the final summary line for a deploy or dry run (`complete`, `failed`,
-/// or `stopped` on early cancellation).
-pub(super) fn summary_line(r: &DeployResult, dry_run: bool, succeeded: bool) -> String {
+/// Format the counts of a run: created, configured, unchanged, and failed,
+/// then the objects that did not finish when `not_finished` is set, then the
+/// pruned ones when any were.
+pub(crate) fn counts(r: &DeployResult, not_finished: bool) -> String {
     let failed_str = r.failed.to_string();
-    let mut cancelled_tail = if r.cancelled > 0 {
-        format!(", {} cancelled", output::dim(&r.cancelled.to_string()),)
-    } else {
-        String::new()
-    };
-    if r.pruned > 0 {
-        cancelled_tail.push_str(&format!(", {} pruned", output::red(&r.pruned.to_string())));
-    }
-    let run = if dry_run { "Dry run" } else { "Deploy" };
-    let ending = if succeeded {
-        "complete"
-    } else if r.failed > 0 {
-        "failed"
-    } else {
-        "stopped"
-    };
-    format!(
-        "{run} {ending}: {} created, {} configured, {} unchanged, {} failed{}",
+    let mut text = format!(
+        "{} created, {} configured, {} unchanged, {} failed",
         output::green(&r.created.to_string()),
         output::yellow(&r.configured.to_string()),
         output::dim(&r.unchanged.to_string()),
@@ -354,40 +344,200 @@ pub(super) fn summary_line(r: &DeployResult, dry_run: bool, succeeded: bool) -> 
         } else {
             output::dim(&failed_str)
         },
-        cancelled_tail,
-    )
+    );
+    if not_finished {
+        text.push_str(&format!(
+            ", {} not finished",
+            output::dim(&r.cancelled.to_string())
+        ));
+    }
+    if r.pruned > 0 {
+        text.push_str(&format!(", {} pruned", output::red(&r.pruned.to_string())));
+    }
+    text
 }
 
-/// Print detected stateful migration pairs that require `--accept-migrations`.
-pub(super) fn print_migration_pairs(pairs: &[MigrationPair]) {
+/// Format the one-line summary of a deploy or dry run that succeeded, or of
+/// one that stopped for a reason [`closing`] does not describe.
+pub(super) fn summary_line(r: &DeployResult, dry_run: bool, succeeded: bool) -> String {
+    let run = if dry_run { "Dry run" } else { "Deploy" };
+    let ending = if succeeded {
+        "complete"
+    } else if r.failed > 0 {
+        "failed"
+    } else {
+        "stopped"
+    };
+    format!("{run} {ending}: {}", counts(r, !succeeded))
+}
+
+/// The record the cluster treats as current, as far as this run knows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Previous {
+    /// The Active record before this run.
+    Active(String),
+    /// The cluster had no Active record: this is its first deploy.
+    FirstDeploy,
+    /// This run did not read the cluster's records (`--current-activation`).
+    Unknown,
+}
+
+/// What the text that closes a failed deploy needs besides the counts.
+pub(crate) struct Closing<'a> {
+    pub cluster: &'a str,
+    /// This run's deployment record, when the build has one.
+    pub record: Option<&'a str>,
+    pub previous: Previous,
+    /// Why the run was interrupted, when it was.
+    pub interrupted: Option<&'a str>,
+    /// Whether this run's record became current.
+    pub current: bool,
+    /// Whether `--on-error continue` was set.
+    pub on_error_continue: bool,
+}
+
+/// Format the text that closes a deploy that did not succeed: the counts,
+/// the failed resources, what state the cluster is in, and what to do next.
+pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
     use std::fmt::Write;
+    let cluster = c.cluster;
     let mut out = String::new();
-    let _ = writeln!(out);
-    let _ = writeln!(
-        out,
-        "{}",
-        output::bold(&format!("Stateful migrations detected ({}):", pairs.len()))
-    );
-    for p in pairs {
+    let failures = |out: &mut String| {
+        if r.failures.is_empty() {
+            return;
+        }
+        let _ = writeln!(out);
+        let _ = writeln!(out, "  Failed resources ({}):", r.failures.len());
+        for f in &r.failures {
+            let first = f.message.lines().next().unwrap_or_default();
+            let _ = writeln!(out, "    - {}: {first}", f.node);
+        }
+    };
+    if c.current {
+        // The record became current although objects failed: under
+        // `--on-error continue`, or when only a prune delete failed.
+        if c.on_error_continue {
+            let _ = writeln!(
+                out,
+                "Deploy of '{cluster}' finished with {} failure(s) (`--on-error continue`): {}",
+                r.failed,
+                counts(r, false)
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "Deploy of '{cluster}' finished with {} failure(s): {}",
+                r.failed,
+                counts(r, false)
+            );
+        }
+        failures(&mut out);
+        let _ = writeln!(out);
+        let _ = writeln!(out, "  Cluster state:");
         let _ = writeln!(
             out,
-            "  {} {}",
-            output::yellow("~"),
-            output::yellow(&p.summary())
+            "    - {} created and {} configured object(s) are live on the cluster.",
+            r.created, r.configured
         );
-        let _ = writeln!(
+        if let Some(record) = c.record {
+            if c.on_error_continue {
+                let _ = writeln!(
+                    out,
+                    "    - Because `--on-error continue` was set and no objects were held back, deployment record {record} is now Active."
+                );
+            } else {
+                let _ = writeln!(out, "    - Deployment record {record} is now Active.");
+            }
+        }
+        let _ = writeln!(out);
+        let _ = writeln!(out, "  Next:");
+        let _ = write!(
             out,
-            "      source: {}/{}/{}",
-            p.source.kind, p.source.namespace, p.source.name
+            "    Fix the failed resource(s) above and run `kix deploy {cluster}` again."
         );
-        let _ = writeln!(
-            out,
-            "      target: {}/{}/{}",
-            p.target.kind, p.target.namespace, p.target.name
-        );
+        return out;
     }
-    let _ = writeln!(out);
-    output::progress_text(&out);
+    let record_line = match (c.record, &c.previous) {
+        (Some(record), Previous::Active(previous)) => Some(format!(
+            "Deployment record {record} is marked Failed, and {previous} remains the Active deployment record."
+        )),
+        (Some(record), Previous::FirstDeploy) => Some(format!(
+            "Deployment record {record} is marked Failed, and the cluster has no Active deployment record yet."
+        )),
+        (Some(record), Previous::Unknown) => {
+            Some(format!("Deployment record {record} is marked Failed."))
+        }
+        (None, Previous::Active(previous)) => {
+            Some(format!("{previous} remains the Active deployment record."))
+        }
+        (None, Previous::FirstDeploy) => {
+            Some("The cluster has no Active deployment record yet.".to_string())
+        }
+        (None, Previous::Unknown) => None,
+    };
+    match c.interrupted {
+        Some(reason) => {
+            let _ = writeln!(
+                out,
+                "Deploy of '{cluster}' stopped ({reason}): {}",
+                counts(r, true)
+            );
+            let _ = writeln!(out);
+            let _ = writeln!(out, "  Cluster state:");
+            let _ = writeln!(
+                out,
+                "    - {} created and {} configured object(s) finished before the run stopped.",
+                r.created, r.configured
+            );
+            let _ = writeln!(
+                out,
+                "    - {} object(s) did not finish (some may already have been sent to the cluster, while the rest were not started).",
+                r.cancelled
+            );
+            if let Some(line) = record_line {
+                let _ = writeln!(out, "    - {line}");
+            }
+            if c.record.is_some() {
+                let _ = writeln!(
+                    out,
+                    "    - The next `kix deploy {cluster}` on a machine with this build will compare against what this run applied."
+                );
+            }
+            let _ = writeln!(out);
+            let _ = writeln!(out, "  Next:");
+            let _ = write!(
+                out,
+                "    Run `kix deploy {cluster}` again to finish applying the build."
+            );
+        }
+        None => {
+            let _ = writeln!(out, "Deploy of '{cluster}' failed: {}", counts(r, true));
+            failures(&mut out);
+            let _ = writeln!(out);
+            let _ = writeln!(out, "  Cluster state:");
+            let _ = writeln!(
+                out,
+                "    - {} created and {} configured object(s) from this run were applied to the cluster; {} object(s) did not finish.",
+                r.created, r.configured, r.cancelled
+            );
+            if let Some(line) = record_line {
+                let _ = writeln!(out, "    - {line}");
+            }
+            if c.record.is_some() {
+                let _ = writeln!(
+                    out,
+                    "    - The next `kix deploy {cluster}` on a machine with this build will compare against what this failed run applied."
+                );
+            }
+            let _ = writeln!(out);
+            let _ = writeln!(out, "  Next:");
+            let _ = write!(
+                out,
+                "    Fix the failed resource(s) above and run `kix deploy {cluster}` again."
+            );
+        }
+    }
+    out
 }
 
 pub(super) fn print_warnings(lines: &[String]) {

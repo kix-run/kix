@@ -164,7 +164,7 @@ pub fn import_target_from_manifest(
                             .unwrap_or("")
                     ),
                     reason: format!(
-                        "CRD ref marker for {crd_kind} ({import_name}) lists no versions in {}. Builds from a kix library before 2026-10-02 lack it. Rebuild and deploy; a rollback or the operator cannot apply this build.",
+                        "CRD ref marker for {crd_kind} ({import_name}) lists no versions in {}. Builds from the Kix library before 2026-10-02 lack this field; rebuild and deploy (a rollback or the operator cannot apply this build).",
                         keys::CRD_SERVED_VERSIONS
                     ),
                 });
@@ -241,7 +241,7 @@ pub(crate) async fn wait_for_import_target(
             // defaulting to "default".
             let ns = target.namespace.as_deref().ok_or_else(|| {
                 ReadinessError::MalformedImportTarget(format!(
-                    "namespaced import target {}/{} has no namespace (marker malformed)",
+                    "namespaced import target {}/{} has no namespace (marker malformed); build the cluster again and deploy.",
                     target.kind, target.name
                 ))
             })?;
@@ -354,7 +354,7 @@ pub(crate) async fn wait_for_import_target(
                     target.kind, target.name
                 ),
                 None => format!(
-                    "import target {}/{} (apiVersion {}) not found on cluster",
+                    "import target {}/{} (apiVersion {}) not found on the cluster before the timeout expired.",
                     target.kind, target.name, target.api_version
                 ),
             };

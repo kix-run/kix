@@ -244,28 +244,31 @@ pub(super) fn print_record_plan(retirement: &RecordRetirement, policy: &Retentio
 }
 
 /// Print the final GC summary line and exit non-zero if `failed > 0`.
-pub(super) fn finish(deleted: usize, failed: usize, records: Option<(usize, usize)>) -> Result<()> {
+pub(super) fn finish(
+    cluster: &str,
+    deleted: usize,
+    failed: usize,
+    records: Option<(usize, usize)>,
+) -> Result<()> {
     crate::say!();
-    let failed_str = failed.to_string();
     let records_note = match records {
         Some((retired, kept)) if retired > 0 || kept > 0 => {
-            format!(", {retired} activation record(s) retired, {kept} kept")
+            format!(", {retired} deployment record(s) retired ({kept} kept)")
         }
         _ => String::new(),
     };
-    crate::say!(
-        "GC complete: {} deleted, {} failed{records_note}",
-        output::green(&deleted.to_string()),
-        if failed > 0 {
-            output::red(&failed_str)
-        } else {
-            output::dim(&failed_str)
-        },
-    );
-    if failed > 0 {
-        std::process::exit(1);
+    let deleted = output::green(&deleted.to_string()).into_owned();
+    if failed == 0 {
+        crate::say!("GC complete for '{cluster}': {deleted} deleted, 0 failed{records_note}");
+        return Ok(());
     }
-    Ok(())
+    // A failure is printed even under `-q`, since the command exits 1.
+    println!(
+        "GC failed for '{cluster}': {deleted} deleted, {} failed{records_note}",
+        output::red(&failed.to_string())
+    );
+    println!("  Resolve the deletion failure(s) listed above and run `kix gc {cluster}` again.");
+    std::process::exit(1);
 }
 
 /// Build the confirmation prompt for deleting `resources` resources and
@@ -285,11 +288,7 @@ pub(super) fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
         return Ok(true);
     }
     if !output::is_interactive() {
-        eprintln!(
-            "{}",
-            output::yellow("Non-interactive terminal. Use --yes to confirm deletion.")
-        );
-        std::process::exit(1);
+        output::refuse_unconfirmed(output::Unconfirmed::GarbageCollect, &args.cluster);
     }
     print!("\n{prompt}");
     std::io::stdout().flush().into_diagnostic()?;

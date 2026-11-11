@@ -202,6 +202,76 @@ pub fn is_interactive() -> bool {
     std::env::var_os("KIX_NO_INTERACTIVE").is_none() && std::io::stdin().is_terminal()
 }
 
+/// What a command was about to do when it stopped for want of a confirmation,
+/// for [`refuse_unconfirmed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unconfirmed {
+    Deploy,
+    Rollback,
+    GarbageCollect,
+    MigrateDomain,
+}
+
+impl Unconfirmed {
+    /// Return the opening sentence, the sentence that says nothing changed,
+    /// and what `--yes` lets the command do.
+    fn wording(self, cluster: &str) -> (String, &'static str, &'static str) {
+        match self {
+            Unconfirmed::Deploy => (
+                format!("Deploy of '{cluster}' aborted"),
+                "Nothing was applied to the cluster.",
+                "apply",
+            ),
+            Unconfirmed::Rollback => (
+                format!("Rollback of '{cluster}' aborted"),
+                "Nothing was applied to the cluster.",
+                "roll back",
+            ),
+            Unconfirmed::GarbageCollect => (
+                format!("Garbage collection of '{cluster}' aborted"),
+                "Nothing was deleted from the cluster.",
+                "delete orphaned resources",
+            ),
+            Unconfirmed::MigrateDomain => (
+                format!("Domain migration of '{cluster}' aborted"),
+                "Nothing was changed on the cluster.",
+                "migrate",
+            ),
+        }
+    }
+}
+
+/// Stop with exit code 1 because the command needs a confirmation and stdin
+/// is not a terminal. The message repeats the command line with `--yes`.
+pub fn refuse_unconfirmed(what: Unconfirmed, cluster: &str) -> ! {
+    let (headline, nothing, does) = what.wording(cluster);
+    eprintln!(
+        "{} {headline}: confirmation required in non-interactive mode.",
+        red("x")
+    );
+    eprintln!("  {nothing}");
+    eprintln!();
+    eprintln!("  Next:");
+    eprintln!("    Pass '--yes' ('-y') to {does} without prompting:");
+    eprintln!("      {}", with_yes(std::env::args().skip(1)));
+    std::process::exit(1);
+}
+
+/// Return the command line `kix <args> --yes`, quoting arguments that a
+/// shell would split.
+fn with_yes(args: impl Iterator<Item = String>) -> String {
+    let mut words = vec!["kix".to_string()];
+    for arg in args {
+        if arg.is_empty() || arg.contains(|c: char| c.is_whitespace() || "'\"$`\\".contains(c)) {
+            words.push(format!("'{}'", arg.replace('\'', r"'\''")));
+        } else {
+            words.push(arg);
+        }
+    }
+    words.push("--yes".to_string());
+    words.join(" ")
+}
+
 /// All command outputs must implement this trait.
 /// Ensures every command supports both human-readable and structured output.
 pub trait CommandResponse {
@@ -226,4 +296,20 @@ pub fn result(response: &dyn CommandResponse) -> miette::Result<()> {
     };
     println!("{rendered}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The suggested command keeps the user's arguments and quotes the ones
+    /// a shell would split.
+    #[test]
+    fn the_suggested_command_repeats_the_arguments_with_yes() {
+        let args = ["deploy", "prod", "--context", "my ctx"].map(String::from);
+        assert_eq!(
+            with_yes(args.into_iter()),
+            "kix deploy prod --context 'my ctx' --yes"
+        );
+    }
 }

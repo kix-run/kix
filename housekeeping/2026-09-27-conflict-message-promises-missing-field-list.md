@@ -6,3 +6,4 @@ list follows. The only field names appear inside the raw Kubernetes error at
 the end of the same line (`.spec.replicas`). `conflict_paths` already extracts
 those names, but only the ceded-fields path uses it (the `info!` log and
 `without_ceded_conflicts`), never this error.
+- Hit again 2026-11-11 while rewording the deploy failure messages; the message still points at a list it does not print.

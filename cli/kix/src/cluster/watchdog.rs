@@ -537,7 +537,7 @@ pub(crate) async fn run(
             }
             Assessment::Abort => {
                 let reason = format!(
-                    "{}; giving up (set {STALL_TIMEOUT_ENV} to change the bound)",
+                    "{}; giving up (set {STALL_TIMEOUT_ENV} to a number of seconds such as 600 to change the bound, or 0 to disable it)",
                     describe(idle, &in_flight)
                 );
                 observer.on_event(&DeployEvent::Stalled {

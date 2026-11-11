@@ -29,9 +29,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "cannot update {resource}: another tool owns fields that Kix is trying to change. \
-         Review the fields listed below. If Kix should manage them, rerun with --force-conflicts to take ownership; \
-         if the other tool is meant to own them, declare them on the resource with `ownership.cede`. Kubernetes reported: {source}"
+        "field ownership conflict on {resource} (not updated). Another field manager owns fields that Kix sets; run the deploy again with `--force-conflicts` to take ownership, or declare those fields on {resource} with `ownership.cede` if the other manager should keep owning them. Kubernetes reported: {source}"
     )]
     Conflict {
         resource: String,
@@ -40,10 +38,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "cannot update {resource}: the change includes a field that Kubernetes does not allow to be modified. \
-         To apply this change, the resource must be deleted and recreated; \
-         review the impact before deleting it, then deploy again. \
-         Kubernetes reported: {source}"
+        "immutable field changed on {resource} (not updated). Kubernetes does not allow changing this field in place, and Kix did not recreate {resource} automatically; review the impact of deleting {resource}, delete it, and run the deploy again. Kubernetes reported: {source}"
     )]
     ImmutableConflict {
         resource: String,
@@ -52,11 +47,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "cannot update {resource}: it drops an API version that the cluster still has objects stored at. \
-         Kubernetes keeps the versions it has written in the CRD's status.storedVersions, and refuses to \
-         remove one until nothing is stored at it. Migrate the existing objects to a version this CRD still \
-         serves (read and re-apply each one, or run a storage-version migrator), then deploy again. \
-         Keeping the old version in spec.versions also unblocks the deploy. Kubernetes reported: {source}"
+        "cannot drop a stored API version from {resource} (not updated). The cluster still has objects stored at an API version removed from `spec.versions`; keep that version in `spec.versions`, or migrate the stored objects to a version {resource} still serves (by reading and re-applying each object or running a storage-version migrator) and run the deploy again. Kubernetes reported: {source}"
     )]
     CrdStoredVersion {
         resource: String,
@@ -65,7 +56,9 @@ pub enum ApplyError {
     },
 
     #[error(
-        "could not record Kix deployment tracking annotations (activations, applied-hash) on {resource}: {source}"
+        "could not write Kix tracking annotations (`{}`, `{}`) on {resource}. Run the deploy again to finish writing the tracking annotations. Kubernetes reported: {source}",
+        keys::ACTIVATIONS,
+        keys::APPLIED_HASH
     )]
     BookkeepingAnnotationsFailed {
         resource: String,
@@ -74,13 +67,12 @@ pub enum ApplyError {
     },
 
     #[error(
-        "the Kubernetes API does not recognize resource kind '{kind}'. Check the kind and API version, and install its CRD if it is a custom resource"
+        "the API server does not serve kind `{kind}` (not applied). Check the kind and `apiVersion`, and make sure the CustomResourceDefinition for `{kind}` is installed if it is a custom resource."
     )]
     UnknownKind { kind: String },
 
     #[error(
-        "cannot apply {resource}: it expects {expected} to exist, declared with kix.untrackedRef as created by something else, \
-         and it has not appeared: {detail}. Check that the declared creator really creates it."
+        "{resource} was not applied because {expected} (declared with `kix.untrackedRef` as created outside this build) has not appeared: {detail}. Check that the controller or process expected to create {expected} is running and creates it, then run the deploy again."
     )]
     ExpectationUnmet {
         resource: String,
@@ -89,8 +81,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "cannot apply {resource}: Kubernetes serves this kind as namespaced, but the manifest has no metadata.namespace. \
-         Kix does not pick a namespace for it. Create it with a namespaced scope (scope.mkResource) or set metadata.namespace"
+        "{resource} is a namespaced resource on the cluster, but its manifest has no `metadata.namespace` (not applied). Create {resource} with a namespaced scope (`scope.mkResource`) or set `metadata.namespace`, then run the deploy again."
     )]
     NoNamespace { resource: String },
 }

@@ -48,8 +48,8 @@ use super::cancel::CancelToken;
 use super::ops::{Cluster, DeployRecord, RecordWriteError, ResourceIo};
 use super::prune_guard::Pruned;
 use super::stream::{
-    CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeId, Phase,
-    TransitionKind, Verdict,
+    CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeFailure, NodeId,
+    Phase, TransitionKind, Verdict,
 };
 use super::watchdog::{self, Progress, StallPolicy};
 #[cfg(test)]
@@ -126,7 +126,12 @@ pub struct SchedulerConfig {
 #[derive(Error, Debug)]
 pub enum DeployError {
     /// The Activation record could not be started, so nothing was applied.
-    #[error("Nothing was applied: the deployment record could not be started. {message}")]
+    #[error(
+        "could not read or start deployment records before applying\n  \
+         Nothing was applied to the cluster.\n\n  \
+         Cause:\n    {message}\n\n  \
+         Next:\n    Resolve the problem above and run the deploy again."
+    )]
     BeginFailed {
         message: String,
         partial: DeployResult,
@@ -160,8 +165,11 @@ pub enum DeployError {
     /// finalized. The record remains in `Deploying` and the previous
     /// activation stays current.
     #[error(
-        "the changes were applied, but the deployment record could not be finalized: {message}. \
-         The record may still read Deploying."
+        "every object reached a result, but Kix could not mark this run's deployment record finished\n  \
+         Cause:\n    {message}\n\n  \
+         Cluster state:\n    \
+         - This run's deployment record may still be in phase Deploying, and the previous deployment record remains Active.\n    \
+         - The next `kix plan`, `kix deploy`, or `kix rollback` will warn about the Deploying record and show the `kubectl patch` command to clear it."
     )]
     FinalizeFailed {
         message: String,
@@ -730,6 +738,10 @@ impl<'a> Run<'a> {
         message: String,
     ) {
         self.result.failed += 1;
+        self.result.failures.push(NodeFailure {
+            node: node_id.clone(),
+            message: message.clone(),
+        });
         self.checkpoints.failed += 1;
         self.state.mark_terminal(node_id, false);
 
@@ -790,7 +802,7 @@ impl<'a> Run<'a> {
 
         if self.config.on_error == OnErrorPolicy::Stop && !self.halting {
             self.halting = true;
-            self.halting_reason = Some(format!("halt-on-first-failure: {message}"));
+            self.halting_reason = Some(format!("{}{message}", super::stream::HALTED_ON_FAILURE));
         }
     }
 
@@ -1116,6 +1128,10 @@ impl<'a> Run<'a> {
                 }
                 Err(message) => {
                     self.result.failed += 1;
+                    self.result.failures.push(NodeFailure {
+                        node: NodeId::Resource(rid.clone()),
+                        message: message.clone(),
+                    });
                     orphans_left = true;
                     self.emit(DeployEvent::NodeStateChanged {
                         node: NodeId::Resource(rid.clone()),

@@ -38,8 +38,8 @@ use super::CommandContext;
 use super::operator::Reconciled;
 use super::plan::{document, dry_run, flags_of, prepare, print_text};
 
-pub(crate) use self::observer::StreamCliObserver;
 use self::observer::*;
+pub(crate) use self::observer::{StreamCliObserver, counts, held_back};
 use self::saved_plan::*;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
@@ -80,28 +80,20 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("{e}"))?;
 
     if !p.migration_pairs.is_empty() {
-        print_migration_pairs(&p.migration_pairs);
+        let pairs = plan::migrations::of_pairs(&p.migration_pairs);
+        let prune = p.checked.flags().prune;
         if !p.checked.flags().accept_migrations {
-            eprintln!(
-                "{}",
-                output::red(
-                    "Deployment stopped: these changes move workloads to different storage. Migrate the data before continuing."
-                )
-            );
-            eprintln!(
-                "{}",
-                output::yellow(
-                    "Data migration is not automated. Review the source and target resources above, migrate the data yourself, then rerun with --accept-migrations."
-                )
-            );
+            let fate = if prune {
+                plan::migrations::SourceFate::Pruned
+            } else {
+                plan::migrations::SourceFate::Kept
+            };
+            let cluster = &p.build.graph().cluster_name;
+            eprintln!();
+            eprint!("{}", plan::migrations::stop(cluster, &pairs, fate));
             std::process::exit(1);
         }
-        crate::say!(
-            "{}",
-            output::yellow(
-                "--accept-migrations set: continuing deployment. Kix will not copy data. Workloads using the new storage will see only the data already present there."
-            )
-        );
+        output::progress_text(&format!("\n{}", plan::migrations::accepted(&pairs, prune)));
     }
 
     // When connected and changes exist, run a server-side dry run so any
@@ -234,13 +226,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if !args.yes {
         if !output::is_interactive() {
-            eprintln!(
-                "{}",
-                output::yellow(
-                    "Non-interactive terminal detected. Use --yes to skip confirmation."
-                )
-            );
-            std::process::exit(1);
+            output::refuse_unconfirmed(output::Unconfirmed::Deploy, &cluster);
         }
         output::progress_text("\nProceed with deploy? [y/N] ");
         std::io::stdout().flush().into_diagnostic()?;
@@ -253,6 +239,14 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
+    let previous = if args.plan.current_activation {
+        Previous::Unknown
+    } else {
+        match p.baseline.active() {
+            Some(record) => Previous::Active(record.name.clone()),
+            None => Previous::FirstDeploy,
+        }
+    };
     let global = ctx.global.clone();
     let end = ctx.runtime.block_on(run_deploy_async(
         args,
@@ -266,6 +260,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         } else {
             None
         },
+        previous,
         sops,
     ))?;
 
@@ -327,6 +322,7 @@ pub(super) async fn check_cached_baseline(
     records: Option<&Records>,
     cluster: &str,
     cached_hash: &str,
+    context: Option<&str>,
 ) -> Result<()> {
     let active = match records {
         Some(records) => records.active(cluster).await.map_err(|e| miette!("{e}"))?,
@@ -337,14 +333,65 @@ pub(super) async fn check_cached_baseline(
         return Ok(());
     }
     let short = |h: &str| h[..8.min(h.len())].to_string();
-    let found = match active_hash {
-        Some(h) => format!("its Active build is {}...", short(h)),
-        None => "it has no Active record".to_string(),
+    let cached = short(cached_hash);
+    let next = match context {
+        Some(context) => format!("kix deploy {cluster} --context {context}"),
+        None => format!("kix deploy {cluster}"),
+    };
+    let Some(active) = active else {
+        let (headline, label) = match context {
+            Some(context) => (
+                format!(
+                    "cached build {cached} does not match context '{context}', which has no active deployment record"
+                ),
+                format!("Active on cluster ('{context}'):       none"),
+            ),
+            None => (
+                format!(
+                    "cached build {cached} does not match the cluster, which has no active deployment record"
+                ),
+                "Active on cluster:                     none".to_string(),
+            ),
+        };
+        return Err(miette!(
+            "{headline}\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Planned offline against cached build:  {cached}\n  \
+             {label}\n\n  \
+             Why:\n    \
+             Applying an offline plan built against {cached} when the cluster has no active deployment record would compare against the wrong baseline.\n\n  \
+             Next:\n    \
+             Run `{next}` without `--current-activation`."
+        ));
+    };
+    let name = &active.name;
+    let build = match (&active.identity_hash, &active.deployed_at) {
+        (Some(h), Some(at)) if !at.is_empty() => format!(" (build {}, deployed at {at})", short(h)),
+        (Some(h), _) => format!(" (build {})", short(h)),
+        (None, Some(at)) if !at.is_empty() => format!(" (deployed at {at})"),
+        (None, _) => String::new(),
+    };
+    let (headline, label) = match context {
+        Some(context) => (
+            format!(
+                "cached build {cached} does not match the active deployment on context '{context}'"
+            ),
+            format!("Active on cluster ('{context}'):       {name}{build}"),
+        ),
+        None => (
+            format!("cached build {cached} does not match the active deployment on the cluster"),
+            format!("Active on cluster:                     {name}{build}"),
+        ),
     };
     Err(miette!(
-        "the cached build {}... that --current-activation planned against is not the Active build of cluster '{cluster}' in this context: {found}. \
-         Nothing was applied. Rerun without --current-activation to plan against this context's record.",
-        short(cached_hash),
+        "{headline}\n  \
+         Nothing was applied to the cluster.\n\n  \
+         Planned offline against cached build:  {cached}\n  \
+         {label}\n\n  \
+         Why:\n    \
+         Applying a plan made against {cached} would compare against the wrong build: objects belonging to {name} could be treated as orphans and deleted.\n\n  \
+         Next:\n    \
+         Run `{next}` without `--current-activation`."
     ))
 }
 
@@ -376,8 +423,16 @@ pub(super) async fn refuse_name_taken(records: &Records, name: &str, hash: &str)
         && found != hash
     {
         return Err(miette!(
-            "the cluster already has an Activation named {name} for another build \
-             (identity hash {found}, this build is {hash}). Nothing was applied."
+            "deployment record '{name}' already exists on the cluster for a different build\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Existing record '{name}' on cluster:  {found}\n  \
+             This build:                           {hash}\n\n  \
+             Why:\n    \
+             The record name '{name}' is written into this build, and the cluster already has a record with that name for another build hash.\n\n  \
+             Next:\n    \
+             Inspect the existing record on the cluster to see what created it:\n      \
+             kubectl get {}/{name} -o yaml",
+            kix::manifest::keys::ACTIVATIONS_CRD,
         ));
     }
     Ok(())
@@ -497,6 +552,7 @@ async fn run_deploy_async(
     receipt: Option<&Value>,
     pre_client: Option<kube::Client>,
     cached_baseline: Option<&str>,
+    previous: Previous,
     sops: kix::build_source::SopsSources,
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
@@ -540,7 +596,12 @@ async fn run_deploy_async(
         .into_records();
 
     if let Some(hash) = cached_baseline {
-        check_cached_baseline(records.as_ref(), cluster_name, hash).await?;
+        let context = binding::Connection::of_context(global.context.as_deref());
+        let context = match &context {
+            binding::Connection::Context { name, .. } => name.as_deref(),
+            binding::Connection::InCluster => None,
+        };
+        check_cached_baseline(records.as_ref(), cluster_name, hash, context).await?;
     }
 
     refuse_before_writing(&checked, records.as_ref(), discovery).await?;
@@ -609,6 +670,7 @@ async fn run_deploy_async(
         }),
     };
 
+    let record = checked.activation_name().map(str::to_string);
     let (result, kept) = checked
         .run(target, receipt.cloned(), config, observer)
         .await;
@@ -627,9 +689,25 @@ async fn run_deploy_async(
     };
     match &json_log {
         Some(json) => json.summary(counts, false, end.succeeded),
-        None => {
+        None if end.succeeded => {
             println!();
-            println!("{}", summary_line(counts, false, end.succeeded));
+            println!("{}", summary_line(counts, false, true));
+        }
+        None => {
+            let interrupted = match &result {
+                Err(scheduler::DeployError::Cancelled { reason, .. }) => Some(reason.as_str()),
+                _ => None,
+            };
+            let closing = Closing {
+                cluster: cluster_name,
+                record: record.as_deref(),
+                previous,
+                interrupted,
+                current: end.current,
+                on_error_continue: args.on_error == OnError::Continue,
+            };
+            println!();
+            println!("{}", observer::closing(counts, &closing));
         }
     }
     // The event stream already reports failed nodes and cancellation.
@@ -708,17 +786,19 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     // Enforce `--accept-migrations` on the CLI before delegating to the
     // non-interactive operator.
-    if !p.migration_pairs.is_empty() {
-        print_migration_pairs(&p.migration_pairs);
-        if !args.plan.accept_migrations {
-            eprintln!(
-                "{}",
-                output::red(
-                    "Refusing to delegate to operator: stateful migration pairs detected but --accept-migrations was not passed."
-                )
-            );
-            std::process::exit(1);
-        }
+    if !p.migration_pairs.is_empty() && !args.plan.accept_migrations {
+        let pairs = plan::migrations::of_pairs(&p.migration_pairs);
+        let cluster = &p.build.graph().cluster_name;
+        eprintln!();
+        eprint!(
+            "{}",
+            plan::migrations::stop(
+                cluster,
+                &pairs,
+                plan::migrations::SourceFate::OperatorPrunes
+            )
+        );
+        std::process::exit(1);
     }
     let cluster = p.build.graph().cluster_name.clone();
     // A plan made from the local cache (`--current-activation`) did not
@@ -740,13 +820,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if !args.yes {
         if !output::is_interactive() {
-            eprintln!(
-                "{}",
-                output::yellow(
-                    "Non-interactive terminal detected. Use --yes to skip confirmation."
-                )
-            );
-            std::process::exit(1);
+            output::refuse_unconfirmed(output::Unconfirmed::Deploy, &cluster);
         }
         print!("\nDelegate deploy to operator? [y/N] ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;

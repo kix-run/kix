@@ -460,7 +460,7 @@ async fn check_unchanged(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId)
 /// changed in place, so it runs again only when it is recreated.
 fn job_next_step(rerun: bool) -> &'static str {
     if rerun {
-        "Deploy with the CLI to run it again, or change an input"
+        "Deploy from the command line to run it again, or change an input"
     } else {
         "Change an input, or delete the Job with kubectl and deploy again"
     }

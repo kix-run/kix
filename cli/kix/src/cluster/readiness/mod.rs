@@ -282,7 +282,7 @@ pub(crate) async fn wait_for_ready(
             return Ok(ReadinessResult::TimedOut {
                 elapsed: total,
                 message: format!(
-                    "no progress for {}s (idle budget {}s): {message}",
+                    "no readiness progress for {}s (idle budget {}s): {message}",
                     idle.as_secs(),
                     idle_budget.as_secs()
                 ),

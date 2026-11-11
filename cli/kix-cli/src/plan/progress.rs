@@ -5,44 +5,67 @@ use kix::plan::PlanEvent;
 
 use crate::output;
 
-/// Print a planning `event`. Under `-q`, only warnings for builds that were
-/// found locally but failed to load are printed so the caller sees why those
-/// builds were omitted from the plan.
+/// Print a planning `event`. Under `-q`, only the warnings about a build that
+/// was found but would not load, and the rollback warnings about the current
+/// build, are printed.
 pub fn print(event: PlanEvent<'_>) {
     match event {
-        PlanEvent::FailedBuildUnusable { activation, error } => unusable_build(
+        PlanEvent::FailedBuildUnusable { activation, error } => {
+            warning_always(&format!(
+                "earlier failed deployment {}'s build could not be loaded ({error}).",
+                output::bold(activation)
+            ));
+            eprintln!(
+                "  This plan leaves out what {activation} applied, so any objects it created that are not in this build remain on the cluster."
+            );
+        }
+        PlanEvent::ActiveBuildUnusable {
             activation,
             error,
-            "This plan leaves out what that failed deployment applied.",
-        ),
-        PlanEvent::ActiveBuildUnusable { activation, error } => {
-            unusable_build(activation, error, NO_CURRENT_BUILD)
+            cluster,
+        } => {
+            warning_always(&format!(
+                "current deployment {}'s build could not be used ({error}).",
+                output::bold(activation)
+            ));
+            rollback_rewrites_everything();
+            eprintln!(
+                "  Objects that exist only in {activation} are not deleted by this rollback; the new deployment record keeps {activation} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {activation}'s build (or `kix gc --hard {cluster}` from any machine) will remove them."
+            );
         }
         PlanEvent::ActiveWithoutHash {
             activation,
             cluster,
         } => {
+            warning_always(&format!(
+                "current deployment record {} has no build hash, so Kix cannot look for its build.",
+                output::bold(activation)
+            ));
+            rollback_rewrites_everything();
             eprintln!(
-                "{} the current deployment {} has no identity hash, so this rollback cannot find its build.",
-                output::yellow("warning:"),
-                output::bold(activation),
-            );
-            eprintln!(
-                "  This rollback compares with no current build: it applies every object of the \
-                 target and deletes only what failed and kept deploys left. Nothing names the \
-                 current build afterwards, so remove what it leaves with `kix gc --hard {cluster}`."
+                "  Objects that exist only in {activation} are not deleted by this rollback and nothing names {activation} afterwards; run `kix gc --hard {cluster}` after the rollback to find and remove them."
             );
         }
-        PlanEvent::ActiveUnresolved { record } => eprintln!(
-            "{} cannot read the build of the current deployment {} on this machine. {NO_CURRENT_BUILD}",
-            output::yellow("warning:"),
-            output::bold(&record.name),
-        ),
-        PlanEvent::KeptBuildUnusable { activation, error } => unusable_build(
-            activation,
-            error,
-            "This plan cannot list or delete the orphans an earlier deploy kept from it.",
-        ),
+        PlanEvent::ActiveUnresolved { record, cluster } => {
+            let current = &record.name;
+            warning_always(&format!(
+                "current deployment {}'s build is not on this machine.",
+                output::bold(current)
+            ));
+            rollback_rewrites_everything();
+            eprintln!(
+                "  Objects that exist only in {current} are not deleted by this rollback; the new deployment record keeps {current} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {current}'s build (or `kix gc --hard {cluster}` from any machine) will remove them."
+            );
+        }
+        PlanEvent::KeptBuildUnusable { activation, error } => {
+            warning_always(&format!(
+                "earlier deployment {}'s build (which has kept orphaned objects) could not be loaded ({error}).",
+                output::bold(activation)
+            ));
+            eprintln!(
+                "  This plan cannot list or delete the orphaned objects kept from {activation}."
+            );
+        }
         PlanEvent::Connecting => crate::say!("Connecting to cluster..."),
         PlanEvent::NoCachedBuild => crate::say!("No previous activation. First deploy."),
         PlanEvent::LoadingCache => crate::say!("Loading previous activation from cache..."),
@@ -70,29 +93,27 @@ pub fn print(event: PlanEvent<'_>) {
             output::dim("note:"),
         ),
         PlanEvent::DeployInFlight(record) => {
-            let since = record
-                .created_at
-                .map(|t| format!(", started {}", t.to_rfc3339()))
-                .unwrap_or_default();
+            let name = &record.name;
+            match record.created_at {
+                Some(started) => warning(&format!(
+                    "deployment record {} is still in phase Deploying (started at {}).",
+                    output::bold(name),
+                    started.to_rfc3339(),
+                )),
+                None => warning(&format!(
+                    "deployment record {} is still in phase Deploying.",
+                    output::bold(name)
+                )),
+            }
             crate::esay!(
-                "{} activation {}{since} is still marked as deploying, so this plan leaves \
-                 resources from incomplete deployments unchanged.",
-                output::yellow("note:"),
-                output::bold(&record.name),
+                "  Either another deploy is running now, or an earlier deploy was killed before it could mark {name} Failed; while {name} stays Deploying, this plan leaves out objects from earlier failed deployments, and completing a new deploy will not clear {name}."
             );
             crate::esay!(
-                "  If that deployment is still running, let it finish. If its process has stopped, mark the"
+                "  If no deploy is running, mark {name} Failed and run the command again:"
             );
             crate::esay!(
-                "  record as failed and rerun this command so Kix can account for its resources:"
-            );
-            crate::esay!(
-                "    kubectl patch {}/{} --subresource=status --type=merge \\",
+                "    kubectl patch {}/{name} --subresource=status --type=merge -p '{{\"status\":{{\"phase\":\"Failed\",\"failure\":{{\"reason\":\"abandoned\"}}}}}}'",
                 keys::ACTIVATIONS_CRD,
-                record.name,
-            );
-            crate::esay!(
-                "      -p '{{\"status\":{{\"phase\":\"Failed\",\"failure\":{{\"reason\":\"abandoned\"}}}}}}'"
             );
         }
         PlanEvent::FailedFolded(record) => {
@@ -108,25 +129,26 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::FailedUnresolved { records, cluster } => {
             let names = some_names(records.iter().map(|r| r.name.as_str()));
+            warning(&format!(
+                "{} earlier failed deployment(s) ({names}) do not have builds in Kix's local store on this machine.",
+                records.len()
+            ));
             crate::esay!(
-                "{} cannot read the {} of {} on this machine: {names}. {} may have left resources on the cluster.",
-                output::yellow("warning:"),
-                plural(records.len(), "build", "builds"),
-                plural(records.len(), "failed deployment", "failed deployments"),
-                plural(records.len(), "It", "They"),
+                "  This plan goes ahead, but Kix cannot tell what those failed runs applied, so any objects they created that are not in this build remain on the cluster."
             );
             crate::esay!(
-                "  Kix cannot tell which resources {} applied, so this plan leaves them. Deploy from a machine \
-                 that has the {}, or review and remove unused resources with `kix gc --hard {cluster}` and then \
-                 mark each failed record as superseded (hard GC does not update it):",
-                plural(records.len(), "it", "they"),
-                plural(records.len(), "build", "builds"),
+                "  To clean up those objects, run from a machine that has the builds or run `kix gc --hard {cluster}`."
             );
             crate::esay!(
-                "    kubectl patch {}/<name> --subresource=status --type=merge \
-                 -p '{{\"status\":{{\"phase\":\"Superseded\"}}}}'",
-                keys::ACTIVATIONS_CRD,
+                "  `kix gc --hard` does not clear failed deployment records; to stop this warning after cleaning up, mark each record Superseded:"
             );
+            for record in records {
+                crate::esay!(
+                    "    kubectl patch {}/{} --subresource=status --type=merge -p '{{\"status\":{{\"phase\":\"Superseded\"}}}}'",
+                    keys::ACTIVATIONS_CRD,
+                    record.name,
+                );
+            }
         }
         PlanEvent::KeptFolded(sources) => {
             crate::say!(
@@ -137,17 +159,13 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::KeptUnresolved { sources, cluster } => {
             let names = some_names(sources.iter().map(|s| s.activation.as_str()));
+            warning(&format!(
+                "{} earlier deployment(s) ({names}) kept orphaned objects (deployed without `--prune`) from builds that are not in Kix's local store on this machine.",
+                sources.len()
+            ));
+            crate::esay!("  This plan cannot list or delete those orphaned objects.");
             crate::esay!(
-                "{} cannot read the {} of {} on this machine: {names}. Earlier deploys kept orphans from {}.",
-                output::yellow("warning:"),
-                plural(sources.len(), "build", "builds"),
-                plural(sources.len(), "activation", "activations"),
-                plural(sources.len(), "it", "them"),
-            );
-            crate::esay!(
-                "  This plan cannot list or delete those orphans. Deploy from a machine that has the {}, or \
-                 remove them with `kix gc --hard {cluster}`.",
-                plural(sources.len(), "build", "builds"),
+                "  To remove them, run `kix deploy {cluster} --prune` from a machine that has those builds, or run `kix gc --hard {cluster}`."
             );
         }
     }
@@ -167,23 +185,20 @@ fn some_names<'a>(names: impl ExactSizeIterator<Item = &'a str>) -> String {
     }
 }
 
-fn plural<'a>(count: usize, one: &'a str, many: &'a str) -> &'a str {
-    if count == 1 { one } else { many }
+/// Print the first line of a warning on stderr unless `-q` is set.
+fn warning(first_line: &str) {
+    crate::esay!("{} {first_line}", output::yellow("warning:"));
 }
 
-/// Warning suffix explaining how rollback proceeds when the active build
-/// cannot be loaded locally.
-const NO_CURRENT_BUILD: &str = "This rollback compares with no current build: it applies every \
-    object of the target and deletes only what failed and kept deploys left. The target's \
-    record keeps naming the current build, so a later prune that can read it removes its objects.";
+/// Print the first line of a warning on stderr, even under `-q`.
+fn warning_always(first_line: &str) {
+    eprintln!("{} {first_line}", output::yellow("warning:"));
+}
 
-/// Warn that the build for `activation` could not be loaded and explain how
-/// planning proceeds without it.
-fn unusable_build(activation: &str, error: &str, without_it: &str) {
+/// Print the line every rollback warning about the current build shares.
+fn rollback_rewrites_everything() {
     eprintln!(
-        "{} cannot use the build of activation {}: {error}. {without_it}",
-        output::yellow("warning:"),
-        output::bold(activation),
+        "  This rollback writes every object of the target build to the cluster again, and the plan below lists every package as added."
     );
 }
 

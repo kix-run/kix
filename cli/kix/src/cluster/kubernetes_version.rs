@@ -152,16 +152,7 @@ pub async fn live_version(client: &Client) -> Result<LiveVersion, ReadError> {
 #[derive(Error, Debug)]
 pub enum VersionError {
     /// The cluster runs a version the definition does not name.
-    #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
-         {cluster}'s definition sets k8sVersion = \"{declared}\", but this cluster runs {}. \
-         Package version checks used {declared}, so some packages in this build may not work \
-         on this cluster. Set k8sVersion = \"{suggested}\"; in {cluster}'s definition, build \
-         again, and deploy again. If you are upgrading Kubernetes, make this change after the \
-         upgrade finishes.",
-        connection.describe(),
-        live.git_version
-    )]
+    #[error("{}", self.render())]
     Mismatch {
         cluster: String,
         declared: String,
@@ -173,18 +164,7 @@ pub enum VersionError {
 
     /// The cluster runs a version the platform's interface file does not
     /// name. The definition sets no `k8sVersion` of its own.
-    #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
-         {cluster} loads its interface file from {platform} with kix.interface, which sets \
-         k8sVersion = \"{declared}\", but this cluster runs {}. Package version checks used \
-         {declared}, so some packages in this build may not work on this cluster. Export a \
-         new interface file from {platform}, build {cluster} against it, and deploy again. \
-         Or set k8sVersion = \"{suggested}\"; in {cluster}'s definition to override the \
-         interface file, build again, and deploy again. If you are upgrading Kubernetes, \
-         make this change after the upgrade finishes.",
-        connection.describe(),
-        live.git_version
-    )]
+    #[error("{}", self.render())]
     MismatchInherited {
         cluster: String,
         declared: String,
@@ -197,13 +177,7 @@ pub enum VersionError {
     },
 
     /// Reading `/version` failed.
-    #[error(
-        "Kix refused to deploy {cluster} to {} because it could not read the cluster's \
-         Kubernetes version ({source}). Nothing was applied. Kix checks this version because \
-         {cluster}'s definition sets k8sVersion = \"{declared}\". Check that the API server \
-         is reachable and healthy, then try again.",
-        connection.describe()
-    )]
+    #[error("{}", self.render())]
     Read {
         cluster: String,
         declared: String,
@@ -266,6 +240,104 @@ pub async fn check(
 }
 
 impl VersionError {
+    /// Return the message: what Kix refused, that nothing changed, why, and
+    /// what to do next.
+    fn render(&self) -> String {
+        const WHY: &str =
+            "Package version checks (`meta.k8s.minVersion` and `maxVersion`) ran against";
+        match self {
+            VersionError::Mismatch {
+                cluster,
+                declared,
+                live,
+                suggested,
+                connection,
+            } => {
+                let live = &live.git_version;
+                match connection {
+                    Connection::InCluster => format!(
+                        "Kubernetes version mismatch for cluster '{cluster}'\n  \
+                         Nothing was applied to the cluster.\n\n  \
+                         `k8sVersion` in '{cluster}':  {declared}\n  \
+                         Live cluster version:         {live}\n\n  \
+                         Why:\n    \
+                         {WHY} Kubernetes {declared} when '{cluster}' was built, so some packages in this build may not work on {live}.\n\n  \
+                         Next:\n    \
+                         Set `k8sVersion = \"{suggested}\";` in '{cluster}'s definition, build again, and deploy (if a Kubernetes upgrade is in progress, make this change after the upgrade finishes)."
+                    ),
+                    Connection::Context { .. } => {
+                        let connection = connection.describe();
+                        format!(
+                            "Kubernetes version mismatch for cluster '{cluster}' on {connection}\n  \
+                             Nothing was applied to the cluster.\n\n  \
+                             `k8sVersion` in '{cluster}':  {declared}\n  \
+                             Live cluster version:         {live}\n\n  \
+                             Why:\n    \
+                             {WHY} Kubernetes {declared} when '{cluster}' was built, so some packages in this build may not work on {live}.\n\n  \
+                             Next:\n    \
+                             - If {connection} is the right cluster, set `k8sVersion = \"{suggested}\";` in '{cluster}'s definition and build again (if a Kubernetes upgrade is in progress, make this change after the upgrade finishes).\n    \
+                             - If Kix is connected to the wrong cluster, pass the right `--context` for '{cluster}' and run the command again."
+                        )
+                    }
+                }
+            }
+            VersionError::MismatchInherited {
+                cluster,
+                declared,
+                live,
+                suggested,
+                platform,
+                connection,
+            } => {
+                let live = &live.git_version;
+                let why = format!(
+                    "'{cluster}' sets no `k8sVersion` of its own; it loads '{platform}'s interface file with `kix.interface`, which sets `k8sVersion = \"{declared}\"`. {WHY} {declared} when '{cluster}' was built, so some packages in this build may not work on {live}."
+                );
+                match connection {
+                    Connection::InCluster => format!(
+                        "Kubernetes version mismatch for cluster '{cluster}'\n  \
+                         Nothing was applied to the cluster.\n\n  \
+                         `k8sVersion` from '{platform}' interface:  {declared}\n  \
+                         Live cluster version:                      {live}\n\n  \
+                         Why:\n    {why}\n\n  \
+                         Next (if a Kubernetes upgrade is in progress, wait until it finishes):\n    \
+                         - Export a new interface file from '{platform}' for Kubernetes {suggested}, build '{cluster}' against it, and deploy.\n    \
+                         - Or set `k8sVersion = \"{suggested}\";` in '{cluster}'s definition to override the interface file, build again, and deploy."
+                    ),
+                    Connection::Context { .. } => format!(
+                        "Kubernetes version mismatch for cluster '{cluster}' on {}\n  \
+                         Nothing was applied to the cluster.\n\n  \
+                         `k8sVersion` from '{platform}' interface:  {declared}\n  \
+                         Live cluster version:                      {live}\n\n  \
+                         Why:\n    {why}\n\n  \
+                         Next (if a Kubernetes upgrade is in progress, wait until it finishes):\n    \
+                         - Export a new interface file from '{platform}' for Kubernetes {suggested} and build '{cluster}' against it.\n    \
+                         - Or set `k8sVersion = \"{suggested}\";` in '{cluster}'s definition to override the interface file, then build again.\n    \
+                         - If Kix is connected to the wrong cluster, pass the right `--context` for '{cluster}' and run the command again.",
+                        connection.describe()
+                    ),
+                }
+            }
+            VersionError::Read {
+                cluster,
+                declared,
+                connection,
+                source,
+            } => {
+                let connection = connection.describe();
+                format!(
+                    "could not read the Kubernetes version from {connection} for cluster '{cluster}'\n  \
+                     Nothing was applied to the cluster.\n\n  \
+                     Why:\n    \
+                     '{cluster}' sets `k8sVersion = \"{declared}\"`, so Kix checks the cluster's version before proceeding:\n    \
+                     {source}\n\n  \
+                     Next:\n    \
+                     Check that the API server on {connection} is reachable and healthy, then run the command again."
+                )
+            }
+        }
+    }
+
     /// Return `true` when the refusal is for a version the cluster does not
     /// run, which a change to the build resolves. A failed read is not one.
     pub fn is_mismatch(&self) -> bool {
@@ -280,7 +352,12 @@ impl VersionError {
 /// was made for a version (`declared`, `None` when unset) the cluster behind
 /// `client` does not run, and `None` otherwise. A version that cannot be
 /// read gives no line either: the rollback goes ahead in every case.
-pub async fn note(client: &Client, cluster: &str, declared: Option<&str>) -> Option<String> {
+pub async fn note(
+    client: &Client,
+    connection: &Connection,
+    cluster: &str,
+    declared: Option<&str>,
+) -> Option<String> {
     let declared = declared?;
     let wanted = Version::parse(declared)?;
     let live = live_version(client).await.ok()?;
@@ -288,10 +365,8 @@ pub async fn note(client: &Client, cluster: &str, declared: Option<&str>) -> Opt
         return None;
     }
     Some(format!(
-        "This rollback build was made for Kubernetes {declared}, but this cluster runs {}. \
-         Kix is rolling back anyway so an incident recovery is not blocked. After the \
-         incident, set k8sVersion = \"{}\"; in {cluster}'s definition, build again, and \
-         deploy again.",
+        "Note: target build was made for Kubernetes {declared}, while {} runs {}; rolling back anyway so recovery is not blocked (after the incident, set `k8sVersion = \"{}\";` in '{cluster}', build, and deploy).",
+        connection.describe(),
         live.git_version,
         wanted.suggest(&live.version)
     ))
@@ -407,7 +482,10 @@ mod tests {
             .await
             .unwrap();
         assert!(api.requests().is_empty(), "{:?}", api.requests());
-        assert_eq!(note(&api.client(), "cluster-a", None).await, None);
+        assert_eq!(
+            note(&api.client(), &Connection::InCluster, "cluster-a", None).await,
+            None
+        );
         assert!(api.requests().is_empty(), "{:?}", api.requests());
     }
 
@@ -428,12 +506,15 @@ mod tests {
         assert!(err.is_mismatch());
         assert_eq!(
             err.to_string(),
-            "Kix refused to deploy cluster-a to context prod (https://prod.example:6443). \
-             Nothing was applied. cluster-a's definition sets k8sVersion = \"1.30\", but this \
-             cluster runs v1.31.4+k3s1. Package version checks used 1.30, so some packages in \
-             this build may not work on this cluster. Set k8sVersion = \"1.31\"; in \
-             cluster-a's definition, build again, and deploy again. If you are upgrading \
-             Kubernetes, make this change after the upgrade finishes."
+            "Kubernetes version mismatch for cluster 'cluster-a' on context prod (https://prod.example:6443)\n  \
+             Nothing was applied to the cluster.\n\n  \
+             `k8sVersion` in 'cluster-a':  1.30\n  \
+             Live cluster version:         v1.31.4+k3s1\n\n  \
+             Why:\n    \
+             Package version checks (`meta.k8s.minVersion` and `maxVersion`) ran against Kubernetes 1.30 when 'cluster-a' was built, so some packages in this build may not work on v1.31.4+k3s1.\n\n  \
+             Next:\n    \
+             - If context prod (https://prod.example:6443) is the right cluster, set `k8sVersion = \"1.31\";` in 'cluster-a's definition and build again (if a Kubernetes upgrade is in progress, make this change after the upgrade finishes).\n    \
+             - If Kix is connected to the wrong cluster, pass the right `--context` for 'cluster-a' and run the command again."
         );
 
         let err = check(
@@ -448,12 +529,12 @@ mod tests {
         .to_string();
         assert!(
             err.starts_with(
-                "Kix refused to deploy cluster-a to the API server the operator runs on. Nothing was applied."
+                "Kubernetes version mismatch for cluster 'cluster-a'\n  Nothing was applied to the cluster."
             ),
             "{err}"
         );
         assert!(
-            err.contains("Set k8sVersion = \"1.31.4\"; in cluster-a's definition"),
+            err.contains("Set `k8sVersion = \"1.31.4\";` in 'cluster-a's definition"),
             "{err}"
         );
     }
@@ -482,17 +563,21 @@ mod tests {
             "{err}"
         );
         assert!(err.is_mismatch());
-        assert_eq!(
-            err.to_string(),
-            "Kix refused to deploy acme-prod to context acme (https://acme.example:6443). \
-             Nothing was applied. acme-prod loads its interface file from prod with \
-             kix.interface, which sets k8sVersion = \"1.30\", but this cluster runs \
-             v1.31.4+k3s1. Package version checks used 1.30, so some packages in this build \
-             may not work on this cluster. Export a new interface file from prod, build \
-             acme-prod against it, and deploy again. Or set k8sVersion = \"1.31\"; in \
-             acme-prod's definition to override the interface file, build again, and deploy \
-             again. If you are upgrading Kubernetes, make this change after the upgrade \
-             finishes."
+        let text = err.to_string();
+        assert!(
+            text.starts_with(
+                "Kubernetes version mismatch for cluster 'acme-prod' on context acme (https://acme.example:6443)\n  Nothing was applied to the cluster."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("`k8sVersion` from 'prod' interface:  1.30"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- Export a new interface file from 'prod' for Kubernetes 1.31")
+                && text.contains("- Or set `k8sVersion = \"1.31\";` in 'acme-prod's definition"),
+            "{text}"
         );
         // The platform is not named when the version matches.
         check(
@@ -523,11 +608,15 @@ mod tests {
         assert!(matches!(err, VersionError::Read { .. }), "{err}");
         assert!(!err.is_mismatch());
         let text = err.to_string();
-        assert!(text.contains("Nothing was applied"), "{text}");
         assert!(
-            text.contains("could not read the cluster's Kubernetes version (HTTP 503 "),
+            text.contains("Nothing was applied to the cluster."),
             "{text}"
         );
+        assert!(
+            text.starts_with("could not read the Kubernetes version from context prod"),
+            "{text}"
+        );
+        assert!(text.contains("HTTP 503 "), "{text}");
     }
 
     /// A rollback gets one line on a mismatch and none otherwise, including
@@ -536,20 +625,42 @@ mod tests {
     async fn a_rollback_gets_one_line_on_a_mismatch_only() {
         let api = FakeApi::new([]);
         api.serve_version("v1.31.4+k3s1", "1", "31");
-        let line = note(&api.client(), "cluster-a", Some("1.30"))
+        let prod = Connection::of_context(Some("prod"));
+        let line = note(&api.client(), &prod, "cluster-a", Some("1.30"))
             .await
             .unwrap();
-        assert_eq!(
-            line,
-            "This rollback build was made for Kubernetes 1.30, but this cluster runs \
-             v1.31.4+k3s1. Kix is rolling back anyway so an incident recovery is not blocked. \
-             After the incident, set k8sVersion = \"1.31\"; in cluster-a's definition, build \
-             again, and deploy again."
+        assert!(
+            line.starts_with("Note: target build was made for Kubernetes 1.30, while context prod"),
+            "{line}"
         );
-        assert_eq!(note(&api.client(), "cluster-a", Some("1.31")).await, None);
+        assert!(
+            line.ends_with(
+                "runs v1.31.4+k3s1; rolling back anyway so recovery is not blocked (after the incident, set `k8sVersion = \"1.31\";` in 'cluster-a', build, and deploy)."
+            ),
+            "{line}"
+        );
+        assert_eq!(
+            note(
+                &api.client(),
+                &Connection::InCluster,
+                "cluster-a",
+                Some("1.31")
+            )
+            .await,
+            None
+        );
 
         let api = FakeApi::new([]);
         api.fail_next("/version", 1, 503);
-        assert_eq!(note(&api.client(), "cluster-a", Some("1.30")).await, None);
+        assert_eq!(
+            note(
+                &api.client(),
+                &Connection::InCluster,
+                "cluster-a",
+                Some("1.30")
+            )
+            .await,
+            None
+        );
     }
 }

@@ -85,7 +85,11 @@ pub enum PlanEvent<'a> {
     FailedFolded(&'a Record),
     /// A rollback's current build failed to load or did not match the record,
     /// so the rollback compares against an empty build.
-    ActiveBuildUnusable { activation: &'a str, error: &'a str },
+    ActiveBuildUnusable {
+        activation: &'a str,
+        error: &'a str,
+        cluster: &'a str,
+    },
     /// A rollback's current record has no identity hash, so its build cannot
     /// be looked up or recorded for later pruning.
     ActiveWithoutHash {
@@ -94,7 +98,10 @@ pub enum PlanEvent<'a> {
     },
     /// A rollback's current build is not on this machine, so the rollback
     /// compares against an empty build.
-    ActiveUnresolved { record: &'a Record },
+    ActiveUnresolved {
+        record: &'a Record,
+        cluster: &'a str,
+    },
     /// A failed deploy's build failed to load, so the plan omits what that
     /// deploy applied.
     FailedBuildUnusable { activation: &'a str, error: &'a str },

@@ -919,7 +919,7 @@ pub enum PruneMode {
     No,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OnError {
     Stop,
     Continue,

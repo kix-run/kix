@@ -126,12 +126,18 @@ names both versions and the value to set, written as precisely as the
 definition writes it:
 
 ```
-Kix refused to deploy production to context prod (https://prod.example:6443).
-Nothing was applied. production's definition sets k8sVersion = "1.30", but this
-cluster runs v1.31.4+k3s1. Package version checks used 1.30, so some packages
-in this build may not work on this cluster. Set k8sVersion = "1.31"; in
-production's definition, build again, and deploy again. If you are upgrading
-Kubernetes, make this change after the upgrade finishes.
+Kubernetes version mismatch for cluster 'production' on context prod (https://prod.example:6443)
+  Nothing was applied to the cluster.
+
+  `k8sVersion` in 'production':  1.30
+  Live cluster version:         v1.31.4+k3s1
+
+  Why:
+    Package version checks (`meta.k8s.minVersion` and `maxVersion`) ran against Kubernetes 1.30 when 'production' was built, so some packages in this build may not work on v1.31.4+k3s1.
+
+  Next:
+    - If context prod (https://prod.example:6443) is the right cluster, set `k8sVersion = "1.31";` in 'production's definition and build again (if a Kubernetes upgrade is in progress, make this change after the upgrade finishes).
+    - If Kix is connected to the wrong cluster, pass the right `--context` for 'production' and run the command again.
 ```
 
 After a Kubernetes upgrade, update `k8sVersion`, build again, and deploy. The

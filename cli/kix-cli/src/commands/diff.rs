@@ -514,27 +514,9 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     if pairs.is_empty() {
         return;
     }
-    println!(
+    print!(
         "{}",
-        output::bold(&format!("Stateful migrations detected ({}):", pairs.len()))
-    );
-    for p in pairs {
-        println!("  {} {}", output::yellow("~"), output::yellow(&p.summary()));
-        println!(
-            "      source: {}/{}/{}",
-            p.source.kind, p.source.namespace, p.source.name
-        );
-        println!(
-            "      target: {}/{}/{}",
-            p.target.kind, p.target.namespace, p.target.name
-        );
-    }
-    println!();
-    println!(
-        "{}",
-        output::yellow(
-            "Data migration is not automated. Review the source and target resources above and migrate the data before deploying with --accept-migrations."
-        )
+        crate::plan::migrations::diff(&crate::plan::migrations::of_pairs(pairs))
     );
     println!();
 }
@@ -545,26 +527,11 @@ fn print_markdown_output(result: &DiffResult) {
 
     if !result.migration_pairs.is_empty() {
         println!(
-            "#### Stateful migrations detected ({})",
-            result.migration_pairs.len()
+            "{}",
+            crate::plan::migrations::diff_markdown(&crate::plan::migrations::of_pairs(
+                &result.migration_pairs
+            ))
         );
-        println!();
-        for p in &result.migration_pairs {
-            println!("- **{}**", p.summary());
-            println!(
-                "  - source: `{}/{}/{}`",
-                p.source.kind, p.source.namespace, p.source.name
-            );
-            println!(
-                "  - target: `{}/{}/{}`",
-                p.target.kind, p.target.namespace, p.target.name
-            );
-        }
-        println!();
-        println!(
-            "> :warning: Data migration is not automated. Review the source and target resources above and migrate the data before deploying with `--accept-migrations`."
-        );
-        println!();
     }
 
     if result.has_diff() {

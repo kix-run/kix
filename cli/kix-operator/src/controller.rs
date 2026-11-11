@@ -779,9 +779,8 @@ mod tests {
             .as_str()
             .unwrap_or_default();
         assert!(
-            reason.contains(&format!(
-                "a's definition sets cluster.kubernetes.uid = \"{ELSEWHERE}\""
-            )) && reason.contains("Nothing was applied"),
+            reason.contains(&format!("`cluster.kubernetes.uid` in 'a':  {ELSEWHERE}"))
+                && reason.contains("Nothing was applied"),
             "{reason}"
         );
         let supersedes: Vec<String> = api
@@ -814,9 +813,7 @@ mod tests {
             .as_str()
             .unwrap_or_default();
         assert!(
-            reason.contains(&format!(
-                "lab1 was deployed here with cluster.kubernetes.uid = \"{HERE}\""
-            )),
+            reason.contains(&format!("is locked to UID '{HERE}' by cluster 'lab1'")),
             "{reason}"
         );
     }
@@ -840,7 +837,7 @@ mod tests {
             .unwrap_err();
         assert!(
             err.to_string()
-                .contains("Grant the operator's service account get permission on namespaces"),
+                .contains("to the operator's service account; the operator will retry"),
             "{err}"
         );
         let after = kube::Api::<DynamicObject>::all_with(ctx.client.clone(), &resource)
@@ -889,9 +886,9 @@ mod tests {
             .as_str()
             .unwrap_or_default();
         assert!(
-            reason.contains("a's definition sets k8sVersion = \"1.30\"")
-                && reason.contains("this cluster runs v1.31.4+k3s1")
-                && reason.contains("Set k8sVersion = \"1.31\"; in a's definition")
+            reason.contains("`k8sVersion` in 'a':  1.30")
+                && reason.contains("Live cluster version:         v1.31.4+k3s1")
+                && reason.contains("Set `k8sVersion = \"1.31\";` in 'a's definition")
                 && reason.contains("Nothing was applied"),
             "{reason}"
         );
@@ -918,8 +915,8 @@ mod tests {
             .as_str()
             .unwrap_or_default();
         assert!(
-            reason.contains("a loads its interface file from prod with kix.interface")
-                && reason.contains("Export a new interface file from prod"),
+            reason.contains("it loads 'prod's interface file with `kix.interface`")
+                && reason.contains("Export a new interface file from 'prod'"),
             "{reason}"
         );
     }
@@ -935,7 +932,7 @@ mod tests {
         let (result, after) = reconcile_on(&api, record).await;
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("could not read the cluster's Kubernetes version (HTTP 503 "),
+            err.contains("could not read the Kubernetes version from") && err.contains("HTTP 503 "),
             "{err}"
         );
         assert!(after.get("status").is_none(), "{after:?}");

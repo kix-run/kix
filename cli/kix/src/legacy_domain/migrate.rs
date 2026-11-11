@@ -159,8 +159,13 @@ impl Report {
 /// `crds` are the two CustomResourceDefinition manifests from the cluster's
 /// own build, so the migration installs exactly what the next deploy
 /// expects. Under `dry_run` nothing is written and the report says what
-/// would be copied.
-pub async fn run(ops: &dyn MigrationOps, crds: &[Value], dry_run: bool) -> Result<Report, String> {
+/// would be copied. `cluster` names the Kix cluster in messages.
+pub async fn run(
+    ops: &dyn MigrationOps,
+    cluster: &str,
+    crds: &[Value],
+    dry_run: bool,
+) -> Result<Report, String> {
     let Some(from_group) = find_legacy_group(ops).await? else {
         return Ok(Report::nothing_to_do());
     };
@@ -190,14 +195,14 @@ pub async fn run(ops: &dyn MigrationOps, crds: &[Value], dry_run: bool) -> Resul
         // A record left Deploying by a run that was killed never finishes on
         // its own, so "wait" would be a refusal with no way out. Name the
         // patch that clears it.
+        let crd = crd_name(ACTIVATION, &from_group);
         return Err(format!(
-            "activation {name} is still deploying. If a deploy is running, wait for it \
-             to finish and run this again.\n\
-             If nothing is running, that record was left behind by a deploy that was \
-             killed. Clear it with:\n  \
-             kubectl patch {}/{name} --subresource=status --type=merge \
+            "Cannot migrate domain for '{cluster}': deployment record {name} under {crd} is in phase Deploying.\n\
+             Nothing was changed on the cluster.\n\n\
+             If a deploy is running now, wait for it to finish and run `kix migrate domain {cluster}` again.\n\
+             If no deploy is running, {name} was left by a killed deploy; mark it Superseded and run `kix migrate domain {cluster}` again:\n  \
+             kubectl patch {crd}/{name} --subresource=status --type=merge \
              -p '{{\"status\":{{\"phase\":\"Superseded\"}}}}'",
-            crd_name(ACTIVATION, &from_group),
         ));
     }
 
@@ -698,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn a_cluster_with_no_retired_group_needs_nothing() {
         let fake = Fake::default();
-        let report = run(&fake, &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
         assert!(!report.needed());
         assert!(fake.calls().is_empty(), "nothing should have been written");
     }
@@ -712,7 +717,7 @@ mod tests {
             legacy,
             vec![json!({"metadata": {"name": "stage2-a"}, "status": {"phase": "Active"}})],
         );
-        let report = run(&fake, &crd_manifests(), true).await.unwrap();
+        let report = run(&fake, "c", &crd_manifests(), true).await.unwrap();
         assert!(report.dry_run);
         assert_eq!(report.activations, vec!["stage2-a".to_string()]);
         assert!(report.copied.is_empty());
@@ -728,8 +733,8 @@ mod tests {
             legacy,
             vec![json!({"metadata": {"name": "stage2-a"}, "status": {"phase": PHASE_DEPLOYING}})],
         );
-        let err = run(&fake, &crd_manifests(), false).await.unwrap_err();
-        assert!(err.contains("still deploying"), "{err}");
+        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
+        assert!(err.contains("is in phase Deploying"), "{err}");
         assert!(fake.calls().is_empty());
     }
 
@@ -745,7 +750,7 @@ mod tests {
                 json!({"metadata": {"name": "stage2-b"}, "spec": {"n": 2}, "status": {"phase": "Active"}}),
             ],
         );
-        let report = run(&fake, &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
         assert_eq!(report.copied, vec!["stage2-a", "stage2-b"]);
         assert_eq!(report.crds_deleted.len(), 2);
 
@@ -788,7 +793,7 @@ mod tests {
                 "status": {"phase": "Active"},
             })],
         );
-        let report = run(&fake, &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
         assert!(report.finalizers_present);
         assert_eq!(report.copied, ["stage2-a"]);
         assert_eq!(report.crds_deleted.len(), 2);
@@ -814,7 +819,7 @@ mod tests {
             .lock()
             .unwrap()
             .replace((legacy.to_string(), finalizer));
-        let err = run(&fake, &crd_manifests(), false).await.unwrap_err();
+        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
         assert!(err.contains("Scale it to 0"), "{err}");
         assert!(
             !fake
@@ -842,7 +847,7 @@ mod tests {
             .lock()
             .unwrap()
             .replace((legacy.to_string(), format!("{legacy}/operator-gc")));
-        let err = run(&fake, &crd_manifests(), false).await.unwrap_err();
+        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
         assert!(err.contains("Scale it to 0"), "{err}");
         assert!(
             !fake.calls().iter().any(|c| c.starts_with("delete_crd")),
@@ -869,11 +874,11 @@ mod tests {
             .unwrap()
             .push(crd_name(PACKAGE_INSTANCE, legacy));
 
-        let plan = run(&fake, &crd_manifests(), true).await.unwrap();
+        let plan = run(&fake, "c", &crd_manifests(), true).await.unwrap();
         assert_eq!(plan.from_group.as_deref(), Some(*legacy));
         assert!(plan.activations.is_empty());
 
-        let report = run(&fake, &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
         assert!(report.copied.is_empty());
         assert_eq!(report.crds_deleted, [crd_name(PACKAGE_INSTANCE, legacy)]);
     }
@@ -899,7 +904,7 @@ mod tests {
             .lock()
             .unwrap()
             .push("stage2-a".to_string());
-        let err = run(&fake, &crd_manifests(), false).await.unwrap_err();
+        let err = run(&fake, "c", &crd_manifests(), false).await.unwrap_err();
         assert!(err.contains("without its phase"), "{err}");
         assert!(!fake.calls().iter().any(|c| c.starts_with("delete_crd")));
     }
@@ -919,7 +924,7 @@ mod tests {
             ACTIVATION.kind,
             json!({"metadata": {"name": "stage2-a"}}),
         ));
-        let report = run(&fake, &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
         assert_eq!(report.already_present, vec!["stage2-a".to_string()]);
         assert!(
             fake.calls().iter().any(|c| c == "status stage2-a"),
@@ -943,7 +948,7 @@ mod tests {
             ACTIVATION.kind,
             json!({"metadata": {"name": "stage2-a"}}),
         ));
-        let report = run(&fake, &crd_manifests(), false).await.unwrap();
+        let report = run(&fake, "c", &crd_manifests(), false).await.unwrap();
         assert_eq!(report.already_present, vec!["stage2-a".to_string()]);
         assert!(report.copied.is_empty());
         assert_eq!(report.crds_deleted.len(), 2);

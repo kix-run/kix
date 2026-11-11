@@ -216,10 +216,10 @@ impl fmt::Display for Unshown {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "the deploy would write or delete objects the plan does not show, so nothing was \
-             planned or applied. The build's package index and its objects disagree; build it \
-             again with Kix and plan that build."
+            "build package index (`kix-packages.json`) and manifest objects disagree"
         )?;
+        writeln!(f, "  Nothing was planned or applied.")?;
+        writeln!(f)?;
         for (what, list) in [("writes", &self.writes), ("deletes", &self.deletes)] {
             if list.is_empty() {
                 continue;
@@ -232,7 +232,18 @@ impl fmt::Display for Unshown {
                 writeln!(f, "    and {} more", list.len() - NAMED)?;
             }
         }
-        Ok(())
+        writeln!(f)?;
+        writeln!(f, "  Why:")?;
+        writeln!(
+            f,
+            "    The build's `kix-packages.json` does not list every object the build would write, or the plan would delete an object that no package index lists. Kix refuses so the plan cannot hide a write or a delete. This usually happens when a build or bundle was made by another Kix version or edited after it was built."
+        )?;
+        writeln!(f)?;
+        writeln!(f, "  Next:")?;
+        write!(
+            f,
+            "    Build the cluster again with Kix and plan that build."
+        )
     }
 }
 
