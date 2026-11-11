@@ -46,8 +46,16 @@ pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result
     };
     let mut temp = tempfile::NamedTempFile::new_in(dir)
         .map_err(|e| miette!("cannot write in {}: {e}", dir.display()))?;
-    file::write(doc, graph, BufWriter::new(temp.as_file_mut()))
-        .map_err(|e| miette!("cannot write the plan {}: {e}", path.display()))?;
+    file::write(doc, graph, BufWriter::new(temp.as_file_mut())).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::InvalidInput {
+            miette!(
+                "cannot write plan file {path}: {e}; {path} was not written. Next: plan fewer objects in this cluster, or run `kix plan` or `kix diff` without `--save`.",
+                path = path.display()
+            )
+        } else {
+            miette!("cannot write the plan {}: {e}", path.display())
+        }
+    })?;
     let stored = temp
         .as_file()
         .metadata()
@@ -55,9 +63,9 @@ pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result
         .len();
     if stored > file::MAX_STORED_BYTES {
         return Err(miette!(
-            "the plan file would be {stored} bytes, over MAX_STORED_BYTES ({}); {} was not written",
+            "cannot write plan file {path}: the saved file would be {stored} bytes, over the 64 MiB limit ({} bytes); {path} was not written. Next: plan fewer objects in this cluster, or run `kix plan` or `kix diff` without `--save`.",
             file::MAX_STORED_BYTES,
-            path.display()
+            path = path.display()
         ));
     }
     let written = std::fs::File::open(temp.path())
@@ -94,7 +102,10 @@ fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
         parts.push(format!("{} kept", kept.len()));
     }
     if !c.dep_affected_resources.is_empty() {
-        parts.push(format!("{} dep-affected", c.dep_affected_resources.len()));
+        parts.push(format!(
+            "{} tracking annotation only",
+            c.dep_affected_resources.len()
+        ));
     }
     let detail = if parts.is_empty() {
         String::new()
@@ -144,7 +155,10 @@ fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
         let _ = writeln!(out);
     }
     if !c.dep_affected_resources.is_empty() {
-        let _ = writeln!(out, "**Dep-affected (hash bump only, no content change):**");
+        let _ = writeln!(
+            out,
+            "**Tracking annotation only (dependency changed, no spec change or restart):**"
+        );
         let _ = writeln!(out);
         for id in &c.dep_affected_resources {
             let _ = writeln!(out, "- `{}`", id);
@@ -193,7 +207,7 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
         };
         let _ = writeln!(
             out,
-            "**Resources:** {} with real content changes{kept}, {} dep-affected (hash bump only)",
+            "**Resources:** {} changed in content{kept}, {} tracking annotation only (no spec change or restart)",
             totals.real_content, totals.dep_affected,
         );
     }
@@ -257,7 +271,7 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
     if let Some(a) = &diff.activation {
         let _ = writeln!(
             out,
-            "**Activation:** `{}` → `{}`",
+            "**Deployment record:** `{}` → `{}`",
             a.old.as_deref().unwrap_or("(none)"),
             a.new.as_deref().unwrap_or("(none)"),
         );
@@ -383,7 +397,7 @@ pub fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                     }
                     if !change.dep_affected_resources.is_empty() {
                         parts.push(format!(
-                            "{} dep-affected",
+                            "{} tracking annotation only",
                             change.dep_affected_resources.len()
                         ));
                     }
@@ -457,7 +471,9 @@ pub fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                                 "      {} {} {}",
                                 output::dim("~"),
                                 output::dim(&id.to_string()),
-                                output::dim("(via dependency)"),
+                                output::dim(
+                                    "(tracking annotation only; no spec change or restart)"
+                                ),
                             );
                         }
                     }
@@ -491,7 +507,7 @@ fn write_kept_line(out: &mut String, id: &ResourceId) {
         "      {} {} {}",
         output::yellow("!"),
         output::yellow(&id.to_string()),
-        output::dim("(kept)"),
+        output::dim("(kept; never deleted automatically)"),
     );
 }
 
@@ -510,8 +526,8 @@ pub fn render_never_pruned(kept: &[ResourceId]) -> String {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "{} {} resources are not in the build but are never deleted automatically:",
-        output::bold("Kept:"),
+        "{} ({} left the build, never deleted automatically):",
+        output::bold("Kept on the cluster"),
         kept.len(),
     );
     for rid in kept {
@@ -521,9 +537,9 @@ pub fn render_never_pruned(kept: &[ResourceId]) -> String {
         out,
         "  {}",
         output::dim(
-            "Deleting a Namespace deletes everything in it, and deleting a \
+            "Deleting a Namespace deletes every resource in it, and deleting a \
              CustomResourceDefinition deletes every resource of that kind. \
-             Delete them with kubectl if that is intended."
+             Delete them with `kubectl` if that is intended."
         ),
     );
     out
@@ -534,10 +550,13 @@ pub fn kix_build() -> kix::plan::document::KixBuild {
     kix::plan::document::KixBuild::current(&kix::version::running().to_string())
 }
 
-/// Hint explaining how to delete orphans retained by a deploy without
-/// `--prune` (recorded under `status.orphansKeptFrom` on the finalized
-/// Activation).
-pub const KEPT_ORPHANS_HINT: &str = "`kix deploy --prune` or `kix gc` deletes them";
+/// Return the fate of orphans a deploy of `cluster` keeps without `--prune`.
+/// The new Activation records them under `status.orphansKeptFrom`.
+pub fn kept_orphans_fate(cluster: &str) -> String {
+    format!(
+        "still running on the cluster; `kix deploy {cluster} --prune` or `kix gc {cluster}` deletes them"
+    )
+}
 
 /// Render the orphaned and protected-resource sections of a deploy or rollback
 /// plan. `fate` describes how prunable orphans will be handled, while kinds
@@ -548,7 +567,11 @@ pub fn render_plan_orphans(orphans: &[ResourceId], fate: &str) -> String {
     let (prunable, kept) = split_never_pruned(orphans.to_vec());
     if !prunable.is_empty() {
         let orphan_str = prunable.len().to_string();
-        let _ = writeln!(out, "  {} orphaned ({fate})", output::red(&orphan_str));
+        let _ = writeln!(
+            out,
+            "  {} object(s) left the build, {fate}:",
+            output::red(&orphan_str)
+        );
         for rid in &prunable {
             let _ = writeln!(out, "    {} {}", output::red("-"), rid.display_id());
         }
@@ -573,9 +596,6 @@ pub fn print_plan_summary(diff: &PackageDiff) {
     let totals = diff.resource_totals();
 
     let mut parts = Vec::new();
-    if diff.cluster_level.is_some() {
-        parts.push(output::yellow("cluster-level changes").into_owned());
-    }
     if updated > 0 {
         let s = format!("{updated} updated");
         parts.push(output::yellow(&s).into_owned());
@@ -592,6 +612,14 @@ pub fn print_plan_summary(diff: &PackageDiff) {
         let s = format!("{} unchanged", diff.unchanged);
         parts.push(output::dim(&s).into_owned());
     }
+    if diff.cluster_level.is_some() {
+        let s = if parts.is_empty() {
+            "cluster-level changes"
+        } else {
+            "plus cluster-level changes"
+        };
+        parts.push(output::yellow(s).into_owned());
+    }
 
     if parts.is_empty() && diff.activation.is_none() {
         crate::say!();
@@ -600,7 +628,7 @@ pub fn print_plan_summary(diff: &PackageDiff) {
         crate::say!();
         crate::say!(
             "  Plan: {}",
-            output::dim("only the activation record changes")
+            output::dim("only the deployment record changes (no object changes)")
         );
     } else {
         crate::say!();
@@ -612,7 +640,7 @@ pub fn print_plan_summary(diff: &PackageDiff) {
                 String::new()
             };
             let res_line = format!(
-                "  Resources: {} real content{kept}, {} dep-affected",
+                "  Resources: {} changed in content{kept}, {} tracking annotation only (no spec change or restart)",
                 totals.real_content, totals.dep_affected,
             );
             crate::say!("{}", output::dim(&res_line));
@@ -658,7 +686,9 @@ mod render_tests {
         let text = render_package_plan(&diff_garbage(&old_graph, &new_graph), true);
         assert!(text.contains("~ web 1.0.0 (1 kept)"), "{text}");
         assert!(
-            text.contains("! CustomResourceDefinition/widgets.example.com (kept)"),
+            text.contains(
+                "! CustomResourceDefinition/widgets.example.com (kept; never deleted automatically)"
+            ),
             "{text}"
         );
         assert!(!text.contains("- CustomResourceDefinition"), "{text}");
@@ -716,7 +746,7 @@ mod render_tests {
                 "{text}"
             );
             assert!(
-                text.contains("! CustomResourceDefinition/widgets.example.com (kept)"),
+                text.contains("! CustomResourceDefinition/widgets.example.com (kept; never deleted automatically)"),
                 "{text}"
             );
             let md = render_package_diff_markdown(&d);
@@ -749,7 +779,7 @@ mod render_tests {
         let md = render_package_diff_markdown(&d);
         assert!(
             md.contains(
-                "**Resources:** 1 with real content changes, 1 kept (never deleted automatically),"
+                "**Resources:** 1 changed in content, 1 kept (never deleted automatically),"
             ),
             "{md}"
         );
@@ -780,7 +810,10 @@ mod render_tests {
 
         let md = render_package_diff_markdown(&d);
         assert!(md.contains("#### Cluster-level resources"), "{md}");
-        assert!(md.contains("**Activation:** `c-old` → `c-new`"), "{md}");
+        assert!(
+            md.contains("**Deployment record:** `c-old` → `c-new`"),
+            "{md}"
+        );
     }
 
     /// An object of another API group with kind Secret is not a Kubernetes
@@ -827,8 +860,11 @@ mod render_tests {
                 namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
             },
         ];
-        let text = render_plan_orphans(&orphans, "will be deleted");
-        assert!(text.contains("1 orphaned (will be deleted)"), "{text}");
+        let text = render_plan_orphans(&orphans, "to be deleted after the apply (`--prune`)");
+        assert!(
+            text.contains("1 object(s) left the build, to be deleted after the apply (`--prune`):"),
+            "{text}"
+        );
         assert!(text.contains("- ConfigMap/old@app"), "{text}");
         assert!(!text.contains("- Namespace"), "{text}");
         assert!(text.contains("! Namespace/gone"), "{text}");

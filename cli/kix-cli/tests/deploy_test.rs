@@ -41,7 +41,7 @@ fn deploy_dry_run_shows_plan() {
         .stdout(predicate::str::contains("Plan:"))
         .stdout(predicate::str::contains("added"))
         .stdout(predicate::str::contains(
-            "Two builds compared; nothing was read from or sent to the cluster.",
+            "Made by comparing two builds, with no cluster read.",
         ));
 }
 
@@ -57,7 +57,7 @@ fn apply_alias_works() {
         ])
         .assert()
         .code(2)
-        .stdout(predicate::str::contains("Two builds compared"));
+        .stdout(predicate::str::contains("Made by comparing two builds"));
 }
 
 /// `kix plan --save` writes a plan file that reads back as a plan made
@@ -126,7 +126,7 @@ fn deploy_plan_refuses_json_and_a_changed_plan_file() {
         .arg(&json)
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("not a .kixplan"));
+        .stderr(predicate::str::contains("not a valid `.kixplan` archive"));
 
     let saved = dir.path().join("plan.kixplan");
     kix()
@@ -181,7 +181,7 @@ fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Loading previous activation from cache",
+            "Loading previous deployment from local cache",
         ))
         .stdout(predicate::str::contains("First deploy").not());
 }
@@ -214,7 +214,7 @@ fn the_json_deploy_log_has_stdout_to_itself() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("Cluster example:"), "{stderr}");
     assert!(
-        stderr.contains("No previous activation. First deploy."),
+        stderr.contains("No previous deployment in local cache. First deploy."),
         "{stderr}"
     );
     assert!(stderr.contains("failed to connect to cluster"), "{stderr}");

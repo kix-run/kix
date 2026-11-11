@@ -403,7 +403,7 @@ async fn fetch_live_manifests(
     });
     if !elsewhere.is_empty() {
         crate::esay!(
-            "Not comparing {} objects this build drops that another Kix cluster still deploys.",
+            "Not comparing {} object(s) that left the build because another Kix cluster still deploys them.",
             elsewhere.len()
         );
     }
@@ -643,9 +643,10 @@ mod tests {
         let text = render::render_drift_text(&result.doc);
         assert!(text.contains("Deployment/web@app"), "{text}");
         assert!(
-            text.contains(
-                "2 objects not checked for drift: they have no Kix stamp or no field records."
-            ),
+            text.contains(&format!(
+                "2 object(s) not checked for drift: missing `{}` annotation",
+                kix::manifest::keys::APPLIED_HASH
+            )),
             "{text}"
         );
         assert!(
@@ -654,11 +655,11 @@ mod tests {
         );
         let markdown = render::render_drift_markdown(&result.doc);
         assert!(
-            markdown.contains("2 objects not checked for drift"),
+            markdown.contains("2 object(s) not checked for drift"),
             "{markdown}"
         );
         assert!(
-            text.contains("\"web:2\" live, \"web:1\" deployed, set by kubectl-edit"),
+            text.contains("\"web:2\" live, \"web:1\" in deployed build, set by kubectl-edit"),
             "{text}"
         );
     }

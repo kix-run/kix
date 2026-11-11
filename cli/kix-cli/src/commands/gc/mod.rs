@@ -112,7 +112,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     };
 
-    crate::say!("Loading old activation...");
+    crate::say!("Loading current deployment's build...");
     let old_graph = Build::local(&old_result_dir, &|_| {})
         .map_err(|e| {
             miette!("could not read the previous build's resources and dependencies: {e}")
@@ -191,10 +191,12 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             new_activation_hash.as_deref(),
         ));
         crate::say!(
-            "{} ({} resources unchanged, {})",
-            output::green("No garbage found."),
-            new_hashes.len(),
-            retirement.kept_note(),
+            "{}",
+            output::green(&format!(
+                "Nothing to delete ({} object(s) unchanged, {}).",
+                new_hashes.len(),
+                retirement.kept_note(),
+            ))
         );
         return Ok(());
     }
@@ -252,7 +254,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         crate::say!();
         crate::say!(
             "{}",
-            output::bold("Orphans kept by earlier deploys (warn-only)")
+            output::bold(&format!(
+                "Objects that left the build in earlier deploys, still running on the cluster ({} to delete):",
+                kept_rids.len()
+            ))
         );
         kept_rids.sort();
         for rid in kept_rids {
@@ -315,7 +320,7 @@ async fn clear_kept(
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
             crate::say!(
-                "  {} Activation/{}: no kept orphans left to record",
+                "  {} {}: no objects that left the build remain to record",
                 output::dim("="),
                 active.name
             );
@@ -415,14 +420,14 @@ async fn run_hard_async(
 
     if !output::quiet() {
         println!(
-            "Found {} live kix-managed resources ({} unstamped label carriers){}",
+            "Found {} live Kix-managed object(s) ({} without a Kix build annotation){}",
             sweep.managed.len(),
             sweep.unstamped.len(),
             crate::output::forbidden_note(&sweep.forbidden),
         );
         for (owner, n) in &sweep.foreign {
             println!(
-                "Skipped {n} resources that belong to Kix cluster {}.",
+                "Skipped {n} object(s) that belong to Kix cluster '{}'.",
                 output::bold(owner)
             );
         }
@@ -446,10 +451,10 @@ async fn run_hard_async(
         .count();
     if stale > 0 {
         crate::say!(
-            "{} {stale} resources still carry identity annotations from before the {} \
-             move. Their hashes cannot match a build made now, so they are judged by \
-             Kubernetes identity instead, the rule soft gc already uses. One deploy \
-             re-stamps them.",
+            "{} {stale} object(s) still carry tracking annotations from before the `{}` \
+             move. Their build hashes cannot match a current build, so Kix checks them by \
+             Kubernetes kind, namespace, and name instead, the rule `kix gc` without \
+             `--hard` already uses. One deploy updates their annotations.",
             crate::output::yellow("Note:"),
             keys::DOMAIN,
         );
@@ -487,9 +492,8 @@ async fn run_hard_async(
     if garbage.is_empty() {
         clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
         crate::say!(
-            "{} ({})",
-            output::green("No garbage found."),
-            retirement.kept_note()
+            "{}",
+            output::green(&format!("Nothing to delete ({}).", retirement.kept_note()))
         );
         return Ok(());
     }
@@ -541,7 +545,7 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
 
     if retirement.plan.retire.is_empty() {
         crate::say!(
-            "{} No activation records to retire ({}).",
+            "{} No deployment records to retire ({}).",
             output::green("✓"),
             retirement.kept_note(),
         );
@@ -552,8 +556,8 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
     crate::say!(
         "  {}",
         output::dim(
-            "The operator removes its finalizer from each deleted record; \
-             it deletes no resources for a Superseded record."
+            "The operator removes its finalizer from each deleted deployment record; \
+             it deletes no live objects for an earlier deployment record."
         )
     );
 
@@ -566,7 +570,7 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
 
     for retired in &retirement.plan.retire {
         let name = &retired.record.name;
-        crate::say!("Deleting Activation '{}'...", output::bold(name));
+        crate::say!("Deleting deployment record '{}'...", output::bold(name));
 
         match records.retire(&retired.record).await {
             Ok(_) => {

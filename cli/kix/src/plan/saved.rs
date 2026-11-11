@@ -67,14 +67,20 @@ pub struct Comparison {
     pub kix_differs: Option<(String, String)>,
 }
 
-/// Return a reason why `reviewed` cannot be used to gate a deploy, or `None`
-/// when it is valid.
-pub fn unusable(reviewed: &Plan) -> Option<String> {
+/// Return a reason why `reviewed`, read from `file`, cannot be used to gate
+/// a deploy of `cluster`, or `None` when it is valid.
+pub fn unusable(reviewed: &Plan, file: &str, cluster: &str) -> Option<String> {
+    let fresh = format!(
+        "Nothing was applied to the cluster. Next: save a fresh plan with `kix plan {cluster} --save {file}`."
+    );
+    let against = format!(
+        "Nothing was applied to the cluster. Next: save a plan against the cluster with `kix plan {cluster} --save {file}` or `kix diff {cluster} --save {file}`."
+    );
     if reviewed.schema_version != super::document::SCHEMA_VERSION {
+        let version = crate::version::running().release();
         return Some(format!(
-            "the plan has schema version {}, and Kix {} reads version {}",
+            "the plan file uses schema version {}, and Kix {version} reads version {} (saved by another Kix version). Nothing was applied to the cluster. Next: save a new plan with `kix plan {cluster} --save {file}` using Kix {version}.",
             reviewed.schema_version,
-            crate::version::running().release(),
             super::document::SCHEMA_VERSION
         ));
     }
@@ -92,52 +98,52 @@ pub fn unusable(reviewed: &Plan) -> Option<String> {
         MadeBy::Builds => true,
     };
     if !consistent {
-        return Some(
-            "its sections do not match how it says it was made, so it was edited after \
-             `kix plan` or `kix diff` wrote it"
-                .into(),
-        );
+        return Some(format!(
+            "the file's sections do not match how it says it was made, so it was edited \
+             after `kix plan` or `kix diff` wrote it. {fresh}"
+        ));
     }
     if reviewed.made_by == MadeBy::LiveRead && !matches!(reviewed.drift, Checked::Checked { .. }) {
-        return Some(
-            "the plan is a `kix diff` of a snapshot or export, so it did not check drift \
-             the deploy would revert; save a `kix diff` against the cluster, or a `kix plan`"
-                .into(),
-        );
+        return Some(format!(
+            "the plan is a `kix diff` against a snapshot or export, so it did not check \
+             live cluster drift that the deploy would overwrite. {against}"
+        ));
     }
     // The digest is what holds a deploy to the reviewed objects, so a plan
     // without one, or whose list does not give it, cannot be used.
     match (&reviewed.objects_digest, &reviewed.objects) {
         (Some(digest), Some(objects)) if *digest == super::objects::digest(objects) => {}
         (Some(_), Some(_)) => {
-            return Some(
-                "the objects it lists do not give its objects_digest, so it was edited after \
-                 `kix plan` wrote it"
-                    .into(),
-            );
+            return Some(format!(
+                "the objects in the file do not match its recorded object digest, so it was \
+                 edited after `kix plan` wrote it. {fresh}"
+            ));
         }
         _ => {
-            return Some(
-                "the plan does not list the objects a deploy writes and deletes, which only \
-                 `kix plan` does; save a plan from `kix plan`"
-                    .into(),
-            );
+            return Some(format!(
+                "the file does not list the exact objects a deploy writes and deletes, which \
+                 only `kix plan` records. Nothing was applied to the cluster. Next: save a \
+                 plan with `kix plan {cluster} --save {file}`."
+            ));
         }
     }
     if reviewed.made_by == MadeBy::Builds {
-        return Some(
-            "the plan compared two builds without reading the cluster, so it says nothing \
-             about the cluster's current build or its drift; save a plan from `kix plan` or \
-             `kix diff` against the cluster"
-                .into(),
-        );
+        return Some(format!(
+            "the plan compared two builds without reading the cluster, so it did not check \
+             the cluster's current deployment or drift. {against}"
+        ));
     }
     None
 }
 
-/// Return the planning flags for a deploy gated by `reviewed`, or an error
-/// when `given` contradicts the plan.
-pub fn flags_for(reviewed: &Plan, given: &PlanFlags) -> Result<PlanFlags, String> {
+/// Return the planning flags for a deploy of `cluster` gated by `reviewed`,
+/// read from `file`, or an error when `given` contradicts the plan.
+pub fn flags_for(
+    reviewed: &Plan,
+    given: &PlanFlags,
+    file: &str,
+    cluster: &str,
+) -> Result<PlanFlags, String> {
     let Some(planned) = reviewed.flags else {
         // A `kix diff` plan: no reviewer saw what these flags would do.
         let refused: Vec<&str> = [
@@ -151,8 +157,11 @@ pub fn flags_for(reviewed: &Plan, given: &PlanFlags) -> Result<PlanFlags, String
         .collect();
         if !refused.is_empty() {
             return Err(format!(
-                "the plan is a `kix diff`, which does not show what {} would do",
-                refused.join(", ")
+                "the plan was saved by `kix diff`, which does not check what {} would do. \
+                 Nothing was applied to the cluster. Next: save and review a plan with \
+                 `kix plan {cluster} {} --save {file}`.",
+                refused.join(", "),
+                refused.join(" ")
             ));
         }
         return Ok(*given);
@@ -181,8 +190,10 @@ pub fn flags_for(reviewed: &Plan, given: &PlanFlags) -> Result<PlanFlags, String
     }
     if !contradicted.is_empty() {
         return Err(format!(
-            "the plan was made without {}; make and review a plan with it",
-            contradicted.join(", ")
+            "the plan was saved without {}. Nothing was applied to the cluster. Next: save \
+             and review a plan with `kix plan {cluster} {} --save {file}`.",
+            contradicted.join(", "),
+            contradicted.join(" ")
         ));
     }
     Ok(planned)
@@ -679,41 +690,41 @@ mod tests {
         let c = compare(&diff, &plan());
         assert!(c.matches, "{c:?}");
         assert_eq!(c.skipped, vec![Rule::NewRefusal, Rule::NewPruneDelete]);
-        assert!(unusable(&diff).is_none());
+        assert!(unusable(&diff, "p.kixplan", "c").is_none());
 
         // A diff of a snapshot shows no drift, so it cannot hold rule 6.
         let mut snapshot = diff.clone();
         snapshot.drift = Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable);
-        assert!(unusable(&snapshot).is_some());
+        assert!(unusable(&snapshot, "p.kixplan", "c").is_some());
 
         let accepting = PlanFlags {
             accept_migrations: true,
             ..plan().flags.unwrap()
         };
-        assert!(flags_for(&diff, &accepting).is_err());
+        assert!(flags_for(&diff, &accepting, "p.kixplan", "c").is_err());
 
         let given = PlanFlags {
             prune: true,
             ..plan().flags.unwrap()
         };
-        assert!(flags_for(&diff, &given).is_err());
+        assert!(flags_for(&diff, &given, "p.kixplan", "c").is_err());
     }
 
     #[test]
     fn command_line_flags_must_agree_with_the_plan() {
         let none = plan().flags.unwrap();
-        assert_eq!(flags_for(&plan(), &none), Ok(none));
+        assert_eq!(flags_for(&plan(), &none, "p.kixplan", "c"), Ok(none));
 
         let mut with_prune = plan();
         with_prune.flags.as_mut().unwrap().prune = true;
-        let taken = flags_for(&with_prune, &none).unwrap();
+        let taken = flags_for(&with_prune, &none, "p.kixplan", "c").unwrap();
         assert!(taken.prune, "the plan's flags are used");
 
         let given = PlanFlags {
             reconcile: true,
             ..none
         };
-        let err = flags_for(&plan(), &given).unwrap_err();
+        let err = flags_for(&plan(), &given, "p.kixplan", "c").unwrap_err();
         assert!(err.contains("--reconcile"), "{err}");
     }
 
@@ -735,13 +746,13 @@ mod tests {
     fn an_edited_plan_is_unusable() {
         let mut unpruned = plan();
         unpruned.prune = Checked::not_checked(NotCheckedReason::ReadOnly);
-        assert!(unusable(&unpruned).is_some());
+        assert!(unusable(&unpruned, "p.kixplan", "c").is_some());
         let mut flagless = plan();
         flagless.flags = None;
-        assert!(unusable(&flagless).is_some());
+        assert!(unusable(&flagless, "p.kixplan", "c").is_some());
         let mut diff_with_flags = plan();
         diff_with_flags.made_by = MadeBy::LiveRead;
-        assert!(unusable(&diff_with_flags).is_some());
+        assert!(unusable(&diff_with_flags, "p.kixplan", "c").is_some());
     }
 
     /// Records without an identity hash are matched by name.
@@ -788,11 +799,11 @@ mod tests {
     fn a_plan_from_two_builds_is_unusable() {
         let mut builds = plan();
         builds.made_by = MadeBy::Builds;
-        assert!(unusable(&builds).is_some());
-        assert!(unusable(&plan()).is_none());
+        assert!(unusable(&builds, "p.kixplan", "c").is_some());
+        assert!(unusable(&plan(), "p.kixplan", "c").is_none());
         let mut future = plan();
         future.schema_version = "2099-01-01".into();
-        assert!(unusable(&future).is_some());
+        assert!(unusable(&future, "p.kixplan", "c").is_some());
     }
 
     /// A deploy writes and deletes the objects the reviewed plan lists, by
@@ -846,13 +857,13 @@ mod tests {
         let mut unlisted = plan();
         unlisted.objects = None;
         unlisted.objects_digest = None;
-        assert!(unusable(&unlisted).is_some());
+        assert!(unusable(&unlisted, "p.kixplan", "c").is_some());
         let mut undigested = plan();
         undigested.objects_digest = None;
-        assert!(unusable(&undigested).is_some());
+        assert!(unusable(&undigested, "p.kixplan", "c").is_some());
         let mut edited = plan();
         edited.objects.as_mut().unwrap().deletes.clear();
-        assert!(unusable(&edited).is_some());
+        assert!(unusable(&edited, "p.kixplan", "c").is_some());
         // And a fresh plan without them does not match.
         let mut fresh = plan();
         fresh.objects_digest = None;

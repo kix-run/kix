@@ -27,13 +27,13 @@ mod prune_start_and_timeout_tests {
         let all = orphans();
         let text = render_prune_start(&all[..1], &all[1..], false);
         assert!(
-            text.contains("1 orphaned resources kept (warn-only"),
+            text.contains("1 object(s) left the build, still running on the cluster"),
             "{text}"
         );
         assert!(text.contains("- ConfigMap/old@app"), "{text}");
         assert!(
             text.contains(
-                "1 orphaned resources are never deleted automatically\n  ! Namespace/gone"
+                "(never deleted automatically; delete with `kubectl` if intended):\n  ! Namespace/gone"
             ),
             "{text}"
         );

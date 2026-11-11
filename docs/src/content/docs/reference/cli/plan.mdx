@@ -84,10 +84,12 @@ say:
   apiserver's message.
 - `Drift:`, one line per drifted field with its live and deployed values,
   the managers that set it, and whether the deploy reverts it.
-- `Prune:`, orphans that stay because another Kix cluster deploys them or
-  they changed since they were read.
+- `Prune:`, objects that left the build and stay running on the cluster
+  because another Kix cluster deploys them or they changed since they were
+  read.
 - `Not checked by the dry run (N)`, grouped by reason, five names per group.
-- A closing note that no preview checks whether Pods start.
+- A closing note that no preview checks whether Pods start, pull their
+  images, and pass their readiness probes.
 
 ### Markdown
 

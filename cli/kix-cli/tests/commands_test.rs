@@ -82,7 +82,7 @@ fn deploy_dry_run() {
         .assert()
         .code(2)
         .stdout(predicate::str::contains("Plan:"))
-        .stdout(predicate::str::contains("Two builds compared"));
+        .stdout(predicate::str::contains("Made by comparing two builds"));
 }
 
 /// Verify that `kix bundle` reads back what it writes, so a build the bundle

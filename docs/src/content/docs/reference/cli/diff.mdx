@@ -97,7 +97,7 @@ Within a changed package, each resource is reported as one of:
 | --- | --- |
 | `+` added or `-` removed | The resource exists on one side only |
 | `~` modified | The content differs. Text output shows each differing path with a unified diff of the values. |
-| `~` via dependency | Only the identity hash changed, because a dependency of this resource changed. The content is the same. Text output marks these "via dependency"; JSON and Markdown call them dep-affected. |
+| `~` tracking annotation only | Only the identity hash changed, because a dependency of this resource changed. The content is the same, so pods do not restart. Text and Markdown output mark these "tracking annotation only"; JSON calls them `dep_affected_resources`. |
 
 Two more sections follow the packages:
 

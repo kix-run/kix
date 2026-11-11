@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix deploy how-to-adoption-takeover --reconcile --dry-run --force-conflicts -y",
-      "stdout": "\u001b[33m~\u001b[39m \u001b[33mDeployment/legacy-web@takeover\u001b[39m\n\u001b[33m↺\u001b[39m Deployment/legacy-web@takeover spec.replicas: 3 live, 2 deployed, set by autoscaler\n",
+      "stdout": "\u001b[33m~\u001b[39m \u001b[33mDeployment/legacy-web@takeover\u001b[39m\n\u001b[33m↺\u001b[39m Deployment/legacy-web@takeover spec.replicas: 3 live, 2 in deployed build, set by autoscaler\n",
       "stderr": "",
-      "stdoutDrift": "~ Deployment/legacy-web@takeover\n↺ Deployment/legacy-web@takeover spec.replicas: 3 live, 2 deployed, set by autoscaler\n",
+      "stdoutDrift": "~ Deployment/legacy-web@takeover\n↺ Deployment/legacy-web@takeover spec.replicas: 3 live, 2 in deployed build, set by autoscaler\n",
       "stderrDrift": "",
       "exitCode": 2
     }

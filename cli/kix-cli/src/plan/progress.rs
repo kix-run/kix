@@ -67,30 +67,34 @@ pub fn print(event: PlanEvent<'_>) {
             );
         }
         PlanEvent::Connecting => crate::say!("Connecting to cluster..."),
-        PlanEvent::NoCachedBuild => crate::say!("No previous activation. First deploy."),
-        PlanEvent::LoadingCache => crate::say!("Loading previous activation from cache..."),
+        PlanEvent::NoCachedBuild => {
+            crate::say!("No previous deployment in local cache. First deploy.")
+        }
+        PlanEvent::LoadingCache => {
+            crate::say!("Loading previous deployment from local cache...")
+        }
         PlanEvent::NoActiveRecord => {
-            crate::say!("No previous activation on cluster. First deploy.")
+            crate::say!("No previous deployment record on the cluster. First deploy.")
         }
         PlanEvent::Active {
             name,
             identity_hash,
         } => crate::say!(
-            "Active activation: {} ({}...)",
+            "Current deployment: {} (build {}...)",
             output::bold(name),
             short(identity_hash),
         ),
         PlanEvent::ReadingLive { error: Some(e) } => crate::say!(
-            "  {} {e}. Reconstructing previous state from cluster",
+            "  {} {e}. Reading live objects from the cluster to compare against.",
             output::yellow("!"),
         ),
         PlanEvent::ReadingLive { error: None } => crate::say!(
-            "  {} store path for activation not found locally. Reconstructing previous state from cluster",
+            "  {} Local build for current deployment is not on this machine. Reading live objects from the cluster to compare against.",
             output::yellow("!"),
         ),
         PlanEvent::OlderBuildsLeftOut(count) => crate::say!(
-            "  {} {count} objects of this Kix cluster name only older builds, so this plan leaves them; `kix gc --hard` finds them",
-            output::dim("note:"),
+            "  {} {count} object(s) of this Kix cluster belong only to older deployments, so this plan leaves them; `kix gc --hard` finds and deletes them.",
+            output::dim("Note:"),
         ),
         PlanEvent::DeployInFlight(record) => {
             let name = &record.name;

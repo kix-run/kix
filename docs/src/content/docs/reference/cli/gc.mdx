@@ -61,7 +61,7 @@ records to decide whose each resource is:
 - A resource that another cluster's current build also contains is kept and
   listed as `kept ..., still deployed by Kix cluster <name>`.
 - A resource that names no record on the cluster (its records were retired,
-  or it predates the annotation) is listed under "Unattributed" and kept
+  or it predates the annotation) is listed under "No deployment record on this cluster" and kept
   unless you pass `--include-unattributed`. With only one Kix cluster on the
   Kubernetes cluster, such a resource is judged like any other.
 

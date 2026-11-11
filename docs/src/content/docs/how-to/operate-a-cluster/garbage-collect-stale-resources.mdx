@@ -66,12 +66,13 @@ judges only the named cluster's resources. It finds them through the
 Activation records each resource names, skips the other clusters' resources,
 and keeps a resource another cluster's current build also contains. A
 resource that names no Activation record at all cannot be attributed to
-either cluster, so hard mode lists it under "Unattributed" and keeps it.
+either cluster, so hard mode lists it under "No deployment record on this cluster" and keeps
+it.
 Review those and pass `--include-unattributed` to judge them against the
 build too.
 
-Resources carrying a Kix label but no `kix.run/identity-hash` are reported as
-unstamped and kept by default. Kix cannot establish that it originally applied
+Resources carrying a Kix label but no `kix.run/identity-hash` are listed under
+"No Kix build annotation" and kept by default. Kix cannot establish that it originally applied
 them. Include them only after checking each reported resource:
 
 <Command

@@ -65,7 +65,7 @@ fn write_objects(out: &mut String, plan: &Plan) {
     if reapplied > 0 {
         let _ = writeln!(
             out,
-            "  {} {reapplied} written again unchanged: a build this cluster ran holds the same file",
+            "  {} {reapplied} written again unchanged: an earlier deployment on this cluster already ran the exact same manifest",
             output::yellow("↻"),
         );
     }
@@ -232,10 +232,8 @@ fn write_drift(out: &mut String, plan: &Plan) {
                 out,
                 "{}",
                 output::yellow(&format!(
-                    "Drift: {} field{} differ{} live from the deployed build:",
+                    "Drift: {} field(s) on the live cluster differ from the deployed build:",
                     items.len(),
-                    if items.len() == 1 { "" } else { "s" },
-                    if items.len() == 1 { "s" } else { "" },
                 ))
             );
             for d in items {
@@ -248,18 +246,19 @@ fn write_drift(out: &mut String, plan: &Plan) {
                 );
                 let fate = match (d.reverted, conflict_with(plan, d)) {
                     (true, Some(owners)) => output::yellow(&format!(
-                        "the deploy stops on an ownership conflict with {owners} unless run with --force-conflicts"
+                        "the deploy writes this object, which stops on a field ownership conflict with {owners} unless run with --force-conflicts"
                     ))
                     .into_owned(),
                     (true, None) => {
-                        output::yellow("the deploy puts the deployed value back").into_owned()
+                        output::yellow("the deploy writes this object and restores the deployed value")
+                            .into_owned()
                     }
                     (false, Some(owners)) => output::dim(&format!(
-                        "the deploy leaves this object alone; --reconcile stops on an ownership conflict with {owners} unless run with --force-conflicts"
+                        "the deploy leaves this object alone; --reconcile stops on a field ownership conflict with {owners} unless run with --force-conflicts"
                     ))
                     .into_owned(),
                     (false, None) => output::dim(
-                        "the deploy leaves this object alone; --reconcile reverts it",
+                        "the deploy leaves this object alone (--reconcile restores the deployed value)",
                     )
                     .into_owned(),
                 };
@@ -274,7 +273,7 @@ fn write_drift(out: &mut String, plan: &Plan) {
                 out,
                 "{}",
                 output::dim(
-                    "Drift not checked: the deployed build is not on this machine, so changes are not labelled as the commit's or as drift."
+                    "Drift not checked: the deployed build is not on this machine, so Kix cannot tell which differences come from this build and which come from edits on the cluster (the deploy applies everything in the plan)."
                 )
             );
         }
@@ -299,11 +298,9 @@ fn conflict_with(plan: &Plan, d: &kix::plan::document::DriftChange) -> Option<St
 fn drift_unchecked_line(plan: &Plan) -> Option<String> {
     match plan.drift_unchecked {
         0 => None,
-        1 => {
-            Some("1 object not checked for drift: it has no Kix stamp or no field records.".into())
-        }
         n => Some(format!(
-            "{n} objects not checked for drift: they have no Kix stamp or no field records."
+            "{n} object(s) not checked for drift: missing `{}` annotation (an older Kix deployed them; the next deploy adds it) or missing Kubernetes field ownership entry for Kix.",
+            kix::manifest::keys::APPLIED_HASH
         )),
     }
 }
@@ -313,7 +310,7 @@ fn drift_unchecked_line(plan: &Plan) -> Option<String> {
 /// not known.
 fn drift_detail(d: &kix::plan::document::DriftChange) -> String {
     if d.path == "$" {
-        return "fields Kix applied have changed; Kubernetes recorded no other tool as their owner"
+        return "fields Kix applied changed on the live cluster (no other field manager recorded)"
             .into();
     }
     let by = if d.managers.is_empty() {
@@ -322,7 +319,7 @@ fn drift_detail(d: &kix::plan::document::DriftChange) -> String {
         format!(", set by {}", d.managers.join(", "))
     };
     let deployed = match &d.deployed {
-        Some(v) => format!(", {} deployed", compact(Some(v))),
+        Some(v) => format!(", {} in deployed build", compact(Some(v))),
         None => String::new(),
     };
     format!(
@@ -346,17 +343,22 @@ fn write_drift_markdown(out: &mut String, plan: &Plan) {
         for d in items {
             let fate = match (d.reverted, conflict_with(plan, d)) {
                 (true, Some(owners)) => format!(
-                    "the deploy stops on an ownership conflict with {owners} unless run with `--force-conflicts`"
+                    "the deploy writes this object, which stops on a field ownership conflict with `{owners}` unless run with `--force-conflicts`"
                 ),
-                (true, None) => "the deploy puts the deployed value back".into(),
+                (true, None) => {
+                    "the deploy writes this object and restores the deployed value".into()
+                }
                 (false, Some(owners)) => format!(
-                    "the deploy leaves this object alone; `--reconcile` stops on an ownership conflict with {owners} unless run with `--force-conflicts`"
+                    "the deploy leaves this object alone; `--reconcile` stops on a field ownership conflict with `{owners}` unless run with `--force-conflicts`"
                 ),
-                (false, None) => "the deploy leaves this object alone".into(),
+                (false, None) => {
+                    "the deploy leaves this object alone; `--reconcile` restores the deployed value"
+                        .into()
+                }
             };
             let _ = writeln!(
                 out,
-                "- `{}` {}; {fate}",
+                "- `{}` {} ({fate})",
                 d.resource,
                 drift_detail_markdown(d),
             );
@@ -371,7 +373,7 @@ fn write_drift_markdown(out: &mut String, plan: &Plan) {
 
 fn drift_detail_markdown(d: &kix::plan::document::DriftChange) -> String {
     if d.path == "$" {
-        return "fields Kix applied have changed; Kubernetes recorded no other tool as their owner"
+        return "fields Kix applied changed on the live cluster, no other field manager recorded"
             .into();
     }
     let by = if d.managers.is_empty() {
@@ -380,7 +382,7 @@ fn drift_detail_markdown(d: &kix::plan::document::DriftChange) -> String {
         format!(", set by `{}`", d.managers.join("`, `"))
     };
     let deployed = match &d.deployed {
-        Some(v) => format!(", `{}` deployed", compact(Some(v))),
+        Some(v) => format!(", `{}` in deployed build", compact(Some(v))),
         None => String::new(),
     };
     format!(
@@ -431,7 +433,7 @@ fn write_prune(out: &mut String, plan: &Plan) {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "{} {} orphans stay:",
+        "{} {} object(s) that left the build stay running on the cluster:",
         output::bold("Prune:"),
         shared.len()
     );
@@ -466,17 +468,21 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
         }
         for (reason, names) in groups {
             let why = match reason {
-                UncheckedReason::CrdCreatedByThisDeploy => "its CRD is created by this deploy",
+                UncheckedReason::CrdCreatedByThisDeploy => {
+                    "uses a CustomResourceDefinition created by this deploy"
+                }
                 UncheckedReason::CrdChangedByThisDeploy => {
-                    "its CRD is changed by this deploy, and was checked as it is now"
+                    "uses a CustomResourceDefinition changed by this deploy, so it was checked against the definition currently on the cluster"
                 }
                 UncheckedReason::NamespaceCreatedByThisDeploy => {
-                    "its namespace is created by this deploy"
+                    "is in a Namespace created by this deploy"
                 }
                 UncheckedReason::WebhookNoDryRun => {
-                    "an admission webhook it calls does not support dry run"
+                    "calls an admission webhook that does not support dry run"
                 }
-                UncheckedReason::DependencyNotChecked => "the dry run did not reach it",
+                UncheckedReason::DependencyNotChecked => {
+                    "not reached by the dry run (for example, cancelled early)"
+                }
             };
             let _ = writeln!(out, "  {} {} {}:", output::dim("?"), names.len(), why);
             for name in names.iter().take(5) {
@@ -504,7 +510,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                 out,
                 "{}",
                 output::dim(
-                    "Not checked by any preview: whether Pods start, pull their images, and pass their probes."
+                    "Not checked by any preview: whether Pods start, pull their images, and pass their readiness probes."
                 )
             );
         }
@@ -514,7 +520,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                 out,
                 "{}",
                 output::dim(
-                    "Not checked: admission webhooks, field ownership conflicts, and what the deploy itself refuses. `kix plan` checks them with a server-side dry run."
+                    "Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
                 )
             );
         }
@@ -524,7 +530,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                 out,
                 "{}",
                 output::dim(
-                    "Two builds compared; nothing was read from or sent to the cluster. Not checked: drift, admission webhooks, field ownership conflicts, and what the deploy itself refuses."
+                    "Made by comparing two builds, with no cluster read. Not checked: live cluster drift, admission webhooks, admission policies, field ownership conflicts, and invalid objects."
                 )
             );
         }
@@ -600,13 +606,13 @@ pub fn render_markdown(plan: &Plan) -> String {
     }
     let note = match plan.made_by {
         MadeBy::DryRun => {
-            "Made by a server-side dry run. Not checked: whether Pods start, pull their images, and pass their probes."
+            "Made by a server-side dry run. Not checked: whether Pods start, pull their images, and pass their readiness probes."
         }
         MadeBy::LiveRead => {
-            "Made by a read-only comparison with the cluster. Not checked: admission, field ownership, and deploy refusals; `kix plan` checks them."
+            "Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
         }
         MadeBy::Builds => {
-            "Made by comparing two builds, with no cluster read. Not checked: drift, admission, field ownership, and deploy refusals."
+            "Made by comparing two builds, with no cluster read. Not checked: live cluster drift, admission webhooks, admission policies, field ownership conflicts, and invalid objects."
         }
     };
     let _ = writeln!(out, "> {note}");
@@ -614,9 +620,11 @@ pub fn render_markdown(plan: &Plan) -> String {
     out
 }
 
-/// Render the result of comparing a live plan against the saved plan at `path`.
-pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str) -> String {
+/// Render the result of comparing a live plan against the saved plan at `path`,
+/// for a deploy of `cluster`.
+pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str, cluster: &str) -> String {
     let mut out = String::new();
+    let file = path;
     let path = match &c.plan_sha256 {
         Some(sha) => format!("{path}, {sha}"),
         None => path.to_string(),
@@ -631,8 +639,11 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str) -> String 
         let _ = writeln!(
             out,
             "{}",
-            output::red(&format!("The reviewed plan no longer matches ({path}):"))
+            output::red(&format!("The reviewed plan no longer matches ({path})."))
         );
+        let _ = writeln!(out, "Nothing was applied to the cluster.");
+        let _ = writeln!(out);
+        let _ = writeln!(out, "  Differences since '{file}' was saved:");
         for m in &c.mismatches {
             for (i, item) in m.items.iter().enumerate() {
                 let label = if i == 0 {
@@ -640,30 +651,31 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str) -> String 
                 } else {
                     String::new()
                 };
-                let _ = writeln!(out, "  {label:<20} {item}");
+                let _ = writeln!(out, "    {label:<20} {item}");
             }
         }
+        let _ = writeln!(out);
     }
     if !c.skipped.is_empty() {
         let what: Vec<&str> = c
             .skipped
             .iter()
             .map(|r| match r {
-                Rule::NewRefusal => "conflicts and admission",
-                Rule::NewRevertedDrift => "drift",
-                Rule::NewPruneDelete => "prune",
+                Rule::NewRefusal => "admission and ownership conflicts",
+                Rule::NewRevertedDrift => "live drift",
+                Rule::NewPruneDelete => "`--prune` deletions",
                 _ => r.label(),
             })
             .collect();
         let kind = if reviewed.made_by == MadeBy::LiveRead {
-            "the reviewed plan is a kix diff"
+            "because the reviewed plan was saved by `kix diff`"
         } else {
-            "the reviewed plan did not check them"
+            "because the reviewed plan did not check them"
         };
         let _ = writeln!(
             out,
             "{}",
-            output::dim(&format!("Not compared, {kind}: {}.", what.join(", ")))
+            output::dim(&format!("  Not compared, {kind}: {}.", join_list(&what)))
         );
     }
     if let Some((r, f)) = &c.kix_differs {
@@ -671,15 +683,31 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str) -> String 
             out,
             "{}",
             output::yellow(&format!(
-                "note: the plan was made by {r}, and this deploy runs {f}. The deploy writes \
-                 and deletes the objects the plan lists, so this is not refused."
+                "  Note: the plan was saved by {r}, and this deploy runs {f}. The deploy writes \
+                 and deletes the exact objects the plan lists, so this version difference is \
+                 allowed."
             ))
         );
     }
     if !c.matches {
-        let _ = writeln!(out, "Review a new plan, or deploy without --plan.");
+        let _ = writeln!(out);
+        let _ = writeln!(out, "  Next:");
+        let _ = writeln!(
+            out,
+            "    Save and review a new plan with `kix plan {cluster} --save {file}`, or run `kix deploy {cluster}` without `--plan`."
+        );
     }
     out
+}
+
+/// Join `items` as an English list with an Oxford comma.
+fn join_list(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
 }
 
 #[cfg(test)]
@@ -724,15 +752,15 @@ mod tests {
         let text = render_drift_text(&owned);
         assert!(
             text.contains(
-                "the deploy stops on an ownership conflict with kubectl-scale unless run with --force-conflicts"
+                "the deploy writes this object, which stops on a field ownership conflict with kubectl-scale unless run with --force-conflicts"
             ),
             "{text}"
         );
-        assert!(render_drift_markdown(&owned).contains("ownership conflict with kubectl-scale"));
+        assert!(render_drift_markdown(&owned).contains("ownership conflict with `kubectl-scale`"));
 
         let kept = render_drift_text(&plan_with(vec![drift(&["kubectl-scale"], false)]));
         assert!(
-            kept.contains("--reconcile stops on an ownership conflict"),
+            kept.contains("--reconcile stops on a field ownership conflict"),
             "{kept}"
         );
 
@@ -746,13 +774,13 @@ mod tests {
         });
         let text = render_drift_text(&forced);
         assert!(
-            text.contains("the deploy puts the deployed value back"),
+            text.contains("the deploy writes this object and restores the deployed value"),
             "{text}"
         );
 
         let unowned = render_drift_text(&plan_with(vec![drift(&[], true)]));
         assert!(
-            unowned.contains("the deploy puts the deployed value back"),
+            unowned.contains("the deploy writes this object and restores the deployed value"),
             "{unowned}"
         );
     }
@@ -809,10 +837,9 @@ mod tests {
         let mut plan = plan_with(Vec::new());
         assert!(render_drift_text(&plan).is_empty());
         plan.drift_unchecked = 1;
-        assert!(
-            render_drift_text(&plan).contains(
-                "1 object not checked for drift: it has no Kix stamp or no field records."
-            )
-        );
+        assert!(render_drift_text(&plan).contains(&format!(
+            "1 object(s) not checked for drift: missing `{}` annotation",
+            kix::manifest::keys::APPLIED_HASH
+        )));
     }
 }

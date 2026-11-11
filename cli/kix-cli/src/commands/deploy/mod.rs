@@ -45,7 +45,11 @@ use self::saved_plan::*;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let saved = match &args.saved_plan {
-        Some(path) => Some(load_saved_plan(path, &flags_of(&args.plan))?),
+        Some(path) => Some(load_saved_plan(
+            path,
+            &flags_of(&args.plan),
+            &args.plan.cluster,
+        )?),
         None => None,
     };
     if args.dry_run {
@@ -131,7 +135,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         eprintln!();
         eprint!(
             "{}",
-            plan::render::render_comparison(&comparison, &s.reviewed, &s.path)
+            plan::render::render_comparison(&comparison, &s.reviewed, &s.path, &s.cluster)
         );
         if !comparison.matches {
             std::process::exit(EXIT_STALE);
@@ -200,14 +204,15 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
         if engine_decides {
             crate::say!(
-                "{} nothing changed; Kix checks the live Jobs on the cluster to see whether one failed",
+                "{} nothing changed; Kix checks the live Jobs on the cluster and reruns any failed Job with {}",
                 output::yellow("↻"),
+                kix::manifest::keys::RERUN,
             );
         }
         if !failed_jobs.is_empty() {
             let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
             crate::say!(
-                "{} nothing changed, but {} failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
+                "{} nothing changed, but {} Job(s) failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
                 output::yellow("↻"),
                 failed_jobs.len(),
                 kix::manifest::keys::RERUN,
@@ -785,7 +790,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             "{}",
             plan::render_plan_orphans(
                 checked.orphans(),
-                "will be deleted; the operator always prunes"
+                "to be deleted after the apply (the operator always prunes)"
             )
         );
         plan::print_shared(checked.shared_orphans());

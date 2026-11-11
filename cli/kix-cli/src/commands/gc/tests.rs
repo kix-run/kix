@@ -212,14 +212,14 @@ mod prompt_tests {
 
     #[test]
     fn prompt_names_what_is_deleted() {
-        assert_eq!(deletion_prompt(3, 0), "Delete 3 resources? [y/N] ");
+        assert_eq!(deletion_prompt(3, 0), "Delete 3 object(s)? [y/N] ");
         assert_eq!(
             deletion_prompt(0, 2),
-            "Delete 2 activation record(s)? [y/N] "
+            "Delete 2 deployment record(s)? [y/N] "
         );
         assert_eq!(
             deletion_prompt(3, 2),
-            "Delete 3 resources and 2 activation record(s)? [y/N] "
+            "Delete 3 object(s) and 2 deployment record(s)? [y/N] "
         );
     }
 }

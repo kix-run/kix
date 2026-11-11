@@ -56,9 +56,10 @@ command:
 <Command {...diffChange} />
 
 The report names the ConfigMap you edited and shows the changed value. The
-resources marked "via dependency" have no content change of their own. Their
-identity hash moves because they depend on the ConfigMap, so Kix will
-re-stamp them on the next deploy.
+resources marked "tracking annotation only" have no content change of their
+own. Their identity hash moves because they depend on the ConfigMap, so Kix
+writes them again on the next deploy to update the annotation. Their pods do
+not restart.
 
 ## Read the diff
 
@@ -67,11 +68,11 @@ The report is grouped by package, and each line tells you something different:
 - A package marked added or removed appears on only one side.
 - A resource marked `~` has a content change, shown as a diff of the fields
   that differ.
-- A resource marked "via dependency" has no content change of its own. Only
-  its identity hash moved, because something it depends on changed.
+- A resource marked "tracking annotation only" has no content change of its
+  own. Only its identity hash moved, because something it depends on changed.
 - A cluster-level group collects resources that belong to no package, such as
   namespaces and custom resource definitions.
-- An activation line names the deployment record this change would create.
+- A deployment record line names the deployment record this change would create.
 
 Read the packages you edited first, then the dependent resources, which tell
 you how far the rollout reaches. A non-empty diff exits with status 2, which
