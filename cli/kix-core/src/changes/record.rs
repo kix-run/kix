@@ -342,7 +342,7 @@ impl fmt::Display for DocumentError {
             DocumentError::Json(e) => write!(f, "the change records are not valid JSON: {e}"),
             DocumentError::Schema(s) => write!(
                 f,
-                "the change records use schema `{s}`, and this Kix reads only `{SCHEMA}`"
+                "the change records use schema `{s}`, and Kix reads only `{SCHEMA}`"
             ),
         }
     }
