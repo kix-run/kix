@@ -1,3 +1,0 @@
-# 2026-11-11 · `.github/workflows/pages.yml`, `docs/package.json` · No pull-request check runs the docs build, so a new how-to page that is missing from `docs/how-to-coverage.json` breaks the site deploy on main.
-
-Pull request 45 added `how-to/start-and-inspect/upgrade-a-project-to-a-new-kix.mdx` with no ledger entry. Every check on the pull request passed. After the merge, "Deploy site to Cloudflare Pages" failed in "Build main docs" with "page missing from ledger". The checks `check:how-to-coverage` and `check:doc-refs` need only Node and the source tree, so a pull-request job could run them in seconds.

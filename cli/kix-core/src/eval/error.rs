@@ -5,7 +5,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum KixEvalError {
     #[error(
-        "cluster '{name}' was not found. Run `kix list clusters` with the same flake to see available clusters"
+        "cluster '{name}' is not defined in this project. Nothing was built or changed.\nNext: run `kix list clusters` to see the clusters in this project, or pass --flake <path> to point to another project."
     )]
     ClusterNotFound { name: String },
 

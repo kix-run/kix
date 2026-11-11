@@ -1,11 +1,16 @@
 name: Lint
 
-# The nixfmt, deadnix, and Co-Authored-By checks from lefthook.yml, run on
-# every pull request and every push to main. The git hooks run only in a
-# clone that has them installed, and a commit made without them reaches main
-# unchecked. Each Nix check covers every file, not only the changed ones, so
+# The nixfmt, deadnix, and Co-Authored-By checks from lefthook.yml, and two
+# docs checks, run on every pull request and every push to main. The git
+# hooks run only in a clone that has them installed, and a commit made
+# without them reaches main unchecked. Each Nix check covers every file, not only the changed ones, so
 # main stays clean and the next edit to a file does not carry a reformat of
 # the whole file.
+#
+# The two docs checks need only Node and the source tree. The site build runs
+# them too, but only after a merge to main, where a failure stops the site
+# from deploying. `check:local-imports` is left to the site build, because it
+# reads snippets the build generates.
 #
 # The tools come from this flake's locked nixpkgs (`--inputs-from .`), the
 # same versions the hooks use. Spindle runs the job on a VM whose image ships
@@ -53,6 +58,12 @@ jobs:
         run: |
           git ls-files -z '*.nix' ':!:docs/src/snippets/**' \
             | xargs -0 nix run --inputs-from . nixpkgs#deadnix -- --fail --no-lambda-pattern-names
+
+      - name: Every how-to page is in the docs coverage ledger
+        run: nix shell --inputs-from . nixpkgs#nodejs -c node docs/scripts/check-how-to-coverage.mjs
+
+      - name: Docs references to repository files resolve
+        run: nix shell --inputs-from . nixpkgs#nodejs -c node docs/scripts/check-doc-refs.mjs
 
       - name: No Co-Authored-By trailers
         if: github.event_name == 'pull_request'

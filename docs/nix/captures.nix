@@ -465,7 +465,7 @@
           "06-service-dep"
         ];
         allowFailure = true;
-        stdoutGrep = "error: .*dependency 'backend' was not found";
+        stdoutGrep = "error: .*dependency 'backend' has no matching instance|Fix: declare an instance named|instances\\.[a-z0-9-]*\\.backend\\.package|If another instance|deps\\.backend = ref";
       }
     ];
   }
@@ -582,7 +582,7 @@
           "how-to-auto-instantiation"
         ];
         allowFailure = true;
-        stdoutGrep = "kix: dependency 'database'|^ *(database|postgres) \\(|Kix does not choose|instances\\.<namespace>\\.database|remove the others";
+        stdoutGrep = "error: .*dependency 'database'|^ *(database|postgres) \\(|Fix: declare the package|instances\\.<namespace>\\.database|remove them from availablePackages";
       }
     ];
   }

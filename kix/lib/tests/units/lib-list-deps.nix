@@ -183,7 +183,7 @@ in
     in
     (
       fails
-      && lib.hasInfix "appns/consumer lists ref.appns.shelf in deps.logins, which is not an instance" message
+      && lib.hasInfix "appns/consumer: deps.logins lists ref.appns.shelf, which is not a declared instance" message
     )
     || throw "missing element: fails=${builtins.toJSON fails} message=${message}";
 
@@ -235,6 +235,7 @@ in
         requesterNamespace = "appns";
         hasDefault = false;
         requester = "appns/consumer";
+        requesterName = "consumer";
         explicitOverride = [
           {
             _type = "kix-ref";
@@ -245,7 +246,9 @@ in
         ];
       };
     in
-    lib.hasInfix "appns/consumer: deps.logins is a list that mixes ref" (result.thrown or "")
+    lib.hasInfix "appns/consumer: instances.appns.consumer.deps.logins is a list that mixes ref" (
+      result.thrown or ""
+    )
     || throw "mixed list: ${builtins.toJSON result}";
 
   # A list of instance handles in `deps.<arg>` records dependency links for each
