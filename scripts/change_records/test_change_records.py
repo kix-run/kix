@@ -457,6 +457,19 @@ class PullRequestTest(RepoTest):
         self.assertIn("`cady` in `packages` is not a folder", err)
         self.assertNotIn("`caddy` in", err)
 
+    def test_an_error_record_needs_its_id_in_an_error_message(self):
+        self.repo.write("kix/packages/caddy/default.nix", "{}\n")
+        self.repo.write(
+            "changes/x.md", record('kind = "error"\nid = "K0007"\npackages = ["caddy"]')
+        )
+        code, _, err = self.repo.run("check")
+        self.assertEqual(code, 1)
+        self.assertIn("prints [K0007]", err)
+        self.repo.write(
+            "kix/packages/caddy/default.nix", '{ x = throw "[K0007] caddy: gone"; }\n'
+        )
+        self.assertEqual(self.repo.run("check")[0], 0)
+
     def test_a_security_bullet_carries_the_workaround(self):
         self.repo.write(
             "changes/x.md",

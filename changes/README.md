@@ -67,6 +67,10 @@ and tools can look the change up. `scripts/change-records.py next-id` prints
 an id no record uses. It picks one at random, so that branches worked on at
 the same time do not pick the same id.
 
+The error that refuses the old form starts with the id in brackets, such as
+`[K0001] caddy: ...`. The check fails until a file under `kix/` or `cli/`
+prints it. People search `CHANGELOG.md` for the id, and tools match on it.
+
 ## Commands
 
 ```bash
