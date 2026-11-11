@@ -1018,7 +1018,7 @@ fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
         "{out}"
     );
     assert!(
-        out.contains("No project files were modified (the 9.1.0 baseline build is cached)."),
+        out.contains("kix.toml, flake.nix, and flake.lock were not changed. Upgrade state is saved in kix-upgrade.json (the 9.1.0 baseline build is cached)."),
         "{out}"
     );
     assert!(
