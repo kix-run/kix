@@ -233,6 +233,10 @@ Acknowledged K0007 in kix-upgrade.json. You can now run `kix deploy`.
 `kix deploy --dry-run` and `kix plan` are not blocked.
 Another `kix upgrade` also refuses until each change is acknowledged.
 
+This check reads `kix-upgrade.json`, so it protects only a project that was
+upgraded with `kix upgrade` and kept the file. A project whose pins were
+moved by hand gets no refusal. Commit `kix-upgrade.json` with the upgrade.
+
 ## `kix-upgrade.json`
 
 | Field | Meaning |
