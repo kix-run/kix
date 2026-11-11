@@ -1,6 +1,6 @@
 # 164: Versioning at agent speed
 
-**Status:** Accepted (§1 to §4). §5 is a sketch to argue with.
+**Status:** Implemented (§1 and §2, November 2026). Open questions moved to `ROADMAP.md` § Open design questions; §5 moved to `interesting_thoughts/164b_per_cluster_kix_versions.md`.
 **Related:** `163_cli_install_versions_and_upgrades.md` (selection, signing, the first `kix upgrade`), `140_catalogue_versions_and_upgrade_windows.md` (per-client revisions in the Lithus monorepo), `155_platform_versions_and_compatibility.md`, `164a_versioning_review_record.md` (the eleven reviews behind this doc)
 
 ## Context
