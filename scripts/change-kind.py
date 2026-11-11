@@ -137,7 +137,9 @@ def decide(
             cluster,
             "fails-at-base",
             details=[
-                "It does not build at the base commit, so there is nothing to compare."
+                "It does not build at the base commit, so there is nothing to compare.",
+                "Failure (last lines):",
+                *[f"    {line}" for line in base.error.splitlines()[-5:]],
             ],
         )
 
@@ -343,6 +345,13 @@ def main(argv: list[str] | None = None) -> int:
     removals = surface_removals(args.base, args.head)
     surface = surface_problems(removals, added)
 
+    # When nothing builds at the base, the check compared nothing. That is a
+    # broken check, and it must not pass.
+    if outcomes and all(o.status == "fails-at-base" for o in outcomes):
+        outcomes[0].problems.append(
+            "No cluster builds at the base commit, so this check compared nothing. "
+            "Look at the failure below. It is likely a problem with the check's setup."
+        )
     text = summary(outcomes, removals, surface, added)
     sys.stdout.write(text)
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
