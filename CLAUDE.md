@@ -127,7 +127,7 @@ There are two kinds of breaking change, each a kind of change record (below) wit
 
 Where you can, turn a breaking change with no error into one that shows an error. For example, make the build refuse the old setting and name the new one. This is a goal, not a rule: do it when the cost is reasonable.
 
-Package options, library functions, and CLI flags have no deprecation period. The release that removes or renames one refuses the old form with an error that names the new one and prints the change record's id, such as `[K0001]`. That refusal stays for at least one minor release.
+Package options, library functions, and CLI flags have no deprecation period. A release may warn about an option before a later release removes it, but it does not have to, and the removal is the `error` record. The records in `changes/0.9.1/` that say an option "still works with a warning, and 0.10 removes it" were written before this rule, and 0.10 keeps that promise. The release that removes or renames one refuses the old form with an error that names the new one and prints the change record's id, such as `[K0001]`. That refusal stays for at least one minor release.
 
 Each breaking change's record says what users change when they upgrade. A change that needs no action, but that users should know about, is a `note` record, listed under `### Upgrade notes`. For example, the first deploy after an upgrade applies many objects again, or restarts some pods once.
 

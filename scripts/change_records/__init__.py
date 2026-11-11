@@ -15,6 +15,7 @@ import dataclasses
 import datetime
 import json
 import pathlib
+import random
 import re
 import subprocess
 import tomllib
@@ -72,6 +73,8 @@ class Record:
         """Return the CHANGELOG bullet: the body on one line, then the id."""
         paragraphs = re.split(r"\n\s*\n", self.body.strip())
         text = " ".join(" ".join(p.split()) for p in paragraphs)
+        if self.workaround:
+            text += f" To get the fix without upgrading: {self.workaround.strip()}"
         if self.id:
             text += f" [{self.id}]"
         return f"- {text}"
@@ -227,6 +230,17 @@ def load(root: pathlib.Path) -> tuple[list[Record], list[str]]:
             records.append(parse_record(path, path.read_text(), version))
         except RecordError as e:
             problems.append(f"{rel}: {e}")
+    packages_dir = root / "kix" / "packages"
+    if packages_dir.is_dir():
+        for record in records:
+            if record.version is not None:
+                continue
+            for name in record.packages:
+                if not (packages_dir / name).is_dir():
+                    problems.append(
+                        f"{record.path.relative_to(root)}: `{name}` in `packages` is not a "
+                        "folder under kix/packages/. Use the package's folder name"
+                    )
     seen: dict[str, pathlib.Path] = {}
     for record in records:
         if record.id is None:
@@ -268,8 +282,14 @@ def select(records: list[Record], version: str | None) -> list[Record]:
 
 
 def next_id(records: list[Record]) -> str:
-    numbers = [int(r.id[1:]) for r in records if r.id]
-    return f"K{max(numbers, default=0) + 1:04d}"
+    """Return an id no record uses, picked at random.
+
+    Branches worked on at the same time each pick an id before either
+    merges. Counting up would give them the same one.
+    """
+    used = {r.id for r in records if r.id}
+    free = [f"K{n:04d}" for n in range(1, 10000) if f"K{n:04d}" not in used]
+    return random.choice(free)
 
 
 def bump(records: list[Record]) -> str:
@@ -363,10 +383,29 @@ def pr_problems(
     unreleased_re = re.compile(rf"^{CHANGES_DIR}/(?!{re.escape(README)}$)[^/]+\.md$")
     released_re = re.compile(rf"^{CHANGES_DIR}/\d+\.\d+\.\d+/[^/]+\.md$")
     adds_record = any(s[0] in "AM" and unreleased_re.match(p) for s, p in changes)
-    is_release = any(s[0] == "A" and released_re.match(p) for s, p in changes)
     touches_code = any(p.startswith(("cli/", "kix/")) for p in paths)
 
+    # A version folder that exists at the base is a release that shipped.
+    # Its records also went out as kix-<version>-changes.json, so they stay
+    # as they are. A folder new in this pull request is the release itself.
+    merge_base = git(root, "merge-base", base, head).strip()
+    shipped: set[str] = set()
+    new_folders: set[str] = set()
+    for _, path in changes:
+        if released_re.match(path):
+            folder = path.rsplit("/", 1)[0]
+            if git(root, "ls-tree", merge_base, f"{folder}/").strip():
+                shipped.add(folder)
+            else:
+                new_folders.add(folder)
+    is_release = bool(new_folders)
+
     problems: list[str] = []
+    for folder in sorted(shipped):
+        problems.append(
+            f"This pull request changes records in {folder}/, a release that has shipped.\n"
+            "Released records do not change. Put a new record directly in changes/."
+        )
     if record_required and touches_code and not adds_record and not is_release:
         problems.append(
             "This pull request changes cli/ or kix/ and adds no change record.\n"
@@ -377,7 +416,6 @@ def pr_problems(
         )
 
     if not is_release and "CHANGELOG.md" in paths:
-        merge_base = git(root, "merge-base", base, head).strip()
         before = release_lines(show(root, merge_base, "CHANGELOG.md"))
         after = release_lines(show(root, head, "CHANGELOG.md"))
         if after - before:

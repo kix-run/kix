@@ -302,12 +302,14 @@ class OutputTest(RepoTest):
         self.assertEqual([r["name"] for r in doc["records"]], ["old"])
 
     def test_next_id(self):
-        self.assertEqual(self.repo.run("next-id")[1], "K0004\n")
+        picked = self.repo.run("next-id")[1].strip()
+        self.assertRegex(picked, r"^K\d{4}$")
+        self.assertNotIn(picked, {"K0001", "K0003"})
 
     def test_next_id_with_no_ids(self):
         empty = Repo()
         self.addCleanup(empty.close)
-        self.assertEqual(empty.run("next-id")[1], "K0001\n")
+        self.assertRegex(empty.run("next-id")[1], r"^K\d{4}\n$")
 
     def test_bump(self):
         self.assertEqual(self.repo.run("bump")[1], "minor\n")
@@ -426,6 +428,46 @@ class PullRequestTest(RepoTest):
         self.repo.write("cli/Cargo.toml", 'version = "0.10.0"\n')
         self.repo.run("release", "0.10.0", "--date", "2026-11-11")
         self.assertEqual(self.check(), (0, ""))
+
+    def test_a_record_added_to_a_shipped_release_fails(self):
+        self.repo.write("changes/0.9.0/old.md", record('kind = "fixed"', "Old."))
+        self.base = self.repo.commit("shipped")
+        self.repo.write("cli/main.rs", "fn main() { 1; }\n")
+        self.repo.write("changes/0.9.0/sneaked.md", record('kind = "fixed"'))
+        code, err = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("a release that has shipped", err)
+        self.assertIn("adds no change record", err)
+
+    def test_editing_a_shipped_record_fails(self):
+        self.repo.write("changes/0.9.0/old.md", record('kind = "fixed"', "Old."))
+        self.base = self.repo.commit("shipped")
+        self.repo.write("changes/0.9.0/old.md", record('kind = "added"', "Old."))
+        code, err = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("changes/0.9.0/, a release that has shipped", err)
+
+    def test_a_package_that_does_not_exist_is_refused(self):
+        self.repo.write("kix/packages/caddy/default.nix", "{}\n")
+        self.repo.write(
+            "changes/x.md", record('kind = "fixed"\npackages = ["caddy", "cady"]')
+        )
+        code, _, err = self.repo.run("check")
+        self.assertEqual(code, 1)
+        self.assertIn("`cady` in `packages` is not a folder", err)
+        self.assertNotIn("`caddy` in", err)
+
+    def test_a_security_bullet_carries_the_workaround(self):
+        self.repo.write(
+            "changes/x.md",
+            record(
+                'kind = "security"\nworkaround = "Pin the image to 1.2.3."', "Fixed."
+            ),
+        )
+        out = self.repo.run("changelog")[1]
+        self.assertIn(
+            "- Fixed. To get the fix without upgrading: Pin the image to 1.2.3.", out
+        )
 
 
 if __name__ == "__main__":

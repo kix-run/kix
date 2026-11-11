@@ -63,16 +63,15 @@ Otherwise it is a patch release.
 ## Ids
 
 An `error` record needs an id, and Kix prints it in the error so that people
-and tools can look the change up. Run `scripts/change-records.py next-id` on
-a branch that is up to date with main. Two branches can pick the same id, and both can pass their checks.
-The check then fails on main once both have merged. Give the record that
-merged second the next free id, in its file and in its error message.
+and tools can look the change up. `scripts/change-records.py next-id` prints
+an id no record uses. It picks one at random, so that branches worked on at
+the same time do not pick the same id.
 
 ## Commands
 
 ```bash
 scripts/change-records.py check                  # check every record
-scripts/change-records.py next-id                # the next free id
+scripts/change-records.py next-id                # an id no record uses
 scripts/change-records.py changelog              # preview the next release's section
 scripts/change-records.py bump                   # minor, patch, or none
 scripts/change-records.py json --version 0.10.0  # the release asset
