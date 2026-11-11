@@ -373,7 +373,12 @@ pub fn pin(
         )
     };
     if let Err(e) = moved {
-        let error: String = e.lines().map(|l| format!("  {l}\n")).collect();
+        // Nix prints its command line and a trace before the one line
+        // that says what went wrong.
+        let error: String = super::out::excerpt(&e)
+            .iter()
+            .map(|l| format!("  {l}\n"))
+            .collect();
         let head =
             format!("Cannot lock Kix library tag {target_tag} for Kix {release}:\n{error}\n");
         return Err(PinError::Lock(if restore() {
