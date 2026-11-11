@@ -20,6 +20,8 @@ import subprocess
 import tomllib
 
 SCHEMA = "kix.run/changes/v1"
+# A released version, the only name a folder under changes/ may have.
+VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 CHANGES_DIR = "changes"
 README = "README.md"
 
@@ -161,6 +163,13 @@ def parse_record(path: pathlib.Path, text: str, version: str | None = None) -> R
         problems.append(
             "the text below the header is empty. Describe the change for users"
         )
+    elif any(
+        line.lstrip().startswith(("- ", "* ", "```")) for line in body.splitlines()
+    ):
+        problems.append(
+            "the text must be plain paragraphs, with no list or code block. "
+            "It becomes one bullet in CHANGELOG.md"
+        )
 
     if problems:
         raise RecordError("; ".join(problems))
@@ -204,6 +213,14 @@ def load(root: pathlib.Path) -> tuple[list[Record], list[str]]:
     """Read every record. Return the records that parse and a list of problems."""
     records: list[Record] = []
     problems: list[str] = []
+    changes = root / CHANGES_DIR
+    for entry in sorted(changes.iterdir()) if changes.is_dir() else []:
+        if entry.is_dir() and not VERSION_RE.fullmatch(entry.name):
+            problems.append(
+                f"{entry.relative_to(root)}/: a folder under changes/ must be a released "
+                "version such as 0.10.0. Put a new record directly in changes/, and "
+                "replace any `/` in its name"
+            )
     for path, version in record_paths(root):
         rel = path.relative_to(root)
         try:
@@ -289,6 +306,11 @@ def to_json(records: list[Record], version: str) -> dict:
 
 def release(root: pathlib.Path, version: str, date: str | None = None) -> list[Record]:
     """Move the unreleased records into `changes/<version>/` and add their section to CHANGELOG.md."""
+    if not VERSION_RE.fullmatch(version):
+        raise RecordError(
+            f"`{version}` is not a release version. Give it as X.Y.Z, such as 0.10.0. "
+            "A prerelease moves no records"
+        )
     records = load_valid(root)
     pending = unreleased(records)
     if not pending:
@@ -339,7 +361,7 @@ def pr_problems(
     paths = [path for _, path in changes]
 
     unreleased_re = re.compile(rf"^{CHANGES_DIR}/(?!{re.escape(README)}$)[^/]+\.md$")
-    released_re = re.compile(rf"^{CHANGES_DIR}/[^/]+/[^/]+\.md$")
+    released_re = re.compile(rf"^{CHANGES_DIR}/\d+\.\d+\.\d+/[^/]+\.md$")
     adds_record = any(s[0] in "AM" and unreleased_re.match(p) for s, p in changes)
     is_release = any(s[0] == "A" and released_re.match(p) for s, p in changes)
     touches_code = any(p.startswith(("cli/", "kix/")) for p in paths)

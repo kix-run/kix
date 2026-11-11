@@ -219,6 +219,13 @@ jobs:
               ;;
             *)
               prerelease=false
+              # A record merged after the release pull request moved the
+              # others would ship in this release and be listed in the next.
+              if [ ! -d "changes/$base" ] || [ "$(python3 scripts/change-records.py bump)" != none ]; then
+                echo "changes/$base/ is missing, or changes/ still holds unreleased records."
+                echo "Move them with: scripts/change-records.py release $base (the release skill)."
+                exit 1
+              fi
               : > release-notes.md
               awk -v v="$base" '$1 == "##" && $2 == v { on = 1; next } on && /^## / { exit } on' \
                 CHANGELOG.md >> release-notes.md

@@ -1,8 +1,9 @@
 # Change records
 
 Each change that a Kix user can see gets one file here, usually named after
-the branch: `changes/<name>.md`. A file per change means parallel branches
-never edit the same file. At release, the files move to
+the branch: `changes/<name>.md`. Replace any `/` in the branch name with `-`,
+because a folder here means a released version. A file per change means
+parallel branches never edit the same file. At release, the files move to
 `changes/<version>/`, and `CHANGELOG.md` gets a section written from them.
 Kix also ships them with each release as `kix-<version>-changes.json`.
 
@@ -13,7 +14,8 @@ The Changelog workflow checks this, and checks every record's format.
 ## Format
 
 A TOML header between `+++` lines, then one paragraph for users. The
-paragraph becomes one bullet in `CHANGELOG.md`.
+paragraph becomes one bullet in `CHANGELOG.md`, so it takes no list and no
+code block.
 
 ```markdown
 +++
@@ -62,9 +64,9 @@ Otherwise it is a patch release.
 
 An `error` record needs an id, and Kix prints it in the error so that people
 and tools can look the change up. Run `scripts/change-records.py next-id` on
-a branch that is up to date with main. Two branches can pick the same id.
-The check then fails on the branch that merges second, which takes the next
-free id.
+a branch that is up to date with main. Two branches can pick the same id, and both can pass their checks.
+The check then fails on main once both have merged. Give the record that
+merged second the next free id, in its file and in its error message.
 
 ## Commands
 

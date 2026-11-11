@@ -204,6 +204,27 @@ class ValidationTest(RepoTest):
         self.assertEqual(code, 1)
         self.assertIn("changes/x.md:", err)
 
+    def test_a_folder_that_is_no_version_is_refused(self):
+        self.repo.write("changes/fix/branch.md", record('kind = "fixed"'))
+        code, _, err = self.repo.run("check")
+        self.assertEqual(code, 1)
+        self.assertIn("must be a released version", err)
+
+    def test_a_list_or_code_block_in_the_text_is_refused(self):
+        for body in ("Intro:\n- one\n- two", "See:\n```\ncode\n```"):
+            self.repo.write("changes/x.md", record('kind = "fixed"', body))
+            code, _, err = self.repo.run("check")
+            self.assertEqual(code, 1)
+            self.assertIn("no list or code block", err)
+
+    def test_release_refuses_a_version_that_is_not_x_y_z(self):
+        self.repo.write("changes/x.md", record('kind = "fixed"'))
+        for version in ("v0.10.0", "0.10.0-rc.1"):
+            code, _, err = self.repo.run("release", version)
+            self.assertEqual(code, 1)
+            self.assertIn("is not a release version", err)
+        self.assertTrue((self.repo.root / "changes/x.md").exists())
+
     def test_other_commands_refuse_invalid_records(self):
         self.repo.write("changes/x.md", record('kind = "nope"'))
         code, _, err = self.repo.run("changelog")
