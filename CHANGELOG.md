@@ -21,6 +21,23 @@ Changes that are not released yet are in [`changes/`](changes/), one file per
 change. Each release moves its files to `changes/<version>/` and writes its
 section here from them.
 
+## 0.10.0 - 2026-11-11
+
+### Breaking (no error)
+
+- `stackgres-cluster` now writes `reconciliationTimeout: 3600` on each `backups` entry, so StackGres has an hour instead of its five-minute default to delete the base backups and WAL that retention no longer keeps. With the default, a busy database's delete was cut off every night while the backup still succeeded, and old backups piled up in the bucket. The SGCluster of every cluster with `backups` changes on the next deploy. To keep StackGres's default, set `reconciliationTimeout = null` on the entry.
+
+### Changed
+
+- Errors caused by a bug in Kix now give the address to report it: https://github.com/kix-run/kix/issues. When `kix upgrade` stops for an edit to `flake.nix`, it now says that it saved its progress in `kix-upgrade.json`.
+- `kix plan`, `kix diff`, `kix deploy`, `kix drift`, `kix gc`, and `kix rollback` now replace internal jargon with plain descriptions of what changes on the cluster, whether Pods restart, whether objects that left the build stay running or are deleted, what drift or dry-run limits apply, and what command to run next.
+- Cluster and package evaluation errors now lead with the affected instance, resource, or cluster option, explain the failure and its Kubernetes consequence, and show the usual fix first.
+- Kix now explains what failed when a command stops because of the Kix runtime, project or builder setup, Helm chart rendering, missing or retired cluster deployment records, SOPS secrets, or an internal check. Each error states whether any files or cluster resources were changed and gives the next step to fix the problem.
+
+### Fixed
+
+- Fixed 17 Kix Nix library error messages during `kix check` and `kix build` that were cut short (for example, stopping after `[gateway] Untracked configMap reference in volumes[].configMap.name: `) so they now print in full with the resource name and fix.
+
 ## 0.9.2 - 2026-11-11
 
 ### Added
