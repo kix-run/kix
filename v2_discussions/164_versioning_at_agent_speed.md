@@ -56,8 +56,11 @@ six months, or by the previous minor, whichever covers more.** This replaces
 pace is about a day and a half. A change that cannot keep that promise is
 marked as a required stop (`required-stop = true` on its record, §2.4). Required stops should be rare.
 
-A deploy by an older Kix onto a cluster that a newer minor last deployed is
-already refused (163 §9), so the window only has to run forwards.
+The window runs forwards only: a newer Kix reads what an older one wrote.
+Nothing yet stops an older Kix from deploying onto a cluster that a newer
+minor deployed last. 163 §9 designs that refusal, and it is not built. Going
+back to an older Kix is also how a user gets away from a bad release, so the
+refusal needs an override when it is built (§4, question 6).
 
 ### 1.3 No supported line with backports, for now
 
@@ -231,6 +234,10 @@ local store and shared between Kix versions.
    found only scorecard JSON and SARIF.
 5. **Is six months right?** It is provisional. Measure how often state
    changes before tightening or relaxing it.
+6. **Should an older Kix be refused on a cluster a newer minor deployed?**
+   163 §9 says yes. With no way to withdraw a release, a user leaves a bad
+   release by deploying with the previous Kix, which that refusal would
+   block. If it is built, it needs an explicit override.
 
 ## 5. Sketch: per-cluster Kix versions
 
