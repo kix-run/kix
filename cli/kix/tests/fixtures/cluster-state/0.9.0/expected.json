@@ -1,0 +1,187 @@
+{
+  "cluster": "fixtures",
+  "current": "fixtures-act000000000",
+  "currentReceiptSchema": "kix.run/receipt/v1",
+  "objects": [
+    {
+      "drift": "InSync",
+      "file": "deployment.json",
+      "kind": "Deployment",
+      "lifecycle": "Desired",
+      "name": "fixture-web",
+      "owners": [
+        "fixtures"
+      ]
+    },
+    {
+      "drift": "Unstamped",
+      "file": "package-instance.json",
+      "kind": "PackageInstance",
+      "lifecycle": "Desired",
+      "name": "fixtures",
+      "owners": [
+        "fixtures"
+      ]
+    }
+  ],
+  "receiptSchema": "kix.run/receipt/v1",
+  "records": [
+    {
+      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvact-kix-activation-fixtures.json",
+      "createdAt": "2026-11-10T09:14:40+00:00",
+      "deleting": false,
+      "deployedAt": "2026-11-10T09:15:02.118422+00:00",
+      "failedAt": null,
+      "failureReason": null,
+      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
+      "interfaces": {},
+      "name": "fixtures-act000000000",
+      "operatorDriven": false,
+      "orphansKeptFrom": [
+        {
+          "activation": "fixtures-old000000000",
+          "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json",
+          "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold"
+        }
+      ],
+      "packageIndex": {
+        "clusterLevel": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans"
+        ],
+        "format": 1,
+        "packages": {
+          "drift-fixtures/fixtures": {
+            "instance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
+            "resources": [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb"
+            ]
+          }
+        }
+      },
+      "phase": "Active",
+      "previousActivation": "fixtures-old000000000",
+      "publishedInterfaces": {},
+      "totalWaves": 2,
+      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000a1",
+      "waves": [
+        {
+          "applied": 1,
+          "failed": 0,
+          "resources": 1,
+          "status": "Complete",
+          "wave": 0
+        },
+        {
+          "applied": 2,
+          "failed": 0,
+          "resources": 2,
+          "status": "Complete",
+          "wave": 1
+        }
+      ]
+    },
+    {
+      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json",
+      "createdAt": "2026-11-03T16:02:11+00:00",
+      "deleting": false,
+      "deployedAt": "2026-11-03T16:02:40.501977+00:00",
+      "failedAt": null,
+      "failureReason": null,
+      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaold",
+      "interfaces": {},
+      "name": "fixtures-old000000000",
+      "operatorDriven": false,
+      "orphansKeptFrom": [],
+      "packageIndex": {
+        "clusterLevel": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans"
+        ],
+        "format": 1,
+        "packages": {
+          "drift-fixtures/fixtures": {
+            "instance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi",
+            "resources": [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb"
+            ]
+          }
+        }
+      },
+      "phase": "Superseded",
+      "previousActivation": null,
+      "publishedInterfaces": {},
+      "totalWaves": 2,
+      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000b2",
+      "waves": [
+        {
+          "applied": 1,
+          "failed": 0,
+          "resources": 1,
+          "status": "Complete",
+          "wave": 0
+        },
+        {
+          "applied": 2,
+          "failed": 0,
+          "resources": 2,
+          "status": "Complete",
+          "wave": 1
+        }
+      ]
+    },
+    {
+      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvail-kix-activation-fixtures.json",
+      "createdAt": "2026-11-08T11:30:00+00:00",
+      "deleting": false,
+      "deployedAt": null,
+      "failedAt": "2026-11-08T11:35:00.000000+00:00",
+      "failureReason": "Deployment drift-fixtures/fixture-web did not become ready within 300s",
+      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaafail",
+      "interfaces": {},
+      "name": "fixtures-fail00000000",
+      "operatorDriven": false,
+      "orphansKeptFrom": [],
+      "packageIndex": null,
+      "phase": "Failed",
+      "previousActivation": null,
+      "publishedInterfaces": {},
+      "totalWaves": 2,
+      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000c3",
+      "waves": [
+        {
+          "applied": 1,
+          "failed": 0,
+          "resources": 1,
+          "status": "Complete",
+          "wave": 0
+        },
+        {
+          "applied": 1,
+          "failed": 1,
+          "resources": 2,
+          "status": "Failed",
+          "wave": 1
+        }
+      ]
+    },
+    {
+      "builtVia": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaasrc-kix-bundle-fixtures",
+      "createdAt": "2026-11-10T10:00:00+00:00",
+      "deleting": false,
+      "deployedAt": null,
+      "failedAt": null,
+      "failureReason": null,
+      "identityHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaqueued",
+      "interfaces": {},
+      "name": "fixtures-queued000000",
+      "operatorDriven": true,
+      "orphansKeptFrom": [],
+      "packageIndex": null,
+      "phase": "",
+      "previousActivation": null,
+      "publishedInterfaces": {},
+      "totalWaves": 0,
+      "uid": "6f1c2a43-0d7e-4b8e-9a51-0000000000d4",
+      "waves": []
+    }
+  ]
+}

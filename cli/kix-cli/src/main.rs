@@ -1,4 +1,6 @@
 mod cli;
+#[cfg(test)]
+mod cli_surface;
 mod client;
 mod commands;
 mod output;

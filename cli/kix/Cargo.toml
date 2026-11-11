@@ -69,6 +69,8 @@ tracing.workspace = true
 test-util = ["kix-core/test-util"]
 
 [dev-dependencies]
+# Reads `written.toml` in the cluster state fixtures.
+toml.workspace = true
 kix-core = { workspace = true, features = ["test-util"] }
 # Tests read plan files with zstd's own decoder too.
 zstd.workspace = true

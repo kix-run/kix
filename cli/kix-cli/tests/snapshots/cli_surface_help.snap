@@ -1,0 +1,2269 @@
+---
+source: kix-cli/src/cli_surface.rs
+---
+## kix
+
+Kubernetes manifest generator
+
+Usage: kix [OPTIONS] <COMMAND>
+
+Commands:
+  build        Render manifests to stdout
+  diff         Compare the build with the live cluster or a directory, read-only
+  plan         Preview a deploy as a server-side dry run
+  check        Evaluate a cluster and report build-time checks and scorecard findings
+  deploy       Wave-based deployment with confirmation
+  status       Resource health table
+  list         List clusters, packages, or other resources
+  graph        Dependency DAG visualization
+  bundle       Package a built cluster into a standalone `.kixbundle` file
+  inspect      Summarize a cluster's rendered resources by namespace and kind
+  gc           Garbage-collect stale Kix-managed resources
+  migrate      One-off cluster migrations
+  rollback     Rollback to the previous activation
+  export       Export cluster manifests as plain Kubernetes YAML (exit-strategy / audit bundle)
+  logs         Tail logs for a package's primary workload
+  pf           Port-forward to a package's primary workload
+  health       Cluster integrity walk: dependency-presence check via identity-hashes
+  drift        Content drift check via applied-hash stamps (cluster-only, no build)
+  snapshot     Manage cluster snapshots for CI/offline use
+  images       List all container images in a cluster activation (for airgap preloading)
+  completions  Generate shell completions
+  doctor       Check the Kix installation
+  compliance   Compliance exports: SBOM, SLSA attestations, audit bundles
+  pin          Resolve image references and record them in a committed pin file
+  lib          Manage the Kix library this project pins in flake.lock
+  self         Install, list, and remove versions of Kix
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Plugins: `kix NAME ARGS...` runs `kix-NAME ARGS...` from PATH.
+
+## kix build
+
+Render manifests to stdout
+
+Usage: kix build [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix diff
+
+Compare the build with the live cluster or a directory, read-only
+
+Compares the build against the live cluster's Kix-managed resources (requiring only `get` and `list` permissions), a snapshot from `kix snapshot save`, or another build (`--from <DIR>`, which requires no cluster access). When the currently deployed build is available locally, field changes are classified as either committed changes or live drift.
+
+Because `kix diff` is read-only, it cannot detect write-time effects such as admission webhook mutations or rejections, server-side apply ownership conflicts, or deploy-time refusals. Use `kix plan` to check those with a server-side dry run.
+
+Exits 2 when any differences are found.
+
+Usage: kix diff [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --from <PATH>
+          Compare against a local build or directory instead of the live cluster: a previous build (its `kix.run/built-via` store path, or a result directory containing `kix-packages.json`) or a manifest directory from `kix snapshot save` or `kix export`
+
+      --bundle <FILE>
+          Read the target build from a `.kixbundle` file instead of evaluating. Without `--from` or `--from-bundle`, compares against an empty baseline without contacting the cluster
+
+      --from-bundle <FILE>
+          Compare against the baseline build in this `.kixbundle` file instead of the live cluster
+
+      --detail <DETAIL>
+          Detail level for `--output json` and `--output yaml` (text and Markdown output are unaffected)
+
+          Possible values:
+          - plain:     Resource names and changed field counts only
+          - fields:    Include each changed field with its old and new values
+          - manifests: Include the full old and new manifests for each changed, added, or removed resource
+          
+          [default: plain]
+
+      --save <FILE>
+          Write the comparison to a `.kixplan` file (same format as `kix plan --save`), regardless of `--detail` and `--output`
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix plan
+
+Preview a deploy as a server-side dry run
+
+Runs the deploy pipeline with every write sent as a server-side dry run so the API server reports the exact field changes it would make and any writes it would reject (field ownership conflicts, admission webhooks, schema validation, or RBAC). Also reports stateful migrations, live drift that the deploy would revert, and orphaned resources that pruning would delete or keep. `kix deploy` prints this same plan before prompting, and `kix deploy --dry-run` runs this command.
+
+Because dry-run writes require the same RBAC permissions as real writes, use `kix diff` when you only have read-only access. A dry run cannot verify whether Pods will start or pass readiness probes.
+
+Exits 0 when the deploy would make no changes, 2 when changes would be made, and 3 when the deploy would be blocked by a rejected write or an unacknowledged stateful migration (see `--accept-migrations`).
+
+Usage: kix plan [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --current-activation
+          Use the local activation cache instead of querying the cluster.
+          
+          Runs completely offline by comparing the new build against the locally cached activation. Does not inspect live cluster state, in-flight or failed deployments, or previously retained orphans, and performs no server-side dry run.
+
+      --reconcile
+          Re-apply all resources even if activation identity matches (heal drift)
+
+      --prune
+          Delete orphaned resources left from the previous activation or earlier deploys (`kix plan` dry-runs each deletion). Without this flag, orphans are kept and recorded on the new Activation for a later `--prune` or `kix gc`
+
+      --prune-mode <MODE>
+          Prune mode: default (prune after apply), no (skip pruning)
+
+          Possible values:
+          - default: Prune orphans after every apply has finished (default)
+          - no:      Skip pruning entirely, defer to `kix gc`
+
+      --force-conflicts
+          Take ownership of fields currently owned by other field managers (SSA conflict override). Without this, conflicts surface as a 409 with the conflicting field paths and current owner. Useful when migrating resources from kubectl/helm to Kix for the first time
+
+      --accept-migrations
+          Acknowledge detected stateful migration pairs. Without this flag, a deploy that would remove and add stateful resources in the same logical slot is rejected (even with --yes) to prevent silent data loss, and `kix plan` exits 3. Kix does not copy data between them
+
+      --bundle <FILE>
+          Read the target build from a `.kixbundle` file instead of evaluating, verifying every store path against its content first
+
+      --deployed-bundle <FILE>
+          Bundle file for a previously deployed build (active, failed, or retained orphan source) to use when its store path is not present locally. Matched by the Activation record's identity hash; repeatable
+
+      --save <FILE>
+          Write the plan to a `.kixplan` file for `kix deploy --plan` or Kix Enterprise. Includes changed fields, the build's dependency graph, and full old and new manifests with Secret values redacted
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix check
+
+Evaluate a cluster and report build-time checks and scorecard findings
+
+Runs constructor validators, cross-resource checks, and error-severity scorecard rules; any failure marks the `eval` row as `fail`. The `scorecard` row summarizes findings by severity. To validate rendered manifests against Kubernetes schemas, run `nix flake check` (via the `schema-cluster-<name>` check). Exits 1 when any row reports `fail`.
+
+Usage: kix check [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster to validate
+
+Options:
+      --sarif
+          Output SARIF 2.1.0 JSON (for GitHub Code Scanning integration)
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix deploy
+
+Wave-based deployment with confirmation
+
+Usage: kix deploy [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --current-activation
+          Use the local activation cache instead of querying the cluster.
+          
+          Runs completely offline by comparing the new build against the locally cached activation. Does not inspect live cluster state, in-flight or failed deployments, or previously retained orphans, and performs no server-side dry run.
+
+      --reconcile
+          Re-apply all resources even if activation identity matches (heal drift)
+
+      --prune
+          Delete orphaned resources left from the previous activation or earlier deploys (`kix plan` dry-runs each deletion). Without this flag, orphans are kept and recorded on the new Activation for a later `--prune` or `kix gc`
+
+      --prune-mode <MODE>
+          Prune mode: default (prune after apply), no (skip pruning)
+
+          Possible values:
+          - default: Prune orphans after every apply has finished (default)
+          - no:      Skip pruning entirely, defer to `kix gc`
+
+      --force-conflicts
+          Take ownership of fields currently owned by other field managers (SSA conflict override). Without this, conflicts surface as a 409 with the conflicting field paths and current owner. Useful when migrating resources from kubectl/helm to Kix for the first time
+
+      --accept-migrations
+          Acknowledge detected stateful migration pairs. Without this flag, a deploy that would remove and add stateful resources in the same logical slot is rejected (even with --yes) to prevent silent data loss, and `kix plan` exits 3. Kix does not copy data between them
+
+      --bundle <FILE>
+          Read the target build from a `.kixbundle` file instead of evaluating, verifying every store path against its content first
+
+      --deployed-bundle <FILE>
+          Bundle file for a previously deployed build (active, failed, or retained orphan source) to use when its store path is not present locally. Matched by the Activation record's identity hash; repeatable
+
+  -y, --yes
+          Skip confirmation prompt
+
+      --dry-run
+          Preview only: run `kix plan` with the same flags and make no changes. When combined with `--plan`, verify that the saved plan still matches and exit
+
+      --plan <FILE>
+          Deploy only if the current plan matches this `.kixplan` file from `kix plan --save`. Uses the planning flags recorded in the file and exits 4 without applying anything if the cluster state, builds, flags, refusals, reverted drift, or prune deletions have changed
+
+      --on-error <ON_ERROR>
+          Behavior on error: `stop` or `continue`. With `stop`, a deploy whose plan contains a refused write aborts before applying anything
+          
+          [default: stop]
+          [possible values: stop, continue]
+
+      --timeout <TIMEOUT>
+          Readiness timeout (e.g. "5m", "300s", or bare seconds)
+
+      --operator
+          Delegate deployment to the Kix operator instead of applying directly (requires the build in the cluster's Nix store; incompatible with `--bundle`)
+
+      --record-annotation <KEY=VALUE>
+          Add a `KEY=VALUE` annotation to the Activation record (repeatable). Keys under `kix.run/`, its subdomains, or retired Kix domains are reserved and rejected
+
+      --tui
+          Render a live inline graph-streaming dashboard. Falls back to line-oriented output on non-interactive terminals
+
+      --group-by-ns
+          Group the tree view by namespace instead of Kix package. Only affects rendering; execution order is unchanged
+
+      --fold-height <ROWS>
+          Cap the live viewport height in rows. Default: half the terminal height (clamped to [10, 40]). Rows beyond the cap fold into the scrollback history above
+
+      --log-format <LOG_FORMAT>
+          Output format for the deploy event stream. `pretty` (default on TTY) is the colored human stream; `line` is the nix-build-L idiom (one line per terminal verdict, no ANSI); `json` emits NDJSON, one event per line, suitable for CI/automation. Non-TTY stdout auto-falls-back to `line` when `pretty` is requested
+          
+          [default: pretty]
+          [possible values: pretty, line, json]
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix status
+
+Resource health table
+
+Usage: kix status [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --operator
+          Show operator-managed activation status with package-grouped resources
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix list
+
+List clusters, packages, or other resources
+
+Usage: kix list [OPTIONS] <COMMAND>
+
+Commands:
+  clusters  Available clusters in this flake
+  packages  Available packages (optionally scoped to a cluster)
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix list clusters
+
+Available clusters in this flake
+
+Usage: kix list clusters [OPTIONS]
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix list packages
+
+Available packages (optionally scoped to a cluster)
+
+Usage: kix list packages [OPTIONS]
+
+Options:
+      --cluster <CLUSTER>
+          Show packages for a specific cluster (adds installed status)
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix graph
+
+Dependency DAG visualization
+
+Usage: kix graph [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --format <FORMAT>
+          Graph output format (tree, dot, json)
+          
+          [possible values: tree, dot, json]
+
+      --bundle <FILE>
+          Read the target build from a `.kixbundle` file instead of evaluating
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix bundle
+
+Package a built cluster into a standalone `.kixbundle` file
+
+A bundle (`.kixbundle`) is a seekable zstd archive containing every store file in the build and its references, allowing `kix plan`, `kix deploy`, and `kix graph` to run with `--bundle` on machines without Nix. Readers recompute every store path from its content and references and reject any mismatch.
+
+Usage: kix bundle [OPTIONS] <CLUSTER> [FILE]
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+  [FILE]
+          Output path for the bundle [default: <CLUSTER>.kixbundle]
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix inspect
+
+Summarize a cluster's rendered resources by namespace and kind
+
+Usage: kix inspect [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix gc
+
+Garbage-collect stale Kix-managed resources
+
+Usage: kix gc [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+  -y, --yes
+          Skip confirmation prompt
+
+      --hard
+          Full cluster scan (default: diff old vs new activation store graphs)
+
+      --operator
+          Delegate garbage collection to the operator (deletes the Activation records the retention policy retires)
+
+      --include-unstamped
+          Also delete resources that carry the Kix label but no `kix.run/identity-hash`. Kix never applied those, so by default `--hard` only reports them
+
+      --include-unattributed
+          With `--hard`, also evaluate Kix resources that reference no Activation record on the cluster. When multiple Kix clusters share a Kubernetes cluster, Kix cannot tell which cluster owns unattributed resources, so by default `--hard` only reports them
+
+      --include-copies
+          With `--hard`, also check copies against the build. A copy carries Kix's labels and annotations, but Kix never wrote it: another program, usually an operator, copied them from an object Kix made. By default `--hard` only lists copies
+
+      --keep <N>
+          Minimum number of newest completed (`Superseded`) Activation records to retain as rollback targets, regardless of age (`0` retains none)
+          
+          [default: 10]
+
+      --keep-max <N>
+          Maximum number of `Superseded` Activation records to retain, bounding the size of the `kix.run/activations` annotation on managed resources
+          
+          [default: 50]
+
+      --keep-for <DURATION>
+          Beyond `--keep`, retire records older than this duration (`30d`, `12h`, `45m`, or a bare number of days; `0` or `off` disables age-based retirement)
+          
+          [default: 30d]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix migrate
+
+One-off cluster migrations
+
+Usage: kix migrate [OPTIONS] <COMMAND>
+
+Commands:
+  domain  Migrate this cluster's Kix records from a retired API group to `kix.run`
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix migrate domain
+
+Migrate this cluster's Kix records from a retired API group to `kix.run`.
+
+Copies every Activation record to the current API group with its status history intact, verifies each copy by name and phase, removes the operator finalizer from the old records, and deletes the old CRDs. PackageInstance records are not copied because the next deploy recreates them from the build.
+
+If the Kix operator runs on this cluster, scale it to 0 before running this command. An older operator watching the retired API group will re-add its finalizer and delete active resources when the old CRDs are removed. Before copying or deleting anything, this command clears the old finalizers, waits briefly, and aborts if an operator re-adds them.
+
+Safe to rerun if interrupted: existing copies are skipped and missing status subresources are repaired. After migration completes, upgrade the operator image, scale it back up, and deploy.
+
+Usage: kix migrate domain [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --dry-run
+          Print the plan and stop
+
+  -y, --yes
+          Skip the confirmation prompt
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix rollback
+
+Rollback to the previous activation
+
+Usage: kix rollback [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --list
+          List available Superseded activations without rolling back. Shows name, identity-hash, timestamp, source store path, and the previousActivation link so the deploy chain is easy to follow. Respects `--output json|yaml` for machine consumption
+
+  -y, --yes
+          Skip confirmation prompt
+
+      --dry-run
+          Preview mode: show what would be applied without making changes
+
+      --prune
+          Delete orphaned resources from the current activation or earlier deploys that are not in the rollback target
+
+      --operator
+          Delegate rollback to the operator instead of applying directly
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix export
+
+Export cluster manifests as plain Kubernetes YAML (exit-strategy / audit bundle)
+
+Usage: kix export [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --out <OUT>
+          Output directory (nested: `<out>/<namespace>/<Kind>-<name>.yaml`)
+          
+          [default: ./kix-export]
+
+      --for <MODE>
+          Export mode: `exit` strips `kix.run/*` annotations and omits Kix-internal CRs (`Activation`, `PackageInstance`) for a clean handoff; `audit` preserves all metadata for compliance evidence
+
+          Possible values:
+          - exit:  Plain Kubernetes YAML without Kix metadata, suitable for `kubectl apply`, Flux, or Argo
+          - audit: Preserve `kix.run/*` provenance annotations for audit evidence
+          
+          [default: exit]
+
+      --force
+          Overwrite an existing output directory
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix logs
+
+Tail logs for a package's primary workload
+
+Usage: kix logs [OPTIONS] <CLUSTER> <PACKAGE>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+  <PACKAGE>
+          Package instance name (e.g. `vaultwarden`) or `<namespace>/<name>` for disambiguation when the instance name isn't unique
+
+Options:
+  -f, --follow
+          Stream logs (`kubectl logs -f`)
+
+      --tail <TAIL>
+          Number of lines to show from the tail (`kubectl logs --tail`)
+
+  -c, --container <CONTAINER>
+          Container name when the workload has multiple containers
+
+      --since <SINCE>
+          Only show logs newer than a relative duration (`5m`, `2h`, `1h30m`)
+
+  -p, --previous
+          Show logs from the previous terminated container (`kubectl logs --previous`)
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix pf
+
+Port-forward to a package's primary workload
+
+Usage: kix pf [OPTIONS] <CLUSTER> <PACKAGE> <PORTS>...
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+  <PACKAGE>
+          Package instance name (e.g. `vaultwarden`) or `<namespace>/<name>`
+
+  <PORTS>...
+          One or more port specs passed to `kubectl port-forward`. Use `8080:80` to bind a specific local port, `5432` to use the same port on both sides, or `:80` to let kubectl choose a free local port
+
+Options:
+      --address <ADDRESS>
+          Address(es) to listen on locally (`kubectl port-forward --address`)
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix health
+
+Cluster integrity walk: dependency-presence check via identity-hashes
+
+Usage: kix health [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix drift
+
+Content drift check via applied-hash stamps (cluster-only, no build)
+
+Usage: kix drift [OPTIONS]
+
+Options:
+      --cluster <CLUSTER>
+          Check only objects belonging to this Kix cluster (resolved via its Activation records). When omitted, checks all Kix-managed objects and reports their owning clusters
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix snapshot
+
+Manage cluster snapshots for CI/offline use
+
+Usage: kix snapshot [OPTIONS] <COMMAND>
+
+Commands:
+  save  Save a snapshot of one Kix cluster's live objects
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+  -h, --help
+          Print help
+
+## kix snapshot save
+
+Save a snapshot of one Kix cluster's live objects
+
+Usage: kix snapshot save [OPTIONS] <CLUSTER> <DIR>
+
+Arguments:
+  <CLUSTER>
+          Kix cluster whose objects to save
+
+  <DIR>
+          Directory to save the snapshot to
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+  -h, --help
+          Print help
+
+## kix images
+
+List all container images in a cluster activation (for airgap preloading)
+
+Usage: kix images [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --sources
+          Show which resources reference each image
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix completions
+
+Generate shell completions
+
+Usage: kix completions [OPTIONS] <SHELL>
+
+Arguments:
+  <SHELL>
+          Shell to generate completions for
+          
+          [possible values: bash, elvish, fish, powershell, zsh]
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+  -h, --help
+          Print help
+
+## kix doctor
+
+Check the Kix installation
+
+Reports where Kix found the Kix runtime (nix, helm, kubectl, sops), checks that its manifest.json lists the programs Kix expects, and checks every file against its SHA-256 in the manifest. Also reports the project's builder and where it was chosen (kix.toml, or the default), the version of Kix the project needs, and the installed versions of Kix. Exits 1 when a check fails.
+
+Usage: kix doctor [OPTIONS]
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix compliance
+
+Compliance exports: SBOM, SLSA attestations, audit bundles
+
+Usage: kix compliance [OPTIONS] <COMMAND>
+
+Commands:
+  sbom    CycloneDX Software Bill of Materials (SBOM)
+  attest  SLSA v1 provenance attestation (in-toto statement)
+  audit   Full audit bundle: SARIF + SBOM + SLSA provenance + OSCAL assessment + summary
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix compliance sbom
+
+CycloneDX Software Bill of Materials (SBOM)
+
+Usage: kix compliance sbom [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix compliance attest
+
+SLSA v1 provenance attestation (in-toto statement)
+
+Usage: kix compliance attest [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --builder-id <BUILDER_ID>
+          Builder ID (URI). In CI, pass the workflow run URL
+
+      --invocation-id <INVOCATION_ID>
+          Invocation ID (e.g. CI run ID)
+
+      --from-cluster
+          Read the deploy receipt from the cluster's active Activation resource instead of evaluating locally, attesting what is currently deployed
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --context <CONTEXT>
+          Kubeconfig context to use
+          
+          [env: KIX_CONTEXT]
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix compliance audit
+
+Full audit bundle: SARIF + SBOM + SLSA provenance + OSCAL assessment + summary
+
+Usage: kix compliance audit [OPTIONS] <CLUSTER>
+
+Arguments:
+  <CLUSTER>
+          Cluster name
+
+Options:
+      --out <OUT>
+          Output directory (created if missing)
+          
+          [default: ./compliance]
+
+      --force
+          Overwrite an existing output directory
+
+      --framework <FRAMEWORK>
+          Regulatory framework to map controls to
+          
+          [default: soc2]
+          [possible values: soc2, iso27001, dora, nis2]
+
+      --builder-id <BUILDER_ID>
+          Builder ID for SLSA provenance (passed through to attest)
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+      --no-cache
+          Skip the SQLite eval cache (always re-evaluate from Nix)
+          
+          [env: KIX_NO_CACHE]
+
+      --override-input <INPUT> <URL>
+          Override a flake input's URL (repeatable: `--override-input INPUT URL`).
+          
+          Forwards `--override-input` to every `nix` subprocess. When this flag is not set, Kix reads space-separated `INPUT URL` pairs from `KIX_OVERRIDE_INPUT`.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix pin
+
+Resolve image references and record them in a committed pin file
+
+Usage: kix pin [OPTIONS] <COMMAND>
+
+Commands:
+  set    Resolve a tag and write it into the pin file
+  rm     Remove an entry from the pin file
+  check  Verify that every pin still resolves to its recorded digest
+  list   List all entries in a pin file
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix pin set
+
+Resolve a tag and write it into the pin file
+
+Usage: kix pin set [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>
+          Pin key read by the cluster definition (`pins.get "<key>"`), or `<namespace>/<instance>` to set an instance's image option directly
+
+Options:
+      --option <OPTION>
+          Config option path to set for an instance pin (e.g., `server.image`). Defaults to `image`
+
+      --tag <TAG>
+          Image tag to resolve and record alongside the digest
+
+      --repository <REPOSITORY>
+          Image repository, including the registry host. Required when creating a new pin; defaults to the existing repository when updating
+
+      --digest <DIGEST>
+          Record this digest directly instead of querying the registry (for air-gapped environments)
+
+      --no-resolve
+          Record the tag without resolving a digest from the registry
+
+      --source-rev <SOURCE_REV>
+          Source revision the image was built from, verified by `kix pin check --source-rev`
+
+      --promoted-by <PROMOTED_BY>
+          Identity of the promoter (defaults to the CI run or `user@host`)
+
+      --note <NOTE>
+          Free-form note stored on the pin entry. Preserved when re-pinning the same image, cleared when switching to a different image unless a new note is provided, or cleared explicitly with `""`
+
+      --init
+          Create the pin file if missing, or add a new named pin (not required for `<namespace>/<instance>` pins)
+
+      --force
+          Overwrite a pin file that was not generated by `kix pin`
+
+      --pins-file <PINS_FILE>
+          Path to the pin file. If omitted, Kix searches the working directory, the flake directory, and the repository for a single `*pins.json` file
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix pin rm
+
+Remove an entry from the pin file
+
+Usage: kix pin rm [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>
+          Pin key read by the cluster definition (`pins.get "<key>"`), or `<namespace>/<instance>` to remove an instance's image pin
+
+Options:
+      --option <OPTION>
+          Config option path to remove for an instance pin (e.g., `server.image`). Defaults to `image`
+
+      --force
+          Overwrite a pin file that was not generated by `kix pin`
+
+      --pins-file <PINS_FILE>
+          Path to the pin file. If omitted, Kix searches the working directory, the flake directory, and the repository for a single `*pins.json` file
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix pin check
+
+Verify that every pin still resolves to its recorded digest
+
+Usage: kix pin check [OPTIONS]
+
+Options:
+      --key <KEYS>
+          Check only the specified pin key or `<namespace>/<instance>` (repeatable; defaults to all pins)
+
+      --source-rev <SOURCE_REV>
+          Require every pin that records a source revision to match this value
+
+      --allow-unresolved
+          Warn instead of failing when a pin has no recorded digest
+
+      --offline
+          Validate the pin file's structure without contacting any registry
+
+      --pins-file <PINS_FILE>
+          Path to the pin file. If omitted, Kix searches the working directory, the flake directory, and the repository for a single `*pins.json` file
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix pin list
+
+List all entries in a pin file
+
+Usage: kix pin list [OPTIONS]
+
+Options:
+      --pins-file <PINS_FILE>
+          Path to the pin file. If omitted, Kix searches the working directory, the flake directory, and the repository for a single `*pins.json` file
+
+  -o, --output <OUTPUT>
+          Output format (text, json, yaml, markdown). Default varies by command
+
+          Possible values:
+          - text
+          - json
+          - yaml
+          - markdown: GitHub-flavored markdown suitable for PR comments
+          
+          [env: KIX_OUTPUT]
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix lib
+
+Manage the Kix library this project pins in flake.lock
+
+Usage: kix lib [OPTIONS] <COMMAND>
+
+Commands:
+  update  Move this project's Kix library to the version of the installed Kix
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help
+
+## kix lib update
+
+Move this project's Kix library to the version of the installed Kix
+
+Locks the project's Kix library input (github:kix-run/kix) to the tag `v<version>` of the installed Kix and writes flake.lock. It does not change flake.nix. When flake.nix pins another release, or the input is a local path or a fork, it says what to change by hand.
+
+Usage: kix lib update [OPTIONS]
+
+Options:
+      --dry-run
+          Show what would change without writing flake.lock
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+      --flake <FLAKE>
+          Flake reference to evaluate clusters from (default: current directory)
+          
+          [env: KIX_FLAKE]
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix self
+
+Install, list, and remove versions of Kix
+
+Versions live under ~/.local/share/kix/<version>. A project names the version it needs with `kix = "0.8"` in kix.toml, and Kix runs that version for the project, installing it first when needed.
+
+Usage: kix self [OPTIONS] <COMMAND>
+
+Commands:
+  install  Install a version of Kix
+  list     List the installed versions, newest first
+  prune    Remove all but the newest installed versions
+  update   Install the newest release and point ~/.local/bin/kix at it
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix self install
+
+Install a version of Kix
+
+Takes a minor such as 0.8, which installs its newest patch, or an exact version such as 0.8.3. Kix checks the release's signature and SHA-256 before it unpacks anything.
+
+Usage: kix self install [OPTIONS] <VERSION>
+
+Arguments:
+  <VERSION>
+          The version to install, such as 0.8 or 0.8.3
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix self list
+
+List the installed versions, newest first
+
+Marks the running version with `*` and the one `kix` on PATH runs.
+
+Usage: kix self list [OPTIONS]
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix self prune
+
+Remove all but the newest installed versions
+
+Always keeps the running version and the one `kix` on PATH runs.
+
+Usage: kix self prune [OPTIONS]
+
+Options:
+      --keep <KEEP>
+          How many of the newest versions to keep
+          
+          [default: 2]
+
+      --dry-run
+          Show what would be removed without removing it
+
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+## kix self update
+
+Install the newest release and point ~/.local/bin/kix at it
+
+Works when the install script installed this Kix. Otherwise it says how to upgrade Kix the way it was installed.
+
+Usage: kix self update [OPTIONS]
+
+Options:
+  -v, --verbose...
+          Increase verbosity (-v, -vv, etc.)
+          
+          [env: KIX_VERBOSE]
+
+  -q, --quiet
+          Suppress non-essential output
+          
+          [env: KIX_QUIET]
+
+      --no-color
+          Disable colored output (also respects NO_COLOR env per no-color.org spec)
+
+  -h, --help
+          Print help (see a summary with '-h')

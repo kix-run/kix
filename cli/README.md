@@ -70,6 +70,25 @@ reads plan files through `kix::plan::file`.
   (20 seconds per target), and weekly (two minutes per target). Every
   release pull request runs them.
 
+### Compatibility checks
+
+- `kix-cli/src/cli_surface.rs` snapshots the long help of every visible
+  command into `kix-cli/tests/snapshots/cli_surface_help.snap`, with
+  environment values hidden. Refresh it with
+  `INSTA_UPDATE=always cargo test -p kix-cli cli_surface`.
+- `scripts/change-kind.py`, run by `.github/workflows/change-kind.yml`,
+  builds the clusters in its `CLUSTERS` list at a pull request's base and
+  head with the head's `kix`, and compares that snapshot and
+  `kix-cli/schema/*.json`. It checks the pull request's change records
+  against what changed (`CLAUDE.md`, Versioning and breaking changes).
+- `kix/src/cluster/state_fixtures.rs` (`cargo test -p kix-lib cluster_state`)
+  reads the cluster state each minor release wrote, kept in
+  `kix/tests/fixtures/cluster-state/<version>/`, with today's readers:
+  `activation::Record::of`, `current_record`, `Tenancy`,
+  `drift::check_object`, and `lifecycle_of`. It compares the result with
+  that folder's `expected.json`, and writes the file when it is missing. It
+  fails when there is no folder for the previous minor release.
+
 ### Releases
 
 Kix uses semantic versioning. Each change is a change record under
