@@ -345,6 +345,42 @@ from a directory source, and `kix self`, without Nix), the integration test in
 `KIX_RUNTIME_DIR`), and the unit tests in `version/`, `installs.rs`, and
 `release/`.
 
+## Change records and `kix explain`
+
+`changes/README.md` describes the records: one Markdown file per
+user-visible change, with a TOML header. Kix carries every record up to its
+own version.
+
+- **Build step** (`kix-core/build.rs`): reads the unreleased records at the
+  top of `changes/` and the released ones in `changes/<version>/`, checks
+  each with `changes/record.rs` (which `build.rs` compiles too, so it uses
+  only `serde`, `serde_json`, and `toml`), and writes them to
+  `$OUT_DIR/changes.json`. A record that breaks the format, or an id two
+  records share, fails the build. The records come from `KIX_CHANGES_DIR`
+  when it is set. The Nix build sets it in `flake-integration.nix`, because
+  its source holds only `cli/`, and sets it on the final build only, so a new
+  record does not rebuild the dependencies. Without the variable, `build.rs`
+  reads the repository's `changes/`. With neither, Kix carries no records.
+- **Module** (`kix-core/src/changes/`): `compiled()` holds the built-in
+  records, `find(id)` looks one up, `normalize_id` accepts brackets and lower
+  case, and `ids_in(text)` returns the bracketed ids in an error's text.
+- **`kix explain <id>`** (`kix-cli/src/commands/explain.rs`): prints a
+  record's kind, the release it shipped in, the fields its header sets, and
+  its text, or the record as JSON with `-o json`. It needs no project, Nix,
+  or runtime. An id that is malformed or unknown exits 1.
+- **Hint**: `main` prints the error itself, then `explain::print_hint` reads
+  the error's whole chain and, when it names a known id such as `[K0001]`,
+  prints `Run \`kix explain K0001\` for what changed and how to update.` on
+  stderr. `kix check` prints the same hint after a failed check. An id Kix
+  does not know gets no hint.
+
+A refusal for a removed or renamed option starts with the record's id in
+brackets, and the id comes from `scripts/change-records.py next-id`.
+
+Tests: `kix-cli/tests/explain_test.rs` (the command as a binary), the unit
+tests in `commands/explain.rs` (rendering and the hint, with fixture
+records), and `kix-core/tests/changes_ids.rs`.
+
 ## Deploy pipeline
 
 ```
@@ -939,6 +975,7 @@ a record line need regenerating.
 - `commands/pin/locate.rs`: finds the pin file when `--pins-file` is absent. It checks the working directory, then the directory named by `--flake` without evaluating the flake, then the git root. At the git root it accepts `pins.json`, or a single `*pins.json` file whose header declares `managedBy`. The marker prevents unrelated JSON files from becoming candidates. The scan does not follow symlinks or run outside a repository, and it refuses to choose when several candidates remain. A flake cannot declare the source path directly because a path literal evaluates to a Nix store path; recovering the original path would require evaluating the flake, which this command avoids
 - `select.rs`: chooses which installed Kix runs before clap parses the arguments, and hands over with `exec` and `KIX_SELECTED_BY`. See "Versions, selection, and installs"
 - `commands/self_cmd.rs`: `kix self install|list|prune|update`, over `kix::installs` and `kix::release`
+- `commands/explain.rs`: `kix explain <id>` and the hint `main` prints after an error that names a known change record id. See "Change records and `kix explain`"
 - `commands/compliance/`: compliance exports for auditors, CI, and compliance platforms. Three subcommands, all built on the same `shared::build_and_load` helper that runs `nix build` + loads the StoreGraph:
   - `sbom` emits a CycloneDX 1.6 SBOM to stdout. Walks the StoreGraph to produce a `platform` root component for the cluster, one `application` component per package (`pkg:kix/<ns>/<name>@<version>` purl), one `container` component per unique image (deduped, with optional SHA-256 digest from `@sha256:` refs, `pkg:docker/...?repository_url=<host>` purl), and one `library` component per flake input read from `flake.lock` (`pkg:nix/<name>@<rev>`). The dependency graph is derived from `StoreGraph::cross_deps` plus per-package image edges.
   - `attest` emits an unsigned in-toto Statement with a SLSA v1 provenance predicate. Subject is the activation identity hash (`nixStoreHash` digest type). `externalParameters` include the flake ref and a BLAKE3 digest of the on-disk `flake.lock`; `resolvedDependencies` carry the git HEAD, every flake input's rev/narHash, and every container image, with a `sha256` digest only when the reference actually carries one. `--builder-id` and `--invocation-id` override the `runDetails` block so CI can stamp its workflow URL. `--from-cluster` reads the deploy receipt off the cluster's active Activation instead of building, so the statement describes what **was** deployed rather than what would be, from a machine that has never built this cluster. Both routes go through `receipt::attestation_from_receipt`, so they cannot drift apart.

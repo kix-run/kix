@@ -294,6 +294,9 @@ evaluation every combination evaluation can see, with a negative test and a
 positive control (O15, T2). Defaults are public-safe; a site's value goes in
 the cluster file (L1, L2). The migration guides' "match the cluster" refers
 to that cluster override, never to the package default.
+A refusal for a removed or renamed option starts with its change record's
+id in brackets, such as `[K0001] <pkg>: ...`. Take the id from
+`scripts/change-records.py next-id` (O26).
 
 ### 9. Monitoring and alerts
 

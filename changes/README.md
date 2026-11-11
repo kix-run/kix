@@ -62,11 +62,13 @@ Otherwise it is a patch release.
 
 ## Ids
 
-An `error` record needs an id, and Kix prints it in the error so that people
-and tools can look the change up. Run `scripts/change-records.py next-id` on
-a branch that is up to date with main. Two branches can pick the same id, and both can pass their checks.
-The check then fails on main once both have merged. Give the record that
-merged second the next free id, in its file and in its error message.
+An `error` record needs an id. The refusal the change causes starts with the
+id in brackets, such as `[K0001] echo-server: ...`. Kix builds every record
+into itself, and `kix explain K0001` prints the record. Run
+`scripts/change-records.py next-id` on a branch that is up to date with main.
+Two branches can pick the same id, and both can pass their checks. The check
+then fails on main once both have merged. Give the record that merged second
+the next free id, in its file and in its error message.
 
 ## Commands
 
