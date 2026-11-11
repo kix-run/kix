@@ -1,3 +1,0 @@
-# 2026-11-11 · `cli/kix/src/cluster/secrets.rs` · SOPS hydration replaces a Secret's inline keys instead of adding to them.
-
-`hydrate_single` and `hydrate_carried` set `stringData` to the decrypted SOPS data, so any key the build put in `stringData` is lost at deploy. The `<instance>-credentials` Secret of `stackgres-database`, `cnpg-database`, and `clickhouse-database` mixes inline `username`, `host`, and `port` with a SOPS `password` (see `kix.run/secret-sources` in a built manifest, such as `kix build n8n`). With `passwordSource`, now the only way to give these packages a password, the deployed Secret holds only `password`, and consumers that read `username` or `host` break.

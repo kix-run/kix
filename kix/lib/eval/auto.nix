@@ -546,6 +546,7 @@ rec {
             ++ [
               "Declare it once, and every consumer resolves to it:"
               "  instances.<namespace>.${name}.package = packages.${name};"
+              "Write packages.experimental.${name} if ${name} is an experimental package."
             ]
           )
         )
@@ -573,6 +574,7 @@ rec {
             ++ [
               "Removing that package would then remove ${name} for the whole cluster. Declare ${name} once, in a namespace of its own:"
               "  instances.<namespace>.${name}.package = packages.${name};"
+              "Write packages.experimental.${name} if ${name} is an experimental package."
               "or set autoNamespace to place every package Kix adds there."
             ]
           )
