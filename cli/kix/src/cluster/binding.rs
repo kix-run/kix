@@ -6,7 +6,7 @@
 //! Kubernetes cluster for its whole life. The build carries the UID in
 //! `kix-packages.json` ([`StoreGraph::kubernetes_uid`]), and a deploy of a
 //! bound build writes it onto the Activation record as the
-//! `kix.run/kubernetes-uid` label.
+//! `{KUBERNETES_UID}` label.
 //!
 //! [`check`] runs in every command that writes to a cluster from a build of
 //! the definition (deploy, plan, gc, and the operator), after the command
@@ -31,16 +31,13 @@ use thiserror::Error;
 
 use super::activation::{self, RecordsError};
 use super::errors::{api_error, forbidden};
-use crate::manifest::keys::DOCS_URL;
+use crate::manifest::keys::{ACTIVATIONS_CRD, DOCS_URL, KUBERNETES_UID};
 
 /// The Namespace whose UID identifies a Kubernetes cluster.
 pub const NAMESPACE: &str = "kube-system";
 
-/// The how-to page that says how to bind a definition and how to lift a
-/// binding, named in the messages.
-const HOW_TO: &str = "Bind a cluster definition to its Kubernetes cluster";
-
-/// The path of [`HOW_TO`] under [`DOCS_URL`].
+/// The path under [`DOCS_URL`] of the how-to page that says how to bind a
+/// definition and how to lift a binding, linked from the messages.
 const HOW_TO_PATH: &str =
     "how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/";
 
@@ -59,16 +56,11 @@ pub enum Action {
 }
 
 impl Action {
-    /// Return the sentences that open a refusal: what Kix refused to do
-    /// with `cluster` on `target`, and that nothing changed.
-    fn refused(self, cluster: &str, target: &str) -> String {
+    /// Return the line that says the refusal changed nothing.
+    fn nothing(self) -> &'static str {
         match self {
-            Action::Deploy => {
-                format!("Kix refused to deploy {cluster} to {target}. Nothing was applied.")
-            }
-            Action::GarbageCollect => format!(
-                "Kix refused to garbage-collect {cluster} on {target}. Nothing was deleted."
-            ),
+            Action::Deploy => "Nothing was applied to the cluster.",
+            Action::GarbageCollect => "Nothing was deleted from the cluster.",
         }
     }
 }
@@ -123,76 +115,16 @@ impl Connection {
             Connection::InCluster => "the API server the operator runs on".to_string(),
         }
     }
-
-    /// Return the advice to check `--context`, which the operator cannot
-    /// follow.
-    fn check_context(&self) -> &'static str {
-        match self {
-            Connection::Context { .. } => {
-                " If you targeted the wrong cluster, pass the right --context."
-            }
-            Connection::InCluster => "",
-        }
-    }
-
-    /// Return where `--context` points, for the message that suggests
-    /// checking it.
-    fn otherwise_check_context(&self) -> String {
-        match self {
-            Connection::Context {
-                server: Some(server),
-                ..
-            } => format!(
-                " If you targeted the wrong cluster, pass the right --context \
-                 (currently pointing at {server})."
-            ),
-            Connection::Context { .. } => {
-                " If you targeted the wrong cluster, pass the right --context.".to_string()
-            }
-            Connection::InCluster => String::new(),
-        }
-    }
-
-    /// Return the advice for a 403 on the `kube-system` Namespace: the
-    /// operator cannot switch accounts, so it names its service account.
-    fn grant_get_namespaces(&self) -> &'static str {
-        match self {
-            Connection::Context { .. } => {
-                "Grant this Kubernetes account get permission on namespaces, \
-                 or use an account that has it."
-            }
-            Connection::InCluster => {
-                "Grant the operator's service account get permission on namespaces, \
-                 and the operator will retry."
-            }
-        }
-    }
 }
 
 /// What a failed read of the `kube-system` Namespace was going to confirm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Checking {
-    /// That the build's `cluster.kubernetes.uid` is this cluster's.
-    Declared,
+    /// That the build's `cluster.kubernetes.uid`, given here, is this
+    /// cluster's.
+    Declared(String),
     /// That the UID a record on this cluster carries is this cluster's.
     Locked,
-}
-
-impl Checking {
-    /// Return the clause that says why Kix read the Namespace for `cluster`.
-    fn why(self, cluster: &str) -> String {
-        match self {
-            Checking::Declared => format!(
-                "{cluster}'s definition sets cluster.kubernetes.uid, and Kix could not read \
-                 the kube-system namespace"
-            ),
-            Checking::Locked => format!(
-                "A previous deploy locked this cluster to a cluster.kubernetes.uid, \
-                 {cluster}'s definition does not set one, and Kix could not read \
-                 the kube-system namespace"
-            ),
-        }
-    }
 }
 
 /// Why a build may not be applied to the Kubernetes cluster a command
@@ -200,16 +132,7 @@ impl Checking {
 #[derive(Error, Debug)]
 pub enum BindingError {
     /// The build names a Kubernetes cluster and this is another one.
-    #[error(
-        "{} \
-         {cluster}'s definition sets cluster.kubernetes.uid = \"{declared}\", \
-         which locks it to the Kubernetes cluster whose kube-system namespace has that UID. \
-         This cluster's kube-system namespace has UID \"{live}\".{} \
-         If this Kubernetes cluster was recreated and {cluster} now belongs here, \
-         set cluster.kubernetes.uid = \"{live}\"; in {cluster}'s definition.",
-        action.refused(cluster, &connection.describe()),
-        connection.check_context()
-    )]
+    #[error("{}", self.render())]
     Mismatch {
         action: Action,
         cluster: String,
@@ -219,19 +142,8 @@ pub enum BindingError {
     },
 
     /// The build names no Kubernetes cluster, and a record on this one
-    /// carries the `kix.run/kubernetes-uid` label with this cluster's UID.
-    #[error(
-        "{} \
-         {bound_cluster} was deployed here with cluster.kubernetes.uid = \"{uid}\" \
-         (the UID of this cluster's kube-system namespace), which locked this cluster \
-         to definitions that set that UID. {cluster}'s definition does not set \
-         cluster.kubernetes.uid.{} If {cluster} belongs on this cluster, \
-         add cluster.kubernetes.uid = \"{uid}\"; to {cluster}'s definition. \
-         If the Kix cluster that set it no longer exists, remove the label from its \
-         records (see \"{HOW_TO}\", {DOCS_URL}{HOW_TO_PATH}).",
-        action.refused(cluster, "this Kubernetes cluster"),
-        connection.otherwise_check_context()
-    )]
+    /// carries the `{KUBERNETES_UID}` label with this cluster's UID.
+    #[error("{}", self.render())]
     Unbound {
         action: Action,
         cluster: String,
@@ -243,18 +155,7 @@ pub enum BindingError {
     /// The build names no Kubernetes cluster, and a record on this one
     /// carries the label with another cluster's UID: the records were
     /// restored or copied from another Kubernetes cluster.
-    #[error(
-        "{} \
-         {bound_cluster}'s Activation records here carry cluster.kubernetes.uid = \"{label}\", \
-         but this cluster's kube-system namespace has UID \"{live}\", so those records \
-         came from another Kubernetes cluster. {cluster}'s definition does not set \
-         cluster.kubernetes.uid.{} If {cluster} belongs on this cluster, \
-         add cluster.kubernetes.uid = \"{live}\"; to {cluster}'s definition. \
-         To lift the lock the restored records hold, remove the label from them \
-         (see \"{HOW_TO}\", {DOCS_URL}{HOW_TO_PATH}).",
-        action.refused(cluster, "this Kubernetes cluster"),
-        connection.otherwise_check_context()
-    )]
+    #[error("{}", self.render())]
     UnboundRestored {
         action: Action,
         cluster: String,
@@ -265,13 +166,7 @@ pub enum BindingError {
     },
 
     /// The account may not read the `kube-system` Namespace.
-    #[error(
-        "{} \
-         {} (HTTP 403 Forbidden) to check this cluster's UID. {}",
-        action.refused(cluster, &connection.describe()),
-        checking.why(cluster),
-        connection.grant_get_namespaces()
-    )]
+    #[error("{}", self.render())]
     Forbidden {
         action: Action,
         cluster: String,
@@ -280,14 +175,7 @@ pub enum BindingError {
     },
 
     /// Reading the `kube-system` Namespace failed for another reason.
-    #[error(
-        "{} \
-         {} to check this cluster's UID ({}). \
-         Check that the cluster's API server is reachable and healthy, then retry.",
-        action.refused(cluster, &connection.describe()),
-        checking.why(cluster),
-        api_error(source)
-    )]
+    #[error("{}", self.render())]
     Read {
         action: Action,
         cluster: String,
@@ -299,16 +187,7 @@ pub enum BindingError {
 
     /// Listing the Activation records failed, so whether the Kubernetes
     /// cluster accepts an unbound build is unknown.
-    #[error(
-        "{} \
-         {cluster}'s definition does not set cluster.kubernetes.uid, and Kix could not \
-         read the Activation records on this cluster to check whether a previous deploy \
-         locked it to a cluster.kubernetes.uid ({}). \
-         Check that the API server is reachable and that this Kubernetes account has \
-         list permission on activations, then retry.",
-        action.refused(cluster, &connection.describe()),
-        api_error(&source.source)
-    )]
+    #[error("{}", self.render())]
     Records {
         action: Action,
         cluster: String,
@@ -320,22 +199,7 @@ pub enum BindingError {
     /// `kix.lib.mkFlake` named the build after its `clusters` key, and the
     /// Kubernetes cluster has records only for a Kix cluster named
     /// [`OLD_DEFAULT_NAME`], the name Kix 0.6 gave the same definition.
-    #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
-         {cluster}'s definition in kix.lib.mkFlake calls kix.buildCluster without name. \
-         Kix 0.6 named such a cluster \"{OLD_DEFAULT_NAME}\", while Kix 0.7 names it \
-         \"{cluster}\" after its key. This Kubernetes cluster has Activation records for \
-         \"{OLD_DEFAULT_NAME}\" and none for \"{cluster}\", so Kix 0.6 probably deployed it \
-         under the old name. Deploying as \"{cluster}\" would start a new deploy history and \
-         ignore the old records. Kix would never delete objects that only the old build has, \
-         and the Kix operator (if running here) would keep repairing the old build while its \
-         record stays. To keep the old name and its deploy history, add \
-         name = \"{OLD_DEFAULT_NAME}\"; to the kix.buildCluster call in {cluster}'s definition. \
-         To confirm the new name and start a new deploy history, add name = \"{cluster}\"; \
-         instead, then remove the old \"{OLD_DEFAULT_NAME}\" records and any objects that only \
-         the old build has. Setting name to either value turns this check off.",
-        connection.describe()
-    )]
+    #[error("{}", self.render())]
     RenamedByFlake {
         cluster: String,
         connection: Connection,
@@ -343,17 +207,7 @@ pub enum BindingError {
 
     /// Listing the Activation records failed, so whether Kix 0.6 deployed
     /// this cluster under [`OLD_DEFAULT_NAME`] is unknown.
-    #[error(
-        "Kix refused to deploy {cluster} to {}. Nothing was applied. \
-         {cluster}'s definition in kix.lib.mkFlake calls kix.buildCluster without name, \
-         and Kix could not read the Activation records on this cluster to check whether \
-         Kix 0.6 deployed it under the old name \"{OLD_DEFAULT_NAME}\" ({}). \
-         Check that the API server is reachable and that this Kubernetes account has \
-         list permission on activations, then retry. Setting name in the \
-         kix.buildCluster call turns this check off.",
-        connection.describe(),
-        api_error(&source.source)
-    )]
+    #[error("{}", self.render())]
     NameRecords {
         cluster: String,
         connection: Connection,
@@ -363,6 +217,263 @@ pub enum BindingError {
 }
 
 impl BindingError {
+    /// Return the message: what Kix refused, that nothing changed, why, and
+    /// what to do next.
+    fn render(&self) -> String {
+        match self {
+            BindingError::Mismatch {
+                action,
+                cluster,
+                declared,
+                live,
+                connection,
+            } => match connection {
+                Connection::InCluster => format!(
+                    "cluster '{cluster}' does not match this Kubernetes cluster\n  \
+                     {}\n\n  \
+                     `cluster.kubernetes.uid` in '{cluster}':  {declared}\n  \
+                     `kube-system` UID on this cluster:        {live}\n\n  \
+                     Next:\n    \
+                     If this Kubernetes cluster was recreated and '{cluster}' belongs here, update '{cluster}'s definition to `cluster.kubernetes.uid = \"{live}\";`, build, and deploy again.",
+                    action.nothing(),
+                ),
+                Connection::Context { .. } => {
+                    let connection = connection.describe();
+                    format!(
+                        "cluster '{cluster}' does not match {connection}\n  \
+                         {}\n\n  \
+                         `cluster.kubernetes.uid` in '{cluster}':  {declared}\n  \
+                         `kube-system` UID on {connection}:        {live}\n\n  \
+                         Next:\n    \
+                         - If Kix is connected to the wrong cluster, pass the right `--context` for '{cluster}' and run the command again.\n    \
+                         - If this Kubernetes cluster was recreated and '{cluster}' belongs here, update '{cluster}'s definition and build again:\n        \
+                         cluster.kubernetes.uid = \"{live}\";",
+                        action.nothing(),
+                    )
+                }
+            },
+            BindingError::Unbound {
+                action,
+                cluster,
+                bound_cluster,
+                uid,
+                connection,
+            } => match connection {
+                Connection::InCluster => format!(
+                    "this Kubernetes cluster is locked to UID '{uid}' by cluster '{bound_cluster}', but '{cluster}' sets no `cluster.kubernetes.uid`\n  \
+                     {}\n\n  \
+                     Why:\n    \
+                     A deployment record for Kix cluster '{bound_cluster}' on this cluster carries `cluster.kubernetes.uid = \"{uid}\"` (this cluster's UID), so this Kubernetes cluster accepts only definitions that set that UID.\n\n  \
+                     Next:\n    \
+                     - If '{cluster}' belongs on this Kubernetes cluster, add `cluster.kubernetes.uid = \"{uid}\";` to '{cluster}'s definition, build, and deploy again.\n    \
+                     - If '{bound_cluster}' no longer exists, remove the `{KUBERNETES_UID}` label from its deployment records (see {DOCS_URL}{HOW_TO_PATH}).",
+                    action.nothing(),
+                ),
+                Connection::Context { .. } => {
+                    let connection = connection.describe();
+                    format!(
+                        "{connection} is locked to UID '{uid}' by cluster '{bound_cluster}', but '{cluster}' sets no `cluster.kubernetes.uid`\n  \
+                         {}\n\n  \
+                         Why:\n    \
+                         A deployment record for Kix cluster '{bound_cluster}' on {connection} carries `cluster.kubernetes.uid = \"{uid}\"` (this cluster's UID), so this Kubernetes cluster accepts only definitions that set that UID.\n\n  \
+                         Next:\n    \
+                         - If Kix is connected to the wrong cluster, pass the right `--context` for '{cluster}' and run the command again.\n    \
+                         - If '{cluster}' belongs on this Kubernetes cluster, add the UID to '{cluster}'s definition and build again:\n        \
+                         cluster.kubernetes.uid = \"{uid}\";\n    \
+                         - If '{bound_cluster}' no longer exists, remove the `{KUBERNETES_UID}` label from its deployment records (see {DOCS_URL}{HOW_TO_PATH}).",
+                        action.nothing(),
+                    )
+                }
+            },
+            BindingError::UnboundRestored {
+                action,
+                cluster,
+                bound_cluster,
+                label,
+                live,
+                connection,
+            } => match connection {
+                Connection::InCluster => format!(
+                    "this Kubernetes cluster has deployment records locked to UID '{label}' by cluster '{bound_cluster}', but '{cluster}' sets no `cluster.kubernetes.uid`\n  \
+                     {}\n\n  \
+                     Why:\n    \
+                     Deployment records for '{bound_cluster}' on this cluster carry `{KUBERNETES_UID} = \"{label}\"`, while this cluster's `kube-system` namespace has UID '{live}' (the records were restored or copied from another Kubernetes cluster).\n\n  \
+                     Next:\n    \
+                     - If '{cluster}' belongs on this Kubernetes cluster, set `cluster.kubernetes.uid = \"{live}\";` in '{cluster}'s definition, build, and deploy again.\n    \
+                     - To lift the lock held by the restored '{bound_cluster}' records, remove the `{KUBERNETES_UID}` label from them (see {DOCS_URL}{HOW_TO_PATH}).",
+                    action.nothing(),
+                ),
+                Connection::Context { .. } => {
+                    let connection = connection.describe();
+                    format!(
+                        "{connection} has deployment records locked to UID '{label}' by cluster '{bound_cluster}', but '{cluster}' sets no `cluster.kubernetes.uid`\n  \
+                         {}\n\n  \
+                         Why:\n    \
+                         Deployment records for '{bound_cluster}' on {connection} carry `{KUBERNETES_UID} = \"{label}\"`, while this cluster's `kube-system` namespace has UID '{live}' (the records were restored or copied from another Kubernetes cluster).\n\n  \
+                         Next:\n    \
+                         - If Kix is connected to the wrong cluster, pass the right `--context` for '{cluster}' and run the command again.\n    \
+                         - If '{cluster}' belongs on this Kubernetes cluster, set this cluster's live UID in '{cluster}'s definition and build again:\n        \
+                         cluster.kubernetes.uid = \"{live}\";\n    \
+                         - To lift the lock held by the restored '{bound_cluster}' records, remove the `{KUBERNETES_UID}` label from them (see {DOCS_URL}{HOW_TO_PATH}).",
+                        action.nothing(),
+                    )
+                }
+            },
+            BindingError::Forbidden {
+                action,
+                cluster,
+                checking,
+                connection,
+            } => {
+                let (on, why_where) = match connection {
+                    Connection::InCluster => (String::new(), "this cluster".to_string()),
+                    Connection::Context { .. } => (
+                        format!(" on {}", connection.describe()),
+                        connection.describe(),
+                    ),
+                };
+                let (headline, why) = match checking {
+                    Checking::Declared(declared) => (
+                        format!(
+                            "cannot read namespace `kube-system`{on} (403 Forbidden) to check `cluster.kubernetes.uid` for '{cluster}'"
+                        ),
+                        format!(
+                            "'{cluster}' sets `cluster.kubernetes.uid = \"{declared}\"`, so Kix must read the `kube-system` namespace to check the cluster's UID."
+                        ),
+                    ),
+                    Checking::Locked => (
+                        format!(
+                            "cannot read namespace `kube-system`{on} (403 Forbidden) to check the cluster UID lock for '{cluster}'"
+                        ),
+                        format!(
+                            "An earlier deploy locked {why_where} to a Kubernetes UID, and '{cluster}' sets no `cluster.kubernetes.uid`, so Kix must read the `kube-system` namespace."
+                        ),
+                    ),
+                };
+                let next = match connection {
+                    Connection::InCluster => {
+                        "Grant `get` permission on `namespaces` (resource name `kube-system`) to the operator's service account; the operator will retry automatically."
+                    }
+                    Connection::Context { .. } => {
+                        "Grant `get` permission on `namespaces` (resource name `kube-system`) to this Kubernetes account, or use an account that has it, then run the command again."
+                    }
+                };
+                format!(
+                    "{headline}\n  {}\n\n  Why:\n    {why}\n\n  Next:\n    {next}",
+                    action.nothing()
+                )
+            }
+            BindingError::Read {
+                action,
+                cluster,
+                connection,
+                source,
+                ..
+            } => {
+                let error = api_error(source);
+                match connection {
+                    Connection::InCluster => format!(
+                        "could not read namespace `kube-system` for cluster '{cluster}'\n  \
+                         {}\n\n  \
+                         Kubernetes API error:\n    {error}\n\n  \
+                         Next:\n    \
+                         Check that the Kubernetes API server is reachable and healthy; the operator will retry automatically.",
+                        action.nothing(),
+                    ),
+                    Connection::Context { name, .. } => {
+                        let kubectl = match name {
+                            Some(context) => {
+                                format!("kubectl get namespace kube-system --context {context}")
+                            }
+                            None => "kubectl get namespace kube-system".to_string(),
+                        };
+                        format!(
+                            "could not read namespace `kube-system` on {} for cluster '{cluster}'\n  \
+                             {}\n\n  \
+                             Kubernetes API error:\n    {error}\n\n  \
+                             Next:\n    \
+                             Check that the API server is reachable and healthy (`{kubectl}`), then run the command again.",
+                            connection.describe(),
+                            action.nothing(),
+                        )
+                    }
+                }
+            }
+            BindingError::Records {
+                action,
+                cluster,
+                connection,
+                source,
+            } => {
+                let error = api_error(&source.source);
+                match connection {
+                    Connection::InCluster => format!(
+                        "could not list deployment records for cluster '{cluster}'\n  \
+                         {}\n\n  \
+                         Why:\n    \
+                         '{cluster}' does not set `cluster.kubernetes.uid`, so Kix lists existing deployment records to check whether this cluster is locked to a UID.\n\n  \
+                         Kubernetes API error:\n    {error}\n\n  \
+                         Next:\n    \
+                         Check that the API server is reachable and that the operator's service account has permission to list `{ACTIVATIONS_CRD}` (the operator will retry automatically), or set `cluster.kubernetes.uid` in '{cluster}'s definition to skip this check.",
+                        action.nothing(),
+                    ),
+                    Connection::Context { .. } => {
+                        let connection = connection.describe();
+                        format!(
+                            "could not list deployment records on {connection} for cluster '{cluster}'\n  \
+                             {}\n\n  \
+                             Why:\n    \
+                             '{cluster}' does not set `cluster.kubernetes.uid`, so Kix lists existing deployment records to check whether {connection} is locked to a UID.\n\n  \
+                             Kubernetes API error:\n    {error}\n\n  \
+                             Next:\n    \
+                             Check that the API server is reachable and that this Kubernetes account has permission to list `{ACTIVATIONS_CRD}`, then run the command again.\n    \
+                             Setting `cluster.kubernetes.uid` in '{cluster}'s definition also skips this deployment records check.",
+                            action.nothing(),
+                        )
+                    }
+                }
+            }
+            BindingError::RenamedByFlake {
+                cluster,
+                connection,
+            } => {
+                let connection = connection.describe();
+                let old = OLD_DEFAULT_NAME;
+                format!(
+                    "cluster name changed from '{old}' to '{cluster}' on {connection}\n  \
+                     Nothing was applied to the cluster.\n\n  \
+                     Why:\n    \
+                     {connection} has deployment records for '{old}' and none for '{cluster}'.\n    \
+                     In Kix 0.6, a `kix.buildCluster` call without `name` was named '{old}'; in Kix 0.7 and later, `kix.lib.mkFlake` names it after its key in `clusters` ('{cluster}').\n    \
+                     Deploying under '{cluster}' would start a separate deploy history: Kix would never delete objects that exist only in the '{old}' build, and the Kix operator (if running on the cluster) would keep repairing the '{old}' build while its deployment record remains.\n\n  \
+                     Next (choose one):\n    \
+                     1. Keep the existing name and deploy history (no cleanup needed): in `{cluster}`'s `kix.buildCluster` call, set:\n         \
+                     name = \"{old}\";\n    \
+                     2. Use the new name '{cluster}': in `{cluster}`'s `kix.buildCluster` call, set:\n         \
+                     name = \"{cluster}\";\n       \
+                     Then remove the old '{old}' deployment records and any objects on the cluster that exist only in the '{old}' build (Kix has no command for that cleanup)."
+                )
+            }
+            BindingError::NameRecords {
+                cluster,
+                connection,
+                source,
+            } => {
+                let old = OLD_DEFAULT_NAME;
+                format!(
+                    "could not list deployment records on {} to check cluster '{cluster}'\n  \
+                     Nothing was applied to the cluster.\n\n  \
+                     Kubernetes API error:\n    {}\n\n  \
+                     Next:\n    \
+                     Check that the API server is reachable and that this Kubernetes account has permission to list `{ACTIVATIONS_CRD}`, then run the command again.\n    \
+                     Or set `name` explicitly in `{cluster}`'s `kix.buildCluster` call (`name = \"{cluster}\";` or `name = \"{old}\";`), which turns this check off.",
+                    connection.describe(),
+                    api_error(&source.source),
+                )
+            }
+        }
+    }
+
     /// Return `true` when the refusal is for a 403 on the `kube-system`
     /// Namespace, which a grant of permission resolves without a change to
     /// the build.
@@ -431,7 +542,14 @@ pub async fn check_declared(
     cluster: &str,
     declared: &str,
 ) -> Result<(), BindingError> {
-    let live = read_live_uid(client, connection, action, cluster, Checking::Declared).await?;
+    let live = read_live_uid(
+        client,
+        connection,
+        action,
+        cluster,
+        Checking::Declared(declared.to_string()),
+    )
+    .await?;
     if live == declared {
         return Ok(());
     }
@@ -446,7 +564,7 @@ pub async fn check_declared(
 
 /// Refuse the unbound build of `cluster` when an Activation record on the
 /// Kubernetes cluster, of any Kix cluster, that finished a deploy carries
-/// the `kix.run/kubernetes-uid` label ([`activation::bound_record`]), since
+/// the `{KUBERNETES_UID}` label ([`activation::bound_record`]), since
 /// a deployed bound definition makes the Kubernetes cluster one that
 /// accepts only definitions that name it. The live UID is read to tell a record written here from one restored
 /// from another Kubernetes cluster, so the advice names this cluster's UID.
@@ -608,31 +726,29 @@ mod tests {
         assert!(matches!(err, BindingError::Mismatch { .. }));
         let text = err.to_string();
         assert!(
-            text.contains(
-                "Kix refused to deploy cluster-a to context cluster-b (https://b.example:6443). Nothing was applied."
+            text.starts_with(
+                "cluster 'cluster-a' does not match context cluster-b (https://b.example:6443)\n  Nothing was applied to the cluster."
             ),
             "{text}"
         );
         assert!(
             text.contains(&format!(
-                "cluster-a's definition sets cluster.kubernetes.uid = \"{ELSEWHERE}\""
+                "`cluster.kubernetes.uid` in 'cluster-a':  {ELSEWHERE}"
             )),
             "{text}"
         );
         assert!(
             text.contains(&format!(
-                "This cluster's kube-system namespace has UID \"{HERE}\"."
+                "`kube-system` UID on context cluster-b (https://b.example:6443):        {HERE}"
             )),
             "{text}"
         );
         assert!(
-            text.contains("If you targeted the wrong cluster, pass the right --context."),
+            text.contains("pass the right `--context` for 'cluster-a'"),
             "{text}"
         );
         assert!(
-            text.contains(&format!(
-                "set cluster.kubernetes.uid = \"{HERE}\"; in cluster-a's definition."
-            )),
+            text.contains(&format!("cluster.kubernetes.uid = \"{HERE}\";")),
             "{text}"
         );
         assert_eq!(
@@ -657,8 +773,8 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains(
-                "Kix refused to deploy cluster-a to the API server the operator runs on. Nothing was applied."
+            err.starts_with(
+                "cluster 'cluster-a' does not match this Kubernetes cluster\n  Nothing was applied to the cluster."
             ),
             "{err}"
         );
@@ -683,19 +799,19 @@ mod tests {
         assert!(matches!(err, BindingError::Forbidden { .. }));
         let text = err.to_string();
         assert!(
-            text.contains(
-                "Kix refused to deploy cluster-a to context prod (https://prod.example:6443). Nothing was applied."
+            text.starts_with(
+                "cannot read namespace `kube-system` on context prod (https://prod.example:6443) (403 Forbidden) to check `cluster.kubernetes.uid` for 'cluster-a'\n  Nothing was applied to the cluster."
             ),
             "{text}"
         );
         assert!(
-            text.contains(
-                "Kix could not read the kube-system namespace (HTTP 403 Forbidden) to check this cluster's UID."
-            ),
+            text.contains(&format!(
+                "'cluster-a' sets `cluster.kubernetes.uid = \"{HERE}\"`, so Kix must read"
+            )),
             "{text}"
         );
         assert!(
-            text.contains("Grant this Kubernetes account get permission on namespaces"),
+            text.contains("to this Kubernetes account, or use an account that has it"),
             "{text}"
         );
         assert!(writes(&api).is_empty());
@@ -719,7 +835,7 @@ mod tests {
         assert!(err.is_forbidden());
         let text = err.to_string();
         assert!(
-            text.contains("Grant the operator's service account get permission on namespaces"),
+            text.contains("to the operator's service account; the operator will retry"),
             "{text}"
         );
         assert!(!text.contains("use an account"), "{text}");
@@ -741,8 +857,15 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, BindingError::Read { .. }), "{err}");
         let text = err.to_string();
-        assert!(text.contains("Nothing was applied"), "{text}");
-        assert!(text.contains("(HTTP 503 "), "{text}");
+        assert!(
+            text.contains("Nothing was applied to the cluster."),
+            "{text}"
+        );
+        assert!(text.contains("HTTP 503 "), "{text}");
+        assert!(
+            text.contains("kubectl get namespace kube-system --context prod"),
+            "{text}"
+        );
     }
 
     /// An unbound build on a cluster whose records carry another cluster's
@@ -764,14 +887,12 @@ mod tests {
         let text = err.to_string();
         assert!(
             text.contains(&format!(
-                "lab1's Activation records here carry cluster.kubernetes.uid = \"{ELSEWHERE}\", but this cluster's kube-system namespace has UID \"{HERE}\", so those records came from another Kubernetes cluster."
+                "carry `{KUBERNETES_UID} = \"{ELSEWHERE}\"`, while this cluster's `kube-system` namespace has UID '{HERE}' (the records were restored"
             )),
             "{text}"
         );
         assert!(
-            text.contains(&format!(
-                "add cluster.kubernetes.uid = \"{HERE}\"; to cluster-a's definition."
-            )),
+            text.contains(&format!("cluster.kubernetes.uid = \"{HERE}\";")),
             "{text}"
         );
         assert!(writes(&api).is_empty());
@@ -795,7 +916,11 @@ mod tests {
         assert!(err.is_forbidden());
         let text = err.to_string();
         assert!(
-            text.contains("A previous deploy locked this cluster to a cluster.kubernetes.uid, cluster-a's definition does not set one, and Kix could not read the kube-system namespace (HTTP 403 Forbidden)"),
+            text.contains("to check the cluster UID lock for 'cluster-a'"),
+            "{text}"
+        );
+        assert!(
+            text.contains("An earlier deploy locked the current context to a Kubernetes UID, and 'cluster-a' sets no `cluster.kubernetes.uid`"),
             "{text}"
         );
     }
@@ -824,14 +949,15 @@ mod tests {
         let text = err.to_string();
         assert!(
             text.contains(&format!(
-                "lab1 was deployed here with cluster.kubernetes.uid = \"{HERE}\" (the UID of this cluster's kube-system namespace), which locked this cluster to definitions that set that UID. cluster-a's definition does not set cluster.kubernetes.uid."
+                "is locked to UID '{HERE}' by cluster 'lab1', but 'cluster-a' sets no `cluster.kubernetes.uid`"
             )),
             "{text}"
         );
         assert!(
-            text.contains(&format!(
-                "If you targeted the wrong cluster, pass the right --context (currently pointing at https://prod.example:6443). If cluster-a belongs on this cluster, add cluster.kubernetes.uid = \"{HERE}\"; to cluster-a's definition. If the Kix cluster that set it no longer exists, remove the label from its records"
-            )),
+            text.contains(&format!("cluster.kubernetes.uid = \"{HERE}\";"))
+                && text.contains(&format!(
+                    "If 'lab1' no longer exists, remove the `{KUBERNETES_UID}` label"
+                )),
             "{text}"
         );
         assert!(writes(&api).is_empty());
@@ -996,11 +1122,11 @@ mod tests {
         .to_string();
         assert!(
             err.starts_with(
-                "Kix refused to garbage-collect cluster-a on context prod (https://prod.example:6443). Nothing was deleted."
+                "cluster 'cluster-a' does not match context prod (https://prod.example:6443)\n  Nothing was deleted from the cluster."
             ),
             "{err}"
         );
-        assert!(!err.contains("deploy"), "{err}");
+        assert!(!err.contains("applied"), "{err}");
 
         let api = FakeApi::new([kube_system(HERE), record("lab1", Some(HERE))]);
         let err = check(
@@ -1014,9 +1140,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.starts_with(
-                "Kix refused to garbage-collect cluster-a on this Kubernetes cluster. Nothing was deleted."
-            ),
+            err.contains("\n  Nothing was deleted from the cluster.\n"),
             "{err}"
         );
         assert!(err.contains(&format!("{DOCS_URL}{HOW_TO_PATH}")), "{err}");
@@ -1036,17 +1160,12 @@ mod tests {
         let text = err.to_string();
         assert!(
             text.starts_with(
-                "Kix refused to deploy prod to context prod (https://prod.example:6443). Nothing was applied."
+                "cluster name changed from 'cluster' to 'prod' on context prod (https://prod.example:6443)\n  Nothing was applied to the cluster."
             ),
             "{text}"
         );
-        assert!(
-            text.contains(
-                "add name = \"cluster\"; to the kix.buildCluster call in prod's definition"
-            ),
-            "{text}"
-        );
-        assert!(text.contains("add name = \"prod\"; instead"), "{text}");
+        assert!(text.contains("name = \"cluster\";"), "{text}");
+        assert!(text.contains("name = \"prod\";"), "{text}");
         assert!(writes(&api).is_empty());
     }
 

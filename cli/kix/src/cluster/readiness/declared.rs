@@ -858,15 +858,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 format!("{kind}/{name}: not ready")
             } else {
                 format!(
-                    concat!(
-                        "{kind}/{name}: no Ready or Available condition; the controller reports [{seen}]. ",
-                        "check on the owning package's CRD builder (readiness = {{ condition = ",
-                        "{{ type; status; }}; }} or {{ path; equals; }}, stamped as the ",
-                        "{readiness_key} annotation)."
-                    ),
-                    kind = kind,
-                    name = name,
-                    readiness_key = keys::READINESS,
+                    "{kind}/{name} has no Ready or Available condition (conditions: {seen}). The package that defines {kind} can declare how Kix should read its readiness.",
                     seen = seen.join(", ")
                 )
             }

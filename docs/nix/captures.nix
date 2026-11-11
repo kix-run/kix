@@ -2162,7 +2162,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "another tool owns fields|Dry run complete";
+        stdoutGrep = "The deploy would stop|field ownership conflict| owns \\.|--force-conflicts takes";
       }
       {
         capture = "take-ownership";
@@ -2214,7 +2214,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "another tool owns fields|Dry run complete";
+        stdoutGrep = "The deploy would stop|field ownership conflict| owns \\.|--force-conflicts takes";
       }
       {
         capture = "force-preview";
@@ -2227,6 +2227,7 @@
           "--force-conflicts"
           "-y"
         ];
+        allowFailure = true;
         stdoutGrep = "Deployment/legacy-web|Dry run complete";
       }
       {
@@ -2310,7 +2311,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "another tool owns fields|Dry run complete";
+        stdoutGrep = "The deploy would stop|field ownership conflict| owns \\.|--force-conflicts takes";
       }
       {
         capture = "take-ownership";
@@ -2400,7 +2401,7 @@
           "stateful-before"
         ];
         allowFailure = true;
-        stdoutGrep = "PersistentVolumeClaim/media-v[12]|Stateful migrations detected|data/volume:|source:|target:|Data migration is not automated";
+        stdoutGrep = "PersistentVolumeClaim/media-v[12]|Stateful workload replacements|data/volume|Data migration is not automated|requires `--accept-migrations`";
       }
     ];
     live = [
@@ -2439,6 +2440,7 @@
           "--dry-run"
           "-y"
         ];
+        allowFailure = true;
       }
     ];
   }
@@ -2680,24 +2682,16 @@
           "--log-format"
           "line"
         ];
+        allowFailure = true;
       }
       {
-        prepare = "kix deploy how-to-application --dry-run --log-format json > deploy.ndjson";
+        prepare = "kix deploy how-to-application --dry-run --log-format json > deploy.ndjson || [ $? -eq 2 ]";
       }
       {
-        prepare = [
-          "kix"
-          "deploy"
-          "how-to-application"
-          "--dry-run"
-          "--tui"
-          "--group-by-ns"
-          "--fold-height"
-          "20"
-        ];
+        prepare = "kix deploy how-to-application --dry-run --tui --group-by-ns --fold-height 20 || [ $? -eq 2 ]";
       }
       {
-        prepare = "KIX_STALL_TIMEOUT=900 kix deploy how-to-application --dry-run";
+        prepare = "KIX_STALL_TIMEOUT=900 kix deploy how-to-application --dry-run || [ $? -eq 2 ]";
       }
     ];
   }

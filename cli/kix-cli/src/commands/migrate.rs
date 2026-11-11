@@ -31,7 +31,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     // prompting for confirmation.
     let plan = ctx
         .runtime
-        .block_on(migrate::run(&ops, &crds, true))
+        .block_on(migrate::run(&ops, &args.cluster, &crds, true))
         .map_err(|e| miette!("{e}"))?;
 
     if !plan.needed() {
@@ -54,7 +54,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let report = ctx
         .runtime
-        .block_on(migrate::run(&ops, &crds, false))
+        .block_on(migrate::run(&ops, &args.cluster, &crds, false))
         .map_err(|e| miette!("{e}"))?;
 
     print_report(&report);
@@ -198,11 +198,7 @@ fn confirm(args: &MigrateArgs) -> Result<bool> {
         return Ok(true);
     }
     if !output::is_interactive() {
-        eprintln!(
-            "{}",
-            output::yellow("Non-interactive terminal. Use --yes to confirm the migration.")
-        );
-        std::process::exit(1);
+        output::refuse_unconfirmed(output::Unconfirmed::MigrateDomain, &args.cluster);
     }
     print!("\nCopy the records and delete the old CRDs? [y/N] ");
     std::io::stdout().flush().into_diagnostic()?;

@@ -290,6 +290,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         ));
     }
     finish(
+        &args.cluster,
         done.deleted,
         done.failed + records_failed,
         Some((retired, retirement.plan.kept.len())),
@@ -525,6 +526,7 @@ async fn run_hard_async(
         clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
     }
     finish(
+        &args.cluster,
         done.deleted,
         done.failed + records_failed,
         Some((retired, retirement.plan.kept.len())),

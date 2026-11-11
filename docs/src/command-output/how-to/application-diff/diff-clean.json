@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix diff how-to-application",
-      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 16 resources across 60 resource types\n3 packages: 3 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
+      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 17 resources across 60 resource types\n4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
       "stderr": "",
-      "stdoutDrift": "3 packages: 3 unchanged, 0 changed, 0 added, 0 removed\nFetched 16 resources across 60 resource types\nFetching managed resources (60 resource types)...\nNo differences found.\n⠁ Fetching live cluster state... Discovering API resources...\n",
+      "stdoutDrift": "4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\nFetched 17 resources across 60 resource types\nFetching managed resources (60 resource types)...\nNo differences found.\n⠁ Fetching live cluster state... Discovering API resources...\n",
       "stderrDrift": "",
       "exitCode": 0
     }

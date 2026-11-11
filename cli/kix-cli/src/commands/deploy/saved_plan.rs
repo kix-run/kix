@@ -87,7 +87,7 @@ pub(super) fn check_saved_plan(
             eprintln!(
                 "{}",
                 output::yellow(
-                    "The deploy would stop: the plan has a refused write or a migration not accepted."
+                    "The deploy would stop: the saved plan has a refused write or a stateful workload replacement without `--accept-migrations`. Nothing was applied to the cluster."
                 )
             );
         }

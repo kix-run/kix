@@ -7,6 +7,7 @@
 //! ([`kix::plan::document::Plan`]) are computed in `kix`; this module and
 //! [`render`] format them for display.
 
+pub mod migrations;
 pub mod progress;
 pub mod render;
 

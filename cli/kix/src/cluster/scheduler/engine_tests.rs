@@ -2402,7 +2402,7 @@ async fn a_failure_says_how_many_dependents_were_not_deployed() {
     }
 
     let none = message_of(&[m("ConfigMap", "bad", &[])]).await;
-    assert!(none.contains("'nope'"), "{none}");
+    assert!(none.contains("`nope`"), "{none}");
     assert!(!none.contains("Kix did not deploy"), "{none}");
 
     let one = message_of(&[m("ConfigMap", "bad", &[]), m("ConfigMap", "x", &["bad"])]).await;

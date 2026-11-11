@@ -302,7 +302,10 @@ pub(crate) enum RecreateError {
     Delete(kube::Error),
     /// The object outlived the deletion wait and was not re-applied because the
     /// apply would fail with the same immutable-field 422.
-    #[error("{rid} still exists {}s after delete (stuck finalizer?); not re-applied", .waited.as_secs())]
+    #[error(
+        "{rid} still exists {}s after delete (stuck finalizer?); the new object was not applied. Run `kubectl get` on {rid} with `-o yaml` to inspect `metadata.finalizers`.",
+        .waited.as_secs()
+    )]
     StillExists { rid: ResourceId, waited: Duration },
     #[error("re-apply failed: {0}")]
     Reapply(ApplyError),

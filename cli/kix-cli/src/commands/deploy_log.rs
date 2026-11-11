@@ -18,7 +18,7 @@ use std::time::Instant;
 use kix::cluster::apply::ApplyAction;
 use kix::cluster::deploy_log::Line;
 use kix::cluster::stream::{
-    CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, Verdict,
+    DeployEvent, DeployObserver, DeployResult, HALTED_ON_FAILURE, NodeDetail, Verdict,
 };
 use kix::manifest::types::ResourceId;
 
@@ -90,13 +90,7 @@ impl DeployObserver for LineObserver {
                         }
                     }
                     Verdict::Cancelled { because } => {
-                        let because = match because {
-                            CancelReason::PredecessorFailed(rid) => {
-                                format!("predecessor {rid} failed")
-                            }
-                            CancelReason::External => "external cancel".to_string(),
-                        };
-                        println!("{label}> cancelled ({because})");
+                        println!("{label}> {}", super::deploy::held_back(because));
                     }
                     Verdict::AwaitingInput { prompt } => {
                         println!("{label}> awaiting input: {prompt}");
@@ -133,9 +127,11 @@ impl DeployObserver for LineObserver {
                 }
                 println!("activation> '{activation}' → Active");
             }
-            DeployEvent::Stopped { reason } => {
+            // The failed node's line already carries a halting failure.
+            DeployEvent::Stopped { reason } if !reason.starts_with(HALTED_ON_FAILURE) => {
                 eprintln!("stopped> {reason}");
             }
+            DeployEvent::Stopped { .. } => {}
             DeployEvent::Stalled {
                 idle,
                 in_flight,
@@ -265,7 +261,7 @@ fn apply_label(action: &ApplyAction) -> &'static str {
 mod tests {
     use super::*;
     use kix::cluster::kept::{NotKept, NotKeptField};
-    use kix::cluster::stream::{NodeId, TransitionKind};
+    use kix::cluster::stream::{CancelReason, NodeId, TransitionKind};
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
@@ -583,6 +579,7 @@ mod tests {
             failed: 4,
             cancelled: 5,
             pruned: 6,
+            ..DeployResult::default()
         };
         let lines: Vec<String> = every_event()
             .iter()

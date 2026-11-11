@@ -281,8 +281,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let target_name = selected.name.clone();
     let target_hash = selected.identity_hash.as_ref().ok_or_else(|| {
         miette!(
-            "superseded activation '{}' has no identity hash",
-            target_name
+            "rollback target {name} has no build hash on its deployment record\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Why:\n    \
+             Deployment record {name} has no build hash, so Kix cannot look for its build in Kix's local store.\n\n  \
+             Next (choose one):\n    \
+             - Run `kix rollback {cluster}` interactively and pick another deployment record marked `[available]`.\n    \
+             - Check out the git commit you want to restore and run `kix deploy {cluster}`.",
+            name = target_name,
         )
     })?;
 
@@ -348,13 +354,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     if !args.yes {
         if !output::is_interactive() {
-            eprintln!(
-                "{}",
-                output::yellow(
-                    "Non-interactive terminal detected. Use --yes to skip confirmation."
-                )
-            );
-            std::process::exit(1);
+            output::refuse_unconfirmed(output::Unconfirmed::Rollback, cluster);
         }
         print!("\nProceed with rollback? [y/N] ");
         std::io::stdout().flush().into_diagnostic()?;
@@ -542,13 +542,7 @@ async fn run_operator_async(
 
     if !args.yes {
         if !output::is_interactive() {
-            eprintln!(
-                "{}",
-                output::yellow(
-                    "Non-interactive terminal detected. Use --yes to skip confirmation."
-                )
-            );
-            std::process::exit(1);
+            output::refuse_unconfirmed(output::Unconfirmed::Rollback, cluster);
         }
         print!("\nDelegate rollback to operator? [y/N] ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
@@ -692,8 +686,14 @@ async fn plan_rollback(
     // their metadata and CRD group names to the current API domain.
     let target_hash = selected.identity_hash.as_deref().ok_or_else(|| {
         miette!(
-            "superseded activation '{}' has no identity hash",
-            selected.name
+            "rollback target {name} has no build hash on its deployment record\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Why:\n    \
+             Deployment record {name} has no build hash, so Kix cannot look for its build in Kix's local store.\n\n  \
+             Next (choose one):\n    \
+             - Run `kix rollback {cluster}` interactively and pick another deployment record marked `[available]`.\n    \
+             - Check out the git commit you want to restore and run `kix deploy {cluster}`.",
+            name = selected.name,
         )
     })?;
     let target_graph = baseline::target_build(
@@ -718,6 +718,7 @@ async fn plan_rollback(
     }
     if let Some(line) = kix::cluster::kubernetes_version::note(
         client,
+        &binding::Connection::of_context(context),
         cluster,
         target_graph.kubernetes_version.as_deref(),
     )
@@ -790,27 +791,24 @@ fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
     }
 }
 
-/// Print the final rollback summary line.
+/// Print the text that closes a rollback: its counts, and when it did not
+/// succeed, what was applied and what to run next.
 fn print_summary(r: &DeployResult, succeeded: bool) {
-    let failed_str = r.failed.to_string();
-    let ending = if succeeded {
-        "complete"
+    if succeeded {
+        println!("Rollback complete: {}", super::deploy::counts(r, false));
     } else if r.failed > 0 {
-        "failed"
+        println!("Rollback failed: {}", super::deploy::counts(r, true));
+        println!(
+            "  {} created and {} configured object(s) were applied before the rollback failed; fix the error(s) above and run `kix rollback` again.",
+            r.created, r.configured
+        );
     } else {
-        "stopped"
-    };
-    println!(
-        "Rollback {ending}: {} created, {} configured, {} unchanged, {} failed",
-        output::green(&r.created.to_string()),
-        output::yellow(&r.configured.to_string()),
-        output::dim(&r.unchanged.to_string()),
-        if r.failed > 0 {
-            output::red(&failed_str)
-        } else {
-            output::dim(&failed_str)
-        },
-    );
+        println!("Rollback stopped: {}", super::deploy::counts(r, true));
+        println!(
+            "  {} created and {} configured object(s) finished before the rollback stopped, and {} object(s) did not finish; run `kix rollback` again to finish restoring the target build.",
+            r.created, r.configured, r.cancelled
+        );
+    }
 }
 
 #[cfg(test)]
