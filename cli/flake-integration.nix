@@ -83,6 +83,15 @@
           # Integration tests require a writable nix store (eval cache),
           # which is unavailable inside the nix build sandbox.
           doCheck = false;
+        }
+        # kix-core's build.rs builds the change records into Kix. They live
+        # outside `src`, so the build reads them from this path. Only the
+        # final build gets it, so a new record does not rebuild the
+        # dependencies.
+        // lib.optionalAttrs (builtins.pathExists ../changes) {
+          KIX_CHANGES_DIR = ../changes;
+        }
+        // {
 
           meta = {
             description = "Kubernetes manifest generator CLI";
