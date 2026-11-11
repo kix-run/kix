@@ -35,7 +35,7 @@ This page is hand-maintained. Check the `std::process::exit` calls in
 | `kix pin check` | `1` when a pin fails or, with `--source-rev`, records a different source revision. Warnings do not fail. |
 | `kix doctor` | `1` when the runtime directory cannot be found, `manifest.json` does not match the compiled-in program versions, any file fails its SHA-256 check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix. Warnings and `info` lines do not fail. |
 | `kix lib update` | `1` when the flake has no `kixpkgs` input, when `flake.nix` pins a ref, fork, or `path:` input that `kix lib update` cannot update on its own, or when Kix cannot fetch the target release tag. |
-| `kix explain` | `1` when the argument is not a change record id, or when this Kix has no record with that id. |
+| `kix explain` | `1` when the argument is not a change record id, or when Kix has no record with that id. |
 | `kix logs`, `kix pf` | kubectl's exit status. Kix replaces itself with `kubectl` once the workload is found. |
 
 Answering no to a confirmation prompt (`deploy`, `rollback`, `gc`,
