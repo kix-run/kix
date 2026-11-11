@@ -84,7 +84,7 @@ let
     native = 9000;
     metrics = 9363;
   };
-  contract = import ../clickhouse/contract.nix { inherit lib; };
+  contract = kix.contracts.clickhouse;
   # The PodMonitor's name, which the alert selector's `job` label carries.
   podMonitorName = name;
 

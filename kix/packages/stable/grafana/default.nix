@@ -147,7 +147,7 @@ in
       let
         relay =
           let
-            r = kix.contracts.smtp.settings {
+            r = kix.contracts.smtp.helpers.settings {
               inherit who smtp;
               inherit (config.mail) from;
             };
@@ -161,7 +161,7 @@ in
           else
             r;
 
-        oidcProviderInfo = kix.contracts.oidc.client {
+        oidcProviderInfo = kix.contracts.oidc.helpers.client {
           inherit who oidc;
           options = config.oidc;
         };
@@ -581,7 +581,7 @@ in
           };
         };
 
-        mailEgress = kix.contracts.smtp.egressPolicy {
+        mailEgress = kix.contracts.smtp.helpers.egressPolicy {
           inherit scope;
           smtp = relay;
           name = "${name}-mail-egress";

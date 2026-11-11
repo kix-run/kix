@@ -95,7 +95,7 @@ let
   keeperIdentityEnv = "CLICKHOUSE_KEEPER_IDENTITY";
   dataPath = "/var/lib/clickhouse";
 
-  contract = import ./contract.nix { inherit lib; };
+  contract = kix.contracts.clickhouse;
 
   # Render each fragment as `<name>.yaml`. JSON is YAML, and ClickHouse
   # reads *.yaml fragments natively; XML attributes are spelled "@name" in

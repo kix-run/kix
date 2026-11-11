@@ -92,12 +92,12 @@ in
     && contract.problems (plain // { sentinel = null; }) == [ ]
     && contract.problems (plain // { sentinel.port = "26379"; }) != [ ]
     && contract.problems (removeAttrs plain [ "host" ]) != [ ]
-    && !contract.usesSentinel {
+    && !contract.helpers.usesSentinel {
       out = plain // {
         sentinel = null;
       };
     }
-    && contract.usesSentinel {
+    && contract.helpers.usesSentinel {
       out = plain // {
         sentinel = {
           port = "26379";
@@ -114,8 +114,8 @@ in
         };
       };
     in
-    contract.requirePlaintext "app" (dep false) == dep false
-    && !(builtins.tryEval (contract.requirePlaintext "app" (dep true))).success;
+    contract.helpers.requirePlaintext "app" (dep false) == dep false
+    && !(builtins.tryEval (contract.helpers.requirePlaintext "app" (dep true))).success;
 
   # Standalone valkey publishes `sentinel = null`; with Sentinel, its port
   # and primary set. Both publish the password secret as credentials.

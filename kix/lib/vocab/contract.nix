@@ -13,7 +13,7 @@
       required ? true,
     }:
     {
-      inherit required;
+      inherit required keys;
       shape = "a secret (out.keyRef) with the keys ${lib.concatStringsSep " and " keys}, such as ref.<namespace>.<instance> naming a secret or secret-ref instance in the consumer's namespace";
       test =
         v:
@@ -25,8 +25,12 @@
         && (!builtins.isList declared || lib.all (k: builtins.elem k declared) keys);
     };
 
-  # Build a contract checker from a field table.
+  # Build a contract from a field table. Every contract has these parts and
+  # no others.
   #
+  # - `name`, `alias`, `fields`: as given. `alias` is the dependency name a
+  #   consumer takes the contract under. A field without `required` is
+  #   required.
   # - `check who out`: validate that a provider's `root.out` defines every
   #   field in `fields` with the expected shape, and return `out`.
   # - `problems out`: return the list of missing or malformed field messages
@@ -35,6 +39,9 @@
   # - `assertions who dep`: build the module assertion list for a consumer
   #   dependency `dep`.
   # - `require who dep`: validate `dep` eagerly and return `dep`, or throw.
+  # - `helpers`: the functions and values this contract gives its consumers.
+  # - `options`: the option set, or the function that builds one, that a
+  #   consumer adds to its own options. Null when the contract has none.
   mkContract =
     {
       name,
@@ -43,6 +50,8 @@
       fields,
       remedyNoun ? alias,
       extraProblems ? (_: [ ]),
+      helpers ? { },
+      options ? null,
     }:
     let
       problemsWith =
@@ -53,7 +62,7 @@
             f = fields.${field};
           in
           if !(out ? ${field}) then
-            lib.optional (all || f.required) "${field} is missing (${f.shape})"
+            lib.optional (all || f.required or true) "${field} is missing (${f.shape})"
           else if !(f.test out.${field}) then
             [ "${field} is not ${f.shape}" ]
           else
@@ -76,7 +85,13 @@
         "${who}: deps.${alias} resolved to ${providerOf dep}, whose out does not honour the ${name} contract: ${lib.concatStringsSep "; " found}. Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another ${remedyNoun} with deps.${alias} = ref.<ns>.<instance> (${here}).";
     in
     {
-      inherit alias fields;
+      inherit
+        name
+        alias
+        fields
+        helpers
+        options
+        ;
 
       # Return the contract problems a consumer reports for `out`.
       problems = problemsWith false;

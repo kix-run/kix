@@ -5,9 +5,12 @@
 # validate their `otlp` dependency with `assertions`, which requires only the
 # `required` fields so a `kix.mkImport` stand-in only needs to publish the two
 # base URLs.
-{ lib }:
+{
+  lib,
+  mkContract,
+  ...
+}:
 let
-  inherit (import ./contract.nix { inherit lib; }) mkContract;
 
   # Return true when `v` is an `http://` or `https://` base URL without a path,
   # since gRPC exporters reject paths and HTTP exporters append `/v1/<signal>`.
@@ -31,21 +34,10 @@ let
       test = v: v == null || builtins.isBool v;
     };
   };
-
-  contract = mkContract {
-    name = "OTLP endpoint";
-    alias = "otlp";
-    remedyNoun = "endpoint";
-    here = "kix/lib/vocab/otlp-endpoint.nix";
-    inherit fields;
-  };
 in
-{
-  inherit (contract)
-    alias
-    fields
-    problems
-    check
-    assertions
-    ;
+mkContract {
+  name = "OTLP endpoint";
+  alias = "otlp";
+  remedyNoun = "endpoint";
+  inherit fields;
 }

@@ -12,7 +12,7 @@
 #                               `extensions`, and a stackgres-database forwards
 #                               them to its stackgres-cluster. Declare
 #                               `stackgres-operator` once, in its own namespace.
-#   valkey (required)           the job queue, honouring kix.contracts.redis. An
+#   redis (required)            the job queue, honouring kix.contracts.redis. An
 #                               auto-instantiated valkey lands in this namespace and
 #                               reads its password from a `secret` aliased
 #                               `valkeyPassword` (key `password`) in this namespace.
@@ -188,7 +188,10 @@ in
         }; missing: ${lib.concatStringsSep ", " missing}. For a kix.mkImport database, install them on that server and list them in the import's out.extensions. For a stackgres-database, remove the setting that drops them from its extensions.";
       };
 
-    valkey.assertions = dep: kix.contracts.redis.assertions who dep;
+    redis = {
+      assertions = dep: kix.contracts.redis.assertions who dep;
+      renamedFrom = kix.contracts.redis.helpers.renamedFrom;
+    };
 
     storage.warnings =
       dep:
@@ -259,7 +262,7 @@ in
         `password`, and refuses them here.
       '';
     };
-    oidc = kix.options.oidc {
+    oidc = kix.contracts.oidc.options {
       scopes = [
         "openid"
         "email"
@@ -269,7 +272,7 @@ in
     };
     metrics = kix.options.monitor;
     ingress = kix.options.ingress;
-    mail = kix.options.mail;
+    mail = kix.contracts.smtp.options;
     initChownData = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -293,7 +296,7 @@ in
         self,
         config,
         clusterConfig,
-        valkey,
+        redis,
         database,
         storage,
         machineLearning ? null,
@@ -305,7 +308,7 @@ in
       let
         hasMetrics = config.metrics.enabled && prometheus != null;
 
-        oidcProviderInfo = kix.contracts.oidc.client {
+        oidcProviderInfo = kix.contracts.oidc.helpers.client {
           inherit who oidc;
           options = config.oidc;
         };
@@ -319,7 +322,7 @@ in
             autoLaunch = config.oidc.autoLogin;
           };
         };
-        relay = kix.contracts.smtp.settings {
+        relay = kix.contracts.smtp.helpers.settings {
           inherit who smtp;
           inherit (config.mail) from;
         };
@@ -390,8 +393,8 @@ in
         # ignores the other REDIS_* variables, so the password goes into that
         # JSON. The container builds REDIS_URL from REDIS_SENTINEL_OPTIONS and
         # REDIS_PASSWORD at start, which keeps the password in its Secret.
-        redis = kix.contracts.redis.requirePlaintext who valkey;
-        useSentinel = kix.contracts.redis.usesSentinel redis;
+        redisServer = kix.contracts.redis.helpers.requirePlaintext who redis;
+        useSentinel = kix.contracts.redis.helpers.usesSentinel redisServer;
         sentinelStart = ''
           REDIS_URL="ioredis://$(node -e 'const o = JSON.parse(process.env.REDIS_SENTINEL_OPTIONS); if (process.env.REDIS_PASSWORD) o.password = process.env.REDIS_PASSWORD; process.stdout.write(Buffer.from(JSON.stringify(o)).toString("base64"))')"
           export REDIS_URL
@@ -407,8 +410,8 @@ in
         startSteps =
           lib.optional useSentinel sentinelStart ++ lib.optional runtimeSecrets runtimeConfigStart;
         startScript = "set -e\n${lib.concatStrings startSteps}exec start.sh\n";
-        valkeyPassword = lib.optionalAttrs (redis.out ? credentials) {
-          REDIS_PASSWORD = redis.out.credentials.out.keyRef "password";
+        valkeyPassword = lib.optionalAttrs (redisServer.out ? credentials) {
+          REDIS_PASSWORD = redisServer.out.credentials.out.keyRef "password";
         };
 
         ownedSettings = [
@@ -525,11 +528,11 @@ in
                     REDIS_SENTINEL_OPTIONS = builtins.toJSON {
                       sentinels = [
                         {
-                          host = redis.out.host;
-                          port = redis.out.sentinel.port;
+                          host = redisServer.out.host;
+                          port = redisServer.out.sentinel.port;
                         }
                       ];
-                      name = redis.out.sentinel.primarySet;
+                      name = redisServer.out.sentinel.primarySet;
                     };
                   }
                   // valkeyPassword;
@@ -541,14 +544,14 @@ in
                     "REDIS_DBINDEX"
                     "REDIS_USERNAME"
                   ];
-                  from = "the valkey dependency, which runs Sentinel";
-                  fix = "The container builds REDIS_URL from the Sentinel options at start, and Immich then ignores the other REDIS_* variables. Wire a different instance through deps.valkey.";
+                  from = "the redis dependency, which runs Sentinel";
+                  fix = "The container builds REDIS_URL from the Sentinel options at start, and Immich then ignores the other REDIS_* variables. Wire a different instance through deps.redis.";
                 }
               else
                 {
                   vars = {
-                    REDIS_HOSTNAME = redis.out.host;
-                    REDIS_PORT = redis.out.port;
+                    REDIS_HOSTNAME = redisServer.out.host;
+                    REDIS_PORT = redisServer.out.port;
                   }
                   // valkeyPassword;
                   names = [
@@ -556,8 +559,8 @@ in
                     "REDIS_SOCKET"
                     "REDIS_SENTINEL_OPTIONS"
                   ];
-                  from = "the valkey dependency";
-                  fix = "Wire a different instance through deps.valkey.";
+                  from = "the redis dependency";
+                  fix = "Wire a different instance through deps.redis.";
                 }
             )
             (
@@ -696,7 +699,10 @@ in
                 "checksum/config" = if self.configMap != null then self.configMap.out.identityHash else null;
                 "checksum/database" = dbCreds.identityHash or null;
                 "checksum/valkey-password" =
-                  if redis.out ? credentials then redis.out.credentials.out.identityHash or null else null;
+                  if redisServer.out ? credentials then
+                    redisServer.out.credentials.out.identityHash or null
+                  else
+                    null;
                 "checksum/oidc-client" = if oidcOn then oidcCredentials.out.identityHash or null else null;
                 "checksum/smtp" = if mailLogin then relay.credentials.out.identityHash or null else null;
               };
@@ -801,7 +807,7 @@ in
           ]
           |> scope.mkDeployment;
 
-        mailEgress = kix.contracts.smtp.egressPolicy {
+        mailEgress = kix.contracts.smtp.helpers.egressPolicy {
           inherit scope;
           smtp = relay;
           name = "${name}-mail-egress";

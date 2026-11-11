@@ -113,7 +113,7 @@ let
   # administrator.
   identifier = lib.types.strMatching "[A-Za-z_][A-Za-z0-9_]*";
 
-  contract = import ../clickhouse/contract.nix { inherit lib; };
+  contract = kix.contracts.clickhouse;
 
   # The bootstrap SQL and the probe were written and verified against 26.3.
   # Nothing older than this has been tried, and an untried server is
@@ -137,7 +137,7 @@ in
       dep:
       let
         who = "clickhouse-database '${name}'";
-        contractProblems = contract.assertions who dep.out;
+        contractProblems = contract.assertions who dep;
       in
       if contractProblems != [ ] then
         contractProblems

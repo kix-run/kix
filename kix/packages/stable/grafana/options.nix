@@ -220,7 +220,7 @@ in
     };
   };
   metrics = kix.options.monitor;
-  oidc = kix.options.oidc {
+  oidc = kix.contracts.oidc.options {
     scopes = [
       "openid"
       "profile"
@@ -228,5 +228,5 @@ in
     ];
     autoLogin = "`auth.generic_oauth.auto_login`";
   };
-  mail = kix.options.mail;
+  mail = kix.contracts.smtp.options;
 }

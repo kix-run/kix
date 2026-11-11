@@ -440,7 +440,7 @@
               depsEnrichment = raw.deps or { };
               resolvedTargets = resolveDepTargets {
                 declaredDeps = discoveredDeps;
-                inherit resolutionIndex;
+                inherit resolutionIndex depsEnrichment;
                 namespace = nsName;
                 requester = describeRequester nsName instName instCfg;
                 requesterName = instName;

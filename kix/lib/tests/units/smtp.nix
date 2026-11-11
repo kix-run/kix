@@ -249,7 +249,7 @@ let
       out ? relayOut,
       from ? null,
     }:
-    contract.settings {
+    contract.helpers.settings {
       who = "app apps/app";
       smtp = depOf out;
       inherit from;
@@ -309,7 +309,7 @@ in
       && (settingsOf { }).credentials == null
       && (settingsOf { from = "app@example.org"; }).from == "app@example.org"
       &&
-        contract.settings {
+        contract.helpers.settings {
           who = "app";
           smtp = null;
         } == null

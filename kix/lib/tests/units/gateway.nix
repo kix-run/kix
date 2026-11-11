@@ -158,17 +158,17 @@ in
   # An instance claims to be a gateway through out.gatewayRef or the
   # `gateway` alias on the instance or in its package's defaultAliases.
   gateway-claims =
-    contract.claims (depOf importOut)
-    && contract.claims {
+    contract.helpers.claims (depOf importOut)
+    && contract.helpers.claims {
       out = { };
       _meta.aliases = [ "gateway" ];
     }
-    && contract.claims {
+    && contract.helpers.claims {
       out = { };
       _meta.packageMeta.defaultAliases = [ "gateway" ];
     }
-    && !contract.claims (depOf { })
-    && !contract.claims {
+    && !contract.helpers.claims (depOf { })
+    && !contract.helpers.claims {
       out = { };
       _meta.aliases = [ "otlp" ];
     };

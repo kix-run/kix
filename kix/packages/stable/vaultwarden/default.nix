@@ -111,7 +111,7 @@ in
       };
     };
     ingress = kix.options.ingress;
-    mail = kix.options.mail;
+    mail = kix.contracts.smtp.options;
     initChownData = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -142,7 +142,7 @@ in
         ...
       }:
       let
-        relay = kix.contracts.smtp.settings {
+        relay = kix.contracts.smtp.helpers.settings {
           who = "vaultwarden ${scope.namespaceName}/${name}";
           inherit smtp;
           inherit (config.mail) from;
@@ -332,7 +332,7 @@ in
           ]
           |> scope.mkDeployment;
 
-        mailEgress = kix.contracts.smtp.egressPolicy {
+        mailEgress = kix.contracts.smtp.helpers.egressPolicy {
           inherit scope;
           smtp = relay;
           name = "${name}-mail-egress";

@@ -4,7 +4,7 @@
 let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
-  gatewayContract = import ./gateway.nix { inherit lib; };
+  gatewayContract = (import ../../contracts { inherit lib; }).gateway;
 
   resolveServicePort =
     caller: port: svc:
@@ -142,7 +142,7 @@ let
 
       # Ignore unrelated instances named `gateway` (such as an OpenTelemetry
       # Collector) that do not claim the gateway contract.
-      hasGateway = gateway != null && gatewayContract.claims gateway;
+      hasGateway = gateway != null && gatewayContract.helpers.claims gateway;
       # Validate the gateway contract when `listener` is forced by the
       # HTTPRoute.
       checkedGateway =

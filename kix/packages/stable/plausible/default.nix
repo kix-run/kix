@@ -273,7 +273,7 @@ in
       description = "Extra environment variables for Plausible settings the package does not set: a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. The database, clickhouseDatabase, secretKeyBase, and smtp dependencies are wired by the package. `BASE_URL` replaces the routed URL, `TMPDIR` the temporary directory, and `ERL_MAX_PORTS` the port limit (65536); null removes any of them.";
     };
     ingress = kix.options.ingress;
-    mail = kix.options.mail;
+    mail = kix.contracts.smtp.options;
   };
 
   build = [
@@ -304,7 +304,7 @@ in
           if smtpPassword != null then
             throw "${who}: deps.smtpPassword was replaced by deps.smtp. Declare the mail server as a kix.mkImport in this namespace whose out sets host, port, tls, from, and credentials = ref.<ns>.<secret>, a secret with keys `username` and `password`. Remove the SMTP_* variables from env."
           else
-            kix.contracts.smtp.settings {
+            kix.contracts.smtp.helpers.settings {
               inherit who smtp;
               inherit (config.mail) from;
             };
@@ -715,7 +715,7 @@ in
             else
               null;
 
-          mailEgress = kix.contracts.smtp.egressPolicy {
+          mailEgress = kix.contracts.smtp.helpers.egressPolicy {
             inherit scope;
             smtp = relay;
             name = "${name}-mail-egress";

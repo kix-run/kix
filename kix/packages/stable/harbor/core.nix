@@ -7,7 +7,7 @@
   lib,
   kix,
   database,
-  valkey,
+  redis,
   harborSecrets,
   caBundle ? null,
   prometheus ? null,
@@ -30,7 +30,7 @@ let
       self
       config
       database
-      valkey
+      redis
       harborSecrets
       caBundle
       prometheus
@@ -70,7 +70,7 @@ let
     metricsServicePort
     ;
 
-  oidcProviderInfo = kix.contracts.oidc.client {
+  oidcProviderInfo = kix.contracts.oidc.helpers.client {
     inherit who oidc;
     options = config.oidc;
   };

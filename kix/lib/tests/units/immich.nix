@@ -70,7 +70,7 @@ let
                   port = "6379";
                 };
               };
-              aliases = [ "valkey" ];
+              aliases = [ "redis" ];
             };
             library = {
               package = eval.mkImport {

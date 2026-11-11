@@ -263,7 +263,7 @@ in
   # an integer, and "0" each give one problem; "2" gives none.
   clickhouse-contract-replicas =
     let
-      contract = import ../../../packages/stable/clickhouse/contract.nix { inherit lib; };
+      contract = (import ../../../contracts { inherit lib; }).clickhouse;
       replicasProblems = out: builtins.filter (p: lib.hasPrefix "replicas " p) (contract.problems out);
     in
     (
@@ -284,7 +284,7 @@ in
   # missing, empty, and a non-string entry each give one problem.
   clickhouse-contract-replica-hosts =
     let
-      contract = import ../../../packages/stable/clickhouse/contract.nix { inherit lib; };
+      contract = (import ../../../contracts { inherit lib; }).clickhouse;
       hostProblems = out: builtins.filter (p: lib.hasPrefix "replicaHosts " p) (contract.problems out);
     in
     (

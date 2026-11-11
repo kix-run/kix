@@ -1,6 +1,6 @@
 # Define the SMTP contract for `smtp` dependencies (`kix.contracts.smtp`),
 # the consumer helpers that read it, and the shared `mail` option set
-# (`kix.options.mail`).
+# (`kix.contracts.smtp.options`).
 #
 # An `smtp` instance is one application's way to send mail: a server, and
 # the login the application uses there. A server outside the cluster is a
@@ -8,10 +8,14 @@
 # login, `out.credentials` names a secret, and a pod reads Secrets only from
 # its own namespace, so each namespace gets its own import (a Nix `let` can
 # share the common settings).
-{ lib }:
+{
+  lib,
+  mkContract,
+  credentialsField,
+  compose,
+  ...
+}:
 let
-  inherit (import ./contract.nix { inherit lib; }) mkContract credentialsField;
-  compose = import ./compose.nix { inherit lib; };
 
   tlsModes = [
     "starttls"
@@ -35,11 +39,6 @@ let
 
   isAddress = v: builtins.isString v && builtins.match "[^@[:space:]]+@[^@[:space:]]+" v != null;
 
-  credentialKeys = [
-    "username"
-    "password"
-  ];
-
   fields = {
     host = {
       required = true;
@@ -59,7 +58,10 @@ let
       test = v: builtins.elem v tlsModes;
     };
     credentials = credentialsField {
-      keys = credentialKeys;
+      keys = [
+        "username"
+        "password"
+      ];
       required = false;
     };
     from = {
@@ -78,8 +80,85 @@ let
     name = "SMTP";
     alias = "smtp";
     remedyNoun = "SMTP server";
-    here = "kix/lib/vocab/smtp.nix";
     inherit fields;
+
+    helpers = {
+      # Validate the `smtp` dependency and return its connection details, or
+      # null when no server is wired. `from` is the server's `out.from` or
+      # null. For an application that keeps its sender elsewhere, such as
+      # Keycloak's realms.
+      inherit server;
+
+      # Validate the `smtp` dependency and return its settings with a sender,
+      # or null when no server is wired. `from` is the instance's `mail.from`,
+      # which replaces the server's `out.from`.
+      settings =
+        {
+          who,
+          smtp,
+          from ? null,
+        }:
+        let
+          found = server { inherit who smtp; };
+          sender = if from != null then from else found.from;
+        in
+        if found == null then
+          null
+        else if sender == null then
+          throw "${who}: deps.smtp has no sender address. Set out.from on the SMTP instance, or mail.from on this instance."
+        else
+          found // { from = sender; };
+
+      # Build a network policy that lets the pods `selector` matches reach an
+      # external server on its port, or return null for a server in the
+      # cluster. The rule allows any address on that port, because the enforcer
+      # cannot name a host outside the cluster.
+      egressPolicy =
+        {
+          scope,
+          name,
+          selector,
+          smtp,
+        }:
+        if smtp == null || !smtp.external then
+          null
+        else
+          compose.operandPolicy {
+            inherit scope name;
+            spec =
+              let
+                netpol = scope.networkPolicyEnforcer.netpol;
+              in
+              netpol.mkEndpointSelector selector
+              // {
+                egress =
+                  (netpol.translateIntentRules {
+                    intents.mail.egress = [
+                      {
+                        to = "world";
+                        ports = [
+                          {
+                            port = smtp.portNumber;
+                            protocol = "TCP";
+                          }
+                        ];
+                      }
+                    ];
+                  }).egressRules;
+              };
+          };
+
+      # Build the `mail` option set for a package that takes `smtp`.
+    };
+
+    options = {
+      from = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "[^@[:space:]]+@[^@[:space:]]+");
+        default = null;
+        example = "vault@example.org";
+        description = "Sender address for this instance's mail. Null uses the `smtp` instance's `out.from`.";
+      };
+    };
   };
 
   # A server without `external = false` counts as outside the cluster, so
@@ -106,89 +185,4 @@ let
           credentials = out.credentials or null;
         };
 in
-{
-  inherit (contract)
-    alias
-    fields
-    problems
-    check
-    assertions
-    ;
-
-  inherit credentialKeys;
-
-  # Validate the `smtp` dependency and return its connection details, or
-  # null when no server is wired. `from` is the server's `out.from` or
-  # null. For an application that keeps its sender elsewhere, such as
-  # Keycloak's realms.
-  inherit server;
-
-  # Validate the `smtp` dependency and return its settings with a sender,
-  # or null when no server is wired. `from` is the instance's `mail.from`,
-  # which replaces the server's `out.from`.
-  settings =
-    {
-      who,
-      smtp,
-      from ? null,
-    }:
-    let
-      found = server { inherit who smtp; };
-      sender = if from != null then from else found.from;
-    in
-    if found == null then
-      null
-    else if sender == null then
-      throw "${who}: deps.smtp has no sender address. Set out.from on the SMTP instance, or mail.from on this instance."
-    else
-      found // { from = sender; };
-
-  # Build a network policy that lets the pods `selector` matches reach an
-  # external server on its port, or return null for a server in the
-  # cluster. The rule allows any address on that port, because the enforcer
-  # cannot name a host outside the cluster.
-  egressPolicy =
-    {
-      scope,
-      name,
-      selector,
-      smtp,
-    }:
-    if smtp == null || !smtp.external then
-      null
-    else
-      compose.operandPolicy {
-        inherit scope name;
-        spec =
-          let
-            netpol = scope.networkPolicyEnforcer.netpol;
-          in
-          netpol.mkEndpointSelector selector
-          // {
-            egress =
-              (netpol.translateIntentRules {
-                intents.mail.egress = [
-                  {
-                    to = "world";
-                    ports = [
-                      {
-                        port = smtp.portNumber;
-                        protocol = "TCP";
-                      }
-                    ];
-                  }
-                ];
-              }).egressRules;
-          };
-      };
-
-  # Build the `mail` option set for a package that takes `smtp`.
-  options = {
-    from = lib.mkOption {
-      type = lib.types.nullOr (lib.types.strMatching "[^@[:space:]]+@[^@[:space:]]+");
-      default = null;
-      example = "vault@example.org";
-      description = "Sender address for this instance's mail. Null uses the `smtp` instance's `out.from`.";
-    };
-  };
-}
+contract

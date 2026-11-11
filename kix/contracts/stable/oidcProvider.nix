@@ -7,9 +7,12 @@
 # Both `issuerUrl` and `endpoints` take a realm name because a single Keycloak
 # instance can serve multiple realms. Providers with a single issuer ignore the
 # realm argument.
-{ lib }:
+{
+  lib,
+  mkContract,
+  ...
+}:
 let
-  inherit (import ./contract.nix { inherit lib; }) mkContract;
 
   isUrl = v: builtins.isString v && builtins.match "https?://[^/]+(/.*)?" v != null;
 
@@ -52,21 +55,10 @@ let
         );
     };
   };
-
-  contract = mkContract {
-    name = "OIDC provider";
-    alias = "oidcProvider";
-    remedyNoun = "provider";
-    here = "kix/lib/vocab/oidc-provider.nix";
-    inherit fields;
-  };
 in
-{
-  inherit (contract)
-    alias
-    fields
-    problems
-    check
-    assertions
-    ;
+mkContract {
+  name = "OIDC provider";
+  alias = "oidcProvider";
+  remedyNoun = "provider";
+  inherit fields;
 }

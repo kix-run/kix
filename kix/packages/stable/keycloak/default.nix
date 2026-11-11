@@ -238,7 +238,7 @@ in
         # Keycloak keeps each realm's mail settings, sender and login
         # included, in the realm. The dependency only opens the network
         # path to the server.
-        relay = kix.contracts.smtp.server { inherit who smtp; };
+        relay = kix.contracts.smtp.helpers.server { inherit who smtp; };
         # Only `metrics.enabled` decides KC_METRICS_ENABLED. Wiring a
         # prometheus dependency changes the Service and the ServiceMonitor
         # but not the pod template, so it does not restart Keycloak.
@@ -544,7 +544,7 @@ in
           else
             null;
 
-        mailEgress = kix.contracts.smtp.egressPolicy {
+        mailEgress = kix.contracts.smtp.helpers.egressPolicy {
           inherit scope;
           smtp = relay;
           name = "${name}-mail-egress";

@@ -1,19 +1,21 @@
 # Define the Redis contract for packages that serve the Redis protocol and
 # publish connection details on `root.out` (`kix.contracts.redis`). Valkey
 # provides it; a `kix.mkImport` can stand in for an outside server such as
-# ElastiCache. Consumers take it as their `valkey` dependency.
+# ElastiCache. Consumers take it as their `redis` dependency.
 #
 # Provider packages call `check`, which requires every field. Consumers
 # validate their dependency with `assertions`, which requires only the
 # `required` fields.
-{ lib }:
+{
+  lib,
+  mkContract,
+  credentialsField,
+  ...
+}:
 let
-  inherit (import ./contract.nix { inherit lib; }) mkContract credentialsField;
 
   isString = builtins.isString;
   isPort = v: isString v && builtins.match "[0-9]+" v != null;
-
-  credentialKeys = [ "password" ];
 
   fields = {
     host = {
@@ -28,7 +30,7 @@ let
       test = isPort;
     };
     credentials = credentialsField {
-      keys = credentialKeys;
+      keys = [ "password" ];
       required = false;
     };
     tls = {
@@ -46,34 +48,31 @@ let
         v: v == null || builtins.isAttrs v && isPort (v.port or null) && isString (v.primarySet or null);
     };
   };
-
-  contract = mkContract {
-    name = "Redis";
-    alias = "valkey";
-    remedyNoun = "Redis server";
-    here = "kix/lib/vocab/redis.nix";
-    inherit fields;
-  };
 in
-{
-  inherit credentialKeys;
-  inherit (contract)
-    alias
-    fields
-    problems
-    check
-    assertions
-    ;
+mkContract {
+  name = "Redis";
+  alias = "redis";
+  remedyNoun = "Redis server";
+  inherit fields;
 
-  # Return whether the server behind `dep` publishes Sentinel.
-  usesSentinel = dep: (dep.out.sentinel or null) != null;
+  helpers = {
+    # The name consumers took this contract under before `redis`, for a
+    # consumer's `deps.redis.renamedFrom`.
+    renamedFrom = {
+      name = "valkey";
+      id = "[K9191]";
+    };
 
-  # Refuse a server with TLS for a consumer that cannot connect over it, and
-  # return `dep`.
-  requirePlaintext =
-    who: dep:
-    if dep.out.tls or false then
-      throw "${who}: the valkey dependency serves TLS, which this package cannot connect to. Wire a server without TLS, or one that also listens without it."
-    else
-      dep;
+    # Return whether the server behind `dep` publishes Sentinel.
+    usesSentinel = dep: (dep.out.sentinel or null) != null;
+
+    # Refuse a server with TLS for a consumer that cannot connect over it, and
+    # return `dep`.
+    requirePlaintext =
+      who: dep:
+      if dep.out.tls or false then
+        throw "${who}: the redis dependency serves TLS, which this package cannot connect to. Wire a server without TLS, or one that also listens without it."
+      else
+        dep;
+  };
 }

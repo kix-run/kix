@@ -6,7 +6,7 @@
   scope,
   lib,
   kix,
-  valkey,
+  redis,
   storage,
   harborSecrets,
   caBundle ? null,
@@ -28,7 +28,7 @@ let
     inherit
       self
       config
-      valkey
+      redis
       harborSecrets
       caBundle
       prometheus
@@ -39,7 +39,7 @@ let
     metricsEnabled
     secrets
     ca
-    redis
+    redisServer
     valkeySecret
     checksumOf
     reloadOn
@@ -147,7 +147,7 @@ let
                 idletimeout = "60s";
               };
             }
-            // lib.optionalAttrs redisSentinel { sentinelMasterSet = redis.out.sentinel.primarySet; };
+            // lib.optionalAttrs redisSentinel { sentinelMasterSet = redisServer.out.sentinel.primarySet; };
             http = {
               addr = ":5000";
               relativeurls = false;

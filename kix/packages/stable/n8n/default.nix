@@ -16,7 +16,7 @@
 #                             (kix.contracts.postgresDatabase), such as a
 #                             `stackgres-database` instance; n8n reads its
 #                             host, port, database name, and credentials.
-#   valkey (required)         a Redis server honouring kix.contracts.redis:
+#   redis (required)          a Redis server honouring kix.contracts.redis:
 #                             a `valkey` in this namespace, or a
 #                             `kix.mkImport` in this namespace whose
 #                             `out.credentials` names the password secret
@@ -194,13 +194,14 @@ in
   # n8n has no Sentinel client, and with Sentinel the valkey Service also
   # routes to read-only replicas, so n8n asks its valkey for a standalone
   # pod.
-  deps.valkey = {
+  deps.redis = {
+    renamedFrom = kix.contracts.redis.helpers.renamedFrom;
     config.sentinel.enabled = false;
     # An import is not reached by the injection above.
     assertions =
       dep:
       kix.contracts.redis.assertions who dep
-      ++ lib.optional (kix.contracts.redis.usesSentinel dep) {
+      ++ lib.optional (kix.contracts.redis.helpers.usesSentinel dep) {
         assertion = false;
         message = "n8n needs a standalone valkey with one pod: it has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Wire a valkey with sentinel.enabled = false.";
       };
@@ -321,7 +322,7 @@ in
         scope,
         kix,
         database,
-        valkey,
+        redis,
         encryptionKey,
         ...
       }:
@@ -335,7 +336,7 @@ in
           keys = [ "key" ];
         };
 
-        valkeyAuth = valkey.out ? credentials;
+        valkeyAuth = redis.out ? credentials;
 
         # A `kix.mergeEnv` owned group that also refuses the `_FILE` twins.
         group = vars: extra: { inherit vars; } // extra // { names = twins vars ++ extra.names or [ ]; };
@@ -359,17 +360,17 @@ in
           group
             (
               {
-                QUEUE_BULL_REDIS_HOST = valkey.out.host;
-                QUEUE_BULL_REDIS_PORT = valkey.out.port;
+                QUEUE_BULL_REDIS_HOST = redis.out.host;
+                QUEUE_BULL_REDIS_PORT = redis.out.port;
               }
-              // lib.optionalAttrs (valkey.out.tls or false) { QUEUE_BULL_REDIS_TLS = "true"; }
+              // lib.optionalAttrs (redis.out.tls or false) { QUEUE_BULL_REDIS_TLS = "true"; }
               // lib.optionalAttrs valkeyAuth {
-                QUEUE_BULL_REDIS_PASSWORD = valkey.out.credentials.out.keyRef "password";
+                QUEUE_BULL_REDIS_PASSWORD = redis.out.credentials.out.keyRef "password";
               }
             )
             {
-              from = "the valkey dependency";
-              fix = "Wire a different valkey through deps.valkey instead.";
+              from = "the redis dependency";
+              fix = "Wire a different valkey through deps.redis instead.";
             };
 
         encryptionKeyGroup = group { N8N_ENCRYPTION_KEY = ek.out.keyRef "key"; } {
@@ -492,7 +493,7 @@ in
         podAnnotations =
           depHash "database" database.out.credentials
           // depHash "encryption-key" ek
-          // lib.optionalAttrs valkeyAuth (depHash "valkey-password" valkey.out.credentials);
+          // lib.optionalAttrs valkeyAuth (depHash "valkey-password" redis.out.credentials);
 
         # The broker accepts connections from 127.0.0.1 only, so a random
         # token per pod authenticates the sidecar without a Secret. The init

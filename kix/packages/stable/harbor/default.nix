@@ -14,7 +14,7 @@
 #                             out.credentials, and out.tls (whether the
 #                             server speaks TLS); without it, set
 #                             database.sslmode.
-#   valkey (required)         a Redis cache and job queue honouring
+#   redis (required)          a Redis cache and job queue honouring
 #                             kix.contracts.redis: a valkey, or a
 #                             kix.mkImport for a server without TLS. Harbor
 #                             asks Sentinel for the primary when the server
@@ -22,7 +22,7 @@
 #                             database indexes 0 to 2 and a fixed job-queue
 #                             prefix, so give each Harbor instance its own
 #                             server; for a second Harbor in one namespace,
-#                             wire deps.valkey = ref.<ns>.<valkey>.
+#                             wire deps.redis = ref.<ns>.<valkey>.
 #   storage (required)        a persistent volume for registry blobs.
 #   harborSecrets (required)  a Secret declaring the keys in `secretKeys` in
 #                             common.nix.
@@ -209,7 +209,10 @@ in
   };
 
   deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
-  deps.valkey.assertions = dep: kix.contracts.redis.assertions who dep;
+  deps.redis = {
+    assertions = dep: kix.contracts.redis.assertions who dep;
+    renamedFrom = kix.contracts.redis.helpers.renamedFrom;
+  };
 
   assertions =
     { config, ... }:
@@ -222,7 +225,7 @@ in
 
   options = {
     oidc =
-      kix.options.oidc {
+      kix.contracts.oidc.options {
         scopes = [
           "openid"
           "profile"

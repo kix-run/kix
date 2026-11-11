@@ -130,7 +130,7 @@ rec {
       self,
       config,
       database ? null,
-      valkey,
+      redis,
       harborSecrets,
       caBundle ? null,
       prometheus ? null,
@@ -167,8 +167,8 @@ rec {
           throw "${who}: the database dependency's credentials Secret \"${creds.out.name}\" declares ${
             if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
           }; this package reads its `username` and `password` keys. Wire a database whose out.credentials declares both.";
-      redis = kix.contracts.redis.requirePlaintext who valkey;
-      valkeySecret = redis.out.credentials or null;
+      redisServer = kix.contracts.redis.helpers.requirePlaintext who redis;
+      valkeySecret = redisServer.out.credentials or null;
 
       # A pod template annotation that changes with a Secret's content,
       # so the pods roll when it changes. A secret-ref has no content
@@ -222,17 +222,17 @@ rec {
       # `redis+sentinel://<sentinels>/<primary set>/<db>` URL and the
       # registry's `sentinelMasterSet`, as harbor-helm writes them for an
       # external Sentinel.
-      redisSentinel = kix.contracts.redis.usesSentinel redis;
+      redisSentinel = kix.contracts.redis.helpers.usesSentinel redisServer;
       redisAddr =
         if redisSentinel then
-          "${redis.out.host}:${redis.out.sentinel.port}"
+          "${redisServer.out.host}:${redisServer.out.sentinel.port}"
         else
-          "${redis.out.host}:${redis.out.port}";
+          "${redisServer.out.host}:${redisServer.out.port}";
       redisUrl =
         db:
         "${
           if redisSentinel then "redis+sentinel" else "redis"
-        }://${lib.optionalString redisAuth ":$(REDIS_PASSWORD)@"}${redisAddr}${lib.optionalString redisSentinel "/${redis.out.sentinel.primarySet}"}/${toString db}";
+        }://${lib.optionalString redisAuth ":$(REDIS_PASSWORD)@"}${redisAddr}${lib.optionalString redisSentinel "/${redisServer.out.sentinel.primarySet}"}/${toString db}";
       redisPasswordRef = var: valkeySecret.out.keyRef "password" // { name = var; };
       redisPasswordEnv = lib.optional redisAuth (redisPasswordRef "REDIS_PASSWORD");
       valkeyChecksum = checksumOf "valkey-password" valkeySecret;

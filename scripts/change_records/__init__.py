@@ -44,6 +44,12 @@ BOOL_FIELDS = ("state", "touches-data", "required-stop")
 STRING_FIELDS = ("kind", "id", "workaround")
 FIELDS = set(LIST_FIELDS) | set(BOOL_FIELDS) | set(STRING_FIELDS)
 
+# How a record names something experimental: a package as
+# `experimental/<name>`, a contract as `kix.contracts.experimental.<name>`.
+EXPERIMENTAL_PACKAGE = "experimental/"
+EXPERIMENTAL_CONTRACT = "kix.contracts.experimental."
+EXPERIMENTAL_HEADING = "Breaking in experimental packages and contracts"
+
 ID_RE = re.compile(r"^K[0-9]{4}$")
 HEADER_FENCE = "+++"
 
@@ -69,6 +75,26 @@ class Record:
     workaround: str | None
     body: str
 
+    @property
+    def experimental(self) -> bool:
+        """Return whether the record is only about experimental packages and contracts.
+
+        Such a record may break in a patch release.
+        """
+        named = self.packages + self.library
+        return (
+            bool(named)
+            and not self.cli
+            and not self.state
+            and all(p.startswith(EXPERIMENTAL_PACKAGE) for p in self.packages)
+            and all(s.startswith(EXPERIMENTAL_CONTRACT) for s in self.library)
+        )
+
+    @property
+    def breaks_stable(self) -> bool:
+        """Return whether the record breaks something that is not experimental."""
+        return self.kind in BREAKING_KINDS and not self.experimental
+
     def bullet(self) -> str:
         """Return the CHANGELOG bullet: the body on one line, then the id."""
         paragraphs = re.split(r"\n\s*\n", self.body.strip())
@@ -93,6 +119,7 @@ class Record:
             "cve": self.cve,
             "workaround": self.workaround,
             "body": self.body,
+            "experimental": self.experimental,
         }
 
 
@@ -250,10 +277,16 @@ def load(root: pathlib.Path) -> tuple[list[Record], list[str]]:
             if record.version is not None:
                 continue
             for name in record.packages:
-                if not (packages_dir / name).is_dir():
+                level, folder = (
+                    ("experimental", name.removeprefix(EXPERIMENTAL_PACKAGE))
+                    if name.startswith(EXPERIMENTAL_PACKAGE)
+                    else ("stable", name)
+                )
+                if not (packages_dir / level / folder).is_dir():
                     problems.append(
                         f"{record.path.relative_to(root)}: `{name}` in `packages` is not a "
-                        "folder under kix/packages/. Use the package's folder name"
+                        f"folder under kix/packages/{level}/. Use the package's folder name, "
+                        f"with `{EXPERIMENTAL_PACKAGE}` before it for an experimental package"
                     )
     # An `error` record describes a refusal, and the refusal prints the id.
     # Released records are not checked: their refusals are removed later.
@@ -322,7 +355,7 @@ def bump(records: list[Record]) -> str:
     pending = unreleased(records)
     if not pending:
         return "none"
-    if any(r.kind in BREAKING_KINDS for r in pending):
+    if any(r.breaks_stable for r in pending):
         return "minor"
     return "patch"
 
@@ -334,10 +367,24 @@ def changelog(
     out: list[str] = []
     if version is not None and date is not None:
         out += [f"## {version} - {date}", ""]
-    for kind, heading, _ in KINDS:
-        bullets = [r.bullet() for r in records if r.kind == kind]
+    for kind, heading, breaking in KINDS:
+        bullets = [
+            r.bullet()
+            for r in records
+            if r.kind == kind and not (breaking and r.experimental)
+        ]
         if bullets:
             out += [f"### {heading}", "", *bullets, ""]
+        if kind == "silent":
+            # After the breaking headings, in the order error then silent.
+            bullets = [
+                r.bullet()
+                for k in ("error", "silent")
+                for r in records
+                if r.kind == k and r.experimental
+            ]
+            if bullets:
+                out += [f"### {EXPERIMENTAL_HEADING}", "", *bullets, ""]
     return "\n".join(out)
 
 

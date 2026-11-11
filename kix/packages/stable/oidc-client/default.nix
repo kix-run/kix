@@ -98,13 +98,13 @@ in
         inherit who;
         arg = "oidcClient";
         dep = oidcClient;
-        keys = kix.contracts.oidc.credentialKeys;
+        keys = kix.contracts.oidc.fields.credentials.keys;
       };
     in
     {
       ready = scope.mkSecretRef {
         name = credentials.out.name;
-        keys = kix.contracts.oidc.credentialKeys;
+        keys = kix.contracts.oidc.fields.credentials.keys;
         requires = lib.optional (credentials ? raw) (credentials.raw.root.resource or credentials.raw.root);
       };
 

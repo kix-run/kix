@@ -5,9 +5,12 @@
 # validates its `gateway` dependency with `require`, which requires only the
 # `required` fields so a `kix.mkImport` stand-in only needs to publish
 # `gatewayRef`.
-{ lib }:
+{
+  lib,
+  mkContract,
+  ...
+}:
 let
-  inherit (import ./contract.nix { inherit lib; }) mkContract;
 
   isString = builtins.isString;
   isStringAttrs = v: builtins.isAttrs v && lib.all isString (builtins.attrValues v);
@@ -48,37 +51,28 @@ let
       test = v: v == null || isString v;
     };
   };
-
-  contract = mkContract {
-    name = "gateway";
-    alias = "gateway";
-    here = "kix/lib/vocab/gateway.nix";
-    inherit fields;
-    # A network policy requires both selector and namespace.
-    extraProblems =
-      out:
-      lib.optional (
-        (out.podSelector or null == null) != (out.podNamespace or null == null)
-      ) "podSelector and podNamespace must both be set or both be null";
-  };
 in
-{
-  inherit (contract)
-    alias
-    fields
-    problems
-    check
-    require
-    ;
+mkContract {
+  name = "gateway";
+  alias = "gateway";
+  inherit fields;
+  # A network policy requires both selector and namespace.
+  extraProblems =
+    out:
+    lib.optional (
+      (out.podSelector or null == null) != (out.podNamespace or null == null)
+    ) "podSelector and podNamespace must both be set or both be null";
 
-  # Return true when `dep` declares the `gateway` alias or publishes
-  # `gatewayRef`. Because dependencies can also resolve by instance name,
-  # `kix.expose` uses this check to ignore unrelated instances named `gateway`.
-  claims =
-    dep:
-    let
-      meta = dep._meta or { };
-      aliases = (meta.aliases or [ ]) ++ ((meta.packageMeta or { }).defaultAliases or [ ]);
-    in
-    (dep.out or { }) ? gatewayRef || builtins.elem "gateway" aliases;
+  helpers = {
+    # Return true when `dep` declares the `gateway` alias or publishes
+    # `gatewayRef`. Because dependencies can also resolve by instance name,
+    # `kix.expose` uses this check to ignore unrelated instances named `gateway`.
+    claims =
+      dep:
+      let
+        meta = dep._meta or { };
+        aliases = (meta.aliases or [ ]) ++ ((meta.packageMeta or { }).defaultAliases or [ ]);
+      in
+      (dep.out or { }) ? gatewayRef || builtins.elem "gateway" aliases;
+  };
 }

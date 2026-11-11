@@ -7,7 +7,7 @@
   lib,
   kix,
   database,
-  valkey,
+  redis,
   harborSecrets,
   caBundle ? null,
   prometheus ? null,
@@ -29,7 +29,7 @@ let
       self
       config
       database
-      valkey
+      redis
       harborSecrets
       caBundle
       prometheus

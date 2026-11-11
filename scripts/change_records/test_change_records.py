@@ -294,6 +294,7 @@ class OutputTest(RepoTest):
                 "cve": [],
                 "workaround": None,
                 "body": "Renamed.\n",
+                "experimental": False,
             },
         )
 
@@ -323,6 +324,61 @@ class OutputTest(RepoTest):
         (self.repo.root / "changes/a-break.md").unlink()
         self.repo.write("changes/d.md", record('kind = "silent"'))
         self.assertEqual(self.repo.run("bump")[1], "minor\n")
+
+    def test_bump_experimental_break_is_patch(self):
+        (self.repo.root / "changes/a-break.md").unlink()
+        self.repo.write(
+            "changes/d.md",
+            record('kind = "silent"\npackages = ["experimental/plausible"]'),
+        )
+        self.repo.write(
+            "changes/e.md",
+            record('kind = "silent"\nlibrary = ["kix.contracts.experimental.queue"]'),
+        )
+        self.assertEqual(self.repo.run("bump")[1], "patch\n")
+
+    def test_bump_break_that_also_names_something_stable_is_minor(self):
+        (self.repo.root / "changes/a-break.md").unlink()
+        self.repo.write(
+            "changes/d.md",
+            record('kind = "silent"\npackages = ["experimental/plausible", "immich"]'),
+        )
+        self.assertEqual(self.repo.run("bump")[1], "minor\n")
+
+    def test_changelog_lists_experimental_breaks_under_their_own_heading(self):
+        self.repo.write(
+            "changes/d.md",
+            record(
+                'kind = "silent"\npackages = ["experimental/plausible"]',
+                "Plausible moved its data.",
+            ),
+        )
+        _, out, _ = self.repo.run("changelog")
+        self.assertEqual(
+            out,
+            "### Breaking (shows an error)\n\n- Renamed. [K0003]\n\n"
+            "### Breaking in experimental packages and contracts\n\n"
+            "- Plausible moved its data.\n\n"
+            "### Added\n\n- New.\n\n"
+            "### Fixed\n\n- Fixed a thing. Second paragraph.\n",
+        )
+
+    def test_package_names_follow_the_two_folders(self):
+        # The source prints the id of the `error` record this class starts with.
+        self.repo.write("kix/packages/stable/caddy/default.nix", '"[K0003] renamed"\n')
+        self.repo.write("kix/packages/experimental/plausible/default.nix", "{}\n")
+        self.repo.write(
+            "changes/ok.md",
+            record('kind = "fixed"\npackages = ["caddy", "experimental/plausible"]'),
+        )
+        self.assertEqual(self.repo.run("check")[0], 0)
+        self.repo.write(
+            "changes/bad.md",
+            record('kind = "fixed"\npackages = ["plausible"]'),
+        )
+        code, _, err = self.repo.run("check")
+        self.assertEqual(code, 1)
+        self.assertIn("kix/packages/stable/", err)
 
 
 class ReleaseTest(RepoTest):

@@ -251,7 +251,7 @@ kix.buildCluster {
             config.keys = [ "password" ];
           };
 
-          valkey.package = kix.mkImport {
+          redis.package = kix.mkImport {
             scope = "namespace";
             out = {
               host = "app-cache.abc123.euw1.cache.amazonaws.com";

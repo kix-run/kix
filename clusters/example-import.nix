@@ -37,7 +37,7 @@ kix.buildCluster {
         # for one that does, put the import in immich's namespace with
         # `scope = "namespace"` and `credentials = ref.<ns>.<secret>`.
         cache = {
-          valkey = {
+          redis = {
             package = kix.mkImport {
               out = {
                 host = "valkey.cache.svc.cluster.local";
@@ -69,7 +69,7 @@ kix.buildCluster {
         };
 
         # Immich namespace: server + ML worker + per-app database instance.
-        # valkey resolves via DI from the cache namespace: an import is
+        # redis resolves via DI from the cache namespace: an import is
         # cluster-scoped, while a managed valkey serves only its own
         # namespace.
         # The stackgres-database instance below lives in *this* namespace

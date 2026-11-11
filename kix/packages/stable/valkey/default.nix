@@ -61,10 +61,7 @@ in
     # Consumers read `out.credentials` through a secretKeyRef, which
     # Kubernetes resolves only in the pod's own namespace.
     scope = "namespace";
-    defaultAliases = [
-      "valkey"
-      "redis"
-    ];
+    defaultAliases = [ "redis" ];
     k8s.minVersion = "1.25";
   };
 
