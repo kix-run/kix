@@ -649,7 +649,7 @@ pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError
     )?;
     let info: serde_json::Value =
         serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
-            summary: "could not parse build path metadata from Nix",
+            summary: "could not read build dependency metadata",
             library: false,
             detail: format!("nix path-info printed something other than JSON: {e}"),
         })?;
@@ -719,7 +719,7 @@ pub fn flake_revision(flake_dir: &Path) -> Result<Option<FlakeRevision>, KixEval
     )?;
     let metadata: serde_json::Value =
         serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
-            summary: "could not parse flake metadata from Nix",
+            summary: "could not read project flake metadata",
             library: false,
             detail: format!("nix flake metadata printed something other than JSON: {e}"),
         })?;

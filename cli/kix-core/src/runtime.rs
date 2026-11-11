@@ -227,7 +227,7 @@ fn mismatch_message(dir: &Path, found_by: FoundBy, found: &str, expected: &str) 
              - Installed with the install script (or by Kix itself): remove that version's directory and reinstall Kix {kix}:\n        \
              rm -rf ~/.local/share/kix/{kix} && curl -fsSL https://kix.run/install | KIX_VERSION={kix} sh\n    \
              - Unpacked from a release archive into another directory: replace both `bin/kix` and {dir} with the files from the Kix {kix} release archive.\n    \
-             - Installed with Nix (`nix profile install`): reinstall or upgrade Kix with `nix profile` so `bin/kix` and its runtime in the Nix store come from the same build."
+             - Installed with Nix (`nix profile install`): reinstall or upgrade Kix with `nix profile` so `bin/kix` and the Kix runtime come from the same build."
         )
     };
     head + &tail
@@ -682,15 +682,16 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, RuntimeError> {
     if let Some(v) = manifest.manifest_version
         && v != MANIFEST_VERSION
     {
+        let kix = crate::version::running().release();
         return Err(invalid(format!(
-            " (format version {v}; this Kix reads version {MANIFEST_VERSION})\n  \
+            " (format version {v}; Kix {kix} reads version {MANIFEST_VERSION})\n  \
              No project files or cluster resources were changed.\n\n  \
              Why:\n    \
              `bin/kix` and the Kix runtime in `libexec/kix` come from different versions of Kix.\n\n  \
              Next (choose one):\n    \
              - Remove the mismatched version directory under `~/.local/share/kix/` and install Kix from its release archive:\n        \
              curl -fsSL https://kix.run/install | sh\n    \
-             - If `KIX_RUNTIME_DIR` is set, unset it or point it at the `libexec/kix` directory from the release archive for this version of Kix."
+             - If `KIX_RUNTIME_DIR` is set, unset it or point it at the `libexec/kix` directory from the Kix {kix} release archive."
         )));
     }
     for program in &manifest.programs {

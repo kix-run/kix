@@ -143,7 +143,7 @@ fn print_plan(cluster: &str, from: &str, plan: &migrate::Report) {
         println!();
         println!("  Note on operator marks:");
         println!(
-            "    Some of these deployment records carry a mark written by the Kix operator. Any record the operator ever touched keeps that mark, so the mark alone does not mean an operator is running now. Before copying or deleting anything, this migration clears the marks on the old {from} records, waits briefly, and checks them again; if any mark comes back, an operator is running and the migration stops before copying or deleting anything."
+            "    Some of these deployment records carry a mark written by the Kix operator. Any record the operator ever touched keeps that mark, so the mark alone does not mean an operator is running now. Before copying or deleting anything, this migration clears the marks on the old {from} records, waits briefly, and checks them again. If any mark comes back, an operator is running and the migration stops before copying or deleting anything."
         );
     }
     if plan.current_records.len() > 1 {
@@ -181,7 +181,7 @@ fn print_report(cluster: &str, report: &migrate::Report) {
         keys::GROUP
     );
     println!(
-        "  2. Run `kix deploy {cluster}`. Every resource will be applied once to update its Kix tracking annotations; only pods whose template hashes a ConfigMap or Secret (such as `valkey` or `coredns`) will restart."
+        "  2. Run `kix deploy {cluster}`. Every resource is applied once to update its Kix tracking annotations. Only pods whose template hashes a ConfigMap or Secret (such as `valkey` or `coredns`) restart."
     );
 }
 

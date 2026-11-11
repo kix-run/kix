@@ -63,7 +63,7 @@ pub(crate) enum SecretError {
 /// Kix never prints the hash it computed, because it is a digest of secret data.
 pub(crate) fn hash_mismatch_next(name: &str) -> String {
     format!(
-        "Check that the right SOPS file is in place; if you edited the SOPS file intentionally, update `hash` in '{name}'s `mkSecret` declaration and run the command again (Kix does not print the new hash because it is computed over decrypted secret data)."
+        "Check that the right SOPS file is in place. If you edited the SOPS file intentionally, update `hash` in the `mkSecret` declaration for '{name}' and run the command again (Kix does not print the new hash because it is computed over decrypted secret data)."
     )
 }
 
@@ -283,7 +283,7 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         return Err(refuse(
             problem
                 .get()
-                .unwrap_or("Bundles only support YAML or JSON SOPS files; re-encrypt this secret as a YAML or JSON SOPS file."),
+                .unwrap_or("Bundles only support YAML or JSON SOPS files. Re-encrypt this secret as a YAML or JSON SOPS file."),
         ));
     }
     let doc: Value = match input_type {
@@ -291,7 +291,7 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         _ => serde_saphyr::from_str_with_options(&text, sops_read_options())
             .map_err(|e| e.to_string()),
     }
-    .map_err(|_| refuse("Bundles only support YAML or JSON SOPS files; re-encrypt this secret as a YAML or JSON SOPS file."))?;
+    .map_err(|_| refuse("Bundles only support YAML or JSON SOPS files. Re-encrypt this secret as a YAML or JSON SOPS file."))?;
     // Go's `encoding/json` matches `"sops"` case-insensitively.
     if let Some(key) = doc
         .as_object()

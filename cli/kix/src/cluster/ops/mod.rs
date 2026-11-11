@@ -257,7 +257,7 @@ impl Cluster {
 /// A kind the discovery cache does not have.
 #[derive(Debug, Error)]
 #[error(
-    "this Kubernetes cluster does not serve resource kind `{kind}` (not applied). If `{kind}` is a custom resource installed by an operator or another Kix cluster, install its CustomResourceDefinition on this cluster first; if this build installs that CustomResourceDefinition, wait for it to become Established and run `kix deploy` again."
+    "this Kubernetes cluster does not serve resource kind `{kind}` (not applied). If `{kind}` is a custom resource installed by an operator or another Kix cluster, install its CustomResourceDefinition on this cluster first. If this build installs that CustomResourceDefinition, wait for it to become Established and run `kix deploy` again."
 )]
 pub(crate) struct NotDiscovered {
     pub(crate) kind: String,
