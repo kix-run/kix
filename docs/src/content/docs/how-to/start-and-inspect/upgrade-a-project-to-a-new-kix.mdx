@@ -1,6 +1,6 @@
 ---
 title: "Upgrade a project to a new version of Kix"
-description: "Move a project to a newer Kix with kix upgrade: preview the release notes, fix build errors one release at a time, review what changed, and acknowledge changes to stored data."
+description: "Move a project to a newer version of Kix with kix upgrade: preview the release notes, fix build errors one release at a time, review what changed, and acknowledge changes to stored data."
 ---
 
 import Command from '../../../../components/Command.astro';
@@ -23,12 +23,11 @@ in `flake.lock`:
 inputs.kix.url = "github:kix-run/kix";
 ```
 
-`kix upgrade` then moves the library in `flake.lock` and never edits
-`flake.nix`, and a later `nix flake lock` keeps the version it locked. When
-`flake.nix` names a tag, such as `github:kix-run/kix/v0.9.1`, `kix upgrade`
-moves the tag when it is the only Kix url that names it. When another input
-names the same tag, it stops and asks you to change the library's url
-yourself.
+`kix upgrade` then updates the Kix library in `flake.lock` without editing
+`flake.nix`. When `flake.nix` names a tag, such as `github:kix-run/kix/v0.9.1`,
+`kix upgrade` updates the tag if no other Kix URL in `flake.nix` uses it. When
+another input uses the same tag, `kix upgrade` stops and asks you to update the
+Kix library URL yourself.
 
 ## Preview the upgrade
 
@@ -58,8 +57,8 @@ min-age = "7d"
 
 <Command commands={["kix upgrade"]} cwd="my-project/" />
 
-When every cluster builds with the new version, the project is pinned to it:
-`kix.toml`, and the Kix library in `flake.lock`. Read the `Manifest changes`
+When every cluster builds with the new version, `kix upgrade` pins the project
+to it in `kix.toml` and `flake.lock`. Read the `Manifest changes`
 summary for each cluster, then commit the changed files with
 `kix-upgrade.json`. When no object changed and nothing needs a review, the
 run ends with `Upgraded to Kix 0.12.1. Ready to deploy.`
@@ -91,9 +90,8 @@ read what changed before you deploy. It ends with a numbered list under
 - objects marked `[review: <Kind>]`, such as a Secret, a ClusterRole, or an
   Ingress whose TLS settings changed,
 - a change that alters behavior with no build error, or
-- a release changes cluster state, and every cluster must deploy it before
-  the project upgrades further. Deploy every cluster, then run
-  `kix upgrade` again.
+- a release that every cluster must deploy before the project upgrades
+  further. Deploy every cluster, then run `kix upgrade` again.
 
 To see the field changes for a cluster, compare the new build with the
 cluster before you deploy:

@@ -8,10 +8,10 @@ cluster with the version the project uses now, pins the project to the new
 version, and builds every cluster again. Then it compares the two builds and
 lists the release notes that apply to the project.
 
-`kix upgrade` always runs in the version of Kix you typed, whatever the
-project's `kix.toml` says. It builds nothing itself: each list and build runs
-in the installed Kix of the version being tried, which `kix upgrade` installs
-when needed. It contacts no cluster.
+`kix upgrade` runs in the Kix version you invoke directly, even when
+`kix.toml` pins an older version. For each version it tests, it installs that
+version of Kix if needed and runs the build with it. It does not contact any
+cluster.
 
 :::note
 This page is hand-maintained from `cli/kix-cli/src/cli.rs` and
@@ -83,13 +83,14 @@ Kix 0.10.0 -> 0.12.1 (preview, no files changed)
 Next: run `kix upgrade`.
 ```
 
-A note applies to the project when it names no package, or names a package
-one of the project's clusters installs. `kix upgrade` asks the Kix the
-project uses now for the packages with `kix list packages --cluster <name>`.
-It compares instance names, so an instance that has another name than its
-package does not match the package's records. A change that works
-differently with no error, and a release every cluster must deploy first,
-apply to every project for that reason.
+A release note applies to the project when it names no package, or names a
+package one of the project's clusters installs. `kix upgrade` gets the
+installed packages from the project's current version of Kix with
+`kix list packages --cluster <name>`. Because that command lists instance
+names, an instance whose name differs from its package name does not match
+package-specific config or note entries. Behavior and data changes, and
+releases that every cluster must deploy first, always apply to every project
+regardless of instance names.
 
 ## What a run does
 
@@ -104,14 +105,14 @@ apply to every project for that reason.
    does. When the library input in `flake.nix` names the project's version
    as a tag, such as `github:kix-run/kix/v0.9.1`, `?ref=refs/tags/v0.9.1`,
    or `?ref=v0.9.1` on any host, Kix moves that tag too, but only when
-   exactly one Kix url in `flake.nix` names it. When two or more do, such as
-   a second input that pins the Kix built into an image, Kix changes
+   exactly one Kix URL in `flake.nix` names it. When two or more do, such as
+   a second input that pins a version of Kix built into an image, Kix changes
    nothing, names the lines, writes `edit-needed` into `kix-upgrade.json`,
    and exits `3` before it installs the target. Change the library input's
-   url yourself, leave the others, and run `kix upgrade` again. When Nix
-   cannot lock the new tag, or `flake.lock` still names another tag
-   afterwards, Kix puts `kix.toml`, `flake.nix`, and `flake.lock` back as
-   they were before that step, names the tag, and exits `2` or `3`.
+   URL yourself, leave the others, and run `kix upgrade` again. When Kix
+   cannot lock the new tag in `flake.lock`, or `flake.lock` still names
+   another tag afterwards, Kix puts `kix.toml`, `flake.nix`, and `flake.lock`
+   back as they were before that step, names the tag, and exits `2` or `3`.
 3. When a cluster does not build with the target, takes one minor release at
    a time: the newest patch of each minor after the project's, ending with
    the target. A project on a prerelease, such as `0.9.0-rc.1`, takes the
@@ -141,9 +142,10 @@ apply to every project for that reason.
    release, then run `kix upgrade` again. The next run reuses the builds from
    step 1 and the package list made then, tries that release again, and
    continues. So does a run after an interruption, since Kix writes
-   `kix-upgrade.json` before it first pins the project. When those builds
-   are gone, Kix refuses. Delete `kix-upgrade.json` and run again; the
-   comparison then starts from the version the project is pinned to now.
+   `kix-upgrade.json` before it first pins the project. If the cached builds
+   from step 1 are missing, Kix stops with an error. Delete `kix-upgrade.json`
+   and run `kix upgrade` again; the comparison then starts from the version
+   the project is pinned to now.
 4. Compares the first build with the last, cluster by cluster, and prints the
    objects added, removed, and changed. Clusters that changed the same way
    are printed together, with `+`, `~`, and `-` for added, changed, and
@@ -210,7 +212,7 @@ Then run `kix deploy` again.
 Acknowledged K0007 in kix-upgrade.json. You can now run `kix deploy`.
 ```
 
- `kix deploy --dry-run` and `kix plan` do not check.
+`kix deploy --dry-run` and `kix plan` are not blocked.
 Another `kix upgrade` also refuses until each change is acknowledged.
 
 ## `kix-upgrade.json`
@@ -221,10 +223,10 @@ Another `kix upgrade` also refuses until each change is acknowledged.
 | `from`, `to` | The version the upgrade started from, and the version it moved to. |
 | `status` | `done`, `fix-needed` (a build failed, or the run stopped part of the way), `edit-needed` (a person must edit `flake.nix`), `needs-person`, or `required-stop`. |
 | `steps` | Each version the project was built with: `version`, `result` (`ok`, `failed`, or `started` for a step that stopped before it built), and `failed`, the clusters that did not build. |
-| `records` | The ids (or names, for a record without an id) of the applying records, by kind. |
+| `records` | The ids (or names, for a note without an id) of the release notes that apply, by kind. |
 | `dataChanges` | The changes to stored data: `reference`, `release`, and `body`. |
 | `acknowledged` | The data changes someone acknowledged with `--ack`. |
-| `unexplainedChanges`, `sensitiveChanges` | How many changed objects have no record, and how many are sensitive. |
+| `unexplainedChanges`, `sensitiveChanges` | How many changed objects have no matching release note, and how many are sensitive. |
 | `cliHits` | Each project line that uses a changed command or flag: `text`, `file`, `line`. |
 | `before` | The directory of the builds made with the version the upgrade started from. |
 | `packagesInUse` | The instances the project's clusters install, as the version the upgrade started from listed them. Absent when Kix could not list them. |
@@ -243,4 +245,4 @@ Programs that read the file must skip fields they do not know.
 - `0` when the project builds with the target and nothing needs a person, and with `--preview` or `--ack`.
 - `1` when the release index or a release's notes cannot be fetched or verified, a version cannot be installed, or the project cannot be pinned.
 - `2` when a cluster does not build, with the version the project used or with a release the upgrade tried.
-- `3` when the project builds with the target and a person should read what changed: a change no record explains, a sensitive change, an applying record of a change that works differently with no error, or a release every cluster must deploy first.
+- `3` when the project builds with the target and a person should read what changed: an object change with no matching release note, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first.

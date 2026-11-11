@@ -188,7 +188,7 @@ pub enum ProjectError {
     KixNotQuoted { path: PathBuf, literal: String },
 
     #[error(
-        "{} has a bad [upgrade] table: {problem}. Kix {} reads only min-age, a number of days such as min-age = \"7d\"",
+        "{} has a bad [upgrade] table: {problem}. Kix {} reads only min-age. Set min-age to a number of days in quotes, such as min-age = \"7d\", or remove [upgrade]",
         path.display(),
         crate::version::running().release()
     )]

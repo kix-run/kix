@@ -132,7 +132,10 @@ pub enum InstallError {
     #[error("the release archive of Kix {version} cannot be installed: {reason}")]
     BadArchive { version: String, reason: String },
 
-    #[error("the change records of Kix {version} cannot be read: {message}")]
+    #[error(
+        "the release notes of Kix {version} cannot be read: {message}. Kix changed nothing. Update Kix with `kix self update` if Kix {version} is newer than Kix {}",
+        version::running().release()
+    )]
     BadChanges { version: String, message: String },
 
     #[error("{}", installs::NO_HOME)]
