@@ -711,7 +711,7 @@ impl Run {
         text.push('\n');
         if self.pinned == self.from {
             text.push_str(&format!(
-                "No project files were modified (the {} baseline build is cached).\n",
+                "kix.toml, flake.nix, and flake.lock were not changed. Upgrade state is saved in kix-upgrade.json (the {} baseline build is cached).\n",
                 self.from.release()
             ));
         } else {

@@ -110,7 +110,7 @@ pub enum InstallError {
     NoSignature { version: String },
 
     #[error(
-        "the release signature for Kix {version} does not verify against any key built into Kix {}. Kix did not install it. Report this at https://kix.run",
+        "the release signature for Kix {version} does not verify against any key built into Kix {}. Kix did not install it. Report this at https://github.com/kix-run/kix/issues",
         version::running().release()
     )]
     BadSignature {

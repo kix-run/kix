@@ -97,7 +97,7 @@ pub enum KixEvalError {
 pub(crate) const KEEP_LIBRARY: &str = "To keep this project on its current Kix library instead, set `kix = \"<major.minor>\"` in `kix.toml` (using the Kix library's minor version, such as `\"0.8\"`).";
 
 /// The next step after an error that reports a bug in Kix.
-pub const REPORT_A_BUG: &str = "Run your command again with `-v` to capture the full trace and report the output to the Kix maintainers.";
+pub const REPORT_A_BUG: &str = "Run your command again with `-v` to capture the full trace and report the output at https://github.com/kix-run/kix/issues.";
 
 impl KixEvalError {
     pub(crate) fn not_found(name: impl Into<String>) -> Self {
