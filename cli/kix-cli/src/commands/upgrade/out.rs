@@ -171,18 +171,16 @@ pub fn without_notes_paragraph(versions: &[String]) -> Vec<String> {
     wrap("", 0, &text)
 }
 
-/// Return the run's line about releases with no release notes.
+/// Return the run's line about releases with no release notes, printed on
+/// the first run of an upgrade only.
 pub fn without_notes_line(versions: &[String]) -> String {
-    if versions.len() == 1 {
-        format!(
-            "Note: Kix {} shipped without structured release notes; read CHANGELOG.md for that release.",
-            versions[0]
-        )
-    } else {
-        format!(
-            "Note: Kix {} shipped without structured release notes; read CHANGELOG.md for those releases.",
-            and_list(versions)
-        )
+    match versions {
+        [one] => format!("Note: Kix {one} has no release notes; see CHANGELOG.md."),
+        _ => format!(
+            "Note: Kix {} through {} have no release notes; see CHANGELOG.md.",
+            versions.first().map(String::as_str).unwrap_or_default(),
+            versions.last().map(String::as_str).unwrap_or_default()
+        ),
     }
 }
 

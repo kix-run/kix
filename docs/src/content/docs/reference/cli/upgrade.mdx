@@ -53,10 +53,10 @@ archives, as `kix-<version>-changes.json`, listed in the release's signed
 `SHA256SUMS`. `kix upgrade` fetches the notes of every release after the
 project's version up to the target and checks each file against
 `SHA256SUMS`. A release made before structured release notes existed has
-none, and `kix upgrade` says so:
+none, and the first run of an upgrade says so:
 
 ```text
-Note: Kix 0.9.1 shipped without structured release notes; read CHANGELOG.md for that release.
+Note: Kix 0.9.1 has no release notes; see CHANGELOG.md.
 ```
 
 `kix upgrade --preview` lists the notes that apply, grouped by what you must

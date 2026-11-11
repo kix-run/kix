@@ -219,15 +219,23 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                     pinned = run.pinned.release()
                 ));
             }
-            let at = s.steps.last().map_or(from.release(), |l| l.version.clone());
-            println!(
-                "Resuming upgrade Kix {} -> {} (from {at}, reusing {} baseline)",
-                from.release(),
-                goal.release(),
-                from.release()
-            );
-            if !without_notes.is_empty() {
-                println!("{}", out::without_notes_line(&without_notes));
+            // Name the pin only when the project is on a step between the
+            // two ends; otherwise the next lines say what Kix does first.
+            if run.pinned != from && run.pinned != goal {
+                println!(
+                    "Resuming upgrade Kix {} -> {} (from {}, reusing {} baseline)",
+                    from.release(),
+                    goal.release(),
+                    run.pinned.release(),
+                    from.release()
+                );
+            } else {
+                println!(
+                    "Resuming upgrade Kix {} -> {} (reusing {} baseline)",
+                    from.release(),
+                    goal.release(),
+                    from.release()
+                );
             }
             println!();
             saved_in_use(s)
@@ -349,20 +357,37 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .position(|v| *v == failing)
             .map_or(1, |i| i + 1);
         println!();
-        println!(
-            "Stopped at Kix {} (step {position} of {} toward {}).",
-            failing.release(),
-            steps.len(),
-            goal.release()
-        );
-        println!(
-            "kix.toml, flake.nix, and flake.lock are pinned to {} so you can fix this step first.",
-            failing.release()
-        );
-        println!(
-            "Next: fix the error above, then run `kix upgrade` to continue to {}.",
-            goal.release()
-        );
+        if failing != goal {
+            println!(
+                "Stopped at Kix {} (step {position} of {} toward {}).",
+                failing.release(),
+                steps.len(),
+                goal.release()
+            );
+            println!(
+                "kix.toml, flake.nix, and flake.lock are pinned to {} so you can fix this step first.",
+                failing.release()
+            );
+            println!(
+                "Next: fix the error above, then run `kix upgrade` to continue to {}.",
+                goal.release()
+            );
+        } else {
+            if steps.len() == 1 {
+                println!("Stopped at Kix {}.", goal.release());
+            } else {
+                println!(
+                    "Stopped at Kix {} (step {position} of {}).",
+                    goal.release(),
+                    steps.len()
+                );
+            }
+            println!(
+                "kix.toml, flake.nix, and flake.lock are pinned to {} so you can fix the build.",
+                goal.release()
+            );
+            println!("Next: fix the error above, then run `kix upgrade` to finish the upgrade.");
+        }
         run.state_mut().status = Status::FixNeeded;
         run.save()?;
         run.prune(&from, &failing);
@@ -621,6 +646,25 @@ impl Run {
         );
         let installed = match installed {
             Ok(i) => i,
+            // Once the steps began, the state is saved and a rerun resumes.
+            Err(e) if self.state.is_some() => {
+                let v = version.release();
+                println!("Installing Kix {v}... failed");
+                println!();
+                println!(
+                    "Cannot download Kix {v}: {}.",
+                    e.to_string().trim_end_matches('.')
+                );
+                println!(
+                    "Upgrade state is saved in kix-upgrade.json (the {} baseline build is cached).",
+                    self.from.release()
+                );
+                println!(
+                    "Next: check your network connection, then run `kix upgrade` to resume at Kix {v}."
+                );
+                exit(EXIT_REFUSED)?;
+                unreachable!("exit does not return")
+            }
             Err(e) => {
                 println!("Installing Kix {}... failed", version.release());
                 return Err(miette!("{e}"));
@@ -857,12 +901,17 @@ impl Run {
 
     /// Remove each version this run installed, except `from` and `kept`.
     fn prune(&self, from: &Version, kept: &Version) {
+        let mut first = true;
         for i in &self.installed_here {
             if &i.version == from || &i.version == kept {
                 continue;
             }
             match installs::remove_tree(&i.dir) {
                 Ok(()) if self.verbose => {
+                    if first {
+                        println!();
+                        first = false;
+                    }
                     println!("Removed temporary Kix {}.", i.version.release())
                 }
                 Ok(()) => {}
@@ -1152,7 +1201,15 @@ fn preview(p: &Preview) {
         println!();
     } else if p.without_notes.is_empty() {
         println!();
-        println!("No changes between {from} and {target} affect packages used by this project.");
+        match p.known {
+            Known::Clusters(n) => println!(
+                "No changes between {from} and {target} affect packages used by your {n} {}.",
+                if n == 1 { "cluster" } else { "clusters" }
+            ),
+            _ => println!(
+                "No changes between {from} and {target} affect packages used by this project."
+            ),
+        }
     }
     if !notes.is_empty() {
         if listed == 0 {

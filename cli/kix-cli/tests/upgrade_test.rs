@@ -406,6 +406,10 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
         "{out}"
     );
     assert!(
+        out.contains("Upgrading Kix 9.1.0 -> 9.3.0\nNote: Kix 9.2.1 has no release notes; see CHANGELOG.md.\n"),
+        "{out}"
+    );
+    assert!(
         out.contains("  east, west:\n    ~ Deployment/web@shop (web)\n"),
         "{out}"
     );
@@ -495,6 +499,13 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
     );
     assert!(!s.calls().contains("9.1.0 export"), "{}", s.calls());
     assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
+    // A resume does not repeat the note about releases without notes.
+    assert!(!out.contains("no release notes"), "{out}");
+    // The failing step is the target, so there is nothing to continue to.
+    assert!(
+        out.contains("Stopped at Kix 9.3.0 (step 2 of 2).\nkix.toml, flake.nix, and flake.lock are pinned to 9.3.0 so you can fix the build.\nNext: fix the error above, then run `kix upgrade` to finish the upgrade.\n"),
+        "{out}"
+    );
 
     std::fs::remove_file(s.project.join("fake/fail-9.3.0")).unwrap();
     let (code, out) = s.upgrade(&[]);
@@ -916,6 +927,16 @@ fn an_interrupted_run_leaves_a_state_and_resumes() {
     std::fs::rename(&archive, &hidden).unwrap();
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("Installing Kix 9.2.1... failed\n\nCannot download Kix 9.2.1: "),
+        "{out}"
+    );
+    assert!(
+        out.ends_with(
+            "Next: check your network connection, then run `kix upgrade` to resume at Kix 9.2.1.\n"
+        ),
+        "{out}"
+    );
     let state = s.state();
     assert_eq!(state["status"], "fix-needed");
     let last = state["steps"].as_array().unwrap().last().unwrap().clone();
@@ -927,6 +948,12 @@ fn an_interrupted_run_leaves_a_state_and_resumes() {
     std::fs::remove_file(s.project.join("fake/calls.log")).unwrap();
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 0, "{out}");
+    // The project is pinned to the target from the failed jump, so the
+    // opening line names no step.
+    assert!(
+        out.starts_with("Resuming upgrade Kix 9.1.0 -> 9.3.0 (reusing 9.1.0 baseline)\n\n"),
+        "{out}"
+    );
     assert!(
         out.ends_with("Upgraded to Kix 9.3.0. Ready to deploy.\n"),
         "{out}"
@@ -982,6 +1009,16 @@ fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
     assert_eq!(s.read("flake.lock"), lock);
     assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
     assert_eq!(s.installed(), ["9.1.0"]);
+
+    // After the person's edit, the rerun resumes from the version the
+    // project is still on. Moving flake.lock needs Nix, which this test
+    // does not have, so only the opening line is checked.
+    s.write("flake.nix", &flake.replacen("v9.1.0", "v9.3.0", 1));
+    let (_, out) = s.upgrade(&[]);
+    assert!(
+        out.starts_with("Resuming upgrade Kix 9.1.0 -> 9.3.0 (reusing 9.1.0 baseline)\n"),
+        "{out}"
+    );
 }
 
 #[test]
