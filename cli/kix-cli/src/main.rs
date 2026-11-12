@@ -51,7 +51,7 @@ fn default_filter(verbose: u8, quiet: bool) -> &'static str {
     match verbose {
         // kube_client logs every failed request as an error, including the
         // ones Kix retries and then reports itself.
-        0 => "warn,kube_client=off,kube_client::client::tls=warn",
+        0 => "warn,kube_client::client=off,kube_client::client::tls=warn",
         1 => "kix=info",
         2 => "kix=debug",
         _ => "debug",
@@ -307,7 +307,9 @@ mod tracing_filter_tests {
             tracing::warn!(target: "kube_client::client::tls", "Server cert bypassed");
             tracing::warn!(target: "kube_client::config", "impersonating user");
             tracing::warn!(target: "kix::cluster", "a kix warning");
+            tracing::error!(target: "kube_client::client::builder", "failed with status 500 Internal Server Error");
         });
+        assert!(!out.contains("status 500"), "{out}");
         assert!(!out.contains("404 page not found"), "{out}");
         assert!(out.contains("Server cert bypassed"), "{out}");
         assert!(out.contains("impersonating user"), "{out}");
