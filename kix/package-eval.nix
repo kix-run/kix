@@ -262,6 +262,12 @@ let
         config.stringData.api-token = "token";
       };
     };
+    # The operator comes from the catalog through the externalSecrets
+    # dependency.
+    external-secret.config = {
+      store.name = "vault";
+      keys.password = "app/password";
+    };
     # A rules file, so the rules ConfigMap and its mount are built, and a
     # Prometheus provider, so the metrics Service and the ServiceMonitor are
     # built.
