@@ -576,7 +576,7 @@ fn shorten_trace(stderr: &str) -> String {
     }
     if kept.len() < frames.len() {
         short.push(format!(
-            "{indent}({} more stack frame(s) hidden; run kix with -v to show them)",
+            "{indent}({} more stack frame(s) hidden; run with -v to show them)",
             frames.len() - kept.len()
         ));
         short.push(String::new());

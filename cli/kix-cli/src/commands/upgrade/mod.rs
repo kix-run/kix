@@ -106,7 +106,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         && index.releases.iter().any(|r| r.version == *v)
     {
         return refuse(&format!(
-            "Kix {v} is a prerelease, and `kix upgrade` moves only to releases.\nNo project files were modified.\nNext: to try {v}, set kix = \"{v}\" in kix.toml and run `kix lib update`, which moves flake.lock to the {v} library."
+            "Kix {v} is a prerelease, and `kix upgrade` moves only to releases.\nNo project files were modified.\nNext: to try {v}, set kix = \"{v}\" in kix.toml and run `kix lib update`, which moves flake.lock to the Kix library {v}."
         ));
     }
     let min_age = config.upgrade_min_age;

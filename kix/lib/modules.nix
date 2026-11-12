@@ -141,7 +141,7 @@ in
                   if isMoved package then
                     throw (movedMessage package)
                   else if builtins.isPath package then
-                    throw "An instance's `package` is the path ${toString package}, not a package. Write `package = import ${toString package};`."
+                    throw "An instance's `package` is set to the path ${toString package} without `import`. Write `package = import ${toString package};`."
                   else
                     package;
                 description = ''
