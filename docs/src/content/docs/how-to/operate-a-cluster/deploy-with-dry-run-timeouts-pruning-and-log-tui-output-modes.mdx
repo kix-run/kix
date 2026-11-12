@@ -53,6 +53,13 @@ resource as soon as Kix sees the state, with the controller's message. The
 owning package declares which states mean that; see
 [Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/#declare-the-states-that-mean-failure).
 
+An image pull fails at once only when another pull cannot succeed, for example
+when the image or tag does not exist, the registry refuses the login, or the
+image name is invalid. When the pull fails because of the network or the
+registry, such as a timeout, a reset connection, a 5xx answer, or a rate
+limit, the kubelet pulls again and Kix keeps waiting. If the timeout runs out
+first, the message shows the last pull error.
+
 Kix also checks objects it does not change. Before it deploys an object, it
 reads every unchanged object that the object depends on, directly or through
 other unchanged objects, and waits for it to be ready under the same timeout.

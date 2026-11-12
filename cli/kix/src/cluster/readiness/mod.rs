@@ -33,7 +33,10 @@ use crate::manifest::types::ResourceId;
 
 pub use declared::{check_readiness, declared_rule, is_immediate_kind};
 pub use imports::{ImportTarget, MalformedMarker, import_target_from_manifest};
-pub use terminal::{TerminalReason, classify_pod_terminal, classify_workload_terminal};
+pub use terminal::{
+    PullError, TerminalReason, classify_pod_terminal, classify_pull_error,
+    classify_workload_terminal, transient_pull_error,
+};
 
 pub(crate) use declared::{check_job_ready, daemonset_pending_restart};
 pub(crate) use imports::{wait_for_expectations, wait_for_import_target};
@@ -160,7 +163,9 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// Before each poll iteration, scans for terminal failure signals
 /// (`ImagePullBackOff`, `CrashLoopBackOff` past threshold,
 /// `ProgressDeadlineExceeded`, or Job backoff exhausted) and returns `Failed`
-/// immediately on a match. A custom resource whose `kix.run/readiness`
+/// immediately on a match. An image pull that failed for a network reason is
+/// not terminal because the kubelet pulls again. A timeout during such a
+/// retry ends its message with the pull error. A custom resource whose `kix.run/readiness`
 /// annotation lists `failed` states ends the same way when the controller
 /// reports one of them for the current spec ([`declared_failure`]). A match
 /// counts as current when its `observedGeneration` has reached
@@ -273,10 +278,16 @@ pub(crate) async fn wait_for_ready(
             last_progress_at = Instant::now();
         }
 
-        let message = readiness_message(&obj, kind);
+        let mut message = readiness_message(&obj, kind);
         let idle = last_progress_at.elapsed();
         let total = start.elapsed();
+        if scan.pull_retrying.is_some() {
+            message.push_str(", retrying an image pull");
+        }
         on_status(&format!("{message} (idle {}s)", idle.as_secs()));
+        if let Some(pull) = &scan.pull_retrying {
+            message = format!("{message} after this error: {pull}");
+        }
 
         if idle >= idle_budget {
             return Ok(ReadinessResult::TimedOut {
