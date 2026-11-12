@@ -1,0 +1,3 @@
+# 2026-11-12 · `cli/kix-core/src/eval/nix.rs` · An evaluation error prints the full `nix eval` command, Nix's warnings, and three frames inside Kix before the message that matters.
+
+`shorten_trace` keeps the outermost three frames. For a cluster these are always `mkFlake.nix:116`, `mkFlake.nix:146`, and line 1 of the cluster file, so they never point at the mistake. A message such as `[K9503] stackgres-database app/db: password was removed ...` comes last, after a path to the bundled `nix` binary, `warning: Git tree ... is dirty`, and `trace:` lines like the DNS warning. `kix check` puts all of it in one table cell. Seen in every refusal tested on 0.10.0-rc.1.
