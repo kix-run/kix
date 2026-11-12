@@ -69,11 +69,55 @@ let
   # single-node clickhouse for `clickhouse`, and StackGres for `postgres`
   # and `database`. The packages left out are still evaluated as their own
   # instances.
-  availablePackages = removeAttrs packages [
-    "clickhouse-cluster"
-    "cnpg-cluster"
-    "cnpg-database"
-  ];
+  #
+  # Kix refuses to add a package that runs once per cluster, such as an
+  # operator, beside its only consumer, so those entries name a namespace of
+  # their own: the package's name.
+  availablePackages =
+    lib.mapAttrs
+      (
+        name: package:
+        let
+          meta = import ./lib/meta.nix { inherit lib; };
+          packageMeta = kix.peekPackageMeta {
+            inherit package;
+            inherit (kix) kixlib;
+          };
+        in
+        if
+          meta.servesCluster {
+            inherit packageMeta;
+            context = "availablePackages.${name}";
+          }
+        then
+          {
+            inherit package;
+            namespace = name;
+          }
+        else
+          package
+      )
+      (
+        removeAttrs packages [
+          "clickhouse-cluster"
+          "cnpg-cluster"
+          "cnpg-database"
+        ]
+      );
+
+  # The password of every database instance, from a SOPS file encrypted to
+  # the test-only key in clusters/dev-secrets. Evaluation never decrypts it.
+  dbPassword = {
+    passwordSource = ./package-eval-password.sops.yaml;
+    passwordHash = "sha256-CZBEBEf3F4x4XixP50/aHYHOipR3x139Cz4T9XyYqpw=";
+  };
+
+  # The ClickHouse operator runs once per cluster, so the packages that need
+  # it declare it in a namespace of its own, with its login.
+  clickhouseOperator = {
+    clickhouse-operator.package = packages.clickhouse-operator;
+    inherit credentials;
+  };
 
   # A `credentials` secret for packages that read one.
   credentials = {
@@ -145,17 +189,23 @@ let
       };
     };
     clickhouse.instances = { inherit credentials storage; };
-    clickhouse-cluster.instances = { inherit credentials; };
+    clickhouse-cluster = {
+      instances = { inherit credentials; };
+      module = _: { instances.clickhouse-operator = clickhouseOperator; };
+    };
     clickhouse-database = {
-      config.password = "password";
+      config = { inherit (dbPassword) passwordSource passwordHash; };
       instances = { inherit credentials storage; };
     };
-    clickhouse-keeper.instances = { inherit credentials; };
+    clickhouse-keeper = {
+      instances = { inherit credentials; };
+      module = _: { instances.clickhouse-operator = clickhouseOperator; };
+    };
     clickhouse-logs.instances = {
       inherit credentials storage;
       clickhouse-database = {
         package = packages.clickhouse-database;
-        config.password = "password";
+        config = { inherit (dbPassword) passwordSource passwordHash; };
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
@@ -169,7 +219,7 @@ let
     # cnpg-cluster is off the shelf, so the database's cluster is declared.
     cnpg-database = {
       config = {
-        password = "password";
+        inherit (dbPassword) passwordSource passwordHash;
         extensions = [ "citext" ];
       };
       instances.postgres.package = packages.cnpg-cluster;
@@ -180,7 +230,15 @@ let
       postgres.package = packages.cnpg-cluster;
       prometheus-operator.package = packages.prometheus-operator;
     };
-    cluster-issuer.config.spec.selfSigned = { };
+    # CloudNativePG finds a plugin only in its own namespace, so the
+    # operator is declared beside the plugin.
+    cnpg-barman-cloud.instances.cnpg-operator.package = packages.cnpg-operator;
+    # An issuer lives in cert-manager's namespace, so cert-manager is
+    # declared beside it.
+    cluster-issuer = {
+      config.spec.selfSigned = { };
+      instances.cert-manager.package = packages.cert-manager;
+    };
     # A real Prometheus provider, so the ServiceMonitor, the alert rules,
     # and the Service's metrics port are built against its builders.
     coredns = {
@@ -224,7 +282,7 @@ let
       instances = {
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         # The three salts are optional; clusters/test-immich.nix sets them.
         application-secrets = {
@@ -267,7 +325,7 @@ let
         valkey-password = valkeyPassword;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         harbor-secrets = {
           package = packages.secret;
@@ -293,7 +351,7 @@ let
       valkey-password = valkeyPassword;
       database = {
         package = packages.stackgres-database;
-        config.password = "password";
+        config = { inherit (dbPassword) passwordSource passwordHash; };
       };
       prometheus-operator.package = packages.prometheus-operator;
     };
@@ -306,7 +364,7 @@ let
         prometheus-operator.package = packages.prometheus-operator;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         bootstrap-admin = {
           package = packages.secret;
@@ -337,7 +395,7 @@ let
     metabase.instances = {
       database = {
         package = packages.stackgres-database;
-        config.password = "password";
+        config = { inherit (dbPassword) passwordSource passwordHash; };
       };
       encryption-key = {
         package = packages.secret;
@@ -352,11 +410,11 @@ let
         inherit credentials storage;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         clickhouse-database = {
           package = packages.clickhouse-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         secret-key-base = {
           package = packages.secret;
@@ -374,7 +432,7 @@ let
         valkey-password = valkeyPassword;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         n8n-encryption-key = {
           package = packages.secret;
@@ -494,7 +552,7 @@ let
         };
       };
     };
-    stackgres-database.config.password = "password";
+    stackgres-database.config = { inherit (dbPassword) passwordSource passwordHash; };
     stackgres-object-storage = {
       config = {
         type = "s3Compatible";
@@ -535,7 +593,7 @@ let
         inherit storage;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
       };
       config.domain = "https://vault.example.com";
