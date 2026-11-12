@@ -159,6 +159,16 @@ pub enum FetchError {
     #[error("failed to create Kubernetes client: {0}")]
     ClientError(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    /// No `--context` was given, the kubeconfig names no current context,
+    /// and Kix is not running in a Pod.
+    #[error(
+        "Kix does not know which Kubernetes cluster to use: your kubeconfig has no current \
+         context, and Kix is not running inside a cluster. Pass --context <name>, or choose \
+         one with `kubectl config use-context <name>`. Kix reads the kubeconfig from \
+         KUBECONFIG, or ~/.kube/config when KUBECONFIG is not set. (Details: {detail})"
+    )]
+    NoCluster { detail: String },
+
     /// The endpoint did not respond to the first-contact probe within `timeout`.
     #[error(
         "no response from the Kubernetes API server at {endpoint} within {}s. \

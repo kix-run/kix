@@ -570,6 +570,24 @@ fn shorten_trace(stderr: &str) -> String {
         .filter(|frame| !frame.iter().any(|l| in_library(l)))
         .collect();
     let kept = &kept[kept.len().saturating_sub(SHORT_TRACE_FRAMES)..];
+    // A Kix package or contract checks what an instance gave it and throws a
+    // message that names the instance. The frames above it only show where
+    // the cluster definition starts, so the message is all a reader can act
+    // on. The same holds when every frame is in Kix or nixpkgs.
+    let thrown_by_kix_package = frames
+        .last()
+        .is_some_and(|frame| frame.iter().any(|l| in_kix_level_folder(l)));
+    if (kept.is_empty() || thrown_by_kix_package) && !frames.is_empty() {
+        let mut alone: Vec<String> = message
+            .iter()
+            .map(|l| l.strip_prefix(indent).unwrap_or(l).to_string())
+            .collect();
+        alone.push(format!(
+            "({} stack frame(s) hidden; run with -v to show them)",
+            frames.len()
+        ));
+        return alone.join("\n");
+    }
     let mut short = vec!["error:".to_string()];
     for frame in kept {
         short.extend(frame.iter().map(|l| l.to_string()));
@@ -585,12 +603,29 @@ fn shorten_trace(stderr: &str) -> String {
     short.join("\n")
 }
 
-/// Return whether a trace line places its frame in nixpkgs or Kix's own
-/// library, which rarely shows a reader what to change.
+/// Return whether a trace line places its frame in nixpkgs or in Kix's own
+/// library, packages, contracts, or modules, which rarely shows a reader what
+/// to change. Kix's packages, contracts, and modules sit in `stable/` and
+/// `experimental/` folders, which tells them apart from a project's own
+/// `kix/packages/` folder.
 fn in_library(line: &str) -> bool {
-    let line = line.trim_start();
-    line.starts_with("at ")
-        && (line.contains("«github:NixOS/nixpkgs") || line.contains("/kix/lib/"))
+    let at = line.trim_start();
+    at.starts_with("at ")
+        && (at.contains("«github:NixOS/nixpkgs")
+            || at.contains("/kix/lib/")
+            || in_kix_level_folder(line))
+}
+
+/// Return whether a trace line places its frame in a Kix package, contract,
+/// or module, which sit in `stable/` and `experimental/` folders.
+fn in_kix_level_folder(line: &str) -> bool {
+    let at = line.trim_start();
+    at.starts_with("at ")
+        && ["packages", "contracts", "modules"].iter().any(|dir| {
+            ["stable", "experimental"]
+                .iter()
+                .any(|level| at.contains(&format!("/kix/{dir}/{level}/")))
+        })
 }
 
 /// Return whether a Nix error `message` is one of Kix's own that says what to
@@ -600,7 +635,11 @@ fn names_its_fix(message: &str) -> bool {
         let rest = &message.as_bytes()[i + 2..];
         rest.len() >= 5 && rest[..4].iter().all(u8::is_ascii_digit) && rest[4] == b']'
     });
-    has_id || (message.starts_with("error: cluster '") && message.contains(" problem(s):"))
+    let unknown_option =
+        message.starts_with("error: The option `") && message.contains("' does not exist.");
+    has_id
+        || unknown_option
+        || (message.starts_with("error: cluster '") && message.contains(" problem(s):"))
 }
 
 fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError> {
@@ -864,13 +903,55 @@ mod tests {
     fn frames_in_the_library_are_hidden() {
         let lib = "       … while calling 'throw'\n         at /x/kix/lib/modules.nix:1:1:\n";
         let full = format!(
-            "error:\n{}\n{lib}\n       error: The option `a.b' does not exist.",
+            "error:\n{}\n{lib}\n       error: attribute 'b' missing",
             frame("while evaluating the file"),
         );
         let short = shorten_trace(&full);
         assert!(!short.contains("kix/lib"), "{short}");
         assert!(short.contains("while evaluating the file"), "{short}");
         assert!(short.contains("(1 more stack frame(s) hidden"), "{short}");
+    }
+
+    #[test]
+    fn a_throw_from_a_kix_package_stands_alone() {
+        let pkg = "       … while calling 'throw'\n         at «github:kix-run/kix/abc»/kix/packages/experimental/cnpg-database/default.nix:280:11:\n";
+        let contract = "       … while calling 'use'\n         at /nix/store/x-source/kix/contracts/stable/secret.nix:73:9:\n";
+        let full =
+            format!("error:\n{pkg}{contract}\n       error: app-db: has no `password` dependency.");
+        assert_eq!(
+            shorten_trace(&full),
+            "error: app-db: has no `password` dependency.\n(2 stack frame(s) hidden; run with -v to show them)"
+        );
+        // The frames of the cluster definition that led there go too.
+        let full = format!(
+            "error:\n{}\n{pkg}\n       error: app-db: has no `password` dependency.",
+            frame("while calling anonymous lambda"),
+        );
+        assert!(
+            shorten_trace(&full)
+                .starts_with("error: app-db: has no `password` dependency.\n(2 stack"),
+            "{}",
+            shorten_trace(&full)
+        );
+    }
+
+    #[test]
+    fn a_projects_own_packages_folder_is_not_the_library() {
+        let own = "       … while calling 'throw'\n         at /nix/store/x-source/src/kix/packages/site/default.nix:3:1:\n";
+        let short = shorten_trace(&format!("error:\n{own}\n       error: boom"));
+        assert!(short.contains("src/kix/packages/site"), "{short}");
+    }
+
+    #[test]
+    fn an_unknown_option_stands_alone() {
+        let full = format!(
+            "error:\n{}\n       error: The option `a.b' does not exist. Definition values:\n       - In `x': 1",
+            frame("while calling anonymous lambda"),
+        );
+        assert_eq!(
+            shorten_trace(&full),
+            "error: The option `a.b' does not exist. Definition values:\n- In `x': 1"
+        );
     }
 
     #[test]

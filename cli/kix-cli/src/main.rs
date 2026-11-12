@@ -49,7 +49,9 @@ fn default_filter(verbose: u8, quiet: bool) -> &'static str {
         return "error";
     }
     match verbose {
-        0 => "warn,kube_client::client=error,kube_client::client::tls=warn",
+        // kube_client logs every failed request as an error, including the
+        // ones Kix retries and then reports itself.
+        0 => "warn,kube_client=off,kube_client::client::tls=warn",
         1 => "kix=info",
         2 => "kix=debug",
         _ => "debug",
@@ -62,16 +64,25 @@ fn default_filter(verbose: u8, quiet: bool) -> &'static str {
 fn init_tracing(verbose: u8, quiet: bool) {
     use tracing_subscriber::EnvFilter;
 
-    let filter = std::env::var("KIX_LOG")
+    let custom = std::env::var("KIX_LOG").ok();
+    // Without -v or KIX_LOG, only warnings show, so drop the timestamp and
+    // module path that are there for debugging.
+    let plain = custom.is_none() && verbose == 0;
+    let filter = custom
         .map(EnvFilter::new)
-        .unwrap_or_else(|_| EnvFilter::new(default_filter(verbose, quiet)));
+        .unwrap_or_else(|| EnvFilter::new(default_filter(verbose, quiet)));
 
-    tracing_subscriber::fmt()
+    let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(trace_sink::make_writer)
-        .with_timer(tracing_subscriber::fmt::time::uptime())
-        .with_ansi(false)
-        .init();
+        .with_ansi(false);
+    if plain {
+        builder.without_time().with_target(false).init();
+    } else {
+        builder
+            .with_timer(tracing_subscriber::fmt::time::uptime())
+            .init();
+    }
 }
 
 /// Compute the [`output::Mode`] for `cli`.

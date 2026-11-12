@@ -22,16 +22,20 @@ struct CheckResponse {
     verbose: bool,
 }
 
+/// The longest one-line detail kept in the table. Longer ones would stretch
+/// every row of the table past the width of a terminal.
+const MAX_CELL_CHARS: usize = 80;
+
 impl CommandResponse for CheckResponse {
     fn format_text(&self) -> String {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
         table.set_header(["TOOL", "RESULT", "DETAILS"]);
-        // A message of several lines does not fit a table cell, so it goes
-        // under the table.
+        // A message of several lines, or one too long for a terminal line,
+        // does not fit a table cell, so it goes under the table.
         let mut below = Vec::new();
         for r in &self.results {
-            if r.details.contains('\n') {
+            if r.details.contains('\n') || r.details.chars().count() > MAX_CELL_CHARS {
                 table.add_row([r.tool.as_str(), r.result.as_str(), "see below"]);
                 below.push(r.details.trim_end().to_string());
             } else {

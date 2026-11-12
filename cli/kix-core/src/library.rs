@@ -317,7 +317,7 @@ fn classify(node: &Value, name: &str, version: &str, test_repo: Option<&str>) ->
         }
         return Some(Box::new(move |path| {
             Action::ByHand(format!(
-                "The input `{}` reads the Kix library from {from} instead of {LIBRARY_FLAKE}, so Kix cannot move it. Point it at {LIBRARY_FLAKE}/{tag}, or move that copy to the {tag} release.",
+                "The input `{}` reads the Kix library from {from} instead of {LIBRARY_FLAKE}, so Kix cannot move it. Point it at {LIBRARY_FLAKE}/{tag} in flake.nix, or move that copy to the {tag} release. Then run `kix lib update` again.",
                 path.join("/")
             ))
         }));
@@ -464,6 +464,21 @@ fn rev_at(lock: &Value, path: &[String]) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Return the release named by the tag (`vX.Y.Z`) that `original` holds for
+/// the input at `path` in `lock`, following `follows`.
+fn locked_tag(lock: &Value, path: &[String]) -> Option<String> {
+    let mut key = lock["root"].as_str().unwrap_or("root").to_string();
+    for name in path {
+        key = lock["nodes"][&key]["inputs"][name].as_str()?.to_string();
+    }
+    let original = &lock["nodes"][&key]["original"];
+    let tag = original["ref"].as_str()?;
+    let tag = tag.strip_prefix("refs/tags/").unwrap_or(tag);
+    tag.strip_prefix('v')
+        .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+        .map(str::to_string)
+}
+
 /// What [`update`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Updated {
@@ -496,17 +511,48 @@ pub fn update_to(flake: &str, release: &str, dry_run: bool) -> Result<Updated, U
     let lock = read_lock(&lock_path)?;
     let test_repo = std::env::var(TEST_REPO_VAR).ok().filter(|v| !v.is_empty());
     let release = release.to_string();
-    let inputs = library_inputs(&lock, &release, test_repo.as_deref());
+    let by_hand_steps = |inputs: &[LibraryInput]| -> Vec<String> {
+        inputs
+            .iter()
+            .filter_map(|i| match &i.action {
+                Action::ByHand(text) => Some(text.clone()),
+                Action::Move { .. } => None,
+            })
+            .collect()
+    };
+    let mut inputs = library_inputs(&lock, &release, test_repo.as_deref());
+    let mut by_hand = by_hand_steps(&inputs);
+    if !by_hand.is_empty() {
+        // flake.lock still records an input as flake.nix spelled it before
+        // the person followed one of these steps. Read the lock that
+        // flake.nix gives now, without writing it, and decide again.
+        if let Ok(current) = current_lock(dir, &release) {
+            inputs = library_inputs(&current, &release, test_repo.as_deref());
+            by_hand = by_hand_steps(&inputs);
+        }
+    }
     if inputs.is_empty() {
         return Err(UpdateError::NotFound);
     }
-    let by_hand: Vec<String> = inputs
-        .iter()
-        .filter_map(|i| match &i.action {
-            Action::ByHand(text) => Some(text.clone()),
-            Action::Move { .. } => None,
-        })
-        .collect();
+    // A copy Kix cannot move, such as a mirror, may already be at the
+    // release because the person moved it by hand. Then only flake.lock
+    // has to catch up.
+    if !by_hand.is_empty() && eval_version(dir, &[]) == LibraryVersion::Known(release.clone()) {
+        let new_lock = if dry_run {
+            current_lock(dir, &release)?
+        } else {
+            self::lock(dir, &release)?;
+            read_lock(&lock_path)?
+        };
+        let changed = inputs
+            .iter()
+            .any(|i| rev_at(&new_lock, &i.path) != rev_at(&lock, &i.path));
+        return Ok(Updated {
+            from: LibraryVersion::Unknown,
+            to: release,
+            changed,
+        });
+    }
     if !by_hand.is_empty() {
         return Err(UpdateError::ByHand {
             version: release,
@@ -514,7 +560,17 @@ pub fn update_to(flake: &str, release: &str, dry_run: bool) -> Result<Updated, U
         });
     }
 
-    let from = eval_version(dir, &[]);
+    // Nix evaluates flake.nix as it is now, which already names the new
+    // release when the person moved a pinned input by hand. The old tag in
+    // flake.lock then tells the release the project had.
+    let from = match eval_version(dir, &[]) {
+        LibraryVersion::Known(v) if v == release => inputs
+            .iter()
+            .find_map(|i| locked_tag(&lock, &i.path))
+            .filter(|old| *old != release)
+            .map_or(LibraryVersion::Known(v), LibraryVersion::Known),
+        other => other,
+    };
     let nix_error = |source| UpdateError::Nix {
         version: release.clone(),
         source,
@@ -544,7 +600,11 @@ pub fn update_to(flake: &str, release: &str, dry_run: bool) -> Result<Updated, U
     } else {
         read_lock(&lock_path)?
     };
-    let changed = inputs.iter().any(|i| rev_at(&new_lock, &i.path) != i.rev);
+    // Compare with flake.lock as it was on disk, which `inputs` may not
+    // describe when flake.nix changed since the last lock.
+    let changed = inputs
+        .iter()
+        .any(|i| rev_at(&new_lock, &i.path) != rev_at(&lock, &i.path));
     Ok(Updated {
         from,
         to: release,
@@ -568,6 +628,31 @@ pub fn lock(dir: &Path, release: &str) -> Result<(), UpdateError> {
     ])
     .current_dir(dir);
     output(&mut cmd).map(|_| ()).map_err(nix_error)
+}
+
+/// Return the lock that `flake.nix` in `dir` gives now, with each input whose
+/// entry changed locked again, without writing `flake.lock`.
+fn current_lock(dir: &Path, release: &str) -> Result<Value, UpdateError> {
+    let nix_error = |source| UpdateError::Nix {
+        version: release.to_string(),
+        source,
+    };
+    let mut cmd = command(Tool::Nix).map_err(nix_error)?;
+    cmd.args([
+        "flake",
+        "metadata",
+        "--json",
+        "--no-write-lock-file",
+        "--extra-experimental-features",
+        "nix-command flakes",
+    ])
+    .current_dir(dir);
+    let out = output(&mut cmd).map_err(nix_error)?;
+    let metadata: Value = serde_json::from_slice(&out).map_err(|e| UpdateError::BadLock {
+        path: dir.join("flake.lock"),
+        message: format!("`nix flake metadata` printed no JSON: {e}"),
+    })?;
+    Ok(metadata["locks"].clone())
 }
 
 fn read_lock(path: &Path) -> Result<Value, UpdateError> {
@@ -614,6 +699,22 @@ mod tests {
                 Action::ByHand(text) => (i.override_path(), format!("by hand: {text}")),
             })
             .collect()
+    }
+
+    #[test]
+    fn reads_the_release_of_a_tag_in_the_lock() {
+        let lock = json!({
+            "root": "root",
+            "nodes": {
+                "root": { "inputs": { "kixpkgs": "kixpkgs" } },
+                "kixpkgs": { "original": { "type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.9.1" } }
+            }
+        });
+        assert_eq!(
+            locked_tag(&lock, &["kixpkgs".into()]).as_deref(),
+            Some("0.9.1")
+        );
+        assert_eq!(locked_tag(&lock, &["other".into()]), None);
     }
 
     #[test]
