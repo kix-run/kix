@@ -168,7 +168,7 @@ in
         oidcOn = oidcProviderInfo != null;
         oidcCredentials = oidcProviderInfo.credentials;
 
-        admin = kix.checkSecretKeys {
+        admin = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "grafanaAdmin";
           dep = grafanaAdmin;

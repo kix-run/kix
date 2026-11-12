@@ -250,7 +250,7 @@ in
           if builtins.length configRoutes > 1 then
             throw "${who}: ${lib.concatStringsSep " and " configRoutes} are set, and each supplies the whole Alertmanager configuration. Keep one."
           else
-            kix.checkSecretKeys {
+            kix.contracts.secret.helpers.use {
               inherit who;
               arg = "alertmanagerConfig";
               dep = alertmanagerConfig;

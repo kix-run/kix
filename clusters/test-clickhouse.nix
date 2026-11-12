@@ -83,12 +83,11 @@ kix.buildCluster {
           events-writer = {
             package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.analytics.clickhouse;
+            deps.password = ref.apps.events-writer-password;
             config = {
               database = "events";
               user = "events_writer";
               privileges = [ "INSERT" ];
-              passwordSource = ./dev-secrets/clickhouse-writer.sops.yaml;
-              passwordHash = "sha256-3SzwB0cSxd5FydzhTnlpDbzeo5RVDcyKAYozycJTFjM=";
               schema."01-events.sql" = ''
                 CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
                 (ts DateTime, message String)
@@ -101,12 +100,27 @@ kix.buildCluster {
           events-reader = {
             package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.analytics.clickhouse;
+            deps.password = ref.apps.events-reader-password;
             config = {
               database = "events";
               user = "events_reader";
               privileges = [ "SELECT" ];
-              passwordSource = ./dev-secrets/clickhouse-reader.sops.yaml;
-              passwordHash = "sha256-dmv/EC/7xd7edSv4+fNenSCjIX4tphprqkcNLmDH/zE=";
+            };
+          };
+          events-writer-password = {
+            package = packages.secret;
+            config = {
+              source = ./dev-secrets/clickhouse-writer.sops.yaml;
+              hash = "sha256-3SzwB0cSxd5FydzhTnlpDbzeo5RVDcyKAYozycJTFjM=";
+              keys = [ "password" ];
+            };
+          };
+          events-reader-password = {
+            package = packages.secret;
+            config = {
+              source = ./dev-secrets/clickhouse-reader.sops.yaml;
+              hash = "sha256-dmv/EC/7xd7edSv4+fNenSCjIX4tphprqkcNLmDH/zE=";
+              keys = [ "password" ];
             };
           };
         };
@@ -130,8 +144,15 @@ kix.buildCluster {
               database = "logs";
               user = "logs_writer";
               privileges = [ "INSERT" ];
-              passwordSource = ./dev-secrets/clickhouse-logs-writer.sops.yaml;
-              passwordHash = "sha256-5VldXrruCH+ik7THWptuUkRraB5hs2yD5LN4ElBNQQU=";
+            };
+          };
+          logs-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
+            config = {
+              source = ./dev-secrets/clickhouse-logs-writer.sops.yaml;
+              hash = "sha256-5VldXrruCH+ik7THWptuUkRraB5hs2yD5LN4ElBNQQU=";
+              keys = [ "password" ];
             };
           };
         };
@@ -143,8 +164,15 @@ kix.buildCluster {
             database = "logs";
             user = "logs_reader";
             privileges = [ "SELECT" ];
-            passwordSource = ./dev-secrets/clickhouse-logs-reader.sops.yaml;
-            passwordHash = "sha256-MLJxrpprts1rhcwcWhUK7+11Dfknfm02ALwcUnYQ5l4=";
+          };
+        };
+        instances.dashboards.logs-reader-password = {
+          package = packages.secret;
+          aliases = [ "password" ];
+          config = {
+            source = ./dev-secrets/clickhouse-logs-reader.sops.yaml;
+            hash = "sha256-MLJxrpprts1rhcwcWhUK7+11Dfknfm02ALwcUnYQ5l4=";
+            keys = [ "password" ];
           };
         };
 
@@ -193,13 +221,20 @@ kix.buildCluster {
               "INSERT"
               "SELECT"
             ];
-            passwordSource = ./dev-secrets/clickhouse-ha-writer.sops.yaml;
-            passwordHash = "sha256-hDC5NC5WiiYwb6xbofK+j/LaBpZ5P/a+ni8ttdUnevs=";
             schema."01-events.sql" = ''
               CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
               (ts DateTime, message String)
               ENGINE = ReplicatedMergeTree ORDER BY ts
             '';
+          };
+        };
+        instances.apps-ha.ha-events-password = {
+          package = packages.secret;
+          aliases = [ "password" ];
+          config = {
+            source = ./dev-secrets/clickhouse-ha-writer.sops.yaml;
+            hash = "sha256-hDC5NC5WiiYwb6xbofK+j/LaBpZ5P/a+ni8ttdUnevs=";
+            keys = [ "password" ];
           };
         };
       }

@@ -56,9 +56,16 @@ kix.buildCluster {
           };
           metabase-db = {
             package = packages.experimental.stackgres-database;
+          };
+          metabase-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
             # Dev-only value; it protects nothing.
-            config.passwordSource = ./dev-secrets/metabase-db.sops.yaml;
-            config.passwordHash = "sha256-k0pdgI1oX0m5LiEyPB32gfh3QgB7yTQZPRyNBtkmqpM=";
+            config = {
+              source = ./dev-secrets/metabase-db.sops.yaml;
+              hash = "sha256-k0pdgI1oX0m5LiEyPB32gfh3QgB7yTQZPRyNBtkmqpM=";
+              keys = [ "password" ];
+            };
           };
           metabase-encryption-key = {
             package = packages.secret;

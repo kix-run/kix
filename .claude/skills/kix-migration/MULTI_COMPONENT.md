@@ -41,9 +41,9 @@ Reference implementation: `kix/packages/stable/harbor/`.
    # root.requires = [ self.coreDeployment self.jobserviceDeployment ... ]
    ```
 
-5. **Secrets are dependencies, checked before the first read**. A secret the package needs is a dependency named for its contract (`harborSecrets`, not `credentials`), read through one binding made by `kix.checkSecretKeys`, so a missing key fails with the secret's name before any `out.keyRef` throws. A dependency's own Secret (`database.out.credentials`) gets a local check instead, whose message names the database, because `deps.database` takes a database, not a Secret.
+5. **Secrets are dependencies, checked before the first read**. A secret the package needs is a dependency named for its contract (`harborSecrets`, not `credentials`), read through one binding made by `kix.contracts.secret.helpers.use`, so a missing key fails with the secret's name before any `out.keyRef` throws. A dependency's own Secret (`database.out.credentials`) gets a local check instead, whose message names the database, because `deps.database` takes a database, not a Secret.
    ```nix
-   secrets = kix.checkSecretKeys { inherit who; arg = "harborSecrets"; dep = harborSecrets; keys = secretKeys; };
+   secrets = kix.contracts.secret.helpers.use { inherit who; arg = "harborSecrets"; dep = harborSecrets; keys = secretKeys; };
    env = secrets.out.mkEnv { CORE_SECRET = "coreSecret"; JOBSERVICE_SECRET = "jobserviceSecret"; }
      ++ dbCredentials.out.mkEnv { POSTGRESQL_PASSWORD = "password"; };
    envFrom = [ { configMapRef.name = self.coreConfigMap.out.name; } ];

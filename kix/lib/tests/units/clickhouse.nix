@@ -4,7 +4,7 @@
 # addresses for each replica, Keeper's metrics endpoint, and the alert
 # rules of the operator, Keeper, and both server packages and what each
 # rule is gated on, and clickhouse-database's refusal of the removed
-# `password` option.
+# password options and its two routes for the `password` dependency.
 # The operator runs in `clickhouse-system`, Keeper and the servers in `db`,
 # the prometheus stub in `monitoring`.
 # tryEval drops a throw's message, so each refusal is checked with
@@ -30,6 +30,7 @@ let
   keeperPackage = import ../../../packages/experimental/clickhouse-keeper;
   clusterPackage = import ../../../packages/experimental/clickhouse-cluster;
   secretPackage = import ../../../packages/stable/secret;
+  secretRefPackage = import ../../../packages/stable/secret-ref;
   barePackage = import ../../../packages/experimental/clickhouse;
   pvcPackage = import ../../../packages/stable/persistent-volume-claim;
   databasePackage = import ../../../packages/experimental/clickhouse-database;
@@ -115,6 +116,46 @@ let
       ]
       ++ modules
     );
+
+  # `bare` with a clickhouse-database `app-db` in `apps` on `ch`, with
+  # `password` as its password dependency `app-db-password` unless that is
+  # null.
+  withDatabase =
+    {
+      config ? { },
+      password ? {
+        package = secretPackage;
+        config = {
+          source = ./clickhouse.nix;
+          hash = "hash";
+          keys = [ "password" ];
+        };
+      },
+    }:
+    bare {
+      modules = [
+        (
+          { ref, ... }:
+          {
+            instances.apps = {
+              app-db = {
+                package = databasePackage;
+                deps = {
+                  clickhouse = ref.db.ch;
+                }
+                // lib.optionalAttrs (password != null) {
+                  password = ref.apps.app-db-password;
+                };
+                inherit config;
+              };
+            }
+            // lib.optionalAttrs (password != null) {
+              app-db-password = password;
+            };
+          }
+        )
+      ];
+    };
 
   rulesOf = cluster: alertRulesOf "PrometheusRule" "ch" (manifests cluster);
 
@@ -377,32 +418,13 @@ in
       builtins.toJSON (if rules3 == null then null else builtins.attrNames rules3)
     }, one ${builtins.toJSON (if rules1 == null then null else builtins.attrNames rules1)}";
 
-  # The removed `password` option fails the build. `passwordSource` fills
-  # both Secrets from the SOPS file at deploy.
+  # The removed `password`, `passwordSource`, and `passwordHash` options
+  # fail the build, and so does a database with no `password` dependency.
+  # A packages.secret with a SOPS source fills both Secrets from that file
+  # at deploy.
   clickhouse-database-password-refused =
     let
-      withDatabase =
-        config:
-        bare {
-          modules = [
-            (
-              { ref, ... }:
-              {
-                instances.apps.app-db = {
-                  package = databasePackage;
-                  deps.clickhouse = ref.db.ch;
-                  inherit config;
-                };
-              }
-            )
-          ];
-        };
-      sopsPassword = {
-        passwordSource = ./clickhouse.nix;
-        passwordHash = "hash";
-      };
-      literal = withDatabase (sopsPassword // { password = "pw"; });
-      secretIn = name: byName name (ofKind "Secret" (manifests (withDatabase sopsPassword)));
+      secretIn = name: byName name (ofKind "Secret" (manifests (withDatabase { })));
       fromSops =
         name:
         let
@@ -410,6 +432,80 @@ in
         in
         secret.metadata.annotations ? ${kixKeys.sopsSource} && !(secret.stringData or { } ? password);
     in
-    (evalFails literal && fromSops "app-db-credentials" && fromSops "app-db-apps-bootstrap-password")
+    (
+      evalFails (withDatabase {
+        config.password = "pw";
+      })
+      && evalFails (withDatabase {
+        config = {
+          passwordSource = ./clickhouse.nix;
+          passwordHash = "hash";
+        };
+      })
+      && evalFails (withDatabase {
+        password = null;
+      })
+      && fromSops "app-db-credentials"
+      && fromSops "app-db-apps-bootstrap-password"
+    )
     || throw "clickhouse-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
+
+  # A password from a secret-ref holding `username` and `password` is the
+  # credentials Secret. The package renders no Secret of its own, and the
+  # Job reads the password from `<instance>-<namespace>-bootstrap-password`
+  # in the server's namespace, which the site writes. A secret-ref without
+  # `username` fails.
+  clickhouse-database-password-secret-ref =
+    let
+      withRef =
+        keys:
+        withDatabase {
+          password = {
+            package = secretRefPackage;
+            config = { inherit keys; };
+          };
+        };
+      cluster = withRef [
+        "username"
+        "password"
+      ];
+      ms = manifests cluster;
+      secrets = map (m: "${m.metadata.namespace}/${m.metadata.name}") (ofKind "Secret" ms);
+      imported = map (m: "${m.metadata.namespace}/${m.metadata.annotations.${kixKeys.importName}}") (
+        builtins.filter (m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret") (
+          ofKind "PackageInstance" ms
+        )
+      );
+      job = builtins.head (
+        builtins.filter (m: lib.hasPrefix "app-db-apps-bootstrap-" m.metadata.name) (ofKind "Job" ms)
+      );
+      newPassword =
+        (lib.findFirst (e: e.name == "NEW_PASSWORD") null
+          (builtins.head job.spec.template.spec.containers).env
+        ).valueFrom.secretKeyRef;
+      credentialsName = builtins.unsafeDiscardStringContext cluster.instances.apps.app-db.raw.root.out.credentials.out.name;
+    in
+    (
+      newPassword == {
+        name = "app-db-apps-bootstrap-password";
+        key = "password";
+      }
+      && job.metadata.namespace == "db"
+      && builtins.elem "db/app-db-apps-bootstrap-password" imported
+      && builtins.elem "apps/app-db-password" imported
+      && credentialsName == "app-db-password"
+      && !(builtins.elem "apps/app-db-credentials" secrets)
+      && !(builtins.elem "db/app-db-apps-bootstrap-password" secrets)
+      && evalFails (withRef [ "password" ])
+    )
+    || throw "clickhouse-database secret-ref password: ${
+      builtins.toJSON {
+        inherit
+          secrets
+          imported
+          newPassword
+          credentialsName
+          ;
+      }
+    }";
 }

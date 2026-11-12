@@ -101,7 +101,7 @@ in
       ...
     }:
     let
-      token = kix.checkSecretKeys {
+      token = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "tunnelToken";
         dep = tunnelToken;

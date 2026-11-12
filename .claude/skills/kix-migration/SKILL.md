@@ -550,7 +550,7 @@ The script gives up once `RETRY_FOR` seconds have passed and keeps one round of 
 | `kix.mergeGuarded { who; locked; what ? "extraSpec"; } base overrides` | `lib.recursiveUpdate` for an `extraSpec` or `settings` escape hatch that throws when `overrides` touches a path in `locked` (a list of attribute paths the package computes) or sets an ancestor of one to a non-attrset value such as null. Use it for every `extraSpec` and `settings`. |
 | `kix.mergeEnv { who; defaults ? { }; owned ? [ ]; } config.env` | The env attrset for `kix.mkEnvVars`: `defaults`, then the instance's `env`, then the owned variables. Each `owned` group is `{ vars ? { }; names ? [ ]; from; fix; }`; an `env` key a group owns throws with `from` and `fix`. Every `env` option goes through it. |
 | `kix.guardArgs { who; option ? "extraArgs"; owned; } config.extraArgs` | Returns `extraArgs` unless it sets an owned flag. A list entry matches `--flag`, `--flag=...`, or a one-letter flag with an attached value; a key of an attrset (a VictoriaMetrics CR's `extraArgs`) matches an owned name with or without leading dashes. `owned."--flag"` is the reason and fix shown after `which this package does not accept:`. |
-| `kix.checkSecretKeys { who; arg; dep; keys ? [ ]; anyOf ? null; }` | Returns the secret dep after checking its declared keys; read the secret through the returned value so the check runs before any `keyRef` throws. |
+| `kix.contracts.secret.helpers.use { who; arg; dep; keys ? [ ]; anyOf ? null; }` | Returns the secret dep after checking that it is a secret (`kix.contracts.secret`) and declares the keys; read the secret through the returned value so the check runs before any `keyRef` throws. `kix.checkSecretKeys` takes the same arguments and checks the keys only. |
 | `kix.operandPolicy { scope; name; spec; }` | A network policy over pods an operator creates (`spec` in the enforcer's format). Drops the `ingress`/`egress` sections of a direction `networkPolicy.directions` does not enforce; null when no enforcer runs or no section is left, so filter nulls before `root.requires`. |
 | `kix.parseQuantity "memory" "512Mi"` | `→ 536870912` (bytes; millicores for `"cpu"`); null when not a quantity; an integer, and a value above the signed 64-bit range throws. |
 
@@ -643,7 +643,9 @@ A package is stable or experimental. `packages.<name>` and `packages.stable.<nam
       config = { source = ./valkey.sops.yaml; keys = [ "password" ]; }; };
     harbor-pg.package = packages.experimental.stackgres-cluster;      # answers stackgres-database's `postgres`
     harbor-db = { package = packages.experimental.stackgres-database;  # answers harbor's `database`
-      config = { database = "registry"; passwordSource = ./harbor-db.sops.yaml; passwordHash = "..."; }; };
+      config = { database = "registry"; user = "harbor"; }; };
+    harbor-db-password = { package = packages.secret; aliases = [ "password" ];   # answers stackgres-database's `password`
+      config = { source = ./harbor-db.sops.yaml; hash = "sha256-..."; keys = [ "password" ]; }; };
   };
 }
 ```
@@ -896,7 +898,7 @@ When a service has a small form and an operator form, build both as separate pac
 - **Before the first deploy onto an existing cluster, run `kix plan <cluster>`.** `kix diff` reads only, so it misses what shows on the write path. Taking over objects that Helm, kubectl, or an installer made usually stops on field ownership conflicts (the plan names the manager and the fields) and on immutable fields such as a Deployment's `spec.selector`. Decide per conflict: `ownership.cede` when the other manager should keep the field, `--force-conflicts` when Kix should take it, or delete and recreate for an immutable field. An object whose namespace or CRD the deploy creates is listed as not checked, which is expected on a first deploy. `kix diff` can also show a field as removed when another manager owns it, so trust the plan where the two disagree. A "Kubernetes would not keep" warning names a field the CRD's schema drops (often a field the upstream chart sets for a newer CRD version, or a typo) or a value a mutating webhook changes: fix the manifest or the CRD version, since the setting never takes effect.
 - **Cluster-only resources are fine.** Many cluster resources (operator CRDs, auto-generated secrets) are not Kix-managed. Focus on the **Modified** section.
 - **A new package is evaluated by `nix build .#checks.x86_64-linux.every-package-evaluates`** at availability `none` and `zone`, without being named by any cluster. If it has options with no default, or needs an instance the catalog cannot auto-instantiate (a secret dep such as `valkeyPassword`), add them to the `settings` table in `kix/package-eval.nix`.
-- **Never `types.anything` with an attrset default.** Use `kix.options.resources` for container resources, a submodule with defaults on its fields otherwise, and `kix.types.quantity` for sizes. `extraArgs` goes through `kix.guardArgs`, `env` through `kix.mergeEnv`, and every secret dep through `kix.checkSecretKeys`.
+- **Never `types.anything` with an attrset default.** Use `kix.options.resources` for container resources, a submodule with defaults on its fields otherwise, and `kix.types.quantity` for sizes. `extraArgs` goes through `kix.guardArgs`, `env` through `kix.mergeEnv`, and every secret dep through `kix.contracts.secret.helpers.use`.
 - **Review the package before opening a pull request.** The `package-review` skill (`.claude/skills/package-review/SKILL.md`) holds the principles a package must meet and the checklist of known mistakes, with the commands that find them.
 - **Pipe the diff to an LLM.** `./scripts/compare-cluster-dump.py ./result cluster-dump/ | pbcopy`
 - **Look at existing packages for patterns:**

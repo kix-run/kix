@@ -159,9 +159,16 @@ kix.buildCluster {
                   version = null;
                 }
               ];
-              # Test values only.
-              passwordSource = ./dev-secrets/cnpg-app-db.sops.yaml;
-              passwordHash = "sha256-M4b7ISu/Z6SShWDjhi3Hn8OAfI6U8VTLWyiI7J7vNvg=";
+            };
+          };
+          app-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
+            # Test values only.
+            config = {
+              source = ./dev-secrets/cnpg-app-db.sops.yaml;
+              hash = "sha256-M4b7ISu/Z6SShWDjhi3Hn8OAfI6U8VTLWyiI7J7vNvg=";
+              keys = [ "password" ];
             };
           };
           metabase = {

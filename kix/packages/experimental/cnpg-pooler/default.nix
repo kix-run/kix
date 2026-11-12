@@ -20,8 +20,11 @@
 #   app-db = {
 #     package = packages.experimental.cnpg-database;
 #     deps.postgres = ref.data.pg-pooler;
-#     config.passwordSource = ./secrets/app-db.yaml;
-#     config.passwordHash = "...";
+#   };
+#   app-db-password = {
+#     package = packages.secret;
+#     aliases = [ "password" ];
+#     config = { source = ./secrets/app-db.yaml; hash = "..."; keys = [ "password" ]; };
 #   };
 #
 # The package claims no alias: `postgres` belongs to the cluster, so a

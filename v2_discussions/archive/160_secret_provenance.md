@@ -1,6 +1,6 @@
 # 160: Secret provenance: the site chooses where values come from
 
-**Status:** Accepted; §5.1 (cloudflared, firezone), §5.2, §5.3, and §5.4 shipped 2026-10-17. Open: §6.3 (database facades) and §5.5 (generation).
+**Status:** Superseded by 167. §5.1 (cloudflared, firezone), §5.2, §5.3, and §5.4 shipped 2026-10-17; the open §6.3 (database packages) and §5.5 (generation) moved to 167 and `interesting_thoughts/167b_generated_secrets.md`.
 **Related:** `77_secrets_implementation_plan.md` (SOPS hydration, in progress), `archive/75_secrets_what_actually_matters.md` (contracts, not stores), `archive/76_secrets_design.md` (`mkSecret`, `mkSecretRef`, `out.keyRef`), `archive/78_cross_namespace_secret_refs.md` (one value, two namespaces), `archive/138_values_that_vary_per_deploy.md` §9 (a build with inline Secrets is a credential archive), `153_packages_reading_scorecard_policy.md` (how a package may read policy)
 **Triggered by:** [kix-run/kixpkgs#236](https://github.com/kix-run/kixpkgs/issues/236)
 

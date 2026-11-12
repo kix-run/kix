@@ -969,7 +969,17 @@ in
             namespace = namespaceName;
           };
         in
-        resource // { out = resource.out // secretHelpers; };
+        resource
+        // {
+          out =
+            resource.out
+            // secretHelpers
+            # A package that needs the value in a second namespace renders
+            # another Secret from the same file (kix.contracts.secret).
+            // lib.optionalAttrs (source != null) {
+              sops = { inherit source hash; };
+            };
+        };
 
       # Reference a Secret created outside Kix. `keys` lists the keys that pods
       # read by name, and deployment waits until the live Secret contains each of

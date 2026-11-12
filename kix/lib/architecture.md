@@ -79,7 +79,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `plugins/netpol/interface.nix` | Network policy enforcer contract (`out.netpol`). |
 | `plugins/availability/module.nix` | Declares `cluster.availability.*` and `cluster.topology.*` options; injects `topologySpreadConstraints`, derives PodDisruptionBudgets, and enforces replica/ceiling invariants. |
 | `vocab/default.nix` | Assembles the public `kix.*` helper library from the `vocab/` modules, `core/availability.nix`, and `scorecard.nix`. |
-| `vocab/compose.nix` | Core composition helpers (`image`, `port`, `mkEnvVars`, `mkEnv`, `mergeGuarded`, `mergeEnv`, `guardArgs`, `checkSecretKeys`, `operandPolicy`, `service.*`) and re-exports of the split `vocab/` modules. |
+| `vocab/compose.nix` | Core composition helpers (`image`, `port`, `mkEnvVars`, `mkEnv`, `mergeGuarded`, `mergeEnv`, `guardArgs`, `checkSecretKeys` (keys only; packages call `kix.contracts.secret.helpers.use`, which adds the contract check), `operandPolicy`, `service.*`) and re-exports of the split `vocab/` modules. |
 | `vocab/expose.nix` | `ingress`, `httpRoute`, `gatewayPathType`, and `expose` (Gateway API HTTPRoute / Ingress routing, `exposure` URL resolution, and ingress-controller/gateway network policy edges). |
 | `vocab/mounts.nix` | Volume mount constructors (`kix.mount.{pvc,configMap,secret,emptyDir,hostPath}`) and workload injection (`withMounts`, `withMountsOn`). |
 | `vocab/options.nix` | Reusable package option schemas (`kix.options.{image,resources,env,ingress,monitor,healthCheck}`). `vocab/default.nix` refuses `kix.options.oidc` and `kix.options.mail`, which moved to `kix.contracts.oidc.options` and `kix.contracts.smtp.options`. |

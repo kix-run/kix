@@ -229,14 +229,19 @@ let
               package = facadePackage;
               # The server lives in `events`, so the cluster names it.
               deps.clickhouse = ref.events.clickhouse;
-              config = {
-                passwordSource = ./plausible.nix;
-                passwordHash = "events-hash";
-              }
-              // facadeConfig;
+              deps.password = ref.${ns}.plausible-events-password;
+              config = facadeConfig;
             }
           else
             { package = facadeStub facade; };
+        plausible-events-password = {
+          package = secretPackage;
+          config = {
+            source = ./plausible.nix;
+            hash = "events-hash";
+            keys = [ "password" ];
+          };
+        };
         plausible-key = {
           package = secretPackage;
           aliases = [ "secretKeyBase" ];

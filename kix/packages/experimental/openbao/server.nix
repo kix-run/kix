@@ -55,7 +55,7 @@ let
     else if unsealKey == null then
       throw "${who}: seal.type is \"static\" and there is no unsealKey dependency. Add a secret aliased unsealKey with key \"key\", a 32-byte key (`openssl rand -hex 32 | tr -d '\\n'`), or set seal.type = \"shamir\" to initialize and unseal OpenBao by hand."
     else
-      kix.checkSecretKeys {
+      kix.contracts.secret.helpers.use {
         inherit who;
         arg = "unsealKey";
         dep = unsealKey;

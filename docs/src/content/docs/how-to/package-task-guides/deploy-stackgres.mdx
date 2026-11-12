@@ -59,7 +59,9 @@ Apps should not read the superuser Secret. Give each app a
 `packages.experimental.stackgres-database` instance, which creates a role and a
 database on the cluster and puts the credentials in the app's namespace. Its
 `out` follows the Postgres database contract, `kix.contracts.postgresDatabase`,
-which the packages that take a `database` dependency check at evaluation.
+which the packages that take a `database` dependency check at evaluation. The
+role's password is a secret dependency named `password`, such as a
+`packages.secret` instance with a SOPS `source` and `keys = [ "password" ]`.
 
 ## Back up to object storage
 

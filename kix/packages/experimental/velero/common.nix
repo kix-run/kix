@@ -222,7 +222,7 @@ rec {
   checkCloudCredentials =
     cloudCredentials:
     let
-      dep = kix.checkSecretKeys {
+      dep = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "cloudCredentials";
         dep = cloudCredentials;

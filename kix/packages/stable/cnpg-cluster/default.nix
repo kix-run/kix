@@ -313,7 +313,7 @@ in
             s: if bk.credentialKeys.${s} != null then bk.credentialKeys.${s} else s
           )
           // lib.optionalAttrs (bk.credentialKeys.region != null) { region = bk.credentialKeys.region; };
-        credentials = kix.checkSecretKeys {
+        credentials = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "storageCredentials";
           dep =
@@ -400,7 +400,7 @@ in
           "verify-ca"
           "verify-full"
         ];
-        importCredentials = kix.checkSecretKeys {
+        importCredentials = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "importPassword";
           dep =
@@ -424,7 +424,7 @@ in
             throw "${who}: the importCa dependency is wired and import.sslMode is ${im.sslMode}, which does not check the source's certificate. Set import.sslMode = \"verify-full\", or remove deps.importCa."
           else
             (
-              (kix.checkSecretKeys {
+              (kix.contracts.secret.helpers.use {
                 inherit who;
                 arg = "importCa";
                 dep = importCa;

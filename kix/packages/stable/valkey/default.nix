@@ -259,7 +259,7 @@ in
         sentinel = config.sentinel.enabled;
         scrape = config.metrics.enabled && prometheus != null;
 
-        password = kix.checkSecretKeys {
+        password = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "valkeyPassword";
           dep = valkeyPassword;

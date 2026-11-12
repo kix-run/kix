@@ -218,7 +218,7 @@ in
       storage ? null,
     }:
     let
-      caddyfileSecret = kix.checkSecretKeys {
+      caddyfileSecret = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "caddyfile";
         dep = caddyfile;

@@ -50,10 +50,11 @@
 #       package = packages.experimental.keycloak;
 #       config.ingress.host = "auth.example.com";
 #     };
-#     keycloak-db = {
-#       package = packages.experimental.stackgres-database;
-#       config.passwordSource = ./secrets/keycloak-db.yaml;
-#       config.passwordHash = "...";
+#     keycloak-db.package = packages.experimental.stackgres-database;
+#     keycloak-db-password = {
+#       package = packages.secret;
+#       aliases = [ "password" ];
+#       config = { source = ./secrets/keycloak-db.yaml; hash = "..."; keys = [ "password" ]; };
 #     };
 #     keycloak-admin = {
 #       package = packages.secret;
@@ -252,7 +253,7 @@ in
         };
         scraped = metricsOn && prometheus != null;
 
-        admin = kix.checkSecretKeys {
+        admin = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "bootstrapAdmin";
           dep = bootstrapAdmin;

@@ -61,7 +61,12 @@
 #     harbor-db = {
 #       package = packages.experimental.stackgres-database;
 #       aliases = [ "database" ];
-#       config = { database = "registry"; passwordSource = ./harbor-db.sops.yaml; passwordHash = "..."; };
+#       config.database = "registry";
+#     };
+#     harbor-db-password = {
+#       package = packages.secret;
+#       aliases = [ "password" ];
+#       config = { source = ./harbor-db.sops.yaml; hash = "..."; keys = [ "password" ]; };
 #     };
 #   };
 #

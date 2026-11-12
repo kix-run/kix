@@ -107,32 +107,42 @@ let
       config ? { },
     }:
     mkCluster [
-      {
-        instances.chlogs = {
-          clickhouse.package = import ../../../packages/experimental/clickhouse;
-          storage = {
-            package = pvcPackage;
-            config = {
-              size = "1Gi";
-              storageClassName = "standard";
+      (
+        { ref, ... }:
+        {
+          instances.chlogs = {
+            clickhouse.package = import ../../../packages/experimental/clickhouse;
+            storage = {
+              package = pvcPackage;
+              config = {
+                size = "1Gi";
+                storageClassName = "standard";
+              };
+            };
+            standard-class = storageClassImport "standard";
+            credentials = {
+              package = secretPackage;
+              aliases = [ "credentials" ];
+              config.stringData.password = "password";
+            };
+            clickhouse-database = {
+              package = import ../../../packages/experimental/clickhouse-database;
+              deps.password = ref.chlogs.clickhouse-database-password;
+            };
+            clickhouse-database-password = {
+              package = secretPackage;
+              config = {
+                source = ./log-agents.nix;
+                hash = "hash";
+                keys = [ "password" ];
+              };
+            };
+            clickhouse-logs = {
+              inherit package config;
             };
           };
-          standard-class = storageClassImport "standard";
-          credentials = {
-            package = secretPackage;
-            aliases = [ "credentials" ];
-            config.stringData.password = "password";
-          };
-          clickhouse-database = {
-            package = import ../../../packages/experimental/clickhouse-database;
-            config.passwordSource = ./log-agents.nix;
-            config.passwordHash = "hash";
-          };
-          clickhouse-logs = {
-            inherit package config;
-          };
-        };
-      }
+        }
+      )
     ];
 
   vectorConfigOf =

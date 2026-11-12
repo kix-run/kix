@@ -23,15 +23,36 @@
 #                            Cluster.
 #   cnpgOperator (required)  the cnpg-operator whose DatabaseRole and
 #                            Database handles the package builds from.
+#   password (required)      the role's password, a secret with the key
+#                            `password` (kix.contracts.secret), in this
+#                            instance's namespace.
 #
-# Config: `passwordSource` with `passwordHash` (a SOPS file).
+# Where the password comes from decides what the package renders:
+#
+# - A `packages.secret` with a SOPS `source`: the package renders the
+#   credentials Secret and the role's password Secret in the cluster's
+#   namespace from that file, and the deploy fills both.
+# - Any other secret (`packages.secret-ref`, `packages.experimental.external-secret`,
+#   a site's own source package): the package renders neither. The
+#   dependency is the credentials Secret, so it must also hold `username`,
+#   equal to `user`. The site writes the role's password into the cluster's
+#   namespace too, as the kubernetes.io/basic-auth Secret
+#   `<namespace>-<instance>-role` with the keys `username` (equal to `user`)
+#   and `password`, and the deploy waits for it.
 #
 # Minimal instance, beside an app that takes deps.database:
 #
 #   app-db = {
 #     package = packages.experimental.cnpg-database;
-#     config.passwordSource = ./secrets/app-db.yaml;
-#     config.passwordHash = "...";
+#     deps.password = ref.apps.app-db-password;
+#   };
+#   app-db-password = {
+#     package = packages.secret;
+#     config = {
+#       source = ./secrets/app-db.yaml;   # holds `password`
+#       hash = "sha256-...";
+#       keys = [ "password" ];
+#     };
 #   };
 #
 # A consumer reads the same `out` as from stackgres-database:
@@ -55,7 +76,9 @@
 #   out.database            the database name.
 #   out.username            the role name.
 #   out.extensions          the `extensions` option.
-#   out.credentials         the credentials Secret, for `out.mkEnv`.
+#   out.credentials         the credentials Secret, for `out.mkEnv`: the
+#                           one this package renders, or the password
+#                           dependency.
 #   out.tls                 whether PostgreSQL serves TLS (the postgres
 #                           dependency's `out.tls`).
 #
@@ -63,13 +86,10 @@
 #
 # Escape hatch: the instance's `partsOverlays`.
 #
-# Limits: the role's password comes from options rather than a secret
-# dependency, because the same value has to reach a Secret in each of two
-# namespaces. CloudNativePG reads the role's password in the Cluster's
-# namespace. The password should come from a secret dependency
-# with a declared `password` key, as in other packages. That needs Kix to
-# copy a dependency's Secret into a second namespace, which Kix cannot do
-# yet.
+# Limits: Kix copies only a value it decrypts itself, so a password from any
+# other source has to be delivered to both namespaces. The instance manager
+# reads the role's Secret again when it changes, so a changed password there
+# reaches the role without a new deploy.
 #
 # The role always owns the database. Removing the instance leaves the role
 # and the database in PostgreSQL (the operator's reclaim policy `retain`).
@@ -204,30 +224,22 @@ in
     };
 
     password = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
       visible = false;
-      description = "Removed. Setting it fails the build with a message that names `passwordSource` and `passwordHash`.";
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
-
     passwordSource = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
-      description = ''
-        Path to a SOPS-encrypted file containing a `password` key. The Kix
-        deploy CLI hydrates the credentials Secret and the role's password
-        Secret from this same source at apply time.
-      '';
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
-
     passwordHash = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
-      description = ''
-        Content hash of the SOPS-decrypted password. Required when
-        passwordSource is set; the deploy compares it to find a changed
-        password.
-      '';
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
   };
 
@@ -237,6 +249,9 @@ in
       config,
       postgres,
       cnpgOperator,
+      # Optional only so that a build with the removed options reaches
+      # _passwordCheck and its message; a missing one fails below.
+      password ? null,
       ...
     }:
     let
@@ -254,15 +269,40 @@ in
         else
           throw "${who}: the cnpgOperator dependency publishes no out.crds, as with an import. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
 
+      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, hash set to its content hash, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
+
       _passwordCheck =
         if config.password != null then
-          throw "[K9503] ${who}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
-        else if config.passwordSource == null then
-          throw "${who}: passwordSource is not set. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
-        else if config.passwordHash == null then
-          throw "${who}: passwordSource is set without passwordHash, which the deploy compares to find a changed password. Set passwordHash."
+          throw "[K9503] ${who}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. ${passwordAdvice}"
+        else if config.passwordSource != null || config.passwordHash != null then
+          throw "[K6023] ${who}: passwordSource and passwordHash were removed. ${passwordAdvice} Use the same file and hash."
+        else if password == null then
+          throw "${who}: has no `password` dependency. ${passwordAdvice}"
         else
           null;
+
+      # With a SOPS file Kix decrypts the password itself, so it renders the
+      # Secrets in both namespaces. Otherwise the site delivers both.
+      sops = (passwordDep.out.sops or null);
+      fromSops = sops != null;
+      passwordDep =
+        let
+          dep = builtins.seq _passwordCheck (
+            kix.contracts.secret.helpers.use {
+              inherit who;
+              arg = "password";
+              dep = password;
+              keys = [ "password" ];
+            }
+          );
+          declared = dep.out.keys or [ ];
+        in
+        (
+          if dep.out ? sops || builtins.elem "username" declared then
+            dep
+          else
+            throw "${who}: deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads. Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source."
+        );
 
       # The cluster's namespace, for the role, the database, and the
       # password Secret the role reads.
@@ -282,46 +322,66 @@ in
         rotationPolicy = "manual";
       };
 
-      # In the consumer's namespace. With passwordSource, the deploy fills
-      # `password` from the SOPS file.
-      credentials = scope.mkSecret {
-        name = "${name}-credentials";
-        keys = [
-          "username"
-          "password"
-          "database"
-          "host"
-          "port"
-        ];
-        stringData = {
-          username = userName;
-          database = dbName;
-          host = cluster.fqdn;
-          port = cluster.port;
-        };
-        source = config.passwordSource;
-        hash = config.passwordHash;
-        inherit labels;
-        meta = secretMeta;
-      };
+      # In the consumer's namespace. From a SOPS file, the deploy fills
+      # `password`. Otherwise the password dependency is the credentials.
+      credentials =
+        if fromSops then
+          scope.mkSecret {
+            name = "${name}-credentials";
+            keys = [
+              "username"
+              "password"
+              "database"
+              "host"
+              "port"
+            ];
+            stringData = {
+              username = userName;
+              database = dbName;
+              host = cluster.fqdn;
+              port = cluster.port;
+            };
+            inherit (sops) source hash;
+            inherit labels;
+            meta = secretMeta;
+          }
+        else
+          scope.mkSecretRef {
+            name = passwordDep.out.name;
+            keys = [
+              "username"
+              "password"
+            ];
+          };
 
       # CloudNativePG reads a role's password from a basic-auth Secret
-      # whose `username` is the role name.
-      rolePassword = backendScope.mkSecret {
-        name = "${backendName}-role";
-        type = "kubernetes.io/basic-auth";
-        keys = [
-          "username"
-          "password"
-        ];
-        stringData = {
-          username = userName;
-        };
-        source = config.passwordSource;
-        hash = config.passwordHash;
-        inherit labels;
-        meta = secretMeta;
-      };
+      # whose `username` is the role name: rendered from the same SOPS file
+      # as `credentials`, or written there by the site.
+      rolePassword =
+        if fromSops then
+          backendScope.mkSecret {
+            name = "${backendName}-role";
+            type = "kubernetes.io/basic-auth";
+            keys = [
+              "username"
+              "password"
+            ];
+            stringData = {
+              username = userName;
+            };
+            inherit (sops) source hash;
+            inherit labels;
+            meta = secretMeta;
+          }
+        else
+          backendScope.mkSecretRef {
+            name = "${backendName}-role";
+            type = "kubernetes.io/basic-auth";
+            keys = [
+              "username"
+              "password"
+            ];
+          };
 
       role = backendScope.mkCR crds.DatabaseRole {
         name = backendName;
@@ -350,7 +410,7 @@ in
         };
       };
     in
-    builtins.seq _passwordCheck {
+    builtins.seq passwordDep {
       inherit
         credentials
         rolePassword

@@ -67,9 +67,16 @@ kix.buildCluster {
           };
           keycloak-db = {
             package = packages.experimental.stackgres-database;
+          };
+          keycloak-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
             # Dev-only value; it protects nothing.
-            config.passwordSource = ./dev-secrets/keycloak-db.sops.yaml;
-            config.passwordHash = "sha256-rgn6JZpWdY4hK9Cs6xIUUsG71gsVbab0Da/CZ0N4kRA=";
+            config = {
+              source = ./dev-secrets/keycloak-db.sops.yaml;
+              hash = "sha256-rgn6JZpWdY4hK9Cs6xIUUsG71gsVbab0Da/CZ0N4kRA=";
+              keys = [ "password" ];
+            };
           };
           # Test values only.
           keycloak-admin = {
@@ -208,8 +215,15 @@ kix.buildCluster {
             config = {
               database = "registry";
               user = "harbor";
-              passwordSource = ./dev-secrets/harbor-db.sops.yaml;
-              passwordHash = "sha256-nxxYCF5UR6Dn+PHqSeQFUVpn08f6zKlS+H/TYsfgu6Q=";
+            };
+          };
+          harbor-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
+            config = {
+              source = ./dev-secrets/harbor-db.sops.yaml;
+              hash = "sha256-nxxYCF5UR6Dn+PHqSeQFUVpn08f6zKlS+H/TYsfgu6Q=";
+              keys = [ "password" ];
             };
           };
         };
@@ -249,8 +263,15 @@ kix.buildCluster {
             config = {
               database = "immich";
               user = "immich";
-              passwordSource = ./dev-secrets/immich-oidc-db.sops.yaml;
-              passwordHash = "sha256-FLPsEp1yreYLSH/vE0eaQZWcLTzXswoNR+/lMsrP6EA=";
+            };
+          };
+          immich-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
+            config = {
+              source = ./dev-secrets/immich-oidc-db.sops.yaml;
+              hash = "sha256-FLPsEp1yreYLSH/vE0eaQZWcLTzXswoNR+/lMsrP6EA=";
+              keys = [ "password" ];
             };
           };
           valkey = {
