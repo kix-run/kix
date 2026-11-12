@@ -2,12 +2,15 @@
 """Check that a pull request's change records match what it changes for users.
 
     scripts/change-kind.py --base <dir> --head <dir> [--head-build <dir>]
-                           [--kix <kix>] [--labels a,b] [--cluster <name> ...]
+                           [--kix <kix>] [--base-kix <kix>] [--labels a,b]
+                           [--cluster <name> ...]
 
 `--base` and `--head` are checkouts of the pull request's base and head
 commits. The script reads the change records and the CLI surface files from
-them. It builds each fixture cluster at `--base` and at `--head-build`, with
-the head's `kix`. `--head-build` defaults to `--head`. The workflow passes a
+them. It builds each fixture cluster at `--base` with `--base-kix`, and at
+`--head-build` with `--kix`. `--base-kix` defaults to `--kix`; a release pull
+request needs the base's own Kix, because Kix refuses a library of another
+minor version. `--head-build` defaults to `--head`. The workflow passes a
 checkout of the head commit whose `clusters/` comes from the base, so the
 base's cluster definitions are built with the pull request's library. A pull
 request that removes an option and also fixes `clusters/` then still shows
@@ -326,6 +329,10 @@ def main(argv: list[str] | None = None) -> int:
         help="the kix to build with (default: $KIX or kix)",
     )
     parser.add_argument(
+        "--base-kix",
+        help="the kix to build the base with (default: --kix)",
+    )
+    parser.add_argument(
         "--labels",
         default=os.environ.get("PR_LABELS", ""),
         help="comma-separated pull request labels",
@@ -348,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     outcomes = []
     for cluster in args.cluster or CLUSTERS:
         print(f"building {cluster} at the base and the head", file=sys.stderr)
-        base = render(args.kix, args.base, cluster)
+        base = render(args.base_kix or args.kix, args.base, cluster)
         head = render(args.kix, args.head_build or args.head, cluster)
         outcomes.append(decide(cluster, base, head, added, labels))
 

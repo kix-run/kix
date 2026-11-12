@@ -255,7 +255,12 @@ fn cluster_state_from_earlier_releases_reads_back() {
 // The note about folders that are safe to delete goes to the test output.
 #[allow(clippy::print_stdout)]
 fn cluster_state_folders_safe_to_delete() {
-    let (major, minor, _) = parse_version(env!("CARGO_PKG_VERSION"));
+    // A prerelease such as 0.10.0-rc.1 counts as its release.
+    let release = env!("CARGO_PKG_VERSION")
+        .split('-')
+        .next()
+        .unwrap_or_default();
+    let (major, minor, _) = parse_version(release);
     let folders = folders();
     let previous = if minor > 0 {
         (major, minor - 1)
