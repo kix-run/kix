@@ -1,9 +1,11 @@
 name: Change kind
 
 # Checks that a pull request's change records match what it changes for
-# users. scripts/change-kind.py builds a fixed set of clusters twice with
-# the head's Kix: at the base commit, and with the head's library and the
-# base's `clusters/`. The second build is a head checkout whose `clusters/`
+# users. scripts/change-kind.py builds a fixed set of clusters twice: at the
+# base commit with the base's Kix, and with the head's Kix, the head's
+# library, and the base's `clusters/`. Each build uses its own Kix because
+# Kix refuses a library of another minor version, which a release pull
+# request would otherwise hit. The second build is a head checkout whose `clusters/`
 # comes from the base, so an old cluster definition meets the new library.
 # A pull request that removes an option and fixes `clusters/` in the same
 # change still shows the removal. The script also compares the committed CLI
@@ -16,8 +18,8 @@ name: Change kind
 #
 # `labeled` and `unlabeled` run the check again when the label changes.
 #
-# Same runner and Nix setup as bundle-checks.yml. Kix is built from the
-# head with cargo in the dev shell.
+# Same runner and Nix setup as bundle-checks.yml. Both Kix binaries are
+# built with cargo in the head's dev shell.
 
 on:
   pull_request:
@@ -79,7 +81,10 @@ jobs:
         run: |
           nix develop --command bash -c '
             set -euo pipefail
+            (cd "$RUNNER_TEMP/base/cli" && cargo build -p kix-cli --bin kix)
+            cp "${CARGO_TARGET_DIR:-$RUNNER_TEMP/base/cli/target}/debug/kix" "$RUNNER_TEMP/kix-base"
             (cd cli && cargo build -p kix-cli --bin kix)
             KIX="${CARGO_TARGET_DIR:-$PWD/cli/target}/debug/kix"
             python3 scripts/change-kind.py --base "$RUNNER_TEMP/base" --head . \
-              --head-build "$RUNNER_TEMP/head-build" --kix "$KIX"'
+              --head-build "$RUNNER_TEMP/head-build" --kix "$KIX" \
+              --base-kix "$RUNNER_TEMP/kix-base"'
