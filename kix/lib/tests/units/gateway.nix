@@ -1,4 +1,4 @@
-# Tests for the gateway contract (kix/lib/vocab/gateway.nix): `check` on
+# Tests for the gateway contract (kix/contracts/stable/gateway.nix): `check` on
 # the provider side, `claims` and `require` on the consumer side,
 # kix.expose against envoy-gateway, traefik, and kix.mkImport gateways, and
 # the traefik package's refusals and alert rules.
@@ -23,8 +23,8 @@
 
 let
   contract = kixlib.contracts.gateway;
-  envoyGateway = import ../../../packages/envoy-gateway;
-  traefik = import ../../../packages/traefik;
+  envoyGateway = import ../../../packages/experimental/envoy-gateway;
+  traefik = import ../../../packages/experimental/traefik;
 
   importOut.gatewayRef = {
     name = "shared";
@@ -158,17 +158,17 @@ in
   # An instance claims to be a gateway through out.gatewayRef or the
   # `gateway` alias on the instance or in its package's defaultAliases.
   gateway-claims =
-    contract.claims (depOf importOut)
-    && contract.claims {
+    contract.helpers.claims (depOf importOut)
+    && contract.helpers.claims {
       out = { };
       _meta.aliases = [ "gateway" ];
     }
-    && contract.claims {
+    && contract.helpers.claims {
       out = { };
       _meta.packageMeta.defaultAliases = [ "gateway" ];
     }
-    && !contract.claims (depOf { })
-    && !contract.claims {
+    && !contract.helpers.claims (depOf { })
+    && !contract.helpers.claims {
       out = { };
       _meta.aliases = [ "otlp" ];
     };
@@ -208,7 +208,7 @@ in
         ];
       alone = manifests (clusterWith { });
       withIngress = manifests (clusterWith {
-        instances.ingress.ingress-nginx.package = import ../../../packages/ingress-nginx;
+        instances.ingress.ingress-nginx.package = import ../../../packages/experimental/ingress-nginx;
       });
     in
     ofKind "HTTPRoute" alone == [ ]

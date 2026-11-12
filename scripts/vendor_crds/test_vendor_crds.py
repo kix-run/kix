@@ -248,14 +248,18 @@ class Reconcile(unittest.TestCase):
 
     def test_discover_skips_rbac_without_sources(self):
         packages = pathlib.Path(self.tmp.name) / "packages"
-        for d in ("a/crds", "a/rbac", "b/rbac"):
+        for d in ("stable/a/crds", "stable/a/rbac", "experimental/b/rbac"):
             (packages / d).mkdir(parents=True)
-        (packages / "a/crds/update.py").write_text("")
-        (packages / "a/rbac/update.py").write_text("")
-        (packages / "b/rbac/sources.txt").write_text("")
+        (packages / "stable/a/crds/update.py").write_text("")
+        (packages / "stable/a/rbac/update.py").write_text("")
+        (packages / "experimental/b/rbac/sources.txt").write_text("")
         self.driver.PACKAGES = packages
         found = [str(d.relative_to(packages)) for d in self.driver.discover([])]
-        self.assertEqual(found, ["a/crds", "b/rbac"])
+        self.assertEqual(found, ["experimental/b/rbac", "stable/a/crds"])
+        self.assertEqual(
+            [str(d.relative_to(packages)) for d in self.driver.discover(["b"])],
+            ["experimental/b/rbac"],
+        )
         with self.assertRaises(SystemExit):
             self.driver.discover(["c"])
 

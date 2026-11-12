@@ -1,0 +1,5 @@
+# The test clusters' development passwords, encrypted to the test-only key
+# in age-key.txt.
+creation_rules:
+  - path_regex: \.sops\.yaml$
+    age: age12uaczkdv3uvyrw6kmvc4s4srykpwtd9uqzejlqt9yzajd986qp8qvtfjmv

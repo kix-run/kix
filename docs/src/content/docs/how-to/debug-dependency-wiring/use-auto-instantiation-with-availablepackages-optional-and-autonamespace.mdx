@@ -41,7 +41,11 @@ namespace:
 When an instance requires `database`, Kix creates a `database` instance in
 `platform` with the package's default configuration. Without `autoNamespace`,
 Kix creates it in the requesting instance's namespace. A `namespace` set on
-the individual catalog entry takes precedence over `autoNamespace`.
+the individual catalog entry takes precedence over `autoNamespace`. A package
+that runs once per cluster, such as an operator, needs a namespace of its own;
+if Kix would place it in the requesting instance's namespace, evaluation fails
+with `[K2377]`. Declare the operator under `instances`, set `autoNamespace`, or
+set `namespace` on its catalog entry.
 
 ## Keep a configured provider dormant
 

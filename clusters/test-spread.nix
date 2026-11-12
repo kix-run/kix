@@ -34,12 +34,12 @@ kix.buildCluster {
 
       # Gives the descheduler its ServiceMonitor and alerts, which
       # test-spread.rules-test.yaml tests.
-      instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
+      instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
       # Short interval so scripts/kind-spread.sh sees a rebalance within
       # minutes.
       instances.descheduler.descheduler = {
-        package = packages.descheduler;
+        package = packages.experimental.descheduler;
         config.deschedulingInterval = "30s";
       };
 

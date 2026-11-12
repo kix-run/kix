@@ -117,16 +117,16 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
 
-        instances.monitoring.prometheus-operator.package = packages."prometheus-operator";
+        instances.monitoring.prometheus-operator.package = packages.experimental."prometheus-operator";
 
-        instances.external-secrets.external-secrets.package = packages.external-secrets;
+        instances.external-secrets.external-secrets.package = packages.experimental.external-secrets;
 
         instances.app = {
           app-secrets.package = appSecretsPackage;
           secret-echo = {
-            package = packages.secret-echo;
+            package = packages.experimental.secret-echo;
             deps.credentials = ref.app.app-secrets;
           };
         };

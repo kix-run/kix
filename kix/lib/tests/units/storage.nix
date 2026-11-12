@@ -148,8 +148,8 @@ let
       (lib.attrByPath path (throw "no part ${toString path}") cluster.instances.${ns}.${inst}.raw)
       .out.identityHash;
 
-  storageClassesPackage = import ../../../packages/storage-classes;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
+  storageClassesPackage = import ../../../packages/stable/storage-classes;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
 
   # A cluster with one claim in `apps` and, when `classes` is set, a
   # storage-classes instance in kube-system. No flavor, so nothing else

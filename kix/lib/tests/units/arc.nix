@@ -1,4 +1,4 @@
-# Tests for kix/packages/arc and kix/packages/arc-runner-set: the CRD source
+# Tests for kix/packages/experimental/arc and kix/packages/experimental/arc-runner-set: the CRD source
 # tag, the image tag check, the runner set contract that
 # out.mkAutoscalingRunnerSet builds, the parts that render only with a
 # prometheus provider or an enforcer, and the refusals. The controller runs in
@@ -25,10 +25,10 @@
 }:
 
 let
-  arcPackage = import ../../../packages/arc;
-  runnerSetPackage = import ../../../packages/arc-runner-set;
-  secretRefPackage = import ../../../packages/secret-ref;
-  priorityClassPackage = import ../../../packages/priority-class;
+  arcPackage = import ../../../packages/experimental/arc;
+  runnerSetPackage = import ../../../packages/experimental/arc-runner-set;
+  secretRefPackage = import ../../../packages/stable/secret-ref;
+  priorityClassPackage = import ../../../packages/stable/priority-class;
 
   # arc evaluated outside a cluster, for its assertions and meta.
   arcAlone = arcPackage {
@@ -88,7 +88,7 @@ in
           availability = "none";
         }).meta.version;
       urls = builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
-        lib.splitString "\n" (builtins.readFile ../../../packages/arc/crds/sources.txt)
+        lib.splitString "\n" (builtins.readFile ../../../packages/experimental/arc/crds/sources.txt)
       );
     in
     (builtins.length urls == 4 && builtins.all (lib.hasInfix "/gha-runner-scale-set-${version}/") urls)
@@ -202,7 +202,7 @@ in
       otherMinor =
         tag:
         !(check tag).assertion
-        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.14 release, and the CRDs under kix/packages/arc/crds are vendored from 0.14.2." (check tag)
+        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.14 release, and the CRDs under kix/packages/experimental/arc/crds are vendored from 0.14.2." (check tag)
         .message;
     in
     (
@@ -235,7 +235,7 @@ in
   # Each constraint of out.mkAutoscalingRunnerSet, checked by message.
   arc-builder-refusals =
     let
-      builder = import ../../../packages/arc/runner-set.nix {
+      builder = import ../../../packages/experimental/arc/runner-set.nix {
         inherit lib;
         who = "arc arc-systems/arc";
         ns = "arc-systems";
@@ -306,7 +306,7 @@ in
   # that an option sets is left to kix.mergeGuarded.
   arc-runner-set-option-refusals =
     let
-      check = import ../../../packages/arc-runner-set/checks.nix {
+      check = import ../../../packages/experimental/arc-runner-set/checks.nix {
         inherit lib;
         name = "linux";
       };

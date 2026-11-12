@@ -37,7 +37,7 @@ kix.buildCluster {
         # for one that does, put the import in immich's namespace with
         # `scope = "namespace"` and `credentials = ref.<ns>.<secret>`.
         cache = {
-          valkey = {
+          redis = {
             package = kix.mkImport {
               out = {
                 host = "valkey.cache.svc.cluster.local";
@@ -51,7 +51,7 @@ kix.buildCluster {
         database = {
           postgres = {
             package = kix.mkImport {
-              from = packages."stackgres-cluster";
+              from = packages.experimental."stackgres-cluster";
               # The extensions the external cluster has installed. The
               # stackgres-database below checks the ones immich asks for
               # against this list.
@@ -69,7 +69,7 @@ kix.buildCluster {
         };
 
         # Immich namespace: server + ML worker + per-app database instance.
-        # valkey resolves via DI from the cache namespace: an import is
+        # redis resolves via DI from the cache namespace: an import is
         # cluster-scoped, while a managed valkey serves only its own
         # namespace.
         # The stackgres-database instance below lives in *this* namespace
@@ -87,21 +87,22 @@ kix.buildCluster {
           # immich adds the extensions it needs to this instance, which
           # checks them against the imported cluster's out.extensions.
           immich-db = {
-            package = packages."stackgres-database";
+            package = packages.experimental."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "immich";
               user = "immich";
-              password = "immich-dev-password";
+              passwordSource = ./dev-secrets/immich-db.sops.yaml;
+              passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
             };
           };
 
           immich = {
-            package = packages.immich;
+            package = packages.experimental.immich;
           };
 
           machine-learning = {
-            package = packages."immich-machine-learning";
+            package = packages.experimental."immich-machine-learning";
           };
         };
       };

@@ -54,6 +54,29 @@ Each entry under `instances.<namespace>.<name>` places a managed package instanc
 - **`extraDeps` and `platformIntents`**: Valid only on `kix.mkImport` instances. Setting `extraDeps` on a managed instance fails evaluation. Each entry in `extraDeps` is a Kix resource or `ref.<namespace>.<instance>`; when the import is active, `ref` entries must point to active instances (an `extraDeps` reference does not activate a dormant `optional` instance). `platformIntents` uses the same schema as [`networkPolicy.platformIntents`](/docs/reference/cluster-configuration/#network-policy) and attaches the generated policies as dependencies of the import marker.
 - **`version`**: Overrides the version string written onto the `PackageInstance` resource. Without it, the record carries the package's `meta.version`, or the `out.version` it builds (`stackgres-cluster` and `cnpg-cluster` report the PostgreSQL version this way), or no version at all. Dependency compatibility checks (`meta.compatibleWith`) still check the package's `meta.version`, or its `out.version` when `meta.version` is unset.
 
+### Stable and experimental packages
+
+A package is stable or experimental. A stable package breaks only in a minor release. An experimental package may break in any release, including a patch release, and the break may be one that shows no error. `CHANGELOG.md` lists these breaks under the heading "Breaking in experimental packages and contracts".
+
+The name you write in `package` shows the level:
+
+```nix
+instances.apps.cache.package = packages.valkey;
+instances.apps.cache-2.package = packages.stable.valkey;
+instances.apps.photos.package = packages.experimental.immich;
+```
+
+- **`packages.<name>`**: A stable package. `packages.stable.<name>` is the same package.
+- **`packages.experimental.<name>`**: An experimental package. Writing `packages.<name>` for an experimental package fails with `[K0549]` and gives `packages.experimental.<name>`. `kix list packages` shows it as `experimental.<name>`.
+- **Reserved names**: No package can be named `stable` or `experimental`.
+- **A package that becomes stable**: `packages.experimental.<name>` then fails with the error "`packages.experimental.<name>` is stable now. Write `packages.<name>`."
+- **A shared name**: An experimental package may have the same name as a stable package. It is then a rework of that package, and replaces it in a minor release.
+- **Contracts**: A stable package reads only stable [dependency contracts](/docs/reference/dependency-contracts/#shared-contract-attributes-and-methods). An experimental package may read both stable and experimental contracts.
+- **Modules**: The monitoring module is experimental and is written `kix.modules.experimental.monitoring` (`kix/modules/experimental/monitoring.nix`). `kix.modules.monitoring` fails with `[K0549]`.
+- **Automatic instances**: [`availablePackages = packages`](/docs/reference/cluster-configuration/#availablepackages) offers only the stable packages. Name each experimental package that Kix may add.
+
+These packages are stable: `cnpg-cluster`, `cnpg-operator`, `echo-server`, `grafana`, `harbor`, `kube-state-metrics`, `node-exporter`, `persistent-volume-claim`, `priority-class`, `secret`, `secret-ref`, `storage-classes`, `valkey`, `victoria-metrics-agent`, `victoria-metrics-alert`, `victoria-metrics-cluster`, and `victoria-metrics-operator`. Every other package is experimental. A package becomes stable once it has run in production long enough to settle.
+
 ## config
 
 `instances.<namespace>.<name>.config` sets values for the options declared in the package's `options` block.
@@ -145,7 +168,7 @@ See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency
 ```nix
 instances.apps.valkey-cache = {
   package = packages.valkey;
-  aliases = [ "cache" "valkey" ];
+  aliases = [ "cache" "redis" ];
 };
 ```
 
@@ -165,7 +188,7 @@ Setting `optional = true` keeps a declared instance dormant unless an active ins
 
 ```nix
 instances.data.clickhouse = {
-  package = packages.clickhouse-cluster;
+  package = packages.experimental.clickhouse-cluster;
   optional = true;
   config.shards = 2;
 };

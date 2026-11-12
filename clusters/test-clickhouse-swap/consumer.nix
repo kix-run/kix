@@ -6,7 +6,7 @@
 {
   instances.app = {
     events-db = {
-      package = packages.clickhouse-database;
+      package = packages.experimental.clickhouse-database;
       config = {
         database = "events";
         user = "events";
@@ -14,7 +14,8 @@
           "INSERT"
           "SELECT"
         ];
-        password = "swap-fixture-password";
+        passwordSource = ../dev-secrets/swap-fixture-db.sops.yaml;
+        passwordHash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
         schema."01-events.sql" = ''
           CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
           (ts DateTime, message String)

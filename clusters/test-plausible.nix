@@ -39,13 +39,13 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
 
-        instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
+        instances.ingress-system.ingress-nginx.package = packages.experimental.ingress-nginx;
         instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
 
         instances.events = {
-          clickhouse.package = packages.clickhouse;
+          clickhouse.package = packages.experimental.clickhouse;
           clickhouse-data = {
             package = packages.persistent-volume-claim;
             aliases = [ "storage" ];
@@ -60,7 +60,7 @@ kix.buildCluster {
 
         instances.analytics = {
           plausible = {
-            package = packages.plausible;
+            package = packages.experimental.plausible;
             config = {
               ingress.host = "plausible.localtest.me";
               mail.from = "plausible@localtest.me";
@@ -72,13 +72,15 @@ kix.buildCluster {
             config.storage.size = "1Gi";
           };
           plausible-db = {
-            package = packages.cnpg-database;
-            config.password = "plausible-db-dev-password";
+            package = packages.experimental.cnpg-database;
+            config.passwordSource = ./dev-secrets/plausible-db.sops.yaml;
+            config.passwordHash = "sha256-Fx4LekxcnAr8/CrtSEqLMisM7ElvkqCo+jSeVrr6xqw=";
           };
           plausible-events = {
-            package = packages.clickhouse-database;
+            package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.events.clickhouse;
-            config.password = "plausible-events-dev-password";
+            config.passwordSource = ./dev-secrets/plausible-events.sops.yaml;
+            config.passwordHash = "sha256-n8fiYw1YaJ4eWkduVI5s+ugSbn3FLfwuRJ+WpySotvg=";
           };
           plausible-secret-key-base = {
             package = packages.secret;

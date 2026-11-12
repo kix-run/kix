@@ -103,7 +103,7 @@ in
             desc
             + " nothing in this cluster provides it (cluster.roles.metricsApi.binding = \"absent\" and no metrics-server instance is declared)."
             + "\nFix: add a metrics-server instance to your cluster definition:"
-            + "\n  instances.kube-system.metrics-server.package = packages.metrics-server;"
+            + "\n  instances.kube-system.metrics-server.package = packages.experimental.metrics-server;"
             + "\nIf your cluster environment already runs metrics-server, set `cluster.roles.metricsApi.binding = \"exclusive\";` in your cluster definition instead."
           )
         else if status == "unknown" then

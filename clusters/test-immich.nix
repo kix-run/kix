@@ -30,12 +30,12 @@ kix.buildCluster {
 
       # The operator is cluster-scoped: declare it once to avoid duplicate CRDs.
       instances.stackgres-system.stackgres-operator = {
-        package = packages.stackgres-operator;
+        package = packages.experimental.stackgres-operator;
       };
 
       instances.immich = {
         immich = {
-          package = packages.immich;
+          package = packages.experimental.immich;
         };
 
         immich-library = {
@@ -50,7 +50,7 @@ kix.buildCluster {
         # namespace does not resolve to firezone's postgres. It sets no
         # `extensions`: immich's arrive through immich-db.
         immich-pg = {
-          package = packages.stackgres-cluster;
+          package = packages.experimental.stackgres-cluster;
           aliases = [ "postgres" ];
         };
 
@@ -58,12 +58,13 @@ kix.buildCluster {
         # immich adds its extensions to `extensions`, and stackgres-database
         # forwards them to immich-pg.
         immich-db = {
-          package = packages.stackgres-database;
+          package = packages.experimental.stackgres-database;
           aliases = [ "database" ];
           config = {
             database = "immich";
             user = "immich";
-            password = "immich-dev-password";
+            passwordSource = ./dev-secrets/immich-db.sops.yaml;
+            passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
           };
         };
 
@@ -80,16 +81,17 @@ kix.buildCluster {
       # real cluster gives each secret a SOPS `source` or a `secret-ref`.
       instances.firezone = {
         firezone-pg = {
-          package = packages.stackgres-cluster;
+          package = packages.experimental.stackgres-cluster;
           aliases = [ "postgres" ];
         };
         firezone-db = {
-          package = packages.stackgres-database;
-          config.password = "firezone-dev-password";
+          package = packages.experimental.stackgres-database;
+          config.passwordSource = ./dev-secrets/firezone-db.sops.yaml;
+          config.passwordHash = "sha256-mkPnt4ugMrbK4xcSsIwaPsOYAmwzzg4wD5ydQAY9g5Q=";
         };
 
         firezone = {
-          package = packages.firezone;
+          package = packages.experimental.firezone;
           config = {
             domain = "vpn.example.com";
             admin.email = "admin@example.com";

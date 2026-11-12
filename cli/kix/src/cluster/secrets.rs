@@ -189,14 +189,29 @@ fn hydrate_carried(
         data
     };
     let keys_injected = data.len();
-    let string_data: serde_json::Map<String, Value> = data
-        .into_iter()
-        .map(|(k, v)| (k, Value::String(v)))
-        .collect();
-    if let Some(obj) = manifest.as_object_mut() {
-        obj.insert("stringData".to_string(), Value::Object(string_data));
-    }
+    merge_string_data(manifest, data);
     Ok(HydrationResult { rid, keys_injected })
+}
+
+/// Add the decrypted keys to the Secret's `stringData`, keeping the keys
+/// the build wrote there in plain text. A Secret can mix the two: a database
+/// credentials Secret carries `username` and `host` inline and `password`
+/// from the SOPS file. A key in both takes the SOPS value.
+fn merge_string_data(manifest: &mut Value, data: BTreeMap<String, String>) {
+    let Some(obj) = manifest.as_object_mut() else {
+        return;
+    };
+    let string_data = obj
+        .entry("stringData")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !string_data.is_object() {
+        *string_data = Value::Object(serde_json::Map::new());
+    }
+    if let Some(map) = string_data.as_object_mut() {
+        for (key, value) in data {
+            map.insert(key, Value::String(value));
+        }
+    }
 }
 
 /// Generate a placeholder value for each key in `keys` that is valid for
@@ -495,16 +510,7 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
     }
 
     let keys_injected = data.len();
-
-    let string_data: serde_json::Map<String, Value> = data
-        .into_iter()
-        .map(|(k, v)| (k, Value::String(v)))
-        .collect();
-
-    if let Some(obj) = manifest.as_object_mut() {
-        obj.insert("stringData".to_string(), Value::Object(string_data));
-    }
-
+    merge_string_data(manifest, data);
     Ok(HydrationResult { rid, keys_injected })
 }
 
@@ -851,6 +857,19 @@ mod tests {
         assert_eq!(
             manifests[0]["stringData"],
             json!({"password": "kix-placeholder"})
+        );
+    }
+
+    /// A Secret that mixes plain keys with SOPS keys keeps both after a deploy
+    /// fills it.
+    #[test]
+    fn hydration_keeps_the_plain_keys_the_build_wrote() {
+        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+        manifests[0]["stringData"] = json!({"username": "app", "password": "stale"});
+        hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap();
+        assert_eq!(
+            manifests[0]["stringData"],
+            json!({"username": "app", "password": "kix-placeholder"})
         );
     }
 

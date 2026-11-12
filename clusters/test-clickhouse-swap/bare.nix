@@ -12,7 +12,7 @@ kix.buildCluster {
       {
         instances.app.events-db.deps.clickhouse = ref.db.ch;
         instances.db = {
-          ch.package = packages.clickhouse;
+          ch.package = packages.experimental.clickhouse;
           ch-data = {
             package = packages.persistent-volume-claim;
             aliases = [ "storage" ];

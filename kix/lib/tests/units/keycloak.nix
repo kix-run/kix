@@ -1,4 +1,4 @@
-# Tests for kix/packages/keycloak: the variables and flags the package owns,
+# Tests for kix/packages/experimental/keycloak: the variables and flags the package owns,
 # the public URL and the issuer URLs, the database sslmode, the
 # bootstrapAdmin key check, the metrics toggle and the prometheus
 # dependency, the alert rules and what they are gated on, and the JGroups
@@ -22,8 +22,8 @@
 }:
 
 let
-  keycloakPackage = import ../../../packages/keycloak;
-  secretPackage = import ../../../packages/secret;
+  keycloakPackage = import ../../../packages/experimental/keycloak;
+  secretPackage = import ../../../packages/stable/secret;
 
   # A `database` provider with stackgres-database's out shape. `tls` is
   # published only when it is not "absent".

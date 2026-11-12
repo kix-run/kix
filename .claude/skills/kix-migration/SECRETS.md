@@ -131,7 +131,7 @@ Configuration a program reads from a Secret (Alertmanager) is rendered from opti
 
 ## Standalone packages for DI
 
-`kix/packages/secret` and `kix/packages/secret-ref` wrap the primitives as first-class instances:
+`kix/packages/stable/secret` and `kix/packages/stable/secret-ref` wrap the primitives as first-class instances:
 
 ```nix
 # Cluster definition: a standalone secret for DI. `aliases` names the

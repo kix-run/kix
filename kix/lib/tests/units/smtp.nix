@@ -1,4 +1,4 @@
-# Tests for the SMTP contract (kix/lib/vocab/smtp.nix), the `ref` an
+# Tests for the SMTP contract (kix/contracts/stable/smtp.nix), the `ref` an
 # import's `out` can carry (kix/lib/eval/import.nix), and their consumers:
 # vaultwarden and grafana mail, and vaultwarden on an outside PostgreSQL
 # such as RDS. Plausible's mail is tested in units/plausible.nix.
@@ -25,10 +25,10 @@
 
 let
   contract = kixlib.contracts.smtp;
-  secretPackage = import ../../../packages/secret;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
-  vaultwardenPackage = import ../../../packages/vaultwarden;
-  grafanaPackage = import ../../../packages/grafana;
+  secretPackage = import ../../../packages/stable/secret;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
+  vaultwardenPackage = import ../../../packages/experimental/vaultwarden;
+  grafanaPackage = import ../../../packages/stable/grafana;
 
   login = {
     username = "app";
@@ -249,7 +249,7 @@ let
       out ? relayOut,
       from ? null,
     }:
-    contract.settings {
+    contract.helpers.settings {
       who = "app apps/app";
       smtp = depOf out;
       inherit from;
@@ -309,7 +309,7 @@ in
       && (settingsOf { }).credentials == null
       && (settingsOf { from = "app@example.org"; }).from == "app@example.org"
       &&
-        contract.settings {
+        contract.helpers.settings {
           who = "app";
           smtp = null;
         } == null

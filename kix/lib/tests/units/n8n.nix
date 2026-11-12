@@ -19,9 +19,9 @@
 }:
 
 let
-  n8nPackage = import ../../../packages/n8n;
-  valkeyPackage = import ../../../packages/valkey;
-  secretPackage = import ../../../packages/secret;
+  n8nPackage = import ../../../packages/experimental/n8n;
+  valkeyPackage = import ../../../packages/stable/valkey;
+  secretPackage = import ../../../packages/stable/secret;
 
   # The package's top-level attributes. `deps` and `config` read no
   # instance scope.
@@ -79,7 +79,7 @@ let
   # An import without a password is cluster-scoped, so n8n resolves it
   # from another namespace.
   importedValkey = out: {
-    instances.cache.valkey.package = eval.mkImport {
+    instances.cache.redis.package = eval.mkImport {
       from = valkeyPackage;
       out = {
         host = "valkey.example.net";
@@ -98,7 +98,7 @@ let
           package = secretPackage;
           config.stringData.password = "test";
         };
-        valkey.package = eval.mkImport {
+        redis.package = eval.mkImport {
           scope = "namespace";
           out = {
             host = "valkey.example.net";
@@ -251,7 +251,7 @@ in
   n8n-sentinel-import-refused =
     let
       messages =
-        dep: map (a: a.message) (lib.filter (a: !a.assertion) (n8nAttrs.deps.valkey.assertions dep));
+        dep: map (a: a.message) (lib.filter (a: !a.assertion) (n8nAttrs.deps.redis.assertions dep));
       plain = {
         host = "valkey.example.net";
         port = "6379";

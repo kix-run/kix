@@ -131,9 +131,7 @@ in
     talos = ./flavors/talos.nix;
   };
 
-  modules = {
-    monitoring = ./modules/monitoring.nix;
-  };
+  modules = import ../modules { inherit lib; };
 
   mkManifest =
     manifest:

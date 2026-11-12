@@ -4,8 +4,8 @@ description: "Field schemas, credential rules, and validation helpers for Kix de
 ---
 
 import Snippet from '/src/components/Snippet.astro';
-import postgresDatabaseCheck from '/src/snippets/kix/packages/cnpg-database/default/postgresDatabaseCheck.json';
-import postgresDatabaseAssertions from '/src/snippets/kix/packages/metabase/default/postgresDatabaseAssertions.json';
+import postgresDatabaseCheck from '/src/snippets/kix/packages/experimental/cnpg-database/default/postgresDatabaseCheck.json';
+import postgresDatabaseAssertions from '/src/snippets/kix/packages/experimental/metabase/default/postgresDatabaseAssertions.json';
 import importedPostgresDatabase from '/src/snippets/clusters/test-doc-how-tos/importedPostgresDatabase.json';
 import importedRedisCache from '/src/snippets/clusters/test-doc-how-tos/importedRedisCache.json';
 import clusterWideSmtpRelay from '/src/snippets/clusters/test-doc-how-tos/clusterWideSmtpRelay.json';
@@ -29,25 +29,31 @@ Every contract in `kix.contracts.*` defines the default dependency alias, the re
 | Contract | Default alias | Typical providers | Typical consumers |
 | --- | --- | --- | --- |
 | [`kix.contracts.postgresDatabase`](#postgresql-database-kixcontractspostgresdatabase) | `"database"` | `cnpg-database`, `stackgres-database`, `kix.mkImport` | `firezone`, `harbor`, `immich`, `keycloak`, `metabase`, `n8n`, `plausible`, `vaultwarden` |
-| [`kix.contracts.redis`](#redis-kixcontractsredis) | `"valkey"` | `valkey`, `kix.mkImport` | `harbor`, `immich`, `n8n` |
-| [`kix.contracts.smtp`](#mail-kixcontractssmtp-and-kixoptionsmail) | `"smtp"` | `kix.mkImport` | `grafana`, `immich`, `keycloak`, `plausible`, `vaultwarden` |
-| [`kix.contracts.oidc`](#single-sign-on-kixcontractsoidc-and-kixcontractsoidcprovider) | `"oidc"` | `oidc-client`, `kix.mkImport` | `grafana`, `harbor`, `immich` |
-| [`kix.contracts.oidcProvider`](#multi-realm-providers-kixcontractsoidcprovider-and-packagesoidc-client) | `"oidcProvider"` | `keycloak`, `kix.mkImport` | `oidc-client` |
+| [`kix.contracts.redis`](#redis-kixcontractsredis) | `"redis"` | `valkey`, `kix.mkImport` | `harbor`, `immich`, `n8n` |
+| [`kix.contracts.smtp`](#mail-kixcontractssmtp) | `"smtp"` | `kix.mkImport` | `grafana`, `immich`, `keycloak`, `plausible`, `vaultwarden` |
+| [`kix.contracts.oidc`](#single-sign-on-kixcontractsoidc-and-kixcontractsexperimentaloidcprovider) | `"oidc"` | `oidc-client`, `kix.mkImport` | `grafana`, `harbor`, `immich` |
+| [`kix.contracts.experimental.oidcProvider`](#multi-realm-providers-kixcontractsexperimentaloidcprovider-and-packagesexperimentaloidc-client) | `"oidcProvider"` | `keycloak`, `kix.mkImport` | `oidc-client` |
 | [`kix.contracts.gateway`](#gateway-api-kixcontractsgateway) | `"gateway"` | `envoy-gateway`, `traefik`, `kix.mkImport` | `kix.expose` |
-| [`kix.contracts.otlpEndpoint`](#opentelemetry-kixcontractsotlpendpoint) | `"otlp"` | `tempo`, `otel-collector`, `kix.mkImport` | `otel-collector` |
+| [`kix.contracts.experimental.otlpEndpoint`](#opentelemetry-kixcontractsexperimentalotlpendpoint) | `"otlp"` | `tempo`, `otel-collector`, `kix.mkImport` | `otel-collector` |
+| [`kix.contracts.experimental.clickhouse`](#clickhouse-kixcontractsexperimentalclickhouse) | `"clickhouse"` | `clickhouse`, `clickhouse-cluster` | `clickhouse-database` |
 
 ### Shared contract attributes and methods
 
-Each contract object in `kix.contracts.*` is constructed with `mkContract` in `kix/lib/vocab/contract.nix` and exposes:
+Each stable contract is one file in `kix/contracts/stable/`, and the file name is the contract's name under `kix.contracts`. For example, `kix/contracts/stable/redis.nix` is `kix.contracts.redis`. Each experimental contract is one file in `kix/contracts/experimental/`, read as `kix.contracts.experimental.<name>`. Every file builds its contract with `mkContract` in `kix/lib/vocab/contract.nix`, so every contract has exactly these parts:
 
 | Attribute / method | Signature | Behavior |
 | --- | --- | --- |
-| `alias` | `string` | Default dependency argument name (`"database"`, `"valkey"`, `"smtp"`, `"oidc"`, `"oidcProvider"`, `"gateway"`, or `"otlp"`). |
-| `fields` | `attrset` | Map of field names to `{ required; shape; test; }` definitions. |
+| `name` | `string` | The contract's name in error messages, such as `"Redis"`. |
+| `alias` | `string` | Default dependency argument name (`"database"`, `"redis"`, `"smtp"`, `"oidc"`, `"oidcProvider"`, `"gateway"`, `"otlp"`, or `"clickhouse"`). |
+| `fields` | `attrset` | Map of field names to `{ required; shape; test; }` definitions. A `credentials` field also lists its Secret key names in `fields.credentials.keys`. |
 | `check` | `who -> out -> out` | Provider-side validator. Verifies that `root.out` defines **every** field in `fields` (both required and optional) with a valid shape, and returns `out` (or throws an evaluation error naming `who` and the missing or malformed fields). |
 | `problems` | `out -> [ string ]` | Consumer-side problem finder. Checks that all `required = true` fields are present and valid, and validates the shape of any `required = false` fields that are present on `out`. |
-| `assertions` | `who -> dep -> [ { assertion; message; } ]` | Consumer-side assertion builder for `deps.<alias>.assertions` (exposed on all contracts except `gateway`, which exposes `require` instead). Because a `kix.mkImport` stand-in is checked as a consumer dependency, it only needs to set the `required = true` fields (plus any optional fields the consumer requires). |
-| `require` | `who -> dep -> dep` | Eager consumer-side validator (exposed on `kix.contracts.gateway` and called internally by `kix.contracts.smtp.server` and `kix.contracts.oidc.client`). Validates `dep.out` with `problems` and returns `dep`, or throws an evaluation error. |
+| `assertions` | `who -> dep -> [ { assertion; message; } ]` | Consumer-side assertion builder for `deps.<alias>.assertions`. Because a `kix.mkImport` stand-in is checked as a consumer dependency, it only needs to set the `required = true` fields (plus any optional fields the consumer requires). |
+| `require` | `who -> dep -> dep` | Eager consumer-side validator (used by `kix.expose` for `kix.contracts.gateway`, and called internally by `kix.contracts.smtp.helpers.server` and `kix.contracts.oidc.helpers.client`). Validates `dep.out` with `problems` and returns `dep`, or throws an evaluation error. |
+| `helpers` | `attrset` | The contract's own functions and values for its consumers, such as `kix.contracts.redis.helpers.usesSentinel`. An empty attribute set when the contract has none. |
+| `options` | option attrset, a function that returns one, or `null` | The option set a consumer package adds to its own `options`, such as `kix.contracts.smtp.options`. `null` when the contract has none. |
+
+A stable contract breaks only in a minor release. An experimental contract is a file in `kix/contracts/experimental/` and is read as `kix.contracts.experimental.<name>`. It may break in any release, including a patch release. A stable package reads only stable contracts, and an experimental package may read both. `oidcProvider`, `otlpEndpoint`, and `clickhouse` are experimental. The other contracts on this page are stable. See [Stable and experimental packages](/docs/reference/instances-and-composition/#stable-and-experimental-packages) for the two levels.
 
 In a provider package, pass `root.out` through `check` so Kix validates every required and optional field:
 
@@ -72,7 +78,7 @@ Because a Kubernetes pod can only read Secrets from its own namespace, and Kix r
 
 ## PostgreSQL database (`kix.contracts.postgresDatabase`)
 
-`kix.contracts.postgresDatabase` (`kix/lib/vocab/postgres-database.nix`) defines the contract for packages that answer the `database` alias.
+`kix.contracts.postgresDatabase` (`kix/contracts/stable/postgresDatabase.nix`) defines the contract for packages that answer the `database` alias.
 
 ### `postgresDatabase` fields
 
@@ -94,7 +100,7 @@ Because a Kubernetes pod can only read Secrets from its own namespace, and Kix r
 
 ## Redis (`kix.contracts.redis`)
 
-`kix.contracts.redis` (`kix/lib/vocab/redis.nix`) defines the contract for servers speaking the Redis protocol. `valkey` provides it in-cluster, and consumers (`harbor`, `immich`, `n8n`) request it as their `valkey` dependency.
+`kix.contracts.redis` (`kix/contracts/stable/redis.nix`) defines the contract for servers speaking the Redis protocol. `valkey` provides it in-cluster, and consumers (`harbor`, `immich`, `n8n`) request it as their `redis` dependency.
 
 ### `redis` fields
 
@@ -110,9 +116,10 @@ Because a Kubernetes pod can only read Secrets from its own namespace, and Kix r
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.contracts.redis.credentialKeys` | `[ "password" ]` | Required key names when `out.credentials` is present. |
-| `kix.contracts.redis.usesSentinel` | `dep -> bool` | Returns `true` when `dep.out.sentinel` is non-null. |
-| `kix.contracts.redis.requirePlaintext` | `who -> dep -> dep` | Throws an evaluation error if `dep.out.tls` is `true`, and returns `dep` otherwise. Used by `harbor` and `immich`, whose Redis clients in the package do not connect over TLS (`n8n` supports `tls = true`). |
+| `kix.contracts.redis.fields.credentials.keys` | `[ "password" ]` | Required key names when `out.credentials` is present. |
+| `kix.contracts.redis.helpers.usesSentinel` | `dep -> bool` | Returns `true` when `dep.out.sentinel` is non-null. |
+| `kix.contracts.redis.helpers.requirePlaintext` | `who -> dep -> dep` | Throws an evaluation error if `dep.out.tls` is `true`, and returns `dep` otherwise. Used by `harbor` and `immich`, whose Redis clients in the package do not connect over TLS (`n8n` supports `tls = true`). |
+| `kix.contracts.redis.helpers.renamedFrom` | `{ name = "valkey"; id; }` | The name this dependency had in earlier releases. `harbor`, `immich`, and `n8n` set it as [`deps.redis.renamedFrom`](/docs/reference/package-anatomy/#enriching-dependencies-with-depsarg), so the error for a missing `redis` dependency says that it was named `valkey`. |
 
 ### Importing an external Redis server
 
@@ -120,9 +127,9 @@ Because a Kubernetes pod can only read Secrets from its own namespace, and Kix r
 
 ---
 
-## Mail (`kix.contracts.smtp` and `kix.options.mail`)
+## Mail (`kix.contracts.smtp`)
 
-`kix.contracts.smtp` (`kix/lib/vocab/smtp.nix`) defines the contract for the optional `smtp ? null` dependency taken by packages that send email (`grafana`, `immich`, `keycloak`, `plausible`, and `vaultwarden`).
+`kix.contracts.smtp` (`kix/contracts/stable/smtp.nix`) defines the contract for the optional `smtp ? null` dependency taken by packages that send email (`grafana`, `immich`, `keycloak`, `plausible`, and `vaultwarden`).
 
 ### `smtp` fields
 
@@ -139,11 +146,11 @@ Because a Kubernetes pod can only read Secrets from its own namespace, and Kix r
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.contracts.smtp.settings` | `{ who, smtp, from ? null } -> attrset or null` | Returns `null` when `smtp` is `null`. Otherwise validates `smtp` and returns `{ host; port; portNumber; tls; external; from; credentials; }`, where `port` is a string, `portNumber` is an integer, `from` is the `from` argument (if non-null) or `smtp.out.from`, and `credentials` is `smtp.out.credentials` or `null`. Refuses `tls = "none"` when `external` is `true`, and refuses a server when both `from` and `smtp.out.from` are `null`. |
-| `kix.contracts.smtp.server` | `{ who, smtp } -> attrset or null` | Validates `smtp` with the same rules and return shape as `settings`, except `from` may be `null`. Used by packages such as `keycloak` that configure sender addresses inside application realms rather than at the container level. |
-| `kix.contracts.smtp.egressPolicy` | `{ scope, name, selector, smtp } -> resource or null` | Returns a network policy opening TCP egress on `smtp.portNumber` to `"world"` for pods matching `selector`, or `null` when `smtp` is `null` or `smtp.external` is `false`. |
-| `kix.contracts.smtp.credentialKeys` | `[ "username" "password" ]` | Required key names when `out.credentials` is present. |
-| `kix.options.mail` (`kix.contracts.smtp.options`) | option attrset | Declares `from` (`nullOr str` containing `@`, default `null`) for `options.mail = kix.options.mail;`. |
+| `kix.contracts.smtp.helpers.settings` | `{ who, smtp, from ? null } -> attrset or null` | Returns `null` when `smtp` is `null`. Otherwise validates `smtp` and returns `{ host; port; portNumber; tls; external; from; credentials; }`, where `port` is a string, `portNumber` is an integer, `from` is the `from` argument (if non-null) or `smtp.out.from`, and `credentials` is `smtp.out.credentials` or `null`. Refuses `tls = "none"` when `external` is `true`, and refuses a server when both `from` and `smtp.out.from` are `null`. |
+| `kix.contracts.smtp.helpers.server` | `{ who, smtp } -> attrset or null` | Validates `smtp` with the same rules and return shape as `settings`, except `from` may be `null`. Used by packages such as `keycloak` that configure sender addresses inside application realms rather than at the container level. |
+| `kix.contracts.smtp.helpers.egressPolicy` | `{ scope, name, selector, smtp } -> resource or null` | Returns a network policy opening TCP egress on `smtp.portNumber` to `"world"` for pods matching `selector`, or `null` when `smtp` is `null` or `smtp.external` is `false`. |
+| `kix.contracts.smtp.fields.credentials.keys` | `[ "username" "password" ]` | Required key names when `out.credentials` is present. |
+| `kix.contracts.smtp.options` | option attrset | Declares `from` (`nullOr str` containing `@`, default `null`) for `options.mail = kix.contracts.smtp.options;`. |
 
 ### Consumer mailer constraints
 
@@ -163,12 +170,12 @@ With a login, place the import in the consumer's namespace beside its secret wit
 
 ---
 
-## Single sign-on (`kix.contracts.oidc` and `kix.contracts.oidcProvider`)
+## Single sign-on (`kix.contracts.oidc` and `kix.contracts.experimental.oidcProvider`)
 
-Applications that sign users in with OpenID Connect (`grafana`, `harbor`, and `immich`) take an optional `oidc ? null` dependency checked against `kix.contracts.oidc` (`kix/lib/vocab/oidc.nix`). Single sign-on is enabled whenever `oidc` is bound.
+Applications that sign users in with OpenID Connect (`grafana`, `harbor`, and `immich`) take an optional `oidc ? null` dependency checked against `kix.contracts.oidc` (`kix/contracts/stable/oidc.nix`). Single sign-on is enabled whenever `oidc` is bound.
 
 Two kinds of instance satisfy `oidc`, both placed in the application's namespace beside the client secret:
-1. **`packages.oidc-client`**: Pairs a multi-realm identity provider (`kix.contracts.oidcProvider`, such as `keycloak`) with one realm name and one client secret (`oidcClient`).
+1. **`packages.experimental.oidc-client`**: Pairs a multi-realm identity provider (`kix.contracts.experimental.oidcProvider`, such as `keycloak`) with one realm name and one client secret (`oidcClient`).
 2. **A namespaced `kix.mkImport`**: Declares an external single-issuer provider directly in the application's namespace with `scope = "namespace"` and `credentials = ref.<namespace>.<secret>`.
 
 ### `oidc` fields (`kix.contracts.oidc`)
@@ -183,21 +190,21 @@ Two kinds of instance satisfy `oidc`, both placed in the application's namespace
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.contracts.oidc.client` | `{ who, oidc, options } -> attrset or null` | Checks `options` (`config.oidc`) and throws a migration error if the removed `enabled` or `realm` options are set. Returns `null` when `oidc` is `null`, or `{ issuerUrl; endpoints; credentials; }` when bound (evaluating `.endpoints` throws an error if the provider did not publish `out.endpoints`). |
-| `kix.options.oidc` (`kix.contracts.oidc.clientOptions`) | `{ scopes, autoLogin ? null } -> option attrset` | Declares `scopes` (`listOf str` that must include `"openid"`, defaulting to `scopes`) and, when `autoLogin != null`, `autoLogin` (`bool`, default `false`). |
-| `kix.contracts.oidc.credentialKeys` | `[ "clientId" "clientSecret" ]` | Required key names on `out.credentials`. |
-| `kix.contracts.oidc.endpointKeys` | `[ "authorizationUrl" "tokenUrl" "userinfoUrl" ]` | Required attribute names when `out.endpoints` is set. |
+| `kix.contracts.oidc.helpers.client` | `{ who, oidc, options } -> attrset or null` | Checks `options` (`config.oidc`) and throws a migration error if the removed `enabled` or `realm` options are set. Returns `null` when `oidc` is `null`, or `{ issuerUrl; endpoints; credentials; }` when bound (evaluating `.endpoints` throws an error if the provider did not publish `out.endpoints`). |
+| `kix.contracts.oidc.options` | `{ scopes, autoLogin ? null } -> option attrset` | Declares `scopes` (`listOf str` that must include `"openid"`, defaulting to `scopes`) and, when `autoLogin != null`, `autoLogin` (`bool`, default `false`). |
+| `kix.contracts.oidc.fields.credentials.keys` | `[ "clientId" "clientSecret" ]` | Required key names on `out.credentials`. |
+| `kix.contracts.oidc.helpers.endpointKeys` | `[ "authorizationUrl" "tokenUrl" "userinfoUrl" ]` | Required attribute names when `out.endpoints` is set. |
 
-### Multi-realm providers (`kix.contracts.oidcProvider` and `packages.oidc-client`)
+### Multi-realm providers (`kix.contracts.experimental.oidcProvider` and `packages.experimental.oidc-client`)
 
-A multi-realm identity provider such as `keycloak` publishes functions of the realm name on `root.out`, checked by `kix.contracts.oidcProvider` (`kix/lib/vocab/oidc-provider.nix`):
+A multi-realm identity provider such as `keycloak` publishes functions of the realm name on `root.out`, checked by `kix.contracts.experimental.oidcProvider` (`kix/contracts/experimental/oidcProvider.nix`):
 
 | Field | Required | Type / shape | Description |
 | --- | --- | --- | --- |
 | `issuerUrl` | Yes | `realm -> url` | Function taking a realm name string and returning that realm's issuer URL (`https?://...`). |
 | `endpoints` | No (required on provider `check`) | `realm -> { authorizationUrl; tokenUrl; userinfoUrl; }` | Function taking a realm name string and returning that realm's authorization, token, and userinfo URLs. |
 
-`packages.oidc-client` (`meta.scope = "namespace"`, `meta.defaultAliases = [ "oidc" ]`) connects a consumer namespace to an `oidcProvider`:
+`packages.experimental.oidc-client` (`meta.scope = "namespace"`, `meta.defaultAliases = [ "oidc" ]`) connects a consumer namespace to an `oidcProvider`:
 - **`config.realm`** (`str`, required): Realm name passed to `oidcProvider.out.issuerUrl` and `oidcProvider.out.endpoints`.
 - **`deps.oidcProvider`** (required): Explicit `ref.<namespace>.<provider>` pointing to the `keycloak` instance (or `oidcProvider` import).
 - **`oidcClient` dependency** (required): Secret or `secret-ref` instance in the same namespace declaring `keys = [ "clientId" "clientSecret" ]`.
@@ -214,7 +221,7 @@ When the external identity provider has a single issuer URL, declare a `kix.mkIm
 
 ## Gateway API (`kix.contracts.gateway`)
 
-`kix.contracts.gateway` (`kix/lib/vocab/gateway.nix`) defines the contract between Gateway API providers (`envoy-gateway`, `traefik`, or `kix.mkImport`) and `kix.expose`.
+`kix.contracts.gateway` (`kix/contracts/stable/gateway.nix`) defines the contract between Gateway API providers (`envoy-gateway`, `traefik`, or `kix.mkImport`) and `kix.expose`.
 
 ### `gateway` fields
 
@@ -227,15 +234,15 @@ When the external identity provider has a single issuer URL, declare a `kix.mkIm
 
 ### `gateway` helper functions
 
-Unlike the other contracts, `kix.contracts.gateway` exposes `require` and `claims` instead of `assertions`:
+`kix.expose` reads its gateway through `require` and the `claims` helper:
 - **`kix.contracts.gateway.require who dep`**: Validates `dep.out` (requiring `gatewayRef` and checking that `podSelector` and `podNamespace` are either both set or both `null`) and returns `dep`.
-- **`kix.contracts.gateway.claims dep`**: Returns `true` when `dep` declares the `"gateway"` alias or publishes `out.gatewayRef`. `kix.expose` uses this check so an unrelated application instance named `gateway` in the same namespace is not mistaken for a Gateway API controller.
+- **`kix.contracts.gateway.helpers.claims dep`**: Returns `true` when `dep` declares the `"gateway"` alias or publishes `out.gatewayRef`. `kix.expose` uses this check so an unrelated application instance named `gateway` in the same namespace is not mistaken for a Gateway API controller.
 
 ---
 
-## OpenTelemetry (`kix.contracts.otlpEndpoint`)
+## OpenTelemetry (`kix.contracts.experimental.otlpEndpoint`)
 
-`kix.contracts.otlpEndpoint` (`kix/lib/vocab/otlp-endpoint.nix`) defines the contract for OpenTelemetry receivers that answer the `otlp` alias (`tempo`, `otel-collector`, or `kix.mkImport`).
+`kix.contracts.experimental.otlpEndpoint` (`kix/contracts/experimental/otlpEndpoint.nix`) defines the contract for OpenTelemetry receivers that answer the `otlp` alias (`tempo`, `otel-collector`, or `kix.mkImport`).
 
 ### `otlpEndpoint` fields
 
@@ -247,6 +254,6 @@ Unlike the other contracts, `kix.contracts.gateway` exposes `require` and `claim
 
 ---
 
-## Package-family contracts (`clickhouse`)
+## ClickHouse (`kix.contracts.experimental.clickhouse`)
 
-In addition to the framework-wide `kix.contracts.*` vocabulary, the ClickHouse package family shares an internal contract at `kix/packages/clickhouse/contract.nix` (default alias `"clickhouse"`), implemented by both single-node `clickhouse` and operator-managed `clickhouse-cluster` and consumed by `clickhouse-database`. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (`"YY.M"`), `replicas`, and `replicaHosts`.
+`kix.contracts.experimental.clickhouse` (`kix/contracts/experimental/clickhouse.nix`) defines the contract for ClickHouse servers that answer the `clickhouse` alias. Both single-node `clickhouse` and operator-managed `clickhouse-cluster` provide it, and `clickhouse-database` consumes it. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (`"YY.M"`), `replicas`, and `replicaHosts`.

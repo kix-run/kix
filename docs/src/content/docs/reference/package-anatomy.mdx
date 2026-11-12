@@ -194,7 +194,7 @@ meta = {
 | `annotationDomains` | list of strings | `[ ]` | Annotation domain prefixes (such as `"cert-manager.io"`) owned and consumed by this package. |
 | `network` | attrset | `{ }` | Ambient network intents (`intents.<part>.{egress,ingress}`) and `externalIngressEntities`. |
 | `lifecycle` | `"stateful"` | None | Marks the `PackageInstance` with `kix.run/lifecycle: stateful`. |
-| `scope` | `"cluster"` \| `"namespace"` | unset | `"cluster"`: consumers in every namespace find an instance by name, and auto-instantiation places the package once per cluster (if a second namespace needs it from `availablePackages`, evaluation fails; declare one instance instead). `"namespace"`: an instance is never used from another namespace, not even with `ref`. Unset: an instance in another namespace is used only when the consumer names it with `deps.<arg> = ref.<namespace>.<instance>`. Packages that claim a role or declare a `cluster:` conflict still serve the whole cluster, as do instances that Kix creates from `availablePackages` or enables via `optional = true` to satisfy a dependency. A `kix.mkImport` stand-in defaults to `"cluster"`. |
+| `scope` | `"cluster"` \| `"namespace"` | unset | `"cluster"`: consumers in every namespace find an instance by name, and auto-instantiation places the package once per cluster in `autoNamespace` or the catalog entry's `namespace` (without either, evaluation fails; declare the instance under `instances` or set `autoNamespace`). `"namespace"`: an instance is never used from another namespace, not even with `ref`. Unset: an instance in another namespace is used only when the consumer names it with `deps.<arg> = ref.<namespace>.<instance>`. Packages that claim a role or declare a `cluster:` conflict still serve the whole cluster, as do instances that Kix creates from `availablePackages` or enables via `optional = true` to satisfy a dependency. A `kix.mkImport` stand-in defaults to `"cluster"`. |
 | `owner` | string | None | Team or owner identifier used by `governance.hasOwner` and `byOwner` policy rules. |
 | `deprecated` | `{ message; replacement?; }` | None | Emits an evaluation warning when the package is instantiated. |
 
@@ -357,8 +357,8 @@ Every package in a flake checked by `kix.mkFlake` or `kix.checkPackageOptions` m
 | `kix.options.monitor` | option attrset (not a function) | Attribute set of options `{ enabled; interval; }` where `enabled` is `bool` (default `true`) and `interval` is `nullOr str` (default `null`). Assign as `options.metrics = kix.options.monitor;`; read by `kix.monitor` from `config.metrics`. |
 | `kix.options.alerts` | option attrset (not a function) | Attribute set `{ enabled; }` where `enabled` is `bool` (default `true`), for packages that render alert rules without a `kix.monitor` scrape. Assign as `options.metrics = kix.options.alerts;`; read by `kix.alerts` from `config.metrics.enabled`. |
 | `kix.options.healthCheck` | option attrset (not a function) | Attribute set `{ enabled; retryFor; }` where `enabled` is `bool` (default `false`) and `retryFor` is `int` (default `90`). Assign as `options.healthCheck = kix.options.healthCheck;`; read by `kix.healthCheck` from `config.healthCheck`. |
-| `kix.options.oidc` | `{ scopes, autoLogin ? null }` | Attribute set of options `{ scopes; autoLogin?; }` where `scopes` is `listOf str` that must include `"openid"` (default `scopes`), and `autoLogin` is `bool` (default `false`, included only when `autoLogin != null`). Setting the removed `enabled` or `realm` options fails evaluation in `kix.contracts.oidc.client` with migration steps. |
-| `kix.options.mail` | option attrset (not a function) | Attribute set `{ from; }` where `from` is `nullOr str` holding one `@` (default `null`): the sender address that replaces the `smtp` server's `out.from`. Assign as `options.mail = kix.options.mail;` and pass `config.mail.from` to `kix.contracts.smtp.settings`. |
+| `kix.contracts.oidc.options` | `{ scopes, autoLogin ? null }` | Attribute set of options `{ scopes; autoLogin?; }` where `scopes` is `listOf str` that must include `"openid"` (default `scopes`), and `autoLogin` is `bool` (default `false`, included only when `autoLogin != null`). Setting the removed `enabled` or `realm` options fails evaluation in `kix.contracts.oidc.helpers.client` with migration steps. The single sign-on option set lives on its contract. |
+| `kix.contracts.smtp.options` | option attrset (not a function) | Attribute set `{ from; }` where `from` is `nullOr str` holding one `@` (default `null`): the sender address that replaces the `smtp` server's `out.from`. Assign as `options.mail = kix.contracts.smtp.options;` and pass `config.mail.from` to `kix.contracts.smtp.helpers.settings`. The mail option set lives on its contract. |
 
 ### Resource quantities (`kix.types.quantity` and `kix.parseQuantity`)
 
@@ -474,13 +474,14 @@ deps.postgres = {
 | `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider instance's `config` in the cluster definition locked the target option with `kix.mkLocked`. |
 | `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. |
 | `warnings` | `dep: [ string ]` | Warnings evaluated only when `<arg>` is non-null. |
+| `renamedFrom` | `{ name; id; }` | The name this dependency had in earlier releases, and a change id such as `"[K1234]"`. When no instance matches the dependency, the error starts with `id` and adds a sentence saying that the dependency was named `name` in earlier releases. |
 
 ### Built-in dependency contracts (`kix.contracts.*`)
 
-`kix.contracts.*` provides shared contract validators (`postgresDatabase`, `redis`, `smtp`, `oidc`, `oidcProvider`, `gateway`, and `otlpEndpoint`) that verify the `out` surface passed between providers (including `kix.mkImport` stand-ins) and consumers:
+`kix.contracts.*` provides shared contract validators (`postgresDatabase`, `redis`, `smtp`, `oidc`, and `gateway` under `kix.contracts.<name>`, and `oidcProvider`, `otlpEndpoint`, and `clickhouse` under `kix.contracts.experimental.<name>`) that verify the `out` surface passed between providers (including `kix.mkImport` stand-ins) and consumers:
 
-- **Provider validation (`check`)**: A provider passes its `root.out` through `kix.contracts.<name>.check who { ... }`, which verifies every required and optional contract field and returns `out`.
-- **Consumer validation (`assertions` or helper functions)**: A consumer checks a bound dependency in `deps.<alias>.assertions` with `kix.contracts.<name>.assertions who` (or reads it through a contract helper such as `kix.contracts.smtp.settings`, `kix.contracts.smtp.server`, `kix.contracts.oidc.client`, or `kix.contracts.gateway.require`), which checks all required contract fields and validates the shape of any present optional fields.
+- **Provider validation (`check`)**: A provider passes its `root.out` through `kix.contracts.<name>.check who { ... }` (or `kix.contracts.experimental.<name>.check who { ... }`), which verifies every required and optional contract field and returns `out`.
+- **Consumer validation (`assertions` or helper functions)**: A consumer checks a bound dependency in `deps.<alias>.assertions` with `kix.contracts.<name>.assertions who` or `kix.contracts.experimental.<name>.assertions who` (or reads it through a contract helper such as `kix.contracts.smtp.helpers.settings`, `kix.contracts.smtp.helpers.server`, `kix.contracts.oidc.helpers.client`, or `kix.contracts.gateway.require`), which checks all required contract fields and validates the shape of any present optional fields.
 - **Credentials on contracts (`out.credentials`)**: Every contract that carries a login places the secret or secret instance at `out.credentials` (read via `dep.out.credentials.out.keyRef "<key>"`) rather than taking a second secret dependency.
 
 ```nix
@@ -488,7 +489,7 @@ deps.database.assertions = kix.contracts.postgresDatabase.assertions "vaultwarde
 ```
 
 :::note[Reference]
-See [Dependency contracts](/docs/reference/dependency-contracts/) for the full field schemas, secret key requirements, consumer helpers (`kix.contracts.smtp.*` and `kix.contracts.oidc.*`), and `kix.mkImport` examples for every contract.
+See [Dependency contracts](/docs/reference/dependency-contracts/) for the full field schemas, secret key requirements, consumer helpers (`kix.contracts.smtp.helpers.*` and `kix.contracts.oidc.helpers.*`), and `kix.mkImport` examples for every contract.
 :::
 
 ---

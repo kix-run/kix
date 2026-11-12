@@ -77,6 +77,9 @@ in
             options = {
               package = lib.mkOption {
                 type = lib.types.raw;
+                # A package that moved to experimental leaves a marker under
+                # its old name, which carries the error to show.
+                apply = package: if (package._type or "") == "kix-moved" then throw package.message else package;
                 description = ''
                   The package function. types.raw avoids recursive merge
                   processing that would break lib.fix in package evaluation.
@@ -211,6 +214,9 @@ in
         When DI resolution fails for a required dep, the system checks this
         registry and auto-creates an instance with default config.
         Nice DX: availablePackages = packages;
+        That puts the stable packages in the registry. Add an
+        experimental package by name:
+        availablePackages = packages // { inherit (packages.experimental) stackgres-operator; };
 
         A name that more than one entry answers (by entry name,
         meta.roles, meta.defaultAliases or the entry's aliases) is refused

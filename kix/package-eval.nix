@@ -47,28 +47,77 @@ let
   # The clusterDomain of every synthetic cluster.
   evalClusterDomain = "eval.kix.test";
 
+  byLevel = import ./packages/by-level.nix { inherit lib; };
+
+  # Every package of both levels by name. Every package cluster reads every
+  # package through `availablePackages`, experimental ones included.
   packages =
     let
-      entries = builtins.readDir ./packages;
-      dirs = lib.filterAttrs (_: type: type == "directory") entries;
+      both = builtins.attrNames (builtins.intersectAttrs byLevel.stable byLevel.experimental);
     in
-    # Every package cluster reads every package through `availablePackages`,
-    # so a parse error would otherwise be reported under whichever package
-    # happens to be evaluated first.
-    lib.mapAttrs (
-      name: _: builtins.addErrorContext "while loading kix/packages/${name}" (import ./packages/${name})
-    ) dirs;
+    assert lib.assertMsg (both == [ ])
+      "kix/package-eval.nix: ${lib.concatStringsSep ", " both} is both a stable and an experimental package. Give the experimental rework a key of its own here.";
+    byLevel.stable // byLevel.experimental;
+
+  levelOf = name: if byLevel.stable ? ${name} then "stable" else "experimental";
+
+  # The folder of a package, relative to the repository root.
+  folderOf = name: "kix/packages/${levelOf name}/${name}";
 
   # Auto-instantiation refuses a key that two shelf packages answer, so the
   # shelf keeps one implementation per contested required key: the
   # single-node clickhouse for `clickhouse`, and StackGres for `postgres`
   # and `database`. The packages left out are still evaluated as their own
   # instances.
-  availablePackages = removeAttrs packages [
-    "clickhouse-cluster"
-    "cnpg-cluster"
-    "cnpg-database"
-  ];
+  #
+  # Kix refuses to add a package that runs once per cluster, such as an
+  # operator, beside its only consumer, so those entries name a namespace of
+  # their own: the package's name.
+  availablePackages =
+    lib.mapAttrs
+      (
+        name: package:
+        let
+          meta = import ./lib/meta.nix { inherit lib; };
+          packageMeta = kix.peekPackageMeta {
+            inherit package;
+            inherit (kix) kixlib;
+          };
+        in
+        if
+          meta.servesCluster {
+            inherit packageMeta;
+            context = "availablePackages.${name}";
+          }
+        then
+          {
+            inherit package;
+            namespace = name;
+          }
+        else
+          package
+      )
+      (
+        removeAttrs packages [
+          "clickhouse-cluster"
+          "cnpg-cluster"
+          "cnpg-database"
+        ]
+      );
+
+  # The password of every database instance, from a SOPS file encrypted to
+  # the test-only key in clusters/dev-secrets. Evaluation never decrypts it.
+  dbPassword = {
+    passwordSource = ./package-eval-password.sops.yaml;
+    passwordHash = "sha256-CZBEBEf3F4x4XixP50/aHYHOipR3x139Cz4T9XyYqpw=";
+  };
+
+  # The ClickHouse operator runs once per cluster, so the packages that need
+  # it declare it in a namespace of its own, with its login.
+  clickhouseOperator = {
+    clickhouse-operator.package = packages.clickhouse-operator;
+    inherit credentials;
+  };
 
   # A `credentials` secret for packages that read one.
   credentials = {
@@ -140,17 +189,23 @@ let
       };
     };
     clickhouse.instances = { inherit credentials storage; };
-    clickhouse-cluster.instances = { inherit credentials; };
+    clickhouse-cluster = {
+      instances = { inherit credentials; };
+      module = _: { instances.clickhouse-operator = clickhouseOperator; };
+    };
     clickhouse-database = {
-      config.password = "password";
+      config = { inherit (dbPassword) passwordSource passwordHash; };
       instances = { inherit credentials storage; };
     };
-    clickhouse-keeper.instances = { inherit credentials; };
+    clickhouse-keeper = {
+      instances = { inherit credentials; };
+      module = _: { instances.clickhouse-operator = clickhouseOperator; };
+    };
     clickhouse-logs.instances = {
       inherit credentials storage;
       clickhouse-database = {
         package = packages.clickhouse-database;
-        config.password = "password";
+        config = { inherit (dbPassword) passwordSource passwordHash; };
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
@@ -164,7 +219,7 @@ let
     # cnpg-cluster is off the shelf, so the database's cluster is declared.
     cnpg-database = {
       config = {
-        password = "password";
+        inherit (dbPassword) passwordSource passwordHash;
         extensions = [ "citext" ];
       };
       instances.postgres.package = packages.cnpg-cluster;
@@ -175,7 +230,15 @@ let
       postgres.package = packages.cnpg-cluster;
       prometheus-operator.package = packages.prometheus-operator;
     };
-    cluster-issuer.config.spec.selfSigned = { };
+    # CloudNativePG finds a plugin only in its own namespace, so the
+    # operator is declared beside the plugin.
+    cnpg-barman-cloud.instances.cnpg-operator.package = packages.cnpg-operator;
+    # An issuer lives in cert-manager's namespace, so cert-manager is
+    # declared beside it.
+    cluster-issuer = {
+      config.spec.selfSigned = { };
+      instances.cert-manager.package = packages.cert-manager;
+    };
     # A real Prometheus provider, so the ServiceMonitor, the alert rules,
     # and the Service's metrics port are built against its builders.
     coredns = {
@@ -219,7 +282,7 @@ let
       instances = {
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         # The three salts are optional; clusters/test-immich.nix sets them.
         application-secrets = {
@@ -262,7 +325,7 @@ let
         valkey-password = valkeyPassword;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         harbor-secrets = {
           package = packages.secret;
@@ -288,7 +351,7 @@ let
       valkey-password = valkeyPassword;
       database = {
         package = packages.stackgres-database;
-        config.password = "password";
+        config = { inherit (dbPassword) passwordSource passwordHash; };
       };
       prometheus-operator.package = packages.prometheus-operator;
     };
@@ -301,7 +364,7 @@ let
         prometheus-operator.package = packages.prometheus-operator;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         bootstrap-admin = {
           package = packages.secret;
@@ -332,7 +395,7 @@ let
     metabase.instances = {
       database = {
         package = packages.stackgres-database;
-        config.password = "password";
+        config = { inherit (dbPassword) passwordSource passwordHash; };
       };
       encryption-key = {
         package = packages.secret;
@@ -347,11 +410,11 @@ let
         inherit credentials storage;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         clickhouse-database = {
           package = packages.clickhouse-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         secret-key-base = {
           package = packages.secret;
@@ -369,7 +432,7 @@ let
         valkey-password = valkeyPassword;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
         n8n-encryption-key = {
           package = packages.secret;
@@ -489,7 +552,7 @@ let
         };
       };
     };
-    stackgres-database.config.password = "password";
+    stackgres-database.config = { inherit (dbPassword) passwordSource passwordHash; };
     stackgres-object-storage = {
       config = {
         type = "s3Compatible";
@@ -530,7 +593,7 @@ let
         inherit storage;
         database = {
           package = packages.stackgres-database;
-          config.password = "password";
+          config = { inherit (dbPassword) passwordSource passwordHash; };
         };
       };
       config.domain = "https://vault.example.com";
@@ -593,7 +656,7 @@ let
   sourceDomainLiterals =
     name:
     let
-      dir = ./packages + "/${name}";
+      dir = ./packages + "/${levelOf name}/${name}";
       nixFiles =
         rel:
         lib.concatLists (
@@ -617,7 +680,7 @@ let
             i: line:
             lib.optional (
               !(lib.hasPrefix "#" (lib.trimWith { start = true; } line)) && lib.hasInfix "cluster.local" line
-            ) "kix/packages/${name}/${file}:${toString i}"
+            ) "${folderOf name}/${file}:${toString i}"
           ) (lib.splitString "\n" (builtins.readFile (dir + "/${file}")))
         );
     in
@@ -652,15 +715,15 @@ let
     in
     if versionExceptions ? ${name} then
       lib.assertMsg (!ok)
-        "kix/packages/${name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
+        "${folderOf name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
     else
-      lib.assertMsg ok "kix/packages/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
+      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
 
   checkOptions =
     name: package:
     kix.checkPackageOptions {
       inherit package;
-      who = "kix/packages/${name}";
+      who = folderOf name;
       scope = {
         instanceName = name;
         namespaceName = name;
@@ -724,7 +787,7 @@ let
     assert checkSource name;
     assert checkVersion name package;
     builtins.addErrorContext
-      "while evaluating kix/packages/${name} in its synthetic cluster at availability \"${level}\""
+      "while evaluating ${folderOf name} in its synthetic cluster at availability \"${level}\""
       (
         builtins.deepSeq cluster.rawManifests (
           builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
@@ -784,7 +847,7 @@ in
   # package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions`, or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a package folder under kix/packages/";
     assert checkOptionContracts packages;
     builtins.deepSeq evaluated evaluated;
 }

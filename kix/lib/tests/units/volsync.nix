@@ -20,11 +20,11 @@
 }:
 
 let
-  volsyncPackage = import ../../../packages/volsync;
-  snapshotControllerPackage = import ../../../packages/snapshot-controller;
-  secretPackage = import ../../../packages/secret;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
-  sourceChecks = import ../../../packages/volsync/checks.nix { inherit lib; };
+  volsyncPackage = import ../../../packages/experimental/volsync;
+  snapshotControllerPackage = import ../../../packages/experimental/snapshot-controller;
+  secretPackage = import ../../../packages/stable/secret;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
+  sourceChecks = import ../../../packages/experimental/volsync/checks.nix { inherit lib; };
 
   resticKeys = {
     RESTIC_REPOSITORY = "s3:https://s3.example.com/backups/app";

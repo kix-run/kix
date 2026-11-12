@@ -40,6 +40,8 @@ This boundary works because packages declare *what* they need while clusters dec
 
 Because the contract between packages is typed data and builders on `out` (validated across the catalog by [`kix.contracts.*`](/docs/explanation/dependency-contracts/)), platform teams can swap an underlying provider or run the same application stack in local kind and multi-node production without editing package code.
 
+Every package and every contract has a stability level. A stable one breaks only in a minor release. An experimental one may break in any release, including a patch release, and the break may show no error. The level is visible in the cluster definition, because an experimental package is written `packages.experimental.<name>`. A stable package reads only stable contracts, so an experimental contract cannot break it. See [Stable and experimental packages](/docs/reference/instances-and-composition/#stable-and-experimental-packages) for the naming rules.
+
 :::tip[Try it as a tutorial]
 Work through [Package anatomy and safe resource composition](/docs/tutorials/07-package-anatomy-and-safe-resource-composition/) and [Reusing packages](/docs/tutorials/10-reusing-packages/) to see how `scope`, `options`, and `out` work in practice.
 :::

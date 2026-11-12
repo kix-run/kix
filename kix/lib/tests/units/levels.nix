@@ -1,0 +1,260 @@
+# Tests for the stable and experimental levels (kix/lib/core/levels.nix):
+# the merged set a cluster or a package reads, the error for a name that
+# has only a stable entry, the error for the old name of an entry that
+# moved to experimental, and the one shape every contract in kix/contracts
+# has.
+
+{
+  lib,
+  kixlib,
+  mkCluster,
+  mkCmPackage,
+  evalFails,
+  manifests,
+  ...
+}:
+
+let
+  levels = import ../../core/levels.nix { inherit lib; };
+  packages = import ../../../packages { inherit lib; };
+  packagesByLevel = import ../../../packages/by-level.nix { inherit lib; };
+  contracts = kixlib.contracts;
+  modules = import ../../../modules { inherit lib; };
+
+  fails = v: !(builtins.tryEval v).success;
+  # The entries of a merged level that are not graduation errors.
+  entries = lib.filterAttrs (_: v: (builtins.tryEval v).success);
+
+  merged = levels.merge {
+    prefix = "things";
+    stable = {
+      a = 1;
+      b = 2;
+    };
+    experimental = {
+      b = 20;
+      c = 30;
+    };
+  };
+
+  contractKeys = [
+    "alias"
+    "assertions"
+    "check"
+    "fields"
+    "helpers"
+    "name"
+    "options"
+    "problems"
+    "require"
+  ];
+  # The names refused since 0.10 (kix/contracts/moved.nix) sit beside a
+  # contract's parts until they are removed.
+  moved = import ../../../contracts/moved.nix { inherit lib; };
+  partsOf = name: contract: removeAttrs contract (builtins.attrNames (moved name));
+in
+{
+  # Stable entries are read at the top and under `stable`, and an
+  # experimental entry only under `experimental`, where it may share a
+  # stable entry's name.
+  levels-merge-spellings =
+    (
+      merged.a == 1
+      && merged.b == 2
+      &&
+        merged.stable == {
+          a = 1;
+          b = 2;
+        }
+      && merged.experimental.b == 20
+      && merged.experimental.c == 30
+      && !(merged ? c)
+    )
+    || throw "levels merge: ${builtins.toJSON (builtins.attrNames merged)}";
+
+  # An experimental name with only a stable entry is refused.
+  levels-graduated-name-is-refused =
+    fails merged.experimental.a || throw "levels: experimental.a evaluated";
+
+  # `stable` and `experimental` cannot be entries.
+  levels-reserved-names =
+    fails (
+      levels.merge {
+        prefix = "things";
+        stable.experimental = 1;
+        experimental = { };
+      }
+    )
+    || throw "levels: an entry named experimental was accepted";
+
+  # Every stable package is read by its short name, and `packages.stable`
+  # holds the packages and nothing else.
+  levels-packages-set =
+    (
+      builtins.attrNames packages.stable == builtins.attrNames packagesByLevel.stable
+      && lib.all (name: packages ? ${name}) (builtins.attrNames packagesByLevel.stable)
+      &&
+        builtins.attrNames packages.experimental == lib.unique (
+          builtins.sort builtins.lessThan (
+            builtins.attrNames packagesByLevel.stable ++ builtins.attrNames packagesByLevel.experimental
+          )
+        )
+    )
+    || throw "levels: packages set does not match the two folders";
+
+  # Every contract file returns the parts `mkContract` builds and no others.
+  levels-contract-shape =
+    let
+      wrong = lib.filterAttrs (
+        name: contract: builtins.attrNames (partsOf name contract) != contractKeys
+      ) (contracts.stable // entries contracts.experimental);
+    in
+    wrong == { }
+    || throw "contracts with other parts than ${builtins.toJSON contractKeys}: ${
+      builtins.toJSON (lib.mapAttrs (name: c: builtins.attrNames (partsOf name c)) wrong)
+    }";
+
+  # A stable package breaks only in a minor release, so it reads no
+  # experimental contract and imports no file of an experimental package.
+  levels-stable-packages-read-stable-contracts =
+    let
+      nixFiles =
+        dir:
+        lib.concatLists (
+          lib.mapAttrsToList (
+            name: type:
+            if type == "directory" then
+              nixFiles (dir + "/${name}")
+            else
+              lib.optional (lib.hasSuffix ".nix" name) (dir + "/${name}")
+          ) (builtins.readDir dir)
+        );
+      readers = lib.filterAttrs (
+        name: _:
+        lib.any (
+          file:
+          let
+            text = builtins.readFile file;
+          in
+          lib.hasInfix "contracts.experimental" text || lib.hasInfix "/experimental/" text
+        ) (nixFiles (../../../packages/stable + "/${name}"))
+      ) packagesByLevel.stable;
+    in
+    readers == { }
+    || throw "stable packages that read kix.contracts.experimental or an experimental package's files: ${builtins.toJSON (builtins.attrNames readers)}. Move the package to kix/packages/experimental, or move what it reads to the stable level.";
+
+  # A helper's old name is refused, and its new name works.
+  levels-moved-helper-is-refused =
+    (fails contracts.redis.usesSentinel && builtins.isFunction contracts.redis.helpers.usesSentinel)
+    || throw "contracts: redis.usesSentinel evaluated";
+
+  # The old name of a package that moved to experimental fails when an
+  # instance uses it, and `availablePackages = packages` skips it.
+  levels-demoted-package-is-refused =
+    let
+      withPackage =
+        package:
+        mkCluster [
+          {
+            instances.demo.app.package = package;
+          }
+        ];
+      shelf = mkCluster [
+        {
+          availablePackages = packages;
+          instances.demo.app.package = packages.echo-server;
+        }
+      ];
+    in
+    (
+      evalFails (withPackage packages.dns-exporter)
+      && !(evalFails (withPackage packages.experimental.dns-exporter))
+      && (packages.dns-exporter.message or "") != ""
+      && lib.hasPrefix "[K0549] " packages.dns-exporter.message
+      && manifests shelf != [ ]
+    )
+    || throw "levels: the old name of an experimental package was accepted, or the registry read it";
+
+  # A list of moved names must name experimental entries only.
+  levels-demoted-names-are-checked =
+    fails (
+      levels.merge {
+        prefix = "things";
+        stable.a = 1;
+        experimental = { };
+        demoted = _: throw;
+        demotedNames = [ "a" ];
+        demotedId = "[K0000]";
+      }
+    )
+    || throw "levels: a stable name was accepted as moved to experimental";
+
+  # The old names of the contracts and the module that moved to experimental
+  # fail, and the new names work.
+  levels-demoted-contracts-and-modules =
+    (
+      fails contracts.oidcProvider
+      && fails contracts.otlpEndpoint
+      && builtins.isFunction contracts.experimental.otlpEndpoint.check
+      && fails modules.monitoring
+      && builtins.isPath modules.experimental.monitoring
+      && modules.stable == { }
+    )
+    || throw "levels: an old contract or module name evaluated";
+
+  # A dependency that only a package which moved to experimental would answer
+  # from `availablePackages = packages` fails, and naming the package fixes
+  # it.
+  levels-moved-package-leaves-the-registry =
+    let
+      provider = mkCmPackage {
+        name = "provider";
+        metaExtra.defaultAliases = [ "thing" ];
+        out.ok = true;
+      };
+      consumer = {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            thing,
+            ...
+          }:
+          {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "consumer";
+              extra.data.ok = builtins.toJSON thing.out.ok;
+            };
+            root = self.cm;
+          };
+      };
+      shelf = levels.merge {
+        prefix = "packages";
+        stable = { };
+        experimental.provider = provider;
+        demoted = name: message: {
+          _type = "kix-moved";
+          inherit name message;
+          experimentalPackage = provider;
+        };
+        demotedNames = [ "provider" ];
+        demotedId = "[K0549]";
+      };
+      withShelf =
+        availablePackages:
+        mkCluster [
+          {
+            inherit availablePackages;
+            instances.a.consumer.package = consumer;
+          }
+        ];
+    in
+    (
+      evalFails (withShelf shelf)
+      && manifests (withShelf (shelf // { inherit (shelf.experimental) provider; })) != [ ]
+    )
+    || throw "levels: a moved package was still offered, or naming it did not help";
+}

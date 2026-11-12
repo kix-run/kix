@@ -16,8 +16,8 @@ makes keeping this file current part of changing the package conventions.
 | Need | Read |
 |---|---|
 | The values a package is judged against | `PRINCIPLES.md`; `docs/src/content/docs/explanation/packages-and-clusters.mdx`; `docs/src/content/docs/explanation/availability-levels.mdx` |
-| The package file contract and option contract | `docs/src/content/docs/reference/package-anatomy.mdx`; `docs/src/content/docs/reference/resources-and-out.mdx`; `.claude/skills/kix-migration/SKILL.md` "Package Anatomy" (line 78) and "Package Meta" (line 778) |
-| Second implementation of an alias, facades, operator stacks | kix-migration "Two Implementations, One Alias" (line 868) and "Operator-Managed Stacks" (line 816); `.claude/skills/kix-migration/MULTI_COMPONENT.md`, `STORAGE.md`, and `SECRETS.md` |
+| The package file contract and option contract | `docs/src/content/docs/reference/package-anatomy.mdx`; `docs/src/content/docs/reference/resources-and-out.mdx`; `.claude/skills/kix-migration/SKILL.md` "Package Anatomy" (line 78) and "Package Meta" (line 780) |
+| Second implementation of an alias, facades, operator stacks | kix-migration "Two Implementations, One Alias" (line 870) and "Operator-Managed Stacks" (line 818); `.claude/skills/kix-migration/MULTI_COMPONENT.md`, `STORAGE.md`, and `SECRETS.md` |
 | CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md`; `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
 | Any prose, including comments and the header | `CLAUDE.prose.md`, `CLAUDE.md` "Code comments" |
 | Logging what you notice and do not fix | `CLAUDE.housekeeping.md` |
@@ -54,7 +54,7 @@ rewrites the later ones.
 
 | # | Decision | What it fixes | A late change costs |
 |---|---|---|---|
-| 1 | Shape and boundary | tier, one package or several, facade or not, CRD route | a restart (L4, I9, C1) |
+| 1 | Shape and boundary | tier, stable or experimental, one package or several, facade or not, CRD route | a restart (L4, I9, C1) |
 | 2 | Upstream research | the facts every later decision is derived from | every decision made on a guess |
 | 3 | Availability | the `pick` table per workload, ceilings and their evidence, strategy | every builder and the header (W1, W4, O19) |
 | 4 | Contracts consumed, provider fixes | build args, the contract holding each, what providers must add | every consumer wire and the `out` shape (D5, D30) |
@@ -71,6 +71,17 @@ rewrites the later ones.
   through; once the package reads or computes a field inside the chart, go
   native. A chart's singleton default, hooks, and release-name prefixing are
   not evidence of anything (L6, E11, W22).
+- Level: stable or experimental. A new package starts in
+  `kix/packages/experimental/<pkg>/` unless the maintainer says otherwise,
+  and a cluster names it `packages.experimental.<pkg>`. An experimental
+  package may break in any release. A stable package
+  (`kix/packages/stable/<pkg>/`) breaks only in a minor release and reads
+  only stable contracts. An experimental package may read
+  `kix.contracts.experimental.<name>` too, and may share a stable package's
+  name as a rework of it. No package is named `stable` or `experimental`.
+  The package graduates when its folder moves to `stable/`. This skill
+  writes paths as `kix/packages/experimental/<pkg>`. Read `stable` there for
+  a stable package.
 - One package per upstream unit. A multi-component application stays one
   package (`docs/src/content/docs/explanation/packages-and-clusters.mdx` `#packages-versus-instances`). A component other packages would
   reuse becomes a dependency instead.
@@ -116,7 +127,7 @@ Collect a whole class at once rather than meeting it one deploy at a time:
 reads, every `CREATE`, `DROP`, or `GRANT` of an object outside the app's
 database, every `System.get_env`/`os.environ` name.
 
-Worked example, Plausible CE (`kix/packages/plausible`):
+Worked example, Plausible CE (`kix/packages/experimental/plausible`):
 `config/runtime.exs` takes `DATABASE_URL` and `CLICKHOUSE_DATABASE_URL` as
 URLs, so the credentials are `$(VAR)` expansions into owned variables. It
 reads every setting from a file in `CONFIG_DIR` before the environment, so
@@ -157,7 +168,7 @@ is a finding from the upstream source, not a default.
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
-   volume as the state (immich:144-146); one owner of an OS resource
+   volume as the state (immich:156-158); one owner of an OS resource
    (firezone:83-85). For each piece of in-memory state, also note what a
    restart loses (sessions, buffered events), since Recreate and a singleton
    make every deploy a restart; the header's `Limits:` says it.
@@ -193,24 +204,44 @@ the defaults fails there.
 
 ### 4. Contracts consumed, and fixing the provider
 
-- Choose by alias and contract, never by package (P10, P13). Lib contracts:
+- Choose by alias and contract, never by package (P10, P13). Contracts
+  (`kix/contracts/stable/`, one file per name under `kix.contracts`):
   `kix.contracts.postgresDatabase`, `oidc`, `oidcProvider`, `otlpEndpoint`,
-  `redis` (taken as the `valkey` dependency), and `smtp` (`kix/lib/vocab/`); `gateway` is held by `kix.expose`, not by
+  `redis` (taken as the `redis` dependency), `clickhouse`, and `smtp`; `gateway` is held by `kix.expose`, not by
   the package. A login always travels in the provider's `out.credentials`
-  (`credentialsField` in `contract.nix`), never in a second dependency: a
+  (`credentialsField` in `kix/lib/vocab/contract.nix`), never in a second dependency: a
   provider Kix runs publishes its own Secret, and an outside service is a
   `kix.mkImport` in the consumer's namespace with `credentials =
   ref.<ns>.<secret>`. An application that sends mail takes `smtp ? null`
-  and maps `kix.contracts.smtp.settings` onto its own settings (vaultwarden,
+  and maps `kix.contracts.smtp.helpers.settings` onto its own settings (vaultwarden,
   grafana, plausible, immich); one that keeps mail settings elsewhere calls
-  `kix.contracts.smtp.server` for the egress only (keycloak). One that signs users in takes `oidc ? null` and calls
-  `kix.contracts.oidc.client` (grafana, harbor, immich).
-  Package-local: `kix/packages/clickhouse/contract.nix`. Consumers hold the
+  `kix.contracts.smtp.helpers.server` for the egress only (keycloak). One that signs users in takes `oidc ? null` and calls
+  `kix.contracts.oidc.helpers.client` (grafana, harbor, immich).
+  A contract's own functions sit under its `helpers`, and its option schema
+  under `options` (`options.oidc = kix.contracts.oidc.options { ... }`,
+  `options.mail = kix.contracts.smtp.options`). Consumers hold the
   dependency with `assertions`, providers pass `root.out` through `check`
   (D30; pattern table, "Contracts").
+- A contract that more than one package shares is a file in
+  `kix/contracts/`: `stable/<name>.nix`, or `experimental/<name>.nix` for one
+  that may still change in any release (read as
+  `kix.contracts.experimental.<name>`, by experimental packages only). The
+  file name is the name under `kix.contracts`, and the folder listing builds
+  the set, so no list needs editing. The file is a function
+  `{ lib, mkContract, credentialsField, compose, ... }:` that returns the
+  result of `mkContract { name; alias; fields; remedyNoun ? ; extraProblems ? ;
+  helpers ? { }; options ? null; }`. Every contract then has the same parts:
+  `name`, `alias`, `fields`, `problems`, `check`, `assertions`, `require`,
+  `helpers`, and `options`. A field without `required` is required. The
+  contract's own functions go under `helpers`
+  (`kix/contracts/stable/redis.nix`).
+- A package that renames a dependency sets `deps.<arg>.renamedFrom = { name
+  = "<old name>"; id = "[K1234]"; }`, with the id of the `error` change
+  record in brackets. The error for a missing dependency then starts with
+  the id and says what the dependency was called before (immich:191-194).
 - A consumer that reads an optional field (`username`, `extensions`, `tls`)
   handles its absence on a `kix.mkImport` stand-in
-  (`kix/lib/vocab/postgres-database.nix:1-11`, D22), and acts on it where the
+  (`kix/contracts/stable/postgresDatabase.nix:1-8`, D22), and acts on it where the
   program needs telling: `tls = true` means TLS in the connection settings
   (keycloak's `KC_DB_URL_PROPERTIES`, plausible's `sslmode=require`).
 - A facade with no contract file (clickhouse-database) is held through
@@ -336,13 +367,13 @@ deploy says where it was observed. Operators add
 ### Pattern to reference package
 
 The only place in this skill with package line numbers. `pkg:N` is
-`kix/packages/pkg/default.nix:N`.
+`kix/packages/stable/pkg/default.nix:N`.
 
 | Pattern | Reference |
 |---|---|
 | Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:88-96 |
-| Shared release file for a release group | `immich/release.nix`, immich:94 |
-| Follower image tag with `tagText` and `mkDefault` | n8n:265-272, 305 |
+| Shared release file for a release group | `immich/release.nix`, immich:106 |
+| Follower image tag with `tagText` and `mkDefault` | n8n:267-274, 307 |
 | `checkSecretKeys`, read through the binding | metabase:157-162, 207, 263 |
 | `mergeEnv` defaults and owned groups | metabase:167-231 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:186-202 |
@@ -354,23 +385,24 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Contracts: consumer `assertions`, provider `check` | metabase:111; stackgres-database:488; keycloak:537; tempo:630 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:234, header 74-76 |
-| `atLeast` | valkey:108 |
-| Ceilings: package-wide, per builder | tempo:275; valkey:545, `harbor/registry.nix`:244, `harbor/jobservice.nix`:340 |
+| `atLeast` | valkey:106 |
+| Ceilings: package-wide, per builder | tempo:275; valkey:545, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:171-174, 363 |
 | Metrics toggle that does not restart the workload | metabase:151-156; keycloak header 30-35 |
-| `kix.monitor` with alerts | openbao:392; clickhouse:602-621 and `alerts.nix` |
+| `kix.monitor` with alerts | openbao:392; clickhouse:608-618 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
 | `kix.healthCheck` with a script file | victoria-metrics-agent:355-372 |
 | Checksum annotations, `enableServiceLinks = false` | metabase:257-270 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-40; stackgres-database |
-| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:270 (`serverSideName`) |
+| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:284 (`serverSideName`) |
 | Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:182-194, 212-252 |
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:619-625, 692; vaultwarden:178-200, 275 |
-| One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:497-511, 677-678 |
+| One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:498-512, 678-679 |
 | Literal credentials refused in `env` | plausible:337-357 |
 | Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:711-736; cnpg-cluster:596-661 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:517-560, 604-605; `plausible/replicate.py` |
-| One alias, two implementations, a contract file | `clickhouse/contract.nix`; clickhouse, clickhouse-cluster |
+| One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:98, clickhouse-cluster:87 |
+| Renamed dependency with `renamedFrom` | immich:191-194; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
@@ -386,7 +418,7 @@ definition.
 
 Mandatory:
 
-1. `kix/packages/<pkg>/default.nix`.
+1. `kix/packages/experimental/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
    config to evaluate at `none` and `zone` (`:105`; keycloak at `:290-308`).
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
@@ -410,15 +442,14 @@ Conditional:
 
 8. `clusters/test-<pkg>.rules-test.yaml` when the package ships alerts
    (auto-discovered, `kix/lib/mkFlake.nix:152-170`).
-9. `kix/lib/vocab/<contract>.nix`, `vocab/default.nix`, `units/<contract>.nix`,
-   and `kix/lib/architecture.md` for a new contract. A new field on any
-   contract, package-local ones included: `git grep -n` an existing field
+9. `kix/contracts/stable/<name>.nix` (or `experimental/<name>.nix`),
+   `kix/lib/tests/units/<contract>.nix`, and `kix/lib/architecture.md` for a
+   new contract. A new field on any contract: `git grep -n` an existing field
    name to find every list of fields (`docs/src/content/docs/reference/`, the kix-migration
    skill) and add it there.
 10. Provider packages the consumer exposed gaps in, with their tests (step 4).
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
-    files such as `health-check.py`, `release.nix`, `contract.nix`, and
-    `alerts.nix`.
+    files such as `health-check.py`, `release.nix`, and `alerts.nix`.
 12. `clusters/test-<contract>-swap/` for a second implementation of an alias,
     registered in `clusters/flake.nix` and the root `flake.nix`.
 13. `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`,
@@ -432,7 +463,7 @@ Cheap first. Each step assumes the earlier ones pass.
 
 ```bash
 F=--extra-experimental-features; P=pipe-operators
-git add -A kix/packages/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
+git add -A kix/packages/experimental/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
 nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh ./clusters <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls

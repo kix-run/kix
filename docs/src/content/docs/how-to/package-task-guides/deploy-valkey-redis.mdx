@@ -71,17 +71,17 @@ setting `metrics.enabled = false`, restarts every pod.
 ## Connect an application
 
 Valkey's `out` follows the Redis contract, `kix.contracts.redis`.
-Applications take it as their `valkey` dependency and read these fields:
+Applications take it as their `redis` dependency and read these fields:
 
 | Key | Value |
 |---|---|
 | `out.host`, `out.port` | The Service that selects every Valkey pod, port `"6379"` |
-| `out.credentials` | The password secret: `valkey.out.credentials.out.keyRef "password"` |
+| `out.credentials` | The password secret: `redis.out.credentials.out.keyRef "password"` |
 | `out.tls` | `false`: Valkey serves no TLS |
 | `out.sentinel` | `null`, or with Sentinel `{ port = "26379"; primarySet = "primary"; }` |
 
 A package checks the dependency with
-`deps.valkey.assertions = dep: kix.contracts.redis.assertions who dep;`.
+`deps.redis.assertions = dep: kix.contracts.redis.assertions who dep;`.
 
 A consumer must run in Valkey's namespace, because Kubernetes resolves a
 `secretKeyRef` only in the pod's own namespace. Dependency injection does not
@@ -101,12 +101,12 @@ A package whose client cannot use Sentinel asks for a standalone Valkey and
 refuses one that runs Sentinel anyway, such as an import:
 
 ```nix title="package default.nix"
-deps.valkey = {
+deps.redis = {
   config.sentinel.enabled = false;
   assertions =
     dep:
     kix.contracts.redis.assertions who dep
-    ++ lib.optional (kix.contracts.redis.usesSentinel dep) {
+    ++ lib.optional (kix.contracts.redis.helpers.usesSentinel dep) {
       assertion = false;
       message = "this package has no Sentinel client; set sentinel.enabled = false on the valkey instance.";
     };
@@ -116,9 +116,10 @@ deps.valkey = {
 ## Use a Redis server outside the cluster
 
 To use a server Kix does not run, such as ElastiCache, replace the `valkey`
-instance with a `kix.mkImport` that sets the contract's fields. Put the
-import in the application's namespace, beside the secret that holds the
-password:
+instance with a `kix.mkImport` that sets the contract's fields. Name the
+import `redis`, or give it `aliases = [ "redis" ]`, so that applications find
+it as their `redis` dependency. Put the import in the application's
+namespace, beside the secret that holds the password:
 
 ```nix title="cluster definition"
 { ref, ... }:
@@ -129,7 +130,7 @@ password:
       config.source = ./secrets/redis-login.sops.yaml;
       config.keys = [ "password" ];
     };
-    valkey.package = kix.mkImport {
+    redis.package = kix.mkImport {
       scope = "namespace";
       out = {
         host = "app-cache.abc123.euw1.cache.amazonaws.com";

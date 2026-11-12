@@ -134,17 +134,17 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
-        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
-        instances.cert-manager.cert-manager.package = packages.cert-manager;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
+        instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
+        instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
         instances.rabbitmq-system.rabbitmq-operator = {
-          package = packages.rabbitmq-operator;
+          package = packages.experimental.rabbitmq-operator;
           config.metrics.enabled = true;
         };
 
         instances.messaging = {
           rabbitmq = {
-            package = packages.rabbitmq-cluster;
+            package = packages.experimental.rabbitmq-cluster;
             config = {
               storage.size = "5Gi";
               resources = {
@@ -166,7 +166,7 @@ kix.buildCluster {
             };
           };
           rabbitmq-ha = {
-            package = packages.rabbitmq-cluster;
+            package = packages.experimental.rabbitmq-cluster;
             config = {
               replicas = 3;
               storage.size = "5Gi";

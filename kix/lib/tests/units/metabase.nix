@@ -1,4 +1,4 @@
-# Tests for kix/packages/metabase: the variables the package owns, the
+# Tests for kix/packages/experimental/metabase: the variables the package owns, the
 # metrics toggle and the prometheus dependency, the encryption key check,
 # the checksum annotations, and the citext request. Metabase runs in
 # namespace `bi` with a database stub and a `secret` encryption key.
@@ -15,8 +15,8 @@
 }:
 
 let
-  metabasePackage = import ../../../packages/metabase;
-  secretPackage = import ../../../packages/secret;
+  metabasePackage = import ../../../packages/experimental/metabase;
+  secretPackage = import ../../../packages/stable/secret;
 
   # A `database` provider with stackgres-database's out shape. Its
   # ConfigMap records the extensions consumers ask for.

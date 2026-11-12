@@ -37,7 +37,7 @@ let
     in
     parts.serviceMonitor.spec.endpoints;
 
-  packagePath = ../../../packages/descheduler;
+  packagePath = ../../../packages/experimental/descheduler;
   policyLib = import (packagePath + "/policy.nix") { inherit lib; };
   package = import packagePath {
     inherit lib;

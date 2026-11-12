@@ -223,7 +223,12 @@ in
 
         resolvedDeps = resolveDeclaredDeps {
           declaredDeps = discoveredDeps;
-          inherit resolutionIndex allInstances requester;
+          inherit
+            resolutionIndex
+            allInstances
+            requester
+            depsEnrichment
+            ;
           requesterName = instanceName;
           namespace = namespaceName;
           explicitOverrides = deps;
@@ -237,6 +242,7 @@ in
             requesterName = instanceName;
             requesterNamespace = namespaceName;
             hasDefault = depSpec.optional or false;
+            renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
           }
         ) discoveredDeps;
 

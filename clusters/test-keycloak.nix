@@ -29,31 +29,32 @@ kix.buildCluster {
         binding = "absent";
         provider = null;
       };
-      instances.kube-system.cilium.package = packages.cilium;
+      instances.kube-system.cilium.package = packages.experimental.cilium;
 
-      instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
-      instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
-      instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+      instances.ingress-system.ingress-nginx.package = packages.experimental.ingress-nginx;
+      instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
+      instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
 
       instances.auth = {
         keycloak = {
-          package = packages.keycloak;
+          package = packages.experimental.keycloak;
           config = {
             ingress.host = "keycloak.localtest.me";
             extraArgs = [ "--log-console-output=json" ];
           };
         };
         keycloak-pg = {
-          package = packages.stackgres-cluster;
+          package = packages.experimental.stackgres-cluster;
           aliases = [ "postgres" ];
           # kind has one node and the pods anti-affine, so a second
           # instance never schedules.
           config.instances = 1;
         };
         keycloak-db = {
-          package = packages.stackgres-database;
+          package = packages.experimental.stackgres-database;
           # Dev-only value; it protects nothing.
-          config.password = "dev-keycloak-db-password";
+          config.passwordSource = ./dev-secrets/keycloak-db.sops.yaml;
+          config.passwordHash = "sha256-rgn6JZpWdY4hK9Cs6xIUUsG71gsVbab0Da/CZ0N4kRA=";
         };
         # Test values only.
         keycloak-admin = {

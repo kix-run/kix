@@ -7,7 +7,7 @@
 # region:postgresSwapConsumer
 {
   instances.app = {
-    metabase.package = packages.metabase;
+    metabase.package = packages.experimental.metabase;
     metabase-encryption-key = {
       package = packages.secret;
       aliases = [ "encryptionKey" ];

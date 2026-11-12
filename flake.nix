@@ -136,7 +136,7 @@
             touch $out
           '';
       });
-      # Evaluate every directory under kix/packages/ in a synthetic cluster of
+      # Evaluate every directory under kix/packages/stable/ in a synthetic cluster of
       # its own (kix/package-eval.nix), once at availability "none" and once at
       # "zone", so a package that no cluster names still runs through the
       # validators and the scorecard.
@@ -221,7 +221,7 @@
       # namespace, plus the facade's bootstrap Job next to the server, must
       # match except for the ClickHouse hostname. The contract itself is
       # defined and checked at evaluation time in
-      # kix/packages/clickhouse/contract.nix; this is the rendering regression
+      # kix/contracts/experimental/clickhouse.nix; this is the rendering regression
       # test. Kix's own dependency bookkeeping is stripped first because it
       # records upstream hashes that legitimately differ between providers.
       clickhouseSwap = lib.genAttrs systems (system: {
@@ -367,9 +367,7 @@
         }:
         let
           kix = import ./kix/lib { inherit pkgs lib self; };
-          entries = builtins.readDir ./kix/packages;
-          dirs = lib.filterAttrs (_: type: type == "directory") entries;
-          packages = lib.mapAttrs (name: _: import ./kix/packages/${name}) dirs;
+          packages = import ./kix/packages { inherit lib; };
         in
         {
           inherit kix packages;

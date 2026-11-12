@@ -6,7 +6,7 @@
 {
   cluster.domain = "swap.test";
   instances.files = {
-    filebrowser.package = packages.filebrowser;
+    filebrowser.package = packages.experimental.filebrowser;
     filebrowser-data = {
       package = packages.persistent-volume-claim;
       aliases = [ "storage" ];

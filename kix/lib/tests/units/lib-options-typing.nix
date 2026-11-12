@@ -26,7 +26,7 @@ let
       modules = [ { options.o = o; } ] ++ map (d: { config.o = d; }) defs;
     }).config.o;
 
-  pkg = name: import (../../../packages + "/${name}");
+  pkg = name: (import ../../../packages/by-level.nix { inherit lib; }).byName.${name};
 
   # The VictoriaMetrics operator plus one instance of `package` in
   # monitoring-system, with `config`.
@@ -976,7 +976,7 @@ in
   lib-options-typing-check-throws =
     throws (
       eval.checkOptionContract {
-        who = "kix/packages/example";
+        who = "kix/packages/stable/example";
         options.x = lib.mkOption {
           type = t.anything;
           default.a = 1;
@@ -985,7 +985,7 @@ in
     )
     &&
       eval.checkOptionContract {
-        who = "kix/packages/example";
+        who = "kix/packages/stable/example";
         options = { };
       } == null;
 
@@ -1165,7 +1165,7 @@ in
       settings = builtins.fromJSON secret.stringData."alertmanager.yaml";
     in
     (
-      settings == import ../../../packages/alertmanager/default-settings.nix
+      settings == import ../../../packages/stable/victoria-metrics-alert/alertmanager-default-settings.nix
       && evalFails' (alert {
         extraSpec.datasource.url = "http://elsewhere";
       })
@@ -1350,23 +1350,10 @@ in
   # creates, a byte count included.
   lib-options-typing-monitoring-grafana-persistence =
     let
-      packages = lib.genAttrs [
-        "alertmanager"
-        "grafana"
-        "kube-state-metrics"
-        "loki"
-        "loki-logs"
-        "node-exporter"
-        "persistent-volume-claim"
-        "priority-class"
-        "prometheus"
-        "prometheus-default-rules"
-        "prometheus-operator"
-        "secret"
-      ] pkg;
+      packages = import ../../../packages { inherit lib; };
       claim = lib.findFirst (m: m.kind == "PersistentVolumeClaim") null (
         manifests (mkCluster [
-          ../../modules/monitoring.nix
+          ../../../modules/experimental/monitoring.nix
           {
             _module.args.packages = packages;
             monitoring = {

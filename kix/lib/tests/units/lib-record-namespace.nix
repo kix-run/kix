@@ -15,7 +15,7 @@
 }:
 
 let
-  priorityClassPackage = import ../../../packages/priority-class;
+  priorityClassPackage = import ../../../packages/stable/priority-class;
 
   sentinel = {
     instances._cluster.high = {

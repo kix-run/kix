@@ -1,4 +1,4 @@
-# Tests for kix/packages/mayastor: where etcd's StorageClass comes from, the
+# Tests for kix/packages/experimental/mayastor: where etcd's StorageClass comes from, the
 # pool, class, toleration, and resource checks, and the flags and env
 # variables the package owns. Refusals raised by `throw` in the build are
 # checked with evalFails beside a control that changes only the refused
@@ -18,7 +18,7 @@
 }:
 
 let
-  mayastorPackage = import ../../../packages/mayastor;
+  mayastorPackage = import ../../../packages/experimental/mayastor;
 
   # A cluster with the instance mayastor/mayastor. `deps` and `aliases` are
   # functions of `ref`; the default wires etcd's class to an import of

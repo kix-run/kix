@@ -37,7 +37,7 @@ kix.buildCluster {
           # endregion:storageClassesInstance
 
           coredns = {
-            package = packages.coredns;
+            package = packages.experimental.coredns;
 
             config = {
               replicas = 2;
@@ -48,32 +48,33 @@ kix.buildCluster {
 
         cert-manager = {
           cert-manager = {
-            package = packages.cert-manager;
+            package = packages.experimental.cert-manager;
 
           };
         };
 
         stackgres-system = {
           stackgres-operator = {
-            package = packages.stackgres-operator;
+            package = packages.experimental.stackgres-operator;
           };
         };
 
         immich = {
           postgres = {
-            package = packages."stackgres-cluster";
+            package = packages.experimental."stackgres-cluster";
           };
 
           # Per-app database + role on the postgres cluster above, resolved
           # through the `database` alias. immich adds the extensions it needs
           # to this instance, which forwards them to the postgres cluster.
           immich-db = {
-            package = packages."stackgres-database";
+            package = packages.experimental."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "immich";
               user = "immich";
-              password = "immich-dev-password";
+              passwordSource = ./dev-secrets/immich-db.sops.yaml;
+              passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
             };
           };
 
@@ -135,11 +136,11 @@ kix.buildCluster {
           };
 
           immich = {
-            package = packages.immich;
+            package = packages.experimental.immich;
           };
 
           machine-learning = {
-            package = packages."immich-machine-learning";
+            package = packages.experimental."immich-machine-learning";
           };
 
           # Keeps the downloaded models across restarts; the worker then runs

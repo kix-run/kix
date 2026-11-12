@@ -150,8 +150,8 @@ the consumer's namespace with `scope = "namespace"`:
 This satisfies the `database` contract (`kix.contracts.postgresDatabase`) for
 an outside PostgreSQL server such as RDS or Cloud SQL. The same pattern works
 for an outside Redis cache (`kix.contracts.redis`, see [Use a Redis server outside the cluster](/docs/how-to/package-task-guides/deploy-valkey-redis/#use-a-redis-server-outside-the-cluster)),
-an authenticated mail server ([`kix.contracts.smtp`](/docs/reference/dependency-contracts/#mail-kixcontractssmtp-and-kixoptionsmail)),
-or a single-issuer external OIDC provider ([`kix.contracts.oidc`](/docs/reference/dependency-contracts/#single-sign-on-kixcontractsoidc-and-kixcontractsoidcprovider)).
+an authenticated mail server ([`kix.contracts.smtp`](/docs/reference/dependency-contracts/#mail-kixcontractssmtp)),
+or a single-issuer external OIDC provider ([`kix.contracts.oidc`](/docs/reference/dependency-contracts/#single-sign-on-kixcontractsoidc-and-kixcontractsexperimentaloidcprovider)).
 See [Connect external databases, caches, mail, and single sign-on](/docs/how-to/adopt-existing-resources/connect-external-databases-caches-mail-and-sso/)
 for complete examples of each contract.
 

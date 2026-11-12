@@ -18,7 +18,7 @@ kix.buildCluster {
   specialArgs = { inherit packages kix; };
   modules = [
     kix.flavors.kind
-    kix.modules.monitoring
+    kix.modules.experimental.monitoring
 
     {
       cluster.domain = "monitoring.test";
@@ -29,8 +29,8 @@ kix.buildCluster {
         provider = null;
       };
       networkPolicy.enable = true;
-      instances.kube-system.cilium.package = packages.cilium;
-      instances.ingress-nginx.ingress-nginx.package = packages.ingress-nginx;
+      instances.kube-system.cilium.package = packages.experimental.cilium;
+      instances.ingress-nginx.ingress-nginx.package = packages.experimental.ingress-nginx;
 
       monitoring = {
         enabled = true;

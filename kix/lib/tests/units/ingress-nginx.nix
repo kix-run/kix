@@ -17,7 +17,7 @@
 }:
 
 let
-  ingressNginx = import ../../../packages/ingress-nginx;
+  ingressNginx = import ../../../packages/experimental/ingress-nginx;
 
   # One instance in namespace `ingress`, beside the shared DNS provider.
   # `extra` is a second module, for another instance or a prometheus

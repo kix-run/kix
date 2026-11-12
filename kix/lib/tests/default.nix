@@ -1274,11 +1274,11 @@ let
       (cluster.scorecardReport or { findings = [ ]; }).findings
     );
 
-  # The real kix/packages/envoy-gateway, not a synthetic stand-in: its
+  # The real kix/packages/experimental/envoy-gateway, not a synthetic stand-in: its
   # EnvoyProxy/GatewayClass/Gateway wiring is what decides whether a
   # Gateway can program on a cluster with no LoadBalancer, so the tests
   # want the shipped package, field names and all.
-  envoyGatewayPackage = import ../../packages/envoy-gateway;
+  envoyGatewayPackage = import ../../packages/experimental/envoy-gateway;
 
   # What a kind scenario opts into. Envoy Gateway's own default is a
   # LoadBalancer Service for the proxy, which stock kind never gives an
@@ -2006,7 +2006,12 @@ let
         ms = manifests (mkCluster [
           baseInstances
           {
-            availablePackages.stock-storage.package = stockStorage;
+            # A package that runs once per cluster needs a namespace of
+            # its own before Kix adds it.
+            availablePackages.stock-storage = {
+              package = stockStorage;
+              namespace = "storage";
+            };
             instances.ns1.consumer1.package = requiredScConsumer;
             instances.ns2.consumer2.package = requiredScConsumer;
           }
@@ -2056,7 +2061,10 @@ let
           baseInstances
           {
             availablePackages = {
-              stock-storage.package = stockStorage;
+              stock-storage = {
+                package = stockStorage;
+                namespace = "storage";
+              };
             }
             // extra;
             instances.appns.consumer.package = requiredScConsumer;
@@ -4681,7 +4689,10 @@ let
           name = "mkenv-role";
           modules = [
             {
-              availablePackages.stock-storage.package = stockStorage;
+              availablePackages.stock-storage = {
+                package = stockStorage;
+                namespace = "storage";
+              };
               instances =
                 publicKix.mkEnv "development" { } { app = application; }
                 // publicKix.mkEnv "production" { } { app = application; };
@@ -6058,16 +6069,12 @@ let
     # declaration and not the other.
     t128-shipped-package-config-keeps-declared-images =
       let
-        packagesDir = ../../packages;
-        names = builtins.attrNames (
-          lib.filterAttrs (
-            n: t: t == "directory" && builtins.pathExists (packagesDir + "/${n}/default.nix")
-          ) (builtins.readDir packagesDir)
-        );
+        catalog = (import ../../packages/by-level.nix { inherit lib; }).byName;
+        names = builtins.attrNames catalog;
         rawOf =
           n:
           eval.callPackagePhase1 {
-            package = import (packagesDir + "/${n}");
+            package = catalog.${n};
             scope = {
               instanceName = n;
               namespaceName = "pkgcfg";
@@ -6147,7 +6154,7 @@ let
             ms = manifests (mkCluster [
               {
                 instances.cert-manager.cert-manager = {
-                  package = import ../../packages/cert-manager;
+                  package = import ../../packages/experimental/cert-manager;
                   inherit config;
                 };
               }

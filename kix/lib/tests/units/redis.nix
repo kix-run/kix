@@ -1,4 +1,4 @@
-# Tests for the Redis contract (kix/lib/vocab/redis.nix): the fields it
+# Tests for the Redis contract (kix/contracts/stable/redis.nix): the fields it
 # accepts, the refusal of TLS for a consumer that cannot use it, and the
 # `out` valkey publishes with and without Sentinel. The consumers are
 # tested in units/n8n.nix and units/immich.nix.
@@ -15,8 +15,8 @@
 
 let
   contract = kixlib.contracts.redis;
-  valkeyPackage = import ../../../packages/valkey;
-  secretPackage = import ../../../packages/secret;
+  valkeyPackage = import ../../../packages/stable/valkey;
+  secretPackage = import ../../../packages/stable/secret;
 
   plain = {
     host = "valkey.example.net";
@@ -92,12 +92,12 @@ in
     && contract.problems (plain // { sentinel = null; }) == [ ]
     && contract.problems (plain // { sentinel.port = "26379"; }) != [ ]
     && contract.problems (removeAttrs plain [ "host" ]) != [ ]
-    && !contract.usesSentinel {
+    && !contract.helpers.usesSentinel {
       out = plain // {
         sentinel = null;
       };
     }
-    && contract.usesSentinel {
+    && contract.helpers.usesSentinel {
       out = plain // {
         sentinel = {
           port = "26379";
@@ -114,8 +114,8 @@ in
         };
       };
     in
-    contract.requirePlaintext "app" (dep false) == dep false
-    && !(builtins.tryEval (contract.requirePlaintext "app" (dep true))).success;
+    contract.helpers.requirePlaintext "app" (dep false) == dep false
+    && !(builtins.tryEval (contract.helpers.requirePlaintext "app" (dep true))).success;
 
   # Standalone valkey publishes `sentinel = null`; with Sentinel, its port
   # and primary set. Both publish the password secret as credentials.

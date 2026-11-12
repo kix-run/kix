@@ -1,5 +1,5 @@
 # Tests for single sign-on through an OIDC provider: the contract
-# (kix/lib/vocab/oidc-provider.nix), keycloak's `out` under it, and the
+# (kix/contracts/experimental/oidcProvider.nix), keycloak's `out` under it, and the
 # `oidc` option of grafana, harbor, and immich.
 #
 # The applications bind a kix.mkImport stand-in aliased `oidcProvider`,
@@ -23,14 +23,14 @@
 }:
 
 let
-  contract = kixlib.contracts.oidcProvider;
-  secretPackage = import ../../../packages/secret;
-  keycloakPackage = import ../../../packages/keycloak;
-  grafanaPackage = import ../../../packages/grafana;
-  harborPackage = import ../../../packages/harbor;
-  oidcClientPackage = import ../../../packages/oidc-client;
+  contract = kixlib.contracts.experimental.oidcProvider;
+  secretPackage = import ../../../packages/stable/secret;
+  keycloakPackage = import ../../../packages/experimental/keycloak;
+  grafanaPackage = import ../../../packages/stable/grafana;
+  harborPackage = import ../../../packages/stable/harbor;
+  oidcClientPackage = import ../../../packages/experimental/oidc-client;
   clientContract = kixlib.contracts.oidc;
-  immichPackage = import ../../../packages/immich;
+  immichPackage = import ../../../packages/experimental/immich;
 
   issuer = realm: "https://auth.example.com/realms/${realm}";
   providerOut = {
@@ -250,7 +250,7 @@ let
                 port = "6379";
               };
             };
-            aliases = [ "valkey" ];
+            aliases = [ "redis" ];
           };
           library = {
             package = eval.mkImport {
@@ -348,7 +348,7 @@ let
                 port = "6379";
               };
             };
-            aliases = [ "valkey" ];
+            aliases = [ "redis" ];
           };
           blobs = {
             package = eval.mkImport {

@@ -16,11 +16,15 @@
   imports = [
     ./platform.nix
     ./services.nix
-    kix.modules.monitoring
+    kix.modules.experimental.monitoring
   ];
 
-  # Auto-instantiate deps (coredns, valkey, stackgres-operator, etc.)
+  # Auto-instantiate dependencies from the stable packages.
   availablePackages = packages;
+
+  # The StackGres operator runs once per cluster, so it has a namespace of
+  # its own rather than sitting beside the first cluster that needs it.
+  instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
 
   cluster.domain = "homelab.lan";
   clusterLabels = {

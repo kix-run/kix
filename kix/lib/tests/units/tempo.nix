@@ -1,4 +1,4 @@
-# Tests for kix/packages/tempo: its root.out honours the OTLP endpoint
+# Tests for kix/packages/experimental/tempo: its root.out honours the OTLP endpoint
 # contract, `retention` reaches the rendered config, and the settings
 # locks, owned flags, backslashes in settings, and retentions outside
 # Tempo's duration grammar are refused. `objectStorage` renders an S3
@@ -28,11 +28,11 @@
 }:
 
 let
-  tempoPackage = import ../../../packages/tempo;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
+  tempoPackage = import ../../../packages/experimental/tempo;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
 
-  secretPackage = import ../../../packages/secret;
-  ciliumPackage = import ../../../packages/cilium;
+  secretPackage = import ../../../packages/stable/secret;
+  ciliumPackage = import ../../../packages/experimental/cilium;
 
   tempoCluster = config: tempoClusterWith { inherit config; };
 

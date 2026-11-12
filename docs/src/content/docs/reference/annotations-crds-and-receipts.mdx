@@ -90,7 +90,7 @@ Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs
 | `kix.run/secret-keys` | `scope.mkSecret` | Comma-separated list of keys declared on the Secret. |
 | `kix.run/secret-sources` | `scope.mkSecret` | Comma-separated `<key>=<source>` pairs (`inline`, `plain`, `sops`, `controller`, or `*=controller`) read by the `security.secretSource` scorecard rule. |
 | `kix.run/sops-source` | `scope.mkSecret` (`source`) | Store path of the encrypted SOPS file decrypted at deploy time. |
-| `kix.run/content-hash` | `scope.mkSecret` (`hash`) | Content hash of the SOPS file used for change detection. |
+| `kix.run/content-hash` | `scope.mkSecret` (`hash`) | SHA-256 hash (`sha256-<base64>`) of the decrypted keys from the SOPS file (written as `<key>=<value>` lines in key order, each ending in a newline), checked by `kix deploy`. |
 | `kix.run/secret-type` | `scope.mkSecret` (`type`) | Kubernetes Secret type (defaults to `"Opaque"`). |
 | `kix.run/classification` | `scope.mkSecret` (`meta.classification`) | Data classification (such as `"configuration"`). |
 | `kix.run/rotation-policy` | `scope.mkSecret` (`meta.rotationPolicy`) | Rotation policy metadata. |

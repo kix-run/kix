@@ -16,8 +16,8 @@
 }:
 
 let
-  metricsServerPackage = import ../../../packages/metrics-server;
-  deschedulerPackage = import ../../../packages/descheduler;
+  metricsServerPackage = import ../../../packages/experimental/metrics-server;
+  deschedulerPackage = import ../../../packages/experimental/descheduler;
   kindFlavor = import ../../flavors/kind.nix;
   rke2Flavor = import ../../flavors/rke2.nix;
 

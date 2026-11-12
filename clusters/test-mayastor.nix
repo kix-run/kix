@@ -42,7 +42,7 @@ kix.buildCluster {
 
         instances = {
           kube-system.cilium = {
-            package = packages.cilium;
+            package = packages.experimental.cilium;
             config.values = {
               kubeProxyReplacement = false;
               prometheus.enabled = false;
@@ -50,7 +50,7 @@ kix.buildCluster {
             };
           };
 
-          snapshot.snapshot-controller.package = packages.snapshot-controller;
+          snapshot.snapshot-controller.package = packages.experimental.snapshot-controller;
 
           mayastor = {
             # The example key pair from the OpenEBS pool encryption
@@ -68,7 +68,7 @@ kix.buildCluster {
             };
 
             mayastor = {
-              package = packages.mayastor;
+              package = packages.experimental.mayastor;
               availability = "node";
               deps.poolEncryptionKey = ref.mayastor.pool-key;
               config = {

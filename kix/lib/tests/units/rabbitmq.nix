@@ -24,10 +24,10 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/rabbitmq-operator;
-  clusterPackage = import ../../../packages/rabbitmq-cluster;
-  certManagerPackage = import ../../../packages/cert-manager;
-  ciliumPackage = import ../../../packages/cilium;
+  operatorPackage = import ../../../packages/experimental/rabbitmq-operator;
+  clusterPackage = import ../../../packages/experimental/rabbitmq-cluster;
+  certManagerPackage = import ../../../packages/experimental/cert-manager;
+  ciliumPackage = import ../../../packages/experimental/cilium;
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read
@@ -292,7 +292,7 @@ in
           kix = kixlib;
           availability = "none";
         }).meta.version;
-      dir = ../../../packages/rabbitmq-operator;
+      dir = ../../../packages/experimental/rabbitmq-operator;
       stray = builtins.filter (u: !(lib.hasInfix "/v${release}/" u)) (
         urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
       );

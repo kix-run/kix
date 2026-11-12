@@ -1,4 +1,4 @@
-# Tests for the Postgres database contract (kix/lib/vocab/postgres-database.nix):
+# Tests for the Postgres database contract (kix/contracts/stable/postgresDatabase.nix):
 # `check` on the provider side, `assertions` on the consumer side, the
 # `deps.database.assertions` of every package that consumes it, and a
 # cluster whose database provider publishes a misshapen field.
@@ -15,7 +15,7 @@
 
 let
   contract = kixlib.contracts.postgresDatabase;
-  secretPackage = import ../../../packages/secret;
+  secretPackage = import ../../../packages/stable/secret;
 
   # A credentials Secret as mkSecret publishes it.
   credentials = keys: {
@@ -69,7 +69,7 @@ let
   consumers = lib.genAttrs [ "harbor" "immich" "keycloak" "metabase" "n8n" "vaultwarden" ] (
     pname:
     let
-      package = import ../../../packages/${pname};
+      package = (import ../../../packages/by-level.nix { inherit lib; }).byName.${pname};
     in
     package (
       builtins.intersectAttrs (builtins.functionArgs package) {
@@ -130,7 +130,7 @@ let
     mkCluster [
       {
         instances.bi = {
-          metabase.package = import ../../../packages/metabase;
+          metabase.package = import ../../../packages/experimental/metabase;
           metabase-db.package = stubPackage out;
           metabase-key = {
             package = secretPackage;

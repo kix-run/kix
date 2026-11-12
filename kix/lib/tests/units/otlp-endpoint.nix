@@ -1,4 +1,4 @@
-# Tests for the OTLP endpoint contract (kix/lib/vocab/otlp-endpoint.nix):
+# Tests for the OTLP endpoint contract (kix/contracts/experimental/otlpEndpoint.nix):
 # `check` on the provider side and `assertions` on the consumer side.
 
 {
@@ -8,7 +8,7 @@
 }:
 
 let
-  contract = kixlib.contracts.otlpEndpoint;
+  contract = kixlib.contracts.experimental.otlpEndpoint;
 
   # What a kix.mkImport stand-in must publish.
   importOut = {

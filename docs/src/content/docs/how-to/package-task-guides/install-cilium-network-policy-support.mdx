@@ -105,7 +105,7 @@ Tell Kix the same thing with the rke2 flavour, and declare the instance in
 
 ```nix
 cluster.flavor.rke2.cni = [ "cilium" ];
-instances.kube-system.cilium.package = packages.cilium;
+instances.kube-system.cilium.package = packages.experimental.cilium;
 ```
 
 The flavour declares RKE2's Cilium as the platform import
@@ -145,7 +145,7 @@ depends on, and leave its configuration alone:
 ```nix
 cluster.roles.cni.binding = "shadowable";
 instances.cilium-policy = {
-  cilium.package = packages.cilium;
+  cilium.package = packages.experimental.cilium;
   platform-cilium.package = kix.mkImport {
     roles = [ "cni" ];
     out.helmChartConfig = null;

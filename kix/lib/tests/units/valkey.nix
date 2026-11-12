@@ -16,9 +16,9 @@
 }:
 
 let
-  valkeyPackage = import ../../../packages/valkey;
-  secretPackage = import ../../../packages/secret;
-  conf = import ../../../packages/valkey/conf.nix {
+  valkeyPackage = import ../../../packages/stable/valkey;
+  secretPackage = import ../../../packages/stable/secret;
+  conf = import ../../../packages/stable/valkey/conf.nix {
     inherit lib;
     kix = kixlib;
   };

@@ -46,28 +46,28 @@ kix.buildCluster {
         # DNS. This second server exercises the derived spread and a managed
         # dns provider.
         dns.coredns = {
-          package = packages.coredns;
+          package = packages.experimental.coredns;
           config.clusterIP = "10.96.0.53";
         };
-        monitoring.prometheus-operator.package = packages.prometheus-operator;
-        monitoring.smartctl-exporter.package = packages.smartctl-exporter;
-        arc-systems.arc.package = packages.arc;
-        cdi.cdi.package = packages.cdi;
-        kubevirt.kubevirt.package = packages.kubevirt;
-        infisical.infisical-operator.package = packages.infisical-operator;
-        storage.snapshot-controller.package = packages.snapshot-controller;
+        monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
+        monitoring.smartctl-exporter.package = packages.experimental.smartctl-exporter;
+        arc-systems.arc.package = packages.experimental.arc;
+        cdi.cdi.package = packages.experimental.cdi;
+        kubevirt.kubevirt.package = packages.experimental.kubevirt;
+        infisical.infisical-operator.package = packages.experimental.infisical-operator;
+        storage.snapshot-controller.package = packages.experimental.snapshot-controller;
         # kind nodes have no ZFS pool, so the node plugin starts but
         # provisions nothing; the controller, the registration, and the
         # classes are what is judged.
         storage.zfs-localpv = {
-          package = packages.zfs-localpv;
+          package = packages.experimental.zfs-localpv;
           config = {
             storageClasses.zfs.parameters.poolname = "zfspv-pool";
             volumeSnapshotClasses.zfs = { };
           };
         };
         mayastor.mayastor = {
-          package = packages.mayastor;
+          package = packages.experimental.mayastor;
           # No node carries this label, so csi-node and agent-ha-node
           # schedule nowhere and the run judges the control plane and etcd.
           # The kubelet sets openebs.io/csi-node once csi-node registers, so

@@ -7,9 +7,6 @@ let
   storageClass = import ./storage-class.nix { inherit lib; };
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
-  oidcProvider = import ./oidc-provider.nix { inherit lib; };
-  oidc = import ./oidc.nix { inherit lib; };
-  smtp = import ./smtp.nix { inherit lib; };
   quotaUse = import ./quota-use.nix { inherit lib; };
 in
 compose
@@ -24,26 +21,12 @@ compose
   # Render StorageClasses from `kix.types.storageClass` values and pick the
   # default class for consumers that do not name one (`vocab/storage-class.nix`).
   storage.mkClasses = storageClass.mkClasses;
-  # Validate and consume `database` provider outputs (`vocab/postgres-database.nix`).
-  contracts.postgresDatabase = import ./postgres-database.nix { inherit lib; };
-  # Validate and consume `otlp` provider outputs (`vocab/otlp-endpoint.nix`).
-  contracts.otlpEndpoint = import ./otlp-endpoint.nix { inherit lib; };
-  # Validate and consume `gateway` provider outputs (`vocab/gateway.nix`).
-  contracts.gateway = import ./gateway.nix { inherit lib; };
-  # Validate and consume `oidcProvider` outputs (`vocab/oidc-provider.nix`).
-  contracts.oidcProvider = oidcProvider;
-  # Validate and consume `oidc` client outputs (`vocab/oidc.nix`).
-  contracts.oidc = oidc;
-  # Validate and consume `smtp` outputs (`vocab/smtp.nix`).
-  contracts.smtp = smtp;
-  # Validate and consume Redis outputs, taken as `valkey` (`vocab/redis.nix`).
-  contracts.redis = import ./redis.nix { inherit lib; };
-  # Build the `oidc` option set for an application that signs users in through
-  # an `oidc` dependency.
+  # The contracts in `kix/contracts`, by name, with the experimental ones
+  # under `contracts.experimental`.
+  contracts = import ../../contracts { inherit lib; };
   options = compose.options // {
-    oidc = oidc.clientOptions;
-    # The `mail.from` sender override for a package that takes `smtp`.
-    mail = smtp.options;
+    oidc = throw "[K0106] kix.options.oidc moved to kix.contracts.oidc.options.";
+    mail = throw "[K0106] kix.options.mail moved to kix.contracts.smtp.options.";
   };
   # Map availability levels to replica counts, quorums, and topology spread
   # constraints (`core/availability.nix`). Single-replica workloads set a

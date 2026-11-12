@@ -1,4 +1,4 @@
-# Tests for kix/packages/loki and the kix/lib behaviour it relies on:
+# Tests for kix/packages/experimental/loki and the kix/lib behaviour it relies on:
 # kix.mergeGuarded refuses an override that replaces an ancestor of a locked
 # path, and the package's alert rules render as their settings, limits, and
 # dependencies say. Loki runs in namespace `logs`, the prometheus stub in
@@ -30,8 +30,8 @@ let
 
   fails = overrides: !(builtins.tryEval (builtins.deepSeq (merge overrides) true)).success;
 
-  lokiPackage = import ../../../packages/loki;
-  pvcPackage = import ../../../packages/persistent-volume-claim;
+  lokiPackage = import ../../../packages/experimental/loki;
+  pvcPackage = import ../../../packages/stable/persistent-volume-claim;
 
   # The `loki-alerts` rules of a Loki instance with `config`, beside the
   # prometheus stub unless `prometheus` is false.

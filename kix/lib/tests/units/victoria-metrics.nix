@@ -1,4 +1,4 @@
-# Tests for the alert rules of kix/packages/victoria-metrics-operator,
+# Tests for the alert rules of kix/packages/stable/victoria-metrics-operator,
 # victoria-metrics-cluster, victoria-metrics-agent, and
 # victoria-metrics-alert. Each renders a VMRule `<instance>-alerts`, and the
 # last three render it only while their `prometheus` dependency is the
@@ -25,10 +25,10 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/victoria-metrics-operator;
-  clusterPackage = import ../../../packages/victoria-metrics-cluster;
-  agentPackage = import ../../../packages/victoria-metrics-agent;
-  alertPackage = import ../../../packages/victoria-metrics-alert;
+  operatorPackage = import ../../../packages/stable/victoria-metrics-operator;
+  clusterPackage = import ../../../packages/stable/victoria-metrics-cluster;
+  agentPackage = import ../../../packages/stable/victoria-metrics-agent;
+  alertPackage = import ../../../packages/stable/victoria-metrics-alert;
 
   ns = ''namespace="monitoring"'';
 

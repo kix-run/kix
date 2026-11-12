@@ -5,8 +5,8 @@
 # SGCluster, the webhook check that StackGres custom resources wait for,
 # the alert rules of stackgres-operator and stackgres-cluster and what
 # each is gated on,
-# stackgres-database's names in the cluster's namespace, and its warning on
-# a literal `password`.
+# stackgres-database's names in the cluster's namespace, and its refusal of
+# the removed `password` option.
 
 {
   lib,
@@ -28,12 +28,14 @@
 }:
 
 let
-  operatorPackage = import ../../../packages/stackgres-operator;
-  clusterPackage = import ../../../packages/stackgres-cluster;
-  objectStoragePackage = import ../../../packages/stackgres-object-storage;
-  databasePackage = import ../../../packages/stackgres-database;
-  secretPackage = import ../../../packages/secret;
-  releaseTable = import ../../../packages/stackgres-operator/release.nix { inherit lib; };
+  operatorPackage = import ../../../packages/experimental/stackgres-operator;
+  clusterPackage = import ../../../packages/experimental/stackgres-cluster;
+  objectStoragePackage = import ../../../packages/experimental/stackgres-object-storage;
+  databasePackage = import ../../../packages/experimental/stackgres-database;
+  secretPackage = import ../../../packages/stable/secret;
+  releaseTable = import ../../../packages/experimental/stackgres-operator/release.nix {
+    inherit lib;
+  };
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read
@@ -465,7 +467,10 @@ in
           instances.${ns}.app-db = {
             package = databasePackage;
             deps.postgres = ref.data.postgres;
-            config.password = "pw-${ns}";
+            config = {
+              passwordSource = ./stackgres.nix;
+              passwordHash = "hash-${ns}";
+            };
           };
         };
       cluster = sgCluster {
@@ -490,9 +495,9 @@ in
     )
     || throw "stackgres-database same name: jobs ${builtins.toJSON jobs}, secrets ${builtins.toJSON secrets}";
 
-  # A literal `password` still fills both Secrets, and warns that Kix 0.10
-  # removes it. `passwordSource` gives no such warning.
-  stackgres-database-password-warns =
+  # The removed `password` option fails the build. `passwordSource` fills
+  # both Secrets from the SOPS file at deploy.
+  stackgres-database-password-refused =
     let
       withDatabase =
         config:
@@ -507,27 +512,25 @@ in
               };
             };
         };
-      literal = withDatabase { password = "pw"; };
+      literal = withDatabase {
+        password = "pw";
+        passwordSource = ./stackgres.nix;
+        passwordHash = "hash";
+      };
       sops = withDatabase {
         passwordSource = ./stackgres.nix;
         passwordHash = "hash";
       };
-      warningsOf = cluster: cluster.instances.apps.app-db._diagnostics.warnings;
-      warns = cluster: builtins.any (lib.hasInfix "Kix 0.10 removes") (warningsOf cluster);
-      passwordIn = name: (byName name (ofKind "Secret" (manifests literal))).stringData.password;
+      secretIn = name: byName name (ofKind "Secret" (manifests sops));
+      fromSops =
+        name:
+        let
+          secret = secretIn name;
+        in
+        secret.metadata.annotations ? ${kixKeys.sopsSource} && !(secret.stringData or { } ? password);
     in
-    (
-      warns literal
-      && !(warns sops)
-      && passwordIn "app-db-credentials" == "pw"
-      && passwordIn "app-db-apps-bootstrap-password" == "pw"
-    )
-    || throw "stackgres-database password warning: ${
-      builtins.toJSON {
-        literal = warningsOf literal;
-        sops = warningsOf sops;
-      }
-    }";
+    (evalFails literal && fromSops "app-db-credentials" && fromSops "app-db-apps-bootstrap-password")
+    || throw "stackgres-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
 
   stackgres-resolve-postgres =
     let

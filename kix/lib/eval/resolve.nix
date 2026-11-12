@@ -145,6 +145,10 @@ rec {
       # The requesting instance's name, for the `instances.<ns>.<name>` path
       # in messages.
       requesterName ? null,
+      # `{ name; id; }` from the package's `deps.<arg>.renamedFrom`, when the
+      # dependency had another name in an earlier release. `id` is the id of
+      # the change record for the rename, in brackets as an error prints it.
+      renamedFrom ? null,
     }:
     let
       prefix = lib.optionalString (requester != null) "${requester}: ";
@@ -301,7 +305,8 @@ rec {
 
       else
         throw (
-          "${prefix}dependency '${argName}' has no matching instance in namespace '${requesterNamespace}'."
+          lib.optionalString (renamedFrom != null) "${renamedFrom.id} "
+          + "${prefix}dependency '${argName}' has no matching instance in namespace '${requesterNamespace}'."
           +
             lib.optionalString (namespaced != [ ])
               " Matching instances in other namespaces (${labels namespaced}) set meta.scope = \"namespace\" and serve only their own namespace."
@@ -309,6 +314,9 @@ rec {
           + "\n  instances.${requesterNamespace}.${argName}.package = packages.<package>;"
           + "\nIf another instance in '${requesterNamespace}' provides '${argName}', wire it in ${consumerPath}:"
           + "\n  deps.${argName} = ref.${requesterNamespace}.<instance>;"
+          + lib.optionalString (renamedFrom != null) (
+            "\nThis dependency was named '${renamedFrom.name}' in earlier releases. An instance named '${renamedFrom.name}' no longer answers it, and neither does deps.${renamedFrom.name}. Rename the instance to '${argName}', or wire it with the deps.${argName} line above."
+          )
         );
 
   # Unwrap `deferredModule` definitions into `{ file, value }` pairs,
@@ -582,6 +590,8 @@ rec {
       allInstances,
       requester ? null,
       requesterName ? null,
+      # The package's `deps` attribute, read for `renamedFrom`.
+      depsEnrichment ? { },
     }:
     builtins.foldl' (
       acc: argName:
@@ -597,6 +607,7 @@ rec {
             requester
             requesterName
             ;
+          renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
@@ -624,6 +635,8 @@ rec {
       explicitOverrides,
       requester ? null,
       requesterName ? null,
+      # The package's `deps` attribute, read for `renamedFrom`.
+      depsEnrichment ? { },
     }:
     lib.mapAttrs (
       argName: depSpec:
@@ -638,6 +651,7 @@ rec {
             requester
             requesterName
             ;
+          renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };

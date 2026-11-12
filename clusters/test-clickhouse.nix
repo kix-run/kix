@@ -40,10 +40,10 @@ kix.buildCluster {
         networkPolicy.enable = true;
 
         instances.kube-system.cilium = {
-          package = packages.cilium;
+          package = packages.experimental.cilium;
         };
 
-        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
+        instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
         # Every rule set, so the package is held to all of them.
         scorecard = {
@@ -56,7 +56,7 @@ kix.buildCluster {
 
         instances.analytics = {
           clickhouse = {
-            package = packages.clickhouse;
+            package = packages.experimental.clickhouse;
             config = {
               # The package's 2Gi default stands: at 1Gi the server's own
               # background merges hit the cap once logs start arriving.
@@ -81,13 +81,14 @@ kix.buildCluster {
         # server's. The writer brings the schema; the reader only selects.
         instances.apps = {
           events-writer = {
-            package = packages.clickhouse-database;
+            package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.analytics.clickhouse;
             config = {
               database = "events";
               user = "events_writer";
               privileges = [ "INSERT" ];
-              password = "writer-dev-password";
+              passwordSource = ./dev-secrets/clickhouse-writer.sops.yaml;
+              passwordHash = "sha256-3SzwB0cSxd5FydzhTnlpDbzeo5RVDcyKAYozycJTFjM=";
               schema."01-events.sql" = ''
                 CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
                 (ts DateTime, message String)
@@ -98,13 +99,14 @@ kix.buildCluster {
           };
 
           events-reader = {
-            package = packages.clickhouse-database;
+            package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.analytics.clickhouse;
             config = {
               database = "events";
               user = "events_reader";
               privileges = [ "SELECT" ];
-              password = "reader-rotated-password";
+              passwordSource = ./dev-secrets/clickhouse-reader.sops.yaml;
+              passwordHash = "sha256-dmv/EC/7xd7edSv4+fNenSCjIX4tphprqkcNLmDH/zE=";
             };
           };
         };
@@ -114,7 +116,7 @@ kix.buildCluster {
         # what a dashboard would log in as.
         instances.logging = {
           logs = {
-            package = packages.clickhouse-logs;
+            package = packages.experimental.clickhouse-logs;
             config = {
               healthCheck.enabled = true;
               retentionDays = 3;
@@ -122,25 +124,27 @@ kix.buildCluster {
           };
 
           logs-db = {
-            package = packages.clickhouse-database;
+            package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.analytics.clickhouse;
             config = {
               database = "logs";
               user = "logs_writer";
               privileges = [ "INSERT" ];
-              password = "logs-writer-dev-password";
+              passwordSource = ./dev-secrets/clickhouse-logs-writer.sops.yaml;
+              passwordHash = "sha256-5VldXrruCH+ik7THWptuUkRraB5hs2yD5LN4ElBNQQU=";
             };
           };
         };
 
         instances.dashboards.logs-reader = {
-          package = packages.clickhouse-database;
+          package = packages.experimental.clickhouse-database;
           deps.clickhouse = ref.analytics.clickhouse;
           config = {
             database = "logs";
             user = "logs_reader";
             privileges = [ "SELECT" ];
-            password = "logs-reader-dev-password";
+            passwordSource = ./dev-secrets/clickhouse-logs-reader.sops.yaml;
+            passwordHash = "sha256-MLJxrpprts1rhcwcWhUK7+11Dfknfm02ALwcUnYQ5l4=";
           };
         };
 
@@ -149,7 +153,7 @@ kix.buildCluster {
         # `ha-events` is the same facade as `events-writer` above, pointed
         # at it: the swap the contract promises.
         instances.clickhouse-system = {
-          clickhouse-operator.package = packages.clickhouse-operator;
+          clickhouse-operator.package = packages.experimental.clickhouse-operator;
           clickhouse-operator-credentials = {
             package = packages.secret;
             aliases = [ "credentials" ];
@@ -162,11 +166,11 @@ kix.buildCluster {
 
         instances.analytics-ha = {
           keeper = {
-            package = packages.clickhouse-keeper;
+            package = packages.experimental.clickhouse-keeper;
             config.storage.size = "1Gi";
           };
           ch = {
-            package = packages.clickhouse-cluster;
+            package = packages.experimental.clickhouse-cluster;
             config = {
               storage.size = "5Gi";
               resources.requests.cpu = "250m";
@@ -180,7 +184,7 @@ kix.buildCluster {
         };
 
         instances.apps-ha.ha-events = {
-          package = packages.clickhouse-database;
+          package = packages.experimental.clickhouse-database;
           deps.clickhouse = ref.analytics-ha.ch;
           config = {
             database = "events";
@@ -189,7 +193,8 @@ kix.buildCluster {
               "INSERT"
               "SELECT"
             ];
-            password = "ha-writer-dev-password";
+            passwordSource = ./dev-secrets/clickhouse-ha-writer.sops.yaml;
+            passwordHash = "sha256-hDC5NC5WiiYwb6xbofK+j/LaBpZ5P/a+ni8ttdUnevs=";
             schema."01-events.sql" = ''
               CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
               (ts DateTime, message String)

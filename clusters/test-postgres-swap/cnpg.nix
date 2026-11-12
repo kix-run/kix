@@ -14,10 +14,11 @@ kix.buildCluster {
         instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
         instances.db.pg.package = packages.cnpg-cluster;
         instances.app.metabase-db = {
-          package = packages.cnpg-database;
+          package = packages.experimental.cnpg-database;
           deps.postgres = ref.db.pg;
           # Test values only.
-          config.password = "swap-fixture-password";
+          config.passwordSource = ../dev-secrets/swap-fixture-db.sops.yaml;
+          config.passwordHash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
         };
       }
       # endregion:postgresSwapCnpg

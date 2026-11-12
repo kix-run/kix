@@ -34,7 +34,7 @@ kix.buildCluster {
 
       instances = {
         kube-system.cilium = {
-          package = packages.cilium;
+          package = packages.experimental.cilium;
           config.values = {
             kubeProxyReplacement = false;
             prometheus.enabled = false;
@@ -42,15 +42,15 @@ kix.buildCluster {
           };
         };
 
-        monitoring.prometheus-operator.package = packages.prometheus-operator;
+        monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
 
         gateway-system.traefik = {
-          package = packages.traefik;
+          package = packages.experimental.traefik;
           config.metrics.enabled = true;
         };
 
         files = {
-          filebrowser.package = packages.filebrowser;
+          filebrowser.package = packages.experimental.filebrowser;
           filebrowser-data = {
             package = packages.persistent-volume-claim;
             aliases = [ "storage" ];

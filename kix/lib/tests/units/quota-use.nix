@@ -13,8 +13,8 @@
 let
   q = import ../../vocab/quota-use.nix { inherit lib; };
 
-  operatorPackage = import ../../../packages/cnpg-operator;
-  clusterPackage = import ../../../packages/cnpg-cluster;
+  operatorPackage = import ../../../packages/stable/cnpg-operator;
+  clusterPackage = import ../../../packages/stable/cnpg-cluster;
 
   container = resources: {
     name = "c";
@@ -559,7 +559,7 @@ in
       use =
         part:
         declaredUse {
-          package = import ../../../packages/clickhouse-operator;
+          package = import ../../../packages/experimental/clickhouse-operator;
           path = [
             "crds"
             part
@@ -567,7 +567,7 @@ in
           modules = [
             {
               instances.ops.credentials = {
-                package = import ../../../packages/secret;
+                package = import ../../../packages/stable/secret;
                 config.stringData = {
                   username = "operator";
                   password = "test";
@@ -674,7 +674,7 @@ in
       use =
         part:
         declaredUse {
-          package = import ../../../packages/stackgres-operator;
+          package = import ../../../packages/experimental/stackgres-operator;
           path = [
             "crds"
             part
@@ -738,7 +738,7 @@ in
       use =
         part:
         declaredUse {
-          package = import ../../../packages/prometheus-operator;
+          package = import ../../../packages/experimental/prometheus-operator;
           path = [
             "crds"
             part
@@ -800,7 +800,7 @@ in
       use =
         part:
         declaredUse {
-          package = import ../../../packages/victoria-metrics-operator;
+          package = import ../../../packages/stable/victoria-metrics-operator;
           path = [
             "crds"
             part
@@ -879,7 +879,7 @@ in
   quota-use-arc =
     let
       use = declaredUse {
-        package = import ../../../packages/arc;
+        package = import ../../../packages/experimental/arc;
         path = [
           "crds"
           "autoscalingRunnerSets"
@@ -908,13 +908,15 @@ in
   quota-use-rabbitmq-operator =
     let
       use = declaredUse {
-        package = import ../../../packages/rabbitmq-operator;
+        package = import ../../../packages/experimental/rabbitmq-operator;
         path = [
           "crds"
           "rabbitmqClusters"
         ];
         modules = [
-          { instances.cert-manager.cert-manager.package = import ../../../packages/cert-manager; }
+          {
+            instances.cert-manager.cert-manager.package = import ../../../packages/experimental/cert-manager;
+          }
         ];
       };
     in
@@ -967,7 +969,7 @@ in
   quota-use-kubevirt =
     let
       use = declaredUse {
-        package = import ../../../packages/kubevirt;
+        package = import ../../../packages/experimental/kubevirt;
         path = [
           "crds"
           "virtualMachines"

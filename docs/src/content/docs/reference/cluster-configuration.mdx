@@ -255,7 +255,7 @@ cluster.roles.cni = {
   binding = "absent";
   provider = null;
 };
-instances.kube-system.cilium.package = packages.cilium;
+instances.kube-system.cilium.package = packages.experimental.cilium;
 ```
 
 ## Cluster factBehavior
@@ -335,7 +335,7 @@ When Kix auto-instantiates a catalog package, it selects the target namespace in
 
 Setting `autoNamespace = "platform"` places shared auto-instantiated providers into a single namespace instead of duplicating them in every requesting namespace. It has no effect on instances declared explicitly under `instances`.
 
-A package that runs once per cluster, such as an operator, needs a namespace of its own. When step 3 would place one beside the package that needs it, Kix builds the cluster and prints a warning, because removing that package would remove the operator for the whole cluster. Declare the operator under `instances`, set `autoNamespace`, or set a namespace on its catalog entry. Kix 0.10 will refuse this placement. When consumers in two namespaces need it, Kix already refuses the cluster.
+A package that runs once per cluster, such as an operator, needs a namespace of its own. When step 3 would place one beside the package that needs it, Kix refuses the cluster with error `[K2377]`, because removing that package would remove the operator for the whole cluster. Declare the operator under `instances`, set `autoNamespace`, or set a namespace on its catalog entry. Kix also refuses the cluster when consumers in two namespaces need it.
 
 ## availablePackages
 
@@ -344,7 +344,7 @@ A package that runs once per cluster, such as an operator, needs a namespace of 
 ```nix
 availablePackages = packages // {
   prometheus = {
-    package = packages.prometheus;
+    package = packages.experimental.prometheus;
     namespace = "monitoring";
     aliases = [ "metrics" ];
   };
@@ -356,11 +356,19 @@ availablePackages = packages // {
 | `availablePackages.<name> = <package>;` | Shorthand for `{ package = <package>; }`. |
 | `availablePackages.<name> = { package, namespace?, aliases? };` | Full catalog entry with an optional fixed `namespace` (`nullOr str`) and additional `aliases` (`listOf str`). |
 
+`availablePackages = packages` offers the stable packages only, so Kix never adds an experimental package you did not name. Name each experimental package you want Kix to add:
+
+```nix
+availablePackages = packages // {
+  inherit (packages.experimental) cert-manager cluster-issuer;
+};
+```
+
 ### Auto-instantiation rules
 
 - **Required dependencies only**: Only required build arguments (without `? null`) create demand against `availablePackages`. Optional build arguments resolve to an active instance or `null`. Explicit `deps.<arg>` overrides also bypass catalog lookup.
 - **Transitive resolution**: If an auto-instantiated package has its own required dependencies, Kix resolves them transitively using the same rules.
-- **One-per-cluster packages**: If a package claims a cluster-wide role (`meta.roles`) or lists `"cluster:<own-alias>"` in `meta.conflictsWith`, it can only be instantiated once in the cluster. If consumers in two different namespaces demand it and neither `autoNamespace` nor an entry `namespace` pins it to a single namespace, evaluation fails and asks you to declare the instance explicitly under `instances`.
+- **One-per-cluster packages**: A package that serves the whole cluster (`meta.scope = "cluster"`, a role in `meta.roles`, or a `"cluster:<name>"` entry in `meta.conflictsWith`) can only be instantiated once in the cluster and needs a namespace of its own. If an active consumer demands it from `availablePackages` and neither `autoNamespace` nor the catalog entry's `namespace` is set, evaluation fails with `[K2377]` and asks you to declare the instance under `instances` or set `autoNamespace`.
 - **Ambiguous catalog claimants**: If two or more entries in `availablePackages` answer the same demanded dependency name, evaluation fails and lists the claimants. Disambiguate by declaring an instance with `optional = true` under `instances` or by removing the duplicate entry from `availablePackages`.
 
 :::tip[Use it in a task]

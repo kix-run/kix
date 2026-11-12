@@ -440,7 +440,7 @@
               depsEnrichment = raw.deps or { };
               resolvedTargets = resolveDepTargets {
                 declaredDeps = discoveredDeps;
-                inherit resolutionIndex;
+                inherit resolutionIndex depsEnrichment;
                 namespace = nsName;
                 requester = describeRequester nsName instName instCfg;
                 requesterName = instName;
@@ -1275,9 +1275,13 @@
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
         inherit allInstancesList;
-        extraWarnings = crossScorecardDiag.warnings ++ autoResult.besideConsumerWarnings;
+        extraWarnings = crossScorecardDiag.warnings;
         extraAssertions =
           crossScorecardDiag.assertions
+          ++ map (message: {
+            assertion = false;
+            inherit message;
+          }) autoResult.besideConsumerRefusals
           ++ sharedClusterObjectAssertions
           ++ podSecurityAssertions
           ++ quotaAssertions

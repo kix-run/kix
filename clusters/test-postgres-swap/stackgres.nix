@@ -11,13 +11,14 @@ kix.buildCluster {
       { ref, ... }:
       # region:postgresSwapStackgres
       {
-        instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
-        instances.db.pg.package = packages.stackgres-cluster;
+        instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
+        instances.db.pg.package = packages.experimental.stackgres-cluster;
         instances.app.metabase-db = {
-          package = packages.stackgres-database;
+          package = packages.experimental.stackgres-database;
           deps.postgres = ref.db.pg;
           # Test values only.
-          config.password = "swap-fixture-password";
+          config.passwordSource = ../dev-secrets/swap-fixture-db.sops.yaml;
+          config.passwordHash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
         };
       }
       # endregion:postgresSwapStackgres

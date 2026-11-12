@@ -54,12 +54,8 @@ let
     else
       throw "kix.toml sets builder = ${builtins.toJSON value}, which is not a known builder (the Kix library supports: ${lib.concatStringsSep ", " builders}). Check the spelling, or run `kix lib update` if the project needs a newer Kix library.";
 
-  catalogPackages =
-    let
-      entries = builtins.readDir ../packages;
-      dirs = lib.filterAttrs (_: type: type == "directory") entries;
-    in
-    lib.mapAttrs (name: _: import ../packages/${name}) dirs;
+  catalogPackages = import ../packages { inherit lib; };
+  packagesByLevel = import ../packages/by-level.nix { inherit lib; };
 
   eachSystem =
     f:
@@ -279,19 +275,27 @@ let
           inherit (built) kix;
           packages = catalogPackages;
         };
-        kixPackages = lib.mapAttrs (
-          _name: pkg:
-          let
-            m = kix.peekPackageMeta {
-              package = pkg;
-              kixlib = kix.kixlib;
-            };
-          in
-          {
-            version = m.version or null;
-            owner = m.owner or null;
-          }
-        ) catalogPackages;
+        kixPackages =
+          lib.mapAttrs
+            (
+              _name: pkg:
+              let
+                m = kix.peekPackageMeta {
+                  package = pkg;
+                  kixlib = kix.kixlib;
+                };
+              in
+              {
+                version = m.version or null;
+                owner = m.owner or null;
+              }
+            )
+            (
+              packagesByLevel.stable
+              // lib.mapAttrs' (
+                name: pkg: lib.nameValuePair "experimental.${name}" pkg
+              ) packagesByLevel.experimental
+            );
       };
     };
 

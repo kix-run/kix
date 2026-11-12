@@ -1,6 +1,6 @@
 +++
 kind = "silent"
-packages = ["stackgres-cluster"]
+packages = ["experimental/stackgres-cluster"]
 +++
 `stackgres-cluster` now writes `reconciliationTimeout: 3600` on each `backups`
 entry, so StackGres has an hour instead of its five-minute default to delete

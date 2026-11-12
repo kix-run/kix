@@ -14,7 +14,7 @@ let
   platform = {
     namespaces.kube-system.labels."app.kubernetes.io/part-of" = "platform";
     instances.kube-system.coredns = {
-      package = packages.coredns;
+      package = packages.experimental.coredns;
       config.clusterIP = "10.96.0.10";
     };
   };

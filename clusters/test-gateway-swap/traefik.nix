@@ -7,6 +7,6 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (import ./consumer.nix { inherit packages; })
-    { instances.traefik-system.traefik.package = packages.traefik; }
+    { instances.traefik-system.traefik.package = packages.experimental.traefik; }
   ];
 }

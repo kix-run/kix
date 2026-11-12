@@ -113,15 +113,15 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
 
-        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
-        instances.cert-manager.cert-manager.package = packages.cert-manager;
-        instances.external-secrets.external-secrets.package = packages.external-secrets;
+        instances.monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
+        instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
+        instances.external-secrets.external-secrets.package = packages.experimental.external-secrets;
 
         instances.secrets = {
           openbao = {
-            package = packages.openbao;
+            package = packages.experimental.openbao;
             config = {
               secretsEngines.secret = {
                 type = "kv";
@@ -159,7 +159,7 @@ kix.buildCluster {
 
         instances.secrets-ha = {
           openbao-ha = {
-            package = packages.openbao;
+            package = packages.experimental.openbao;
             availability = "pod";
           };
           # Test value only.

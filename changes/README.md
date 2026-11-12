@@ -20,7 +20,7 @@ code block.
 ```markdown
 +++
 kind = "error"
-packages = ["echo-server", "dns-exporter"]
+packages = ["echo-server", "experimental/dns-exporter"]
 id = "K0001"
 +++
 `echo-server` and `dns-exporter` rename `replicaCount` to `replicas`. Set
@@ -32,8 +32,8 @@ Only `kind` is required. Any field not listed here is an error.
 | Field | Type | Meaning |
 |---|---|---|
 | `kind` | string | One of the kinds below |
-| `packages` | list of strings | The packages under `kix/packages/` that the change touches. Leave it out when the change is not about particular packages |
-| `library` | list of strings | Library symbols, such as `kix.contracts.redis` |
+| `packages` | list of strings | The packages the change touches: a folder name under `kix/packages/stable/`, or `experimental/<name>` for a folder under `kix/packages/experimental/`. Leave it out when the change is not about particular packages |
+| `library` | list of strings | Library symbols, such as `kix.contracts.redis`. An experimental contract is `kix.contracts.experimental.<name>` |
 | `cli` | list of strings | CLI commands or flags removed or changed, as a user types them: `--old-flag`, `kix oldcmd` |
 | `state` | bool | The change touches cluster state: Activation records, `kix.run/*` annotations, PackageInstance, or Kix's CRDs |
 | `touches-data` | bool | The change moves or reinterprets stored data. Only with `kind = "silent"` |
@@ -57,7 +57,14 @@ The kind picks the `CHANGELOG.md` heading. Headings appear in this order.
 | `changed` | Changed | no |
 | `fixed` | Fixed | no |
 
-A release with any `error` or `silent` record raises the minor version.
+A record is experimental when it names at least one package or library
+symbol, every package it names starts with `experimental/`, every library
+symbol starts with `kix.contracts.experimental.`, and it sets neither `cli`
+nor `state`. An experimental `error` or `silent` record is listed under
+"Breaking in experimental packages and contracts", after the two breaking
+headings, and does not raise the minor version.
+
+A release with any other `error` or `silent` record raises the minor version.
 Otherwise it is a patch release.
 
 ## Ids

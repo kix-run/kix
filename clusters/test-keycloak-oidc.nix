@@ -30,7 +30,9 @@ kix.buildCluster {
     (
       { ref, ... }:
       {
-        availablePackages = packages;
+        availablePackages = packages // {
+          inherit (packages.experimental) cert-manager cluster-issuer;
+        };
         networkPolicy.enable = true;
         # `*.localhost` resolves to loopback, so the port-forwarded Ingress
         # needs no /etc/hosts entry.
@@ -42,28 +44,32 @@ kix.buildCluster {
           binding = "absent";
           provider = null;
         };
-        instances.kube-system.cilium.package = packages.cilium;
+        instances.kube-system.cilium.package = packages.experimental.cilium;
 
-        instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
+        instances.ingress-system.ingress-nginx.package = packages.experimental.ingress-nginx;
+        # cert-manager runs once per cluster, so it is declared in a
+        # namespace of its own rather than added beside the issuer.
+        instances.cert-manager.cert-manager.package = packages.experimental.cert-manager;
         instances.cert-manager.selfsigned = {
-          package = packages.cluster-issuer;
+          package = packages.experimental.cluster-issuer;
           config.spec.selfSigned = { };
         };
-        instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+        instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
 
         instances.auth = {
-          keycloak.package = packages.keycloak;
+          keycloak.package = packages.experimental.keycloak;
           keycloak-pg = {
-            package = packages.stackgres-cluster;
+            package = packages.experimental.stackgres-cluster;
             aliases = [ "postgres" ];
             # kind has one node and the pods anti-affine, so a second
             # instance never schedules.
             config.instances = 1;
           };
           keycloak-db = {
-            package = packages.stackgres-database;
+            package = packages.experimental.stackgres-database;
             # Dev-only value; it protects nothing.
-            config.password = "dev-keycloak-db-password";
+            config.passwordSource = ./dev-secrets/keycloak-db.sops.yaml;
+            config.passwordHash = "sha256-rgn6JZpWdY4hK9Cs6xIUUsG71gsVbab0Da/CZ0N4kRA=";
           };
           # Test values only.
           keycloak-admin = {
@@ -96,7 +102,7 @@ kix.buildCluster {
             };
           };
           oidc = {
-            package = packages.oidc-client;
+            package = packages.experimental.oidc-client;
             deps.oidcProvider = ref.auth.keycloak;
             config.realm = "main";
           };
@@ -121,7 +127,7 @@ kix.buildCluster {
           };
           # Test values only.
           oidc = {
-            package = packages.oidc-client;
+            package = packages.experimental.oidc-client;
             deps.oidcProvider = ref.auth.keycloak;
             config.realm = "main";
           };
@@ -192,29 +198,30 @@ kix.buildCluster {
             config.sentinel.enabled = false;
           };
           harbor-pg = {
-            package = packages.stackgres-cluster;
+            package = packages.experimental.stackgres-cluster;
             aliases = [ "postgres" ];
             config.instances = 1;
           };
           harbor-db = {
-            package = packages.stackgres-database;
+            package = packages.experimental.stackgres-database;
             aliases = [ "database" ];
             config = {
               database = "registry";
               user = "harbor";
-              password = "dev-harbor-db-password";
+              passwordSource = ./dev-secrets/harbor-db.sops.yaml;
+              passwordHash = "sha256-nxxYCF5UR6Dn+PHqSeQFUVpn08f6zKlS+H/TYsfgu6Q=";
             };
           };
         };
 
         instances.photos = {
           immich = {
-            package = packages.immich;
+            package = packages.experimental.immich;
             config.oidc.autoLogin = true;
           };
           # Test values only.
           oidc = {
-            package = packages.oidc-client;
+            package = packages.experimental.oidc-client;
             deps.oidcProvider = ref.auth.keycloak;
             config.realm = "main";
           };
@@ -232,17 +239,18 @@ kix.buildCluster {
             config.size = "50Gi";
           };
           immich-pg = {
-            package = packages.stackgres-cluster;
+            package = packages.experimental.stackgres-cluster;
             aliases = [ "postgres" ];
             config.instances = 1;
           };
           immich-db = {
-            package = packages.stackgres-database;
+            package = packages.experimental.stackgres-database;
             aliases = [ "database" ];
             config = {
               database = "immich";
               user = "immich";
-              password = "dev-immich-db-password";
+              passwordSource = ./dev-secrets/immich-oidc-db.sops.yaml;
+              passwordHash = "sha256-FLPsEp1yreYLSH/vE0eaQZWcLTzXswoNR+/lMsrP6EA=";
             };
           };
           valkey = {

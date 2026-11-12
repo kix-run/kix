@@ -136,6 +136,47 @@ rec {
         )
       );
 
+      # Map each key to the packages that `availablePackages = packages`
+      # offered before they moved to experimental. Their old names are
+      # markers there, which the shelf skips.
+      movedByKey = builtins.zipAttrsWith (_: names: names) (
+        lib.concatLists (
+          lib.mapAttrsToList (
+            name: marker:
+            map (key: { ${key} = marker.name; }) (
+              lib.unique (
+                [ name ]
+                ++ meta.peekPackageAliases {
+                  availEntry = {
+                    package = marker.experimentalPackage;
+                    aliases = [ ];
+                    namespace = null;
+                  };
+                  inherit kixlib;
+                  context = "availablePackages.${name}";
+                }
+              )
+            )
+          ) (lib.filterAttrs (_: v: (v._type or "") == "kix-moved") availablePackages)
+        )
+      );
+
+      # Refuse a demand that only a package which moved to experimental would
+      # answer, naming the package to add.
+      refuseMoved =
+        item:
+        let
+          names = lib.unique movedByKey.${item.depName};
+        in
+        throw (
+          "[K0549] ${item.requester} needs dependency '${item.depName}'. `availablePackages = packages` offered ${
+            lib.concatMapStringsSep " or " (n: "`${n}`") names
+          } for it, but that package is experimental now, and `packages` offers only stable packages."
+          + "\nFix: add it by name:"
+          + "\n  availablePackages = packages // { inherit (packages.experimental) ${builtins.head names}; };"
+          + "\nOr declare the instance under `instances` with `packages.experimental.${builtins.head names}`."
+        );
+
       # Return the reasons an availablePackages entry matches `key`, for error
       # messages.
       claimSources =
@@ -395,6 +436,9 @@ rec {
             in
             demandsOf { inherit (shelf.avPkg) package; } shelf.ns shelf.canonicalName
 
+          else if movedByKey ? ${item.depName} then
+            refuseMoved item
+
           else
             [ ];
       };
@@ -502,16 +546,18 @@ rec {
             ++ [
               "Declare it once, and every consumer resolves to it:"
               "  instances.<namespace>.${name}.package = packages.${name};"
+              "Write packages.experimental.${name} if ${name} is an experimental package."
             ]
           )
         )
       ) (builtins.attrNames placementsByName);
 
-      # Warn about a package that runs once per cluster and lands beside the
-      # one consumer that needs it, because nothing names its namespace.
-      # Removing that consumer removes the package for the whole cluster.
-      # Two consumers in two namespaces are refused by spreadRefusals.
-      besideConsumerWarnings = builtins.concatMap (
+      # Refuse a package that runs once per cluster and would land beside
+      # the one consumer that needs it, because nothing names its namespace.
+      # Removing that consumer would remove the package for the whole
+      # cluster. Two consumers in two namespaces are refused by
+      # spreadRefusals.
+      besideConsumerRefusals = builtins.concatMap (
         name:
         let
           ps = placementsByName.${name};
@@ -522,13 +568,14 @@ rec {
         lib.optional (builtins.length namespaces == 1 && reason != null && !placed) (
           builtins.concatStringsSep "\n" (
             [
-              "${name} runs once per cluster (${reason}). Kix added it to namespace ${builtins.head namespaces}, because the package that needs it is there:"
+              "[K2377] ${name} runs once per cluster (${reason}), and nothing names its namespace. Kix would add it to namespace ${builtins.head namespaces}, beside the package that needs it:"
             ]
             ++ map (p: "  ${labelRequester p.requester}, for dependency '${p.depName}'") ps
             ++ [
-              "Removing that package would remove ${name} for the whole cluster. Declare it once, in a namespace of its own:"
+              "Removing that package would then remove ${name} for the whole cluster. Declare ${name} once, in a namespace of its own:"
               "  instances.<namespace>.${name}.package = packages.${name};"
-              "or set autoNamespace to place every package Kix adds there. Kix 0.10 will refuse this placement."
+              "or set autoNamespace to place every package Kix adds there."
+              "Write packages.experimental.${name} if ${name} is an experimental package."
             ]
           )
         )
@@ -558,6 +605,6 @@ rec {
       throw (builtins.concatStringsSep "\n" spreadRefusals)
     else
       (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
-        inherit autoInstances activatedOptionals besideConsumerWarnings;
+        inherit autoInstances activatedOptionals besideConsumerRefusals;
       };
 }

@@ -33,7 +33,7 @@
 
   instances.infra = {
     cert-manager = {
-      package = packages.cert-manager;
+      package = packages.experimental.cert-manager;
     };
   };
 

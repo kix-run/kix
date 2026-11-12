@@ -2,7 +2,7 @@
 import Section from '../Section.astro';
 
 // What packages.cnpg-cluster renders at each availability level
-// (kix/packages/cnpg-cluster: none 1, pod 2, node 2, zone 3 instances).
+// (kix/packages/stable/cnpg-cluster: none 1, pod 2, node 2, zone 3 instances).
 // The EKS cluster reaches "zone" by declaring three availability zones.
 const targets = [
   { profile: 'kind · 1 node', availability: 'none', result: '1 instance, no high availability' },
@@ -21,9 +21,9 @@ const profiles = [
 type SwapLine = { kind: 'comment' | 'removed' | 'added'; text: string };
 const swap: SwapLine[] = [
   { kind: 'comment', text: '# single-node ClickHouse provider' },
-  { kind: 'removed', text: 'instances.data.olap.package = packages.clickhouse;' },
+  { kind: 'removed', text: 'instances.data.olap.package = packages.experimental.clickhouse;' },
   { kind: 'comment', text: '# operator-managed ClickHouse provider (with its operator and Keeper)' },
-  { kind: 'added', text: 'instances.data.olap.package = packages.clickhouse-cluster;' },
+  { kind: 'added', text: 'instances.data.olap.package = packages.experimental.clickhouse-cluster;' },
 ];
 ---
 
