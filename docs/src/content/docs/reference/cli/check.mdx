@@ -23,7 +23,7 @@ kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>]
 | --- | --- | --- |
 | `<CLUSTER>` | | Cluster name to evaluate. |
 | `--sarif` | Off | Print SARIF 2.1.0 JSON instead of the table. Overrides `-o`. |
-| `-o`, `--output` | `text` | `text` prints a `TOOL`, `RESULT`, `DETAILS` table. `json` and `yaml` print an array of `{ tool, result, details }`. |
+| `-o`, `--output` | `text` | `text` prints a `TOOL`, `RESULT`, `DETAILS` table, then the scorecard findings. `json` and `yaml` print an array of `{ tool, result, details }`, and the `scorecard` entry also has `findings`. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate. |
 | `--override-input <INPUT> <URL>` | None | Override a flake input for the evaluation. Repeatable. |
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
@@ -35,7 +35,11 @@ kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>]
 | `eval` | `pass` with the number of manifests, or `fail` with the evaluation error. Evaluation runs the constructor validators, the cross-resource checks, and every error-severity scorecard rule, so a failure in any of them appears here. |
 | `scorecard` | The counts of error, warning, and info findings. `fail` when there is at least one error, `skip` when the cluster does not enable the scorecard. |
 
-When `eval` fails, the `scorecard` step does not run.
+When `eval` fails, the `scorecard` step does not run, and the evaluation error
+is printed under the table.
+
+Text output lists the error and warning findings under the table, grouped by
+rule. Add `-v` to list the info findings too.
 
 `kix check` runs constructor validators, cross-resource checks, and scorecard
 rules. It does not validate rendered manifests against external Kubernetes

@@ -12,15 +12,9 @@ use super::CommandContext;
 
 /// Build `<cluster>` and write its bundle archive to `FILE` (or `<cluster>.kix.bundle`).
 pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
-    let status = |msg: &str| {
-        if !output::quiet() {
-            eprint!("\r\x1b[2K  {msg}");
-        }
-    };
+    let status = |msg: &str| output::status_line(msg);
     let build = super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)?;
-    if !output::quiet() {
-        eprint!("\r\x1b[2K");
-    }
+    output::clear_status_line();
     let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
     let object = |v: &serde_json::Value| v.as_object().cloned().unwrap_or_default();
     let provenance = kix_bundle::Provenance {

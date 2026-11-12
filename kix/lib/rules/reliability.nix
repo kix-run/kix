@@ -28,9 +28,7 @@ let
     ];
 in
 {
-  # Require both CPU and memory in `requests` and `limits` on every container,
-  # which is stricter than `hasResourceLimits` and `hasResourceRequests`
-  # (those pass when any resource is set).
+  # Require both CPU and memory in `requests` and `limits` on every container.
   boundedResources = {
     description = "Every container should declare CPU+memory requests and limits";
     level = "manifest";
@@ -77,46 +75,6 @@ in
         ) containers;
       in
       findings;
-  };
-
-  hasResourceLimits = {
-    description = "Every container should have resource limits";
-    level = "manifest";
-    severity = "warning";
-    tags = [
-      "reliability"
-      "resources"
-    ];
-    appliesTo = { resource, ... }: isWorkload resource;
-    check =
-      { resource, ... }:
-      let
-        containers = getContainers resource;
-        failing = builtins.filter (c: !(c ? resources && c.resources ? limits)) containers;
-      in
-      map (c: {
-        message = "container '${c.name or "unnamed"}' has no resource limits";
-      }) failing;
-  };
-
-  hasResourceRequests = {
-    description = "Every container should have resource requests";
-    level = "manifest";
-    severity = "warning";
-    tags = [
-      "reliability"
-      "resources"
-    ];
-    appliesTo = { resource, ... }: isWorkload resource;
-    check =
-      { resource, ... }:
-      let
-        containers = getContainers resource;
-        failing = builtins.filter (c: !(c ? resources && c.resources ? requests)) containers;
-      in
-      map (c: {
-        message = "container '${c.name or "unnamed"}' has no resource requests";
-      }) failing;
   };
 
   hasProbes = {

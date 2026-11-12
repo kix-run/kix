@@ -176,7 +176,8 @@ fn slot_name(canonical: &Path, attr: &str) -> String {
 }
 
 /// Return the BLAKE3 hash of the flake path, `flake.lock`, the source
-/// fingerprint, the attribute, the builder, and the store root.
+/// fingerprint, the attribute, the Kix version, the builder, and the store
+/// root.
 fn cache_key(canonical: &Path, attr: &str, source_fingerprint: &str) -> std::io::Result<String> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(canonical.as_os_str().as_encoded_bytes());
@@ -193,9 +194,13 @@ fn cache_key(canonical: &Path, attr: &str, source_fingerprint: &str) -> std::io:
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// Add the builder and store root, because a result from one builder or
-/// store says nothing about what another holds.
+/// Add the running Kix's version, the builder, and the store root. A result
+/// from one builder or store says nothing about what another holds. The
+/// version is there because a cache hit skips the check that this Kix can
+/// build the project's library, which only an evaluation runs.
 fn hash_runtime(hasher: &mut blake3::Hasher) {
+    hasher.update(b"\0kix:");
+    hasher.update(crate::VERSION.as_bytes());
     hasher.update(b"\0builder:");
     hasher.update(crate::runtime::builder().name().as_bytes());
     match crate::runtime::nix_runner().root() {

@@ -17,7 +17,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 
 ```text
 kix rollback <CLUSTER> [--list [-o text|json|yaml]] [--flake <FLAKE>] [--context <CONTEXT>]
-kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--operator] [--flake <FLAKE>] [--context <CONTEXT>]
+kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--force-conflicts] [--operator] [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
@@ -27,6 +27,7 @@ kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--operator] [--flake <FLAKE>]
 | `-y`, `--yes` | Roll back to the most recent Superseded activation without prompting. |
 | `--dry-run` | Print the plan and stop. |
 | `--prune` | Delete resources the current activation has and the target does not, and orphans earlier deploys kept. Without it they are listed and kept, and the target Activation records where they came from, as a deploy does. |
+| `--force-conflicts` | Take fields that another field manager owns, such as a replica count set with `kubectl scale`. Without it, a conflict stops the rollback before it writes anything. |
 | `--operator` | Point the Activation record at the target build and let the Kix operator apply it. See [Operator mode](/docs/reference/cli/operator-mode/). |
 | `--flake <FLAKE>` | Flake reference used to evaluate the cluster name when no Activation record in the context carries `<CLUSTER>`. See [Global flags](/docs/reference/cli/global-flags/). |
 | `--context <CONTEXT>` | Kubeconfig context. See [Global flags](/docs/reference/cli/global-flags/). |
@@ -50,6 +51,11 @@ imports a CRD (`scope.mkCRDRef`, or `kix.mkImport` with `crds`). Its CRD ref
 markers lack the `kix.run/crd-served-versions` annotation, and Kix refuses the
 build before applying anything (with `--operator`, the operator refuses it).
 Deploy a fresh build instead.
+
+Before it writes anything, the rollback sends its writes to the apiserver as a
+dry run, as `kix plan` does. When the apiserver would refuse one, such as for a
+field ownership conflict, Kix lists the refused writes and stops, so the cluster
+is never left between two builds. `--dry-run` shows the same list.
 
 The rollback waits up to 180 seconds for each resource to become ready and
 stops at the first failure.

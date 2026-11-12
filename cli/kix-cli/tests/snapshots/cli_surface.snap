@@ -191,6 +191,7 @@ kix rollback --list
 kix rollback --yes -y
 kix rollback --dry-run
 kix rollback --prune
+kix rollback --force-conflicts
 kix rollback --operator
 kix rollback --output -o <value> [text|json|yaml|markdown]
 kix rollback --verbose -v

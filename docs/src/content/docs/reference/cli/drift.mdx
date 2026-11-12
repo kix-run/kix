@@ -53,6 +53,10 @@ Kix set the replica count.
 | Unstamped | `not checked (no kix.run/applied-hash annotation; ...)` | `unstamped` | No `kix.run/applied-hash`; the resource was applied before stamping existed, and the next deploy adds it. Not counted as drift. |
 | Unreadable | `not checked (no Kubernetes field ownership entry for Kix)` | `no-fieldset` | The object has no field ownership data, so the check cannot run |
 
+Text output lists only the resources that are not in sync, then a summary line
+with the counts. Add `-v` to list the resources in sync as well. JSON output
+always lists every resource.
+
 For a drifted resource, text output names each changed field with the field
 manager, operation, and time Kubernetes recorded, in the form
 `<field> owned by <manager> (<operation>, <time>)`. When no other manager

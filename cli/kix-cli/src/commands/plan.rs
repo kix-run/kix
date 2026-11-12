@@ -141,9 +141,7 @@ pub(crate) fn prepare(
     ctx: &CommandContext,
 ) -> Result<Option<Planned>> {
     let build = new_build(args, ctx)?;
-    if !output::quiet() {
-        eprint!("\r\x1b[2K");
-    }
+    output::clear_status_line();
     let graph = build.graph();
     crate::say!(
         "Cluster {}: {} manifests",
@@ -175,11 +173,7 @@ fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> 
                 .map_err(|e| miette::miette!("{e}"))?
         }
         None => {
-            let status = |msg: &str| {
-                if !output::quiet() {
-                    eprint!("\r\x1b[2K  {msg}");
-                }
-            };
+            let status = |msg: &str| output::status_line(msg);
             crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
             super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)?
         }
