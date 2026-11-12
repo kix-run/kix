@@ -629,7 +629,8 @@ fn in_kix_level_folder(line: &str) -> bool {
 }
 
 /// Return whether a Nix error `message` is one of Kix's own that says what to
-/// change: it carries a change record id, or it lists a cluster's problems.
+/// change: it carries a change record id, lists a cluster's problems, names
+/// an unknown option, or gives a `Fix:` line.
 fn names_its_fix(message: &str) -> bool {
     let has_id = message.match_indices("[K").any(|(i, _)| {
         let rest = &message.as_bytes()[i + 2..];
@@ -637,8 +638,11 @@ fn names_its_fix(message: &str) -> bool {
     });
     let unknown_option =
         message.starts_with("error: The option `") && message.contains("' does not exist.");
+    // Kix's dependency errors end with `Fix:` and the lines to add.
+    let gives_fix = message.lines().any(|l| l.trim_start().starts_with("Fix: "));
     has_id
         || unknown_option
+        || gives_fix
         || (message.starts_with("error: cluster '") && message.contains(" problem(s):"))
 }
 
@@ -951,6 +955,18 @@ mod tests {
         assert_eq!(
             shorten_trace(&full),
             "error: The option `a.b' does not exist. Definition values:\n- In `x': 1"
+        );
+    }
+
+    #[test]
+    fn a_message_with_a_fix_line_stands_alone() {
+        let full = format!(
+            "error:\n{}\n       error: gw: dependency 'backend' is missing.\n       Fix: declare an instance named 'backend'.",
+            frame("while calling anonymous lambda"),
+        );
+        assert_eq!(
+            shorten_trace(&full),
+            "error: gw: dependency 'backend' is missing.\nFix: declare an instance named 'backend'."
         );
     }
 
