@@ -94,7 +94,7 @@ in
       # Order the marker after the secret instance's root resource. A
       # dependency's own `root` is its PackageInstance record, which a
       # resource must not depend on.
-      credentials = kix.checkSecretKeys {
+      credentials = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "oidcClient";
         dep = oidcClient;

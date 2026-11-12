@@ -187,7 +187,7 @@ in
       ...
     }:
     let
-      creds = kix.checkSecretKeys {
+      creds = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "githubConfigSecret";
         dep = githubConfigSecret;

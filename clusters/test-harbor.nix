@@ -173,8 +173,15 @@ kix.buildCluster {
             config = {
               database = "registry";
               user = "harbor";
-              passwordSource = ./dev-secrets/harbor-db.sops.yaml;
-              passwordHash = "sha256-nxxYCF5UR6Dn+PHqSeQFUVpn08f6zKlS+H/TYsfgu6Q=";
+            };
+          };
+          harbor-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
+            config = {
+              source = ./dev-secrets/harbor-db.sops.yaml;
+              hash = "sha256-nxxYCF5UR6Dn+PHqSeQFUVpn08f6zKlS+H/TYsfgu6Q=";
+              keys = [ "password" ];
             };
           };
         };

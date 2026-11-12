@@ -1776,6 +1776,10 @@ in
           name = "tunnel-token";
           inherit keys;
           mkEnv = mapping: lib.mapAttrsToList (n: _: { name = n; }) mapping;
+          # The rest of kix.contracts.secret, which the package checks.
+          keyRef = key: { valueFrom.secretKeyRef.key = key; };
+          envFrom = { };
+          volume = name: { inherit name; };
         };
       };
       deploymentOf =

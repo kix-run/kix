@@ -157,10 +157,10 @@ instances.my-ns.vault-creds = {
 instances.my-ns.my-app.deps.providerCredentials = ref.my-ns.cloudflare-api;
 ```
 
-A package reads a secret dep through one binding made by `kix.checkSecretKeys`, so a missing key fails with the secret's name before any `keyRef` throws:
+A package reads a secret dep through one binding made by `kix.contracts.secret.helpers.use`, so a dependency that is not a secret, or lacks a key, fails with the secret's name before any `keyRef` throws:
 
 ```nix
-creds = kix.checkSecretKeys { inherit who; arg = "providerCredentials"; dep = providerCredentials; keys = [ "api-token" ]; };
+creds = kix.contracts.secret.helpers.use { inherit who; arg = "providerCredentials"; dep = providerCredentials; keys = [ "api-token" ]; };
 env = kix.mkEnvVars { API_TOKEN = creds.out.keyRef "api-token"; };
 ```
 

@@ -36,6 +36,7 @@ Every contract in `kix.contracts.*` defines the default dependency alias, the re
 | [`kix.contracts.gateway`](#gateway-api-kixcontractsgateway) | `"gateway"` | `envoy-gateway`, `traefik`, `kix.mkImport` | `kix.expose` |
 | [`kix.contracts.experimental.otlpEndpoint`](#opentelemetry-kixcontractsexperimentalotlpendpoint) | `"otlp"` | `tempo`, `otel-collector`, `kix.mkImport` | `otel-collector` |
 | [`kix.contracts.experimental.clickhouse`](#clickhouse-kixcontractsexperimentalclickhouse) | `"clickhouse"` | `clickhouse`, `clickhouse-cluster` | `clickhouse-database` |
+| [`kix.contracts.secret`](#secret-kixcontractssecret) | `"secret"` | `secret`, `secret-ref`, `external-secret`, any Secret from `scope.mkSecret` or `scope.mkSecretRef` | every package that reads a secret value |
 
 ### Shared contract attributes and methods
 
@@ -44,7 +45,7 @@ Each stable contract is one file in `kix/contracts/stable/`, and the file name i
 | Attribute / method | Signature | Behavior |
 | --- | --- | --- |
 | `name` | `string` | The contract's name in error messages, such as `"Redis"`. |
-| `alias` | `string` | Default dependency argument name (`"database"`, `"redis"`, `"smtp"`, `"oidc"`, `"oidcProvider"`, `"gateway"`, `"otlp"`, or `"clickhouse"`). |
+| `alias` | `string` | Default dependency argument name (`"database"`, `"redis"`, `"smtp"`, `"oidc"`, `"oidcProvider"`, `"gateway"`, `"otlp"`, `"clickhouse"`, or `"secret"`). |
 | `fields` | `attrset` | Map of field names to `{ required; shape; test; }` definitions. A `credentials` field also lists its Secret key names in `fields.credentials.keys`. |
 | `check` | `who -> out -> out` | Provider-side validator. Verifies that `root.out` defines **every** field in `fields` (both required and optional) with a valid shape, and returns `out` (or throws an evaluation error naming `who` and the missing or malformed fields). |
 | `problems` | `out -> [ string ]` | Consumer-side problem finder. Checks that all `required = true` fields are present and valid, and validates the shape of any `required = false` fields that are present on `out`. |
@@ -73,6 +74,26 @@ Whenever a dependency contract carries a login, it places the login in `out.cred
 - **External imports (`kix.mkImport`)**: An external service declared with [`kix.mkImport`](/docs/reference/helm-and-imports/#mkimport) points `out.credentials` at a `secret` or `secret-ref` instance in the same namespace using `credentials = ref.<namespace>.<instance>`.
 
 Because a Kubernetes pod can only read Secrets from its own namespace, and Kix rejects cross-namespace Secret references at build time, any `kix.mkImport` that sets `out.credentials` must be placed in the consumer's namespace beside its secret with `scope = "namespace"`. An import without a login can keep the default `scope = "cluster"` and serve every namespace. When several namespaces connect to the same external service with their own secrets, use a Nix `let` binding to share the common host and port fields across the per-namespace imports.
+
+---
+
+## Secret (`kix.contracts.secret`)
+
+`kix.contracts.secret` (`kix/contracts/stable/secret.nix`) defines what a package reads from a secret dependency. A package takes every secret value through such a dependency and never through an option, so the site chooses where the value comes from. A test in the Kix repository fails a package that Kix ships if one of its options holds a secret or a path to one.
+
+A secret dependency has no fixed name: Grafana's is `grafanaAdmin`, caddy's is `caddyfile`. The alias `secret` is the default alias of `packages.secret` and `packages.secret-ref`. A cluster wires a dependency by an alias that matches the package's argument name, or with `deps.<name> = ref.<namespace>.<instance>`.
+
+| Field | Required | Type / shape | Description |
+| --- | --- | --- | --- |
+| `name` | Yes | `str` | The Secret's name. It carries the dependency, so a workload that reads it is ordered after it. |
+| `keyRef` | Yes | `key -> valueFrom` | An env var's `valueFrom` for one key. |
+| `mkEnv` | Yes | `{ ENV = key; } -> [ env ]` | Env entries for several keys. |
+| `envFrom` | Yes | `attrset` | An `envFrom` entry for the whole Secret. |
+| `volume` | Yes | `name -> volume` | A volume that mounts the Secret. |
+| `keys` | No | `list` of `str` or `null` | The keys the Secret holds. |
+| `sops` | No | `{ source; hash; }` | The SOPS file and hash that Kix fills the Secret from, set only when it does. |
+
+A consumer checks the dependency with `kix.contracts.secret.helpers.use { who; arg; dep; keys ? [ ]; anyOf ? null; }`, which returns `dep` or throws an error that names `deps.<arg>`. See [`kix.contracts.secret.helpers.use`](/docs/reference/package-anatomy/#kixcontractssecrethelpersuse).
 
 ---
 

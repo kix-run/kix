@@ -39,7 +39,8 @@
 #   photos = {
 #     immich.package = packages.experimental.immich;
 #     library = { package = packages.persistent-volume-claim; aliases = [ "storage" ]; config.size = "100Gi"; };
-#     immich-db = { package = packages.experimental.stackgres-database; aliases = [ "database" ]; config = { passwordSource = ./immich-db.sops.yaml; passwordHash = "sha256-..."; }; };
+#     immich-db = { package = packages.experimental.stackgres-database; aliases = [ "database" ]; };
+#     immich-db-password = { package = packages.secret; aliases = [ "password" ]; config = { source = ./immich-db.sops.yaml; hash = "sha256-..."; keys = [ "password" ]; }; };
 #     valkey-password = { package = packages.secret; aliases = [ "valkeyPassword" ]; config.stringData.password = "<password>"; };
 #   };
 #

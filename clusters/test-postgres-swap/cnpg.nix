@@ -16,9 +16,16 @@ kix.buildCluster {
         instances.app.metabase-db = {
           package = packages.experimental.cnpg-database;
           deps.postgres = ref.db.pg;
+        };
+        instances.app.metabase-db-password = {
+          package = packages.secret;
+          aliases = [ "password" ];
           # Test values only.
-          config.passwordSource = ../dev-secrets/swap-fixture-db.sops.yaml;
-          config.passwordHash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
+          config = {
+            source = ../dev-secrets/swap-fixture-db.sops.yaml;
+            hash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
+            keys = [ "password" ];
+          };
         };
       }
       # endregion:postgresSwapCnpg

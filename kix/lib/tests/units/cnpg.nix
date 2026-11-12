@@ -4,7 +4,8 @@
 # backups, and Pooler, the webhook check that every postgresql.cnpg.io
 # custom resource waits for, the vendored sources' release, and the alert
 # rules of cnpg-operator and cnpg-cluster and what each is gated on, and
-# cnpg-database's refusal of the removed `password` option.
+# cnpg-database's refusal of the removed password options and its two
+# routes for the `password` dependency.
 
 {
   lib,
@@ -35,6 +36,7 @@ let
   certManagerPackage = import ../../../packages/experimental/cert-manager;
   ciliumPackage = import ../../../packages/experimental/cilium;
   secretPackage = import ../../../packages/stable/secret;
+  secretRefPackage = import ../../../packages/stable/secret-ref;
   serviceRefPackage = import ../../../packages/experimental/service-ref;
 
   # A package's failed assertion messages for `config`, evaluated against
@@ -72,37 +74,56 @@ let
     );
   says = fragment: messages: builtins.any (m: lib.hasInfix fragment m) messages;
 
+  # The password secret of a cnpg-database: a packages.secret with a SOPS
+  # source.
+  sopsPassword = {
+    package = secretPackage;
+    config = {
+      source = ./cnpg.nix;
+      hash = "hash";
+      keys = [ "password" ];
+    };
+  };
+
   # The operator, a cluster `postgres`, and, unless `database` is null, a
-  # cnpg-database `app-db` beside it.
+  # cnpg-database `app-db` beside it, with `password` as its password
+  # dependency `app-db-password` unless that is null.
   cnpg =
     {
       operatorConfig ? { },
       clusterConfig ? { },
-      database ? {
-        passwordSource = ./cnpg.nix;
-        passwordHash = "hash";
-      },
+      database ? { },
+      password ? sopsPassword,
       extra ? { },
     }:
     mkCluster [
-      {
-        instances.cnpg-system.cnpg-operator = {
-          package = operatorPackage;
-          config = operatorConfig;
-        };
-        instances.data = {
-          postgres = {
-            package = clusterPackage;
-            config = clusterConfig;
+      (
+        { ref, ... }:
+        {
+          instances.cnpg-system.cnpg-operator = {
+            package = operatorPackage;
+            config = operatorConfig;
+          };
+          instances.data = {
+            postgres = {
+              package = clusterPackage;
+              config = clusterConfig;
+            };
+          }
+          // lib.optionalAttrs (database != null) {
+            app-db = {
+              package = databasePackage;
+              config = database;
+            }
+            // lib.optionalAttrs (password != null) {
+              deps.password = ref.data.app-db-password;
+            };
+          }
+          // lib.optionalAttrs (database != null && password != null) {
+            app-db-password = password;
           };
         }
-        // lib.optionalAttrs (database != null) {
-          app-db = {
-            package = databasePackage;
-            config = database;
-          };
-        };
-      }
+      )
       extra
     ];
   ms = cluster: manifests cluster;
@@ -246,9 +267,9 @@ let
               app-db = {
                 package = databasePackage;
                 deps.postgres = ref.${poolerNamespace}.pooler;
-                config.passwordSource = ./cnpg.nix;
-                config.passwordHash = "hash";
+                deps.password = ref.data.app-db-password;
               };
+              app-db-password = sopsPassword;
             };
           }
         )
@@ -611,8 +632,6 @@ in
     let
       all = ms (cnpg {
         database = {
-          passwordSource = ./cnpg.nix;
-          passwordHash = "hash";
           user = "app_user";
           extensions = [
             "citext"
@@ -659,28 +678,13 @@ in
     )
     || throw "cnpg-database resources: ${builtins.toJSON { inherit role database secret; }}";
 
-  # The removed `password` option fails the build. `passwordSource` fills
-  # both Secrets from the SOPS file at deploy.
+  # The removed `password`, `passwordSource`, and `passwordHash` options
+  # fail the build, and so does a database with no `password` dependency.
+  # A packages.secret with a SOPS source fills both Secrets from that file
+  # at deploy.
   cnpg-database-password-refused =
     let
-      sopsPassword = {
-        passwordSource = ./cnpg.nix;
-        passwordHash = "hash";
-      };
-      literal = cnpg {
-        database = sopsPassword // {
-          password = "pw";
-        };
-      };
-      secretIn =
-        name:
-        byName name (
-          ofKind "Secret" (
-            ms (cnpg {
-              database = sopsPassword;
-            })
-          )
-        );
+      secretIn = name: byName name (ofKind "Secret" (ms (cnpg { })));
       fromSops =
         name:
         let
@@ -688,8 +692,72 @@ in
         in
         secret.metadata.annotations ? ${kixKeys.sopsSource} && !(secret.stringData or { } ? password);
     in
-    (evalFails literal && fromSops "app-db-credentials" && fromSops "data-app-db-role")
+    (
+      evalFails (cnpg {
+        database.password = "pw";
+      })
+      && evalFails (cnpg {
+        database = {
+          passwordSource = ./cnpg.nix;
+          passwordHash = "hash";
+        };
+      })
+      && evalFails (cnpg {
+        password = null;
+      })
+      && fromSops "app-db-credentials"
+      && fromSops "data-app-db-role"
+    )
     || throw "cnpg-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
+
+  # A password from a secret-ref holding `username` and `password` is the
+  # credentials Secret. The package renders no Secret of its own, and the
+  # role reads its password from the basic-auth Secret
+  # `<namespace>-<instance>-role` in the cluster's namespace, which the site
+  # writes. A secret-ref without `username` fails.
+  cnpg-database-password-secret-ref =
+    let
+      withRef =
+        keys:
+        cnpg {
+          password = {
+            package = secretRefPackage;
+            config = { inherit keys; };
+          };
+        };
+      cluster = withRef [
+        "username"
+        "password"
+      ];
+      all = ms cluster;
+      secrets = map (m: m.metadata.name) (
+        builtins.filter (m: m.metadata.namespace == "data") (ofKind "Secret" all)
+      );
+      imported = builtins.filter (
+        m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret"
+      ) (ofKind "PackageInstance" all);
+      roleSecret = lib.findFirst (
+        m: m.metadata.annotations.${kixKeys.importName} == "data-app-db-role"
+      ) null imported;
+      role = byName "data-app-db" (ofKind "DatabaseRole" all);
+      credentialsName = builtins.unsafeDiscardStringContext cluster.instances.data.app-db.raw.root.out.credentials.out.name;
+    in
+    (
+      role.spec.passwordSecret.name == "data-app-db-role"
+      && roleSecret != null
+      && roleSecret.metadata.annotations.${kixKeys.secretType} == "kubernetes.io/basic-auth"
+      && roleSecret.metadata.annotations.${kixKeys.importSecretKeys} == "username,password"
+      && credentialsName == "app-db-password"
+      && !(builtins.elem "app-db-credentials" secrets)
+      && !(builtins.elem "data-app-db-role" secrets)
+      && evalFails (withRef [ "password" ])
+    )
+    || throw "cnpg-database secret-ref password: ${
+      builtins.toJSON {
+        inherit secrets credentialsName;
+        roleSecret = if roleSecret == null then null else roleSecret.metadata.annotations;
+      }
+    }";
 
   # A name listed twice, as when a consumer's deps.database.config.extensions
   # repeats one of the instance's, renders once, keeping the one version
@@ -702,8 +770,6 @@ in
           ofKind "Database" (
             ms (cnpg {
               database = {
-                passwordSource = ./cnpg.nix;
-                passwordHash = "hash";
                 inherit extensions;
               };
             })
@@ -733,8 +799,6 @@ in
       ]
       && evalFails (cnpg {
         database = {
-          passwordSource = ./cnpg.nix;
-          passwordHash = "hash";
           extensions = [
             {
               name = "vector";
@@ -782,24 +846,15 @@ in
       && says ''database "postgres" is reserved by PostgreSQL'' reservedByName
       && fine == [ ]
       && evalFails (cnpg {
-        database = { };
+        password = null;
       })
       && evalFails (cnpg {
-        database = {
-          password = "password";
-          passwordSource = ./cnpg.nix;
-          passwordHash = "hash";
-        };
+        database.password = "password";
       })
       && evalFails (cnpg {
         database.passwordSource = ./cnpg.nix;
       })
-      && !evalFails (cnpg {
-        database = {
-          passwordSource = ./cnpg.nix;
-          passwordHash = "hash";
-        };
-      })
+      && !evalFails (cnpg { })
     )
     || throw "cnpg-database refusals: ${
       builtins.toJSON {
@@ -815,18 +870,21 @@ in
   # A cnpg-database on a stackgres-cluster is refused; the same database on
   # a cnpg-cluster (cnpg-database-resources) evaluates.
   cnpg-database-refuses-other-postgres = evalFails (mkCluster [
-    {
-      instances.cnpg-system.cnpg-operator.package = operatorPackage;
-      instances.stackgres-system.stackgres-operator.package = stackgresOperatorPackage;
-      instances.data = {
-        postgres.package = stackgresClusterPackage;
-        app-db = {
-          package = databasePackage;
-          config.passwordSource = ./cnpg.nix;
-          config.passwordHash = "hash";
+    (
+      { ref, ... }:
+      {
+        instances.cnpg-system.cnpg-operator.package = operatorPackage;
+        instances.stackgres-system.stackgres-operator.package = stackgresOperatorPackage;
+        instances.data = {
+          postgres.package = stackgresClusterPackage;
+          app-db = {
+            package = databasePackage;
+            deps.password = ref.data.app-db-password;
+          };
+          app-db-password = sopsPassword;
         };
-      };
-    }
+      }
+    )
   ]);
 
   # With `backup` set: the Cluster enables the plugin as its WAL archiver

@@ -73,8 +73,15 @@ in
         config = {
           database = "immich";
           user = "immich";
-          passwordSource = ../dev-secrets/immich-db.sops.yaml;
-          passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
+        };
+      };
+      immich.immich-db-password = {
+        package = packages.secret;
+        aliases = [ "password" ];
+        config = {
+          source = ../dev-secrets/immich-db.sops.yaml;
+          hash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
+          keys = [ "password" ];
         };
       };
 
@@ -133,16 +140,23 @@ in
         config.size = "1Gi";
       };
 
-      # A development password, encrypted to the test-only key in
-      # clusters/dev-secrets. A deployment with real users encrypts its own.
       vaultwarden.vaultwarden-db = {
         package = packages.experimental.stackgres-database;
         deps.postgres = ref.data.postgres;
         config = {
           database = "vaultwarden";
           user = "vaultwarden";
-          passwordSource = ../dev-secrets/vaultwarden-db.sops.yaml;
-          passwordHash = "sha256-vSRCg4c2Q8jZrB+qWUa7YhXrpdZOoafVsi2KtKkZPRQ=";
+        };
+      };
+      vaultwarden.vaultwarden-db-password = {
+        package = packages.secret;
+        aliases = [ "password" ];
+        # A development password, encrypted to the test-only key in
+        # clusters/dev-secrets. A deployment with real users encrypts its own.
+        config = {
+          source = ../dev-secrets/vaultwarden-db.sops.yaml;
+          hash = "sha256-vSRCg4c2Q8jZrB+qWUa7YhXrpdZOoafVsi2KtKkZPRQ=";
+          keys = [ "password" ];
         };
       };
 

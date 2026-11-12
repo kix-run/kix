@@ -64,10 +64,11 @@
 #       package = packages.experimental.n8n;
 #       config.ingress.host = "n8n.example.com";
 #     };
-#     n8n-db = {
-#       package = packages.experimental.stackgres-database;
-#       config.passwordSource = ./secrets/n8n-db.yaml;
-#       config.passwordHash = "...";
+#     n8n-db.package = packages.experimental.stackgres-database;
+#     n8n-db-password = {
+#       package = packages.secret;
+#       aliases = [ "password" ];
+#       config = { source = ./secrets/n8n-db.yaml; hash = "..."; keys = [ "password" ]; };
 #     };
 #     n8n-encryption-key = {
 #       package = packages.secret;
@@ -329,7 +330,7 @@ in
       let
         exposure = self.exposure;
 
-        ek = kix.checkSecretKeys {
+        ek = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "encryptionKey";
           dep = encryptionKey;

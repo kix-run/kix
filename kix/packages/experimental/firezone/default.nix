@@ -47,7 +47,8 @@
 #         admin.email = "admin@example.com";
 #       };
 #     };
-#     firezone-db = { package = packages.experimental.stackgres-database; config.passwordSource = ./secrets/firezone-db.yaml; config.passwordHash = "..."; };
+#     firezone-db.package = packages.experimental.stackgres-database;
+#     firezone-db-password = { package = packages.secret; aliases = [ "password" ]; config = { source = ./secrets/firezone-db.yaml; hash = "..."; keys = [ "password" ]; }; };
 #     firezone-secrets = {
 #       package = packages.secret;
 #       aliases = [ "applicationSecrets" ];
@@ -261,7 +262,7 @@ in
         secretsDir = "/var/firezone-secrets";
         samlDir = "/var/firezone-saml";
 
-        appSecrets = kix.checkSecretKeys {
+        appSecrets = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "applicationSecrets";
           dep = applicationSecrets;
@@ -271,19 +272,19 @@ in
             "DATABASE_ENCRYPTION_KEY"
           ];
         };
-        admin = kix.checkSecretKeys {
+        admin = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "adminPassword";
           dep = adminPassword;
           keys = [ "password" ];
         };
-        wgKey = kix.checkSecretKeys {
+        wgKey = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "wireguardKey";
           dep = wireguardKey;
           keys = [ "private_key" ];
         };
-        saml = kix.checkSecretKeys {
+        saml = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "samlCertificate";
           dep = samlCertificate;

@@ -230,7 +230,7 @@ in
       let
         hasMetrics = config.metrics.enabled && prometheus != null;
 
-        creds = kix.checkSecretKeys {
+        creds = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "oauthCredentials";
           dep = oauthCredentials;

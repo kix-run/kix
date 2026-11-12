@@ -63,8 +63,15 @@ kix.buildCluster {
           config = {
             database = "immich";
             user = "immich";
-            passwordSource = ./dev-secrets/immich-db.sops.yaml;
-            passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
+          };
+        };
+        immich-db-password = {
+          package = packages.secret;
+          aliases = [ "password" ];
+          config = {
+            source = ./dev-secrets/immich-db.sops.yaml;
+            hash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
+            keys = [ "password" ];
           };
         };
 
@@ -86,8 +93,15 @@ kix.buildCluster {
         };
         firezone-db = {
           package = packages.experimental.stackgres-database;
-          config.passwordSource = ./dev-secrets/firezone-db.sops.yaml;
-          config.passwordHash = "sha256-mkPnt4ugMrbK4xcSsIwaPsOYAmwzzg4wD5ydQAY9g5Q=";
+        };
+        firezone-db-password = {
+          package = packages.secret;
+          aliases = [ "password" ];
+          config = {
+            source = ./dev-secrets/firezone-db.sops.yaml;
+            hash = "sha256-mkPnt4ugMrbK4xcSsIwaPsOYAmwzzg4wD5ydQAY9g5Q=";
+            keys = [ "password" ];
+          };
         };
 
         firezone = {

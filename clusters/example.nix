@@ -73,8 +73,15 @@ kix.buildCluster {
             config = {
               database = "immich";
               user = "immich";
-              passwordSource = ./dev-secrets/immich-db.sops.yaml;
-              passwordHash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
+            };
+          };
+          immich-db-password = {
+            package = packages.secret;
+            aliases = [ "password" ];
+            config = {
+              source = ./dev-secrets/immich-db.sops.yaml;
+              hash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
+              keys = [ "password" ];
             };
           };
 

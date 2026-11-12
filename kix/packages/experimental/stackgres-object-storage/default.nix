@@ -247,7 +247,7 @@ in
         else
           null;
       keys = selectorKeys config;
-      creds = kix.checkSecretKeys {
+      creds = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "storageCredentials";
         dep = storageCredentials;

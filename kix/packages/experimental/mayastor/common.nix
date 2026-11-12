@@ -47,7 +47,7 @@ rec {
   # is not wired.
   poolKey =
     dep:
-    kix.checkSecretKeys {
+    kix.contracts.secret.helpers.use {
       inherit who dep;
       arg = "poolEncryptionKey";
       keys = [ "encryption_parameters" ];

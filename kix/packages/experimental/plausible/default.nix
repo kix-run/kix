@@ -45,13 +45,19 @@
 #     };
 #     plausible-db = {
 #       package = packages.experimental.stackgres-database;
-#       config.passwordSource = ./secrets/plausible-db.yaml;
-#       config.passwordHash = "...";
+#       deps.password = ref.analytics.plausible-db-password;
+#     };
+#     plausible-db-password = {
+#       package = packages.secret;
+#       config = { source = ./secrets/plausible-db.yaml; hash = "..."; keys = [ "password" ]; };
 #     };
 #     plausible-events = {
 #       package = packages.experimental.clickhouse-database;
-#       config.passwordSource = ./secrets/plausible-events.yaml;
-#       config.passwordHash = "...";
+#       deps.password = ref.analytics.plausible-events-password;
+#     };
+#     plausible-events-password = {
+#       package = packages.secret;
+#       config = { source = ./secrets/plausible-events.yaml; hash = "..."; keys = [ "password" ]; };
 #     };
 #     plausible-secret-key-base = {
 #       package = packages.secret;
@@ -291,7 +297,7 @@ in
         ...
       }:
       let
-        skb = kix.checkSecretKeys {
+        skb = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "secretKeyBase";
           dep = secretKeyBase;

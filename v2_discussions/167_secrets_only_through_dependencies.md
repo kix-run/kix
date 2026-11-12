@@ -1,6 +1,6 @@
 # 167: Packages take secrets only through a secret dependency
 
-**Status:** Draft. The decisions of 2026-11-12 (§3) are provisional and may change. Not built.
+**Status:** Draft. The decisions of 2026-11-12 (§3) are provisional and may change. Phases 1 to 4 built on branch `secrets-deps-impl` (2026-11-12), not merged.
 **Related:** `77_secrets_implementation_plan.md` (SOPS hydration), `archive/78_cross_namespace_secret_refs.md` (one value, two namespaces), `archive/165_package_and_contract_levels.md` (stable and experimental), `interesting_thoughts/167b_generated_secrets.md` (Kix-made values, later)
 **Supersedes:** `archive/160_secret_provenance.md`
 
@@ -148,10 +148,15 @@ a package that takes a secret through the helper gets the key check, the
 ordering, the wait for an external Secret, and pod restarts on change in
 one call. Taking a string option and rendering a Secret is more code.
 
-`packages.secret`, `packages.secret-ref`, and `scope.mkSecretRef` publish
-the contract. `checkSecretKeys` stays as a thin wrapper for one release,
-then goes (the library has no experimental level, so its removal is an
-`error` record in a minor release).
+`scope.mkSecret` and `scope.mkSecretRef` build every Secret `out` with
+these fields, so `packages.secret`, `packages.secret-ref`, and any source
+package built on them honour the contract without calling `check`.
+`checkSecretKeys` stays and checks the keys only; the helper calls it after
+the contract check. Removing it is a library break, an `error` record in a
+minor release, and nothing forces it.
+
+As built, the helper returns the dependency. Returning readers with the
+checksum annotation and reloader wiring ready (rule S10) is not built yet.
 
 ### 5.2 Source packages
 
@@ -187,11 +192,10 @@ package's `options` and fails when an option:
   (`password`, `token`, `apiKey`, `secretKey`, `privateKey`, `secretName`,
   and the like).
 
-It also builds each package with the `kix/package-eval.nix` fixtures and
-fails on a rendered Secret with a plain-text key that is neither in
-`plainKeys` nor under `classification = "configuration"`, again unless the
-package is a source package. A source package is one whose root publishes
-`kix.contracts.secret`.
+It walks submodule options too. Hidden options (`visible = false`) are
+skipped: they exist only to refuse a removed name. A second check over the
+`kix/package-eval.nix` builds, failing on a rendered Secret with a
+plain-text credential key, is not built yet (§7).
 
 False matches go in one file, `kix/packages/not-secret.nix`, as
 `{ "<package>.<option path>" = "<why>"; }`. It starts with `passwordKey` and
@@ -223,23 +227,33 @@ Each of `stackgres-database`, `cnpg-database`, and `clickhouse-database`:
     so. The site delivers the value there too: a second `secret-ref`
     filled by its operator, a `ClusterExternalSecret`, or a second
     `lithus-secret`. The deploy waits for it.
-- Keeps rendering the app's `credentials` Secret (`username` plain, as
-  `kubernetes.io/basic-auth`, and `password`) when the source is SOPS. When
-  it is not, the contract's `credentials` must point at a Secret with both
-  keys, which the package cannot build (§6, question 1).
+- Keeps rendering the app's `credentials` Secret (`username` plain, and
+  `password`) when the source is SOPS. When it is not, the dependency itself
+  is the credentials Secret, so it must also hold `username`, equal to the
+  package's `user`; the package refuses one that does not declare it. That
+  Secret has no `database`, `host`, or `port`; consumers read those from
+  `out`, and every consumer in the tree does.
+- Is declared `password ? null`, so a build with the removed options reaches
+  their refusal (`[K9503]`, `[K6023]`) instead of a missing-dependency error,
+  which the change-kind check needs. A missing dependency then fails in the
+  build with its own message.
+- Server-side names as built: stackgres-database and clickhouse-database
+  `<instance>-<namespace>-bootstrap-password` (key `password`); cnpg-database
+  `<namespace>-<instance>-role` (`kubernetes.io/basic-auth`, keys `username`
+  and `password`, which CloudNativePG reads). The order differs because each
+  package kept the name it already deployed.
 
 The bootstrap Job's name keeps changing with the password: it takes the
 dependency's `identityHash` where it took `passwordHash`.
 
 ## 6. Open questions
 
-1. **Credentials from an external source.** The `postgresDatabase` contract
-   wants `credentials` with `username` and `password` in one Secret. With
-   an external source the package holds only `password`. Options: the site
-   puts both keys in its store, or the contract's `credentials` needs only
-   `password` and consumers read `username` from `out.username` (already an
-   optional field). The second is a change to a stable contract, so a minor
-   release. Check every consumer before choosing.
+1. **Credentials from an external source.** Settled for now (§5.4): the
+   site puts `username` and `password` in its store, and the stable
+   `postgresDatabase` contract stays as it is. The alternative, a
+   `credentials` that needs only `password` with consumers reading
+   `out.username`, is a change to a stable contract and needs a minor
+   release; reopen it if sites find the duplicated user name awkward.
 2. **Should `kix plan` and `kix diff` show plain keys?** Carried from doc
    160. A changed `host` in a credentials Secret is hidden with the
    password. The per-key stamp makes it possible. It changes what the plan

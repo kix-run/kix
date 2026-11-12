@@ -14,13 +14,20 @@
           "INSERT"
           "SELECT"
         ];
-        passwordSource = ../dev-secrets/swap-fixture-db.sops.yaml;
-        passwordHash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
         schema."01-events.sql" = ''
           CREATE TABLE IF NOT EXISTS {database:Identifier}.events ON CLUSTER '{cluster}'
           (ts DateTime, message String)
           ENGINE = ReplicatedMergeTree ORDER BY ts
         '';
+      };
+    };
+    events-db-password = {
+      package = packages.secret;
+      aliases = [ "password" ];
+      config = {
+        source = ../dev-secrets/swap-fixture-db.sops.yaml;
+        hash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
+        keys = [ "password" ];
       };
     };
 

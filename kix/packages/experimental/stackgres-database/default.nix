@@ -18,15 +18,35 @@
 #                        whose out has name, fqdn, port, and extensions.
 #                        The `extensions` option is added to its
 #                        `extensions`.
+#   password (required)  the role's password, a secret with the key
+#                        `password` (kix.contracts.secret), in this
+#                        instance's namespace.
 #
-# Config: `passwordSource` with `passwordHash` (a SOPS file).
+# Where the password comes from decides what the package renders:
+#
+# - A `packages.secret` with a SOPS `source`: the package renders the
+#   credentials Secret and the cluster-side Secret from that file, and the
+#   deploy fills both.
+# - Any other secret (`packages.secret-ref`, `packages.experimental.external-secret`,
+#   a site's own source package): the package renders neither. The
+#   dependency is the credentials Secret, so it must also hold `username`,
+#   equal to `user`. The site writes the password into the cluster's
+#   namespace too, as the Secret `<instance>-<namespace>-bootstrap-password`
+#   with the key `password`, and the deploy waits for it.
 #
 # Minimal instance, beside an app that takes deps.database:
 #
 #   app-db = {
 #     package = packages.experimental.stackgres-database;
-#     config.passwordSource = ./secrets/app-db.yaml;
-#     config.passwordHash = "...";
+#     deps.password = ref.apps.app-db-password;
+#   };
+#   app-db-password = {
+#     package = packages.secret;
+#     config = {
+#       source = ./secrets/app-db.yaml;   # holds `password`
+#       hash = "sha256-...";
+#       keys = [ "password" ];
+#     };
 #   };
 #
 # A consumer reads:
@@ -48,7 +68,9 @@
 #   out.database            the database name.
 #   out.username            the role name.
 #   out.extensions          the `extensions` option.
-#   out.credentials         the credentials Secret, for `out.mkEnv`.
+#   out.credentials         the credentials Secret, for `out.mkEnv`: the
+#                           one this package renders, or the password
+#                           dependency.
 #   out.tls                 whether PostgreSQL serves TLS (the postgres
 #                           dependency's `out.tls`), or null when it
 #                           publishes none, as an import.
@@ -58,13 +80,10 @@
 # Escape hatches: `bootstrap.image` and `bootstrap.resources` for the Job,
 # and the instance's `partsOverlays`.
 #
-# Limits: the role's password comes from options rather than a secret
-# dependency, because the same value has to reach a Secret in each of two
-# namespaces. The bootstrap Job runs in the cluster's namespace and reads
-# it there. The password should come from a secret dependency
-# with a declared `password` key, as in other packages. That needs Kix to
-# copy a dependency's Secret into a second namespace, which Kix cannot do
-# yet.
+# Limits: Kix copies only a value it decrypts itself, so a password from any
+# other source has to be delivered to both namespaces. With such a source a
+# changed password runs no new Job, because the build cannot see the value;
+# delete the last Job, or change another input, to set the new password.
 
 {
   scope,
@@ -154,31 +173,22 @@ in
     };
 
     password = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
       visible = false;
-      description = "Removed. Setting it fails the build with a message that names `passwordSource` and `passwordHash`.";
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
-
     passwordSource = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
-      description = ''
-        Path to a SOPS-encrypted file containing a `password` key. The Kix
-        deploy CLI hydrates the credentials Secret and the bootstrap Secret
-        from this same source at apply time.
-      '';
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
-
     passwordHash = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
-      description = ''
-        Content hash of the SOPS-decrypted password. Required when
-        passwordSource is set; used by kix-deploy for change detection
-        (and embedded into the bootstrap Job name so password rotation
-        triggers a fresh Job).
-      '';
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
 
     bootstrap.resources = kix.options.resources {
@@ -206,6 +216,9 @@ in
       self,
       config,
       postgres,
+      # Optional only so that a build with the removed options reaches
+      # _passwordCheck and its message; a missing one fails below.
+      password ? null,
       scope,
       lib,
       kix,
@@ -226,15 +239,40 @@ in
         else
           null;
 
+      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, hash set to its content hash, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
+
       _passwordCheck =
         if config.password != null then
-          throw "[K9503] ${who}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
-        else if config.passwordSource == null then
-          throw "${who}: passwordSource is not set. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
-        else if config.passwordHash == null then
-          throw "${who}: passwordSource is set without passwordHash, which the deploy compares to find a changed password. Set passwordHash."
+          throw "[K9503] ${who}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. ${passwordAdvice}"
+        else if config.passwordSource != null || config.passwordHash != null then
+          throw "[K6023] ${who}: passwordSource and passwordHash were removed. ${passwordAdvice} Use the same file and hash."
+        else if password == null then
+          throw "${who}: has no `password` dependency. ${passwordAdvice}"
         else
           null;
+
+      # With a SOPS file Kix decrypts the password itself, so it renders the
+      # Secrets in both namespaces. Otherwise the site delivers both.
+      sops = (passwordDep.out.sops or null);
+      fromSops = sops != null;
+      passwordDep =
+        let
+          dep = builtins.seq _passwordCheck (
+            kix.contracts.secret.helpers.use {
+              inherit who;
+              arg = "password";
+              dep = password;
+              keys = [ "password" ];
+            }
+          );
+          declared = dep.out.keys or [ ];
+        in
+        (
+          if dep.out ? sops || builtins.elem "username" declared then
+            dep
+          else
+            throw "${who}: deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads. Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source."
+        );
 
       # These carry the context of the cluster's Service reference, so the
       # resources built from them depend on the SGCluster.
@@ -254,7 +292,7 @@ in
         inherit dbName userName;
         owner = config.owner;
         extensions = config.extensions;
-        passwordFingerprint = config.passwordHash;
+        passwordFingerprint = if fromSops then sops.hash else null;
       };
       bootstrapHash = builtins.substring 0 10 (builtins.hashString "sha256" bootstrapInputs);
 
@@ -264,45 +302,61 @@ in
         ${kix.keys.dbCluster} = clusterName;
       };
 
-      # In the consumer's namespace. With passwordSource, the deploy fills
-      # `password` from the SOPS file.
-      credentials = scope.mkSecret {
-        name = "${name}-credentials";
-        keys = [
-          "username"
-          "password"
-          "database"
-          "host"
-          "port"
-        ];
-        stringData = {
-          username = userName;
-          database = dbName;
-          host = clusterFqdn;
-          port = clusterPort;
-        };
-        source = config.passwordSource;
-        hash = config.passwordHash;
-        labels = labels;
-        meta = {
-          classification = "credential";
-          rotationPolicy = "manual";
-        };
-      };
+      # In the consumer's namespace. From a SOPS file, the deploy fills
+      # `password`. Otherwise the password dependency is the credentials.
+      credentials =
+        if fromSops then
+          scope.mkSecret {
+            name = "${name}-credentials";
+            keys = [
+              "username"
+              "password"
+              "database"
+              "host"
+              "port"
+            ];
+            stringData = {
+              username = userName;
+              database = dbName;
+              host = clusterFqdn;
+              port = clusterPort;
+            };
+            inherit (sops) source hash;
+            labels = labels;
+            meta = {
+              classification = "credential";
+              rotationPolicy = "manual";
+            };
+          }
+        else
+          scope.mkSecretRef {
+            name = passwordDep.out.name;
+            keys = [
+              "username"
+              "password"
+            ];
+          };
 
-      # The role's password in the cluster's namespace, from the same
-      # source as `credentials`, so the Job reads it by secretKeyRef.
-      bootstrapPassword = backendScope.mkSecret {
-        name = "${serverSideName}-bootstrap-password";
-        keys = [ "password" ];
-        source = config.passwordSource;
-        hash = config.passwordHash;
-        labels = labels;
-        meta = {
-          classification = "credential";
-          rotationPolicy = "manual";
-        };
-      };
+      # The role's password in the cluster's namespace, so the Job reads it
+      # by secretKeyRef: rendered from the same SOPS file as `credentials`,
+      # or written there by the site.
+      bootstrapPassword =
+        if fromSops then
+          backendScope.mkSecret {
+            name = "${serverSideName}-bootstrap-password";
+            keys = [ "password" ];
+            inherit (sops) source hash;
+            labels = labels;
+            meta = {
+              classification = "credential";
+              rotationPolicy = "manual";
+            };
+          }
+        else
+          backendScope.mkSecretRef {
+            name = "${serverSideName}-bootstrap-password";
+            keys = [ "password" ];
+          };
 
       # A stackgres-cluster publishes the Secret StackGres creates for it.
       # An import does not, so this references the Secret StackGres names
@@ -453,7 +507,7 @@ in
         };
       };
     in
-    builtins.seq _passwordCheck (
+    builtins.seq passwordDep (
       builtins.seq _extensionsCheck {
         inherit
           credentials

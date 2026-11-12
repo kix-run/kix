@@ -193,7 +193,7 @@ in
         if alertmanagerConfig != null && config.settings != null then
           throw "${who}: both settings and the alertmanagerConfig dependency are set, and each supplies the whole configuration file. Remove one."
         else
-          kix.checkSecretKeys {
+          kix.contracts.secret.helpers.use {
             inherit who;
             arg = "alertmanagerConfig";
             dep = alertmanagerConfig;

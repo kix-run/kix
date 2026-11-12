@@ -19,7 +19,8 @@
 #
 # How it works:
 #   1. `credentials`, a Secret in this (the consumer's) namespace with
-#      username, password, database, host, and ports.
+#      username, password, database, host, and ports. Without a SOPS
+#      password it is the password dependency (see below).
 #   2. `bootstrapPassword`, the same password in the server's namespace
 #      (`scope.forService clickhouse`), so the Job there can take it by
 #      secretKeyRef.
@@ -67,6 +68,37 @@
 #
 # Dependencies:
 #   clickhouse (required)  anything honouring the clickhouse contract
+#   password (required)    the user's password, a secret with the key
+#                          `password` (kix.contracts.secret), in this
+#                          instance's namespace.
+#
+# Where the password comes from decides what the package renders:
+#
+# - A `packages.secret` with a SOPS `source`: the package renders the
+#   credentials Secret and `bootstrapPassword` in the server's namespace
+#   from that file, and the deploy fills both.
+# - Any other secret (`packages.secret-ref`, `packages.experimental.external-secret`,
+#   a site's own source package): the package renders neither. The
+#   dependency is the credentials Secret, so it must also hold `username`,
+#   equal to `user`, and it holds no `database`, `host`, `httpPort`, or
+#   `nativePort`. The site writes the password into the server's namespace
+#   too, as the Secret `<instance>-<namespace>-bootstrap-password` with the
+#   key `password`, and the deploy waits for it.
+#
+# Minimal instance, beside an app that takes deps.clickhouseDatabase:
+#
+#   app-ch = {
+#     package = packages.experimental.clickhouse-database;
+#     deps.password = ref.apps.app-ch-password;
+#   };
+#   app-ch-password = {
+#     package = packages.secret;
+#     config = {
+#       source = ./secrets/app-ch.yaml;   # holds `password`
+#       hash = "sha256-...";
+#       keys = [ "password" ];
+#     };
+#   };
 #
 # `out`:
 #   out.httpUrl, out.nativeEndpoint, out.host, out.ports
@@ -77,8 +109,10 @@
 #   out.privileges      what the user was granted, so a consumer can refuse
 #                       a database it could not use
 #   out.grants          what the user was granted outside its database
-#   out.credentials     the Secret; keys username, password, database, host,
-#                       httpPort, nativePort
+#   out.credentials     the credentials Secret: the one this package
+#                       renders, with keys username, password, database,
+#                       host, httpPort, and nativePort, or the password
+#                       dependency, with username and password
 #   out.version         the server release as YY.M, forwarded from the
 #                       contract, for a consumer with a requirement of its own
 #   out.replicas        the shard's replica count, forwarded from the
@@ -88,13 +122,10 @@
 #
 # root = credentials Secret.
 #
-# Limits: the user's password comes from options rather than a secret
-# dependency, because the same value has to reach a Secret in each of two
-# namespaces. The bootstrap Job runs in the server's namespace and reads
-# it there. The password should come from a secret dependency
-# with a declared `password` key, as in other packages. That needs Kix to
-# copy a dependency's Secret into a second namespace, which Kix cannot do
-# yet.
+# Limits: Kix copies only a value it decrypts itself, so a password from any
+# other source has to be delivered to both namespaces. With such a source a
+# changed password runs no new Job, because the build cannot see the value;
+# delete the last Job, or change another input, to set the new password.
 
 {
   scope,
@@ -213,22 +244,22 @@ in
     };
 
     password = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
       visible = false;
-      description = "Removed. Setting it fails the build with a message that names `passwordSource` and `passwordHash`.";
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
-
     passwordSource = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
-      description = "SOPS-encrypted file with a `password` key. Both Secrets are hydrated from it at deploy time.";
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
-
     passwordHash = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.anything;
       default = null;
-      description = "Content hash of the decrypted password. Required with passwordSource; it is what makes a rotation a new bootstrap Job.";
+      visible = false;
+      description = "Removed. Setting it fails the build with a message that names the `password` dependency.";
     };
 
     image = kix.options.image {
@@ -243,28 +274,58 @@ in
       self,
       config,
       clickhouse,
+      # Optional only so that a build with the removed options reaches
+      # _passwordCheck and its message; a missing one fails below.
+      password ? null,
       scope,
       lib,
       kix,
       ...
     }:
     let
+      who = "clickhouse-database ${scope.namespaceName}/${name}";
+
+      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, hash set to its content hash, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
+
       _passwordCheck =
         if config.password != null then
-          throw "[K9503] clickhouse-database ${scope.namespaceName}/${name}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
-        else if config.passwordSource == null then
-          throw "clickhouse-database ${scope.namespaceName}/${name}: passwordSource is not set. Set passwordSource to a SOPS-encrypted file with a password key, and passwordHash to the content hash of the decrypted password."
-        else if config.passwordHash == null then
-          throw "clickhouse-database ${scope.namespaceName}/${name}: passwordSource is set without passwordHash, which the deploy compares to find a changed password. Set passwordHash."
+          throw "[K9503] ${who}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. ${passwordAdvice}"
+        else if config.passwordSource != null || config.passwordHash != null then
+          throw "[K6023] ${who}: passwordSource and passwordHash were removed. ${passwordAdvice} Use the same file and hash."
+        else if password == null then
+          throw "${who}: has no `password` dependency. ${passwordAdvice}"
         else
           null;
+
+      # With a SOPS file Kix decrypts the password itself, so it renders the
+      # Secrets in both namespaces. Otherwise the site delivers both.
+      sops = (passwordDep.out.sops or null);
+      fromSops = sops != null;
+      passwordDep =
+        let
+          dep = builtins.seq _passwordCheck (
+            kix.contracts.secret.helpers.use {
+              inherit who;
+              arg = "password";
+              dep = password;
+              keys = [ "password" ];
+            }
+          );
+          declared = dep.out.keys or [ ];
+        in
+        (
+          if dep.out ? sops || builtins.elem "username" declared then
+            dep
+          else
+            throw "${who}: deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads. Add `username` (equal to user, \"${config.user}\") to that secret and to its keys, or use a packages.secret with a SOPS source."
+        );
 
       badGrantKeys = builtins.filter (
         k: builtins.match "(\\*|[A-Za-z_][A-Za-z0-9_]*)\\.(\\*|[A-Za-z_][A-Za-z0-9_]*)" k == null
       ) (builtins.attrNames config.grants);
       _grantsCheck =
         if badGrantKeys != [ ] then
-          throw "clickhouse-database ${scope.namespaceName}/${name}: grants keys must be `<database>.<table>`, each side `*` or a plain identifier, and these are not: ${lib.concatStringsSep ", " badGrantKeys}."
+          throw "${who}: grants keys must be `<database>.<table>`, each side `*` or a plain identifier, and these are not: ${lib.concatStringsSep ", " badGrantKeys}."
         else
           null;
 
@@ -288,7 +349,7 @@ in
             image = kix.image.ref config.image;
             script = bootstrapScript;
             sql = bootstrapSql;
-            passwordFingerprint = config.passwordHash;
+            passwordFingerprint = if fromSops then sops.hash else null;
           }
         )
       );
@@ -347,43 +408,59 @@ in
         echo "clickhouse-database bootstrap complete for ${config.user}@${config.database}"
       '';
     in
-    builtins.deepSeq
-      [
-        _passwordCheck
-        _grantsCheck
-      ]
-      {
-        credentials = scope.mkSecret {
-          name = "${name}-credentials";
-          keys = [
-            "username"
-            "password"
-            "database"
-            "host"
-            "httpPort"
-            "nativePort"
-          ];
-          stringData = {
-            username = config.user;
-            database = config.database;
-            host = server.host;
-            httpPort = server.ports.http;
-            nativePort = server.ports.native;
-          };
-          source = config.passwordSource;
-          hash = config.passwordHash;
-          inherit labels;
-          meta = secretMeta;
-        };
+    builtins.seq passwordDep (
+      builtins.seq _grantsCheck {
+        # In the consumer's namespace. From a SOPS file, the deploy fills
+        # `password`. Otherwise the password dependency is the credentials.
+        credentials =
+          if fromSops then
+            scope.mkSecret {
+              name = "${name}-credentials";
+              keys = [
+                "username"
+                "password"
+                "database"
+                "host"
+                "httpPort"
+                "nativePort"
+              ];
+              stringData = {
+                username = config.user;
+                database = config.database;
+                host = server.host;
+                httpPort = server.ports.http;
+                nativePort = server.ports.native;
+              };
+              inherit (sops) source hash;
+              inherit labels;
+              meta = secretMeta;
+            }
+          else
+            scope.mkSecretRef {
+              name = passwordDep.out.name;
+              keys = [
+                "username"
+                "password"
+              ];
+            };
 
-        bootstrapPassword = backendScope.mkSecret {
-          name = "${serverSideName}-bootstrap-password";
-          keys = [ "password" ];
-          source = config.passwordSource;
-          hash = config.passwordHash;
-          inherit labels;
-          meta = secretMeta;
-        };
+        # The user's password in the server's namespace, so the Job reads it
+        # by secretKeyRef: rendered from the same SOPS file as `credentials`,
+        # or written there by the site.
+        bootstrapPassword =
+          if fromSops then
+            backendScope.mkSecret {
+              name = "${serverSideName}-bootstrap-password";
+              keys = [ "password" ];
+              inherit (sops) source hash;
+              inherit labels;
+              meta = secretMeta;
+            }
+          else
+            backendScope.mkSecretRef {
+              name = "${serverSideName}-bootstrap-password";
+              keys = [ "password" ];
+            };
 
         bootstrapFiles = backendScope.mkResource {
           apiVersion = "v1";
@@ -504,5 +581,6 @@ in
             credentials = self.credentials;
           };
         };
-      };
+      }
+    );
 }

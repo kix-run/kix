@@ -5,8 +5,9 @@
 # SGCluster, the webhook check that StackGres custom resources wait for,
 # the alert rules of stackgres-operator and stackgres-cluster and what
 # each is gated on,
-# stackgres-database's names in the cluster's namespace, and its refusal of
-# the removed `password` option.
+# stackgres-database's names in the cluster's namespace, its refusal of
+# the removed password options, and its two routes for the `password`
+# dependency.
 
 {
   lib,
@@ -33,6 +34,7 @@ let
   objectStoragePackage = import ../../../packages/experimental/stackgres-object-storage;
   databasePackage = import ../../../packages/experimental/stackgres-database;
   secretPackage = import ../../../packages/stable/secret;
+  secretRefPackage = import ../../../packages/stable/secret-ref;
   releaseTable = import ../../../packages/experimental/stackgres-operator/release.nix {
     inherit lib;
   };
@@ -464,12 +466,19 @@ in
         ns:
         { ref, ... }:
         {
-          instances.${ns}.app-db = {
-            package = databasePackage;
-            deps.postgres = ref.data.postgres;
-            config = {
-              passwordSource = ./stackgres.nix;
-              passwordHash = "hash-${ns}";
+          instances.${ns} = {
+            app-db = {
+              package = databasePackage;
+              deps.postgres = ref.data.postgres;
+              deps.password = ref.${ns}.app-db-password;
+            };
+            app-db-password = {
+              package = secretPackage;
+              config = {
+                source = ./stackgres.nix;
+                hash = "hash-${ns}";
+                keys = [ "password" ];
+              };
             };
           };
         };
@@ -495,32 +504,46 @@ in
     )
     || throw "stackgres-database same name: jobs ${builtins.toJSON jobs}, secrets ${builtins.toJSON secrets}";
 
-  # The removed `password` option fails the build. `passwordSource` fills
-  # both Secrets from the SOPS file at deploy.
+  # The removed `password`, `passwordSource`, and `passwordHash` options
+  # fail the build, and so does a database with no `password` dependency.
+  # A packages.secret with a SOPS source fills both Secrets from that file
+  # at deploy.
   stackgres-database-password-refused =
     let
       withDatabase =
-        config:
+        {
+          config ? { },
+          password ? {
+            package = secretPackage;
+            config = {
+              source = ./stackgres.nix;
+              hash = "hash";
+              keys = [ "password" ];
+            };
+          },
+        }:
         sgCluster {
           extra =
             { ref, ... }:
             {
-              instances.apps.app-db = {
-                package = databasePackage;
-                deps.postgres = ref.data.postgres;
-                inherit config;
+              instances.apps = {
+                app-db = {
+                  package = databasePackage;
+                  deps = {
+                    postgres = ref.data.postgres;
+                  }
+                  // lib.optionalAttrs (password != null) {
+                    password = ref.apps.app-db-password;
+                  };
+                  inherit config;
+                };
+              }
+              // lib.optionalAttrs (password != null) {
+                app-db-password = password;
               };
             };
         };
-      literal = withDatabase {
-        password = "pw";
-        passwordSource = ./stackgres.nix;
-        passwordHash = "hash";
-      };
-      sops = withDatabase {
-        passwordSource = ./stackgres.nix;
-        passwordHash = "hash";
-      };
+      sops = withDatabase { };
       secretIn = name: byName name (ofKind "Secret" (manifests sops));
       fromSops =
         name:
@@ -529,8 +552,95 @@ in
         in
         secret.metadata.annotations ? ${kixKeys.sopsSource} && !(secret.stringData or { } ? password);
     in
-    (evalFails literal && fromSops "app-db-credentials" && fromSops "app-db-apps-bootstrap-password")
+    (
+      evalFails (withDatabase {
+        config.password = "pw";
+      })
+      && evalFails (withDatabase {
+        config = {
+          passwordSource = ./stackgres.nix;
+          passwordHash = "hash";
+        };
+      })
+      && evalFails (withDatabase {
+        password = null;
+      })
+      && fromSops "app-db-credentials"
+      && fromSops "app-db-apps-bootstrap-password"
+    )
     || throw "stackgres-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
+
+  # A password from a secret-ref holding `username` and `password` is the
+  # credentials Secret. The package renders no Secret of its own, and the
+  # Job reads the password from `<instance>-<namespace>-bootstrap-password`
+  # in the cluster's namespace, which the site writes. A secret-ref without
+  # `username` fails.
+  stackgres-database-password-secret-ref =
+    let
+      withRef =
+        keys:
+        sgCluster {
+          extra =
+            { ref, ... }:
+            {
+              instances.apps = {
+                app-db = {
+                  package = databasePackage;
+                  deps.postgres = ref.data.postgres;
+                  deps.password = ref.apps.app-db-login;
+                };
+                app-db-login = {
+                  package = secretRefPackage;
+                  config = { inherit keys; };
+                };
+              };
+            };
+        };
+      cluster = withRef [
+        "username"
+        "password"
+      ];
+      ms = manifests cluster;
+      secrets = map (m: "${m.metadata.namespace}/${m.metadata.name}") (
+        builtins.filter (m: m.metadata.namespace != "stackgres-system") (ofKind "Secret" ms)
+      );
+      imported = map (m: "${m.metadata.namespace}/${m.metadata.annotations.${kixKeys.importName}}") (
+        builtins.filter (m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret") (
+          ofKind "PackageInstance" ms
+        )
+      );
+      job = builtins.head (
+        builtins.filter (m: lib.hasPrefix "app-db-apps-bootstrap-" m.metadata.name) (ofKind "Job" ms)
+      );
+      newPassword =
+        (lib.findFirst (e: e.name == "NEW_PASSWORD") null
+          (builtins.head job.spec.template.spec.containers).env
+        ).valueFrom.secretKeyRef;
+      credentialsName = builtins.unsafeDiscardStringContext cluster.instances.apps.app-db.raw.root.out.credentials.out.name;
+    in
+    (
+      newPassword == {
+        name = "app-db-apps-bootstrap-password";
+        key = "password";
+      }
+      && job.metadata.namespace == "data"
+      && builtins.elem "data/app-db-apps-bootstrap-password" imported
+      && builtins.elem "apps/app-db-login" imported
+      && credentialsName == "app-db-login"
+      && !(builtins.elem "apps/app-db-credentials" secrets)
+      && !(builtins.elem "data/app-db-apps-bootstrap-password" secrets)
+      && evalFails (withRef [ "password" ])
+    )
+    || throw "stackgres-database secret-ref password: ${
+      builtins.toJSON {
+        inherit
+          secrets
+          imported
+          newPassword
+          credentialsName
+          ;
+      }
+    }";
 
   stackgres-resolve-postgres =
     let

@@ -73,14 +73,28 @@ kix.buildCluster {
           };
           plausible-db = {
             package = packages.experimental.cnpg-database;
-            config.passwordSource = ./dev-secrets/plausible-db.sops.yaml;
-            config.passwordHash = "sha256-Fx4LekxcnAr8/CrtSEqLMisM7ElvkqCo+jSeVrr6xqw=";
+            deps.password = ref.analytics.plausible-db-password;
+          };
+          plausible-db-password = {
+            package = packages.secret;
+            config = {
+              source = ./dev-secrets/plausible-db.sops.yaml;
+              hash = "sha256-Fx4LekxcnAr8/CrtSEqLMisM7ElvkqCo+jSeVrr6xqw=";
+              keys = [ "password" ];
+            };
           };
           plausible-events = {
             package = packages.experimental.clickhouse-database;
             deps.clickhouse = ref.events.clickhouse;
-            config.passwordSource = ./dev-secrets/plausible-events.sops.yaml;
-            config.passwordHash = "sha256-n8fiYw1YaJ4eWkduVI5s+ugSbn3FLfwuRJ+WpySotvg=";
+            deps.password = ref.analytics.plausible-events-password;
+          };
+          plausible-events-password = {
+            package = packages.secret;
+            config = {
+              source = ./dev-secrets/plausible-events.sops.yaml;
+              hash = "sha256-n8fiYw1YaJ4eWkduVI5s+ugSbn3FLfwuRJ+WpySotvg=";
+              keys = [ "password" ];
+            };
           };
           plausible-secret-key-base = {
             package = packages.secret;

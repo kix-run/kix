@@ -338,7 +338,7 @@ in
         credentialKeys = lib.genAttrs credentialSelectors (
           s: if os.credentialKeys.${s} != null then os.credentialKeys.${s} else s
         );
-        credentials = kix.checkSecretKeys {
+        credentials = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "storageCredentials";
           dep =

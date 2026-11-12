@@ -142,19 +142,19 @@ rec {
       # Every read of a secret dependency goes through these bindings, so
       # a missing key fails here with the secret's name, before any
       # `keyRef` throws.
-      secrets = kix.checkSecretKeys {
+      secrets = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "harborSecrets";
         dep = harborSecrets;
         keys = secretKeys;
       };
-      ca = kix.checkSecretKeys {
+      ca = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "caBundle";
         dep = caBundle;
         keys = [ "ca.crt" ];
       };
-      # Not kix.checkSecretKeys: its message suggests wiring another Secret
+      # Not kix.contracts.secret.helpers.use: its message suggests wiring another Secret
       # through deps.database, which takes a database.
       dbCredentials =
         let

@@ -31,10 +31,11 @@
 #
 #   instances.analytics = {
 #     metabase.package = packages.experimental.metabase;
-#     metabase-db = {
-#       package = packages.experimental.stackgres-database;
-#       config.passwordSource = ./secrets/metabase-db.yaml;
-#       config.passwordHash = "...";
+#     metabase-db.package = packages.experimental.stackgres-database;
+#     metabase-db-password = {
+#       package = packages.secret;
+#       aliases = [ "password" ];
+#       config = { source = ./secrets/metabase-db.yaml; hash = "..."; keys = [ "password" ]; };
 #     };
 #     metabase-encryption-key = {
 #       package = packages.secret;
@@ -156,7 +157,7 @@ in
         # the Recreate Deployment.
         metricsOn = config.metrics.enabled;
         scraped = metricsOn && prometheus != null;
-        ek = kix.checkSecretKeys {
+        ek = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "encryptionKey";
           dep = encryptionKey;

@@ -145,7 +145,7 @@ in
       let
         who = "filebrowser ${scope.namespaceName}/${name}";
         userNames = builtins.attrNames config.users;
-        usersSecret = kix.checkSecretKeys {
+        usersSecret = kix.contracts.secret.helpers.use {
           inherit who;
           arg = "filebrowserUsers";
           dep =

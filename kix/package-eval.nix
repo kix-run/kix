@@ -105,11 +105,17 @@ let
         ]
       );
 
-  # The password of every database instance, from a SOPS file encrypted to
-  # the test-only key in clusters/dev-secrets. Evaluation never decrypts it.
+  # The `password` secret of every database instance in its namespace, from
+  # a SOPS file encrypted to the test-only key in clusters/dev-secrets.
+  # Evaluation never decrypts it.
   dbPassword = {
-    passwordSource = ./package-eval-password.sops.yaml;
-    passwordHash = "sha256-CZBEBEf3F4x4XixP50/aHYHOipR3x139Cz4T9XyYqpw=";
+    package = packages.secret;
+    aliases = [ "password" ];
+    config = {
+      source = ./package-eval-password.sops.yaml;
+      hash = "sha256-CZBEBEf3F4x4XixP50/aHYHOipR3x139Cz4T9XyYqpw=";
+      keys = [ "password" ];
+    };
   };
 
   # The ClickHouse operator runs once per cluster, so the packages that need
@@ -193,9 +199,9 @@ let
       instances = { inherit credentials; };
       module = _: { instances.clickhouse-operator = clickhouseOperator; };
     };
-    clickhouse-database = {
-      config = { inherit (dbPassword) passwordSource passwordHash; };
-      instances = { inherit credentials storage; };
+    clickhouse-database.instances = {
+      inherit credentials storage;
+      database-password = dbPassword;
     };
     clickhouse-keeper = {
       instances = { inherit credentials; };
@@ -203,10 +209,8 @@ let
     };
     clickhouse-logs.instances = {
       inherit credentials storage;
-      clickhouse-database = {
-        package = packages.clickhouse-database;
-        config = { inherit (dbPassword) passwordSource passwordHash; };
-      };
+      clickhouse-database.package = packages.clickhouse-database;
+      database-password = dbPassword;
     };
     clickhouse-operator.instances = { inherit credentials; };
     cloudflared.instances.tunnel-token = {
@@ -218,11 +222,11 @@ let
     cnpg-cluster.instances.prometheus-operator.package = packages.prometheus-operator;
     # cnpg-cluster is off the shelf, so the database's cluster is declared.
     cnpg-database = {
-      config = {
-        inherit (dbPassword) passwordSource passwordHash;
-        extensions = [ "citext" ];
+      config.extensions = [ "citext" ];
+      instances = {
+        postgres.package = packages.cnpg-cluster;
+        database-password = dbPassword;
       };
-      instances.postgres.package = packages.cnpg-cluster;
     };
     # cnpg-cluster is off the shelf, so the pooled cluster is declared, and
     # a Prometheus provider, so the PodMonitor is built.
@@ -280,10 +284,8 @@ let
         admin.email = "admin@example.com";
       };
       instances = {
-        database = {
-          package = packages.stackgres-database;
-          config = { inherit (dbPassword) passwordSource passwordHash; };
-        };
+        database.package = packages.stackgres-database;
+        database-password = dbPassword;
         # The three salts are optional; clusters/test-immich.nix sets them.
         application-secrets = {
           package = packages.secret;
@@ -323,10 +325,8 @@ let
       instances = {
         inherit storage;
         valkey-password = valkeyPassword;
-        database = {
-          package = packages.stackgres-database;
-          config = { inherit (dbPassword) passwordSource passwordHash; };
-        };
+        database.package = packages.stackgres-database;
+        database-password = dbPassword;
         harbor-secrets = {
           package = packages.secret;
           aliases = [ "harborSecrets" ];
@@ -349,10 +349,8 @@ let
     immich.instances = {
       inherit storage;
       valkey-password = valkeyPassword;
-      database = {
-        package = packages.stackgres-database;
-        config = { inherit (dbPassword) passwordSource passwordHash; };
-      };
+      database.package = packages.stackgres-database;
+      database-password = dbPassword;
       prometheus-operator.package = packages.prometheus-operator;
     };
     # Nothing routes to the instance here, so the URL comes from
@@ -362,10 +360,8 @@ let
       config.env.KC_HOSTNAME = "https://auth.example.com";
       instances = {
         prometheus-operator.package = packages.prometheus-operator;
-        database = {
-          package = packages.stackgres-database;
-          config = { inherit (dbPassword) passwordSource passwordHash; };
-        };
+        database.package = packages.stackgres-database;
+        database-password = dbPassword;
         bootstrap-admin = {
           package = packages.secret;
           aliases = [ "bootstrapAdmin" ];
@@ -393,10 +389,8 @@ let
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
     metabase.instances = {
-      database = {
-        package = packages.stackgres-database;
-        config = { inherit (dbPassword) passwordSource passwordHash; };
-      };
+      database.package = packages.stackgres-database;
+      database-password = dbPassword;
       encryption-key = {
         package = packages.secret;
         aliases = [ "encryptionKey" ];
@@ -408,14 +402,10 @@ let
       config.env.BASE_URL = "https://plausible.example.org";
       instances = {
         inherit credentials storage;
-        database = {
-          package = packages.stackgres-database;
-          config = { inherit (dbPassword) passwordSource passwordHash; };
-        };
-        clickhouse-database = {
-          package = packages.clickhouse-database;
-          config = { inherit (dbPassword) passwordSource passwordHash; };
-        };
+        database.package = packages.stackgres-database;
+        clickhouse-database.package = packages.clickhouse-database;
+        # One `password` secret for both databases.
+        database-password = dbPassword;
         secret-key-base = {
           package = packages.secret;
           aliases = [ "secretKeyBase" ];
@@ -430,10 +420,8 @@ let
       instances = {
         prometheus-operator.package = packages.prometheus-operator;
         valkey-password = valkeyPassword;
-        database = {
-          package = packages.stackgres-database;
-          config = { inherit (dbPassword) passwordSource passwordHash; };
-        };
+        database.package = packages.stackgres-database;
+        database-password = dbPassword;
         n8n-encryption-key = {
           package = packages.secret;
           aliases = [ "encryptionKey" ];
@@ -552,7 +540,7 @@ let
         };
       };
     };
-    stackgres-database.config = { inherit (dbPassword) passwordSource passwordHash; };
+    stackgres-database.instances.database-password = dbPassword;
     stackgres-object-storage = {
       config = {
         type = "s3Compatible";
@@ -591,10 +579,8 @@ let
     vaultwarden = {
       instances = {
         inherit storage;
-        database = {
-          package = packages.stackgres-database;
-          config = { inherit (dbPassword) passwordSource passwordHash; };
-        };
+        database.package = packages.stackgres-database;
+        database-password = dbPassword;
       };
       config.domain = "https://vault.example.com";
     };

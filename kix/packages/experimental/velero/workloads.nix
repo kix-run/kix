@@ -37,7 +37,7 @@ let
   repoSecretName = "velero-repo-credentials";
   repoPassword =
     let
-      checked = kix.checkSecretKeys {
+      checked = kix.contracts.secret.helpers.use {
         inherit who;
         arg = "repositoryPassword";
         dep = repositoryPassword;

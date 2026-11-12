@@ -32,11 +32,11 @@ For example, consider a `metabase` instance that requires a PostgreSQL `database
 
 <Snippet {...postgresSwapConsumer} />
 
-On a cluster running the StackGres operator, a `stackgres-database` instance in the `app` namespace satisfies `database`:
+On a cluster running the StackGres operator, a `stackgres-database` instance in the `app` namespace satisfies `database`. A `packages.secret` instance beside it holds the role's password:
 
 <Snippet {...postgresSwapStackgres} />
 
-On another cluster running CloudNativePG, a `cnpg-database` instance satisfies the exact same `database` dependency:
+On another cluster running CloudNativePG, a `cnpg-database` instance, with its own password secret, satisfies the exact same `database` dependency:
 
 <Snippet {...postgresSwapCnpg} />
 

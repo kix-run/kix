@@ -291,8 +291,15 @@ the defaults fails there.
 ### 6. Secrets
 
 One purpose-named dep per credential, bound once through
-`kix.checkSecretKeys` (S3, S4; `SECRETS.md`). Never a string or path option
-for a credential: the dependency is what lets the site choose between a
+`kix.contracts.secret.helpers.use` (S3, S4; `SECRETS.md`). Never a string or
+path option for a credential, and never a Secret's name: the test
+`secret-options-none-take-a-secret` (`kix/lib/tests/units/secret-options.nix`)
+fails the build of the package set, for stable and experimental packages
+alike. An option that only matches by name goes in
+`kix/packages/not-secret.nix` with the reason. A package that needs the
+value in a second namespace renders a copy only from `dep.out.sops`, and
+otherwise references a Secret the site writes there (stackgres-database).
+ the dependency is what lets the site choose between a
 value in the build, a SOPS file, and a Secret an operator writes, and what
 `cluster.secrets.accept` checks (S1, S16; `docs/src/content/docs/reference/cluster-configuration.mdx` `#clustercontainerd-clustermaintenance-and-clustersecretsaccept`). Configuration
 the program reads from a Secret gets a non-Secret route or a dependency
@@ -374,7 +381,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:88-96 |
 | Shared release file for a release group | `immich/release.nix`, immich:106 |
 | Follower image tag with `tagText` and `mkDefault` | n8n:267-274, 307 |
-| `checkSecretKeys`, read through the binding | metabase:157-162, 207, 263 |
+| `kix.contracts.secret.helpers.use`, read through the binding | metabase:157-162, 207, 263 |
 | `mergeEnv` defaults and owned groups | metabase:167-231 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:186-202 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:141-145, 210-231 |
