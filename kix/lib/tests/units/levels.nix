@@ -88,10 +88,12 @@ in
     || throw "levels: an entry named experimental was accepted";
 
   # Every stable package is read by its short name, and `packages.stable`
-  # holds the packages and nothing else.
+  # holds the packages and, for each experimental package, a marker that
+  # gives the right spelling.
   levels-packages-set =
     (
-      builtins.attrNames packages.stable == builtins.attrNames packagesByLevel.stable
+      builtins.attrNames (lib.filterAttrs (_: p: (p._type or "") != "kix-moved") packages.stable)
+      == builtins.attrNames packagesByLevel.stable
       && lib.all (name: packages ? ${name}) (builtins.attrNames packagesByLevel.stable)
       &&
         builtins.attrNames packages.experimental == lib.unique (

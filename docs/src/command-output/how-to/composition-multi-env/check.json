@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-multi-env",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    16 manifests evaluated       \n scorecard  pass    0 errors, 2 warnings, 0 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    16 manifests evaluated       \n scorecard  pass    0 errors, 2 warnings, 0 info \n\nsecurity.hasNetworkPolicy (warning), 2:\n  development-app: namespace 'development-app' has workloads but no network policy\n  production-app: namespace 'production-app' has workloads but no network policy\n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 16 manifests evaluated\nscorecard pass 0 errors, 2 warnings, 0 info\n",
+      "stdoutDrift": "\nTOOL RESULT DETAILS\ndevelopment-app: namespace 'development-app' has workloads but no network policy\neval pass 16 manifests evaluated\nproduction-app: namespace 'production-app' has workloads but no network policy\nscorecard pass 0 errors, 2 warnings, 0 info\nsecurity.hasNetworkPolicy (warning), 2:\n",
       "stderrDrift": "",
       "exitCode": 0
     }

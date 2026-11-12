@@ -120,11 +120,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .into_graph();
 
     crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-    let status = |msg: &str| {
-        if !output::quiet() {
-            eprint!("\r\x1b[2K  {msg}");
-        }
-    };
+    let status = |msg: &str| output::status_line(msg);
     let flake_path = super::resolve_flake_path(&ctx.global.flake)?;
     let overrides = ctx.global.input_overrides();
     let new_graph = Build::of_flake(&flake_path, &args.cluster, &overrides, &status)
@@ -135,9 +131,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             }
         })?
         .into_graph();
-    if !output::quiet() {
-        eprint!("\r\x1b[2K");
-    }
+    output::clear_status_line();
     // Refuse to proceed if the built cluster name differs from the pre-build
     // cluster identity used to load the records and previous build.
     if new_graph.cluster_name != cluster {
@@ -425,11 +419,8 @@ async fn run_hard_async(
             sweep.unstamped.len(),
             crate::output::forbidden_note(&sweep.forbidden),
         );
-        for (owner, n) in &sweep.foreign {
-            println!(
-                "Skipped {n} object(s) that belong to Kix cluster '{}'.",
-                output::bold(owner)
-            );
+        if let Some(note) = sweep.foreign_note() {
+            println!("{note}");
         }
         if !sweep.unattributed.is_empty() {
             print_unattributed(&sweep.unattributed, args.include_unattributed);

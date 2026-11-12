@@ -318,15 +318,43 @@ fn drift_detail(d: &kix::plan::document::DriftChange) -> String {
     } else {
         format!(", set by {}", d.managers.join(", "))
     };
-    let deployed = match &d.deployed {
-        Some(v) => format!(", {} in deployed build", compact(Some(v))),
+    let (live, deployed) = compact_pair(d.live.as_ref(), d.deployed.as_ref());
+    let deployed = match deployed {
+        Some(v) => format!(", {v} in deployed build"),
         None => String::new(),
     };
     format!(
-        "{}: {} live{deployed}{by}",
+        "{}: {live} live{deployed}{by}",
         d.path.trim_start_matches("$."),
-        compact(d.live.as_ref()),
     )
+}
+
+/// Return the live and deployed values for one line of text. Two strings of
+/// several lines that start alike show the first line where they differ, so
+/// the reader sees what changed rather than the same opening twice.
+fn compact_pair(
+    live: Option<&serde_json::Value>,
+    deployed: Option<&serde_json::Value>,
+) -> (String, Option<String>) {
+    if let (Some(serde_json::Value::String(a)), Some(serde_json::Value::String(b))) =
+        (live, deployed)
+        && a != b
+    {
+        let (al, bl): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
+        let at = (0..al.len().max(bl.len()))
+            .find(|&i| al.get(i) != bl.get(i))
+            .unwrap_or(0);
+        if at > 0 {
+            let line = |lines: &[&str], full: &str| {
+                let text = lines.get(at).map_or("", |l| l.trim());
+                let cut = &text[..text.floor_char_boundary(60)];
+                let more = if cut.len() < text.len() { "…" } else { "" };
+                format!("line {}: {cut:?}{more} ({} bytes)", at + 1, full.len())
+            };
+            return (line(&al, a), Some(line(&bl, b)));
+        }
+    }
+    (compact(live), deployed.map(|v| compact(Some(v))))
 }
 
 fn write_drift_markdown(out: &mut String, plan: &Plan) {
@@ -841,5 +869,17 @@ mod tests {
             "1 object(s) not checked for drift: missing `{}` annotation",
             kix::manifest::keys::APPLIED_HASH
         )));
+    }
+
+    #[test]
+    fn a_long_text_drift_shows_the_line_that_differs() {
+        let live = serde_json::json!("server {\n  return 200 'old';\n}\n");
+        let built = serde_json::json!("server {\n  return 200 'new';\n}\n");
+        let (l, b) = compact_pair(Some(&live), Some(&built));
+        assert_eq!(l, "line 2: \"return 200 'old';\" (31 bytes)");
+        assert_eq!(
+            b.as_deref(),
+            Some("line 2: \"return 200 'new';\" (31 bytes)")
+        );
     }
 }

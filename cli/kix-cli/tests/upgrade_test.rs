@@ -1137,3 +1137,23 @@ fn the_kix_toml_delay_names_itself_when_nothing_is_old_enough() {
         "Already on Kix 9.1.0 (matches target 9.1.0 for `min-age = \"7d\"` in kix.toml). Nothing to upgrade.\n"
     );
 }
+
+#[test]
+fn upgrading_to_a_prerelease_says_how_to_try_it() {
+    let s = Setup::new();
+    s.publish("9.1.0", "2026-01-01", None);
+    s.publish("9.2.0-rc.1", "2026-01-02", None);
+    s.write("kix.toml", "kix = \"9.1.0\"\n");
+    let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.starts_with(
+            "Kix 9.2.0-rc.1 is a prerelease, and `kix upgrade` moves only to releases."
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("set kix = \"9.2.0-rc.1\" in kix.toml and run `kix lib update`"),
+        "{out}"
+    );
+}

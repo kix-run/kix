@@ -11,10 +11,15 @@ struct CheckResult {
     tool: String,
     result: String,
     details: String,
+    /// The scorecard's findings, on the scorecard row only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    findings: Vec<serde_json::Value>,
 }
 
 struct CheckResponse {
     results: Vec<CheckResult>,
+    /// Whether to list `info` findings too.
+    verbose: bool,
 }
 
 impl CommandResponse for CheckResponse {
@@ -22,15 +27,89 @@ impl CommandResponse for CheckResponse {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
         table.set_header(["TOOL", "RESULT", "DETAILS"]);
+        // A message of several lines does not fit a table cell, so it goes
+        // under the table.
+        let mut below = Vec::new();
         for r in &self.results {
-            table.add_row([&r.tool, &r.result, &r.details]);
+            if r.details.contains('\n') {
+                table.add_row([r.tool.as_str(), r.result.as_str(), "see below"]);
+                below.push(r.details.trim_end().to_string());
+            } else {
+                table.add_row([&r.tool, &r.result, &r.details]);
+            }
         }
-        table.to_string()
+        let mut text = table.to_string();
+        for detail in below {
+            text.push_str("\n\n");
+            text.push_str(&detail);
+        }
+        for r in &self.results {
+            let listed = list_findings(&r.findings, self.verbose);
+            if !listed.is_empty() {
+                text.push_str("\n\n");
+                text.push_str(&listed);
+            }
+        }
+        text
     }
 
     fn as_json(&self) -> serde_json::Value {
         serde_json::to_value(&self.results).unwrap_or_default()
     }
+}
+
+/// Return the scorecard findings as text, grouped by rule, errors first.
+/// `info` findings are listed only when `verbose`.
+fn list_findings(findings: &[serde_json::Value], verbose: bool) -> String {
+    let field =
+        |f: &serde_json::Value, k: &str| f.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let mut groups: std::collections::BTreeMap<(u8, String), Vec<String>> = Default::default();
+    let mut hidden = 0;
+    for f in findings {
+        let severity = field(f, "severity").unwrap_or_else(|| "warning".into());
+        let rank = match severity.as_str() {
+            "error" => 0,
+            "warning" => 1,
+            _ => 2,
+        };
+        if rank == 2 && !verbose {
+            hidden += 1;
+            continue;
+        }
+        let place = ["namespace", "instance", "resource"]
+            .iter()
+            .filter_map(|k| field(f, k))
+            .collect::<Vec<_>>()
+            .join("/");
+        let message = field(f, "message").unwrap_or_default();
+        let line = if place.is_empty() {
+            message
+        } else {
+            format!("{place}: {message}")
+        };
+        let rule = field(f, "rule").unwrap_or_else(|| "unknown".into());
+        groups
+            .entry((rank, format!("{rule} ({severity})")))
+            .or_default()
+            .push(line);
+    }
+    let mut out: Vec<String> = groups
+        .into_iter()
+        .map(|((_, rule), lines)| {
+            let mut block = format!("{rule}, {}:", lines.len());
+            for line in lines {
+                block.push_str("\n  ");
+                block.push_str(&line);
+            }
+            block
+        })
+        .collect();
+    if hidden > 0 {
+        out.push(format!(
+            "{hidden} info finding(s) not listed; run with -v to list them."
+        ));
+    }
+    out.join("\n\n")
 }
 
 /// Convert scorecard findings to SARIF 2.1.0 JSON.
@@ -184,6 +263,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
                 tool: "eval".into(),
                 result: "pass".into(),
                 details: format!("{} manifests evaluated", output.raw_manifests.len()),
+                findings: Vec::new(),
             });
             Some(output)
         }
@@ -195,6 +275,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
                 tool: "eval".into(),
                 result: "fail".into(),
                 details: e.to_string(),
+                findings: Vec::new(),
             });
             None
         }
@@ -221,6 +302,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
                     tool: "scorecard".into(),
                     result: result_str.into(),
                     details: format!("{} errors, {} warnings, {} info", errors, warnings, infos),
+                    findings: findings.clone(),
                 });
             }
         } else {
@@ -228,6 +310,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
                 tool: "scorecard".into(),
                 result: "skip".into(),
                 details: "scorecard not enabled in cluster definition".into(),
+                findings: Vec::new(),
             });
         }
     }
@@ -265,7 +348,10 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let response = CheckResponse { results };
+    let response = CheckResponse {
+        results,
+        verbose: ctx.global.verbose > 0,
+    };
     output::result(&response)?;
 
     if has_failure {

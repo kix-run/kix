@@ -1083,6 +1083,12 @@ pub struct RollbackArgs {
     #[arg(long)]
     pub prune: bool,
 
+    /// Take ownership of fields that other field managers own, such as a
+    /// replica count set with `kubectl scale`. Without this, the rollback
+    /// stops before writing anything when the apiserver reports a conflict.
+    #[arg(long)]
+    pub force_conflicts: bool,
+
     /// Delegate rollback to the operator instead of applying directly
     #[arg(long)]
     pub operator: bool,

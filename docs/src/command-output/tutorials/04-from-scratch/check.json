@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check 04-from-scratch",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    11 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 0 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    11 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 0 info \n\nsecurity.hasNetworkPolicy (warning), 1:\n  tutorial-04: namespace 'tutorial-04' has workloads but no network policy\n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 11 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 0 info\n",
+      "stdoutDrift": "\nTOOL RESULT DETAILS\neval pass 11 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 0 info\nsecurity.hasNetworkPolicy (warning), 1:\ntutorial-04: namespace 'tutorial-04' has workloads but no network policy\n",
       "stderrDrift": "",
       "exitCode": 0
     }

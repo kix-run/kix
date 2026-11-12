@@ -26,10 +26,21 @@ pub struct NixCommandError {
     pub status: Option<ExitStatus>,
     /// Its stderr, or why it did not start.
     pub stderr: String,
+    /// Show only Nix's error, without the command line. Set by
+    /// [`NixCommandError::brief`] for an evaluation error the reader caused.
+    pub brief: bool,
 }
 
 impl std::fmt::Display for NixCommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.brief {
+            let text = self.stderr.trim();
+            return write!(
+                f,
+                "{}",
+                text.strip_prefix("error:").unwrap_or(text).trim_start()
+            );
+        }
         write!(f, "`{}`", self.command)?;
         if let Some(dir) = &self.dir {
             write!(f, " in {}", dir.display())?;
@@ -51,6 +62,7 @@ pub(crate) fn command(tool: Tool) -> Result<Command, NixCommandError> {
         dir: None,
         status: None,
         stderr: e.to_string(),
+        brief: false,
     })
 }
 
@@ -77,7 +89,16 @@ impl NixCommandError {
             dir: cmd.get_current_dir().map(Path::to_path_buf),
             status,
             stderr,
+            brief: false,
         }
+    }
+
+    /// Shorten this error for a reader who did not ask for `-v`: show Nix's
+    /// error without the command line, and cut the stack trace
+    /// ([`shorten_trace`]).
+    fn brief(&mut self) {
+        self.brief = true;
+        self.stderr = shorten_trace(&self.stderr);
     }
 
     /// Return whether stderr matches Nix's message for a missing flake attribute.
@@ -262,7 +283,7 @@ pub fn eval_with_helm(
             return Err(e);
         }
         if !tracing::enabled!(tracing::Level::INFO) {
-            error.stderr = shorten_trace(&error.stderr);
+            error.brief();
         }
         return Err(error.into());
     }
@@ -279,7 +300,7 @@ pub fn eval_with_helm(
         };
         if pending.is_empty() {
             if !tracing::enabled!(tracing::Level::INFO) {
-                error.stderr = shorten_trace(&error.stderr);
+                error.brief();
             }
             return Err(error.into());
         }
@@ -499,11 +520,20 @@ fn library_facts(
 /// `--show-trace`.
 const SHORT_TRACE_FRAMES: usize = 3;
 
-/// Return `stderr` of a Nix evaluation with its stack trace cut to the
-/// first [`SHORT_TRACE_FRAMES`] frames, like Nix prints it without
-/// `--show-trace`. Text that is not such a trace comes back unchanged.
+/// Return `stderr` of a Nix evaluation cut down for a reader who did not ask
+/// for `-v`.
+///
+/// It drops Nix's dirty-tree warning and the `trace:` lines the library
+/// printed on the way. A Kix message that carries a change record id, such as
+/// `[K0549]`, or that lists a cluster's problems, names what to fix, so the
+/// stack trace goes. Any other error keeps the [`SHORT_TRACE_FRAMES`] frames
+/// nearest to it, which point at the code that failed. Text that is not such
+/// a trace comes back unchanged.
 fn shorten_trace(stderr: &str) -> String {
-    let lines: Vec<&str> = stderr.lines().collect();
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| !l.starts_with("warning: Git tree ") && !l.starts_with("trace: "))
+        .collect();
     let Some(first) = lines.iter().position(|l| l.starts_with("error:")) else {
         return stderr.to_string();
     };
@@ -514,22 +544,63 @@ fn shorten_trace(stderr: &str) -> String {
         .rposition(|l| l.starts_with(' ') && l.trim_start().starts_with("error:"))
         .filter(|&last| last > first)
     else {
-        return stderr.to_string();
-    };
-    let frames: Vec<usize> = (first..last)
-        .filter(|&i| lines[i].trim_start().starts_with('…'))
-        .collect();
-    let Some(&cut) = frames.get(SHORT_TRACE_FRAMES) else {
-        return stderr.to_string();
+        return lines.join("\n");
     };
     let indent = &lines[last][..lines[last].len() - lines[last].trim_start().len()];
-    let mut short: Vec<String> = lines[..cut].iter().map(|l| l.to_string()).collect();
-    short.push(format!(
-        "{indent}(stack trace truncated; run kix with -v to show the full trace)"
-    ));
-    short.push(String::new());
-    short.extend(lines[last..].iter().map(|l| l.to_string()));
+    let message: Vec<String> = lines[last..]
+        .iter()
+        .map(|l| l.strip_prefix(indent).unwrap_or(l).to_string())
+        .collect();
+    if names_its_fix(&message.join("\n")) {
+        return message.join("\n");
+    }
+    let message: Vec<String> = lines[last..].iter().map(|l| l.to_string()).collect();
+    // Each frame runs from its `…` line to the next one.
+    let starts: Vec<usize> = (first..last)
+        .filter(|&i| lines[i].trim_start().starts_with('…'))
+        .collect();
+    let frames: Vec<&[&str]> = starts
+        .iter()
+        .enumerate()
+        .map(|(n, &start)| &lines[start..starts.get(n + 1).copied().unwrap_or(last)])
+        .collect();
+    let kept: Vec<&[&str]> = frames
+        .iter()
+        .copied()
+        .filter(|frame| !frame.iter().any(|l| in_library(l)))
+        .collect();
+    let kept = &kept[kept.len().saturating_sub(SHORT_TRACE_FRAMES)..];
+    let mut short = vec!["error:".to_string()];
+    for frame in kept {
+        short.extend(frame.iter().map(|l| l.to_string()));
+    }
+    if kept.len() < frames.len() {
+        short.push(format!(
+            "{indent}({} more stack frame(s) hidden; run with -v to show them)",
+            frames.len() - kept.len()
+        ));
+        short.push(String::new());
+    }
+    short.extend(message);
     short.join("\n")
+}
+
+/// Return whether a trace line places its frame in nixpkgs or Kix's own
+/// library, which rarely shows a reader what to change.
+fn in_library(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("at ")
+        && (line.contains("«github:NixOS/nixpkgs") || line.contains("/kix/lib/"))
+}
+
+/// Return whether a Nix error `message` is one of Kix's own that says what to
+/// change: it carries a change record id, or it lists a cluster's problems.
+fn names_its_fix(message: &str) -> bool {
+    let has_id = message.match_indices("[K").any(|(i, _)| {
+        let rest = &message.as_bytes()[i + 2..];
+        rest.len() >= 5 && rest[..4].iter().all(u8::is_ascii_digit) && rest[4] == b']'
+    });
+    has_id || (message.starts_with("error: cluster '") && message.contains(" problem(s):"))
 }
 
 fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError> {
@@ -751,12 +822,14 @@ pub fn version() -> Option<String> {
 mod tests {
     use super::*;
 
+    fn frame(what: &str) -> String {
+        format!("       … {what}\n         at /f.nix:1:1:\n            1| x\n")
+    }
+
     #[test]
-    fn a_long_trace_is_cut_like_nix_cuts_it() {
-        let frame =
-            |what: &str| format!("       … {what}\n         at /f.nix:1:1:\n            1| x\n");
+    fn a_long_trace_keeps_the_frames_nearest_the_error() {
         let full = format!(
-            "warning: Git tree is dirty\nerror:\n{}\n{}\n{}\n{}\n       error: boom",
+            "warning: Git tree '/p' is dirty\ntrace: [kix] warning: no DNS\nerror:\n{}\n{}\n{}\n{}\n       error: boom",
             frame("while evaluating the file"),
             frame("while evaluating the attribute 'y'"),
             frame("while evaluating the attribute 'a'"),
@@ -764,15 +837,40 @@ mod tests {
         );
         let short = shorten_trace(&full);
         assert!(
-            short.starts_with(
-                "warning: Git tree is dirty\nerror:\n       … while evaluating the file"
-            )
+            short.starts_with("error:\n       … while evaluating the attribute 'y'"),
+            "{short}"
         );
-        assert!(short.contains("attribute 'a'"));
-        assert!(!short.contains("while calling 'h'"));
-        assert!(short.ends_with(
-            "       (stack trace truncated; run kix with -v to show the full trace)\n\n       error: boom"
-        ));
+        assert!(short.contains("(1 more stack frame(s) hidden"), "{short}");
+        assert!(!short.contains("while evaluating the file"), "{short}");
+        assert!(!short.contains("Git tree"), "{short}");
+        assert!(!short.contains("no DNS"), "{short}");
+        assert!(short.contains("while calling 'h'"), "{short}");
+        assert!(short.ends_with("       error: boom"), "{short}");
+    }
+
+    #[test]
+    fn a_kix_message_with_an_id_stands_alone() {
+        let full = format!(
+            "warning: Git tree '/p' is dirty\nerror:\n{}\n       error: [K9503] db: password was removed.\n       Set the dependency.",
+            frame("while calling anonymous lambda"),
+        );
+        assert_eq!(
+            shorten_trace(&full),
+            "error: [K9503] db: password was removed.\nSet the dependency."
+        );
+    }
+
+    #[test]
+    fn frames_in_the_library_are_hidden() {
+        let lib = "       … while calling 'throw'\n         at /x/kix/lib/modules.nix:1:1:\n";
+        let full = format!(
+            "error:\n{}\n{lib}\n       error: The option `a.b' does not exist.",
+            frame("while evaluating the file"),
+        );
+        let short = shorten_trace(&full);
+        assert!(!short.contains("kix/lib"), "{short}");
+        assert!(short.contains("while evaluating the file"), "{short}");
+        assert!(short.contains("(1 more stack frame(s) hidden"), "{short}");
     }
 
     #[test]

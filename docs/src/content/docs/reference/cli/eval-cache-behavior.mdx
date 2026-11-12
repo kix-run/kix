@@ -49,8 +49,10 @@ Each entry's key is a BLAKE3 hash of:
 2. the contents of `flake.lock`, when it exists;
 3. a fingerprint of the flake's source files;
 4. the name of what was evaluated, such as the cluster name;
-5. the project's builder (`kix` or `nix`, from [`kix.toml`](/docs/reference/kix-toml/));
-6. the store location (the local store root path for `kix`, or the system store marker for `nix`).
+5. the Kix version, because only an evaluation checks that Kix can build the
+   project's Kix library;
+6. the project's builder (`kix` or `nix`, from [`kix.toml`](/docs/reference/kix-toml/));
+7. the store location (the local store root path for `kix`, or the system store marker for `nix`).
 
 The source fingerprint hashes the path and contents of every `.nix`, `.yaml`,
 `.yml`, and `.json` file under the flake directory, skipping `.git`,
@@ -63,6 +65,7 @@ reused without reading the files.
 - Adding, removing, or editing a `.nix`, `.yaml`, `.yml`, or `.json` file
   under the flake directory.
 - Any change to `flake.lock`, such as `kix lib update`.
+- Running another version of Kix.
 - Changing `builder` in [`kix.toml`](/docs/reference/kix-toml/) or changing `KIX_STORE_ROOT`.
 - Running from a different flake directory.
 

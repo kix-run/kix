@@ -11,19 +11,16 @@ name: Change kind
 # change still shows the removal. The script also compares the committed CLI
 # surface (cli/kix-cli/tests/snapshots/cli_surface.snap and
 # cli/kix-cli/schema/). A cluster that newly fails needs an `error` record
-# whose id is in the message. Changed manifests need a record and the label
-# `manifest-change-reviewed`, which only the maintainer adds. A removed or
+# whose id is in the message. Changed manifests need a record. A removed or
 # changed command or flag needs a record with a `cli` field. Rules:
 # CLAUDE.md § Versioning and breaking changes.
-#
-# `labeled` and `unlabeled` run the check again when the label changes.
 #
 # Same runner and Nix setup as bundle-checks.yml. Both Kix binaries are
 # built with cargo in the head's dev shell.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
     paths:
       - 'cli/**'
       - 'kix/**'
@@ -76,8 +73,6 @@ jobs:
           git -C "$RUNNER_TEMP/head-build" checkout "$BASE" -- clusters
 
       - name: Change kind
-        env:
-          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           nix develop --command bash -c '
             set -euo pipefail

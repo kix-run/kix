@@ -718,6 +718,13 @@ fn compute_status(obj: &kube::api::DynamicObject, kind: &str) -> String {
                 "Pending".into()
             }
         }
+        // A deployment record's phase says whether its build is the live one.
+        k if k == kix::manifest::lifecycle::RECORD_KIND => obj
+            .data
+            .pointer("/status/phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_string(),
         "PersistentVolumeClaim" => obj
             .data
             .pointer("/status/phase")
@@ -768,6 +775,21 @@ fn format_duration(d: chrono::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_superseded_activation_shows_its_phase() {
+        let obj: kube::api::DynamicObject = serde_json::from_value(serde_json::json!({
+            "apiVersion": kix::manifest::keys::API_VERSION,
+            "kind": kix::manifest::lifecycle::RECORD_KIND,
+            "metadata": { "name": "web-abc" },
+            "status": { "phase": "Superseded" }
+        }))
+        .unwrap();
+        assert_eq!(
+            compute_status(&obj, kix::manifest::lifecycle::RECORD_KIND),
+            "Superseded"
+        );
+    }
 
     fn pinned(sha256: &str) -> PinnedInterface {
         PinnedInterface {

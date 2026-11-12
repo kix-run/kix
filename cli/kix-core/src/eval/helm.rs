@@ -615,6 +615,7 @@ fn register(out: &Path, deriver: &Path, contents: &[u8]) -> Result<(), HelmError
         dir: None,
         status: None,
         stderr: e.to_string(),
+        brief: false,
     })?;
     child
         .stdin
@@ -629,6 +630,7 @@ fn register(out: &Path, deriver: &Path, contents: &[u8]) -> Result<(), HelmError
             dir: None,
             status: Some(result.status),
             stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
+            brief: false,
         }
         .into());
     }

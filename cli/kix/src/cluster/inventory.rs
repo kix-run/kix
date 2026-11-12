@@ -63,26 +63,40 @@ pub struct ManagedSweep {
 }
 
 impl ManagedSweep {
+    /// Return one line that says how many objects other Kix clusters own,
+    /// or `None` when there are none. A line for each cluster would grow with
+    /// every cluster that shares the Kubernetes cluster.
+    pub fn foreign_note(&self) -> Option<String> {
+        let total: usize = self.foreign.values().sum();
+        let objects = if total == 1 { "object" } else { "objects" };
+        match self.foreign.len() {
+            0 => None,
+            1 => {
+                let (owner, _) = self.foreign.iter().next()?;
+                let (belong, clusters) = match (total == 1, owner.contains(", ")) {
+                    (true, false) => ("belongs", "Kix cluster"),
+                    (true, true) => ("belongs", "Kix clusters"),
+                    (false, false) => ("belong", "Kix cluster"),
+                    (false, true) => ("belong", "Kix clusters"),
+                };
+                Some(format!(
+                    "Skipped {total} {objects} that {belong} to {clusters} '{owner}'."
+                ))
+            }
+            n => {
+                let owners: Vec<&str> = self.foreign.keys().map(String::as_str).collect();
+                Some(format!(
+                    "Skipped {total} {objects} that belong to {n} other Kix clusters: {}.",
+                    owners.join(", ")
+                ))
+            }
+        }
+    }
+
     /// Format summary lines describing objects omitted by `scope` for CLI
     /// output.
     pub fn scope_notes(&self) -> Vec<String> {
-        let mut notes: Vec<String> = self
-            .foreign
-            .iter()
-            .map(|(owner, n)| {
-                let (objects, belong) = if *n == 1 {
-                    ("object", "belongs")
-                } else {
-                    ("objects", "belong")
-                };
-                let clusters = if owner.contains(", ") {
-                    "Kix clusters"
-                } else {
-                    "Kix cluster"
-                };
-                format!("Skipped {n} {objects} that {belong} to {clusters} '{owner}'.")
-            })
-            .collect();
+        let mut notes: Vec<String> = self.foreign_note().into_iter().collect();
         if !self.unattributed.is_empty() {
             let n = self.unattributed.len();
             notes.push(format!(

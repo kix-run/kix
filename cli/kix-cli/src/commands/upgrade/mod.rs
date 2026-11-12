@@ -101,6 +101,14 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             }
         },
     };
+    if let Some(Requirement::Exact(v)) = &to
+        && v.is_prerelease()
+        && index.releases.iter().any(|r| r.version == *v)
+    {
+        return refuse(&format!(
+            "Kix {v} is a prerelease, and `kix upgrade` moves only to releases.\nNo project files were modified.\nNext: to try {v}, set kix = \"{v}\" in kix.toml and run `kix lib update`, which moves flake.lock to the Kix library {v}."
+        ));
+    }
     let min_age = config.upgrade_min_age;
     let today = chrono::Utc::now().date_naive();
     let Some(target) = plan::choose_target(&releases, to.as_ref(), min_age, today) else {

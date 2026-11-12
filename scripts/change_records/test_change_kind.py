@@ -72,16 +72,16 @@ def failed(text: str) -> object:
 
 class Decide(unittest.TestCase):
     def test_same_manifests_need_nothing(self):
-        o = CK.decide("c", built(deployment()), built(deployment()), [], set())
+        o = CK.decide("c", built(deployment()), built(deployment()), [])
         self.assertEqual((o.status, o.problems), ("same", []))
 
     def test_a_cluster_that_fails_at_the_base_is_reported_and_skipped(self):
-        o = CK.decide("c", failed("boom"), failed("boom"), [], set())
+        o = CK.decide("c", failed("boom"), failed("boom"), [])
         self.assertEqual((o.status, o.problems), ("fails-at-base", []))
 
     def test_a_new_failure_needs_an_error_record(self):
         o = CK.decide(
-            "c", built(deployment()), failed("error: replicaCount is gone"), [], set()
+            "c", built(deployment()), failed("error: replicaCount is gone"), []
         )
         self.assertEqual(o.status, "fails-at-head")
         self.assertEqual(len(o.problems), 1)
@@ -94,7 +94,6 @@ class Decide(unittest.TestCase):
             built(deployment()),
             failed("error: replicaCount is gone"),
             records,
-            set(),
         )
         self.assertEqual(len(o.problems), 1)
         self.assertIn("K0007", o.problems[0])
@@ -103,7 +102,7 @@ class Decide(unittest.TestCase):
     def test_a_new_failure_that_names_the_id_passes(self):
         records = [record("error", id="K0007")]
         text = "error: replicaCount is gone. Set replicas instead [K0007]"
-        o = CK.decide("c", built(deployment()), failed(text), records, set())
+        o = CK.decide("c", built(deployment()), failed(text), records)
         self.assertEqual((o.status, o.problems), ("fails-at-head", []))
 
     def test_a_non_error_record_does_not_cover_a_new_failure(self):
@@ -112,38 +111,22 @@ class Decide(unittest.TestCase):
             built(deployment()),
             failed("K0007"),
             [record("silent", id="K0007")],
-            set(),
         )
         self.assertIn('kind = "error"', o.problems[0])
 
-    def test_changed_manifests_need_a_record_and_the_label(self):
-        o = CK.decide(
-            "c", built(deployment()), built(deployment("nginx:1.28")), [], set()
-        )
+    def test_changed_manifests_need_a_record(self):
+        o = CK.decide("c", built(deployment()), built(deployment("nginx:1.28")), [])
         self.assertEqual(o.status, "changed")
-        self.assertEqual(len(o.problems), 2)
+        self.assertEqual(len(o.problems), 1)
         self.assertIn("change record", o.problems[0])
-        self.assertIn(CK.REVIEWED_LABEL, o.problems[1])
         self.assertIn("    changed Deployment shop/web", o.details)
 
-    def test_changed_manifests_with_a_record_still_need_the_label(self):
+    def test_changed_manifests_with_a_record_pass(self):
         o = CK.decide(
             "c",
             built(deployment()),
             built(deployment("nginx:1.28")),
             [record("fixed")],
-            set(),
-        )
-        self.assertEqual(len(o.problems), 1)
-        self.assertIn(CK.REVIEWED_LABEL, o.problems[0])
-
-    def test_changed_manifests_with_a_record_and_the_label_pass(self):
-        o = CK.decide(
-            "c",
-            built(deployment()),
-            built(deployment("nginx:1.28")),
-            [record("silent")],
-            {CK.REVIEWED_LABEL},
         )
         self.assertEqual((o.status, o.problems), ("changed", []))
 
@@ -156,7 +139,7 @@ class Decide(unittest.TestCase):
             }
             for i in range(CK.MAX_LISTED + 5)
         ]
-        o = CK.decide("c", built(), built(*many), [], set())
+        o = CK.decide("c", built(), built(*many), [])
         self.assertIn(f"{CK.MAX_LISTED + 5} objects differ:", o.details)
         self.assertIn("    and 5 more", o.details)
         self.assertIn("    added ConfigMap a/cm00", o.details)
@@ -268,8 +251,6 @@ class Main(unittest.TestCase):
                         str(head),
                         "--cluster",
                         "minimal",
-                        "--labels",
-                        "",
                     ]
                 )
             self.assertEqual(code, 1)

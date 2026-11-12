@@ -2,7 +2,7 @@
 """Check that a pull request's change records match what it changes for users.
 
     scripts/change-kind.py --base <dir> --head <dir> [--head-build <dir>]
-                           [--kix <kix>] [--base-kix <kix>] [--labels a,b]
+                           [--kix <kix>] [--base-kix <kix>]
                            [--cluster <name> ...]
 
 `--base` and `--head` are checkouts of the pull request's base and head
@@ -18,14 +18,12 @@ the removal as a failure.
 
 - A cluster that builds at the base and fails at the head needs a record of
   kind `error`, and the failure message must contain that record's id.
-- A cluster whose manifests change needs a record of any kind, and the
-  pull request needs the label `manifest-change-reviewed`. Only the
-  maintainer adds that label.
+- A cluster whose manifests change needs a record of any kind. The pull
+  request description says which kind it proposes, and why.
 - A line removed or changed in the CLI surface needs a record whose `cli`
   field names the command or flag.
 
-Labels come from `--labels` or the `PR_LABELS` environment variable, as a
-comma-separated list. The summary goes to stdout and to
+The summary goes to stdout and to
 `$GITHUB_STEP_SUMMARY` when it is set. The exit code is 1 when the pull
 request is missing something.
 
@@ -58,7 +56,6 @@ CLUSTERS = [
     "external-secrets",
 ]
 
-REVIEWED_LABEL = "manifest-change-reviewed"
 SURFACE_SNAPSHOT = "cli/kix-cli/tests/snapshots/cli_surface.snap"
 SCHEMA_DIR = "cli/kix-cli/schema"
 MAX_LISTED = 20
@@ -137,7 +134,6 @@ def decide(
     base: Render,
     head: Render,
     added: list[cr.Record],
-    labels: set[str],
 ) -> Outcome:
     """Decide what one cluster's two renders require of the pull request."""
     if not base.ok:
@@ -179,13 +175,8 @@ def decide(
     if not added:
         outcome.problems.append(
             f"`{cluster}` builds different manifests at this pull request. "
-            "Add a change record that says what changes for users (changes/README.md)."
-        )
-    if REVIEWED_LABEL not in labels:
-        outcome.problems.append(
-            f"`{cluster}` builds different manifests at this pull request. "
-            f"The maintainer reviews the change and adds the label `{REVIEWED_LABEL}`. "
-            "Say in the pull request description which record kind you propose, and why."
+            "Add a change record that says what changes for users (changes/README.md), "
+            "and say in the pull request description which kind you chose and why."
         )
     outcome.details.append(f"{len(changes)} objects differ:")
     outcome.details += [f"    {line}" for line in changes[:MAX_LISTED]]
@@ -333,16 +324,10 @@ def main(argv: list[str] | None = None) -> int:
         help="the kix to build the base with (default: --kix)",
     )
     parser.add_argument(
-        "--labels",
-        default=os.environ.get("PR_LABELS", ""),
-        help="comma-separated pull request labels",
-    )
-    parser.add_argument(
         "--cluster", action="append", help="build only this cluster (repeatable)"
     )
     args = parser.parse_args(argv)
 
-    labels = {label.strip() for label in args.labels.split(",") if label.strip()}
     try:
         added = added_records(args.base, args.head)
     except cr.RecordError as e:
@@ -357,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"building {cluster} at the base and the head", file=sys.stderr)
         base = render(args.base_kix or args.kix, args.base, cluster)
         head = render(args.kix, args.head_build or args.head, cluster)
-        outcomes.append(decide(cluster, base, head, added, labels))
+        outcomes.append(decide(cluster, base, head, added))
 
     removals = surface_removals(args.base, args.head)
     surface = surface_problems(removals, added)

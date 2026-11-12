@@ -1,8 +1,65 @@
 # NixOS module options consumed by buildCluster.
 
-{ lib, ... }:
+{ lib, options, ... }:
 let
   versions = import ./core/version.nix { inherit lib; };
+
+  isMoved = package: (package._type or "") == "kix-moved";
+
+  # Return the name and the spelling of every package that moved to
+  # experimental and that an instance names by an old spelling, read from the raw definitions so
+  # that one error can list them all. A definition this cannot read, such
+  # as one under `mkIf`, is skipped.
+  movedNames =
+    let
+      attrsOnly = v: builtins.isAttrs v && !(v ? _type);
+      fromDef =
+        def:
+        lib.optionals (attrsOnly def) (
+          lib.concatMap (
+            instances:
+            lib.optionals (attrsOnly instances) (
+              lib.concatMap (
+                inst:
+                let
+                  read = builtins.tryEval (
+                    if attrsOnly inst && inst ? package && isMoved inst.package then inst.package else null
+                  );
+                in
+                lib.optional (read.success && read.value != null) {
+                  inherit (read.value) name;
+                  spelled = read.value.spelled or "packages.${read.value.name}";
+                }
+              ) (builtins.attrValues instances)
+            )
+          ) (builtins.attrValues def)
+        );
+    in
+    lib.unique (lib.concatMap fromDef options.instances.definitions);
+
+  # Return the error for an instance whose package moved to experimental:
+  # the package's own message, or one that lists every moved package the
+  # cluster names, so a migration takes one build rather than one per name.
+  movedMessage =
+    package:
+    let
+      own = {
+        inherit (package) name;
+        spelled = package.spelled or "packages.${package.name}";
+      };
+      names = lib.unique ([ own ] ++ movedNames);
+    in
+    if builtins.length names == 1 then
+      package.message
+    else
+      lib.concatStringsSep "\n" (
+        [
+          "${(import ../packages/was-stable.nix).id} These ${toString (builtins.length names)} packages are experimental now, so they may change in any release. Write the new names:"
+        ]
+        ++ map (n: "  ${n.spelled} -> packages.experimental.${n.name}") (
+          lib.sort (a: b: a.spelled < b.spelled) names
+        )
+      );
 in
 {
   imports = [
@@ -79,7 +136,14 @@ in
                 type = lib.types.raw;
                 # A package that moved to experimental leaves a marker under
                 # its old name, which carries the error to show.
-                apply = package: if (package._type or "") == "kix-moved" then throw package.message else package;
+                apply =
+                  package:
+                  if isMoved package then
+                    throw (movedMessage package)
+                  else if builtins.isPath package then
+                    throw "An instance's `package` is set to the path ${toString package} without `import`. Write `package = import ${toString package};`."
+                  else
+                    package;
                 description = ''
                   The package function. types.raw avoids recursive merge
                   processing that would break lib.fix in package evaluation.

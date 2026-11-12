@@ -183,8 +183,6 @@ Defined in `kix.rules.reliability` (`kix/lib/rules/reliability.nix`). All rules 
 | Rule | Level | Declared severity | What it checks |
 | --- | --- | --- | --- |
 | `reliability.boundedResources` | `manifest` | `warning` | Every regular and init container sets both `cpu` and `memory` under `resources.requests` and `resources.limits`. |
-| `reliability.hasResourceLimits` | `manifest` | `warning` | Every regular and init container has a non-empty `resources.limits` block. |
-| `reliability.hasResourceRequests` | `manifest` | `warning` | Every regular and init container has a non-empty `resources.requests` block. |
 | `reliability.hasProbes` | `manifest` | `warning` | Every regular container (excluding init containers) defines both `livenessProbe` and `readinessProbe`. |
 | `reliability.gracefulShutdown` | `manifest` | `info` | The pod spec sets `terminationGracePeriodSeconds` to a positive integer. |
 | `reliability.volumeHasSource` | `manifest` | `error` | Every entry in `spec.template.spec.volumes` retains a volume source after manifest normalization (catches constructors where all optional fields were `null` and collapsed without [`kix.keep`](/docs/reference/composition-helpers/)). |
