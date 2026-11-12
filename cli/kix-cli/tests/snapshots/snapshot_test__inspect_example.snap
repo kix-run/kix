@@ -3,18 +3,18 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 Cluster: example
-Total resources: 124
+Total resources: 126
 
 Namespaces (5):
   (cluster-scoped) (47 resources)
   cert-manager (21 resources)
-  immich (28 resources)
+  immich (30 resources)
   kube-system (7 resources)
   stackgres-system (21 resources)
 
 Resource kinds:
  Kind                            Count 
- PackageInstance                 27    
+ PackageInstance                 28    
  ClusterRole                     16    
  ClusterRoleBinding              13    
  CustomResourceDefinition        8     
@@ -25,8 +25,8 @@ Resource kinds:
  Role                            5     
  RoleBinding                     5     
  Namespace                       4     
+ Secret                          4     
  Job                             3     
- Secret                          3     
  ConfigMap                       2     
  MutatingWebhookConfiguration    2     
  PersistentVolumeClaim           2     
@@ -40,7 +40,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-rdnlxxwcld6g
+    Activation/example-mb8f70hcf8yb
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -116,6 +116,7 @@ Resources:
     Job/immich-db-immich-bootstrap-3cfc1bd884
     PackageInstance/immich
     PackageInstance/immich-db
+    PackageInstance/immich-db-password
     PackageInstance/machine-learning
     PackageInstance/ml-cache
     PackageInstance/postgres
@@ -132,6 +133,7 @@ Resources:
     SGPostgresConfig/postgres-pg17-config
     Secret/immich-db-credentials
     Secret/immich-db-immich-bootstrap-password
+    Secret/immich-db-password
     Secret/valkey-password
     Service/immich-server
     Service/machine-learning

@@ -12937,9 +12937,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/vgahxji2ghxy60angxr3174afi0z00ay-kix-activation-example.json",
-        "kix.run/depends-on": "0x9r939vb7jd9ywk36x8vx16x66j5g00,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,5rp3y433nvfw2jdkfvnwmr9ny6b0lvia,75ycv8hc66j8z6w4v1wzvd05ly9qx70z,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "rdnlxxwcld6g7gcqc5wi038a7j77nshn",
+        "kix.run/built-via": "/nix/store/71fq84i3zrw3pm72d7wdcf4rg3pffsk9-kix-activation-example.json",
+        "kix.run/depends-on": "0x9r939vb7jd9ywk36x8vx16x66j5g00,1jzz129jvmcmjy2kqv96dh42izrj8za2,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,5rp3y433nvfw2jdkfvnwmr9ny6b0lvia,75ycv8hc66j8z6w4v1wzvd05ly9qx70z,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "mb8f70hcf8yb683ajxbmi4f0f35p3xm1",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -12947,7 +12947,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-rdnlxxwcld6g"
+      "name": "example-mb8f70hcf8yb"
     },
     "spec": {
       "instances": {
@@ -12957,6 +12957,7 @@ expression: stable
         "immich": {
           "immich": "immich",
           "immich-db": "immich-db",
+          "immich-db-password": "immich-db-password",
           "machine-learning": "machine-learning",
           "ml-cache": "ml-cache",
           "postgres": "postgres",
@@ -13054,6 +13055,33 @@ expression: stable
       "instanceName": "immich-db",
       "lifecycle": "stateful",
       "namespaceName": "immich"
+    }
+  },
+  {
+    "apiVersion": "kix.run/v1alpha1",
+    "kind": "PackageInstance",
+    "metadata": {
+      "annotations": {
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,mp42slksf8jbj56wfvvki9b6vqvs7dq0,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "1jzz129jvmcmjy2kqv96dh42izrj8za2",
+        "kix.run/package": "_cluster",
+        "kix.run/package-namespace": "_cluster",
+        "kix.run/root": "immich-db-password"
+      },
+      "labels": {
+        "app.kubernetes.io/instance": "immich-db-password",
+        "app.kubernetes.io/managed-by": "kix",
+        "app.kubernetes.io/part-of": "kix-example",
+        "team": "platform"
+      },
+      "name": "immich-db-password",
+      "namespace": "immich"
+    },
+    "spec": {
+      "instanceName": "immich-db-password",
+      "lifecycle": "stateful",
+      "namespaceName": "immich",
+      "version": "1.0.0"
     }
   },
   {
@@ -16692,6 +16720,32 @@ expression: stable
         "team": "platform"
       },
       "name": "immich-db-immich-bootstrap-password",
+      "namespace": "immich"
+    },
+    "type": "Opaque"
+  },
+  {
+    "apiVersion": "v1",
+    "kind": "Secret",
+    "metadata": {
+      "annotations": {
+        "kix.run/content-hash": "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,z6va4ipl6hqciqdfm57i81bx6wil9nb4",
+        "kix.run/identity-hash": "mp42slksf8jbj56wfvvki9b6vqvs7dq0",
+        "kix.run/lifecycle": "stateful",
+        "kix.run/package": "immich-db-password",
+        "kix.run/package-namespace": "immich",
+        "kix.run/secret-keys": "password",
+        "kix.run/secret-sources": "password=sops",
+        "kix.run/sops-source": "/nix/store/z6va4ipl6hqciqdfm57i81bx6wil9nb4-immich-db.sops.yaml"
+      },
+      "labels": {
+        "app.kubernetes.io/instance": "immich-db-password",
+        "app.kubernetes.io/managed-by": "kix",
+        "app.kubernetes.io/part-of": "kix-example",
+        "team": "platform"
+      },
+      "name": "immich-db-password",
       "namespace": "immich"
     },
     "type": "Opaque"
