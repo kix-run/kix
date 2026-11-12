@@ -372,6 +372,10 @@ pub enum Command {
     #[command(subcommand)]
     Lib(LibCommand),
 
+    /// Work with the SOPS files that Secrets are made from
+    #[command(subcommand)]
+    Secret(SecretCommand),
+
     /// Move this project to a newer version of Kix
     ///
     /// Builds every cluster with the current Kix, pins the project to the
@@ -447,6 +451,7 @@ impl Command {
             | Command::Drift(_)
             | Command::Pin(_)
             | Command::Lib(_)
+            | Command::Secret(_)
             | Command::Upgrade(_)
             | Command::SelfCmd(_)
             | Command::Plugin(_) => None,
@@ -482,6 +487,21 @@ pub enum LibCommand {
     /// does not change flake.nix. When flake.nix pins another release, or the
     /// input is a local path or a fork, it says what to change by hand.
     Update(LibUpdateArgs),
+}
+
+/// Work with the SOPS files that Secrets are made from.
+#[derive(Subcommand)]
+pub enum SecretCommand {
+    /// Print the `hash` of a SOPS file's values
+    ///
+    /// Decrypts FILE with the sops in the Kix runtime, as `kix deploy` does,
+    /// and prints the value to set as `hash` beside `source` on a secret
+    /// instance or in `scope.mkSecret`. It prints only the hash, never the
+    /// values. Decrypting needs the same key that `kix deploy` uses.
+    Hash {
+        /// The SOPS file, such as secrets/app-db.sops.yaml
+        file: PathBuf,
+    },
 }
 
 /// Install, list, and remove versions of Kix.

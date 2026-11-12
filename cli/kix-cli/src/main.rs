@@ -196,6 +196,12 @@ fn main() -> miette::Result<()> {
         return commands::drift::run(args, &cli.global);
     }
 
+    // `kix secret` reads only the SOPS file it is given, inside or outside a
+    // project.
+    if let Command::Secret(command) = &cli.command {
+        return commands::secret::run(command);
+    }
+
     // Validate cluster names before initializing the Nix backend (which is slow).
     if let Some(name) = cli.command.cluster_name() {
         validate_cluster_name(name)?;
@@ -247,6 +253,7 @@ fn main() -> miette::Result<()> {
         | Command::Drift(_)
         | Command::Pin(_)
         | Command::Lib(_)
+        | Command::Secret(_)
         | Command::Upgrade(_)
         | Command::SelfCmd(_)
         | Command::Plugin(_) => unreachable!(),

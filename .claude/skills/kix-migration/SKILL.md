@@ -650,6 +650,9 @@ A package is stable or experimental. `packages.<name>` and `packages.stable.<nam
 }
 ```
 
+`kix secret hash ./harbor-db.sops.yaml` prints the value for `hash`. Run it
+again after re-encrypting the file, or the deploy stops on a hash mismatch.
+
 CloudNativePG is the alternative PostgreSQL provider: `cnpg-operator` (one
 per cluster), `cnpg-cluster` in place of `stackgres-cluster`, and
 `cnpg-database` in place of `stackgres-database`, with the same `out` and

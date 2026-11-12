@@ -102,6 +102,12 @@ pub enum Refusal {
     Hydration {
         message: String,
     },
+    /// A SOPS Secret's decrypted values do not match its declared `hash`, so
+    /// nothing was sent. `sops_source` is the Secret's `kix.run/sops-source`.
+    HashMismatch {
+        sops_source: String,
+        message: String,
+    },
     Other {
         message: String,
     },
@@ -125,6 +131,7 @@ impl Refusal {
             | Refusal::Forbidden { message }
             | Refusal::NamespaceMissing { message, .. }
             | Refusal::Hydration { message }
+            | Refusal::HashMismatch { message, .. }
             | Refusal::Other { message } => message.clone(),
             Refusal::UnknownKind { kind } => {
                 format!("the apiserver does not serve kind {kind}")
@@ -161,18 +168,23 @@ impl Refusal {
             .immutable_if(matches!(err, ApplyError::ImmutableConflict { .. }))
     }
 
-    /// Classify a secret hydration failure, omitting the actual hash on
-    /// [`SecretError::HashMismatch`] because it hashes decrypted data and plans
-    /// may be shared.
+    /// Classify a secret hydration failure.
     pub(crate) fn of_hydration(err: &SecretError) -> Refusal {
-        let message = match err {
-            SecretError::HashMismatch { name, .. } => format!(
-                "decrypted content of secret '{name}' does not match the `hash` in its `mkSecret` declaration. {}",
-                super::secrets::hash_mismatch_next(name)
-            ),
-            _ => err.to_string(),
-        };
-        Refusal::Hydration { message }
+        match err {
+            SecretError::HashMismatch {
+                name, sops_source, ..
+            } => Refusal::HashMismatch {
+                message: format!(
+                    "the values in SOPS file {} do not match the `hash` declared for Secret '{name}'. {}",
+                    super::secrets::sops_file_name(sops_source),
+                    super::secrets::hash_mismatch_next(sops_source, None)
+                ),
+                sops_source: sops_source.clone(),
+            },
+            _ => Refusal::Hydration {
+                message: err.to_string(),
+            },
+        }
     }
 
     /// Classify an apiserver error status by its code and message. The
