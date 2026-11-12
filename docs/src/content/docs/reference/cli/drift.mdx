@@ -7,8 +7,11 @@ import Command from '/src/components/Command.astro';
 
 `kix drift` checks whether the fields Kix applied to each resource still hold
 the values it applied. Every apply writes a `kix.run/applied-hash` annotation;
-the check recomputes that hash from the live object and compares. It needs
-only a kubeconfig: it evaluates no flake and builds nothing.
+the check recomputes that hash from the live object and compares. It also
+reports each object that the cluster's current Activation record lists and
+that is gone from the cluster, such as one someone removed with
+`kubectl delete`. It needs only a kubeconfig: it evaluates no flake and builds
+nothing.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/drift.rs` when in doubt.
@@ -52,6 +55,16 @@ Kix set the replica count.
 | Drifted | `DRIFTED` | `drifted` | The applied fields changed |
 | Unstamped | `not checked (no kix.run/applied-hash annotation; ...)` | `unstamped` | No `kix.run/applied-hash`; the resource was applied before stamping existed, and the next deploy adds it. Not counted as drift. |
 | Unreadable | `not checked (no Kubernetes field ownership entry for Kix)` | `no-fieldset` | The object has no field ownership data, so the check cannot run |
+| Missing | `MISSING` | `missing` | The current Activation record lists the object, and the cluster does not have it. Counted as drift. |
+
+Kix finds missing objects through the list of deployed objects that each
+deploy writes on its Activation record. The list holds identity hashes, so Kix
+names a missing object from its manifest in the local Nix store. On a machine
+that does not have the deployed build, a missing object shows as
+`Unknown/(hash: ...)`. A record without the list, such as one written by a
+release before the list existed, gets no check for missing objects. When an
+older version of a missing object is on the cluster under another identity
+hash, Kix does not report it as missing.
 
 Text output lists only the resources that are not in sync, then a summary line
 with the counts. Add `-v` to list the resources in sync as well. JSON output
@@ -61,11 +74,15 @@ For a drifted resource, text output names each changed field with the field
 manager, operation, and time Kubernetes recorded, in the form
 `<field> owned by <manager> (<operation>, <time>)`. When no other manager
 is recorded, Kix says so. When anything drifted, the output ends with a
-`Next:` line that names `kix plan` and `kix deploy --reconcile`.
+`Next:` line that names `kix plan` and `kix deploy --reconcile`. When an
+object is missing, the `Next:` lines name `kix plan` and `kix deploy`, which
+creates it again.
 
 JSON output has a `resources` array (`kind`, `namespace`, `name`, `verdict`,
 `clusters`, `foreignOwners`) and a `summary` object with `inSync`, `drifted`, `unstamped`,
-and `noFieldset` counts.
+`noFieldset`, and `missing` counts. A missing resource also has
+`identityHash`. Programs that read the output must skip verdicts they do not
+know.
 
 ## Examples
 
@@ -78,8 +95,8 @@ and `noFieldset` counts.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | No resource drifted |
-| `1` | At least one resource drifted, or the cluster could not be reached |
+| `0` | No resource drifted and none is missing |
+| `1` | At least one resource drifted or is missing, or the cluster could not be reached |
 
 :::tip[Use it in a task]
 See [Check live resources for drift](/docs/how-to/operate-a-cluster/check-live-resources-for-drift/),

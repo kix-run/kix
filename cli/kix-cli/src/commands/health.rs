@@ -4,14 +4,16 @@
 //! cluster, indexes them by identity hash, and walks their dependency graph
 //! without evaluating a Nix flake.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use miette::{Result, miette};
 
 use crate::client;
-use kix::cluster::activation::{OpenedRecords, Record, Records};
+use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::{discovery, inventory};
-use kix::manifest::types::{ResourceId, to_manifest_value};
+use kix::eval::package_index::RecordPackageIndex;
+use kix::eval::store_graph::{self, StoreEntry};
+use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
 
 use crate::cli::HealthArgs;
 use crate::output;
@@ -32,6 +34,9 @@ struct LiveResource {
     package: String,
     package_namespace: String,
     depends_on: Vec<String>,
+    /// Store hash of the file named by `kix.run/sops-source`, which the
+    /// library also lists in `kix.run/depends-on`.
+    sops_source: Option<String>,
     is_import: bool,
     raw: serde_json::Value,
 }
@@ -172,6 +177,11 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             })
             .collect();
 
+        let sops_source = annotations
+            .and_then(|a| keys::get_meta(a, keys::SOPS_SOURCE))
+            .map(|p| store_graph::store_hash(std::path::Path::new(p)))
+            .filter(|h| !h.is_empty());
+
         if identity_hash.is_empty() {
             continue;
         }
@@ -184,6 +194,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
                 package,
                 package_namespace,
                 depends_on,
+                sops_source,
                 is_import,
                 raw: obj.data,
             },
@@ -201,9 +212,18 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 
     crate::say!("{} kix-managed resources on cluster", live_by_hash.len());
 
-    let health_map = walk_graph(&activation, &live_by_hash, ctx.global.verbose);
+    let unresolved: HashSet<&str> = live_by_hash
+        .values()
+        .flat_map(|r| &r.depends_on)
+        .filter(|h| !live_by_hash.contains_key(*h))
+        .map(String::as_str)
+        .collect();
+    let store = store_graph::lookup_hashes(unresolved.iter().copied());
+    let not_objects = non_object_deps(activation.package_index.as_ref(), &live_by_hash, &store);
 
-    let packages = group_by_package(&live_by_hash, &health_map);
+    let health_map = walk_graph(&live_by_hash, &not_objects, ctx.global.verbose);
+
+    let packages = group_by_package(&live_by_hash, &health_map, &store);
     display_results(&packages, ctx.global.verbose);
 
     let has_issues = packages.iter().any(|p| !p.is_healthy());
@@ -214,10 +234,46 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-/// Evaluate each resource's dependencies against `live_by_hash`.
-fn walk_graph(
-    _activation: &Record,
+/// Return the `(resource, dependency)` pairs whose dependency hash names no
+/// Kubernetes object, so its absence from the cluster is not a missing object.
+///
+/// `kix.run/depends-on` lists every store path a manifest refers to, which
+/// includes files such as a Secret's SOPS source. With the active record's
+/// package index, only the hashes it lists are objects. Without one, a hash
+/// is not an object when the local store holds it under a name that is not a
+/// resource, or when it is the object's own `kix.run/sops-source`.
+fn non_object_deps(
+    index: Option<&RecordPackageIndex>,
     live_by_hash: &HashMap<String, LiveResource>,
+    store: &HashMap<String, StoreEntry>,
+) -> HashSet<(String, String)> {
+    let indexed = index.map(RecordPackageIndex::hashes);
+    let mut out = HashSet::new();
+    for (hash, resource) in live_by_hash {
+        for dep in &resource.depends_on {
+            if live_by_hash.contains_key(dep) {
+                continue;
+            }
+            let object = match &indexed {
+                Some(indexed) => indexed.contains(dep.as_str()),
+                None => {
+                    !matches!(store.get(dep), Some(StoreEntry::Other))
+                        && resource.sops_source.as_ref() != Some(dep)
+                }
+            };
+            if !object {
+                out.insert((hash.clone(), dep.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Evaluate each resource's dependencies against `live_by_hash`, skipping the
+/// dependencies in `not_objects`.
+fn walk_graph(
+    live_by_hash: &HashMap<String, LiveResource>,
+    not_objects: &HashSet<(String, String)>,
     verbose: u8,
 ) -> BTreeMap<String, ResourceHealth> {
     let mut health: BTreeMap<String, ResourceHealth> = BTreeMap::new();
@@ -242,7 +298,9 @@ fn walk_graph(
         let mut broken_dep: Option<String> = None;
 
         for dep_hash in &resource.depends_on {
-            if live_by_hash.contains_key(dep_hash) {
+            if live_by_hash.contains_key(dep_hash)
+                || not_objects.contains(&(hash.clone(), dep_hash.clone()))
+            {
                 continue;
             }
             let dep_label = &dep_hash[..8.min(dep_hash.len())];
@@ -336,6 +394,7 @@ fn reachable_from(
 fn group_by_package(
     live_by_hash: &HashMap<String, LiveResource>,
     health_map: &BTreeMap<String, ResourceHealth>,
+    store: &HashMap<String, StoreEntry>,
 ) -> Vec<PackageHealth> {
     let mut pkg_map: BTreeMap<(String, String), Vec<(ResourceId, ResourceHealth)>> =
         BTreeMap::new();
@@ -358,7 +417,7 @@ fn group_by_package(
         if live_by_hash.contains_key(hash) || !matches!(health, ResourceHealth::Missing { .. }) {
             continue;
         }
-        let rid = resolve_hash_to_rid(hash);
+        let rid = resolve_hash_to_rid(hash, store);
         pkg_map
             .entry(("_cluster".to_string(), "_missing".to_string()))
             .or_default()
@@ -559,48 +618,16 @@ fn display_results(packages: &[PackageHealth], verbose: u8) {
     println!();
 }
 
-/// Find the store path matching `/nix/store/{hash}-*`, or `None` if the
-/// local store does not have that derivation.
-fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
-    let prefix = format!("{}-", hash);
-    std::fs::read_dir(kix::eval::store::store_dir())
-        .ok()?
-        .filter_map(Result::ok)
-        .find(|e| e.file_name().to_string_lossy().starts_with(&prefix))
-        .map(|e| e.path())
-}
-
-/// Parse a `ResourceId` from the `/nix/store/{hash}-k8s-{Kind}-{namespace}-{name}`
-/// store path filename, or fall back to an `Unknown` placeholder.
-fn resolve_hash_to_rid(hash: &str) -> ResourceId {
-    if let Some(path) = store_path_for_hash(hash)
-        && let Some(filename) = path.file_name()
-    {
-        let name_str = filename.to_string_lossy();
-        let prefix = format!("{}-", hash);
-        if let Some(rest) = name_str.strip_prefix(&prefix) {
-            let parts: Vec<&str> = rest.splitn(4, '-').collect();
-            if parts.len() == 4 && parts[0] == "k8s" {
-                let kind = parts[1].to_string();
-                let namespace = if parts[2] == "_cluster_" {
-                    "_cluster".to_string()
-                } else {
-                    parts[2].to_string()
-                };
-                let name = parts[3].to_string();
-                return ResourceId {
-                    kind,
-                    namespace,
-                    name,
-                };
-            }
-        }
+/// Return the identity of the object with identity hash `hash`, read from its
+/// manifest in the local store, or an `Unknown` placeholder naming the hash.
+fn resolve_hash_to_rid(hash: &str, store: &HashMap<String, StoreEntry>) -> ResourceId {
+    if let Some(StoreEntry::Resource(rid)) = store.get(hash) {
+        return rid.clone();
     }
-
     let display_hash = &hash[..12.min(hash.len())];
     ResourceId {
         kind: "Unknown".to_string(),
-        namespace: "_cluster".to_string(),
+        namespace: CLUSTER_SCOPED.to_string(),
         name: format!("(hash: {}...)", display_hash),
     }
 }
@@ -623,4 +650,123 @@ fn summarize_issues(resources: &[(ResourceId, ResourceHealth)]) -> String {
         parts.push(format!("{} at risk", at_risk));
     }
     parts.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::eval::package_index::{FORMAT, IndexedPackage};
+
+    fn h(c: char) -> String {
+        c.to_string().repeat(32)
+    }
+
+    fn live(name: &str, depends_on: &[String], sops_source: Option<String>) -> LiveResource {
+        LiveResource {
+            rid: ResourceId {
+                kind: "Secret".to_string(),
+                namespace: "data".to_string(),
+                name: name.to_string(),
+            },
+            identity_hash: String::new(),
+            package: "app-db".to_string(),
+            package_namespace: "data".to_string(),
+            depends_on: depends_on.to_vec(),
+            sops_source,
+            is_import: false,
+            raw: serde_json::Value::Null,
+        }
+    }
+
+    fn index(resources: &[String]) -> RecordPackageIndex {
+        RecordPackageIndex {
+            format: FORMAT,
+            packages: BTreeMap::from([(
+                "data/app-db".to_string(),
+                IndexedPackage {
+                    instance: h('p'),
+                    resources: resources.to_vec(),
+                },
+            )]),
+            cluster_level: vec![],
+        }
+    }
+
+    /// A Secret depends on its SOPS file and on a ConfigMap. The record's
+    /// index lists the ConfigMap only, so only the ConfigMap is missing.
+    #[test]
+    fn a_hash_the_index_does_not_list_is_not_a_missing_object() {
+        let (secret, sops, cm) = (h('s'), h('f'), h('c'));
+        let live_by_hash = HashMap::from([(
+            secret.clone(),
+            live("app-db-credentials", &[sops.clone(), cm.clone()], None),
+        )]);
+        let index = index(&[secret.clone(), cm.clone()]);
+
+        let not_objects = non_object_deps(Some(&index), &live_by_hash, &HashMap::new());
+        let health = walk_graph(&live_by_hash, &not_objects, 0);
+
+        assert!(matches!(health[&cm], ResourceHealth::Missing { .. }));
+        assert!(!health.contains_key(&sops));
+    }
+
+    #[test]
+    fn a_secret_whose_only_store_dependency_is_its_sops_file_is_healthy() {
+        let (secret, sops) = (h('s'), h('f'));
+        let live_by_hash = HashMap::from([(
+            secret.clone(),
+            live("app-db-credentials", std::slice::from_ref(&sops), None),
+        )]);
+        let index = index(std::slice::from_ref(&secret));
+
+        let not_objects = non_object_deps(Some(&index), &live_by_hash, &HashMap::new());
+        let health = walk_graph(&live_by_hash, &not_objects, 0);
+
+        assert_eq!(health.len(), 1);
+        assert_eq!(health[&secret], ResourceHealth::Healthy);
+    }
+
+    /// A record with no package index falls back to the object's own
+    /// `kix.run/sops-source` and to what the local store holds.
+    #[test]
+    fn without_an_index_the_sops_source_and_store_files_are_not_objects() {
+        let (secret, sops, script, gone) = (h('s'), h('f'), h('x'), h('g'));
+        let live_by_hash = HashMap::from([(
+            secret.clone(),
+            live(
+                "app-db-credentials",
+                &[sops.clone(), script.clone(), gone.clone()],
+                Some(sops.clone()),
+            ),
+        )]);
+        let store = HashMap::from([(script.clone(), StoreEntry::Other)]);
+
+        let not_objects = non_object_deps(None, &live_by_hash, &store);
+        let health = walk_graph(&live_by_hash, &not_objects, 0);
+
+        assert!(!health.contains_key(&sops));
+        assert!(!health.contains_key(&script));
+        assert!(matches!(health[&gone], ResourceHealth::Missing { .. }));
+    }
+
+    #[test]
+    fn a_missing_object_is_named_from_its_manifest() {
+        let svc = h('a');
+        let store = HashMap::from([(
+            svc.clone(),
+            StoreEntry::Resource(ResourceId {
+                kind: "Service".to_string(),
+                namespace: "cnpg-system".to_string(),
+                name: "cnpg-webhook-service".to_string(),
+            }),
+        )]);
+        assert_eq!(
+            resolve_hash_to_rid(&svc, &store).to_string(),
+            "Service/cnpg-webhook-service@cnpg-system"
+        );
+        assert_eq!(
+            resolve_hash_to_rid(&h('b'), &HashMap::new()).to_string(),
+            "Unknown/(hash: bbbbbbbbbbbb...)"
+        );
+    }
 }

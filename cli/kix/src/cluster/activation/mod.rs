@@ -24,7 +24,7 @@ mod retention;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::eval::package_index::{self, RecordPackageIndex};
 use crate::legacy_domain::{self, LegacyDomainError};
@@ -487,6 +487,30 @@ impl Records {
             .await
             .map_err(RecordsError::list)?
             .items)
+    }
+
+    /// Return the current record of every Kix cluster with records on the
+    /// cluster, keyed by cluster name, as [`Records::active`] picks it. A
+    /// record without a `kix.run/cluster` label is left out.
+    pub async fn all_current(&self) -> Result<BTreeMap<String, Record>, RecordsError> {
+        let mut by_cluster: BTreeMap<String, Vec<DynamicObject>> = BTreeMap::new();
+        for item in self.all().await? {
+            let cluster = item
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|l| keys::get_meta(l, keys::CLUSTER_LABEL))
+                .map(str::to_string);
+            if let Some(cluster) = cluster {
+                by_cluster.entry(cluster).or_default().push(item);
+            }
+        }
+        Ok(by_cluster
+            .iter()
+            .filter_map(|(cluster, items)| {
+                current_of(items, cluster).map(|r| (cluster.clone(), Record::of(r)))
+            })
+            .collect())
     }
 
     async fn patch_status(&self, name: &str, patch: &Value) -> Result<(), RecordsError> {

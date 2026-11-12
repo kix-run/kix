@@ -82,6 +82,17 @@ impl RecordPackageIndex {
         }
     }
 
+    /// Return the identity hash of every resource the index lists: each
+    /// package's `PackageInstance` and resources, and the cluster-level ones.
+    pub fn hashes(&self) -> HashSet<&str> {
+        self.packages
+            .values()
+            .flat_map(|p| std::iter::once(&p.instance).chain(&p.resources))
+            .chain(&self.cluster_level)
+            .map(String::as_str)
+            .collect()
+    }
+
     /// Read an index from `status.packageIndex`. Return `None`, with a debug
     /// log, when it is in another format or does not parse.
     pub fn from_value(value: &Value) -> Option<RecordPackageIndex> {
@@ -187,6 +198,17 @@ mod tests {
         assert_eq!(
             RecordPackageIndex::from_value(&index.to_value()),
             Some(index)
+        );
+    }
+
+    #[test]
+    fn hashes_lists_instances_resources_and_cluster_level() {
+        let index = RecordPackageIndex::of(&graph());
+        let a = |c: &str| format!("{c:a>32}");
+        let expected: Vec<String> = ["1", "2", "3", "4"].iter().map(|c| a(c)).collect();
+        assert_eq!(
+            index.hashes(),
+            expected.iter().map(String::as_str).collect::<HashSet<_>>()
         );
     }
 
