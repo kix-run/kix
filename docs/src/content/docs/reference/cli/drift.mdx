@@ -61,8 +61,8 @@ Kix finds missing objects through the list of deployed objects that each
 deploy writes on its Activation record. The list holds identity hashes, so Kix
 names a missing object from its manifest in the local Nix store. On a machine
 that does not have the deployed build, a missing object shows as
-`Unknown/(hash: ...)`. A record without the list, such as one written by a
-release before the list existed, gets no check for missing objects. When an
+`Unknown/(hash: ...)`. A record without the list, such as one written by an
+older version of Kix, gets no check for missing objects. When an
 older version of a missing object is on the cluster under another identity
 hash, Kix does not report it as missing.
 
