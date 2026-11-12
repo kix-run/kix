@@ -595,7 +595,7 @@ kix.checkPackageOptions {
 
 ### `kix.contracts.secret.helpers.use`
 
-A package takes every secret value through a secret dependency, never through an option, so the site chooses where the value comes from: `packages.secret` (plain text or a SOPS file), `packages.secret-ref` (a Secret that something else writes), or another source package. A test in the Kix repository fails any package that Kix ships if one of its options holds a secret or a path to one.
+A package takes every secret value through a secret dependency, never through an option, so the cluster chooses where the value comes from: `packages.secret` (plain text or a SOPS file), `packages.secret-ref` (a Secret that something else writes), or another source package. A test in the Kix repository fails any package that Kix ships if one of its options holds a secret or a path to one.
 
 Wrap the dependency with `kix.contracts.secret.helpers.use` before reading its keys. It checks that the dependency honours the secret contract (`kix.contracts.secret`: `out.name`, `out.keyRef`, `out.mkEnv`, `out.envFrom`, `out.volume`), and that `dep.out.keys` declares all required `keys` and at least one complete key group in `anyOf`. Then it returns `dep`, or throws an evaluation error that names the dependency. `kix.checkSecretKeys` takes the same arguments and checks the keys only.
 

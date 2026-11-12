@@ -299,7 +299,7 @@ alike. An option that only matches by name goes in
 `kix/packages/not-secret.nix` with the reason. A package that needs the
 value in a second namespace renders a copy only from `dep.out.sops`, and
 otherwise references a Secret the site writes there (stackgres-database).
- the dependency is what lets the site choose between a
+The dependency is what lets the site choose between a
 value in the build, a SOPS file, and a Secret an operator writes, and what
 `cluster.secrets.accept` checks (S1, S16; `docs/src/content/docs/reference/cluster-configuration.mdx` `#clustercontainerd-clustermaintenance-and-clustersecretsaccept`). Configuration
 the program reads from a Secret gets a non-Secret route or a dependency

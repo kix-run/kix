@@ -79,7 +79,7 @@ Because a Kubernetes pod can only read Secrets from its own namespace, and Kix r
 
 ## Secret (`kix.contracts.secret`)
 
-`kix.contracts.secret` (`kix/contracts/stable/secret.nix`) defines what a package reads from a secret dependency. A package takes every secret value through such a dependency and never through an option, so the site chooses where the value comes from. A test in the Kix repository fails a package that Kix ships if one of its options holds a secret or a path to one.
+`kix.contracts.secret` (`kix/contracts/stable/secret.nix`) defines what a package reads from a secret dependency. A package takes every secret value through such a dependency and never through an option, so the cluster chooses where the value comes from. A test in the Kix repository fails a package that Kix ships if one of its options holds a secret or a path to one.
 
 A secret dependency has no fixed name: Grafana's is `grafanaAdmin`, caddy's is `caddyfile`. The alias `secret` is the default alias of `packages.secret` and `packages.secret-ref`. A cluster wires a dependency by an alias that matches the package's argument name, or with `deps.<name> = ref.<namespace>.<instance>`.
 

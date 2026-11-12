@@ -6,12 +6,11 @@
 {
   "secret.source" = "The secret package is a source package: it fills a Secret from this SOPS file.";
   "cnpg-cluster.backup.credentialKeys.secretAccessKey" =
-    "The name of a key in the credentials dependency, not the key itself.";
-  "cnpg-cluster.import.passwordKey" =
-    "The name of a key in the importPassword dependency, not the password.";
+    "Names which key to read from the credentials dependency.";
+  "cnpg-cluster.import.passwordKey" = "Names which key to read from the importPassword dependency.";
   "stackgres-object-storage.credentialKeys.secretAccessKey" =
-    "The name of a key in the storage credentials dependency, not the key itself.";
+    "Names which key to read from the storageCredentials dependency.";
   "tempo.objectStorage.credentialKeys.secretAccessKey" =
-    "The name of a key in the storage credentials dependency, not the key itself.";
+    "Names which key to read from the storageCredentials dependency.";
   "filebrowser.tokenExpirationTime" = "How long a login session lasts.";
 }

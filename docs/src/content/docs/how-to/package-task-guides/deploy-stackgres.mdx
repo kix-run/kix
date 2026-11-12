@@ -60,9 +60,8 @@ Apps should not read the superuser Secret. Give each app a
 database on the cluster and puts the credentials in the app's namespace. Its
 `out` follows the Postgres database contract, `kix.contracts.postgresDatabase`,
 which the packages that take a `database` dependency check at evaluation. The
-role's password is a secret dependency named `password`: a `packages.secret`
-instance with a SOPS `source`, or any other secret, as the package's header
-describes.
+role's password is a secret dependency named `password`, such as a
+`packages.secret` instance with a SOPS `source` and `keys = [ "password" ]`.
 
 ## Back up to object storage
 
