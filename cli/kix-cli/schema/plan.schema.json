@@ -1121,6 +1121,11 @@
           "type": "string"
         },
         {
+          "const": "webhook_service_written_by_this_deploy",
+          "description": "An admission webhook that would be called could not reach its\nService, and this deploy writes that Service.",
+          "type": "string"
+        },
+        {
           "const": "dependency_not_checked",
           "description": "The engine never reached the object, for example because the dry run\nwas cancelled. A refused dependency does not cause this: a dry run\nstill tries the dependents of a refused object.",
           "type": "string"

@@ -508,6 +508,9 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                 UncheckedReason::WebhookNoDryRun => {
                     "calls an admission webhook that does not support dry run"
                 }
+                UncheckedReason::WebhookServiceWrittenByThisDeploy => {
+                    "calls an admission webhook whose Service is missing or not ready, and this deploy writes that Service"
+                }
                 UncheckedReason::DependencyNotChecked => {
                     "not reached by the dry run (for example, cancelled early)"
                 }

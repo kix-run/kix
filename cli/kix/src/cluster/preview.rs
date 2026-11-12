@@ -78,6 +78,14 @@ pub enum Refusal {
         webhook: Option<String>,
         message: String,
     },
+    /// The apiserver could not reach the Service behind an admission
+    /// webhook: the Service does not exist, has no endpoints, or refused the
+    /// connection. The webhook did not answer, so the object was not checked.
+    WebhookUnreachable {
+        webhook: Option<String>,
+        service: ResourceId,
+        message: String,
+    },
     /// The object fails validation (HTTP 422): schema, a CRD's rules, or a
     /// field Kubernetes does not allow to change.
     Invalid {
@@ -121,6 +129,7 @@ impl Refusal {
             | Refusal::WebhookDenied { message, .. }
             | Refusal::PolicyDenied { message, .. }
             | Refusal::WebhookNoDryRun { message, .. }
+            | Refusal::WebhookUnreachable { message, .. }
             | Refusal::Invalid { message, .. }
             | Refusal::Forbidden { message }
             | Refusal::NamespaceMissing { message, .. }
@@ -129,6 +138,20 @@ impl Refusal {
             Refusal::UnknownKind { kind } => {
                 format!("the apiserver does not serve kind {kind}")
             }
+        }
+    }
+
+    /// Return the webhook's Service when this refusal says only that an
+    /// admission webhook could not reach it, and `writes` says the deploy
+    /// writes that Service. Such a write is not checked, and it does not stop
+    /// the deploy, which creates the Service.
+    pub fn unreachable_service_written(
+        &self,
+        writes: impl Fn(&ResourceId) -> bool,
+    ) -> Option<&ResourceId> {
+        match self {
+            Refusal::WebhookUnreachable { service, .. } if writes(service) => Some(service),
+            _ => None,
         }
     }
 
@@ -186,6 +209,13 @@ impl Refusal {
                 message,
             });
         }
+        if let Some(service) = unreachable_webhook_service(&message) {
+            return Some(Refusal::WebhookUnreachable {
+                webhook: quoted_after(&message, "failed calling webhook "),
+                service,
+                message,
+            });
+        }
         if message.contains("admission webhook") && message.contains("denied the request") {
             return Some(Refusal::WebhookDenied {
                 webhook: quoted_after(&message, "admission webhook "),
@@ -225,6 +255,35 @@ impl Refusal {
             other => other,
         }
     }
+}
+
+/// Return the Service an admission webhook call could not reach, read from
+/// the apiserver's `failed calling webhook "x": failed to call webhook: Post
+/// "https://<service>.<namespace>.svc:443/...": <cause>` message. Return
+/// `None` when the call failed for another cause, or when the webhook names a
+/// URL outside the cluster.
+fn unreachable_webhook_service(message: &str) -> Option<ResourceId> {
+    if !message.contains("failed calling webhook") {
+        return None;
+    }
+    let unreachable = (message.contains("service \"") && message.contains("\" not found"))
+        || message.contains("no endpoints available for service")
+        || message.contains("connection refused");
+    if !unreachable {
+        return None;
+    }
+    let rest = &message[message.find("://")? + "://".len()..];
+    let host = &rest[..rest.find([':', '/', '"'])?];
+    let mut labels = host.split('.');
+    let (name, namespace) = (labels.next()?, labels.next()?);
+    if labels.next() != Some("svc") || name.is_empty() || namespace.is_empty() {
+        return None;
+    }
+    Some(ResourceId {
+        kind: "Service".into(),
+        namespace: namespace.into(),
+        name: name.into(),
+    })
 }
 
 /// Extract the double-quoted name immediately after `prefix` (for example,
@@ -371,6 +430,82 @@ mod tests {
             Refusal::of_status(400, no_dry_run),
             Some(Refusal::WebhookNoDryRun { webhook: Some(w), .. }) if w == "policy.example.com"
         ));
+    }
+
+    fn service(namespace: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: "Service".into(),
+            namespace: namespace.into(),
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn a_webhook_whose_service_is_missing_is_unreachable() {
+        let missing = "Internal error occurred: failed calling webhook \"mcluster.cnpg.io\": failed to call webhook: Post \"https://cnpg-webhook-service.cnpg-system.svc:443/mutate-postgresql-cnpg-io-v1-cluster?timeout=10s\": service \"cnpg-webhook-service\" not found";
+        assert_eq!(
+            Refusal::of_status(500, missing),
+            Some(Refusal::WebhookUnreachable {
+                webhook: Some("mcluster.cnpg.io".into()),
+                service: service("cnpg-system", "cnpg-webhook-service"),
+                message: missing.into(),
+            })
+        );
+        for cause in [
+            "no endpoints available for service \"cnpg-webhook-service\"",
+            "dial tcp 10.96.12.7:443: connect: connection refused",
+        ] {
+            let msg = format!(
+                "Internal error occurred: failed calling webhook \"vcluster.cnpg.io\": failed to call webhook: Post \"https://cnpg-webhook-service.cnpg-system.svc:443/validate?timeout=10s\": {cause}"
+            );
+            assert!(matches!(
+                Refusal::of_status(500, &msg),
+                Some(Refusal::WebhookUnreachable { service: s, .. })
+                    if s == service("cnpg-system", "cnpg-webhook-service")
+            ));
+        }
+    }
+
+    #[test]
+    fn an_unreachable_webhook_waits_only_for_a_service_the_deploy_writes() {
+        let msg = "Internal error occurred: failed calling webhook \"mcluster.cnpg.io\": failed to call webhook: Post \"https://cnpg-webhook-service.cnpg-system.svc:443/m?timeout=10s\": service \"cnpg-webhook-service\" not found";
+        let refusal = Refusal::of_status(500, msg).unwrap();
+        let built = std::collections::HashSet::from([
+            service("cnpg-system", "cnpg-webhook-service"),
+            service("data", "pg-rw"),
+        ]);
+        assert_eq!(
+            refusal.unreachable_service_written(|rid| built.contains(rid)),
+            Some(&service("cnpg-system", "cnpg-webhook-service"))
+        );
+        let elsewhere = std::collections::HashSet::from([service("data", "pg-rw")]);
+        assert_eq!(
+            refusal.unreachable_service_written(|rid| elsewhere.contains(rid)),
+            None
+        );
+        let denied = Refusal::of_status(
+            400,
+            "admission webhook \"vcluster.cnpg.io\" denied the request: bad",
+        )
+        .unwrap();
+        assert_eq!(denied.unreachable_service_written(|_| true), None);
+    }
+
+    #[test]
+    fn other_webhook_failures_are_not_unreachable_services() {
+        // A webhook that answered with a denial is a real refusal.
+        let denied = "admission webhook \"vcluster.cnpg.io\" denied the request: spec.instances: Invalid value: 0";
+        assert!(matches!(
+            Refusal::of_status(400, denied),
+            Some(Refusal::WebhookDenied { .. })
+        ));
+        // A webhook that names a URL outside the cluster has no Service to
+        // create.
+        let external = "Internal error occurred: failed calling webhook \"x.example.com\": failed to call webhook: Post \"https://hooks.example.com:443/x\": dial tcp 1.2.3.4:443: connect: connection refused";
+        assert_eq!(Refusal::of_status(500, external), None);
+        // A Service that answers but fails the TLS check is not missing.
+        let tls = "Internal error occurred: failed calling webhook \"x.io\": failed to call webhook: Post \"https://x.ns.svc:443/x\": tls: failed to verify certificate: x509: certificate signed by unknown authority";
+        assert_eq!(Refusal::of_status(500, tls), None);
     }
 
     #[test]

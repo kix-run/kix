@@ -504,6 +504,32 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
                 reason: UncheckedReason::WebhookNoDryRun,
                 detail: message.clone(),
             }),
+            Refusal::WebhookUnreachable {
+                webhook,
+                service,
+                message,
+            } => {
+                if refusal
+                    .unreachable_service_written(|rid| manifests.contains_key(rid))
+                    .is_some()
+                {
+                    not_checked.push(UncheckedObject {
+                        resource: resource.clone(),
+                        reason: UncheckedReason::WebhookServiceWrittenByThisDeploy,
+                        detail: format!(
+                            "admission webhook {} could not reach {}, which this deploy writes",
+                            webhook.as_deref().unwrap_or("?"),
+                            service.display_id()
+                        ),
+                    })
+                } else {
+                    admission.push(refused(
+                        RefusalReason::Other,
+                        webhook.clone(),
+                        message.clone(),
+                    ))
+                }
+            }
             Refusal::UnknownKind { .. } | Refusal::Invalid { .. } | Refusal::Other { .. }
                 if manifests
                     .get(&answer.rid)
