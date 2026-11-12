@@ -162,6 +162,60 @@ pub fn store_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// What the local store holds under a store hash, from [`lookup_hashes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreEntry {
+    /// A Kix resource manifest, identified by the manifest itself.
+    Resource(ResourceId),
+    /// A store path that is not a Kix resource, such as a source file.
+    Other,
+}
+
+/// Look up each of `hashes` in the local store with one listing of the store
+/// directory. A hash the store does not hold is left out of the result.
+///
+/// A resource's identity is read from its manifest, because the store name
+/// `k8s-<kind>-<namespace>-<name>` cannot be split when the namespace holds
+/// a `-`.
+pub fn lookup_hashes<'a>(hashes: impl IntoIterator<Item = &'a str>) -> HashMap<String, StoreEntry> {
+    lookup_hashes_in(&super::store::store_dir(), hashes)
+}
+
+fn lookup_hashes_in<'a>(
+    dir: &Path,
+    hashes: impl IntoIterator<Item = &'a str>,
+) -> HashMap<String, StoreEntry> {
+    let wanted: std::collections::HashSet<&str> = hashes.into_iter().collect();
+    let mut found = HashMap::new();
+    if wanted.is_empty() {
+        return found;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = dir.join(entry.file_name());
+        let hash = store_hash(&path);
+        if !wanted.contains(hash.as_str()) || found.contains_key(&hash) {
+            continue;
+        }
+        let resource = if is_k8s_path(&path) {
+            std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .filter(|m| m.get("kind").is_some())
+                .map(|m| ResourceId::from_value(&m))
+        } else {
+            None
+        };
+        found.insert(
+            hash,
+            resource.map_or(StoreEntry::Other, StoreEntry::Resource),
+        );
+    }
+    found
+}
+
 /// Return whether a store path is a Kix Kubernetes resource (`k8s-*`).
 fn is_k8s_path(path: &Path) -> bool {
     store_name(path).starts_with("k8s-")
@@ -917,6 +971,42 @@ mod tests {
         assert!(!is_k8s_path(Path::new(
             "/nix/store/abc123def456ghi789jkl012mno345pq-python3-3.11"
         )));
+    }
+
+    /// A namespace with a `-` cannot be split from the store name, so the
+    /// identity comes from the manifest in the file.
+    #[test]
+    fn lookup_hashes_reads_identity_from_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = "a".repeat(32);
+        let sops = "b".repeat(32);
+        let absent = "c".repeat(32);
+        std::fs::write(
+            dir.path().join(format!(
+                "{svc}-k8s-Service-cnpg-system-cnpg-webhook-service"
+            )),
+            serde_json::to_vec(&serde_json::json!({
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": { "name": "cnpg-webhook-service", "namespace": "cnpg-system" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(format!("{sops}-app-db.sops.yaml")),
+            "data: ENC",
+        )
+        .unwrap();
+
+        let found = lookup_hashes_in(dir.path(), [svc.as_str(), sops.as_str(), absent.as_str()]);
+
+        let StoreEntry::Resource(rid) = &found[&svc] else {
+            panic!("expected a resource, got {:?}", found[&svc]);
+        };
+        assert_eq!(rid.to_string(), "Service/cnpg-webhook-service@cnpg-system");
+        assert_eq!(found[&sops], StoreEntry::Other);
+        assert!(!found.contains_key(&absent));
     }
 
     mod validate {

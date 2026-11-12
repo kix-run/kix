@@ -151,6 +151,7 @@ fn verdict_name(v: &DriftVerdict) -> &'static str {
         DriftVerdict::Drifted { .. } => "Drifted",
         DriftVerdict::Unstamped => "Unstamped",
         DriftVerdict::NoFieldset => "NoFieldset",
+        DriftVerdict::Missing { .. } => "Missing",
     }
 }
 
