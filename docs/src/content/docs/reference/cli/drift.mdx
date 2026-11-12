@@ -75,8 +75,9 @@ manager, operation, and time Kubernetes recorded, in the form
 `<field> owned by <manager> (<operation>, <time>)`. When no other manager
 is recorded, Kix says so. When anything drifted, the output ends with a
 `Next:` line that names `kix plan` and `kix deploy --reconcile`. When an
-object is missing, the `Next:` lines name `kix plan` and `kix deploy`, which
-creates it again.
+object is missing, the `Next:` line names `kix deploy --reconcile`, which
+creates it again. A deploy without `--reconcile` skips objects whose build did
+not change, so it does not create a missing object.
 
 JSON output has a `resources` array (`kind`, `namespace`, `name`, `verdict`,
 `clusters`, `foreignOwners`) and a `summary` object with `inSync`, `drifted`, `unstamped`,

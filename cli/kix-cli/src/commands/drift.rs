@@ -200,7 +200,7 @@ fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str
         }
         if missing > 0 {
             println!(
-                "  Run `kix plan {cluster}` to see the missing objects a deploy creates again, then `kix deploy {cluster}` to create them."
+                "  Run `kix deploy {cluster} --reconcile` to create the missing objects again. A deploy without `--reconcile` skips objects whose build did not change."
             );
         }
     }
