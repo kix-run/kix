@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-auto-instantiation",
-      "stdout": "error: apps/api: needs dependency 'database', which has no active instance, and 2 packages in availablePackages match 'database':\ndatabase (package name)\npostgres (availablePackages.postgres.aliases)\nFix: declare the package this cluster should use as an optional instance (created only when something depends on it):\ninstances.<namespace>.database = { package = packages.<one of the above>; optional = true; };\nIf the other matching packages are not used in this cluster, remove them from availablePackages.\n",
+      "stdout": "apps/api: needs dependency 'database', which has no active instance, and 2 packages in availablePackages match 'database':\ndatabase (package name)\npostgres (availablePackages.postgres.aliases)\nFix: declare the package this cluster should use as an optional instance (created only when something depends on it):\ninstances.<namespace>.database = { package = packages.<one of the above>; optional = true; };\nIf the other matching packages are not used in this cluster, remove them from availablePackages.\n",
       "stderr": "",
-      "stdoutDrift": "Fix: declare the package this cluster should use as an optional instance (created only when something depends on it):\nIf the other matching packages are not used in this cluster, remove them from availablePackages.\ndatabase (package name)\nerror: apps/api: needs dependency 'database', which has no active instance, and 2 packages in availablePackages match 'database':\ninstances.<namespace>.database = { package = packages.<one of the above>; optional = true; };\npostgres (availablePackages.postgres.aliases)\n",
+      "stdoutDrift": "Fix: declare the package this cluster should use as an optional instance (created only when something depends on it):\nIf the other matching packages are not used in this cluster, remove them from availablePackages.\napps/api: needs dependency 'database', which has no active instance, and 2 packages in availablePackages match 'database':\ndatabase (package name)\ninstances.<namespace>.database = { package = packages.<one of the above>; optional = true; };\npostgres (availablePackages.postgres.aliases)\n",
       "stderrDrift": "",
       "exitCode": 1
     }
