@@ -1,6 +1,6 @@
 # 167: Packages take secrets only through a secret dependency
 
-**Status:** Accepted (decisions of 2026-11-12, §3). Not built.
+**Status:** Draft. The decisions of 2026-11-12 (§3) are provisional and may change. Not built.
 **Related:** `77_secrets_implementation_plan.md` (SOPS hydration), `archive/78_cross_namespace_secret_refs.md` (one value, two namespaces), `archive/165_package_and_contract_levels.md` (stable and experimental), `interesting_thoughts/167b_generated_secrets.md` (Kix-made values, later)
 **Supersedes:** `archive/160_secret_provenance.md`
 
@@ -66,7 +66,8 @@ So the code change is small. The work is in the rule that keeps it so.
 
 ## 3. Decisions
 
-Made on 2026-11-12:
+Made on 2026-11-12. They are provisional: the design follows them, and any
+of them may change as the work shows more.
 
 1. **A package takes a secret value only through a secret dependency.** No
    option holds a secret, a path to one, or a Secret's name. This holds for
