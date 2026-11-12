@@ -11,6 +11,7 @@ use std::fmt::Write;
 
 use crate::output;
 
+use kix::cluster::{hash_mismatch_next, sops_file_name};
 use kix::plan::document::{
     AdmissionRefusal, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan, PruneFate,
     RefusalReason, UncheckedReason, WriteChange,
@@ -112,6 +113,33 @@ fn write_stops(out: &mut String, plan: &Plan) {
             )
         );
     }
+    let (mismatches, refusals) = hash_mismatches(plan);
+    for m in &mismatches {
+        let _ = writeln!(
+            out,
+            "  {} {}",
+            output::red("✗"),
+            output::red(&format!(
+                "SOPS file {} does not match its `hash`",
+                sops_file_name(m.sops_source)
+            )),
+        );
+        let _ = writeln!(
+            out,
+            "      {}",
+            output::dim(
+                "Kix decrypted the file, but its values do not match the `hash` declared for it, so Kix cannot write the Secrets made from it:"
+            )
+        );
+        for secret in &m.secrets {
+            let _ = writeln!(out, "        {secret}");
+        }
+        let _ = writeln!(
+            out,
+            "      {}",
+            output::dim(&hash_mismatch_next(m.sops_source, m.instance))
+        );
+    }
     for r in refusals {
         let _ = writeln!(
             out,
@@ -186,6 +214,54 @@ fn not_kept_detail(f: &FieldNotKept, markdown: bool) -> String {
     }
 }
 
+/// A SOPS file whose decrypted values do not match its `hash`, and the
+/// Secrets the deploy cannot write because of it.
+struct HashMismatch<'a> {
+    sops_source: &'a str,
+    secrets: Vec<&'a str>,
+    /// The instance whose own Secret is made from the file. A `secret`
+    /// instance names its Secret after itself.
+    instance: Option<&'a str>,
+}
+
+/// Split the plan's refusals into SOPS hash mismatches, one per SOPS file,
+/// and every other refusal. One stale `hash` refuses every Secret made from
+/// that file, and the user fixes it once.
+fn hash_mismatches(plan: &Plan) -> (Vec<HashMismatch<'_>>, Vec<&AdmissionRefusal>) {
+    let mut mismatches: Vec<HashMismatch> = Vec::new();
+    let mut others = Vec::new();
+    for r in plan.admission.items() {
+        let (RefusalReason::HashMismatch, Some(source)) = (r.reason, &r.sops_source) else {
+            others.push(r);
+            continue;
+        };
+        let at = match mismatches.iter().position(|m| m.sops_source == source) {
+            Some(at) => at,
+            None => {
+                mismatches.push(HashMismatch {
+                    sops_source: source,
+                    secrets: Vec::new(),
+                    instance: None,
+                });
+                mismatches.len() - 1
+            }
+        };
+        let m = &mut mismatches[at];
+        m.secrets.push(&r.resource);
+        m.instance = m.instance.or_else(|| own_instance(plan, &r.resource));
+    }
+    (mismatches, others)
+}
+
+/// Return the instance that `resource` is named after and belongs to, if any.
+fn own_instance<'a>(plan: &'a Plan, resource: &str) -> Option<&'a str> {
+    plan.objects.as_ref()?.writes.iter().find_map(|w| {
+        let instance = w.package.rsplit('/').next()?;
+        (w.name == instance && format!("{}/{}@{}", w.kind, w.name, w.namespace) == resource)
+            .then_some(instance)
+    })
+}
+
 fn refusal_title(r: &AdmissionRefusal) -> String {
     match (r.reason, &r.webhook) {
         (RefusalReason::WebhookDenied, Some(w)) => format!("denied by admission webhook {w}"),
@@ -204,6 +280,7 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
             "the cluster does not serve its kind and the build has no CRD for it".into()
         }
         (RefusalReason::Decryption, _) => "could not decrypt the SOPS Secret".into(),
+        (RefusalReason::HashMismatch, _) => "its SOPS file does not match its `hash`".into(),
         (RefusalReason::Other, _) => "refused".into(),
     }
 }
@@ -595,6 +672,17 @@ pub fn render_markdown(plan: &Plan) -> String {
                 owners.join("; ")
             );
         }
+        let (mismatches, refusals) = hash_mismatches(plan);
+        for m in &mismatches {
+            let secrets: Vec<String> = m.secrets.iter().map(|s| format!("`{s}`")).collect();
+            let _ = writeln!(
+                out,
+                "- SOPS file `{}` does not match its `hash`, so Kix cannot write the Secrets made from it: {}",
+                sops_file_name(m.sops_source),
+                secrets.join(", ")
+            );
+            let _ = writeln!(out, "  > {}", hash_mismatch_next(m.sops_source, m.instance));
+        }
         for r in refusals {
             let _ = writeln!(out, "- `{}`: {}", r.resource, refusal_title(r));
             let _ = writeln!(out, "  > {}", r.message.replace('\n', " "));
@@ -814,6 +902,105 @@ mod tests {
             unowned.contains("the deploy writes this object and restores the deployed value"),
             "{unowned}"
         );
+    }
+
+    /// Every Secret made from a SOPS file whose `hash` is stale is refused.
+    /// The plan reports the file once, lists the Secrets, and names the
+    /// secret instance whose `hash` to change.
+    #[test]
+    fn a_stale_sops_hash_is_one_problem_per_file() {
+        use kix::plan::document::{AdmissionRefusal, ObjectWrite, Objects};
+        let source = "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-app-db.sops.yaml";
+        let refusal = |resource: &str, reason, sops_source: Option<&str>| AdmissionRefusal {
+            resource: resource.into(),
+            reason,
+            webhook: None,
+            sops_source: sops_source.map(str::to_string),
+            message: format!("message for {resource}"),
+        };
+        let write = |name: &str, package: &str| ObjectWrite {
+            kind: "Secret".into(),
+            namespace: "data".into(),
+            name: name.into(),
+            store_hash: String::new(),
+            package: package.into(),
+            change: WriteChange::Modified,
+        };
+        let mut plan = plan_with(Vec::new());
+        plan.objects = Some(Objects {
+            writes: vec![
+                write("app-db-credentials", "data/app-db"),
+                write("app-db-password", "data/app-db-password"),
+            ],
+            deletes: Vec::new(),
+        });
+        plan.admission = Checked::found(vec![
+            refusal(
+                "Secret/app-db-credentials@data",
+                RefusalReason::HashMismatch,
+                Some(source),
+            ),
+            refusal(
+                "Secret/app-db-password@data",
+                RefusalReason::HashMismatch,
+                Some(source),
+            ),
+            refusal(
+                "Secret/data-app-db-role@data",
+                RefusalReason::HashMismatch,
+                Some(source),
+            ),
+        ]);
+        assert!(plan.stops_only_on_hash_mismatch());
+
+        let text = render_text(&plan);
+        assert_eq!(
+            text.matches("SOPS file app-db.sops.yaml does not match its `hash`")
+                .count(),
+            1,
+            "{text}"
+        );
+        assert!(!text.contains("could not decrypt"), "{text}");
+        assert!(!text.contains("message for"), "{text}");
+        for secret in [
+            "        Secret/app-db-credentials@data\n",
+            "        Secret/app-db-password@data\n",
+            "        Secret/data-app-db-role@data\n",
+        ] {
+            assert!(text.contains(secret), "{text}");
+        }
+        assert!(
+            text.contains(
+                "run `kix secret hash <path to app-db.sops.yaml>` and put the hash it prints in the `hash` of instance 'app-db-password', whose `source` is app-db.sops.yaml."
+            ),
+            "{text}"
+        );
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.contains(
+                "- SOPS file `app-db.sops.yaml` does not match its `hash`, so Kix cannot write the Secrets made from it: `Secret/app-db-credentials@data`, `Secret/app-db-password@data`, `Secret/data-app-db-role@data`"
+            ),
+            "{markdown}"
+        );
+
+        // Without the secret instance's own Secret, the advice names both
+        // places a `hash` can be declared.
+        plan.objects = None;
+        let text = render_text(&plan);
+        assert!(
+            text.contains("on the secret instance whose `source` is app-db.sops.yaml, or in the `scope.mkSecret` call that names it"),
+            "{text}"
+        );
+
+        // Another refusal keeps its own line, and the deploy may go on
+        // with --on-error continue.
+        let Checked::Checked { items } = &mut plan.admission else {
+            unreachable!()
+        };
+        items.push(refusal("Deployment/web@app", RefusalReason::Invalid, None));
+        assert!(!plan.stops_only_on_hash_mismatch());
+        let text = render_text(&plan);
+        assert!(text.contains("Deployment/web@app invalid"), "{text}");
     }
 
     #[test]

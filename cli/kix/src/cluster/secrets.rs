@@ -28,14 +28,17 @@ pub(crate) enum SecretError {
     #[error("SOPS source file not found: {path}")]
     SourceNotFound { path: String },
 
+    /// Kix decrypted the SOPS file, and its values do not match the `hash`
+    /// the Secret declares. `sops_source` is the Secret's `kix.run/sops-source`.
     #[error(
-        "decrypted content of secret '{name}' does not match the `hash` in its `mkSecret` declaration (expected {expected}). {}",
-        hash_mismatch_next(name)
+        "the values in SOPS file {} do not match the `hash` declared for Secret '{name}' (expected {expected}). {}",
+        sops_file_name(sops_source),
+        hash_mismatch_next(sops_source, None)
     )]
     HashMismatch {
         name: String,
+        sops_source: String,
         expected: String,
-        actual: String,
     },
 
     #[error("failed to parse SOPS output as YAML/JSON for {path}: {message}")]
@@ -59,12 +62,52 @@ pub(crate) enum SecretError {
     NotAgeOnly { path: String, message: String },
 }
 
-/// What to do about a secret whose decrypted data does not match its `hash`.
-/// Kix never prints the hash it computed, because it is a digest of secret data.
-pub(crate) fn hash_mismatch_next(name: &str) -> String {
+/// Return what to do about a SOPS file whose values do not match its `hash`.
+/// `instance` names the secret instance whose `source` is the file, when Kix
+/// knows it. Kix never prints the hash it computed unasked, because it is a
+/// digest of secret values and deploy output often lands in shared logs.
+pub fn hash_mismatch_next(sops_source: &str, instance: Option<&str>) -> String {
+    let file = sops_file_name(sops_source);
+    let place = match instance {
+        Some(instance) => format!("the `hash` of instance '{instance}', whose `source` is {file}"),
+        None => format!(
+            "`hash` where {file} is declared: on the secret instance whose `source` is {file}, or in the `scope.mkSecret` call that names it"
+        ),
+    };
     format!(
-        "Check that the right SOPS file is in place. If you edited the SOPS file intentionally, update `hash` in the `mkSecret` declaration for '{name}' and run the command again (Kix does not print the new hash because it is computed over decrypted secret data)."
+        "If you changed {file} on purpose, run `kix secret hash <path to {file}>` and put the hash it prints in {place}. Otherwise, put back the SOPS file that matches `hash`."
     )
+}
+
+/// Return the file name of a SOPS source for messages, without the store
+/// hash that Kix's local store puts in front of it.
+pub fn sops_file_name(source: &str) -> &str {
+    let base = Path::new(source)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(source);
+    match base.split_at_checked(33) {
+        Some((prefix, name))
+            if !name.is_empty()
+                && prefix.ends_with('-')
+                && prefix[..32]
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()) =>
+        {
+            name
+        }
+        _ => base,
+    }
+}
+
+/// Decrypt the SOPS file at `path` with the `sops` in the Kix runtime and
+/// return the `hash` of its values, as `kix deploy` computes it.
+pub fn sops_file_hash(path: &Path) -> Result<String, String> {
+    let read = || -> Result<String, SecretError> {
+        let data = parse_secret_data(path, &decrypt_sops(path, None)?)?;
+        Ok(compute_content_hash(&data))
+    };
+    read().map_err(|e| e.to_string())
 }
 
 /// Result of hydrating a single secret.
@@ -182,8 +225,10 @@ fn hydrate_carried(
         if compute_content_hash(&data) != expected {
             return Err(SecretError::HashMismatch {
                 name: rid.name.clone(),
+                sops_source: keys::get(manifest, keys::SOPS_SOURCE)
+                    .unwrap_or_default()
+                    .to_string(),
                 expected,
-                actual: String::new(),
             });
         }
         data
@@ -503,8 +548,8 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
         if &actual != expected {
             return Err(SecretError::HashMismatch {
                 name: rid.name.clone(),
+                sops_source,
                 expected: expected.clone(),
-                actual,
             });
         }
     }
@@ -779,6 +824,45 @@ mod tests {
         assert_eq!(data.get("username").unwrap(), "admin");
         assert_eq!(data.get("password").unwrap(), "s3cret");
         assert_eq!(data.get("port").unwrap(), "5432");
+    }
+
+    #[test]
+    fn a_sops_file_is_named_without_its_store_hash() {
+        assert_eq!(
+            sops_file_name("/nix/store/0123456789abcdfghijklmnpqrsvwxyz-app-db.sops.yaml"),
+            "app-db.sops.yaml"
+        );
+        assert_eq!(
+            sops_file_name("/nix/store/0123456789abcdfghijklmnpqrsvwxyz-source/secrets/db.yaml"),
+            "db.yaml"
+        );
+        assert_eq!(
+            sops_file_name("secrets/app-db.sops.yaml"),
+            "app-db.sops.yaml"
+        );
+    }
+
+    /// A hash mismatch says the file decrypted, names the file, and tells
+    /// the user how to get the new hash.
+    #[test]
+    fn a_hash_mismatch_names_the_file_and_the_command_for_the_new_hash() {
+        let err = SecretError::HashMismatch {
+            name: "app-db-password".into(),
+            sops_source: "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-app-db.sops.yaml".into(),
+            expected: "sha256-old".into(),
+        };
+        let message = err.to_string();
+        assert!(
+            message.starts_with(
+                "the values in SOPS file app-db.sops.yaml do not match the `hash` declared for Secret 'app-db-password' (expected sha256-old)."
+            ),
+            "{message}"
+        );
+        assert!(
+            message.contains("run `kix secret hash <path to app-db.sops.yaml>`"),
+            "{message}"
+        );
+        assert!(!message.contains("/nix/store"), "{message}");
     }
 
     #[test]

@@ -485,6 +485,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
             resource: resource.clone(),
             reason,
             webhook,
+            sops_source: None,
             message,
         };
         match refusal {
@@ -594,6 +595,13 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
             Refusal::Hydration { message } => {
                 admission.push(refused(RefusalReason::Decryption, None, message.clone()))
             }
+            Refusal::HashMismatch {
+                sops_source,
+                message,
+            } => admission.push(AdmissionRefusal {
+                sops_source: Some(sops_source.clone()),
+                ..refused(RefusalReason::HashMismatch, None, message.clone())
+            }),
             Refusal::Other { message } => {
                 admission.push(refused(RefusalReason::Other, None, message.clone()))
             }
@@ -605,6 +613,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
                 resource: rid.display_id(),
                 reason: RefusalReason::Other,
                 webhook: None,
+                sops_source: None,
                 message: message.clone(),
             });
         }

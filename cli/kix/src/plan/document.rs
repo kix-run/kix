@@ -489,6 +489,9 @@ pub struct AdmissionRefusal {
     /// when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook: Option<String>,
+    /// The SOPS file the Secret is made from, for `hash_mismatch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sops_source: Option<String>,
     pub message: String,
 }
 
@@ -513,6 +516,9 @@ pub enum RefusalReason {
     UnknownKind,
     /// A SOPS Secret could not be decrypted.
     Decryption,
+    /// Kix decrypted a SOPS Secret, but its values do not match the `hash`
+    /// declared for it. `sops_source` names the SOPS file.
+    HashMismatch,
     /// The deploy refuses it before sending, or the apiserver gave another
     /// error.
     Other,
@@ -686,6 +692,23 @@ impl Plan {
                 .items()
                 .iter()
                 .any(|p| p.fate == PruneFate::DeleteRefused)
+    }
+
+    /// Return true when the deploy would stop, and every stop is a SOPS
+    /// Secret whose values do not match its `hash`.
+    pub fn stops_only_on_hash_mismatch(&self) -> bool {
+        self.stops()
+            && self.conflicts.items().is_empty()
+            && !self
+                .prune
+                .items()
+                .iter()
+                .any(|p| p.fate == PruneFate::DeleteRefused)
+            && self
+                .admission
+                .items()
+                .iter()
+                .all(|r| r.reason == RefusalReason::HashMismatch)
     }
 
     pub fn to_json(&self) -> String {
