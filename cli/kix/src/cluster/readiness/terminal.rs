@@ -73,6 +73,8 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
                 .unwrap_or("");
 
             match waiting_reason {
+                "ImagePullBackOff" | "ErrImagePull"
+                    if classify_pull_error(waiting_msg) == PullError::Transient => {}
                 "ImagePullBackOff" | "ErrImagePull" | "InvalidImageName" | "ImageInspectError" => {
                     return Some((
                         TerminalReason::ImagePull,
@@ -141,6 +143,94 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
         }
     }
     None
+}
+
+/// Whether an image pull error can clear up on a later pull of the same image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullError {
+    /// The registry or the network failed. The kubelet pulls again, and a
+    /// later pull can succeed.
+    Transient,
+    /// The image reference, the registry's answer, or the credentials are
+    /// wrong, so every later pull fails the same way.
+    Permanent,
+}
+
+/// Phrases of pull errors that a later pull cannot fix. They are checked
+/// before [`TRANSIENT_PULL_ERRORS`], so a message with both fails fast.
+const PERMANENT_PULL_ERRORS: &[&str] = &[
+    "manifest unknown",
+    "not found",
+    "unauthorized",
+    "denied",
+    "forbidden",
+    "invalid reference format",
+    "no matching manifest",
+    "repository does not exist",
+];
+
+/// Phrases of pull errors that come from the network or an overloaded
+/// registry. Each starts with a space or a separator so that a word such as
+/// `timeout=` in a URL does not match.
+const TRANSIENT_PULL_ERRORS: &[&str] = &[
+    " timeout",
+    "timeout exceeded",
+    "deadline exceeded",
+    "connection reset",
+    "connection refused",
+    " eof",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "no route to host",
+    "internal server error",
+    "bad gateway",
+    "service unavailable",
+    "too many requests",
+    "toomanyrequests",
+];
+
+/// Classify the message of an `ErrImagePull` or `ImagePullBackOff` container
+/// state. A message Kix does not recognize counts as permanent. This includes
+/// the bare `Back-off pulling image "x"` that kubelets before Kubernetes 1.30
+/// write without the pull error.
+pub fn classify_pull_error(message: &str) -> PullError {
+    let message = message.to_lowercase();
+    if PERMANENT_PULL_ERRORS.iter().any(|p| message.contains(p)) {
+        return PullError::Permanent;
+    }
+    if TRANSIENT_PULL_ERRORS.iter().any(|p| message.contains(p)) {
+        return PullError::Transient;
+    }
+    PullError::Permanent
+}
+
+/// Return the first container in `pod` whose image pull failed with a
+/// transient error, as `pod <pod>/<container>: <reason>: <message>`. The
+/// kubelet keeps pulling such an image, so the deploy keeps waiting and shows
+/// this error if the wait runs out.
+pub fn transient_pull_error(pod: &Value) -> Option<String> {
+    let pod_name = pod
+        .pointer("/metadata/name")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    ["/status/initContainerStatuses", "/status/containerStatuses"]
+        .into_iter()
+        .filter_map(|slot| pod.pointer(slot).and_then(Value::as_array))
+        .flatten()
+        .find_map(|cs| {
+            let reason = cs
+                .pointer("/state/waiting/reason")
+                .and_then(Value::as_str)?;
+            let message = cs
+                .pointer("/state/waiting/message")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let pulling = matches!(reason, "ImagePullBackOff" | "ErrImagePull");
+            (pulling && classify_pull_error(message) == PullError::Transient).then(|| {
+                let container = cs.get("name").and_then(Value::as_str).unwrap_or("?");
+                format!("pod {pod_name}/{container}: {reason}: {message}")
+            })
+        })
 }
 
 /// Classify workload-level terminal failures that don't require pod inspection.
@@ -317,7 +407,13 @@ async fn list_pods_for_workload(
     let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &pod_ar);
     let lp = kube::api::ListParams::default().labels(label_selector);
     match api.list(&lp).await {
-        Ok(list) => list.items.into_iter().map(|p| p.data).collect(),
+        // `DynamicObject::data` leaves out `metadata`, which the pod name in
+        // failure messages comes from, so serialize the whole object.
+        Ok(list) => list
+            .items
+            .into_iter()
+            .filter_map(|p| serde_json::to_value(p).ok())
+            .collect(),
         Err(e) => {
             tracing::debug!(
                 namespace = namespace,
@@ -345,6 +441,9 @@ fn has_pods(kind: &str) -> bool {
 pub(super) struct ScanResult {
     pub terminal: Option<(TerminalReason, String)>,
     pub pods: Vec<Value>,
+    /// A transient image pull error the kubelet is retrying; see
+    /// [`transient_pull_error`].
+    pub pull_retrying: Option<String>,
 }
 
 /// Extract the termination message lines from the most recently started pod.
@@ -425,18 +524,21 @@ pub(super) async fn scan_terminal(
         return ScanResult {
             terminal: Some(hit),
             pods,
+            pull_retrying: None,
         };
     }
     if !has_pods(kind) {
         return ScanResult {
             terminal: None,
             pods: Vec::new(),
+            pull_retrying: None,
         };
     }
     let Some(selector) = workload_label_selector(obj) else {
         return ScanResult {
             terminal: None,
             pods: Vec::new(),
+            pull_retrying: None,
         };
     };
     // Filter to the current rollout revision so previous-revision pods are ignored.
@@ -446,7 +548,12 @@ pub(super) async fn scan_terminal(
     };
     let pods = list_pods_for_workload(client, namespace, &selector).await;
     let terminal = pods.iter().find_map(classify_pod_terminal);
-    ScanResult { terminal, pods }
+    let pull_retrying = pods.iter().find_map(transient_pull_error);
+    ScanResult {
+        terminal,
+        pods,
+        pull_retrying,
+    }
 }
 
 /// Build a stable string fingerprint of a resource's progress state.
@@ -494,7 +601,12 @@ pub(super) fn progress_fingerprint(obj: &DynamicObject, kind: &str, pods: &[Valu
                             cs.get("restartCount").and_then(Value::as_i64).unwrap_or(0);
                         if let Some(r) = cs.pointer("/state/waiting/reason").and_then(Value::as_str)
                         {
-                            waiting_reasons.insert(r);
+                            // The kubelet moves a failing pull between these
+                            // two states on every retry, which is not progress.
+                            waiting_reasons.insert(match r {
+                                "ErrImagePull" => "ImagePullBackOff",
+                                other => other,
+                            });
                         }
                         // Include the running and terminated states in the fingerprint
                         // because transitioning from waiting to running is forward

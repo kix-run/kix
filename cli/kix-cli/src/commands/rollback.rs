@@ -5,6 +5,7 @@
 //! No Nix build is required because the target activation's manifests are already
 //! in the local Nix store.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -775,7 +776,9 @@ async fn plan_rollback(
 
 /// Send the rollback's writes to the apiserver as a dry run, and return each
 /// write it refuses with the reason. A rollback that stops halfway leaves the
-/// cluster between two builds, so a refusal stops it before any write.
+/// cluster between two builds, so a refusal stops it before any write. A
+/// write whose admission webhook could not reach a Service that the rollback
+/// writes is not a refusal, because the rollback creates that Service.
 async fn refused_writes(
     client: &kube::Client,
     checked: &CheckedPlan,
@@ -803,13 +806,32 @@ async fn refused_writes(
             "the rollback's dry run stopped: {e}. Nothing was applied to the cluster."
         ));
     }
-    Ok(answers
-        .into_iter()
-        .filter_map(|a| match a.outcome {
-            DryRunOutcome::Refused(r) => Some((a.rid, describe_refusal(&r))),
-            _ => None,
+    let written: HashSet<ResourceId> = checked
+        .plan()
+        .nodes()
+        .iter()
+        .filter_map(|n| match &n.action {
+            ChangeAction::Apply(manifest) => Some(ResourceId::from_value(manifest)),
+            ChangeAction::Skip(_) | ChangeAction::Orphan(_) => None,
         })
-        .collect())
+        .collect();
+    let mut refused = Vec::new();
+    for a in answers {
+        let DryRunOutcome::Refused(r) = a.outcome else {
+            continue;
+        };
+        match r.unreachable_service_written(|rid| written.contains(rid)) {
+            Some(service) if !output::quiet() => eprintln!(
+                "  {} {}: not checked, because its admission webhook could not reach {}, which this rollback writes",
+                output::dim("?"),
+                a.rid,
+                service.display_id()
+            ),
+            Some(_) => {}
+            None => refused.push((a.rid, describe_refusal(&r))),
+        }
+    }
+    Ok(refused)
 }
 
 /// Return one line for a refused write: who owns which fields for a
