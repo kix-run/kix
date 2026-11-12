@@ -1270,13 +1270,13 @@
           "type": "string"
         },
         {
-          "const": "hash_mismatch",
-          "description": "Kix decrypted a SOPS Secret, but its values do not match the `hash`\ndeclared for it. `sops_source` names the SOPS file.",
+          "const": "other",
+          "description": "The deploy refuses it before sending, or the apiserver gave another\nerror.",
           "type": "string"
         },
         {
-          "const": "other",
-          "description": "The deploy refuses it before sending, or the apiserver gave another\nerror.",
+          "const": "hash_mismatch",
+          "description": "Kix decrypted a SOPS Secret, but its values do not match the `hash`\ndeclared for it. `sops_source` names the SOPS file.",
           "type": "string"
         }
       ]
@@ -1408,13 +1408,13 @@
           "type": "string"
         },
         {
-          "const": "webhook_service_written_by_this_deploy",
-          "description": "An admission webhook that would be called could not reach its\nService, and this deploy writes that Service.",
+          "const": "dependency_not_checked",
+          "description": "The engine never reached the object, for example because the dry run\nwas cancelled. A refused dependency does not cause this: a dry run\nstill tries the dependents of a refused object.",
           "type": "string"
         },
         {
-          "const": "dependency_not_checked",
-          "description": "The engine never reached the object, for example because the dry run\nwas cancelled. A refused dependency does not cause this: a dry run\nstill tries the dependents of a refused object.",
+          "const": "webhook_service_written_by_this_deploy",
+          "description": "An admission webhook that would be called could not reach its\nService, and this deploy writes that Service.",
           "type": "string"
         }
       ]

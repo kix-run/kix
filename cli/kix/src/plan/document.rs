@@ -516,12 +516,12 @@ pub enum RefusalReason {
     UnknownKind,
     /// A SOPS Secret could not be decrypted.
     Decryption,
-    /// Kix decrypted a SOPS Secret, but its values do not match the `hash`
-    /// declared for it. `sops_source` names the SOPS file.
-    HashMismatch,
     /// The deploy refuses it before sending, or the apiserver gave another
     /// error.
     Other,
+    /// Kix decrypted a SOPS Secret, but its values do not match the `hash`
+    /// declared for it. `sops_source` names the SOPS file.
+    HashMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -606,13 +606,13 @@ pub enum UncheckedReason {
     NamespaceCreatedByThisDeploy,
     /// An admission webhook that would be called does not support dry run.
     WebhookNoDryRun,
-    /// An admission webhook that would be called could not reach its
-    /// Service, and this deploy writes that Service.
-    WebhookServiceWrittenByThisDeploy,
     /// The engine never reached the object, for example because the dry run
     /// was cancelled. A refused dependency does not cause this: a dry run
     /// still tries the dependents of a refused object.
     DependencyNotChecked,
+    /// An admission webhook that would be called could not reach its
+    /// Service, and this deploy writes that Service.
+    WebhookServiceWrittenByThisDeploy,
 }
 
 /// How much the `packages` section says about each change.
