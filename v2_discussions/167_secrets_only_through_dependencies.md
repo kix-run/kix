@@ -264,12 +264,24 @@ dependency's `identityHash` where it took `passwordHash`.
 
 ## 7. Phases
 
-1. The contract, the helper, and `packages.secret`, `packages.secret-ref`,
-   and `mkSecretRef` publishing it. Move the consumers to the helper.
-   Update `docs/.../secrets-crds-and-rbac.mdx`, `kix/lib/architecture.md`,
-   and the package-authoring, package-review, and kix-migration skills.
-2. The check (§5.3) and `kix/packages/not-secret.nix`. It passes once the
-   database packages move, so phase 3 lands in the same pull request or
-   the check starts with them listed and the list shrinks.
-3. The database packages (§5.4), after question 1.
+Built on branch `secrets-deps-impl` (2026-11-12):
+
+1. The contract and `helpers.use`; `scope.mkSecret` publishes `out.sops`.
+   Every package moved from `kix.checkSecretKeys` to the helper. Docs
+   (`package-anatomy`, `secrets-crds-and-rbac`, `dependency-contracts`) and
+   the package-authoring, package-review, and kix-migration skills updated.
+2. The option check (`kix/lib/tests/units/secret-options.nix`) and
+   `kix/packages/not-secret.nix`.
+3. The database packages (§5.4), the test clusters, `kix/package-eval.nix`,
+   and the kix-examples homelab.
 4. `external-secret` (§5.2).
+
+Not built:
+
+- The second check, over rendered Secrets with a plain-text credential key.
+- Returning readers with the checksum annotation and reloader wiring from
+  `helpers.use` (rule S10), the part that makes the dependency less code
+  than an option rather than about the same.
+- A store dependency for `external-secret`, so an ExternalSecret is ordered
+  after its SecretStore and the store's existence is checked. Today the
+  store is named by a plain string.
