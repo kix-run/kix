@@ -21,7 +21,7 @@ const FIELD_MANAGER: &str = "kix";
 /// Errors from apply operations.
 #[derive(Error, Debug)]
 pub enum ApplyError {
-    #[error("failed to apply {resource}: {source}")]
+    #[error("failed to apply {resource}: {}", reported(.source))]
     PatchFailed {
         resource: String,
         #[source]
@@ -29,7 +29,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "field ownership conflict on {resource} (not updated). Another field manager owns fields that Kix sets; run the deploy again with `--force-conflicts` to take ownership, or declare those fields on {resource} with `ownership.cede` if the other manager should keep owning them. Kubernetes reported: {source}"
+        "field ownership conflict on {resource} (not updated). Another field manager owns fields that Kix sets; run the command again with `--force-conflicts` to take ownership, or declare those fields on {resource} with `ownership.cede` if the other manager should keep owning them. Kubernetes reported: {}", reported(.source)
     )]
     Conflict {
         resource: String,
@@ -38,7 +38,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "immutable field changed on {resource} (not updated). Kubernetes does not allow changing this field in place, and Kix did not recreate {resource} automatically; review the impact of deleting {resource}, delete it, and run the deploy again. Kubernetes reported: {source}"
+        "immutable field changed on {resource} (not updated). Kubernetes does not allow changing this field in place, and Kix did not recreate {resource} automatically; review the impact of deleting {resource}, delete it, and run the deploy again. Kubernetes reported: {}", reported(.source)
     )]
     ImmutableConflict {
         resource: String,
@@ -47,7 +47,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "cannot drop a stored API version from {resource} (not updated). The cluster still has objects stored at an API version removed from `spec.versions`; keep that version in `spec.versions`, or migrate the stored objects to a version {resource} still serves (by reading and re-applying each object or running a storage-version migrator) and run the deploy again. Kubernetes reported: {source}"
+        "cannot drop a stored API version from {resource} (not updated). The cluster still has objects stored at an API version removed from `spec.versions`; keep that version in `spec.versions`, or migrate the stored objects to a version {resource} still serves (by reading and re-applying each object or running a storage-version migrator) and run the deploy again. Kubernetes reported: {}", reported(.source)
     )]
     CrdStoredVersion {
         resource: String,
@@ -56,9 +56,10 @@ pub enum ApplyError {
     },
 
     #[error(
-        "could not write Kix tracking annotations (`{}`, `{}`) on {resource}. Run the deploy again to finish writing the tracking annotations. Kubernetes reported: {source}",
+        "could not write Kix tracking annotations (`{}`, `{}`) on {resource}. Run the deploy again to finish writing the tracking annotations. Kubernetes reported: {}",
         keys::ACTIVATIONS,
-        keys::APPLIED_HASH
+        keys::APPLIED_HASH,
+        reported(.source)
     )]
     BookkeepingAnnotationsFailed {
         resource: String,
@@ -84,6 +85,15 @@ pub enum ApplyError {
         "{resource} is a namespaced resource on the cluster, but its manifest has no `metadata.namespace` (not applied). Create {resource} with a namespaced scope (`scope.mkResource`) or set `metadata.namespace`, then run the deploy again."
     )]
     NoNamespace { resource: String },
+}
+
+/// Return what the API server said in `e`: the message of an API error
+/// without its debug form, or the whole error otherwise.
+fn reported(e: &kube::Error) -> String {
+    match e {
+        kube::Error::Api(status) if !status.message.is_empty() => status.message.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// Return `true` if `rid` has a namespaced kind (`scope == Scope::Namespaced`)

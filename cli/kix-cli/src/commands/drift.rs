@@ -55,7 +55,12 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
             .iter()
             .flat_map(|r| r.clusters.iter().map(String::as_str))
             .collect();
-        print_text(&reports, clusters.len() > 1, args.cluster.as_deref());
+        print_text(
+            &reports,
+            clusters.len() > 1,
+            args.cluster.as_deref(),
+            global.verbose > 0,
+        );
     }
 
     if drifted > 0 {
@@ -64,11 +69,17 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str>) {
+/// Print a line for each resource Kix could not show to be in sync, and a
+/// summary. Resources in sync get a line of their own only when `verbose`,
+/// so one drifted object does not hide among dozens.
+fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str>, verbose: bool) {
     crate::say!("{} Kix-managed resources", reports.len());
     crate::say!();
 
     for report in reports {
+        if !verbose && matches!(report.verdict, DriftVerdict::InSync) {
+            continue;
+        }
         let rid = if name_clusters {
             format!("{} [{}]", report.rid, owners_label(&report.clusters))
         } else {
@@ -150,6 +161,9 @@ fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str
             ", {} missing field ownership entry",
             output::yellow(&no_fieldset.to_string())
         );
+    }
+    if !verbose && in_sync > 0 {
+        print!("{}", output::dim(" (-v lists the resources in sync)"));
     }
     println!();
     if drifted > 0 {

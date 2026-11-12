@@ -16,10 +16,12 @@ use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::binding;
 use kix::cluster::discovery;
+use kix::cluster::preview::{DryRunOutcome, Refusal};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
-use kix::cluster::stream::{DeployObserver, DeployResult};
+use kix::cluster::stream::{DeployObserver, DeployResult, NullObserver};
 use kix::cluster::watchdog::StallPolicy;
+use kix::manifest::types::ResourceId;
 use kix::plan::baseline::{self, Baseline};
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
@@ -307,7 +309,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         cluster,
         &current,
         selected,
-        args.prune,
+        flags(args.prune, args.force_conflicts),
     )
     .await?;
     if !output::quiet() {
@@ -317,6 +319,22 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         target_result_dir,
         checked,
     } = planned;
+
+    let refused = refused_writes(&client, &checked).await?;
+    if !refused.is_empty() {
+        print_refused(&refused);
+        let next = if args.force_conflicts {
+            String::new()
+        } else {
+            format!(
+                " Run `kix rollback {cluster} --force-conflicts` to take fields another manager owns."
+            )
+        };
+        return Err(miette!(
+            "the rollback would stop on {} write(s), so Kix did not start it. Nothing was applied to the cluster.{next}",
+            refused.len()
+        ));
+    }
 
     let total_apply = checked
         .plan()
@@ -532,7 +550,7 @@ async fn run_operator_async(
         cluster,
         &current,
         selected,
-        true,
+        flags(true, false),
     )
     .await?;
     if !output::quiet() {
@@ -665,14 +683,14 @@ impl RollbackPlan {
 
 /// Build [`PlanFlags`] for a rollback.
 ///
-/// Rollbacks never force field-ownership conflicts or accept stateful
-/// migrations automatically.
-fn flags(prune: bool) -> PlanFlags {
+/// A rollback takes conflicting fields only under `--force-conflicts`, and
+/// never accepts stateful migrations.
+fn flags(prune: bool, force_conflicts: bool) -> PlanFlags {
     PlanFlags {
         prune,
         prune_mode: None,
         reconcile: false,
-        force_conflicts: false,
+        force_conflicts,
         accept_migrations: false,
     }
 }
@@ -695,7 +713,7 @@ async fn plan_rollback(
     cluster: &str,
     current: &Record,
     selected: &Record,
-    prune: bool,
+    flags: PlanFlags,
 ) -> Result<RollbackPlan> {
     // Load the target activation's build from its recorded path or local store
     // hash. Pre-migration builds are allowed here because stamping upgrades
@@ -745,7 +763,7 @@ async fn plan_rollback(
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;
-    let checked = Planner::new(flags(prune), &report)
+    let checked = Planner::new(flags, &report)
         .plan(&target_graph, cluster, &baseline, Some(client))
         .await
         .map_err(|e| miette!("{e}"))?;
@@ -753,6 +771,68 @@ async fn plan_rollback(
         target_result_dir,
         checked,
     })
+}
+
+/// Send the rollback's writes to the apiserver as a dry run, and return each
+/// write it refuses with the reason. A rollback that stops halfway leaves the
+/// cluster between two builds, so a refusal stops it before any write.
+async fn refused_writes(
+    client: &kube::Client,
+    checked: &CheckedPlan,
+) -> Result<Vec<(ResourceId, String)>> {
+    let target = Target::connect(client.clone(), SopsSources::Local)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    let config = SchedulerConfig {
+        timeout: readiness::DEFAULT_TIMEOUT,
+        on_error: OnErrorPolicy::Continue,
+        cancel: kix::cluster::cancel::CancelToken::new(),
+        concurrency: scheduler::CONCURRENCY,
+        stall: StallPolicy::from_env(),
+        rerun_failed: true,
+        check_unchanged: true,
+        names_flags: false,
+    };
+    let (result, answers) = checked
+        .dry_run(target, config, Arc::new(NullObserver))
+        .await;
+    if let Err(e) = &result
+        && !matches!(e, scheduler::DeployError::NodesFailed { .. })
+    {
+        return Err(miette!(
+            "the rollback's dry run stopped: {e}. Nothing was applied to the cluster."
+        ));
+    }
+    Ok(answers
+        .into_iter()
+        .filter_map(|a| match a.outcome {
+            DryRunOutcome::Refused(r) => Some((a.rid, describe_refusal(&r))),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Return one line for a refused write: who owns which fields for a
+/// conflict, or the apiserver's message.
+fn describe_refusal(refusal: &Refusal) -> String {
+    match refusal {
+        Refusal::Conflict { owners, .. } if !owners.is_empty() => {
+            let owned: Vec<String> = owners
+                .iter()
+                .map(|o| format!("{} owns {}", o.manager, o.fields.join(", ")))
+                .collect();
+            format!("field ownership conflict: {}", owned.join("; "))
+        }
+        other => other.message(),
+    }
+}
+
+fn print_refused(refused: &[(ResourceId, String)]) {
+    eprintln!();
+    eprintln!("The rollback would stop on {} write(s):", refused.len());
+    for (rid, why) in refused {
+        eprintln!("  {} {rid}: {why}", output::red("✗"));
+    }
 }
 
 /// Reject a rollback target whose build belongs to a different Kix cluster

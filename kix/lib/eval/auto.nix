@@ -530,6 +530,17 @@ rec {
       # availablePackages entry or autoNamespace places every copy in one
       # namespace, so only packages placed in their requester's namespace can
       # spread across namespaces.
+      # Return how a cluster names Kix's package `name`, at its level.
+      packageSpelling =
+        name:
+        let
+          byLevel = import ../../packages/by-level.nix { inherit lib; };
+        in
+        if !(byLevel.stable ? ${name}) && byLevel.experimental ? ${name} then
+          "packages.experimental.${name}"
+        else
+          "packages.${name}";
+
       spreadRefusals = builtins.concatMap (
         name:
         let
@@ -545,8 +556,7 @@ rec {
             ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
             ++ [
               "Declare it once, and every consumer resolves to it:"
-              "  instances.<namespace>.${name}.package = packages.${name};"
-              "Write packages.experimental.${name} if ${name} is an experimental package."
+              "  instances.<namespace>.${name}.package = ${packageSpelling name};"
             ]
           )
         )
@@ -573,9 +583,8 @@ rec {
             ++ map (p: "  ${labelRequester p.requester}, for dependency '${p.depName}'") ps
             ++ [
               "Removing that package would then remove ${name} for the whole cluster. Declare ${name} once, in a namespace of its own:"
-              "  instances.<namespace>.${name}.package = packages.${name};"
+              "  instances.<namespace>.${name}.package = ${packageSpelling name};"
               "or set autoNamespace to place every package Kix adds there."
-              "Write packages.experimental.${name} if ${name} is an experimental package."
             ]
           )
         )

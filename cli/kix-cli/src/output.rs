@@ -51,6 +51,24 @@ pub fn quiet() -> bool {
     mode().quiet
 }
 
+/// Show `msg` as a progress line on stderr that the next one replaces.
+/// Nothing is written under `--quiet` or when stderr is not a terminal,
+/// where the carriage return and clear-line codes would land in a log.
+pub fn status_line(msg: &str) {
+    use std::io::IsTerminal;
+    if !quiet() && std::io::stderr().is_terminal() {
+        eprint!("\r\x1b[2K  {msg}");
+    }
+}
+
+/// Clear the line [`status_line`] wrote.
+pub fn clear_status_line() {
+    use std::io::IsTerminal;
+    if !quiet() && std::io::stderr().is_terminal() {
+        eprint!("\r\x1b[2K");
+    }
+}
+
 /// Return the active [`OutputFormat`].
 pub fn format() -> OutputFormat {
     mode().format

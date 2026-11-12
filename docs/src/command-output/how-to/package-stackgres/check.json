@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-package-stackgres",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    41 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 0 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    41 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 0 info \n\nsecurity.hasNetworkPolicy (warning), 1:\n  stackgres-system: namespace 'stackgres-system' has workloads but no network policy\n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 41 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 0 info\n",
+      "stdoutDrift": "\nTOOL RESULT DETAILS\neval pass 41 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 0 info\nsecurity.hasNetworkPolicy (warning), 1:\nstackgres-system: namespace 'stackgres-system' has workloads but no network policy\n",
       "stderrDrift": "",
       "exitCode": 0
     }

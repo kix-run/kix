@@ -10,9 +10,9 @@
     {
       "command": "kix compliance audit 19-scorecards --out ./compliance --builder-id https://ci.example/runs/1842",
       "stdout": "",
-      "stderr": "Building cluster '19-scorecards'...\n  Evaluating cluster '19-scorecards'...\n  Reading package index...\n  Loading store graph...\n  Reading 6 packages...\n  Computing cross-package dependencies...\n\n  Wrote audit bundle to ./compliance\n    scorecard: 0 errors, 6 warnings, 2 info\n    framework: SOC 2\n",
+      "stderr": "Building cluster '19-scorecards'...\n  Evaluating cluster '19-scorecards'...\n  Reading package index...\n  Loading store graph...\n  Reading 6 packages...\n  Computing cross-package dependencies...\n\n  Wrote audit bundle to ./compliance\n    scorecard: 0 errors, 2 warnings, 2 info\n    framework: SOC 2\n",
       "stdoutDrift": "",
-      "stderrDrift": "\nBuilding cluster '19-scorecards'...\nComputing cross-package dependencies...\nEvaluating cluster '19-scorecards'...\nLoading store graph...\nReading 6 packages...\nReading package index...\nWrote audit bundle to ./compliance\nframework: SOC 2\nscorecard: 0 errors, 6 warnings, 2 info\n",
+      "stderrDrift": "\nBuilding cluster '19-scorecards'...\nComputing cross-package dependencies...\nEvaluating cluster '19-scorecards'...\nLoading store graph...\nReading 6 packages...\nReading package index...\nWrote audit bundle to ./compliance\nframework: SOC 2\nscorecard: 0 errors, 2 warnings, 2 info\n",
       "exitCode": 0
     }
   ]
