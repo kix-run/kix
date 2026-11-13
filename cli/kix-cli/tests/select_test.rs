@@ -25,7 +25,8 @@ struct Setup {
 }
 
 impl Setup {
-    /// Make a data directory, and a project whose kix.toml says `kix`.
+    /// Make a data directory, and a project whose flake.lock pins the Kix
+    /// library tag `v<kix>`.
     fn new(kix: &str) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
@@ -34,7 +35,8 @@ impl Setup {
         let site = root.join("site");
         std::fs::create_dir_all(&data).unwrap();
         std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join("kix.toml"), format!("kix = \"{kix}\"\n")).unwrap();
+        std::fs::write(project.join("flake.nix"), "{ outputs = _: { }; }\n").unwrap();
+        std::fs::write(project.join("flake.lock"), lock(&format!("v{kix}"))).unwrap();
         Setup {
             _tmp: tmp,
             data,
@@ -71,6 +73,23 @@ impl Setup {
     }
 }
 
+/// Return a flake.lock whose `kix` input pins the ref `r` of the Kix
+/// repository.
+fn lock(r: &str) -> String {
+    serde_json::json!({
+        "root": "root",
+        "version": 7,
+        "nodes": {
+            "root": { "inputs": { "kix": "kix" } },
+            "kix": {
+                "original": { "type": "github", "owner": "kix-run", "repo": "kix", "ref": r },
+                "locked": { "type": "github", "owner": "kix-run", "repo": "kix", "rev": "0123456789abcdef0123456789abcdef01234567" }
+            }
+        }
+    })
+    .to_string()
+}
+
 fn real_kix() -> PathBuf {
     assert_cmd::cargo::cargo_bin("kix")
 }
@@ -90,7 +109,7 @@ fn stdout_of(cmd: &mut Command) -> (String, String) {
 
 #[test]
 fn an_older_kix_hands_over_with_its_arguments_unchanged() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let fake = s.fake("9.9.1");
     let out = stdout(s.kix().arg("--flake").arg(&s.project).args([
         "list",
@@ -116,7 +135,7 @@ fn an_older_kix_hands_over_with_its_arguments_unchanged() {
 
 #[test]
 fn a_chosen_kix_never_selects_again_and_says_who_chose_it() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     s.fake("9.9.1");
     let bin = s.data.join(VERSION).join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -130,17 +149,17 @@ fn a_chosen_kix_never_selects_again_and_says_who_chose_it() {
         .assert()
         .success()
         .stdout(format!("kix {VERSION}\n"))
-        .stderr(predicate::str::contains(format!(
-            "  chosen by kix = \"9.9\" in {} (started from /opt/newer/bin/kix)",
-            s.project.join("kix.toml").display()
-        )));
+        .stderr(predicate::str::contains(
+            "  started from /opt/newer/bin/kix",
+        ));
 }
 
 #[test]
-fn selection_ignores_settings_this_kix_does_not_know() {
-    let s = Setup::new("9.9");
-    std::fs::write(s.project.join("kix.toml"), "kix = \"9.9\"\nfuture = 1\n").unwrap();
+fn selection_reads_only_flake_lock() {
+    let s = Setup::new("9.9.1");
+    std::fs::write(s.project.join("kix.toml"), "kix = \"9.8\"\nfuture = 1\n").unwrap();
     let fake = s.fake("9.9.1");
+    s.fake("9.9.2");
     let out = stdout(
         s.kix()
             .arg("--flake")
@@ -154,22 +173,98 @@ fn selection_ignores_settings_this_kix_does_not_know() {
 }
 
 #[test]
-fn a_kix_older_than_0_8_is_refused() {
-    let s = Setup::new("0.7");
+fn a_project_without_a_versioned_lock_is_refused_with_the_fix() {
+    let s = Setup::new("9.9.1");
+    let running = format!("kix upgrade --to {VERSION}");
+    let refused = |expected: &str| {
+        s.kix()
+            .arg("--flake")
+            .arg(&s.project)
+            .args(["list", "clusters"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(expected.to_string()));
+    };
+    std::fs::remove_file(s.project.join("flake.lock")).unwrap();
+    refused(&format!(
+        "This project has no flake.lock. Run `{running}` to pin the Kix library and create it."
+    ));
+
+    let untagged = lock("v9.9.1").replace(",\"ref\":\"v9.9.1\"", "");
+    assert!(!untagged.contains("ref"), "{untagged}");
+    std::fs::write(s.project.join("flake.lock"), untagged).unwrap();
+    refused(&format!(
+        "flake.nix uses the Kix library without a version. Run `{running}` to pin one."
+    ));
+
+    let old = lock("v9.9.1").replace("{\"kix\":\"kix\"}", "{\"kixpkgs\":\"kix\"}");
+    assert!(old.contains("kixpkgs"), "{old}");
+    std::fs::write(s.project.join("flake.lock"), old).unwrap();
+    refused(
+        "[K9179] flake.nix names the Kix library input kixpkgs, and Kix now reads only an input named kix. Rename the input to kix in flake.nix, then run `kix upgrade --to 9.9.1`.",
+    );
+
+    // A directory without flake.nix is no project, so the command runs here.
+    let empty = s.project.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    s.kix()
+        .arg("--flake")
+        .arg(&empty)
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("kix {VERSION}\n"));
+}
+
+#[test]
+fn a_development_library_runs_here_and_says_so() {
+    let s = Setup::new("9.9.1");
+    s.fake("9.9.1");
+    std::fs::write(s.project.join("flake.lock"), lock("main")).unwrap();
+    s.kix()
+        .arg("--flake")
+        .arg(&s.project)
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("kix {VERSION}\n"))
+        .stderr(predicate::str::contains(
+            "  this project uses a development Kix library: the input kix follows the branch main",
+        ));
+    // An override of the input on the command line counts as one too.
+    std::fs::write(s.project.join("flake.lock"), lock("v9.9.1")).unwrap();
+    s.kix()
+        .arg("--flake")
+        .arg(&s.project)
+        .args(["--override-input", "kix", "path:/src/kix", "--version"])
+        .assert()
+        .success()
+        .stdout(format!("kix {VERSION}\n"))
+        .stderr(predicate::str::contains(
+            "--override-input kix path:/src/kix",
+        ));
+}
+
+#[test]
+fn the_kix_setting_in_kix_toml_is_refused() {
+    let s = Setup::new(VERSION);
+    std::fs::write(s.project.join("kix.toml"), "kix = \"0.9\"\n").unwrap();
     s.kix()
         .arg("--flake")
         .arg(&s.project)
         .args(["list", "clusters"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains(
-            "sets kix = \"0.7\", but Kix 0.7 and older cannot read this setting. Name Kix 0.8 or newer, or remove the line.",
-        ));
+        .stderr(
+            predicate::str::contains("[K4476]").and(predicate::str::contains(
+                "Delete the kix line from kix.toml.",
+            )),
+        );
 }
 
 #[test]
 fn version_runs_an_installed_match_and_never_installs() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
     s.kix()
@@ -181,7 +276,7 @@ fn version_runs_an_installed_match_and_never_installs() {
         .success()
         .stdout(format!("kix {VERSION}\n"))
         .stderr(predicate::str::contains(
-            "  this project needs Kix 9.9, which is not installed. Any other kix command installs it.",
+            "  this project uses Kix 9.9.1, which is not installed. Any other kix command installs it.",
         ));
     assert!(!s.data.join("9.9.1").exists());
 
@@ -195,7 +290,7 @@ fn version_runs_an_installed_match_and_never_installs() {
 
 #[test]
 fn without_a_home_directory_nothing_is_installed() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
     let message = "Kix cannot find a home directory to install into. Set HOME or XDG_DATA_HOME.";
@@ -224,7 +319,7 @@ fn without_a_home_directory_nothing_is_installed() {
 
 #[test]
 fn without_auto_install_a_missing_version_is_refused() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     s.kix()
         .env("KIX_AUTO_INSTALL", "0")
         .arg("--flake")
@@ -233,13 +328,13 @@ fn without_auto_install_a_missing_version_is_refused() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
-            "This project needs Kix 9.9 (kix.toml), and no Kix 9.9 is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install 9.9`.",
+            "This project uses Kix 9.9.1 (flake.lock), and Kix 9.9.1 is not installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install 9.9.1`.",
         ));
 }
 
 #[test]
 fn self_and_completions_run_in_the_kix_the_user_started() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     s.fake("9.9.1");
     let list = stdout(
         s.kix()
@@ -263,22 +358,15 @@ fn self_and_completions_run_in_the_kix_the_user_started() {
 }
 
 #[test]
-fn a_project_this_kix_meets_runs_here() {
+fn a_project_on_this_version_runs_here() {
     let running: kix::version::Version = VERSION.parse().unwrap();
-    // A Kix older than the first one that reads the setting cannot be named
-    // in kix.toml, so a build of such a version has no project it meets.
-    if running.minor_key() < kix::version::policy::FIRST_SELECTING {
-        return;
-    }
-    // A minor never matches a prerelease, so a prerelease is named exactly.
-    // An installed Kix of another minor must not take over.
-    let req = if running.is_prerelease() {
-        running.release()
-    } else {
-        running.minor_text()
-    };
-    let s = Setup::new(&req);
-    s.fake(&format!("{}.{}.0", running.major, running.minor + 1));
+    let s = Setup::new(VERSION);
+    s.fake(&format!(
+        "{}.{}.{}",
+        running.major,
+        running.minor,
+        running.patch + 1
+    ));
     s.kix()
         .arg("--flake")
         .arg(&s.project)
@@ -286,12 +374,12 @@ fn a_project_this_kix_meets_runs_here() {
         .assert()
         .success()
         .stdout(format!("kix {VERSION}\n"))
-        .stderr(predicate::str::contains("chosen by").not());
+        .stderr(predicate::str::contains("started from").not());
 }
 
 #[test]
 fn version_without_auto_install_says_how_to_install() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     s.kix()
         .env("KIX_AUTO_INSTALL", "0")
         .arg("--flake")
@@ -301,7 +389,7 @@ fn version_without_auto_install_says_how_to_install() {
         .success()
         .stdout(format!("kix {VERSION}\n"))
         .stderr(predicate::str::contains(
-            "  this project needs Kix 9.9, which is not installed. Run `kix self install 9.9`.",
+            "  this project uses Kix 9.9.1, which is not installed. Run `kix self install 9.9.1`.",
         ));
 }
 
@@ -414,7 +502,7 @@ fn leftovers(data: &Path) -> Vec<String> {
 
 #[test]
 fn a_missing_version_is_installed_then_run() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
     let out = s
@@ -429,7 +517,7 @@ fn a_missing_version_is_installed_then_run() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stderr}");
     assert!(
-        stderr.contains("Installing Kix 9.9.1 (this project needs 9.9)"),
+        stderr.contains("Installing Kix 9.9.1 (this project uses 9.9.1)"),
         "{stderr}"
     );
     assert!(
@@ -452,43 +540,23 @@ fn a_missing_version_is_installed_then_run() {
 }
 
 #[test]
-fn a_prerelease_is_installed_only_when_named() {
-    let s = Setup::new("9.9");
+fn a_prerelease_is_installed_when_the_lock_pins_it() {
+    let s = Setup::new("9.9.0-rc.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.0-rc.1", Signed::Yes);
-    let run = || {
-        s.kix()
-            .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
-            .arg("--flake")
-            .arg(&s.project)
-            .args(["list", "clusters"])
-            .output()
-            .unwrap()
-    };
-
-    let out = run();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "{stderr}");
-    assert!(
-        stderr
-            .contains("This project needs Kix 9.9 (kix.toml), and no Kix 9.9 release exists for "),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(
-            "Kix 9.9.0-rc.1 is a prerelease, which a minor such as 9.9 never matches. To use it for this project, set kix = \"9.9.0-rc.1\" in kix.toml"
-        ),
-        "{stderr}"
-    );
-    assert!(!s.data.join("9.9.0-rc.1").exists());
-
-    std::fs::write(s.project.join("kix.toml"), "kix = \"9.9.0-rc.1\"\n").unwrap();
-    let out = run();
+    let out = s
+        .kix()
+        .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
+        .arg("--flake")
+        .arg(&s.project)
+        .args(["list", "clusters"])
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stderr}");
     assert!(
-        stderr.contains("Installing Kix 9.9.0-rc.1 (this project needs 9.9.0-rc.1)"),
+        stderr.contains("Installing Kix 9.9.0-rc.1 (this project uses 9.9.0-rc.1)"),
         "{stderr}"
     );
     assert!(
@@ -502,7 +570,7 @@ fn a_prerelease_is_installed_only_when_named() {
 
 #[test]
 fn a_release_whose_signature_does_not_verify_is_not_installed() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Tampered);
     s.kix()
@@ -534,7 +602,7 @@ fn a_release_whose_signature_does_not_verify_is_not_installed() {
 
 #[test]
 fn a_release_without_a_signature_is_not_installed() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Missing);
     s.kix()
@@ -553,7 +621,7 @@ fn a_release_without_a_signature_is_not_installed() {
 // treat it as a directory.
 #[test]
 fn a_site_source_is_fetched_over_the_network() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     s.kix()
         .env("KIX_RELEASE_SOURCE", "https://127.0.0.1:9")
@@ -568,7 +636,7 @@ fn a_site_source_is_fetched_over_the_network() {
 
 #[test]
 fn self_install_list_and_prune() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
     s.fake("9.8.0");
@@ -626,7 +694,7 @@ fn self_install_list_and_prune() {
 
 #[test]
 fn self_upgrade_refuses_a_kix_the_script_did_not_install() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     s.kix()
         .args(["self", "upgrade"])
         .assert()
@@ -638,7 +706,7 @@ fn self_upgrade_refuses_a_kix_the_script_did_not_install() {
 
 #[test]
 fn self_upgrade_installs_the_newest_release_and_moves_the_link() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
     let bin = s.data.join(VERSION).join("bin");
@@ -671,7 +739,7 @@ fn self_upgrade_installs_the_newest_release_and_moves_the_link() {
 
 #[test]
 fn self_upgrade_moves_the_link_the_receipt_names() {
-    let s = Setup::new("9.9");
+    let s = Setup::new("9.9.1");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
     let bin = s.data.join(VERSION).join("bin");

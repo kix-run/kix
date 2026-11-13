@@ -35,9 +35,8 @@ pub enum KixEvalError {
     #[error(
         "cluster '{cluster}' uses a Kix library older than Kix {kix}\n  \
          No project files or cluster resources were changed.\n\n  \
-         Next (choose one):\n    \
-         - Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.\n    \
-         - {KEEP_LIBRARY}",
+         Next:\n    \
+         Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.",
         kix = crate::version::running().release()
     )]
     NoActivationIndex { cluster: String },
@@ -85,9 +84,9 @@ pub enum KixEvalError {
     #[error(transparent)]
     Project(#[from] crate::project::ProjectMismatch),
 
-    /// The project's Kix library is a version this Kix cannot build.
+    /// The project's Kix library is not the running Kix.
     #[error(transparent)]
-    LibraryIncompatible(Box<crate::version::policy::LibraryIncompatible>),
+    LibraryMismatch(Box<crate::version::policy::LibraryMismatch>),
 
     #[error(transparent)]
     Helm(#[from] super::helm::HelmError),
@@ -96,9 +95,6 @@ pub enum KixEvalError {
     #[error("could not read the built resources and their dependencies: {0}")]
     NotJson(#[from] super::manifest_json::NotJson),
 }
-
-/// The choice, in a library mismatch, to keep the project's Kix library.
-pub(crate) const KEEP_LIBRARY: &str = "To keep this project on its current Kix library instead, set `kix = \"<major.minor>\"` in `kix.toml` (using the Kix library's minor version, such as `\"0.8\"`).";
 
 /// The next step after an error that reports a bug in Kix.
 pub const REPORT_A_BUG: &str = "Run your command again with `-v` to capture the full trace and report the output at https://github.com/kix-run/kix/issues.";

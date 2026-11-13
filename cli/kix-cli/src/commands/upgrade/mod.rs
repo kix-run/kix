@@ -41,7 +41,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let verbose = global.verbose > 0;
     let Some(dir) = super::project_dir(&global.flake).filter(|d| d.is_dir()) else {
         return refuse(&format!(
-            "Cannot run `kix upgrade` on non-local flake `{}`: `kix upgrade` must edit kix.toml, flake.nix, and flake.lock in a local directory.\nNext: clone the project locally and run `kix upgrade` from that directory.",
+            "Cannot run `kix upgrade` on non-local flake `{}`: `kix upgrade` must edit flake.nix and flake.lock in a local directory.\nNext: clone the project locally and run `kix upgrade` from that directory.",
             global.flake
         ));
     };
@@ -56,12 +56,13 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let resume = previous
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
-    let from: Version = match &resume {
-        Some(s) => s
-            .from
-            .parse()
-            .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
-        None => current_version(&dir, &config)?,
+    let from: Option<Version> = match &resume {
+        Some(s) => Some(
+            s.from
+                .parse()
+                .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
+        ),
+        None => project_version(&dir)?,
     };
     let to = match args.to.as_deref() {
         None | Some("latest") => None,
@@ -75,12 +76,13 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         },
     };
     // The version the project is on already: nothing is upgraded, so the
-    // release index and the builds are not needed.
+    // release index is not needed.
     if resume.is_none()
-        && let Some(Requirement::Exact(v)) = &to
-        && *v == from
+        && let (Some(from), Some(Requirement::Exact(v))) = (&from, &to)
+        && v == from
     {
-        return repair(&dir, &config, v, args.dry_run);
+        println!("Already on Kix {}. Nothing to upgrade.", from.release());
+        return Ok(());
     }
 
     if resume.is_none()
@@ -105,6 +107,14 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             out::list(&refs),
             refs.join(" ")
         ));
+    }
+
+    // A project that pins no version has nothing to build and compare
+    // against, so Kix only pins the version it names exactly.
+    if from.is_none()
+        && let Some(Requirement::Exact(v)) = &to
+    {
+        return pin_only(&dir, v, args.dry_run);
     }
 
     let source = Source::from_env();
@@ -145,6 +155,9 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             ),
             (None, None) => format!("No Kix release found for {system}."),
         });
+    };
+    let Some(from) = from else {
+        return pin_only(&dir, &target, args.dry_run);
     };
     if target <= from {
         if resume.is_some() {
@@ -188,8 +201,8 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         work: work_dir(&dir),
         installed_here: Vec::new(),
         from: from.clone(),
-        pinned: match &config.kix {
-            Some(Requirement::Exact(v)) => v.clone(),
+        pinned: match project_version(&dir) {
+            Ok(Some(v)) => v,
             _ => from.clone(),
         },
         state: None,
@@ -244,7 +257,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         Some(s) => {
             if s.before != before || !before.is_dir() {
                 return refuse(&format!(
-                    "Cannot resume upgrade from Kix {from}: cached baseline builds were not found at {}.\nkix.toml, flake.nix, and flake.lock remain at Kix {pinned}.\nNext: delete kix-upgrade.json and run `kix upgrade` to start a new comparison from Kix {pinned}.",
+                    "Cannot resume upgrade from Kix {from}: cached baseline builds were not found at {}.\nflake.nix and flake.lock remain at Kix {pinned}.\nNext: delete kix-upgrade.json and run `kix upgrade` to start a new comparison from Kix {pinned}.",
                     before.display(),
                     from = from.release(),
                     pinned = run.pinned.release()
@@ -395,7 +408,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 goal.release()
             );
             println!(
-                "kix.toml, flake.nix, and flake.lock are pinned to {} so you can fix this step first.",
+                "flake.nix and flake.lock are pinned to {} so you can fix this step first.",
                 failing.release()
             );
             println!(
@@ -413,7 +426,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 );
             }
             println!(
-                "kix.toml, flake.nix, and flake.lock are pinned to {} so you can fix the build.",
+                "flake.nix and flake.lock are pinned to {} so you can fix the build.",
                 goal.release()
             );
             println!("Next: fix the error above, then run `kix upgrade` to finish the upgrade.");
@@ -512,7 +525,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 from.release()
             ),
             format!(
-                "     kix.toml, flake.nix, and flake.lock are pinned to {}.",
+                "     flake.nix and flake.lock are pinned to {}.",
                 goal.release()
             ),
         ]);
@@ -546,116 +559,85 @@ fn exit(code: Exit) -> Result<()> {
     Err(Stopped(code).into())
 }
 
-/// Return the version of Kix the project uses: the exact version in
-/// `kix.toml`, or else the version of its Kix library.
-fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<Version> {
-    if let Some(Requirement::Exact(v)) = &config.kix {
-        return Ok(v.clone());
-    }
-    super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
-    kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
-    if let Some(version) = library_version(dir) {
-        return Ok(version);
-    }
-    refuse(&format!(
-        "Cannot determine the current Kix version for this project from kix.toml or flake.lock.\nNo project files were modified.\nNext: set the exact version in kix.toml (for example `kix = \"{}\"`), then run `kix upgrade` again.",
-        kix::version::running().release()
-    ))?;
-    unreachable!("refuse exits")
-}
-
-/// Return the version of the Kix library the project in `dir` builds with,
-/// or `None` when Kix cannot read it.
-fn library_version(dir: &Path) -> Option<Version> {
-    match kix::library::eval_version(dir, &[]) {
-        kix::library::LibraryVersion::Known(v) => v.parse().ok(),
-        _ => None,
+/// Return the version of Kix the project in `dir` uses, from the release
+/// tag its `flake.lock` pins, or `None` when it pins none.
+fn project_version(dir: &Path) -> Result<Option<Version>> {
+    use kix::flake_lock::{Development, LockError, ProjectKix};
+    match kix::flake_lock::project_kix(dir, &[]) {
+        Ok(ProjectKix::Release(v)) => Ok(Some(v)),
+        Ok(ProjectKix::Development(Development::OwnLibrary)) => {
+            refuse(
+                "This project holds the Kix library itself, so it has no version of Kix to upgrade.",
+            )?;
+            unreachable!("refuse exits")
+        }
+        Ok(ProjectKix::Development(_)) => Ok(None),
+        Err(e @ LockError::Unreadable { .. }) => {
+            refuse(&format!("{e}\nNo project files were modified."))?;
+            unreachable!("refuse exits")
+        }
+        Err(_) => Ok(None),
     }
 }
 
-/// Make `kix.toml`, `flake.nix`, and `flake.lock` of the project in `dir`
-/// agree on `version`, the version the project is on, without building.
-/// With `dry_run`, check the library and change nothing.
-fn repair(
-    dir: &Path,
-    config: &kix::project::ProjectConfig,
-    version: &Version,
-    dry_run: bool,
-) -> Result<()> {
+/// Pin the project in `dir`, whose `flake.lock` pins no version of Kix, to
+/// `version`. There is no version to build and compare against, so Kix
+/// only moves the Kix library. With `dry_run`, change nothing.
+fn pin_only(dir: &Path, version: &Version, dry_run: bool) -> Result<()> {
     let release = version.release();
-    let toml_path = dir.join(kix::project::FILE);
-    let old = std::fs::read_to_string(&toml_path).unwrap_or_default();
-    let keeps = config
-        .kix
-        .as_ref()
-        .is_some_and(|r| kix::version::policy::satisfies(r, version));
-    let new_toml = if keeps {
-        None
-    } else {
-        match pin::set_kix(&old, &release) {
-            Ok(text) => Some(text),
-            Err(message) => return refuse(&message),
+    if dry_run {
+        println!(
+            "This project's flake.lock pins no version of Kix. `kix upgrade --to {release}` would pin the Kix library to {release} in flake.nix and flake.lock (dry run, no files changed)."
+        );
+        println!("Next: run `kix upgrade --to {release}`.");
+        return Ok(());
+    }
+    let pinned = pin::prepare(dir, None, version).and_then(|plan| pin::pin(None, version, &plan));
+    match pinned {
+        Ok(files) if files.is_empty() => {
+            println!("flake.nix and flake.lock already pin Kix {release}.");
+            Ok(())
         }
+        Ok(files) => {
+            println!(
+                "Pinned the Kix library to {release} (updated {}). This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.",
+                out::list(&files)
+            );
+            println!("Commit {}.", out::and_list(&files));
+            Ok(())
+        }
+        Err(pin::PinError::Edit(edit)) => refuse(&edit_message(
+            &edit,
+            "Kix did not change flake.nix or flake.lock.",
+            &format!("kix upgrade --to {release}"),
+        )),
+        Err(e) => refuse(&e.to_string()),
+    }
+}
+
+/// Return the text of the stop for an edit a person must make in
+/// `flake.nix`. `state` says what Kix left as it was, and `command` runs
+/// after the edit.
+fn edit_message(edit: &kix::pin_library::HandEdit, state: &str, command: &str) -> String {
+    let count = match edit.lines.len() {
+        2 => "two".to_string(),
+        3 => "three".to_string(),
+        n => n.to_string(),
     };
-    let mut files: Vec<&str> = Vec::new();
-    let mut would_change = new_toml.is_some();
-    let has_flake = dir.join("flake.nix").is_file();
-    if has_flake {
-        super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
-        kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
-        // Read before the move, so the summary can name the old library by
-        // its version.
-        let library = library_version(dir);
-        match kix::pin_library::pin_library(dir, version, dry_run) {
-            Ok(pinned) => {
-                println!("{}", pinned.summary(library.as_ref()));
-                would_change |= pinned.moves();
-                files.extend(pinned.changed);
-            }
-            Err(e) => {
-                let detail = match &e {
-                    kix::pin_library::PinLibraryError::Lock {
-                        url,
-                        repo,
-                        tag,
-                        source,
-                    } => format!(
-                        "Nix could not lock {url}:\n{}\nCheck that {repo} has the tag {tag}. For a mirror, push the tag to the mirror.",
-                        out::excerpt(&source.stderr)
-                            .iter()
-                            .map(|l| format!("  {l}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    ),
-                    e => match e.nix_output() {
-                        Some(output) => out::excerpt(output).join("\n"),
-                        None => e.to_string(),
-                    },
-                };
-                return refuse(&format!(
-                    "{detail}\nNext: make that change, then run `kix upgrade --to {release}` again."
-                ));
-            }
-        }
+    let mut text = format!(
+        "Cannot update flake.nix automatically: {count} inputs use the Kix library's repository:\n"
+    );
+    for (n, line) in &edit.lines {
+        text.push_str(&format!("  flake.nix:{n}:   {line}\n"));
     }
-    if let Some(text) = new_toml {
-        if dry_run {
-            println!("Kix would set kix = \"{release}\" in kix.toml.");
-        } else {
-            std::fs::write(&toml_path, text)
-                .map_err(|e| miette!("could not write {}: {e}", toml_path.display()))?;
-            println!("Set kix = \"{release}\" in kix.toml.");
-            files.insert(0, "kix.toml");
-        }
-    }
-    if dry_run && would_change {
-        println!("Next: run `kix upgrade --to {release}` to make these changes.");
-    } else if !dry_run && !files.is_empty() {
-        println!("Commit {}.", out::and_list(&files));
-    } else if !has_flake && keeps {
-        println!("kix.toml already names Kix {release}. Nothing to change.");
-    }
-    Ok(())
+    text.push('\n');
+    text.push_str(state);
+    text.push('\n');
+    text.push_str(&format!(
+        "Next: change the url of the Kix library input to {} in flake.nix, leave the\nother inputs as they are, then run `{command}` again.",
+        edit.to_url
+    ));
+    text
 }
 
 /// Return the directory `kix upgrade` keeps its builds of the project in
@@ -816,36 +798,19 @@ impl Run {
     /// Return the text of the stop for an edit a person must make in
     /// `flake.nix`.
     fn edit_message(&self, edit: &kix::pin_library::HandEdit) -> String {
-        let count = match edit.lines.len() {
-            2 => "two".to_string(),
-            3 => "three".to_string(),
-            n => n.to_string(),
-        };
-        let mut text = format!(
-            "Cannot update flake.nix automatically: {count} inputs use tag {}:\n",
-            edit.from_tag
-        );
-        for (n, line) in &edit.lines {
-            text.push_str(&format!("  flake.nix:{n}:   {line}\n"));
-        }
-        text.push('\n');
-        if self.pinned == self.from {
-            text.push_str(&format!(
-                "kix.toml, flake.nix, and flake.lock were not changed. Upgrade state is saved in kix-upgrade.json (the {} baseline build is cached).\n",
+        let state = if self.pinned == self.from {
+            format!(
+                "flake.nix and flake.lock were not changed. Upgrade state is saved in kix-upgrade.json (the {} baseline build is cached).",
                 self.from.release()
-            ));
+            )
         } else {
-            text.push_str(&format!(
-                "kix.toml, flake.nix, and flake.lock are pinned to Kix {} (the {} baseline build is cached).\n",
+            format!(
+                "flake.nix and flake.lock are pinned to Kix {} (the {} baseline build is cached).",
                 self.pinned.release(),
                 self.from.release()
-            ));
-        }
-        text.push_str(&format!(
-            "Next: change the Kix library input's tag to {} in flake.nix, leave the\nother input on {}, then run `kix upgrade` again.",
-            edit.to_tag, edit.from_tag
-        ));
-        text
+            )
+        };
+        edit_message(edit, &state, "kix upgrade")
     }
 
     /// Set the result of the step in progress, and save the state.
@@ -871,7 +836,7 @@ impl Run {
         });
         self.state_mut().status = Status::FixNeeded;
         self.save()?;
-        let plan = match pin::prepare(&self.dir, &self.pinned, version) {
+        let plan = match pin::prepare(&self.dir, Some(&self.pinned), version) {
             Ok(plan) => plan,
             Err(pin::PinError::Edit(edit)) => {
                 let message = self.edit_message(&edit);
@@ -893,7 +858,7 @@ impl Run {
             Err(e) => return Err(miette!("{e}")),
         };
         let kix = self.kix(version)?;
-        match pin::pin(&self.dir, &self.pinned, version, plan.as_ref()) {
+        match pin::pin(Some(&self.pinned), version, &plan) {
             Ok(files) => {
                 if !files.is_empty() {
                     println!(
@@ -1512,11 +1477,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_exact_prerelease_in_kix_toml_is_the_version_the_project_uses() {
+    fn the_version_the_project_is_on_comes_from_flake_lock() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("kix.toml"), "kix = \"0.8.0-rc.1\"\n").unwrap();
-        let config = kix::project::ProjectConfig::read(Some(dir.path()), None).unwrap();
-        let v = current_version(dir.path(), &config).unwrap();
+        assert_eq!(project_version(dir.path()).unwrap(), None);
+        std::fs::write(
+            dir.path().join("flake.lock"),
+            r#"{"root": "root", "version": 7, "nodes": {
+                "root": {"inputs": {"kix": "kix"}},
+                "kix": {"original": {"type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.8.0-rc.1"}}
+            }}"#,
+        )
+        .unwrap();
+        let v = project_version(dir.path()).unwrap().unwrap();
         assert_eq!(v.release(), "0.8.0-rc.1");
         assert!(v < "0.8.0".parse().unwrap());
     }

@@ -1,11 +1,12 @@
 //! `kix doctor`: check the installation Kix runs from, the project's
-//! builder, and the version of Kix the project needs.
+//! builder, and the version of Kix the project uses.
 
+use kix::flake_lock::{self, ProjectKix};
 use kix::installs;
-use kix::project::{BuilderKind, BuilderSource, FILE, ProjectConfig};
+use kix::project::{BuilderKind, BuilderSource, ProjectConfig};
 use kix::runtime;
 use kix::system_nix;
-use kix::version::{self, policy};
+use kix::version;
 use miette::miette;
 
 use crate::cli::GlobalArgs;
@@ -15,7 +16,7 @@ use crate::output::{green, red, yellow};
 /// fails.
 pub fn run(global: &GlobalArgs) -> miette::Result<()> {
     ok(&kix_line());
-    let failures = check_runtime() + check_builder(&global.flake) + check_version(&global.flake);
+    let failures = check_runtime() + check_builder(&global.flake) + check_version(global);
     report_installs();
     if failures > 0 {
         return Err(miette!(
@@ -42,72 +43,68 @@ fn kix_line() -> String {
     line
 }
 
-/// Report the version of Kix the project needs. Return 1 when the running
-/// Kix does not meet it.
-fn check_version(flake: &str) -> usize {
-    let Some(dir) = super::project_dir(flake) else {
+/// Report the version of Kix the project uses, from its `flake.lock`, and
+/// warn when Git does not track that file. Return 1 when the running Kix is
+/// not that version, or Kix cannot tell which version it is.
+fn check_version(global: &GlobalArgs) -> usize {
+    let Some(dir) = super::project_dir(&global.flake) else {
         return 0;
     };
-    // The builder check reports a kix.toml that cannot be read.
-    let Ok(config) = ProjectConfig::read(Some(&dir), None) else {
+    if !dir.join("flake.nix").is_file() {
         return 0;
-    };
+    }
     let running = version::running();
-    match (&config.kix, &config.kix_source) {
-        (Some(req), Some(path)) if policy::satisfies(req, running) => {
-            ok(&format!("Project needs Kix {req} ({})", path.display()));
+    let failed = match flake_lock::project_kix(&dir, &global.input_overrides()) {
+        Ok(ProjectKix::Release(v)) if &v == running => {
+            ok(&format!("Project uses Kix {} (flake.lock)", v.release()));
             0
         }
-        (Some(req), path) => {
-            let from = path
-                .as_ref()
-                .map_or_else(|| "kix.toml".to_string(), |p| p.display().to_string());
+        Ok(ProjectKix::Release(v)) => {
             fail(&format!(
-                "Project needs Kix {req} ({from}), and this is Kix {}",
+                "Project uses Kix {} (flake.lock), and this is Kix {}",
+                v.release(),
                 running.release()
             ));
             detail(&format!(
-                "Run `kix self install {req}`, then run kix doctor again."
+                "Run `kix self install {}`, then run kix doctor again.",
+                v.release()
             ));
             1
         }
-        (None, _) => {
-            if let Some(line) =
-                missing_kix_setting(&dir.join("flake.nix"), &dir.join(FILE), running)
-            {
-                warn(&line);
-            }
+        Ok(ProjectKix::Development(from)) => {
+            ok(&format!("Project uses a development Kix library ({from})"));
             0
         }
+        Err(e) => {
+            fail("Project's version of Kix: unknown");
+            detail(&e.to_string());
+            1
+        }
+    };
+    if let Some(line) = untracked_lock(&dir) {
+        warn(&line);
     }
+    failed
 }
 
-/// Return the warning for a project with no `kix` setting, or `None` when
-/// there is nothing to warn about: the directory is not a project, or the
-/// running Kix is older than any version the setting can name.
-fn missing_kix_setting(
-    flake_nix: &std::path::Path,
-    kix_toml: &std::path::Path,
-    running: &version::Version,
-) -> Option<String> {
-    if !flake_nix.exists() || running.minor_key() < policy::FIRST_SELECTING {
+/// Return the warning for a project in Git whose `flake.lock` Git does not
+/// track, or `None`.
+fn untracked_lock(dir: &std::path::Path) -> Option<String> {
+    if !dir.join(flake_lock::FILE).is_file() {
         return None;
     }
-    // A minor never matches a prerelease, so a prerelease suggests itself.
-    let minor = if running.is_prerelease() {
-        running.release()
-    } else {
-        running.minor_text()
-    };
-    Some(if kix_toml.exists() {
-        format!(
-            "kix.toml sets no kix version. Add kix = \"{minor}\" so everyone runs a matching Kix"
-        )
-    } else {
-        format!(
-            "This project has no kix.toml. Add one with kix = \"{minor}\" so everyone runs a matching Kix"
-        )
-    })
+    let out = std::process::Command::new("git")
+        .args(["ls-files", "--", flake_lock::FILE])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    // Outside a Git repository there is nothing to track the file.
+    if !out.status.success() || !out.stdout.is_empty() {
+        return None;
+    }
+    Some(
+        "Git does not track flake.lock, so other clones of this project can run another version of Kix. Run `git add flake.lock` and commit it.".to_string(),
+    )
 }
 
 /// Report the installed versions. This never fails a check, since Kix can
@@ -294,32 +291,26 @@ fn builder_line(config: &ProjectConfig) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_project_without_a_kix_setting_is_told_which_file_to_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let flake = dir.path().join("flake.nix");
-        let toml = dir.path().join(FILE);
-        let v = |s: &str| s.parse::<version::Version>().unwrap();
-        assert_eq!(missing_kix_setting(&flake, &toml, &v("0.8.1")), None);
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
 
-        std::fs::write(&flake, "{}").unwrap();
-        assert_eq!(
-            missing_kix_setting(&flake, &toml, &v("0.8.1+3")).as_deref(),
-            Some(
-                "This project has no kix.toml. Add one with kix = \"0.8\" so everyone runs a matching Kix"
-            )
-        );
-        std::fs::write(&toml, "builder = \"kix\"\n").unwrap();
-        assert_eq!(
-            missing_kix_setting(&flake, &toml, &v("0.9.0")).as_deref(),
-            Some("kix.toml sets no kix version. Add kix = \"0.9\" so everyone runs a matching Kix")
-        );
-        assert_eq!(missing_kix_setting(&flake, &toml, &v("0.7.2")), None);
-        assert_eq!(
-            missing_kix_setting(&flake, &toml, &v("0.9.0-rc.1+4")).as_deref(),
-            Some(
-                "kix.toml sets no kix version. Add kix = \"0.9.0-rc.1\" so everyone runs a matching Kix"
-            )
-        );
+    #[test]
+    fn an_untracked_lock_in_git_gets_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        assert_eq!(untracked_lock(d), None);
+        std::fs::write(d.join("flake.lock"), "{}").unwrap();
+        // Outside Git there is nothing to track the file.
+        assert_eq!(untracked_lock(d), None);
+        git(d, &["init", "-q"]);
+        assert!(untracked_lock(d).is_some_and(|w| w.starts_with("Git does not track flake.lock")),);
+        git(d, &["add", "flake.lock"]);
+        assert_eq!(untracked_lock(d), None);
     }
 }

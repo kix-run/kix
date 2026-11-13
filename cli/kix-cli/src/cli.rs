@@ -244,8 +244,9 @@ pub enum Command {
     /// checks that its manifest.json lists the programs Kix expects, and
     /// checks every file against its SHA-256 in the
     /// manifest. Also reports the project's builder and where it was chosen
-    /// (kix.toml, or the default), the version of Kix the project needs, and
-    /// the installed versions of Kix. Exits 1 when a check fails.
+    /// (kix.toml, or the default), the version of Kix the project uses (from
+    /// flake.lock), whether Git tracks flake.lock, and the installed versions
+    /// of Kix. Exits 1 when a check fails.
     Doctor,
 
     /// Compliance exports: SBOM, SLSA attestations, audit bundles
@@ -257,9 +258,11 @@ pub enum Command {
 
     /// Move this project to a newer version of Kix
     ///
-    /// Builds every cluster with the current Kix, pins the project to the
-    /// target (the newest release or `--to`, delayed by `[upgrade] min-age` in
-    /// kix.toml), and builds again. When that fails, it goes one minor release
+    /// Builds every cluster with the current Kix, pins the project's Kix
+    /// library to the target's tag in flake.nix and flake.lock (the newest
+    /// release or `--to`, delayed by `[upgrade] min-age` in kix.toml), and
+    /// builds again. A project whose flake.lock pins no version of Kix is
+    /// only pinned to the target, since there is nothing to compare against. When that fails, it goes one minor release
     /// at a time and stops at the first release that does not build, leaving
     /// the project pinned there; fix the build and run `kix upgrade` again to
     /// continue. Compares the manifests before and after, lists every breaking,
@@ -281,9 +284,9 @@ pub enum Command {
 
     /// Install, list, and remove versions of Kix
     ///
-    /// Versions live under ~/.local/share/kix/<version>. A project names the
-    /// version it needs with `kix = "0.8"` in kix.toml, and Kix runs that
-    /// version for the project, installing it first when needed.
+    /// Versions live under ~/.local/share/kix/<version>. A project's
+    /// flake.lock pins the Kix library tag of the version it uses, and Kix
+    /// runs that version for the project, installing it first when needed.
     #[command(name = "self", subcommand)]
     SelfCmd(SelfCommand),
 

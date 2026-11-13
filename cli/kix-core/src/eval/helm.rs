@@ -24,7 +24,6 @@ use serde::Deserialize;
 use sha2::Digest as _;
 
 use super::derivation::{self, Derivation};
-use super::error::KEEP_LIBRARY;
 use super::nix::{NixCommandError, command, output};
 use super::store::real_path;
 use crate::runtime::{self, RuntimeError, Tool, Want};
@@ -45,9 +44,8 @@ pub enum HelmError {
          No project files or cluster resources were changed.\n\n  \
          Why:\n    \
          Each version of the Kix library is paired with the Helm versions in that version's Kix runtime.\n\n  \
-         Next (choose one):\n    \
-         - Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.\n    \
-         - {KEEP_LIBRARY}",
+         Next:\n    \
+         Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.",
         shipped_text(shipped),
         kix = crate::version::running().release()
     )]
@@ -64,9 +62,8 @@ pub enum HelmError {
          No project files or cluster resources were changed.\n\n  \
          Why:\n    \
          The Kix library pinned in `flake.lock` and Kix {kix} come from different versions and use incompatible Helm chart formats.\n\n  \
-         Next (choose one):\n    \
-         - Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.\n    \
-         - {KEEP_LIBRARY}",
+         Next:\n    \
+         Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.",
         kix = crate::version::running().release()
     )]
     SpecVersion { found: u64 },
