@@ -66,6 +66,22 @@ Two rules the skill enforces and you should honor outside it too:
 - **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc: start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `v2_discussions/interesting_thoughts/`, never the active folder.
 - **Archive on ship.** When a feature that traces back to a v2_discussions doc lands, re-invoke the skill in the same session: split shipped content from still-open questions (lift to `ROADMAP.md § Open design questions` or `interesting_thoughts/`), move the doc to `archive/`, update the README.
 
+## Fixing bugs
+
+Fix a bug at its cause. Before you fix it, zoom out and ask whether it is a
+symptom of an architectural problem: two pieces of code that own the same
+decision, a concept the design is missing, or a boundary in the wrong place.
+If it is, say so, and propose the change to the design as well as the local
+fix.
+
+If the only fix you can find is a special case, a retry or timing
+workaround, a heuristic, or a flag whose meaning depends on state, do not
+build it. Write up two or three options with what each costs, say which you
+recommend, and put that in the pull request description or a housekeeping
+entry. A known bug with a clear write-up is better than a fix that makes the
+code harder to reason about. When you hand bug fixes to subagents, give them
+this rule too.
+
 ## Code comments
 
 Write for a maintainer reading the current code without the PR. Apply `CLAUDE.prose.md`.
