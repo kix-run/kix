@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix deploy` · A field ownership conflict on a rerun Job stops the deploy, although the deploy deletes and recreates that Job.
+
+After `kubectl patch job immich-db-immich-bootstrap` set `spec.backoffLimit`, the next `kix plan example` listed the Job under "failed on their last run and will be deleted and recreated", and also stopped on "✗ Job/immich-db-immich-bootstrap@immich field ownership conflict, kubectl-patch owns .spec.backoffLimit" (exit 3). The dry run patches the live Job, which the deploy is about to delete, so the conflict cannot happen. Only `--force-conflicts` gets past it.
