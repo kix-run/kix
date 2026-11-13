@@ -50,7 +50,6 @@
 #     package = packages.secret;
 #     config = {
 #       source = ./secrets/app-db.yaml;   # holds `password`
-#       hash = "sha256-...";
 #       keys = [ "password" ];
 #     };
 #   };
@@ -281,7 +280,7 @@ in
             fix = "Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
           };
 
-      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, hash set to its content hash, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
+      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
 
       _passwordCheck =
         if config.password != null then
@@ -298,7 +297,7 @@ in
             package = "cnpg-database";
             option = "config.passwordSource";
             message = "passwordSource and passwordHash were removed.";
-            fix = "${passwordAdvice} Use the same file and hash.";
+            fix = "${passwordAdvice} Use the same file.";
           }
         else if password == null then
           scope.fail {
@@ -373,7 +372,7 @@ in
               host = cluster.fqdn;
               port = cluster.port;
             };
-            inherit (sops) source hash;
+            inherit (sops) source;
             inherit labels;
             meta = secretMeta;
           }
@@ -401,7 +400,7 @@ in
             stringData = {
               username = userName;
             };
-            inherit (sops) source hash;
+            inherit (sops) source;
             inherit labels;
             meta = secretMeta;
           }

@@ -55,8 +55,8 @@ let
     };
     sops = {
       required = false;
-      shape = "{ source; hash; }, the SOPS file Kix fills the Secret from, when it does";
-      test = v: builtins.isAttrs v && v ? source && v ? hash;
+      shape = "{ source; digest; }, the SOPS file Kix fills the Secret from and its SHA-256, when it does";
+      test = v: builtins.isAttrs v && v ? source && v ? digest;
     };
   };
 

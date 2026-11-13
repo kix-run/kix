@@ -24,7 +24,7 @@
 #   app-db-password = {
 #     package = packages.secret;
 #     aliases = [ "password" ];
-#     config = { source = ./secrets/app-db.yaml; hash = "..."; keys = [ "password" ]; };
+#     config = { source = ./secrets/app-db.yaml; keys = [ "password" ]; };
 #   };
 #
 # The package claims no alias: `postgres` belongs to the cluster, so a

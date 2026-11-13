@@ -80,7 +80,6 @@ let
     package = secretPackage;
     config = {
       source = ./cnpg.nix;
-      hash = "hash";
       keys = [ "password" ];
     };
   };

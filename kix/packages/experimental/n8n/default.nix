@@ -68,7 +68,7 @@
 #     n8n-db-password = {
 #       package = packages.secret;
 #       aliases = [ "password" ];
-#       config = { source = ./secrets/n8n-db.yaml; hash = "..."; keys = [ "password" ]; };
+#       config = { source = ./secrets/n8n-db.yaml; keys = [ "password" ]; };
 #     };
 #     n8n-encryption-key = {
 #       package = packages.secret;

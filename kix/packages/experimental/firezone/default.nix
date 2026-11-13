@@ -48,7 +48,7 @@
 #       };
 #     };
 #     firezone-db.package = packages.experimental.stackgres-database;
-#     firezone-db-password = { package = packages.secret; aliases = [ "password" ]; config = { source = ./secrets/firezone-db.yaml; hash = "..."; keys = [ "password" ]; }; };
+#     firezone-db-password = { package = packages.secret; aliases = [ "password" ]; config = { source = ./secrets/firezone-db.yaml; keys = [ "password" ]; }; };
 #     firezone-secrets = {
 #       package = packages.secret;
 #       aliases = [ "applicationSecrets" ];

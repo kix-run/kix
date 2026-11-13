@@ -869,6 +869,7 @@ in
           type ? "Opaque",
           stringData ? { },
           source ? null,
+          # Refused. Kix computes the SOPS file's digest itself.
           hash ? null,
           # Keys whose value is in the manifest and is not a credential (a
           # username, a host). The security.secretSource rule accepts them
@@ -960,6 +961,16 @@ in
               builtins.concatStringsSep "," (map (k: "${k}=${sourceOf k}") effectiveKeys);
           _sourceChecks = builtins.seq _plainCheck _declaredCheck;
 
+          _hashCheck =
+            if hash == null then
+              null
+            else
+              throw "[K4732] mkSecret \"${name}\" in ${namespaceName}/${instanceName}: `hash` was removed. Kix now computes a digest of the SOPS file itself. Delete the `hash` line.";
+
+          # A digest of the encrypted file, so the deploy can check that the
+          # file it decrypts is the one this build read.
+          digest = if source == null then null else builtins.hashFile "sha256" source;
+
           realizedSource =
             if source == null then
               null
@@ -982,13 +993,11 @@ in
               annotations
               // {
                 ${kixKeys.secretKeys} = builtins.concatStringsSep "," effectiveKeys;
-                ${kixKeys.secretSources} = builtins.seq _sourceChecks secretSources;
+                ${kixKeys.secretSources} = builtins.seq _hashCheck (builtins.seq _sourceChecks secretSources);
               }
               // lib.optionalAttrs (source != null) {
                 ${kixKeys.sopsSource} = toString realizedSource;
-              }
-              // lib.optionalAttrs (hash != null) {
-                ${kixKeys.contentHash} = hash;
+                ${kixKeys.sopsDigest} = digest;
               }
               // lib.optionalAttrs (meta ? classification) {
                 ${kixKeys.classification} = meta.classification;
@@ -1020,7 +1029,10 @@ in
             # A package that needs the value in a second namespace renders
             # another Secret from the same file (kix.contracts.secret).
             // lib.optionalAttrs (source != null) {
-              sops = { inherit source hash; };
+              sops = {
+                inherit source digest;
+                hash = throw "[K4732] mkSecret \"${name}\" in ${namespaceName}/${instanceName}: `out.sops.hash` was removed. Read `out.sops.digest`, the SHA-256 of the encrypted file, instead.";
+              };
             };
         };
 

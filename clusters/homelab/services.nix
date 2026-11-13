@@ -80,7 +80,6 @@ in
         aliases = [ "password" ];
         config = {
           source = ../dev-secrets/immich-db.sops.yaml;
-          hash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
           keys = [ "password" ];
         };
       };
@@ -155,7 +154,6 @@ in
         # clusters/dev-secrets. A deployment with real users encrypts its own.
         config = {
           source = ../dev-secrets/vaultwarden-db.sops.yaml;
-          hash = "sha256-vSRCg4c2Q8jZrB+qWUa7YhXrpdZOoafVsi2KtKkZPRQ=";
           keys = [ "password" ];
         };
       };

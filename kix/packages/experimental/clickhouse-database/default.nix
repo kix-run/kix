@@ -95,7 +95,6 @@
 #     package = packages.secret;
 #     config = {
 #       source = ./secrets/app-ch.yaml;   # holds `password`
-#       hash = "sha256-...";
 #       keys = [ "password" ];
 #     };
 #   };
@@ -285,7 +284,7 @@ in
     let
       who = "clickhouse-database ${scope.namespaceName}/${name}";
 
-      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, hash set to its content hash, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
+      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
 
       _passwordCheck =
         if config.password != null then
@@ -302,7 +301,7 @@ in
             package = "clickhouse-database";
             option = "config.passwordSource";
             message = "passwordSource and passwordHash were removed.";
-            fix = "${passwordAdvice} Use the same file and hash.";
+            fix = "${passwordAdvice} Use the same file.";
           }
         else if password == null then
           scope.fail {
@@ -373,7 +372,7 @@ in
             image = kix.image.ref config.image;
             script = bootstrapScript;
             sql = bootstrapSql;
-            passwordFingerprint = if fromSops then sops.hash else null;
+            passwordFingerprint = if fromSops then sops.digest else null;
           }
         )
       );
@@ -455,7 +454,7 @@ in
                 httpPort = server.ports.http;
                 nativePort = server.ports.native;
               };
-              inherit (sops) source hash;
+              inherit (sops) source;
               inherit labels;
               meta = secretMeta;
             }
@@ -476,7 +475,7 @@ in
             backendScope.mkSecret {
               name = "${serverSideName}-bootstrap-password";
               keys = [ "password" ];
-              inherit (sops) source hash;
+              inherit (sops) source;
               inherit labels;
               meta = secretMeta;
             }

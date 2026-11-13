@@ -238,7 +238,6 @@ let
           package = secretPackage;
           config = {
             source = ./plausible.nix;
-            hash = "events-hash";
             keys = [ "password" ];
           };
         };

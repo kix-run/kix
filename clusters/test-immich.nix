@@ -70,7 +70,6 @@ kix.buildCluster {
           aliases = [ "password" ];
           config = {
             source = ./dev-secrets/immich-db.sops.yaml;
-            hash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
             keys = [ "password" ];
           };
         };
@@ -99,7 +98,6 @@ kix.buildCluster {
           aliases = [ "password" ];
           config = {
             source = ./dev-secrets/firezone-db.sops.yaml;
-            hash = "sha256-mkPnt4ugMrbK4xcSsIwaPsOYAmwzzg4wD5ydQAY9g5Q=";
             keys = [ "password" ];
           };
         };

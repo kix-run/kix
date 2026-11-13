@@ -44,7 +44,6 @@
 #     package = packages.secret;
 #     config = {
 #       source = ./secrets/app-db.yaml;   # holds `password`
-#       hash = "sha256-...";
 #       keys = [ "password" ];
 #     };
 #   };
@@ -243,7 +242,7 @@ in
         else
           null;
 
-      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, hash set to its content hash, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
+      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
 
       _passwordCheck =
         if config.password != null then
@@ -260,7 +259,7 @@ in
             package = "stackgres-database";
             option = "config.passwordSource";
             message = "passwordSource and passwordHash were removed.";
-            fix = "${passwordAdvice} Use the same file and hash.";
+            fix = "${passwordAdvice} Use the same file.";
           }
         else if password == null then
           scope.fail {
@@ -316,7 +315,7 @@ in
         inherit dbName userName;
         owner = config.owner;
         extensions = config.extensions;
-        passwordFingerprint = if fromSops then sops.hash else null;
+        passwordFingerprint = if fromSops then sops.digest else null;
       };
       bootstrapHash = builtins.substring 0 10 (builtins.hashString "sha256" bootstrapInputs);
 
@@ -345,7 +344,7 @@ in
               host = clusterFqdn;
               port = clusterPort;
             };
-            inherit (sops) source hash;
+            inherit (sops) source;
             labels = labels;
             meta = {
               classification = "credential";
@@ -369,7 +368,7 @@ in
           backendScope.mkSecret {
             name = "${serverSideName}-bootstrap-password";
             keys = [ "password" ];
-            inherit (sops) source hash;
+            inherit (sops) source;
             labels = labels;
             meta = {
               classification = "credential";

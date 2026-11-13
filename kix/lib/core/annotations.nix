@@ -86,7 +86,9 @@ rec {
 
     # Secrets.
     sopsSource = key "sops-source";
-    contentHash = key "content-hash";
+    # The SHA-256 of the encrypted SOPS file, in hex. The deploy checks the
+    # file against it before decrypting.
+    sopsDigest = key "sops-digest";
     secretKeys = key "secret-keys";
     # Comma-separated `key=source` pairs (`*=controller` when a controller
     # populates the whole Secret) read by the `security.secretSource` rule.

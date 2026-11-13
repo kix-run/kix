@@ -92,7 +92,6 @@ kix.buildCluster {
             package = packages.secret;
             config = {
               source = ./dev-secrets/plausible-db.sops.yaml;
-              hash = "sha256-Fx4LekxcnAr8/CrtSEqLMisM7ElvkqCo+jSeVrr6xqw=";
               keys = [ "password" ];
             };
           };
@@ -105,7 +104,6 @@ kix.buildCluster {
             package = packages.secret;
             config = {
               source = ./dev-secrets/plausible-events.sops.yaml;
-              hash = "sha256-n8fiYw1YaJ4eWkduVI5s+ugSbn3FLfwuRJ+WpySotvg=";
               keys = [ "password" ];
             };
           };

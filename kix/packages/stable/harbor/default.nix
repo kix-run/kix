@@ -66,7 +66,7 @@
 #     harbor-db-password = {
 #       package = packages.secret;
 #       aliases = [ "password" ];
-#       config = { source = ./harbor-db.sops.yaml; hash = "..."; keys = [ "password" ]; };
+#       config = { source = ./harbor-db.sops.yaml; keys = [ "password" ]; };
 #     };
 #   };
 #

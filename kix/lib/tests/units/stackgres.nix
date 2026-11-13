@@ -476,7 +476,6 @@ in
               package = secretPackage;
               config = {
                 source = ./stackgres.nix;
-                hash = "hash-${ns}";
                 keys = [ "password" ];
               };
             };
@@ -517,7 +516,6 @@ in
             package = secretPackage;
             config = {
               source = ./stackgres.nix;
-              hash = "hash";
               keys = [ "password" ];
             };
           },

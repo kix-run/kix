@@ -35,14 +35,13 @@
 #     metabase-db-password = {
 #       package = packages.secret;
 #       aliases = [ "password" ];
-#       config = { source = ./secrets/metabase-db.yaml; hash = "..."; keys = [ "password" ]; };
+#       config = { source = ./secrets/metabase-db.yaml; keys = [ "password" ]; };
 #     };
 #     metabase-encryption-key = {
 #       package = packages.secret;
 #       aliases = [ "encryptionKey" ];
 #       config.source = ./secrets/metabase-key.sops.yaml;
 #       config.keys = [ "key" ];   # a SOPS source must declare its keys
-#       config.hash = "...";
 #     };
 #   };
 #
