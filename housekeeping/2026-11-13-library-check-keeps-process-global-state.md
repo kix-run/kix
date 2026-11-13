@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix-core/src/eval/nix.rs` · The library check keeps its result in process-global statics.
+
+`check_library` (line 441) stores success in `static AGREED` and skips later calls, whatever `flake_path` and `input_overrides` they pass. `library_facts` (509) sets `static PROJECT_ROOT` (490), which `project_roots` reads to shorten Nix stack traces, so how a trace is shortened depends on whether the check ran first. A process that evaluates two projects, or a test that runs several, gets the first project's answer. Return the facts from `library_facts`, and pass the project root to the code that shortens traces.

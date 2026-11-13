@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix-cli/src/cli.rs` · Help text and messages still use "activation" and other internal words.
+
+`kix --help` says rollback "Rollback to the previous activation" (line 216), deploy "Wave-based deployment with confirmation" (178), and graph "Dependency DAG visualization" (197). The rollback plan says "Objects that exist only in {activation}" (`plan/progress.rs:33-57`). `kix status` and `kix plan` say "no applied-hash stamp yet" (`commands/status/text.rs:306`). Suggested summaries: rollback "Go back to an earlier deploy", deploy "Apply the build to the cluster, in dependency order", graph "Show the dependency graph", and build "Print the built manifests".

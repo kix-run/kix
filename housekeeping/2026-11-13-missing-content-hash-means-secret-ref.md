@@ -1,0 +1,5 @@
+# 2026-11-13 · `kix/packages/*` · Packages treat a missing `out.contentHash` as the sign of a Secret that Kix does not build.
+
+The library says so in a comment (`kix/lib/scope/builders.nix:1103`), and each package acts on it with its own code: firezone (`default.nix:335`), cloudflared (116), caddy (239), openbao (`server.nix:387`), vaultwarden (182), external-dns (572), and immich (737). vaultwarden and immich add the checksum when it exists and do nothing otherwise, so a secret-ref Secret never restarts their pods when it changes. harbor's helper (`stable/harbor/common.nix:183-192`) adds the checksum or uses reloader, which is the correct behaviour.
+
+A library helper, such as `kix.rollOn`, could choose from the reference marker that `mkSecretRef` sets, instead of from a missing field. Note that [service-ref-out-has-no-identity-hash](2026-10-03-service-ref-out-has-no-identity-hash.md) asks for reference markers to carry more `out` fields, and any field added there breaks the current signal. Related: [packages-advise-withreloadon-without-reloader-dep](2026-10-02-packages-advise-withreloadon-without-reloader-dep.md).

@@ -1,3 +1,5 @@
 # 2026-11-13 · `cli/kix-cli/src/commands/rollback.rs` · `kix rollback` ignores a dry-run node that failed without an apiserver answer.
 
 `refused_writes` reads only the answers the dry run recorded and passes a `NullObserver` to the engine. `kix plan` also watches the engine's verdicts (`DryRunObserver` in `commands/plan.rs`), lists a node that failed with no answer as a refusal, and lists a node the engine never tried as `dependency_not_checked`. So a rollback goes ahead where `kix plan` for the same build would stop. Both commands sort answers with `kix::cluster::classify` now; the observer could move into the library beside it.
+
+This is a symptom of [rollback-copies-deploy-pipeline](2026-11-13-rollback-copies-deploy-pipeline.md).

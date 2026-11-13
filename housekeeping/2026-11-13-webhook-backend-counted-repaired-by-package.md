@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix/src/cluster/classify.rs` · A dry run that cannot reach a webhook is marked "not checked" when the deploy writes any object of the package that owns the webhook's Service.
+
+`unreachable` (lines 187-208) gives `WebhookBackendWrittenByThisDeploy` when the deploy writes the Service itself or any object of its package. A deploy that changes only a ConfigMap of that package lets the refusal through, and the real apply then fails on the webhook. The decision should come from what serves the Service: its selector and the workloads it matches, or the objects it depends on. `DeployScope` already holds the build and the plan.
