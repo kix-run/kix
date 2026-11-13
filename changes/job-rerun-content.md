@@ -1,5 +1,6 @@
 +++
 kind = "silent"
+cli = ["kix deploy --log-format json"]
 library = ["kix.keyValues.rerunOnChange", "kix.healthCheck"]
 packages = ["cnpg-operator", "experimental/cert-manager", "experimental/clickhouse", "experimental/clickhouse-cluster", "experimental/clickhouse-database", "experimental/clickhouse-logs", "experimental/external-secrets", "experimental/ingress-nginx", "experimental/loki", "experimental/loki-logs", "experimental/rabbitmq-operator", "experimental/stackgres-database", "experimental/stackgres-operator", "victoria-metrics-agent", "victoria-metrics-alert"]
 +++
