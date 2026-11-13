@@ -201,15 +201,19 @@ fn decide(
     let new_flake = if s("ref").map(|r| r.strip_prefix("refs/tags/").unwrap_or(r)) == Some(&tag) {
         None
     } else {
-        Some(retag_flake(flake, original, &tag).map_err(|e| match e {
-            Retag::NotFound => PinLibraryError::UrlNotFound {
-                to_url: tag_url.clone(),
-            },
-            Retag::Many(lines) => PinLibraryError::Edit(HandEdit {
-                to_url: tag_url.clone(),
-                lines,
-            }),
-        })?)
+        Some(
+            retag_flake(flake, original, &tag, &format!("refs/tags/{tag}")).map_err(
+                |e| match e {
+                    Retag::NotFound => PinLibraryError::UrlNotFound {
+                        to_url: tag_url.clone(),
+                    },
+                    Retag::Many(lines) => PinLibraryError::Edit(HandEdit {
+                        to_url: tag_url.clone(),
+                        lines,
+                    }),
+                },
+            )?,
+        )
     };
     Ok(Plan {
         dir: dir.to_path_buf(),
@@ -397,8 +401,9 @@ fn repo_url_of(literal: &str, original: &Value) -> Option<RepoUrl> {
 }
 
 /// Return `literal`, a url in `flake.nix`, moved to the tag `tag`, when it
-/// names the repository of `original` and pins what `original` pins.
-fn retarget(literal: &str, original: &Value, tag: &str) -> Option<String> {
+/// names the repository of `original` and pins what `original` pins. A Git
+/// url gets `git_ref` as its `ref`.
+fn retarget(literal: &str, original: &Value, tag: &str, git_ref: &str) -> Option<String> {
     let found = repo_url_of(literal, original)?;
     if found.pin != pin_of_original(original) {
         return None;
@@ -406,7 +411,7 @@ fn retarget(literal: &str, original: &Value, tag: &str) -> Option<String> {
     let url = Url::parse(literal);
     Some(match found.forge_base {
         Some(base) => url.join(&format!("{base}/{tag}"), None),
-        None => url.join(url.base, Some(("ref", &format!("refs/tags/{tag}")))),
+        None => url.join(url.base, Some(("ref", git_ref))),
     })
 }
 
@@ -475,11 +480,18 @@ pub fn reset_moved_tag(dir: &Path) -> Result<Option<Version>, PinLibraryError> {
     let Some(locked) = pin_of_original(original) else {
         return Ok(None);
     };
-    // Find the url that now pins the moved tag, and move it back.
+    // Find the url that now pins the moved tag, and move it back. A Git url
+    // gets the ref exactly as the lock records it, so Nix sees the input
+    // unchanged and keeps the lock.
     let mut moved = original.clone();
     moved["ref"] = Value::String(format!("v{}", asked.release()));
-    let text = retag_flake(&flake, &moved, &locked).map_err(|_| PinLibraryError::UrlNotFound {
-        to_url: tagged_url(original, &locked),
+    let git_ref = original["ref"]
+        .as_str()
+        .map_or_else(|| format!("refs/tags/{locked}"), str::to_string);
+    let text = retag_flake(&flake, &moved, &locked, &git_ref).map_err(|_| {
+        PinLibraryError::UrlNotFound {
+            to_url: tagged_url(original, &locked),
+        }
     })?;
     std::fs::write(&flake_path, text).map_err(|source| PinLibraryError::Io {
         action: "write",
@@ -490,16 +502,16 @@ pub fn reset_moved_tag(dir: &Path) -> Result<Option<Version>, PinLibraryError> {
 }
 
 /// Return `flake`, a `flake.nix`, with the url of the library input moved to
-/// the tag `tag`.
+/// the tag `tag`. A Git url gets `git_ref` as its `ref`.
 ///
 /// Kix reads no Nix syntax to do this. It changes the url only when exactly
 /// one url names the repository of `original` and pins what it pins. A
 /// project can pin a second input to the same url, such as the Kix it builds
 /// into an image, and that input must stay. Comment lines are skipped.
-fn retag_flake(flake: &str, original: &Value, tag: &str) -> Result<String, Retag> {
+fn retag_flake(flake: &str, original: &Value, tag: &str, git_ref: &str) -> Result<String, Retag> {
     let found: Vec<(usize, usize, String)> = literals(flake)
         .into_iter()
-        .filter_map(|(start, end, l)| Some((start, end, retarget(l, original, tag)?)))
+        .filter_map(|(start, end, l)| Some((start, end, retarget(l, original, tag, git_ref)?)))
         .collect();
     match found.as_slice() {
         [] => Err(Retag::NotFound),
@@ -832,6 +844,52 @@ mod tests {
         assert_eq!(
             declared_tag("inputs.kix = { ref = \"v0.10.0\"; };", &locked),
             None
+        );
+    }
+
+    #[test]
+    fn a_moved_tag_goes_back_to_the_url_the_lock_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let reset = |original: Value, flake: &str| {
+            std::fs::write(
+                dir.path().join(crate::flake_lock::FILE),
+                lock_with(original).to_string(),
+            )
+            .unwrap();
+            std::fs::write(dir.path().join("flake.nix"), flake).unwrap();
+            let asked = reset_moved_tag(dir.path()).unwrap();
+            (
+                asked,
+                std::fs::read_to_string(dir.path().join("flake.nix")).unwrap(),
+            )
+        };
+        // A Git url keeps the ref as the lock records it, with or without
+        // `refs/tags/`.
+        for (locked, moved) in [
+            ("v0.10.0-rc.3", "v0.10.0-rc.2"),
+            ("refs/tags/v0.10.0-rc.3", "refs/tags/v0.10.0-rc.2"),
+        ] {
+            let original = json!({ "type": "git", "url": "file:///src/kix", "ref": locked });
+            assert_eq!(
+                reset(
+                    original,
+                    &format!("kix.url = \"git+file:///src/kix?ref={moved}\";")
+                ),
+                (
+                    Some(v("0.10.0-rc.2")),
+                    format!("kix.url = \"git+file:///src/kix?ref={locked}\";")
+                )
+            );
+        }
+        assert_eq!(
+            reset(
+                github(Some("v0.10.0-rc.3")),
+                "kix.url = \"github:kix-run/kix/v0.10.0-rc.2\";"
+            ),
+            (
+                Some(v("0.10.0-rc.2")),
+                "kix.url = \"github:kix-run/kix/v0.10.0-rc.3\";".to_string()
+            )
         );
     }
 

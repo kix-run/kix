@@ -62,7 +62,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 .parse()
                 .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
         ),
-        None => project_version(&dir, !args.dry_run)?,
+        None => project_version(&dir)?,
     };
     let to = match args.to.as_deref() {
         None | Some("latest") => None,
@@ -75,14 +75,18 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             }
         },
     };
-    // The version the project is on already: nothing is upgraded, so the
-    // release index is not needed.
+    // A version the project is on already, or an older one, needs no
+    // release index.
     if resume.is_none()
         && let (Some(from), Some(Requirement::Exact(v))) = (&from, &to)
-        && v == from
     {
-        println!("Already on Kix {}. Nothing to upgrade.", from.release());
-        return Ok(());
+        if v == from {
+            println!("Already on Kix {}. Nothing to upgrade.", from.release());
+            return Ok(());
+        }
+        if v < from {
+            return refuse_older(from, v);
+        }
     }
 
     if resume.is_none()
@@ -167,25 +171,19 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 target = target.release()
             ));
         }
-        if to.is_none() && min_age.is_none() {
-            println!(
-                "Already on the latest Kix release ({}). Nothing to upgrade.",
-                from.release()
-            );
-        } else if let (None, Some(days)) = (&to, min_age) {
-            println!(
-                "Already on Kix {} (matches target {} for `min-age = \"{days}d\"` in kix.toml). Nothing to upgrade.",
-                from.release(),
-                target.release()
-            );
-        } else {
-            println!(
-                "Already on Kix {} (matches target {}). Nothing to upgrade.",
-                from.release(),
-                target.release()
-            );
+        if to.is_some() && target < from {
+            return refuse_older(&from, &target);
         }
+        println!(
+            "{}",
+            nothing_to_upgrade(&from, &target, to.as_ref(), min_age)
+        );
         return Ok(());
+    }
+    // The upgrade builds the baseline with the version the lock pins, so a
+    // tag a person moved in flake.nix goes back to it first.
+    if resume.is_none() && !args.dry_run {
+        reset_moved_tag(&dir)?;
     }
 
     let (records, without_notes) = fetch_records(&source, &index.releases, &from, &target)?;
@@ -201,7 +199,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         work: work_dir(&dir),
         installed_here: Vec::new(),
         from: from.clone(),
-        pinned: match project_version(&dir, false) {
+        pinned: match project_version(&dir) {
             Ok(Some(v)) => v,
             _ => from.clone(),
         },
@@ -562,12 +560,74 @@ fn exit(code: Exit) -> Result<()> {
     Err(Stopped(code).into())
 }
 
+/// Print why `kix upgrade` refuses to move the project from Kix `from` to
+/// the older `target`, and exit.
+fn refuse_older(from: &Version, target: &Version) -> Result<()> {
+    refuse(&older_message(from, target))
+}
+
+fn older_message(from: &Version, target: &Version) -> String {
+    format!(
+        "Cannot move this project to Kix {target}: it is on Kix {from}, and `kix upgrade` only moves a project to a newer version.\nNo project files were modified.\nNext: to go back to Kix {target}, restore flake.nix and flake.lock from a commit that pinned it.",
+        from = from.release(),
+        target = target.release()
+    )
+}
+
+/// Return the line that says the project on Kix `from` has nothing to
+/// upgrade to. `target` is the release Kix chose, which is `from`, or older
+/// only when `--to` is not given. `min_age` is `min-age` in kix.toml.
+fn nothing_to_upgrade(
+    from: &Version,
+    target: &Version,
+    to: Option<&Requirement>,
+    min_age: Option<u32>,
+) -> String {
+    let (from, target) = (from.release(), target.release());
+    if to.is_some() {
+        return format!("Already on Kix {from} (matches target {target}). Nothing to upgrade.");
+    }
+    match (from == target, min_age) {
+        (true, None) => format!("Already on the latest Kix release ({from}). Nothing to upgrade."),
+        (true, Some(days)) => format!(
+            "Already on Kix {from} (matches target {target} for `min-age = \"{days}d\"` in kix.toml). Nothing to upgrade."
+        ),
+        (false, None) => format!(
+            "Kix {from} is newer than the latest Kix release ({target}). Nothing to upgrade."
+        ),
+        (false, Some(days)) => format!(
+            "Kix {from} is newer than Kix {target}, the newest release at least {days} days old (`min-age = \"{days}d\"` in kix.toml). Nothing to upgrade."
+        ),
+    }
+}
+
+/// Set `flake.nix` in `dir` back to the tag `flake.lock` pins, when a person
+/// moved it by hand.
+fn reset_moved_tag(dir: &Path) -> Result<()> {
+    let Err(kix::flake_lock::LockError::TagMoved { locked, asked }) =
+        kix::flake_lock::project_kix(dir, &[])
+    else {
+        return Ok(());
+    };
+    if let Err(e) = kix::pin_library::reset_moved_tag(dir) {
+        return refuse(&format!(
+            "{e}\nNext: make that change, then run `kix upgrade` again."
+        ));
+    }
+    println!(
+        "flake.nix asked for Kix {}, but flake.lock pins Kix {}. Kix set flake.nix back to {} to upgrade from there.",
+        asked.release(),
+        locked.release(),
+        locked.release()
+    );
+    Ok(())
+}
+
 /// Return the version of Kix the project in `dir` uses, from the release
 /// tag its `flake.lock` pins, or `None` when it pins none. When a person
 /// moved the tag in `flake.nix` by hand, the lock's version is the one the
-/// project is on. With `reset`, Kix also sets `flake.nix` back to that tag,
-/// so the upgrade builds the baseline with it and then moves the project.
-fn project_version(dir: &Path, reset: bool) -> Result<Option<Version>> {
+/// project is on.
+fn project_version(dir: &Path) -> Result<Option<Version>> {
     use kix::flake_lock::{Development, LockError, ProjectKix};
     match kix::flake_lock::project_kix(dir, &[]) {
         Ok(ProjectKix::Release(v)) => Ok(Some(v)),
@@ -578,22 +638,7 @@ fn project_version(dir: &Path, reset: bool) -> Result<Option<Version>> {
             unreachable!("refuse exits")
         }
         Ok(ProjectKix::Development(_)) => Ok(None),
-        Err(LockError::TagMoved { locked, asked }) => {
-            if reset {
-                if let Err(e) = kix::pin_library::reset_moved_tag(dir) {
-                    refuse(&format!(
-                        "{e}\nNext: make that change, then run `kix upgrade` again."
-                    ))?;
-                }
-                println!(
-                    "flake.nix asked for Kix {}, but flake.lock pins Kix {}. Kix set flake.nix back to {} to upgrade from there.",
-                    asked.release(),
-                    locked.release(),
-                    locked.release()
-                );
-            }
-            Ok(Some(*locked))
-        }
+        Err(LockError::TagMoved { locked, .. }) => Ok(Some(*locked)),
         Err(e @ (LockError::Unreadable { .. } | LockError::Setting(_))) => {
             refuse(&format!("{e}\nNo project files were modified."))?;
             unreachable!("refuse exits")
@@ -1510,7 +1555,7 @@ mod tests {
     #[test]
     fn the_version_the_project_is_on_comes_from_flake_lock() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(project_version(dir.path(), false).unwrap(), None);
+        assert_eq!(project_version(dir.path()).unwrap(), None);
         std::fs::write(
             dir.path().join("flake.lock"),
             r#"{"root": "root", "version": 7, "nodes": {
@@ -1519,8 +1564,41 @@ mod tests {
             }}"#,
         )
         .unwrap();
-        let v = project_version(dir.path(), false).unwrap().unwrap();
+        let v = project_version(dir.path()).unwrap().unwrap();
         assert_eq!(v.release(), "0.8.0-rc.1");
         assert!(v < "0.8.0".parse().unwrap());
+    }
+
+    fn v(text: &str) -> Version {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn an_older_target_without_to_is_nothing_to_upgrade() {
+        let to: Requirement = "0.10".parse().unwrap();
+        assert_eq!(
+            nothing_to_upgrade(&v("0.10.3"), &v("0.10.3"), Some(&to), None),
+            "Already on Kix 0.10.3 (matches target 0.10.3). Nothing to upgrade."
+        );
+        assert_eq!(
+            nothing_to_upgrade(&v("0.10.3"), &v("0.10.3"), None, None),
+            "Already on the latest Kix release (0.10.3). Nothing to upgrade."
+        );
+        assert_eq!(
+            nothing_to_upgrade(&v("0.11.0-rc.1"), &v("0.10.3"), None, None),
+            "Kix 0.11.0-rc.1 is newer than the latest Kix release (0.10.3). Nothing to upgrade."
+        );
+        assert_eq!(
+            nothing_to_upgrade(&v("0.10.3"), &v("0.10.2"), None, Some(7)),
+            "Kix 0.10.3 is newer than Kix 0.10.2, the newest release at least 7 days old (`min-age = \"7d\"` in kix.toml). Nothing to upgrade."
+        );
+    }
+
+    #[test]
+    fn an_older_target_names_the_way_back() {
+        assert_eq!(
+            older_message(&v("0.10.0-rc.3"), &v("0.10.0-rc.2")),
+            "Cannot move this project to Kix 0.10.0-rc.2: it is on Kix 0.10.0-rc.3, and `kix upgrade` only moves a project to a newer version.\nNo project files were modified.\nNext: to go back to Kix 0.10.0-rc.2, restore flake.nix and flake.lock from a commit that pinned it."
+        );
     }
 }

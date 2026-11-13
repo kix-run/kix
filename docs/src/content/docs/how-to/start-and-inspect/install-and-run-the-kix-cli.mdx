@@ -117,6 +117,13 @@ as it was. Run [`kix upgrade --to 0.10.1`](/docs/reference/cli/upgrade/): it
 sets `flake.nix` back to 0.10.0, builds every cluster with it, then moves the
 project to 0.10.1 with the usual builds and release notes. Commit both files.
 
+When the tag names an older version than `flake.lock`, `kix upgrade` cannot
+help, because it only moves a project to a newer version. Kix says so:
+
+```text
+flake.nix asks for Kix 0.9.2, but flake.lock pins Kix 0.10.0. `kix upgrade` only moves a project to a newer version of Kix. To stay on Kix 0.10.0, set the tag in flake.nix back to v0.10.0. To go back to Kix 0.9.2, restore flake.nix and flake.lock from a commit that pinned it.
+```
+
 When Kix cannot find the tag in `flake.nix`, for example because the input is
 written as an attribute set, it still checks after evaluation that the Kix
 library has the same version as the running Kix. Installing a version with

@@ -46,11 +46,21 @@ prints this, fetches nothing, and exits `0`:
 Already on Kix 0.10.0. Nothing to upgrade.
 ```
 
-When the target is not newer than the project's version, it prints this and
-exits `0`:
+Without `--to`, when the newest release is not newer than the project's
+version, it prints this and exits `0`:
 
 ```text
 Already on the latest Kix release (0.12.1). Nothing to upgrade.
+```
+
+`kix upgrade` does not move a project to an older version. When `--to` names
+an older version, or a minor whose newest release is older, it changes no
+files and exits `1`:
+
+```text
+Cannot move this project to Kix 0.10.0-rc.2: it is on Kix 0.10.0-rc.3, and `kix upgrade` only moves a project to a newer version.
+No project files were modified.
+Next: to go back to Kix 0.10.0-rc.2, restore flake.nix and flake.lock from a commit that pinned it.
 ```
 
 ## Pin a project that has no version
