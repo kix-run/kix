@@ -86,6 +86,15 @@ pub const COMMANDS: &[RemovedCommand] = &[
             note: "",
         },
     },
+    RemovedCommand {
+        name: "secret",
+        removed: Removed {
+            old: "kix secret hash",
+            new: "",
+            id: "K4732",
+            note: "Kix now records the SHA-256 of each SOPS file itself, so there is nothing to compute. Delete any `hash` line from your SOPS secrets.",
+        },
+    },
 ];
 
 /// `kix bundle CLUSTER FILE`, which names the file with a positional
@@ -350,8 +359,8 @@ const STATUS_MERGE: &str = "K6116";
 pub struct Removed {
     /// The old form as the user would type it, such as `kix gc --hard`.
     pub old: &'static str,
-    /// The form that replaces it, such as `kix gc --full-scan`. Kix puts
-    /// its own version in place of [`RUNNING`].
+    /// The form that replaces it, such as `kix gc --full-scan`, or "" when
+    /// nothing does. Kix puts its own version in place of [`RUNNING`].
     pub new: &'static str,
     /// The id of the change record that removed it, such as `K1234`.
     pub id: &'static str,
@@ -391,10 +400,14 @@ impl Removed {
         let new = self
             .new
             .replace(RUNNING, &kix::version::running().release());
-        let message = format!(
-            "[{}] `{}` was removed. Use `{new}` instead.",
-            self.id, self.old
-        );
+        let message = if new.is_empty() {
+            format!("[{}] `{}` was removed.", self.id, self.old)
+        } else {
+            format!(
+                "[{}] `{}` was removed. Use `{new}` instead.",
+                self.id, self.old
+            )
+        };
         if self.note.is_empty() {
             message
         } else {
@@ -581,6 +594,15 @@ mod tests {
                 "[K6054] `kix lib update` was removed. Use `kix upgrade --to {}` instead.",
                 kix::version::running().release()
             )
+        );
+    }
+
+    #[test]
+    fn secret_hash_says_there_is_nothing_to_compute() {
+        let secret = super::COMMANDS.iter().find(|c| c.name == "secret").unwrap();
+        assert_eq!(
+            secret.removed.message(),
+            "[K4732] `kix secret hash` was removed. Kix now records the SHA-256 of each SOPS file itself, so there is nothing to compute. Delete any `hash` line from your SOPS secrets."
         );
     }
 

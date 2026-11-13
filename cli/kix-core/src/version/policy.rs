@@ -137,6 +137,23 @@ pub fn library_compatible(kix: &Version, library: &Version) -> Result<(), Incomp
     }
 }
 
+/// Return the version of Kix a project is on, from the exact version in
+/// `kix.toml` and the version of its Kix library.
+///
+/// `kix upgrade` builds the project with this version before it moves the
+/// project, so it must be a Kix that can build the library. A library on an
+/// older minor than `kix.toml` names wins, because the Kix that `kix.toml`
+/// names cannot build it, and moving to that Kix is an upgrade with its own
+/// release notes. Otherwise `kix.toml` wins, and `kix upgrade --to` that
+/// version moves only the library.
+pub fn project_version(setting: Option<&Version>, library: Option<&Version>) -> Option<Version> {
+    match (setting, library) {
+        (Some(set), Some(lib)) if lib.minor_key() < set.minor_key() => Some(lib.clone()),
+        (Some(set), _) => Some(set.clone()),
+        (None, lib) => lib.cloned(),
+    }
+}
+
 /// A project's Kix library that the running Kix cannot build, with the fix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryIncompatible {
@@ -343,6 +360,20 @@ mod tests {
             Err(Incompatible::LibraryNewerPatch)
         );
         assert_eq!(library_compatible(&v("0.9.0"), &v("0.9.0-rc.2")), Ok(()));
+    }
+
+    #[test]
+    fn a_library_on_an_older_minor_is_the_version_the_project_is_on() {
+        let on = |set: Option<&str>, lib: Option<&str>| {
+            project_version(set.map(v).as_ref(), lib.map(v).as_ref()).map(|v| v.release())
+        };
+        assert_eq!(on(Some("0.10.0-rc.3"), Some("0.9.2")), Some("0.9.2".into()));
+        assert_eq!(on(Some("0.10.1"), Some("0.10.0")), Some("0.10.1".into()));
+        assert_eq!(on(Some("0.10.0"), Some("0.10.1")), Some("0.10.0".into()));
+        assert_eq!(on(Some("0.9.2"), Some("0.10.0")), Some("0.9.2".into()));
+        assert_eq!(on(Some("0.10.0"), None), Some("0.10.0".into()));
+        assert_eq!(on(None, Some("0.9.2")), Some("0.9.2".into()));
+        assert_eq!(on(None, None), None);
     }
 
     #[test]

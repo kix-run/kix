@@ -259,7 +259,6 @@ mod tests {
             &["kix", "upgrade"],
             &["kix", "doctor"],
             &["kix", "self", "list"],
-            &["kix", "secret", "hash", "f.sops.yaml"],
             &["kix", "completions", "bash"],
             &["kix", "some-plugin"],
         ] {

@@ -12,6 +12,14 @@ use serde_json::Value;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Return an older version of the same minor as this Kix. `kix upgrade
+/// --to` this Kix moves such a library without building, while a library of
+/// an older minor gets the full upgrade.
+fn old() -> String {
+    let v: kix::version::Version = VERSION.parse().unwrap();
+    format!("{}.{}.0-rc.0", v.major, v.minor)
+}
+
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Process::new("git")
         .args([
@@ -32,7 +40,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
-/// A library repository with the tags `v0.0.1` and `v<VERSION>`, and a
+/// A library repository with the tags `v<old()>` and `v<VERSION>`, and a
 /// newer commit on its branch `main`.
 struct Library {
     dir: PathBuf,
@@ -51,13 +59,13 @@ impl Library {
         .unwrap();
         let mut release_rev = String::new();
         for (version, tag) in [
-            ("0.0.1", Some("v0.0.1".to_string())),
-            (VERSION, Some(format!("v{VERSION}"))),
-            ("99.0.0-dev", None),
+            (old(), Some(format!("v{}", old()))),
+            (VERSION.to_string(), Some(format!("v{VERSION}"))),
+            ("99.0.0-dev".to_string(), None),
         ] {
-            std::fs::write(dir.join("VERSION"), version).unwrap();
+            std::fs::write(dir.join("VERSION"), &version).unwrap();
             git(dir, &["add", "-A"]);
-            git(dir, &["commit", "-q", "-m", version]);
+            git(dir, &["commit", "-q", "-m", &version]);
             if let Some(tag) = tag {
                 git(dir, &["tag", &tag]);
                 release_rev = git(dir, &["rev-parse", "HEAD"]);
@@ -148,7 +156,7 @@ fn an_input_without_a_ref_is_locked_to_the_tag() {
             "lock",
             "--override-input",
             "kix",
-            &format!("{url}?ref=refs/tags/v0.0.1"),
+            &format!("{url}?ref=refs/tags/v{}", old()),
         ],
     );
     let old_rev = locked_rev(&proj, "kix");
@@ -158,13 +166,15 @@ fn an_input_without_a_ref_is_locked_to_the_tag() {
         .arg("--dry-run")
         .assert()
         .success()
-        .stdout(predicate::str::contains(format!(
-            "Kix library: v0.0.1 -> {VERSION}. This was a dry run, so Kix changed no files."
-        )));
+        .stdout(format!(
+            "Kix library: {} -> {VERSION}. This was a dry run, so Kix changed no files.\nNext: run `kix upgrade --to {VERSION}` to make these changes.\n",
+            old()
+        ));
     assert_eq!(locked_rev(&proj, "kix"), old_rev);
 
     repair(&proj).assert().success().stdout(format!(
-        "Kix library: v0.0.1 -> {VERSION}.\nCommit flake.lock.\n"
+        "Kix library: {} -> {VERSION}.\nCommit flake.lock.\n",
+        old()
     ));
     assert_eq!(locked_rev(&proj, "kix"), lib.release_rev);
     assert_eq!(
@@ -191,12 +201,13 @@ fn a_version_tag_is_changed_in_flake_nix() {
     let tmp = tempfile::tempdir().unwrap();
     let lib = Library::new(&tmp.path().join("lib"));
     let proj = tmp.path().join("project");
-    let old = format!("{}?ref=refs/tags/v0.0.1", lib.url());
-    project(&proj, &[("kixpkgs", &old)], "kixpkgs");
+    let tagged = format!("{}?ref=refs/tags/v{}", lib.url(), old());
+    project(&proj, &[("kixpkgs", &tagged)], "kixpkgs");
     nix(&proj, &["flake", "lock"]);
 
     repair(&proj).assert().success().stdout(format!(
-        "Kix library: v0.0.1 -> {VERSION}. Kix changed the tag in flake.nix.\nCommit flake.nix and flake.lock.\n"
+        "Kix library: {} -> {VERSION}. Kix changed the tag in flake.nix.\nCommit flake.nix and flake.lock.\n",
+        old()
     ));
     assert!(
         std::fs::read_to_string(proj.join("flake.nix"))
@@ -211,8 +222,8 @@ fn two_urls_on_the_tag_are_left_to_a_person() {
     let tmp = tempfile::tempdir().unwrap();
     let lib = Library::new(&tmp.path().join("lib"));
     let proj = tmp.path().join("project");
-    let old = format!("{}?ref=refs/tags/v0.0.1", lib.url());
-    project(&proj, &[("kix", &old), ("image-kix", &old)], "kix");
+    let tagged = format!("{}?ref=refs/tags/v{}", lib.url(), old());
+    project(&proj, &[("kix", &tagged), ("image-kix", &tagged)], "kix");
     nix(&proj, &["flake", "lock"]);
     let flake = std::fs::read_to_string(proj.join("flake.nix")).unwrap();
     let lock = std::fs::read_to_string(proj.join("flake.lock")).unwrap();
@@ -220,9 +231,10 @@ fn two_urls_on_the_tag_are_left_to_a_person() {
     repair(&proj)
         .assert()
         .code(1)
-        .stdout(predicate::str::starts_with(
-            "Kix cannot tell which url in flake.nix is the Kix library input, because more than one names the tag v0.0.1:\n  flake.nix:2:   inputs.kix.url",
-        ));
+        .stdout(predicate::str::starts_with(format!(
+            "Kix cannot tell which url in flake.nix is the Kix library input, because more than one names the tag v{}:\n  flake.nix:2:   inputs.kix.url",
+            old()
+        )));
     assert_eq!(
         std::fs::read_to_string(proj.join("flake.nix")).unwrap(),
         flake
@@ -271,8 +283,12 @@ fn two_library_names_need_the_setting() {
     let tmp = tempfile::tempdir().unwrap();
     let lib = Library::new(&tmp.path().join("lib"));
     let proj = tmp.path().join("project");
-    let old = format!("{}?ref=refs/tags/v0.0.1", lib.url());
-    project(&proj, &[("kix", &lib.url()), ("kixpkgs", &old)], "kixpkgs");
+    let tagged = format!("{}?ref=refs/tags/v{}", lib.url(), old());
+    project(
+        &proj,
+        &[("kix", &lib.url()), ("kixpkgs", &tagged)],
+        "kixpkgs",
+    );
     repair(&proj)
         .assert()
         .code(1)
@@ -289,7 +305,8 @@ fn two_library_names_need_the_setting() {
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(
-            "Kix library: v0.0.1 -> {VERSION}. Kix changed the tag in flake.nix."
+            "Kix library: {} -> {VERSION}. Kix changed the tag in flake.nix.",
+            old()
         )));
 }
 
@@ -304,6 +321,19 @@ fn lib_update_is_refused_with_the_new_command() {
         .stderr(predicate::str::contains(format!(
             "[K6054] `kix lib update` was removed. Use `kix upgrade --to {VERSION}` instead."
         )));
+}
+
+#[test]
+fn secret_hash_is_refused_with_its_change_record() {
+    Command::cargo_bin("kix")
+        .unwrap()
+        .env("NO_COLOR", "true")
+        .args(["secret", "hash", "secrets/db.yaml"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "[K4732] `kix secret hash` was removed. Kix now records the SHA-256",
+        ));
 }
 
 #[test]

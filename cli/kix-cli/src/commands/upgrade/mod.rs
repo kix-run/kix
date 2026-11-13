@@ -56,11 +56,13 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let resume = previous
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
-    let from: Version = match &resume {
-        Some(s) => s
-            .from
-            .parse()
-            .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
+    let (from, library): (Version, Option<Version>) = match &resume {
+        Some(s) => (
+            s.from
+                .parse()
+                .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
+            None,
+        ),
         None => current_version(&dir, &config)?,
     };
     let to = match args.to.as_deref() {
@@ -80,7 +82,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         && let Some(Requirement::Exact(v)) = &to
         && *v == from
     {
-        return repair(&dir, &config, v, args.dry_run);
+        return repair(&dir, &config, v, library.as_ref(), args.dry_run);
     }
 
     if resume.is_none()
@@ -188,8 +190,11 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         work: work_dir(&dir),
         installed_here: Vec::new(),
         from: from.clone(),
-        pinned: match &config.kix {
-            Some(Requirement::Exact(v)) => v.clone(),
+        // A resumed run may be pinned to a step past `from`. A new run starts
+        // where the project is, which can be an older library than kix.toml
+        // names.
+        pinned: match (&resume, &config.kix) {
+            (Some(_), Some(Requirement::Exact(v))) => v.clone(),
             _ => from.clone(),
         },
         state: None,
@@ -229,6 +234,10 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             known,
             without_notes: &without_notes,
             verbose,
+            command: &match args.to.as_deref() {
+                None | Some("latest") => "kix upgrade".to_string(),
+                Some(text) => format!("kix upgrade --to {text}"),
+            },
         });
         return Ok(());
     }
@@ -542,18 +551,29 @@ fn exit(code: Exit) -> Result<()> {
     Err(Stopped(code).into())
 }
 
-/// Return the version of Kix the project uses: the exact version in
-/// `kix.toml`, or else the version of its Kix library.
-fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<Version> {
-    if let Some(Requirement::Exact(v)) = &config.kix {
-        return Ok(v.clone());
-    }
-    super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
-    kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
-    if let kix::library::LibraryVersion::Known(v) = kix::library::eval_version(dir, &[])
-        && let Ok(version) = v.parse()
-    {
-        return Ok(version);
+/// Return the version of Kix the project uses
+/// ([`kix::version::policy::project_version`]), and the version of its Kix
+/// library when Kix could read it.
+fn current_version(
+    dir: &Path,
+    config: &kix::project::ProjectConfig,
+) -> Result<(Version, Option<Version>)> {
+    let setting = match &config.kix {
+        Some(Requirement::Exact(v)) => Some(v),
+        _ => None,
+    };
+    let library = if setting.is_none() || dir.join("flake.nix").is_file() {
+        super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
+        kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
+        match kix::library::eval_version(dir, &[]) {
+            kix::library::LibraryVersion::Known(v) => v.parse().ok(),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(version) = kix::version::policy::project_version(setting, library.as_ref()) {
+        return Ok((version, library));
     }
     refuse(&format!(
         "Cannot determine the current Kix version for this project from kix.toml or flake.lock.\nNo project files were modified.\nNext: set the exact version in kix.toml (for example `kix = \"{}\"`), then run `kix upgrade` again.",
@@ -564,11 +584,13 @@ fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<V
 
 /// Make `kix.toml`, `flake.nix`, and `flake.lock` of the project in `dir`
 /// agree on `version`, the version the project is on, without building.
-/// With `dry_run`, check the library and change nothing.
+/// `library` is the version of the project's Kix library now, when Kix could
+/// read it. With `dry_run`, check the library and change nothing.
 fn repair(
     dir: &Path,
     config: &kix::project::ProjectConfig,
     version: &Version,
+    library: Option<&Version>,
     dry_run: bool,
 ) -> Result<()> {
     let release = version.release();
@@ -587,13 +609,15 @@ fn repair(
         }
     };
     let mut files: Vec<&str> = Vec::new();
+    let mut would_change = new_toml.is_some();
     let has_flake = dir.join("flake.nix").is_file();
     if has_flake {
         super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
         kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
         match kix::pin_library::pin_library(dir, version, dry_run) {
             Ok(pinned) => {
-                println!("{}", pinned.summary());
+                println!("{}", pinned.summary(library));
+                would_change |= pinned.moves();
                 files.extend(pinned.changed);
             }
             Err(e) => {
@@ -632,7 +656,9 @@ fn repair(
             files.insert(0, "kix.toml");
         }
     }
-    if !dry_run && !files.is_empty() {
+    if dry_run && would_change {
+        println!("Next: run `kix upgrade --to {release}` to make these changes.");
+    } else if !dry_run && !files.is_empty() {
         println!("Commit {}.", out::and_list(&files));
     } else if !has_flake && keeps {
         println!("kix.toml already names Kix {release}. Nothing to change.");
@@ -1295,6 +1321,9 @@ struct Preview<'a> {
     known: Known,
     without_notes: &'a [String],
     verbose: bool,
+    /// The command that runs this upgrade, as the person typed it without
+    /// `--dry-run`.
+    command: &'a str,
 }
 
 fn preview(p: &Preview) {
@@ -1383,7 +1412,7 @@ fn preview(p: &Preview) {
             many.join("], [")
         ),
     }
-    println!("Next: run `kix upgrade`.");
+    println!("Next: run `{}`.", p.command);
 }
 
 /// Add `refs` to the acknowledged data changes in `kix-upgrade.json`.
@@ -1495,7 +1524,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("kix.toml"), "kix = \"0.8.0-rc.1\"\n").unwrap();
         let config = kix::project::ProjectConfig::read(Some(dir.path()), None).unwrap();
-        let v = current_version(dir.path(), &config).unwrap();
+        let (v, _) = current_version(dir.path(), &config).unwrap();
         assert_eq!(v.release(), "0.8.0-rc.1");
         assert!(v < "0.8.0".parse().unwrap());
     }

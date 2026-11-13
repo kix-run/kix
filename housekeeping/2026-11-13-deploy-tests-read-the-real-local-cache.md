@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix-cli/tests/deploy_test.rs`, `commands_test.rs` · The offline deploy tests read the developer's own cache and fail after a real deploy of `example`.
+
+`deploy_dry_run_shows_plan`, `deploy_plan_refuses_json_and_a_changed_plan_file`, `plan_save_writes_the_plan_file`, and `deploy_dry_run` in `commands_test.rs` expect `kix deploy example --dry-run --offline` to find no cached build and exit 2. The tests set no `XDG_CACHE_HOME`, so Kix reads the real cache. Once a deploy of `example` has run on the machine, Kix prints "Loading previous deployment from local cache...", the plan has no changes, and the command exits 0. The tests should point the cache at a temporary folder.
