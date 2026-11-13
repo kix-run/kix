@@ -14276,7 +14276,7 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/dagvl09sp03v1w5x036r5s7nxn7yl3hs-kix-activation-example.json
+    kix.run/built-via: /nix/store/60lvpbvkxrjjvpi68v3mrj75jh9mgm0j-kix-activation-example.json
     kix.run/depends-on: 1mca17qqf22pd9n20lvscfj5f8ybw65r,1vxb2w8lzvzhhmchsan9z0i72qhznpfw,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,dd0si3rkg4yak9q2hpnb29g4spj7grzs,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,kiig0vakys3kkhqdxys2zkznlvnwmmdz,kpppzkza8b4qrn788ppn2xi0sfmpcf03,kxp256xpy6sfk61m1c61g58a82niijxk,spi8qjq6x9y4l363wip2342h53n7r7pa,w4jfxii3b0w1bl78pjanhkxinzl0kiys,wgmzp3vnggxcxxmn83k56nj5d4z4cy59,y2jcrmddnfpzxrf4r3ymy725qwidhh4z,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
     kix.run/identity-hash: xyssrlw2jvvn70qc358flviipndy96y2
     kix.run/package: _cluster
