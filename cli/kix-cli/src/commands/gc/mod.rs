@@ -185,8 +185,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             crate::say!(
                 "{}",
                 output::green(&format!(
-                    "Nothing to delete ({} object(s) unchanged, {}).",
-                    new_hashes.len(),
+                    "Nothing to delete ({}, {}).",
+                    in_use(new_hashes.len()),
                     retirement.kept_note(),
                 ))
             );
@@ -201,8 +201,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         crate::say!(
             "{}",
             output::green(&format!(
-                "Nothing to delete ({} object(s) unchanged, {}).",
-                new_hashes.len(),
+                "Nothing to delete ({}, {}).",
+                in_use(new_hashes.len()),
                 retirement.kept_note(),
             ))
         );
@@ -308,6 +308,15 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         done.failed + records_failed,
         Some((retired, retirement.plan.kept.len())),
     )
+}
+
+/// Return `126 objects still in use`: the objects of the current build, which
+/// gc does not delete.
+fn in_use(objects: usize) -> String {
+    match objects {
+        1 => "1 object still in use".to_string(),
+        n => format!("{n} objects still in use"),
+    }
 }
 
 /// Clear `status.orphansKeptFrom` on the Active record and remove local GC

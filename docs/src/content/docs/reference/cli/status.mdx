@@ -29,8 +29,8 @@ kix status [CLUSTER] [--check presence|drift|readiness]... [--package <NAME>]
 | Argument or flag | Meaning |
 | --- | --- |
 | `[CLUSTER]` | Kix cluster to check. Without it, Kix checks every Kix cluster that has a current deploy on the Kubernetes cluster of the context. |
-| `--check <CHECK>` | Run only this check: `presence`, `drift`, or `readiness`. Repeat it to run more than one. Without it, all three run. |
-| `--package <NAME>` | Show only this package, by instance name (`web`) or `namespace/instance` (`shop/web`). An error when no checked cluster has the package. |
+| `--check <CHECK>` | Run only this check: `presence`, `drift`, or `readiness`. Repeat it to run more than one. Without it, all three run. Every check reports a missing object. |
+| `--package <NAME>` | Show only this package, by instance name (`web`) or `namespace/instance` (`shop/web`). An error when no checked cluster has the package. The error lists the packages, or the five closest names when there are more than ten. |
 | `-o`, `--output` | `text` (default), `json`, or `yaml`. Other formats are refused. |
 | `-v` | List every object, with or without a problem, and print the Kubernetes cluster ID. |
 | `-q`, `--quiet` | Print only the objects with a problem. |
@@ -52,15 +52,18 @@ current deploy is the cluster's `Active` or `Degraded`
 | `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. |
 
 A missing object is a problem under every check, because no check can run on
-an object that is gone. `kix status --check drift` therefore also reports
-missing objects.
+an object that is gone. `kix status --check drift` and
+`kix status --check readiness` therefore also report missing objects.
 
 The drift check hashes only the fields Kix owns through server-side apply. A
 field Kix never set, such as one a controller adds, does not count. A change
 made through the `/scale` subresource, such as `kubectl scale` or an
 autoscaler, counts when Kix set the replica count. For a changed object, Kix
 reads `metadata.managedFields` to name each changed field and the field
-manager that now owns it. See
+manager that now owns it. Kix names only the managers that wrote to the object
+after the deploy. A manager that still owns a field from before Kix took it,
+such as kubeadm on the CoreDNS ConfigMap, has changed nothing since and is not
+named. See
 [Server-side apply and drift](/docs/explanation/server-side-apply-and-drift/).
 
 A Job that finished counts as present and ready. Jobs that Kix builds do not
@@ -79,7 +82,11 @@ The text output has four parts:
    `kix deploy <cluster> --reconcile`, which puts it back, and
    `kix plan <cluster> --reconcile`, which shows what that deploy would change
    first. A deploy without `--reconcile` skips objects whose build did not
-   change, so it does not put back a missing or changed object.
+   change, so it does not put back a missing or changed object. When another
+   field manager changed an object, such as `kubectl edit` or `kubectl scale`,
+   that manager now owns the changed fields, and a deploy stops on them with a
+   field ownership conflict. The line then adds `--force-conflicts`, which
+   takes the fields back from that manager.
 
 ```text
 Cluster shop on Kubernetes v1.33.1 (context prod)
@@ -87,7 +94,7 @@ Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 
   db/postgres              2 resources  1 changed
   ingress/ingress-nginx    1 resource   ok
-  vault/vaultwarden        4 resources  1 not ready, 1 missing
+  vault/vaultwarden        4 resources  1 not ready, 1 missing, 2 not checked
   (cluster-level)          1 resource   ok
 
 db/postgres
@@ -96,8 +103,8 @@ vault/vaultwarden
   Deployment vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
   Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden
 
-8 resources: 5 ok, 1 changed, 1 not ready, 1 missing. 2 not checked.
-Next: run `kix deploy shop --reconcile` to put back what is missing or changed. `kix plan shop --reconcile` shows what it would change first.
+8 resources: 3 ok, 1 changed, 1 not ready, 1 missing, 2 not checked.
+Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take the changed fields back from kubectl-edit. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
 
 This account may not list secrets, so Kix did not check objects of those kinds.
 ```
@@ -137,7 +144,8 @@ not fail the command:
 - **No field ownership entry for Kix.** Kubernetes records no fields that the
   `kix` field manager owns, so the drift check has nothing to compare.
 
-The summary line counts these objects as `ok` and adds `N not checked`.
+The summary line and the package lines count these objects as `not checked`.
+`ok` counts only the objects that every selected check passed.
 
 ## How missing objects are named
 
@@ -176,7 +184,7 @@ fields and values they do not know.
 | `clusters[].objects_from` | Where Kix found the deploy's objects: `index` (the record's package index), `depends_on` (the live objects' `kix.run/depends-on` annotations), or `unknown` (nowhere; no object was checked). |
 | `clusters[].notes` | Warnings about the cluster, such as a platform interface that changed. |
 | `clusters[].packages[]` | One entry for each package, with `name` (`namespace/instance`, or `null` for the cluster-level objects), `summary`, and `resources`. |
-| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, and `not_checked`. Each cluster and package has the same object. An object with two problems counts under both. |
+| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, and `not_checked`. Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
 
 Each entry of `resources[]`:
 
@@ -186,7 +194,7 @@ Each entry of `resources[]`:
 | `identity_hash` | The object's `kix.run/identity-hash`. |
 | `named` | `false` when Kix could not name a missing object. |
 | `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), or `unknown` (the account may not list the kind). |
-| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, and `paths`), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
+| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `changed_by` (the field managers other than Kix that wrote to the object after the deploy, each with `manager`, `operation`, `subresource`, `time`, and `paths`, the fields it owns), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
 | `ready` | `true` or `false`. `null` when the readiness check did not run, the kind has no readiness (such as a ConfigMap), or the object is gone. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
 | `needed_by` | For a missing object, the objects that depend on it, as `Kind namespace/name`. |

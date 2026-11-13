@@ -7,7 +7,7 @@ Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 
   db/postgres              2 resources  1 changed
   ingress/ingress-nginx    1 resource   ok
-  vault/vaultwarden        4 resources  1 not ready, 1 missing
+  vault/vaultwarden        4 resources  1 not ready, 1 missing, 2 not checked
   (cluster-level)          1 resource   ok
 
 db/postgres
@@ -16,7 +16,7 @@ vault/vaultwarden
   Deployment vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
   Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden
 
-8 resources: 5 ok, 1 changed, 1 not ready, 1 missing. 2 not checked.
-Next: run `kix deploy shop --reconcile` to put back what is missing or changed. `kix plan shop --reconcile` shows what it would change first.
+8 resources: 3 ok, 1 changed, 1 not ready, 1 missing, 2 not checked.
+Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take the changed fields back from kubectl-edit. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
 
 This account may not list secrets, so Kix did not check objects of those kinds.

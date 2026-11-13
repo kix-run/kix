@@ -63,11 +63,16 @@ pub(super) struct RecordRetirement {
 }
 
 impl RecordRetirement {
+    /// Return how many older deployment records gc keeps, such as `2 older
+    /// deployment records kept for rollback`.
     pub(super) fn kept_note(&self) -> String {
         if self.records.is_none() {
-            "no deployment records on this cluster".to_string()
-        } else {
-            format!("{} deployment record(s) kept", self.plan.kept.len())
+            return "no deployment records on this cluster".to_string();
+        }
+        match self.plan.kept.len() {
+            0 => "no older deployment records".to_string(),
+            1 => "1 older deployment record kept for rollback".to_string(),
+            n => format!("{n} older deployment records kept for rollback"),
         }
     }
 }

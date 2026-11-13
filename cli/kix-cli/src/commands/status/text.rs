@@ -152,16 +152,55 @@ fn render_cluster(
         let _ = writeln!(out, "\n{}", summary_line(&c.summary));
         let s = &c.summary;
         if s.missing + s.changed > 0 {
-            let _ = writeln!(
-                out,
-                "Next: run `kix deploy {} --reconcile` to put back what is missing or changed. \
-                 `kix plan {} --reconcile` shows what it would change first.",
-                c.cluster, c.cluster
-            );
+            let _ = writeln!(out, "{}", next_step(c));
         }
     }
     for note in &c.notes {
         let _ = writeln!(out, "{}", output::yellow(note));
+    }
+}
+
+/// Return the `Next:` line for a cluster with a missing or changed object.
+///
+/// A deploy stops on a field ownership conflict when another manager owns a
+/// field it applies, so the line adds `--force-conflicts` when a manager
+/// other than Kix changed an object. A replica count changed through `/scale`
+/// with no recorded owner needs only `--reconcile`.
+fn next_step(c: &ClusterStatus) -> String {
+    let mut managers: Vec<&str> = c
+        .packages
+        .iter()
+        .flat_map(|p| &p.resources)
+        .filter(|r| r.problems.contains(&Problem::Changed))
+        .filter_map(|r| r.drift.as_ref())
+        .flat_map(|d| &d.changed_by)
+        .map(|o| o.manager.as_str())
+        .collect();
+    managers.sort();
+    managers.dedup();
+    let cluster = &c.cluster;
+    if managers.is_empty() {
+        format!(
+            "Next: run `kix deploy {cluster} --reconcile` to put back what is missing or changed. \
+             `kix plan {cluster} --reconcile` shows what it would change first."
+        )
+    } else {
+        format!(
+            "Next: run `kix deploy {cluster} --reconcile --force-conflicts` to put back what is \
+             missing or changed and take the changed fields back from {}. \
+             `kix plan {cluster} --reconcile --force-conflicts` shows what it would change first.",
+            and_list(&managers)
+        )
+    }
+}
+
+/// Join `items` with commas and a final "and".
+fn and_list(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
 }
 
@@ -180,13 +219,25 @@ fn package_label(p: &PackageStatus) -> String {
         .unwrap_or_else(|| "(cluster-level)".to_string())
 }
 
+/// Return a package's state: `ok`, or its counts, such as `1 changed, 1 not
+/// checked`.
 fn package_state(s: &Summary) -> String {
     let problems = problem_counts(s);
+    let mut parts = Vec::new();
     if problems.is_empty() {
-        output::green("ok").into_owned()
+        if s.not_checked == 0 {
+            return output::green("ok").into_owned();
+        }
+        if s.ok > 0 {
+            parts.push(output::green(&format!("{} ok", s.ok)).into_owned());
+        }
     } else {
-        output::red(&problems.join(", ")).into_owned()
+        parts.push(output::red(&problems.join(", ")).into_owned());
     }
+    if s.not_checked > 0 {
+        parts.push(output::dim(&format!("{} not checked", s.not_checked)).into_owned());
+    }
+    parts.join(", ")
 }
 
 fn problem_counts(s: &Summary) -> Vec<String> {
@@ -203,12 +254,15 @@ fn problem_counts(s: &Summary) -> Vec<String> {
     parts
 }
 
-/// Return the closing line, such as `29 resources: 26 ok, 1 changed. 2 not
+/// Return the closing line, such as `29 resources: 26 ok, 1 changed, 2 not
 /// checked.`
 fn summary_line(s: &Summary) -> String {
     let mut parts = vec![format!("{} ok", s.ok)];
     parts.extend(problem_counts(s));
-    let mut line = format!(
+    if s.not_checked > 0 {
+        parts.push(format!("{} not checked", s.not_checked));
+    }
+    format!(
         "{} {}: {}.",
         s.resources,
         if s.resources == 1 {
@@ -217,11 +271,7 @@ fn summary_line(s: &Summary) -> String {
             "resources"
         },
         parts.join(", ")
-    );
-    if s.not_checked > 0 {
-        let _ = write!(line, " {} not checked.", s.not_checked);
-    }
-    line
+    )
 }
 
 fn resource_label(r: &ResourceStatus) -> String {
@@ -288,7 +338,7 @@ fn changed(drift: Option<&Drift>) -> String {
         };
     }
     let fields: Vec<String> = drift
-        .foreign_owners
+        .changed_by
         .iter()
         .flat_map(|o| o.paths.iter().map(move |p| format!("{p} by {}", o.manager)))
         .collect();

@@ -120,7 +120,7 @@ how-to-app/production
   Deployment how-to-app/production  changed since deploy (spec.replicas by kubectl)
 
 16 resources: 15 ok, 1 changed.
-Next: run `kix deploy how-to-application --reconcile` to put back what is missing or changed. `kix plan how-to-application --reconcile` shows what it would change first.
+Next: run `kix deploy how-to-application --reconcile --force-conflicts` to put back what is missing or changed and take the changed fields back from kubectl. `kix plan how-to-application --reconcile --force-conflicts` shows what it would change first.
 ```
 
 Only the fields Kix set count. A field that a controller adds, or one the

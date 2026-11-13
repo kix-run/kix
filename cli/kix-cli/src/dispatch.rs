@@ -113,6 +113,29 @@ impl Command {
         })
     }
 
+    /// Return every `-o` format that the command at `path`, such as
+    /// `compliance sbom`, prints with some flags, for its `--help`. The
+    /// default comes first. `None` leaves every format in the help.
+    ///
+    /// A test checks this against [`Command::formats`] for each set of flags
+    /// that changes the formats.
+    pub fn help_formats(path: &str) -> Option<&'static [OutputFormat]> {
+        let command = path.split(' ').next().unwrap_or_default();
+        Some(match (command, path) {
+            (_, "compliance sbom" | "compliance attest") => &[Json, Yaml],
+            (_, "compliance audit") => TEXT,
+            ("compliance", _) => DATA,
+            ("build", _) => &[Yaml, Json],
+            ("check", _) => &[Text, Json, Yaml, Sarif],
+            ("graph", _) => &[Tree, Dot, Json, Yaml],
+            ("diff" | "plan" | "deploy", _) => &[Text, Json, Yaml, Markdown],
+            ("history" | "status" | "list" | "pin", _) => DATA,
+            ("completions" | "self" | "doctor" | "upgrade" | "bundle" | "gc" | "migrate", _)
+            | ("rollback" | "export" | "logs" | "port-forward" | "snapshot", _) => TEXT,
+            _ => return None,
+        })
+    }
+
     /// Return the flags that changed [`Command::formats`], as a user types
     /// them, so that a refusal names the command the user ran.
     pub fn format_flags(&self) -> &'static str {
@@ -310,6 +333,56 @@ mod tests {
             Some(DATA)
         );
         assert_eq!(formats(&["kix", "some-plugin"]), None);
+    }
+
+    /// The formats the help of a command lists are exactly those it prints
+    /// with some set of flags.
+    #[test]
+    fn help_lists_the_formats_of_every_mode() {
+        let modes: &[(&str, &[&[&str]])] = &[
+            ("build", &[&["kix", "build", "c"]]),
+            ("check", &[&["kix", "check", "c"]]),
+            ("graph", &[&["kix", "graph", "c"]]),
+            ("diff", &[&["kix", "diff", "c"]]),
+            (
+                "plan",
+                &[&["kix", "plan", "c"], &["kix", "plan", "c", "--read-only"]],
+            ),
+            (
+                "deploy",
+                &[
+                    &["kix", "deploy", "c"],
+                    &["kix", "deploy", "c", "--dry-run"],
+                    &["kix", "deploy", "c", "--dry-run", "--plan", "p.kixplan"],
+                ],
+            ),
+            ("rollback", &[&["kix", "rollback", "c"]]),
+            ("history", &[&["kix", "history", "c"]]),
+            ("status", &[&["kix", "status"]]),
+            ("list clusters", &[&["kix", "list", "clusters"]]),
+            ("gc", &[&["kix", "gc", "c"]]),
+            ("compliance sbom", &[&["kix", "compliance", "sbom", "c"]]),
+            ("compliance audit", &[&["kix", "compliance", "audit", "c"]]),
+            ("pin list", &[&["kix", "pin", "list"]]),
+        ];
+        for (path, argvs) in modes {
+            let help = Command::help_formats(path).expect(path);
+            let mut printed: Vec<OutputFormat> = Vec::new();
+            for argv in *argvs {
+                let formats = formats(argv).expect("Kix decides the formats");
+                for f in formats {
+                    assert!(
+                        help.contains(f),
+                        "{argv:?} prints {f:?}, which `{path}` help omits"
+                    );
+                    if !printed.contains(f) {
+                        printed.push(*f);
+                    }
+                }
+                assert_eq!(formats[0], help[0], "{argv:?} has another default");
+            }
+            assert_eq!(printed.len(), help.len(), "`{path}` help lists {help:?}");
+        }
     }
 
     #[test]

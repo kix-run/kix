@@ -34,7 +34,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
           "name": "vault/vaultwarden",
           "summary": {
             "resources": 4,
-            "ok": 2,
+            "ok": 0,
             "missing": 1,
             "changed": 0,
             "not_ready": 1,
@@ -50,7 +50,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
               "present": "yes",
               "drift": {
                 "verdict": "in_sync",
-                "foreign_owners": [],
+                "changed_by": [],
                 "unrecorded_scale": null
               },
               "ready": false,
@@ -70,7 +70,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
               "present": "yes",
               "drift": {
                 "verdict": "unstamped",
-                "foreign_owners": [],
+                "changed_by": [],
                 "unrecorded_scale": null
               },
               "ready": null,
@@ -116,7 +116,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
       ],
       "summary": {
         "resources": 4,
-        "ok": 2,
+        "ok": 0,
         "missing": 1,
         "changed": 0,
         "not_ready": 1,
@@ -126,7 +126,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
   ],
   "summary": {
     "resources": 4,
-    "ok": 2,
+    "ok": 0,
     "missing": 1,
     "changed": 0,
     "not_ready": 1,

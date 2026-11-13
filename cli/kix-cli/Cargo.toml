@@ -34,6 +34,8 @@ toml.workspace = true
 blake3.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Ranks package names for a `kix status --package` that matches none.
+strsim.workspace = true
 
 [dependencies.k8s-openapi]
 workspace = true
