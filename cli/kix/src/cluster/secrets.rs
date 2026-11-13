@@ -1,8 +1,8 @@
 //! SOPS secret decryption at deploy time.
 //!
 //! Scans manifests for K8s Secrets with `kix.run/sops-source` annotations,
-//! decrypts the SOPS file via the `sops` CLI, optionally verifies the
-//! content hash, and injects the plaintext into `stringData`.
+//! checks the SOPS file against `kix.run/sops-digest`, decrypts it via the
+//! `sops` CLI, and injects the plaintext into `stringData`.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
@@ -28,24 +28,29 @@ pub(crate) enum SecretError {
     #[error("SOPS source file not found: {path}")]
     SourceNotFound { path: String },
 
-    /// Kix decrypted the SOPS file, and its values do not match the `hash`
-    /// the Secret declares. `sops_source` is the Secret's `kix.run/sops-source`.
+    /// The SOPS file's bytes do not match the `kix.run/sops-digest` the build
+    /// recorded. `sops_source` is the Secret's `kix.run/sops-source`.
     #[error(
-        "the values in SOPS file {} do not match the `hash` declared for Secret '{name}' (expected {expected}). {}",
-        sops_file_name(sops_source),
-        hash_mismatch_next(sops_source, None)
+        "SOPS file {} for Secret '{name}' is not the file Kix built from: its SHA-256 does not match the digest the build recorded. Nothing was decrypted. Build the cluster again, or create a new bundle with `kix bundle <cluster>`, and run the command again.",
+        sops_file_name(sops_source)
     )]
-    HashMismatch {
-        name: String,
-        sops_source: String,
-        expected: String,
-    },
+    DigestMismatch { name: String, sops_source: String },
+
+    /// A bundle made by Kix 0.9 or earlier carries a hash of the SOPS file's
+    /// values instead of a digest of the file, and the decrypted values do
+    /// not match it.
+    // Remove six months after 0.10.0, when no supported bundle lacks a digest.
+    #[error(
+        "the values in SOPS file {} do not match the hash the bundle records for Secret '{name}'. Create a new bundle with `kix bundle <cluster>` and run `kix deploy` again.",
+        sops_file_name(sops_source)
+    )]
+    HashMismatch { name: String, sops_source: String },
 
     #[error("failed to parse SOPS output as YAML/JSON for {path}: {message}")]
     ParseFailed { path: String, message: String },
 
-    /// A Secret names a SOPS source the build does not carry, or declares
-    /// no content hash, when the build carries its SOPS files.
+    /// A Secret names a SOPS source the build does not carry, or records no
+    /// digest of it, when the build carries its SOPS files.
     #[error("secret '{name}': {message}")]
     NotCarried { name: String, message: String },
 
@@ -62,26 +67,9 @@ pub(crate) enum SecretError {
     NotAgeOnly { path: String, message: String },
 }
 
-/// Return what to do about a SOPS file whose values do not match its `hash`.
-/// `instance` names the secret instance whose `source` is the file, when Kix
-/// knows it. Kix never prints the hash it computed unasked, because it is a
-/// digest of secret values and deploy output often lands in shared logs.
-pub fn hash_mismatch_next(sops_source: &str, instance: Option<&str>) -> String {
-    let file = sops_file_name(sops_source);
-    let place = match instance {
-        Some(instance) => format!("the `hash` of instance '{instance}', whose `source` is {file}"),
-        None => format!(
-            "`hash` where {file} is declared: on the secret instance whose `source` is {file}, or in the `scope.mkSecret` call that names it"
-        ),
-    };
-    format!(
-        "If you changed {file} on purpose, run `kix secret hash <path to {file}>` and put the hash it prints in {place}. Otherwise, put back the SOPS file that matches `hash`."
-    )
-}
-
 /// Return the file name of a SOPS source for messages, without the store
 /// hash that Kix's local store puts in front of it.
-pub fn sops_file_name(source: &str) -> &str {
+fn sops_file_name(source: &str) -> &str {
     let base = Path::new(source)
         .file_name()
         .and_then(|n| n.to_str())
@@ -100,14 +88,31 @@ pub fn sops_file_name(source: &str) -> &str {
     }
 }
 
-/// Decrypt the SOPS file at `path` with the `sops` in the Kix runtime and
-/// return the `hash` of its values, as `kix deploy` computes it.
-pub fn sops_file_hash(path: &Path) -> Result<String, String> {
-    let read = || -> Result<String, SecretError> {
-        let data = parse_secret_data(path, &decrypt_sops(path, None)?)?;
-        Ok(compute_content_hash(&data))
-    };
-    read().map_err(|e| e.to_string())
+/// Return the SHA-256 of the file at `path` in hex, as `builtins.hashFile
+/// "sha256"` writes it to `kix.run/sops-digest`.
+fn file_digest(path: &Path) -> Result<String, SecretError> {
+    let bytes = std::fs::read(path).map_err(|_| SecretError::SourceNotFound {
+        path: path.display().to_string(),
+    })?;
+    Ok(Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// Check `actual`, the digest of the SOPS file Kix is about to decrypt,
+/// against the Secret's `kix.run/sops-digest`. A build without the annotation
+/// passes.
+fn check_digest(manifest: &Value, actual: &str) -> Result<(), SecretError> {
+    match keys::get(manifest, keys::SOPS_DIGEST) {
+        Some(expected) if expected != actual => Err(SecretError::DigestMismatch {
+            name: ResourceId::from_value(manifest).name,
+            sops_source: keys::get(manifest, keys::SOPS_SOURCE)
+                .unwrap_or_default()
+                .to_string(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// Result of hydrating a single secret.
@@ -138,8 +143,8 @@ pub(crate) fn needs_hydration(manifest: &Value) -> bool {
 ///
 /// For each Secret with a `kix.run/sops-source` annotation:
 /// 1. Locate the SOPS file (store path or repo-relative path)
-/// 2. Decrypt via `sops --decrypt`
-/// 3. Verify content hash if `kix.run/content-hash` is present
+/// 2. Check its bytes against `kix.run/sops-digest` when present
+/// 3. Decrypt via `sops --decrypt`
 /// 4. Inject decrypted key-value pairs into `stringData`
 ///
 /// Returns the list of hydrated secrets, or the first error encountered.
@@ -147,7 +152,7 @@ pub(crate) fn needs_hydration(manifest: &Value) -> bool {
 /// When `sources` is [`SopsSources::Carried`], every referenced source must be
 /// present in the carried files, encrypted to `age` recipients only (so
 /// decryption never calls a cloud KMS or Vault with local credentials), and
-/// paired with a `kix.run/content-hash` annotation on the `Secret`. When
+/// match the `kix.run/sops-digest` annotation on the `Secret`. When
 /// `placeholders` is enabled, each key from the SOPS file receives a
 /// placeholder value valid for the `Secret` type without running `sops`.
 pub(crate) fn hydrate_secrets_from(
@@ -173,8 +178,10 @@ pub(crate) fn hydrate_secrets_from(
     Ok(results)
 }
 
-/// Cached keys, format, and decrypted values for a carried SOPS source.
+/// Cached digest, keys, format, and decrypted values for a carried SOPS
+/// source.
 struct ReadSource {
+    digest: String,
     keys: Vec<String>,
     input_type: &'static str,
     data: Option<BTreeMap<String, String>>,
@@ -190,27 +197,35 @@ fn hydrate_carried(
         name: rid.name.clone(),
         message,
     };
-    let source = keys::get(manifest, keys::SOPS_SOURCE)
+    let source_name = keys::get(manifest, keys::SOPS_SOURCE)
         .unwrap_or_default()
         .to_string();
     let path = carried
         .files
-        .get(&source)
-        .ok_or_else(|| not_carried(format!("its SOPS source {source} is not in the build")))?;
-    let expected = keys::get(manifest, keys::CONTENT_HASH)
-        .map(str::to_string)
-        .ok_or_else(|| not_carried(format!("it declares no {}", keys::CONTENT_HASH)))?;
+        .get(&source_name)
+        .ok_or_else(|| not_carried(format!("its SOPS source {source_name} is not in the build")))?;
+    // A bundle from Kix 0.9 or earlier records a hash of the decrypted values
+    // instead of a digest of the file.
+    let old_hash = keys::get(manifest, keys::CONTENT_HASH)
+        .filter(|_| keys::get(manifest, keys::SOPS_DIGEST).is_none())
+        .map(str::to_string);
+    if old_hash.is_none() && keys::get(manifest, keys::SOPS_DIGEST).is_none() {
+        return Err(not_carried(format!("it records no {}", keys::SOPS_DIGEST)));
+    }
     let source = match read.entry(path.clone()) {
         std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
         std::collections::hash_map::Entry::Vacant(e) => {
+            let digest = file_digest(path)?;
             let (keys, input_type) = age_only_keys(path)?;
             e.insert(ReadSource {
+                digest,
                 keys,
                 input_type,
                 data: None,
             })
         }
     };
+    check_digest(manifest, &source.digest)?;
 
     let data: BTreeMap<String, String> = if carried.placeholders {
         placeholders(manifest, &source.keys)
@@ -222,13 +237,12 @@ fn hydrate_carried(
                 source.data.insert(data).clone()
             }
         };
-        if compute_content_hash(&data) != expected {
+        if let Some(expected) = old_hash
+            && compute_content_hash(&data) != expected
+        {
             return Err(SecretError::HashMismatch {
                 name: rid.name.clone(),
-                sops_source: keys::get(manifest, keys::SOPS_SOURCE)
-                    .unwrap_or_default()
-                    .to_string(),
-                expected,
+                sops_source: source_name,
             });
         }
         data
@@ -533,26 +547,12 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
         .unwrap_or("")
         .to_string();
 
-    let expected_hash = manifest
-        .pointer("/metadata/annotations")
-        .and_then(|a| a.get(keys::CONTENT_HASH))
-        .and_then(Value::as_str)
-        .map(|s| s.to_string());
-
     let sops_path = resolve_sops_path(&sops_source)?;
+    if keys::get(manifest, keys::SOPS_DIGEST).is_some() {
+        check_digest(manifest, &file_digest(&sops_path)?)?;
+    }
     let plaintext = decrypt_sops(&sops_path, None)?;
     let data = parse_secret_data(&sops_path, &plaintext)?;
-
-    if let Some(ref expected) = expected_hash {
-        let actual = compute_content_hash(&data);
-        if &actual != expected {
-            return Err(SecretError::HashMismatch {
-                name: rid.name.clone(),
-                sops_source,
-                expected: expected.clone(),
-            });
-        }
-    }
 
     let keys_injected = data.len();
     merge_string_data(manifest, data);
@@ -654,11 +654,10 @@ fn parse_secret_data(
     Ok(data)
 }
 
-/// Compute a SHA-256 content hash of secret data.
-///
-/// Uses canonical form: sorted keys, each line is `key=value\n`.
-/// Returns `sha256-<base64>` format (matching Nix SRI hashes).
-pub(crate) fn compute_content_hash(data: &BTreeMap<String, String>) -> String {
+/// Compute the hash of secret data that Kix 0.9 and earlier wrote to
+/// `kix.run/content-hash`: SHA-256 over sorted `key=value\n` lines, as
+/// `sha256-<base64>`.
+fn compute_content_hash(data: &BTreeMap<String, String>) -> String {
     let mut hasher = Sha256::new();
     for (key, value) in data {
         hasher.update(key.as_bytes());
@@ -842,27 +841,42 @@ mod tests {
         );
     }
 
-    /// A hash mismatch says the file decrypted, names the file, and tells
-    /// the user how to get the new hash.
+    /// A digest mismatch names the file without its store path.
     #[test]
-    fn a_hash_mismatch_names_the_file_and_the_command_for_the_new_hash() {
-        let err = SecretError::HashMismatch {
+    fn a_digest_mismatch_names_the_file() {
+        let err = SecretError::DigestMismatch {
             name: "app-db-password".into(),
             sops_source: "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-app-db.sops.yaml".into(),
-            expected: "sha256-old".into(),
         };
         let message = err.to_string();
         assert!(
-            message.starts_with(
-                "the values in SOPS file app-db.sops.yaml do not match the `hash` declared for Secret 'app-db-password' (expected sha256-old)."
-            ),
-            "{message}"
-        );
-        assert!(
-            message.contains("run `kix secret hash <path to app-db.sops.yaml>`"),
+            message.starts_with("SOPS file app-db.sops.yaml for Secret 'app-db-password'"),
             "{message}"
         );
         assert!(!message.contains("/nix/store"), "{message}");
+    }
+
+    /// A local deploy checks the file's bytes before it runs `sops`.
+    #[test]
+    fn a_local_sops_file_that_does_not_match_its_digest_is_not_decrypted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sops.yaml");
+        std::fs::write(&path, AGE_ONLY).unwrap();
+        let mut manifest = carried_secret(path.to_str().unwrap(), Some(&digest_of("other")));
+        let err = hydrate_single(&mut manifest).unwrap_err();
+        assert!(matches!(err, SecretError::DigestMismatch { .. }), "{err}");
+    }
+
+    /// `builtins.hashFile "sha256"` writes lowercase hex.
+    #[test]
+    fn a_file_digest_is_the_hex_sha256_of_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.yaml");
+        std::fs::write(&path, "abc").unwrap();
+        assert_eq!(
+            file_digest(&path).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
@@ -894,13 +908,20 @@ mod tests {
     const SOURCE: &str = "/nix/store/yxyad967bhmxvm5120mrjnrrr7ak087w-db.sops.yaml";
     const AGE_ONLY: &str = "password: ENC[AES256_GCM,data:abc]\nsops:\n  kms: []\n  age:\n    - recipient: age1abc\n      enc: x\n  lastmodified: '2026-10-06T00:00:00Z'\n  mac: ENC[x]\n  version: 3.9.0\n";
 
-    fn carried_secret(source: &str, content_hash: Option<&str>) -> Value {
+    fn digest_of(text: &str) -> String {
+        Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    fn carried_secret(source: &str, digest: Option<&str>) -> Value {
         let mut annotations = serde_json::json!({
             (keys::SOPS_SOURCE): source,
             (keys::SECRET_KEYS): "password, .dockerconfigjson",
         });
-        if let Some(h) = content_hash {
-            annotations[keys::CONTENT_HASH] = serde_json::json!(h);
+        if let Some(d) = digest {
+            annotations[keys::SOPS_DIGEST] = serde_json::json!(d);
         }
         serde_json::json!({
             "apiVersion": "v1",
@@ -920,8 +941,8 @@ mod tests {
 
     #[test]
     fn a_plan_from_a_carried_build_gets_placeholders_typed_for_the_secret() {
-        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
         let text = format!(".dockerconfigjson: ENC[AES256_GCM,data:def]\n{AGE_ONLY}");
+        let mut manifests = [carried_secret(SOURCE, Some(&digest_of(&text)))];
         let results = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap();
         assert_eq!(results[0].keys_injected, 2);
         assert_eq!(manifests[0]["stringData"]["password"], "kix-placeholder");
@@ -935,7 +956,7 @@ mod tests {
     /// writes.
     #[test]
     fn placeholder_keys_come_from_the_sops_file_not_the_annotation() {
-        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+        let mut manifests = [carried_secret(SOURCE, Some(&digest_of(AGE_ONLY)))];
         manifests[0]["metadata"]["annotations"][keys::SECRET_KEYS] = "only-this".into();
         hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap();
         assert_eq!(
@@ -948,7 +969,7 @@ mod tests {
     /// fills it.
     #[test]
     fn hydration_keeps_the_plain_keys_the_build_wrote() {
-        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+        let mut manifests = [carried_secret(SOURCE, Some(&digest_of(AGE_ONLY)))];
         manifests[0]["stringData"] = json!({"username": "app", "password": "stale"});
         hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap();
         assert_eq!(
@@ -966,10 +987,27 @@ mod tests {
     }
 
     #[test]
-    fn a_secret_from_a_carried_build_must_declare_a_content_hash() {
+    fn a_secret_from_a_carried_build_must_record_a_digest() {
         let mut manifests = [carried_secret(SOURCE, None)];
         let err = hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap_err();
         assert!(matches!(err, SecretError::NotCarried { .. }), "{err}");
+    }
+
+    /// A carried file that is not the one the build read is refused before
+    /// a plan or a deploy reads its keys.
+    #[test]
+    fn a_carried_sops_file_that_does_not_match_its_digest_is_refused() {
+        let mut manifests = [carried_secret(SOURCE, Some(&digest_of("other")))];
+        let err = hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap_err();
+        assert!(matches!(err, SecretError::DigestMismatch { .. }), "{err}");
+    }
+
+    /// A bundle from Kix 0.9 records a hash of the values and no digest.
+    #[test]
+    fn a_carried_build_with_only_the_old_hash_is_accepted() {
+        let mut manifests = [carried_secret(SOURCE, None)];
+        manifests[0]["metadata"]["annotations"][keys::CONTENT_HASH] = json!("sha256-x");
+        hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap();
     }
 
     /// sops reads a file in the format its extension names unless told
@@ -1110,9 +1148,10 @@ mod tests {
     /// once.
     #[test]
     fn a_source_many_secrets_name_is_checked_once() {
+        let digest = digest_of(AGE_ONLY);
         let mut manifests: Vec<Value> = (0..1000)
             .map(|i| {
-                let mut secret = carried_secret(SOURCE, Some("sha256-x"));
+                let mut secret = carried_secret(SOURCE, Some(&digest));
                 secret["metadata"]["name"] = json!(format!("db{i}"));
                 secret
             })

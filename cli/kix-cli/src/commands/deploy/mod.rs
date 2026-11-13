@@ -144,13 +144,12 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
                 "Deployment stopped before applying anything: the dry run shows writes the cluster would refuse."
             )
         );
-        // Continuing would deploy the workloads without the Secrets they read.
-        let next = if doc.stops_only_on_hash_mismatch() {
-            "Deploy again once each SOPS file above matches its `hash`."
-        } else {
-            "Fix them and deploy again, or rerun with --on-error continue to apply everything else."
-        };
-        eprintln!("{}", output::yellow(next));
+        eprintln!(
+            "{}",
+            output::yellow(
+                "Fix them and deploy again, or rerun with --on-error continue to apply everything else."
+            )
+        );
         return Ok(Exit::Failure);
     }
 

@@ -638,7 +638,6 @@ mod tests {
             resource: "Deployment/a@app".into(),
             reason: RefusalReason::WebhookDenied,
             webhook: Some("w".into()),
-            sops_source: None,
             message: "no".into(),
         }]);
         assert_eq!(rules(&compare(&reviewed, &refused)), vec![Rule::NewRefusal]);
