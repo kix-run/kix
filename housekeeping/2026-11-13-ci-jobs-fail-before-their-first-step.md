@@ -1,0 +1,3 @@
+# 2026-11-13 · GitHub Actions self-hosted runners · Jobs sometimes fail before any step runs, with no log.
+
+On 2026-11-13 this happened three times: the `change-kind` job on #76, the `runtime (x86_64-linux, self-hosted, spindle-8c-16g)` job on #76, and the `test` job on #84 (twice). Each job had conclusion `failure`, no failed step, and `gh run view --log-failed` said "log not found". Rerunning the failed job passed every time. A pull request can look broken when nothing in it is wrong. Check the runner's logs for the cause, which may be job startup, cache restore, or the runner losing its connection.
