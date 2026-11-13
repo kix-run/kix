@@ -1,3 +1,0 @@
-# 2026-11-13 · `docs/src/content/docs/tutorials/` · Tutorial 03 still teaches the `kixpkgs` input, which Kix now refuses with K9179.
-
-`03-project-skeleton-and-flake-shape.mdx` lines 77-82, 140, and 168 use `kixpkgs`. Tutorial 06 (line 63) and `how-to/index.mdx` (line 100) call the catalog "kixpkgs". Other stale names: `kix/packages/experimental/external-secrets/default.nix:93` says `kix gc --hard`, and `cli/README.md` mentions `export --for audit` (430) and `kix drift` (945). The kix-examples snippets may have the same problem. A new user who follows tutorial 03 hits an error, and the fix is cheap, so fix it before 0.10.0.

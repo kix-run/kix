@@ -74,12 +74,12 @@ three landmarks: `inputs`, `mkFlake`, and `clusters`.
 The first block, `inputs`, names the external Nix dependencies:
 
 - `nixpkgs` is the normal Nix package collection;
-- `kixpkgs` provides Kix itself and the package catalog used by these examples;
-- `kixpkgs.inputs.nixpkgs.follows = "nixpkgs";` keeps both inputs using the
+- `kix` provides the Kix library and the package catalog used by these examples;
+- `kix.inputs.nixpkgs.follows = "nixpkgs";` keeps both inputs using the
   same `nixpkgs`.
 
 The second block, `outputs`, says what this repo provides. Kix projects usually
-delegate that output wiring to `inputs.kixpkgs.lib.mkFlake`.
+delegate that output wiring to `inputs.kix.lib.mkFlake`.
 
 `mkFlake` is the Kix helper that turns the `clusters` map, such as
 `"02-hello-world" = ./tutorials/02-hello-world/cluster.nix`, into the flake
@@ -137,7 +137,7 @@ At the top level, the file has this structure:
 `mkFlake` passes two useful arguments into this function:
 
 - `kix`, the framework helpers;
-- `packages`, the package catalog from `kixpkgs`.
+- `packages`, the package catalog from the `kix` input.
 
 That first line, `{ kix, packages }:`, is Nix function syntax. For now, read it
 as "Kix gives this file the helpers and package catalog it needs."
@@ -165,7 +165,7 @@ know there is a package instance named `hello-world`.
 
 There are two package sources to keep separate.
 
-**Catalog packages** come from `kixpkgs`. In the first example,
+**Catalog packages** come from the `kix` input. In the first example,
 `packages.echo-server` is a catalog package. You use it directly from the
 `packages` argument.
 

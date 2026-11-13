@@ -12,7 +12,7 @@ with `source` set to the old `passwordSource` and `keys = [ "password" ]`.
 Leave out the old `passwordHash`, because Kix computes the digest of the
 file itself (see `[K4732]`).
 Give it `aliases = [ "password" ]`, or set `deps.password` on the database
-when a namespace has more than one. The database's Secrets and Job stay
-the same, and the deploy also creates the new instance's own Secret. A
+when a namespace has more than one. The database's Secrets keep their
+names and values, and the deploy also creates the new instance's own Secret. A
 build that sets `passwordSource` or `passwordHash` fails with an error that
 says how to make the change.
