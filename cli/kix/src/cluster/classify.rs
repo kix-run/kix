@@ -215,8 +215,9 @@ impl<'a> Context<'a> {
                 "admission webhook {webhook_name} could not reach {svc}, so the webhook's backend \
                  is down. This deploy does not write {svc} or anything that serves it, so it \
                  would stop at this object. Get the backend running again first. If someone \
-                 deleted {svc}, `kix deploy {cluster} --reconcile` creates it again. The \
-                 apiserver said: {message}"
+                 deleted {svc}, or scaled the workload behind it to 0 replicas, `kix deploy \
+                 {cluster} --reconcile` restores what the build defines. The apiserver said: \
+                 {message}"
             ),
         })
     }

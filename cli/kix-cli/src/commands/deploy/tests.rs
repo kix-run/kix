@@ -521,3 +521,69 @@ mod operator_tests {
         assert!(parsed.is_err());
     }
 }
+
+mod stop_advice_tests {
+    use kix::eval::store_graph::StoreGraph;
+    use kix::plan::document::{
+        AdmissionRefusal, Build, Checked, Conflict, Detail, MadeBy, NotCheckedReason, Plan,
+        RefusalReason,
+    };
+
+    fn plan(conflicts: Vec<Conflict>, admission: Vec<AdmissionRefusal>) -> Plan {
+        let graph = StoreGraph::empty("c");
+        let mut plan = Plan::new(
+            crate::plan::kix_build(),
+            MadeBy::DryRun,
+            "c",
+            Build::of(&graph),
+            &kix::plan::diff_graphs(&graph, &graph),
+            Detail::Plain,
+            &[],
+            NotCheckedReason::BuildsOnly,
+        );
+        plan.conflicts = Checked::found(conflicts);
+        plan.admission = Checked::found(admission);
+        plan
+    }
+
+    fn conflict() -> Conflict {
+        Conflict {
+            resource: "Deployment/web@app".into(),
+            owners: Vec::new(),
+            message: "conflict".into(),
+        }
+    }
+
+    fn refusal(reason: RefusalReason, webhook: Option<&str>) -> AdmissionRefusal {
+        AdmissionRefusal {
+            resource: "Certificate/web@app".into(),
+            reason,
+            webhook: webhook.map(str::to_string),
+            message: "refused".into(),
+        }
+    }
+
+    #[test]
+    fn a_conflict_stop_points_to_force_conflicts_and_cede() {
+        let text = super::super::stop_advice(&plan(vec![conflict()], Vec::new())).join("\n");
+        assert!(text.contains("--force-conflicts"), "{text}");
+        assert!(text.contains("`ownership.cede`"), "{text}");
+        assert!(!text.contains("--on-error continue"), "{text}");
+    }
+
+    #[test]
+    fn a_webhook_stop_points_to_the_backend() {
+        let unreachable = refusal(RefusalReason::Other, Some("cert-manager-webhook"));
+        let text = super::super::stop_advice(&plan(Vec::new(), vec![unreachable])).join("\n");
+        assert!(text.contains("get its backend running again"), "{text}");
+        assert!(!text.contains("--on-error continue"), "{text}");
+    }
+
+    #[test]
+    fn a_refused_write_still_offers_on_error_continue() {
+        let invalid = refusal(RefusalReason::Invalid, None);
+        let text = super::super::stop_advice(&plan(Vec::new(), vec![invalid])).join("\n");
+        assert!(text.contains("Fix the refused writes."), "{text}");
+        assert!(text.contains("--on-error continue"), "{text}");
+    }
+}

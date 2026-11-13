@@ -493,6 +493,15 @@ pub struct AdmissionRefusal {
     pub message: String,
 }
 
+impl AdmissionRefusal {
+    /// Return true when the write stopped because the apiserver could not
+    /// reach an admission webhook's backend. Such a refusal is the only one
+    /// that names a webhook under [`RefusalReason::Other`].
+    pub fn webhook_unreachable(&self) -> bool {
+        self.reason == RefusalReason::Other && self.webhook.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RefusalReason {
