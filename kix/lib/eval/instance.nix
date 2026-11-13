@@ -866,6 +866,7 @@ in
         diagnostics = meta.combineDiagnostics {
           inherit
             instanceName
+            namespaceName
             metaResult
             packageResult
             structuralWarnings

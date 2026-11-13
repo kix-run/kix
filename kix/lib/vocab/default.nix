@@ -8,6 +8,7 @@ let
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
   quotaUse = import ./quota-use.nix { inherit lib; };
+  errors = import ../core/error.nix { inherit lib; };
 in
 compose
 // {
@@ -24,6 +25,8 @@ compose
   # The contracts in `kix/contracts`, by name, with the experimental ones
   # under `contracts.experimental`.
   contracts = import ../../contracts { inherit lib; };
+  # Stop evaluation with an error for a person to fix (`core/error.nix`).
+  inherit (errors) fail;
   options = compose.options // {
     oidc = throw "[K0106] kix.options.oidc moved to kix.contracts.oidc.options.";
     mail = throw "[K0106] kix.options.mail moved to kix.contracts.smtp.options.";
