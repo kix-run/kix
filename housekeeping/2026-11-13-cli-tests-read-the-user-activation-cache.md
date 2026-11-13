@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix-cli/tests` · Four CLI tests fail after anyone deploys `example` on the same machine.
+
+`deploy_dry_run` in `commands_test.rs` and `plan_save_writes_the_plan_file`, `deploy_plan_refuses_json_and_a_changed_plan_file`, and `deploy_dry_run_shows_plan` in `deploy_test.rs` run `kix plan example --offline` against the user's real cache. After a kind test deployed `example`, `$XDG_CACHE_HOME/kix/activations/example.root` existed, the plan found nothing to change, and the tests got exit 0 instead of 2. They pass with a cache directory that has no `activations` folder. The tests should point `XDG_CACHE_HOME` at a temporary folder.
