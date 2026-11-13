@@ -21,6 +21,7 @@
 
 mod record;
 mod retention;
+
 #[cfg(test)]
 mod tests;
 
@@ -821,22 +822,23 @@ impl Records {
     }
 
     /// Write `index` to the record's `status.packageIndex`, warning instead
-    /// of failing. The index only helps a later diff group objects, so a
-    /// failure must not stop a deploy. See [`Records::begin_deploy`].
+    /// of failing. The index only helps later commands group and name
+    /// objects, so a failure must not stop a deploy. See
+    /// [`Records::begin_deploy`].
+    ///
+    /// An index over [`package_index::MAX_BYTES`] is written without its
+    /// names, and one still over the limit is not written.
     pub async fn write_package_index(&self, activation_name: &str, index: &RecordPackageIndex) {
-        let value = index.to_value();
-        let bytes = value.to_string().len();
-        if bytes > package_index::MAX_BYTES {
+        let Some(value) = sized_index(index) else {
             tracing::warn!(
                 activation = %activation_name,
-                bytes,
                 limit = package_index::MAX_BYTES,
                 "the build's package index is too large to store on its record; \
                  a diff on a machine without this build will show an object that \
                  moved between packages only under its new package",
             );
             return;
-        }
+        };
         let patch = json!({ "status": { (keys::PACKAGE_INDEX_FIELD): value } });
         if let Err(e) = self.patch_status(activation_name, &patch).await {
             tracing::warn!(
@@ -959,4 +961,22 @@ fn current_of<'a>(items: &'a [DynamicObject], cluster: &str) -> Option<&'a Dynam
         );
     }
     current_record(current)
+}
+
+/// Return `index` as the JSON a record stores: with its names when it fits
+/// in [`package_index::MAX_BYTES`], else without them, else `None`.
+fn sized_index(index: &RecordPackageIndex) -> Option<Value> {
+    let fits = |v: &Value| v.to_string().len() <= package_index::MAX_BYTES;
+    let full = index.to_value();
+    if fits(&full) {
+        return Some(full);
+    }
+    let bare = index.without_names().to_value();
+    if fits(&bare) {
+        tracing::debug!(
+            "writing the package index without object names to stay under its size limit"
+        );
+        return Some(bare);
+    }
+    None
 }

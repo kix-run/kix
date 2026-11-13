@@ -1,33 +1,46 @@
-//! Arguments of the commands that read a live cluster: `status`, `health`,
-//! `drift`, `logs`, `pf`, and `snapshot`.
+//! Arguments of the commands that read a live cluster: `status`, `logs`,
+//! `pf`, and `snapshot`.
 
 use clap::Subcommand;
 
+/// Arguments of `kix status`.
 #[derive(clap::Args)]
 pub struct StatusArgs {
-    /// Cluster name
-    pub cluster: String,
-
-    /// Show operator-managed activation status with package-grouped resources
-    #[arg(long)]
-    pub operator: bool,
-}
-
-#[derive(clap::Args)]
-pub struct HealthArgs {
-    /// Cluster name
-    pub cluster: String,
-}
-
-/// Compare live cluster objects against their `kix.run/applied-hash`
-/// annotations without evaluating a flake.
-#[derive(clap::Args)]
-pub struct DriftArgs {
-    /// Check only objects belonging to this Kix cluster (resolved via its
-    /// Activation records). When omitted, checks all Kix-managed objects and
-    /// reports their owning clusters.
-    #[arg(long)]
+    /// Kix cluster to check. Without it, every Kix cluster that has a deploy
+    /// on this Kubernetes cluster.
     pub cluster: Option<String>,
+
+    /// Run only this check. Repeat it to run more than one. Without it, all
+    /// three run.
+    #[arg(long = "check", value_name = "CHECK")]
+    pub checks: Vec<StatusCheck>,
+
+    /// Show only this package, by instance name or `namespace/instance`
+    #[arg(long, value_name = "NAME")]
+    pub package: Option<String>,
+}
+
+/// One check of `kix status`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    clap::ValueEnum,
+    serde::Serialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusCheck {
+    /// Is every object of the current deploy on the cluster?
+    Presence,
+    /// Does each object still hold what Kix applied?
+    Drift,
+    /// Is each object ready, by the rules a deploy waits on?
+    Readiness,
 }
 
 #[derive(clap::Args)]

@@ -2541,8 +2541,8 @@
     cwd = "kix-examples/";
     # First live group after how-to/adoption-stateful-migration, which leaves
     # how-to-stateful-migration deployed. Kix's cluster-wide listings include
-    # every Kix cluster in the kind cluster, so status, health, and diff would
-    # report it.
+    # every Kix cluster in the kind cluster, so status and diff would report
+    # it.
     resetCluster = true;
     live = [
       {
@@ -2559,6 +2559,15 @@
           "kix"
           "status"
           "how-to-application"
+        ];
+      }
+      {
+        capture = "status-verbose";
+        run = [
+          "kix"
+          "status"
+          "how-to-application"
+          "-v"
         ];
       }
       {
@@ -2585,39 +2594,6 @@
           "how-to-app"
         ];
         skipDriftCheck = true;
-      }
-    ];
-  }
-
-  {
-    group = "how-to/application-health";
-    page = "/docs/how-to/operate-a-cluster/check-cluster-health/";
-    cwd = "kix-examples/";
-    live = [
-      {
-        prepare = [
-          "kix"
-          "deploy"
-          "how-to-application"
-          "-y"
-        ];
-      }
-      {
-        capture = "health";
-        run = [
-          "kix"
-          "health"
-          "how-to-application"
-        ];
-      }
-      {
-        capture = "health-verbose";
-        run = [
-          "kix"
-          "health"
-          "how-to-application"
-          "-vv"
-        ];
       }
     ];
   }
@@ -2823,7 +2799,7 @@
 
   {
     group = "how-to/application-drift";
-    page = "/docs/how-to/operate-a-cluster/check-live-resources-for-drift/";
+    page = "/docs/how-to/operate-a-cluster/check-resource-status/";
     cwd = "kix-examples/";
     live = [
       {
@@ -2846,17 +2822,20 @@
         ];
       }
       {
+        # `kix status` exits 2 when it finds a changed object.
         capture = "scaled-deployment";
         run = [
           "kix"
+          "status"
+          "how-to-application"
+          "--check"
           "drift"
         ];
         allowFailure = true;
       }
       {
-        # Drift exits non-zero when it finds drift, so the redirect the
-        # page shows has to tolerate that too.
-        prepare = "kix drift --output json > drift.json || [ $? -eq 1 ]";
+        # The redirect the page shows has to tolerate the same exit 2.
+        prepare = "kix status how-to-application --check drift -o json > status.json || [ $? -eq 2 ]";
       }
     ];
   }
@@ -2900,6 +2879,9 @@
         capture = "drift-clean";
         run = [
           "kix"
+          "status"
+          "how-to-application"
+          "--check"
           "drift"
         ];
       }

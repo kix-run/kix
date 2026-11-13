@@ -163,8 +163,9 @@ After deploying the intended change, run `kix diff` or `kix plan` again. A
 clean result confirms that Kix does not currently plan another content
 change.
 
-`kix diff` compares the fields Kix applied. Use `kix drift` when you need to
-know who else owns a field and what they changed.
+`kix diff` compares the fields Kix applied. Use
+[`kix status <cluster> --check drift`](/docs/how-to/operate-a-cluster/check-resource-status/#find-changed-objects)
+when you need to know who else owns a field and what they changed.
 
 :::note[Reference]
 See [`kix plan`](/docs/reference/cli/plan/) for the full plan document, labels,

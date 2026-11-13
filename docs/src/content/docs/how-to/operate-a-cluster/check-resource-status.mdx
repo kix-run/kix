@@ -1,55 +1,154 @@
 ---
-title: "Check resource status"
-description: "Read the live health of the resources associated with a Kix cluster."
+title: "Check a cluster's status"
+description: "Check that what Kix deployed is still on the cluster, unchanged, and ready, and find out what to do when it is not."
 ---
 
 import Command from '/src/components/Command.astro';
 import describeDeployment from '/src/command-output/how-to/application-status/describe-deployment.json';
 import jobLogs from '/src/command-output/how-to/application-status/job-logs.json';
-import applicationStatus from '/src/command-output/how-to/application-status/status.json';
 
-Use `kix status` to compare a cluster definition with the resources currently
-running in Kubernetes and see their readiness state.
+Use `kix status` to check a cluster after a deploy, or at any time later. For
+every object of the cluster's last deploy, it checks three things: the object
+is on the cluster, it still holds what Kix applied, and it is ready.
 
-## Show the cluster status
+`kix status` reads only the Kubernetes cluster. It does not build the cluster
+definition, so you can run it from any directory, including on a machine
+without the project.
+
+{/* The output below is maintained by hand until the live captures in
+    docs/nix/captures.nix (how-to/application-status and
+    how-to/application-drift) are regenerated against `kix status`. */}
+
+## Check the cluster
 
 Run the command with the cluster name:
 
-<Command {...applicationStatus} />
+<Command commands={["kix status how-to-application"]} cwd="kix-examples/" />
 
-Kix reads the cluster using the selected kubectl context. The output groups
-resources by package and reports the state Kix observes for each one.
+When everything is in order, the output looks like this:
 
-Use this after a deployment to confirm that workloads remain ready, Jobs have
-completed, and the active cluster resources are still present.
+```text
+Cluster how-to-application on Kubernetes v1.35.0 (context kind-kix-demo)
+Last deploy: how-to-application-6rhi3wpk9iml  Active  2m ago
 
-## Select a Kubernetes context
+  how-to-app/preview              4 resources  ok
+  how-to-app/production           6 resources  ok
+  kube-system/platform-dns        1 resource   ok
+  kube-system/platform-storage    1 resource   ok
+  (cluster-level)                 4 resources  ok
 
-Pass `--context` when the desired cluster is not the current kubectl context:
+16 resources: 16 ok.
+```
+
+Kix reads the Kubernetes cluster of the current kubectl context. Pass
+`--context` to read another one:
 
 <Command
   commands={["kix status how-to-application --context kind-kix-demo"]}
   cwd="kix-examples/"
 />
 
-The context controls which Kubernetes API Kix reads. The `--flake` option
-independently controls which cluster definition it evaluates:
+Leave out the cluster name to check every Kix cluster that has deployed to
+that Kubernetes cluster.
 
-<Command
-  commands={[
-    "kix status how-to-application --flake ./infrastructure --context kind-kix-demo",
-  ]}
-/>
+## Read the package lines
 
-## Investigate an unhealthy resource
+The output has one line for each package, named `namespace/instance`, with
+the number of objects the package deployed. Objects that belong to no
+package, such as Namespaces and CustomResourceDefinitions, are counted under
+`(cluster-level)`.
 
-Status is a summary. When a resource is not ready:
+A package line reads `ok` or counts its problems: `missing`, `changed`, or
+`not ready`. Below the package lines, Kix lists each object with a problem,
+grouped by package. Add `-v` to list every object:
 
-1. Note its kind, name, and namespace in the status output.
+<Command commands={["kix status how-to-application -v"]} cwd="kix-examples/" />
+
+Add `-q` to print only the objects with a problem, or `--package production`
+to look at one package.
+
+## Find missing objects
+
+An object is missing when the last deploy made it and it is gone from the
+cluster, for example after someone ran `kubectl delete`:
+
+```text
+  how-to-app/production           6 resources  1 missing
+
+how-to-app/production
+  ConfigMap how-to-app/production  missing, needed by Deployment how-to-app/production
+
+16 resources: 15 ok, 1 missing.
+Next: run `kix deploy how-to-application --reconcile` to put back what is missing or changed. `kix plan how-to-application --reconcile` shows what it would change first.
+```
+
+The line names the objects that depend on the missing one. Those objects may
+keep running, but can fail when they next need it, for example when a Pod
+restarts and mounts the ConfigMap.
+
+Run the command the `Next:` line names to create the object again. A deploy
+without `--reconcile` skips objects whose build did not change, so it does
+not put a missing object back.
+
+When Kix cannot name a missing object, it shows it as
+`Unknown/(hash: ...)`. This happens on a machine that does not have the
+deployed build, for a deploy made by a version of Kix older than 0.10 or one
+too large to store the names of its objects.
+
+## Find changed objects
+
+An object is changed when a field Kix applied no longer holds the value Kix
+applied. Kix reads the object's field ownership data to say which field
+changed and which tool changed it. To run only this check:
+
+<Command commands={["kix status how-to-application --check drift"]} cwd="kix-examples/" />
+
+In this example, someone scaled the production Deployment from two replicas
+to one with `kubectl scale`:
+
+```text
+Cluster how-to-application on Kubernetes v1.35.0 (context kind-kix-demo)
+Last deploy: how-to-application-6rhi3wpk9iml  Active  5m ago
+
+  how-to-app/preview              4 resources  ok
+  how-to-app/production           6 resources  1 changed
+  kube-system/platform-dns        1 resource   ok
+  kube-system/platform-storage    1 resource   ok
+  (cluster-level)                 4 resources  ok
+
+how-to-app/production
+  Deployment how-to-app/production  changed since deploy (spec.replicas by kubectl)
+
+16 resources: 15 ok, 1 changed.
+Next: run `kix deploy how-to-application --reconcile` to put back what is missing or changed. `kix plan how-to-application --reconcile` shows what it would change first.
+```
+
+Only the fields Kix set count. A field that a controller adds, or one the
+package cedes to a controller, does not make the object changed.
+
+Before you put the value back, decide whether the change should stay. If it
+should, change the cluster definition to match and deploy. If it should not,
+follow [Reconcile drift](/docs/how-to/operate-a-cluster/reconcile-drift/).
+
+An object deployed before Kix stamped its objects shows as "not checked for
+changes". The next deploy adds the stamp. Objects that are not checked do not
+count as problems.
+
+## Investigate an object that is not ready
+
+An object is not ready when it fails the readiness rules `kix deploy` waits
+on. The line says why:
+
+```text
+how-to-app/production
+  Deployment how-to-app/production  not ready (1/2 ready, 2/2 updated)
+```
+
+`kix status` gives a summary. To find the cause, use `kubectl`:
+
+1. Note the object's kind, namespace, and name from the output.
 2. Inspect it with `kubectl describe`.
-3. Read Pod or Job logs where applicable.
-4. Run `kix diff` to determine whether the live resource differs from the
-   desired manifest.
+3. Read Pod or Job logs where they apply.
 
 For example:
 
@@ -59,10 +158,43 @@ The health-check Job's logs say whether the post-deploy probe passed:
 
 <Command {...jobLogs} />
 
-`status` reports observed health. It does not reapply resources or change the
-active activation.
+## Use the check in a script
 
-:::note[Next steps]
-Use [Check live resources for drift](/docs/how-to/operate-a-cluster/check-live-resources-for-drift/)
-when the resource is healthy but may no longer match the desired manifest.
+`kix status` exits with a code a script or a cron job can branch on:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Every selected check passed. |
+| `2` | An object is missing, changed, or not ready. |
+| `1` | Kix could not answer, for example because it could not reach the cluster or the cluster has no deploy. |
+
+Pass `--check` to run only the checks you care about. Repeat it to run more
+than one. For example, to alert when an object is gone or someone changed one:
+
+<Command
+  commands={["kix status how-to-application --check presence --check drift -q"]}
+  cwd="kix-examples/"
+/>
+
+Objects that Kix could not check do not change the exit code. For example,
+when the account may not list Secrets, Kix says so on a closing line and
+leaves those objects unchecked.
+
+To store the result or read it with another program, use JSON:
+
+<Command
+  commands={["kix status how-to-application --check drift -o json > status.json"]}
+  cwd="kix-examples/"
+/>
+
+The document lists every object with its `problems`, and has a `summary` with
+counts. See [`kix status`](/docs/reference/cli/status/#json-and-yaml-output)
+for every field.
+
+`kix status` only reads. It does not apply anything or change the cluster's
+Activation records.
+
+:::note[Reference]
+See [`kix status`](/docs/reference/cli/status/) for every flag and what each
+check does.
 :::

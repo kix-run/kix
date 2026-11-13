@@ -13,7 +13,24 @@ use clap::{Arg, ArgAction, ArgMatches};
 use crate::exit::Exit;
 
 /// Top-level commands that a release removed.
-pub const COMMANDS: &[RemovedCommand] = &[];
+pub const COMMANDS: &[RemovedCommand] = &[
+    RemovedCommand {
+        name: "health",
+        removed: Removed {
+            old: "kix health <cluster>",
+            new: "kix status <cluster> --check presence",
+            id: STATUS_MERGE,
+        },
+    },
+    RemovedCommand {
+        name: "drift",
+        removed: Removed {
+            old: "kix drift",
+            new: "kix status [cluster] --check drift",
+            id: STATUS_MERGE,
+        },
+    },
+];
 
 /// Flags that a release removed from a command.
 pub const FLAGS: &[RemovedFlag] = &[
@@ -37,7 +54,21 @@ pub const FLAGS: &[RemovedFlag] = &[
             id: "K4721",
         },
     },
+    RemovedFlag {
+        command: "status",
+        long: "operator",
+        takes_value: false,
+        removed: Removed {
+            old: "kix status --operator",
+            new: "kix status <cluster>",
+            id: STATUS_MERGE,
+        },
+    },
 ];
+
+/// The id of the change record that merged `kix health` and `kix drift`
+/// into `kix status`. The refusal prints it as `[K6116]`.
+const STATUS_MERGE: &str = "K6116";
 
 /// What a user typed that no longer works, and what to type instead.
 #[derive(Debug, PartialEq, Eq)]

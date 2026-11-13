@@ -61,7 +61,6 @@ fn output<T: schemars::JsonSchema>() -> schemars::Schema {
 
 /// The JSON and YAML output of a command, one schema per response type.
 /// `kix diff -o json` prints the plan document (`plan.schema.json`).
-/// `kix status`, `kix health`, and `kix drift` have none yet, and
 /// `kix compliance sbom` and `attest` print documents that published
 /// standards define.
 #[test]
@@ -92,4 +91,5 @@ fn the_command_output_schemas_match_their_types() {
         "plan-comparison.schema.json",
         output::<deploy::ComparisonResponse<'static>>(),
     );
+    check("status.schema.json", output::<status::StatusResponse>());
 }

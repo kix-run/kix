@@ -5,19 +5,35 @@ description: "Reapply a cluster's desired manifests to heal out-of-band changes.
 
 import Command from '/src/components/Command.astro';
 import reconcileApplication from '/src/command-output/how-to/application-reconcile/reconcile.json';
-import cleanDrift from '/src/command-output/how-to/application-reconcile/drift-clean.json';
-import driftReport from '/src/command-output/how-to/application-drift/scaled-deployment.json';
 
 Use `kix deploy --reconcile` to reapply every desired resource, including
 resources whose activation identity has not changed. Add `--force-conflicts`
 only when you have reviewed fields owned by another manager and intend Kix to
 take them back.
 
-## Review the drift report
+{/* The `kix status` output below is maintained by hand until the live
+    captures how-to/application-drift/scaled-deployment and
+    how-to/application-reconcile/drift-clean in docs/nix/captures.nix are
+    regenerated. */}
 
-Start by identifying the fields that changed:
+## Review what changed
 
-<Command {...driftReport} />
+Start by finding the objects that changed and the fields that changed on
+them:
+
+<Command commands={["kix status how-to-application --check drift"]} cwd="kix-examples/" />
+
+```text
+...
+how-to-app/production
+  Deployment how-to-app/production  changed since deploy (spec.replicas by kubectl)
+
+16 resources: 15 ok, 1 changed.
+Next: run `kix deploy how-to-application --reconcile` to put back what is missing or changed. `kix plan how-to-application --reconcile` shows what it would change first.
+```
+
+Run `kix plan how-to-application --reconcile` to see what the deploy would
+change before it changes anything.
 
 Confirm that the checked-in cluster definition still describes the state you
 want. Reconciliation applies that definition, so review intentional emergency
@@ -25,7 +41,7 @@ changes before continuing.
 
 ## Reapply the desired resources
 
-The example drift report attributes `spec.replicas` to kubectl. Reapply the
+The example output says kubectl changed `spec.replicas`. Reapply the
 cluster and deliberately take ownership of that field:
 
 <Command expandable {...reconcileApplication} />
@@ -50,10 +66,16 @@ prompt.
 
 Run the drift check again:
 
-<Command {...cleanDrift} />
+<Command commands={["kix status how-to-application --check drift"]} cwd="kix-examples/" />
 
-The `drifted` count should be zero. You can also use [`kix status`](/docs/how-to/operate-a-cluster/check-resource-status/)
-to confirm that the reapplied workloads are ready.
+```text
+...
+16 resources: 16 ok.
+```
+
+No object should be changed, and the command exits `0`. Run `kix status`
+without `--check` to also confirm that the reapplied workloads are ready. See
+[Check a cluster's status](/docs/how-to/operate-a-cluster/check-resource-status/).
 
 `--reconcile` deliberately reapplies all desired resources. `--force-conflicts`
 also takes fields from other server-side apply managers. Use a normal

@@ -861,7 +861,26 @@ mod package_index_tests {
                 },
             )]),
             cluster_level: vec![hash(resources + 1)],
+            names: BTreeMap::new(),
         }
+    }
+
+    /// An index of `resources` objects with a name for each.
+    fn named(resources: usize) -> RecordPackageIndex {
+        let mut index = index(resources);
+        index.names = (0..=resources + 1)
+            .map(|i| {
+                (
+                    format!("{i:0>32}"),
+                    crate::eval::package_index::ObjectName(
+                        "ConfigMap".into(),
+                        "app".into(),
+                        format!("web-config-{i}"),
+                    ),
+                )
+            })
+            .collect();
+        index
     }
 
     async fn records_with(api: &FakeApi) -> Records {
@@ -915,5 +934,30 @@ mod package_index_tests {
         let read = records.get("c-big").await.unwrap().unwrap();
         assert_eq!(read.phase, PHASE_DEPLOYING);
         assert_eq!(read.package_index, None);
+    }
+
+    /// An index that fits only without its names is written without them.
+    #[tokio::test]
+    async fn an_index_too_large_for_its_names_is_written_without_them() {
+        let api = FakeApi::new([record("c-names")]);
+        let records = records_with(&api).await;
+        let small = named(2);
+        records
+            .begin_deploy("c-names", 1, Some(&small))
+            .await
+            .unwrap();
+        let read = records.get("c-names").await.unwrap().unwrap();
+        assert_eq!(read.package_index, Some(small));
+
+        let api = FakeApi::new([record("c-many")]);
+        let records = records_with(&api).await;
+        let many = named(crate::eval::package_index::MAX_BYTES / 80);
+        assert!(many.to_value().to_string().len() > crate::eval::package_index::MAX_BYTES);
+        records
+            .begin_deploy("c-many", 1, Some(&many))
+            .await
+            .unwrap();
+        let read = records.get("c-many").await.unwrap().unwrap();
+        assert_eq!(read.package_index, Some(many.without_names()));
     }
 }

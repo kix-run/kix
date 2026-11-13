@@ -1,0 +1,3 @@
+# 2026-11-13 · `docs/nix/captures.nix` · The `kix status` how-to pages show output typed by hand until four captures run again on kind.
+
+`kix status` replaced `kix health` and `kix drift`, and the captures `how-to/application-status/status`, `status-verbose`, `how-to/application-drift/scaled-deployment`, and `how-to/application-reconcile/drift-clean` now run the new command. Their JSON sidecars still hold the old output, so `check-resource-status.mdx`, `reconcile-drift.mdx`, and `deploy-to-kind.mdx` show text fences instead. Tutorial 05 imports `tutorials/04-from-scratch/status.json`, which also holds the old table.

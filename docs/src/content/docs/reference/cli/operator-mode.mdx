@@ -1,6 +1,6 @@
 ---
 title: "Operator mode"
-description: "How `deploy`, `rollback`, `gc`, and `status` behave with `--operator`, when the Kix operator applies Activation records inside the cluster."
+description: "How `deploy`, `rollback`, and `gc` behave with `--operator`, when the Kix operator applies Activation records inside the cluster."
 ---
 
 In operator mode the CLI still builds and plans on your machine, but the
@@ -26,7 +26,10 @@ This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 | `kix deploy <CLUSTER> --operator` | Builds, shows the plan, confirms, then creates the Activation record with the build's store path and the deploy receipt. Waits until the record is `Active` or `Degraded`. |
 | `kix rollback <CLUSTER> --operator` | Selects a Superseded activation, then points the current Activation record at the target's store path. Waits for the operator to apply it. |
 | `kix gc <CLUSTER> --operator` | Deletes the Activation records that retention retires. The operator's finalizer deletes each record's resources; the CLI waits up to 300 seconds per record. |
-| `kix status <CLUSTER> --operator` | Reads the cluster's Active record and groups live resources by package. Does not need the operator to be running. See [`status`](/docs/reference/cli/status/). |
+
+[`kix status <CLUSTER>`](/docs/reference/cli/status/) takes no `--operator`
+flag. It reads the cluster's current Activation record the same way whoever
+applied it, and does not need the operator to be running.
 
 Flags that control the local engine have no effect in operator mode:
 `--timeout`, `--on-error`, `--prune`, `--prune-mode`, `--reconcile`,
@@ -53,9 +56,7 @@ A timeout ends the CLI only. The operator keeps working on the record.
 ## Requirements
 
 - The Activation CRD is installed, and the account can list Activation
-  records. The mutating `--operator` commands check this before changing
-  anything. `status --operator` discovers the type as part of reading status
-  and reports no active activation when it is not installed.
+  records. The `--operator` commands check this before changing anything.
 - The operator is running and watches the `kix.run` API group.
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path`, so the build must be present in the store the operator

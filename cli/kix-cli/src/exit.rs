@@ -27,14 +27,17 @@ pub enum Exit {
     /// parse, a command or flag that a release removed ([`crate::removed`]),
     /// an `-o` format the command does not print, a deploy, rollback, or
     /// garbage collection that did not finish cleanly, a confirmation that a
-    /// non-interactive run could not give, a failed `kix check`,
-    /// `kix health`, `kix drift`, or `kix pin check`, and an upgrade that Kix
-    /// refused to start.
+    /// non-interactive run could not give, a failed `kix check` or
+    /// `kix pin check`, an upgrade that Kix refused to start, and a
+    /// `kix status` that could not answer.
     Failure,
     /// `kix plan` found changes the deploy would make. Code 2.
     PlanHasChanges,
     /// `kix diff` found differences. Code 2.
     DiffHasDifferences,
+    /// `kix status` found an object that is missing, changed, or not ready.
+    /// Code 2.
+    StatusFoundProblem,
     /// `kix upgrade` stopped because a build failed, with the current Kix or
     /// at a step, or the library could not be locked at the new tag. Code 2,
     /// the one code 2 that is not a finding. The upgrade page documents it.
@@ -57,7 +60,10 @@ impl Exit {
         match self {
             Exit::Success => 0,
             Exit::Failure => 1,
-            Exit::PlanHasChanges | Exit::DiffHasDifferences | Exit::UpgradeBuildFailed => 2,
+            Exit::PlanHasChanges
+            | Exit::DiffHasDifferences
+            | Exit::StatusFoundProblem
+            | Exit::UpgradeBuildFailed => 2,
             Exit::PlanWouldStop | Exit::UpgradeNeedsPerson => 3,
             Exit::StalePlan => 4,
         }
@@ -121,6 +127,7 @@ mod tests {
             (Exit::Failure, 1),
             (Exit::PlanHasChanges, 2),
             (Exit::DiffHasDifferences, 2),
+            (Exit::StatusFoundProblem, 2),
             (Exit::UpgradeBuildFailed, 2),
             (Exit::PlanWouldStop, 3),
             (Exit::UpgradeNeedsPerson, 3),

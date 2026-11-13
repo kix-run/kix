@@ -2262,7 +2262,7 @@ let
 
     # untrackedRef's marker is proof of a deliberate opt-out, not a resource.
     # Stamping it into depends-on yields a hash nothing can ever resolve, and
-    # `kix health` reports the consumer as depending on a MISSING resource
+    # `kix status` reports the consumer as needing a missing resource
     # forever. The marker's context must reach the validators and stop there.
     t45-untracked-ref-not-a-dep =
       let

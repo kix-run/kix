@@ -54,12 +54,12 @@ on the first real request.
 
 ## Listing managed resources
 
-`diff`, `snapshot save`, `gc`, `status`, `health`, `drift`, and `deploy` (when
+`diff`, `snapshot save`, `gc`, `status`, and `deploy` (when
 it must reconstruct the previous state from the cluster) list every resource
 type the cluster serves, filtered by the Kix managed-by label. At most
 `KIX_SWEEP_CONCURRENCY` lists run at once. A resource type the account may not
 list (`403`) is skipped; `diff` and `gc` print how many types were not
-listable with this account. Any other list failure that
+listable with this account, and `status` names them. Any other list failure that
 survives the retries fails the command, so a partial listing is never treated
 as the cluster's full state.
 

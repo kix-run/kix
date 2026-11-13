@@ -388,30 +388,15 @@
       "unverifiedNixBlocks": 1
     },
     {
-      "page": "operate-a-cluster/check-cluster-health",
-      "scenario": "operations",
-      "status": "implemented",
-      "liveCaptures": [
-        "how-to/application-health/health",
-        "how-to/application-health/health-verbose"
-      ]
-    },
-    {
-      "page": "operate-a-cluster/check-live-resources-for-drift",
-      "scenario": "operations",
-      "status": "implemented",
-      "liveCaptures": [
-        "how-to/application-drift/scaled-deployment"
-      ]
-    },
-    {
       "page": "operate-a-cluster/check-resource-status",
       "scenario": "operations",
       "status": "implemented",
       "liveCaptures": [
+        "how-to/application-drift/scaled-deployment",
         "how-to/application-status/describe-deployment",
         "how-to/application-status/job-logs",
-        "how-to/application-status/status"
+        "how-to/application-status/status",
+        "how-to/application-status/status-verbose"
       ]
     },
     {

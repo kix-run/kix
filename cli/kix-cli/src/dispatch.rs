@@ -44,7 +44,7 @@ impl Command {
             Command::Upgrade(_) => Needs::Nothing,
             // Reads only the cluster, so it works from a bare kubeconfig
             // outside any project.
-            Command::Drift(_) => Needs::Nothing,
+            Command::Status(_) => Needs::Nothing,
             // Reads only the SOPS file it is given.
             Command::Secret(_) => Needs::Nothing,
             Command::Lib(_)
@@ -53,7 +53,6 @@ impl Command {
             | Command::Plan(_)
             | Command::Check(_)
             | Command::Deploy(_)
-            | Command::Status(_)
             | Command::List(_)
             | Command::Graph(_)
             | Command::Bundle(_)
@@ -64,7 +63,6 @@ impl Command {
             | Command::Export(_)
             | Command::Logs(_)
             | Command::Pf(_)
-            | Command::Health(_)
             | Command::Images(_)
             | Command::Snapshot(_)
             | Command::Compliance(_) => Needs::Project,
@@ -99,7 +97,6 @@ impl Command {
             Command::Deploy(_) => TEXT,
             Command::Rollback(args) if args.list => DATA,
             Command::Rollback(_) => TEXT,
-            Command::Drift(_) => &[Text, Json],
             Command::Compliance(args) => match args.command {
                 ComplianceCommand::Sbom(_) | ComplianceCommand::Attest(_) => &[Json, Yaml],
                 ComplianceCommand::Audit(_) => TEXT,
@@ -121,7 +118,6 @@ impl Command {
             | Command::Export(_)
             | Command::Logs(_)
             | Command::Pf(_)
-            | Command::Health(_)
             | Command::Snapshot(_) => TEXT,
         })
     }
@@ -177,7 +173,6 @@ pub fn run(cli: &Cli) -> Result<Exit> {
         Command::Doctor => commands::doctor::run(global).map(Exit::from),
         Command::Pin(command) => commands::pin::run(command, ctx),
         Command::Upgrade(args) => commands::upgrade::run(args, global).map(Exit::from),
-        Command::Drift(args) => commands::drift::run(args, ctx),
         Command::Secret(command) => commands::secret::run(command).map(Exit::from),
         Command::Lib(command) => commands::library::run(command, global).map(Exit::from),
         Command::Build(args) => commands::build::run(args, ctx).map(Exit::from),
@@ -185,7 +180,7 @@ pub fn run(cli: &Cli) -> Result<Exit> {
         Command::Plan(args) => commands::plan::run(&args.plan, args.save.as_deref(), ctx),
         Command::Check(args) => commands::check::run(args, ctx),
         Command::Deploy(args) => commands::deploy::run(args, ctx),
-        Command::Status(args) => commands::status::run(args, ctx).map(Exit::from),
+        Command::Status(args) => commands::status::run(args, ctx),
         Command::List(args) => commands::list::run(args, ctx).map(Exit::from),
         Command::Graph(args) => commands::graph::run(args, ctx).map(Exit::from),
         Command::Bundle(args) => commands::bundle::run(args, ctx).map(Exit::from),
@@ -198,7 +193,6 @@ pub fn run(cli: &Cli) -> Result<Exit> {
         Command::Export(args) => commands::export::run(args, ctx).map(Exit::from),
         Command::Logs(args) => commands::logs::run(args, ctx).map(Exit::from),
         Command::Pf(args) => commands::pf::run(args, ctx).map(Exit::from),
-        Command::Health(args) => commands::health::run(args, ctx),
         Command::Images(args) => commands::images::run(args, ctx).map(Exit::from),
         Command::Snapshot(args) => commands::snapshot::run(args, ctx).map(Exit::from),
         Command::Compliance(args) => commands::compliance::run(args, ctx).map(Exit::from),
@@ -269,7 +263,8 @@ mod tests {
     #[test]
     fn commands_that_must_work_without_a_project_need_nothing() {
         for args in [
-            &["kix", "drift"][..],
+            &["kix", "status"][..],
+            &["kix", "status", "c", "--check", "drift"],
             &["kix", "pin", "list"],
             &["kix", "upgrade"],
             &["kix", "doctor"],

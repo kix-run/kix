@@ -711,9 +711,18 @@ fn has_condition(data: &Value, condition_type: &str, expected_status: &str) -> b
         == Some(expected_status)
 }
 
-/// Build a human-readable message about why a resource isn't ready.
+/// Build a human-readable message about why a resource isn't ready, which
+/// starts with the resource's kind and name.
 pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
     let name = obj.metadata.name.as_deref().unwrap_or("unknown");
+    format!("{kind}/{name}: {}", not_ready_reason(obj, kind))
+}
+
+/// Return why `obj` is not ready, or the state it is in, in a few words such
+/// as `0/1 ready, 0/1 updated`. `kix status` shows it beside the object's
+/// name, and a deploy that waits for the object shows it in
+/// [`readiness_message`].
+pub fn not_ready_reason(obj: &DynamicObject, kind: &str) -> String {
     if let Some(rule) = declared_readiness(obj) {
         return match rule.ready {
             ReadyRule::Path { path, equals } => {
@@ -733,9 +742,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     obj.metadata.generation,
                     obj.data.pointer("/status/observedGeneration"),
                 );
-                format!(
-                    "{kind}/{name}: declared readiness {path}=\"{equals}\", currently {current}{stale}"
-                )
+                format!("declared readiness {path}=\"{equals}\", currently {current}{stale}")
             }
             ReadyRule::PathNot { path, not_equals } => {
                 let current = match obj.data.pointer(&path) {
@@ -746,9 +753,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     obj.metadata.generation,
                     obj.data.pointer("/status/observedGeneration"),
                 );
-                format!(
-                    "{kind}/{name}: declared readiness {path}!=\"{not_equals}\", currently {current}{stale}"
-                )
+                format!("declared readiness {path}!=\"{not_equals}\", currently {current}{stale}")
             }
             ReadyRule::Condition {
                 condition_type,
@@ -771,7 +776,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     }
                 };
                 format!(
-                    "{kind}/{name}: declared readiness condition {condition_type}={status}, currently {current}"
+                    "declared readiness condition {condition_type}={status}, currently {current}"
                 )
             }
         };
@@ -805,7 +810,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 1 => ", 1 old pod left".to_string(),
                 n => format!(", {n} old pods left"),
             };
-            format!("{kind}/{name}: {ready}/{desired} ready, {updated}/{desired} updated{old}")
+            format!("{ready}/{desired} ready, {updated}/{desired} updated{old}")
         }
         "DaemonSet" => {
             let desired = obj
@@ -818,7 +823,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 .pointer("/status/numberReady")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            format!("DaemonSet/{name}: {ready}/{desired} ready")
+            format!("{ready}/{desired} ready")
         }
         "Job" => {
             let succeeded = obj
@@ -826,7 +831,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 .pointer("/status/succeeded")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            format!("Job/{name}: {succeeded} succeeded")
+            format!("{succeeded} succeeded")
         }
         "PersistentVolumeClaim" => {
             let phase = obj
@@ -834,7 +839,7 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 .pointer("/status/phase")
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown");
-            format!("PVC/{name}: phase={phase}")
+            format!("phase {phase}")
         }
         _ => {
             // Show condition types when a generic custom resource has neither
@@ -855,10 +860,10 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 })
                 .unwrap_or_default();
             if seen.is_empty() {
-                format!("{kind}/{name}: not ready")
+                "not ready".to_string()
             } else {
                 format!(
-                    "{kind}/{name} has no Ready or Available condition (conditions: {seen}). The package that defines {kind} can declare how Kix should read its readiness.",
+                    "no Ready or Available condition (conditions: {seen}). The package that defines {kind} can declare how Kix should read its readiness.",
                     seen = seen.join(", ")
                 )
             }

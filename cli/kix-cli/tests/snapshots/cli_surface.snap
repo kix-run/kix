@@ -89,16 +89,14 @@ kix deploy --context <value>
 kix deploy --flake <value>
 kix deploy --override-input <value>
 kix status
-kix status <cluster> required
-kix status --operator
+kix status <cluster>
+kix status --check <value> [presence|drift|readiness]
+kix status --package <value>
 kix status --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix status --verbose -v
 kix status --quiet -q
 kix status --no-color
 kix status --context <value>
-kix status --flake <value>
-kix status --no-cache
-kix status --override-input <value>
 kix list
 kix list --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix list --verbose -v
@@ -233,21 +231,6 @@ kix pf --no-color
 kix pf --context <value>
 kix pf --flake <value>
 kix pf --override-input <value>
-kix health
-kix health <cluster> required
-kix health --verbose -v
-kix health --quiet -q
-kix health --no-color
-kix health --context <value>
-kix health --flake <value>
-kix health --override-input <value>
-kix drift
-kix drift --cluster <value>
-kix drift --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
-kix drift --verbose -v
-kix drift --quiet -q
-kix drift --no-color
-kix drift --context <value>
 kix snapshot
 kix snapshot --verbose -v
 kix snapshot --quiet -q

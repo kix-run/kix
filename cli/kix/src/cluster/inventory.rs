@@ -21,7 +21,7 @@ use tokio::task::JoinSet;
 pub(crate) const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by=kix";
 
 /// Return the fully qualified resource name for logging (e.g. "pods" or "deployments.apps").
-fn resource_fqn(ar: &ApiResource) -> String {
+pub(crate) fn resource_fqn(ar: &ApiResource) -> String {
     if ar.group.is_empty() {
         ar.plural.clone()
     } else {
