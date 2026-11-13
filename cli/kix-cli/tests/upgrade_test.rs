@@ -5,6 +5,8 @@
 //! `fake/fail-<version>` makes that version's builds fail. Needs no Nix and
 //! no network.
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -42,7 +44,7 @@ esac
 "#;
 
 struct Setup {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TempDir,
     data: PathBuf,
     project: PathBuf,
     site: PathBuf,
@@ -54,7 +56,7 @@ impl Setup {
     /// A project on Kix 9.1.0 with clusters `east` and `west`, which install
     /// the packages `web` and `db`.
     fn new() -> Self {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = common::tempdir();
         let root = tmp.path().canonicalize().unwrap();
         let s = Setup {
             data: root.join("data"),

@@ -33,6 +33,12 @@ share (`eval::fixtures`, and the `#[cfg(test)]` keys) sit behind
 `kix/tests/package_test.rs` checks that each crate builds from its own
 directory alone.
 
+An integration test that points `XDG_CACHE_HOME` or `KIX_STORE_ROOT` at a
+temporary directory must create it with `common::tempdir()`
+(`kix-cli/tests/common/mod.rs`), not `tempfile::tempdir()`. Kix makes its
+local store read-only, so `tempfile` cannot delete it, and every run would
+leave about 175,000 files in the temporary folder.
+
 Both binaries depend on `kix`, and `kix-cli` on `kix-bundle`, which is
 built on `kix` as any other user of the library would be. `kix` knows
 nothing of bundles: a bundle reaches it as a `CarriedBuild`. Both `kix`

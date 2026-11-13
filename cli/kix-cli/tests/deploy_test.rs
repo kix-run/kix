@@ -1,5 +1,7 @@
 //! Deploy-specific integration tests.
 
+mod common;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -53,7 +55,7 @@ fn apply_is_refused() {
 /// from builds, with the build's graph and each added object's manifest.
 #[test]
 fn plan_save_writes_the_plan_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let path = dir.path().join("plan.kixplan");
     kix()
         .args(["plan", "example", "--offline", "--out"])
@@ -107,7 +109,7 @@ fn plan_refuses_json_and_points_at_save() {
 /// anything is built, as is a plan file with one byte changed.
 #[test]
 fn deploy_plan_refuses_json_and_a_changed_plan_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let json = dir.path().join("plan.json");
     std::fs::write(&json, "{}").unwrap();
     kix()
@@ -149,7 +151,7 @@ fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
     let index = kix::eval::nix::eval_activation_index(repo, "minimal", &[], &|_| {})
         .expect("the cluster evaluates");
 
-    let cache = tempfile::tempdir().unwrap();
+    let cache = common::tempdir();
     let activations = cache.path().join("kix/activations");
     std::fs::create_dir_all(&activations).unwrap();
     std::fs::write(
@@ -174,7 +176,7 @@ fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
 /// Offline the deploy stops when it connects to apply, after the plan.
 #[test]
 fn the_json_deploy_log_has_stdout_to_itself() {
-    let cache = tempfile::tempdir().unwrap();
+    let cache = common::tempdir();
     let out = kix()
         .env("XDG_CACHE_HOME", cache.path())
         .args([
