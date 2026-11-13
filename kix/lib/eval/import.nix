@@ -229,7 +229,8 @@ rec {
           if entry.namespace == nsName && entry.instanceName == instName then
             fail {
               inherit instance;
-              message = "extraDeps names ${refText}, the import itself. An import's marker cannot depend on itself.";
+              message = "extraDeps names ${refText}, the import itself. An import cannot depend on itself.";
+              fix = "Remove ${refText} from instances.${nsName}.${instName}.extraDeps.";
             }
           else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
             fail {
@@ -246,7 +247,8 @@ rec {
         else
           fail {
             inherit instance;
-            message = "each entry of extraDeps is a resource or a ref.<namespace>.<instance> pointer, and one is ${describe entry}.";
+            message = "extraDeps contains ${describe entry}, which is neither a resource nor a ref.<namespace>.<instance> pointer.";
+            fix = "Pass only resources or ref.<namespace>.<instance> pointers in instances.${nsName}.${instName}.extraDeps.";
           };
 
       checkInstance =

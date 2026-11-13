@@ -392,12 +392,12 @@ deploy says where it was observed. Operators add
 
 Raise an error a person must fix with `scope.fail`, never a bare `throw`.
 Give `message` (what is wrong), `fix` (what to change), and, when they
-apply, what to change and `id` (the change record id of a removed option,
-such as `"K9503"`). Name what to change in one field: `option` is a path in
-the instance's `config` without the `config.` prefix (`"tls.secretName"`),
-`dependency` the name in its `deps` (`"database"`), and `clusterOption` a
-path in the cluster definition (`"cluster.roles.cni.binding"`). A `meta`
-field is no option, so leave the field out. Start `fix` with a capital
+apply, `id` (the change record id of a removed option, such as `"K9503"`),
+`option`, `dependency`, or `clusterOption`. `option` is a path in the
+instance's `config` without the `config.` prefix (`"tls.secretName"`),
+`dependency` is a name in its `deps` (`"database"`), and `clusterOption` is
+a path in the cluster definition (`"cluster.roles.cni.binding"`). A `meta`
+field is not an option, so leave `option` out. Start `fix` with a capital
 letter. `scope.fail` adds the instance, so the message does not start with
 a `who` prefix. Pass a list to report several problems at once
 (cluster-issuer). An assertion takes the same `fix`, `id`, `option`,

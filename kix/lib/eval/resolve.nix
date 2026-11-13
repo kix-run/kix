@@ -288,9 +288,9 @@ rec {
             }optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
             + (
               if builtins.length nameable == 1 then
-                "${labels nameable} matches in another namespace.\nFix: to use it, add this line to ${consumerPath}:"
+                "${labels nameable} matches in another namespace.\nFix: To use it, add this line to ${consumerPath}:"
               else
-                "${labels nameable} match in other namespaces.\nFix: to use one, add one of these lines to ${consumerPath}:"
+                "${labels nameable} match in other namespaces.\nFix: To use one, add one of these lines to ${consumerPath}:"
             )
             + "\n${depLines nameable}"
           );

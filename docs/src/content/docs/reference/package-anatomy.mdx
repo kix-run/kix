@@ -622,7 +622,7 @@ _passwordCheck =
 | `instance` | No | Set by `scope.fail` to `<namespace>/<instance>`. |
 | `package` | No | The package's name. |
 
-An error names at most what a person changes in a cluster definition. A package's `meta` is no option, so leave `option` out for an error about it. `kix.fail` refuses an `option` that starts with `config.`, `deps.`, or `meta.`, and a `clusterOption` that starts with `instances.`. A `fix` starts with a capital letter.
+`option`, `dependency`, and `clusterOption` name settings a person can change in a cluster definition. A package's `meta` is not an instance option, so leave `option` out when an error is about `meta`. `kix.fail` refuses an `option` that starts with `config.`, `deps.`, or `meta.`, and a `clusterOption` that starts with `instances.`. Start `fix` with a capital letter.
 
 `scope.fail` also takes a list of errors, to report several problems at once. A cluster definition, which has no `scope`, uses `kix.fail`, which takes the same arguments and leaves out the instance.
 

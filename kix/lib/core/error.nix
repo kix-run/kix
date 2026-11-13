@@ -41,17 +41,17 @@ let
       ];
     in
     if builtins.match ".*[[:space:]].*" (option + clusterOption) != null then
-      "`option` and `clusterOption` are paths and have no spaces."
+      "`option` and `clusterOption` must be option paths without spaces."
     else if prefix == "config" then
       "option \"${option}\" starts with `config.`. Write the path in the instance's config: \"${lib.removePrefix "config." option}\"."
     else if prefix == "deps" then
       "option \"${option}\" names a dependency. Write dependency = \"${lib.removePrefix "deps." option}\"."
     else if prefix == "meta" then
-      "option \"${option}\" is a field of the package's meta, which is no setting of the instance. Leave `option` out."
+      "option \"${option}\" is a field of the package's meta, which is not an instance option. Leave `option` out."
     else if
       record ? dependency && builtins.match "[A-Za-z_][A-Za-z0-9_'-]*" record.dependency == null
     then
-      "dependency \"${record.dependency}\" is not the name of a dependency. Write the name alone, such as \"database\"."
+      "dependency \"${record.dependency}\" is not a valid dependency name. Write the name alone, such as \"database\"."
     else if lib.hasPrefix "instances." clusterOption then
       "clusterOption \"${clusterOption}\" is inside an instance. Set `instance`, and write the path in its config as `option` or the dependency as `dependency`."
     else

@@ -90,7 +90,7 @@ in
         else if value == null then
           builtins.trace (
             "warning: instance '${instanceName}': requires cluster.capabilities.${cap} = true, which is not set in the cluster definition, so Kix skipped verifying this requirement."
-            + "\nFix: set `cluster.capabilities.${cap} = true;` (or `false;`) in the cluster definition to match your cluster."
+            + "\nFix: Set `cluster.capabilities.${cap} = true;` (or `false;`) in the cluster definition to match your cluster."
           ) null
         else
           null;
@@ -119,7 +119,7 @@ in
             "warning: "
             + desc
             + " cluster.roles.metricsApi.binding is unset, so Kix skipped checking for a provider."
-            + "\nFix: set `cluster.roles.metricsApi.binding = \"exclusive\";` (or `\"absent\";`) in your cluster definition, or add a metrics-server instance."
+            + "\nFix: Set `cluster.roles.metricsApi.binding = \"exclusive\";` (or `\"absent\";`) in your cluster definition, or add a metrics-server instance."
           ) null
         else
           null;
@@ -300,7 +300,7 @@ in
               "warning: "
               + serviceDesc
               + " cluster.roles.loadBalancer.binding is unset, so Kix skipped checking for a load balancer."
-              + "\nFix: set `cluster.roles.loadBalancer.binding = \"shadowable\";` (or `\"absent\";`) in your cluster definition."
+              + "\nFix: Set `cluster.roles.loadBalancer.binding = \"shadowable\";` (or `\"absent\";`) in your cluster definition."
             ) null
           else
             null
