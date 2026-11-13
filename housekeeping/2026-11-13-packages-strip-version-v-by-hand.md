@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix/packages/*` · Packages strip the leading "v" from their version by hand, and a check refuses a version that keeps it.
+
+19 packages write `version = lib.removePrefix "v" release`. `checkVersion` in `kix/package-eval.nix` (lines 700-718) asserts that `meta.version` has no leading "v". victoria-metrics-cluster (`default.nix:595`) builds an image record only to read a version through `kix.image.version`. The library could normalise `meta.version` where it reads it (`meta.instanceVersion`, `compatibleWith`) and offer a version normaliser. Then the `removePrefix` calls and the check can go. Related: `v2_discussions/170_instance_version_from_main_image.md`.
