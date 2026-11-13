@@ -827,6 +827,26 @@ pub struct FlakeRevision {
 /// `flake_dir`. Return `None` for a flake outside Git or in a repository
 /// with no commit.
 pub fn flake_revision(flake_dir: &Path) -> Result<Option<FlakeRevision>, KixEvalError> {
+    Ok(revision_of(&flake_metadata(flake_dir)?))
+}
+
+/// Return the fingerprint Nix gives the flake in `flake_dir`, or `None`
+/// when Nix gives it none.
+///
+/// Two evaluations of the same attribute with the same fingerprint give the
+/// same result. The fingerprint covers the flake's source and its
+/// `flake.lock`. For a flake in a Git repository the source is the
+/// repository's tracked files with their uncommitted changes, which includes
+/// an input given as a relative path. For a flake in a plain folder it is
+/// every file in the folder. Nix gives no fingerprint when it cannot
+/// identify the source, such as a changed Git repository with submodules.
+pub fn flake_fingerprint(flake_dir: &Path) -> Result<Option<String>, KixEvalError> {
+    Ok(fingerprint_of(&flake_metadata(flake_dir)?))
+}
+
+/// Return what `nix flake metadata --json` prints for the flake in
+/// `flake_dir`.
+fn flake_metadata(flake_dir: &Path) -> Result<serde_json::Value, KixEvalError> {
     let out = output(
         command(Tool::Nix)?
             .args([
@@ -835,17 +855,20 @@ pub fn flake_revision(flake_dir: &Path) -> Result<Option<FlakeRevision>, KixEval
                 "--json",
                 "--no-write-lock-file",
                 "--extra-experimental-features",
-                "nix-command flakes",
+                "nix-command flakes pipe-operators",
             ])
             .arg(flake_dir),
     )?;
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
-            summary: "could not read project flake metadata",
-            library: false,
-            detail: format!("nix flake metadata printed something other than JSON: {e}"),
-        })?;
-    Ok(revision_of(&metadata))
+    serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
+        summary: "could not read project flake metadata",
+        library: false,
+        detail: format!("nix flake metadata printed something other than JSON: {e}"),
+    })
+}
+
+fn fingerprint_of(metadata: &serde_json::Value) -> Option<String> {
+    let fingerprint = metadata.get("fingerprint")?.as_str()?;
+    (!fingerprint.is_empty()).then(|| fingerprint.to_string())
 }
 
 fn revision_of(metadata: &serde_json::Value) -> Option<FlakeRevision> {

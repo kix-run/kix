@@ -13,6 +13,13 @@ use super::evaluator::{Builder, ClusterOutput, ClusterPackageInfo, PackageInfo};
 /// Mock builder that returns pre-configured cluster data.
 pub(crate) struct MockBuilder {
     clusters: HashMap<String, Vec<Value>>,
+    /// What `source_fingerprint` returns.
+    pub(crate) fingerprint: Option<String>,
+    /// When set, `eval_cluster` makes this the fingerprint, as a file
+    /// changed during the evaluation would.
+    pub(crate) fingerprint_after_eval: Option<String>,
+    /// How many times `eval_cluster` ran.
+    pub(crate) evaluations: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MockBuilder {
@@ -20,6 +27,9 @@ impl MockBuilder {
     pub(crate) fn new() -> Self {
         Self {
             clusters: HashMap::new(),
+            fingerprint: None,
+            fingerprint_after_eval: None,
+            evaluations: Default::default(),
         }
     }
 
@@ -36,11 +46,20 @@ impl Default for MockBuilder {
 }
 
 impl Builder for MockBuilder {
+    fn source_fingerprint(&mut self, _flake_path: &Path) -> Option<String> {
+        self.fingerprint.clone()
+    }
+
     fn eval_cluster(
         &mut self,
         _flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
+        self.evaluations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(after) = self.fingerprint_after_eval.take() {
+            self.fingerprint = Some(after);
+        }
         let manifests = self
             .clusters
             .get(cluster_name)

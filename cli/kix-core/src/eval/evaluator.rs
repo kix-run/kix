@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::cache::{FileCache, Lookup};
+use super::cache::FileCache;
 use super::error::KixEvalError;
 
 /// Output from evaluating a cluster.
@@ -102,6 +102,13 @@ pub struct ClusterPackageInfo {
 /// result can name store paths. The builder must make every path it names
 /// available in the local store before it returns, wherever it did the work.
 pub trait Builder: Send {
+    /// Return a value that identifies everything an evaluation of the flake
+    /// at `flake_path` reads, or `None` when the builder cannot tell. Two
+    /// evaluations of one attribute under the same fingerprint must give the
+    /// same result, because the evaluator returns a cached result for a
+    /// fingerprint it has seen.
+    fn source_fingerprint(&mut self, flake_path: &Path) -> Option<String>;
+
     /// Evaluate a cluster attribute and return its manifests.
     fn eval_cluster(
         &mut self,
@@ -133,6 +140,8 @@ pub struct KixEvaluator {
     cache: Option<FileCache>,
     /// The flake path to evaluate (resolved, no symlinks).
     flake_path: PathBuf,
+    /// The flake's fingerprint as the builder last gave it, once asked.
+    fingerprint: Option<Option<String>>,
 }
 
 impl KixEvaluator {
@@ -148,6 +157,7 @@ impl KixEvaluator {
             backend: Box::new(backend),
             cache: Some(FileCache::open(cache_dir)),
             flake_path,
+            fingerprint: None,
         })
     }
 
@@ -163,26 +173,34 @@ impl KixEvaluator {
             backend: Box::new(backend),
             cache: None,
             flake_path,
+            fingerprint: None,
         })
     }
 
     /// Return the cached value of `attr`, or run `eval` and cache its result.
     ///
-    /// The cache key covers the flake's source files and `flake.lock`, so a
-    /// file added, removed, or changed invalidates the entry.
+    /// The cache key holds the builder's fingerprint of the flake's source,
+    /// so a change to any file the evaluation reads gives a new entry.
     fn cached<T: Serialize + DeserializeOwned>(
         &mut self,
         attr: &str,
         eval: impl FnOnce(&mut dyn Builder, &Path) -> Result<T, KixEvalError>,
     ) -> Result<T, KixEvalError> {
         let start = std::time::Instant::now();
-        let lookup = match &self.cache {
-            Some(cache) => cache.lookup(&self.flake_path, attr),
-            None => Lookup::none(),
+        let Some(cache) = &self.cache else {
+            let value = eval(self.backend.as_mut(), &self.flake_path)?;
+            tracing::info!(attr, elapsed = ?start.elapsed(), "evaluation complete");
+            return Ok(value);
         };
+        let fingerprint = match &self.fingerprint {
+            Some(known) => known.clone(),
+            None => self.backend.source_fingerprint(&self.flake_path),
+        };
+        let lookup = cache.lookup(&self.flake_path, attr, fingerprint.as_deref());
         if let Some(json) = &lookup.hit {
             match serde_json::from_str::<T>(json) {
                 Ok(value) => {
+                    self.fingerprint = Some(fingerprint);
                     tracing::info!(attr, elapsed = ?start.elapsed(), "cache hit");
                     return Ok(value);
                 }
@@ -194,14 +212,23 @@ impl KixEvaluator {
 
         let value = eval(self.backend.as_mut(), &self.flake_path)?;
 
-        if let Some(cache) = &self.cache {
+        // A file may have changed while the evaluation ran. The result then
+        // belongs to neither fingerprint for certain, so it is not stored.
+        let after = self.backend.source_fingerprint(&self.flake_path);
+        if after == fingerprint {
             let stored = serde_json::to_string(&value)
                 .map_err(std::io::Error::other)
                 .and_then(|json| cache.store(&lookup, &json));
             if let Err(e) = stored {
                 tracing::warn!(attr, error = %e, "could not write to the eval cache; continuing with the evaluated result");
             }
+        } else {
+            tracing::debug!(
+                attr,
+                "the flake's source changed during the evaluation; result not cached"
+            );
         }
+        self.fingerprint = Some(after);
         tracing::info!(attr, elapsed = ?start.elapsed(), "evaluation complete");
         Ok(value)
     }
@@ -299,5 +326,47 @@ mod tests {
         let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
         let err = eval.eval_cluster("nonexistent").unwrap_err();
         assert!(matches!(err, KixEvalError::ClusterNotFound { .. }));
+    }
+
+    /// Evaluate `test-cluster` with a new evaluator over the same cache, as
+    /// a second run of Kix would, and return how many evaluations ran.
+    fn run(dir: &Path, fingerprint: Option<&str>, after_eval: Option<&str>) -> usize {
+        let mut backend = test_backend();
+        backend.fingerprint = fingerprint.map(str::to_string);
+        backend.fingerprint_after_eval = after_eval.map(str::to_string);
+        let evaluations = backend.evaluations.clone();
+        let mut eval = KixEvaluator::new(backend, dir, &dir.join("cache")).unwrap();
+        eval.eval_cluster("test-cluster").unwrap();
+        evaluations.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn an_unchanged_fingerprint_skips_the_evaluation() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run(dir.path(), Some("f1"), None), 1);
+        assert_eq!(run(dir.path(), Some("f1"), None), 0);
+    }
+
+    #[test]
+    fn a_changed_fingerprint_evaluates_again() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run(dir.path(), Some("f1"), None), 1);
+        assert_eq!(run(dir.path(), Some("f2"), None), 1);
+        assert_eq!(run(dir.path(), Some("f2"), None), 0);
+    }
+
+    #[test]
+    fn a_flake_with_no_fingerprint_evaluates_every_time() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run(dir.path(), None, None), 1);
+        assert_eq!(run(dir.path(), None, None), 1);
+    }
+
+    #[test]
+    fn a_result_is_not_cached_when_the_source_changed_during_the_evaluation() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run(dir.path(), Some("f1"), Some("f2")), 1);
+        assert_eq!(run(dir.path(), Some("f1"), None), 1);
+        assert_eq!(run(dir.path(), Some("f2"), None), 1);
     }
 }

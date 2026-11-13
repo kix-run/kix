@@ -69,7 +69,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "upgrade",
         ],
     ),
-    // Only commands that evaluate through the SQLite eval cache.
+    // Only commands that evaluate through the eval cache.
     (
         "no_cache",
         &["build", "check", "list", "graph", "compliance audit"],
