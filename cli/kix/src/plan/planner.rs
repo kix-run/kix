@@ -353,7 +353,7 @@ impl CheckedPlan {
             self.plan.clone(),
             &self.orphans,
             &self.old_manifests,
-            self.flags.prune_policy(),
+            self.flags.prune,
             &config,
             observer,
         )
@@ -405,7 +405,7 @@ impl CheckedPlan {
             self.plan,
             &self.orphans,
             &self.old_manifests,
-            self.flags.prune_policy(),
+            self.flags.prune,
             &config,
             observer,
         )
@@ -659,7 +659,7 @@ impl<'a> Planner<'a> {
             &pkg_diff.shown,
             new_graph,
             &plan,
-            &deletes_of(self.flags.prune_policy(), &orphans),
+            &deletes_of(self.flags.prune, &orphans),
             listed_deletes,
             baseline.ran(),
         )
@@ -837,8 +837,7 @@ mod tests {
             .unwrap();
         let baseline = Baseline::empty();
         let flags = super::super::document::PlanFlags {
-            prune: false,
-            prune_mode: None,
+            prune: PrunePolicy::WarnOnly,
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,

@@ -697,7 +697,7 @@
         },
         {
           "const": "live_read",
-          "description": "`kix diff` against the live cluster or a snapshot: a read-only\ncomparison with the Kix-owned view.",
+          "description": "`kix plan --read-only` against the live cluster, or `kix diff`\nagainst a snapshot: a read-only comparison with the Kix-owned view.",
           "type": "string"
         },
         {
@@ -1128,18 +1128,8 @@
           "type": "boolean"
         },
         "prune": {
-          "type": "boolean"
-        },
-        "prune_mode": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PruneModeFlag"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "`no` with `--skip-orphan-check`, `null` otherwise. A plan saved by an\nolder Kix can hold `default`."
+          "$ref": "#/$defs/PrunePolicy",
+          "description": "What the deploy does with orphans: `delete` with `--prune`, `skip`\nwith `--skip-orphan-check`, and `warn_only` otherwise."
         },
         "reconcile": {
           "type": "boolean"
@@ -1213,12 +1203,25 @@
         }
       ]
     },
-    "PruneModeFlag": {
-      "enum": [
-        "default",
-        "no"
-      ],
-      "type": "string"
+    "PrunePolicy": {
+      "description": "Policy for handling orphaned resources after all plan nodes terminate.\nA saved plan records it as `flags.prune`.",
+      "oneOf": [
+        {
+          "const": "skip",
+          "description": "Do not look for orphans at all (`--skip-orphan-check`).",
+          "type": "string"
+        },
+        {
+          "const": "warn_only",
+          "description": "Report orphans and keep them, recorded on the new Activation for a\nlater `--prune` or `kix gc` (the default).",
+          "type": "string"
+        },
+        {
+          "const": "delete",
+          "description": "Delete orphans in reverse-topological order (`--prune`).",
+          "type": "string"
+        }
+      ]
     },
     "RefusalReason": {
       "oneOf": [

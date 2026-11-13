@@ -274,7 +274,7 @@ pub fn run(cli: &Cli) -> Result<Exit> {
         Command::Upgrade(args) => commands::upgrade::run(args, global).map(Exit::from),
         Command::Build(args) => commands::build::run(args, ctx).map(Exit::from),
         Command::Diff(args) => commands::diff::run(args, ctx),
-        Command::Plan(args) if args.read_only => commands::diff::run_read_only(args, ctx),
+        Command::Plan(args) if args.read_only => commands::plan::run_read_only(args, ctx),
         Command::Plan(args) => commands::plan::run(&args.plan, args.out.as_deref(), ctx),
         Command::Check(args) => commands::check::run(args, ctx),
         Command::Deploy(args) => commands::deploy::run(args, ctx),

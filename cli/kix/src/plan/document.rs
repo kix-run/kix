@@ -203,31 +203,31 @@ impl DeployedBuild {
 /// The planning flags of `kix plan` and `kix deploy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanFlags {
-    pub prune: bool,
-    /// `no` with `--skip-orphan-check`, `null` otherwise. A plan saved by an
-    /// older Kix can hold `default`.
-    pub prune_mode: Option<PruneModeFlag>,
+    /// What the deploy does with orphans: `delete` with `--prune`, `skip`
+    /// with `--skip-orphan-check`, and `warn_only` otherwise.
+    pub prune: PrunePolicy,
     pub reconcile: bool,
     pub force_conflicts: bool,
     pub accept_migrations: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PruneModeFlag {
-    Default,
-    No,
-}
-
 impl PlanFlags {
-    /// Return the [`PrunePolicy`] requested by these flags. `--skip-orphan-check`
-    /// skips pruning, default `deploy` reports orphans without deleting
-    /// (warn-only), and `--prune` deletes them.
-    pub fn prune_policy(&self) -> PrunePolicy {
-        match self.prune_mode.unwrap_or(PruneModeFlag::Default) {
-            PruneModeFlag::No => PrunePolicy::Skip,
-            PruneModeFlag::Default if !self.prune => PrunePolicy::WarnOnly,
-            PruneModeFlag::Default => PrunePolicy::Delete,
+    /// Return the [`PrunePolicy`] that the CLI flags `--prune` and
+    /// `--skip-orphan-check` ask for. The CLI refuses both together.
+    pub fn prune_policy_of(prune: bool, skip_orphan_check: bool) -> PrunePolicy {
+        match (prune, skip_orphan_check) {
+            (true, _) => PrunePolicy::Delete,
+            (false, true) => PrunePolicy::Skip,
+            (false, false) => PrunePolicy::WarnOnly,
+        }
+    }
+
+    /// Return the CLI flag that asks for `policy`, or `None` for the default.
+    pub fn prune_flag(policy: PrunePolicy) -> Option<&'static str> {
+        match policy {
+            PrunePolicy::Delete => Some("--prune"),
+            PrunePolicy::Skip => Some("--skip-orphan-check"),
+            PrunePolicy::WarnOnly => None,
         }
     }
 }
@@ -239,8 +239,8 @@ pub enum MadeBy {
     /// `kix plan`: the deploy pipeline ran as a server-side dry run, so field
     /// changes are what the apiserver says each write would produce.
     DryRun,
-    /// `kix diff` against the live cluster or a snapshot: a read-only
-    /// comparison with the Kix-owned view.
+    /// `kix plan --read-only` against the live cluster, or `kix diff`
+    /// against a snapshot: a read-only comparison with the Kix-owned view.
     LiveRead,
     /// Two builds compared, with no cluster access.
     Builds,
@@ -911,6 +911,55 @@ impl FieldChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_prune_flags_map_to_one_policy() {
+        assert_eq!(
+            PlanFlags::prune_policy_of(false, false),
+            PrunePolicy::WarnOnly
+        );
+        assert_eq!(PlanFlags::prune_policy_of(true, false), PrunePolicy::Delete);
+        assert_eq!(PlanFlags::prune_policy_of(false, true), PrunePolicy::Skip);
+        for policy in [
+            PrunePolicy::Skip,
+            PrunePolicy::WarnOnly,
+            PrunePolicy::Delete,
+        ] {
+            let flag = PlanFlags::prune_flag(policy);
+            let back = PlanFlags::prune_policy_of(
+                flag == Some("--prune"),
+                flag == Some("--skip-orphan-check"),
+            );
+            assert_eq!(back, policy, "{flag:?}");
+        }
+    }
+
+    #[test]
+    fn the_prune_policy_is_one_field_in_json() {
+        for (policy, name) in [
+            (PrunePolicy::Skip, "skip"),
+            (PrunePolicy::WarnOnly, "warn_only"),
+            (PrunePolicy::Delete, "delete"),
+        ] {
+            let flags = PlanFlags {
+                prune: policy,
+                reconcile: false,
+                force_conflicts: false,
+                accept_migrations: false,
+            };
+            let json = serde_json::to_value(flags).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({
+                    "prune": name,
+                    "reconcile": false,
+                    "force_conflicts": false,
+                    "accept_migrations": false,
+                })
+            );
+            assert_eq!(serde_json::from_value::<PlanFlags>(json).unwrap(), flags);
+        }
+    }
 
     #[test]
     fn a_store_path_is_the_store_entry_of_a_path_inside_it() {

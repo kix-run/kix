@@ -158,7 +158,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `cluster` | The name the build gives the Kix cluster. |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
-| `flags` | The planning flags: `{ prune, prune_mode, reconcile, force_conflicts, accept_migrations }`. `prune_mode` is `no` with `--skip-orphan-check` and `null` otherwise. `null` from `kix plan --read-only` and `kix diff`. |
+| `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `null` from `kix plan --read-only` and `kix diff`. |
 | `packages` | The package-grouped changes, described under [`kix diff`](/docs/reference/cli/diff/#json-and-yaml). |
 | `migrations` | Checked section of `{ slot, source, target, reason }`. |
 | `conflicts` | Checked section of `{ resource, owners, message }`, each owner `{ manager, fields }`. |

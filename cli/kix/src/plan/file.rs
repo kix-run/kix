@@ -201,6 +201,13 @@ pub enum PlanFileError {
         crate::version::running().release()
     )]
     WrongFormat { format: String, version: u32 },
+    #[error(
+        "the plan file uses plan schema version {}, and Kix {} reads version {}",
+        printable(.0),
+        crate::version::running().release(),
+        super::document::SCHEMA_VERSION
+    )]
+    WrongSchema(String),
     #[error("the plan file is too large ({})", printable(.0))]
     TooLarge(String),
     #[error("the plan file is corrupted or malformed ({})", printable(.0))]
@@ -438,6 +445,21 @@ fn check_file(sha256: &str, bytes: &[u8]) -> Result<(), PlanFileError> {
 /// Parse frame 0, whose format and version `Container::open` checked.
 fn parse_header(bytes: &[u8]) -> Result<Header, PlanFileError> {
     count_values(bytes)?;
+    // A plan of another schema version may not parse as this one, so its
+    // version is read first and refused by name.
+    #[derive(Deserialize)]
+    struct Versioned {
+        plan: SchemaVersion,
+    }
+    #[derive(Deserialize)]
+    struct SchemaVersion {
+        schema_version: String,
+    }
+    if let Ok(Versioned { plan }) = serde_json::from_slice::<Versioned>(bytes)
+        && plan.schema_version != super::document::SCHEMA_VERSION
+    {
+        return Err(PlanFileError::WrongSchema(plan.schema_version));
+    }
     let header: Header = serde_json::from_slice(bytes)
         .map_err(|e| PlanFileError::Unreadable(format!("the header: {e}")))?;
     if header.files.len() > MAX_FILES {
@@ -926,6 +948,28 @@ mod tests {
         assert_eq!(
             verify(plan.to_json().as_bytes()),
             Err(PlanFileError::NotAPlanFile)
+        );
+    }
+
+    /// A plan of another schema version is refused by its version, even
+    /// when its fields do not parse as this version's.
+    #[test]
+    fn another_schema_version_is_refused_by_name() {
+        let (mut header, files) = parts();
+        let refs: Vec<&[u8]> = files.iter().map(Vec::as_slice).collect();
+        header["plan"]["schema_version"] = json!("2026-10-07");
+        header["plan"]["flags"] = json!({
+            "prune": false,
+            "prune_mode": null,
+            "reconcile": false,
+            "force_conflicts": false,
+            "accept_migrations": false,
+        });
+        let err = verify(&file_of(&header, &refs)).unwrap_err();
+        assert_eq!(err, PlanFileError::WrongSchema("2026-10-07".into()));
+        assert!(
+            err.to_string().contains("schema version 2026-10-07"),
+            "{err}"
         );
     }
 

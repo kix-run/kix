@@ -798,8 +798,7 @@ mod tests {
 
         let mut forced = owned.clone();
         forced.flags = Some(kix::plan::document::PlanFlags {
-            prune: false,
-            prune_mode: None,
+            prune: kix::cluster::scheduler::PrunePolicy::WarnOnly,
             reconcile: false,
             force_conflicts: true,
             accept_migrations: false,

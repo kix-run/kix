@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::baseline::{ActiveSource, Baseline};
-use super::document::{PlanFlags, PruneModeFlag};
+use super::document::PlanFlags;
 use super::{CheckedPlan, PackageDiff, PlanError, Planner, diff_graphs};
 use crate::cluster::scheduler::PrunePolicy;
 use crate::eval::stamp::stamp_annotations;
@@ -145,22 +145,23 @@ pub use crate::eval::fixtures::kix_enterprise_test;
 /// Parse planning flags from `extra` as `kix deploy` does.
 pub fn flags(extra: &[&str]) -> PlanFlags {
     let mut flags = PlanFlags {
-        prune: false,
-        prune_mode: None,
+        prune: PrunePolicy::WarnOnly,
         reconcile: false,
         force_conflicts: false,
         accept_migrations: false,
     };
+    let (mut prune, mut skip_orphan_check) = (false, false);
     for arg in extra {
         match *arg {
-            "--prune" => flags.prune = true,
+            "--prune" => prune = true,
             "--reconcile" => flags.reconcile = true,
             "--force-conflicts" => flags.force_conflicts = true,
             "--accept-migrations" => flags.accept_migrations = true,
-            "--skip-orphan-check" => flags.prune_mode = Some(PruneModeFlag::No),
+            "--skip-orphan-check" => skip_orphan_check = true,
             other => panic!("not a planning flag: {other}"),
         }
     }
+    flags.prune = PlanFlags::prune_policy_of(prune, skip_orphan_check);
     flags
 }
 

@@ -1222,7 +1222,7 @@ fn plan_and_check(
         Err(e) => return Err(format!("the plan failed: {e}")),
     };
     let (plan, pkg_diff, objects) = (checked.plan(), checked.pkg_diff(), checked.objects());
-    let deletes = deletes_of(flags.prune_policy(), checked.orphans());
+    let deletes = deletes_of(flags.prune, checked.orphans());
     let (old_graph, active_manifests) = old_side(&baseline, &new_graph);
 
     // What the deploy writes, each matched to the build file whose

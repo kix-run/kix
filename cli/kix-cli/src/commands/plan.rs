@@ -30,13 +30,13 @@ use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
 use kix::plan::document::{
     AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
-    NotCheckedReason, Plan, PlanFlags, PruneEntry, PruneFate, PruneModeFlag, RefusalReason,
-    UncheckedObject, UncheckedReason,
+    NotCheckedReason, Plan, PlanFlags, PruneEntry, PruneFate, RefusalReason, UncheckedObject,
+    UncheckedReason,
 };
 use kix::plan::server::comparable;
 use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
 
-use crate::cli::{OutputFormat, PlanArgs};
+use crate::cli::{OutputFormat, PlanArgs, PlanCommandArgs};
 use crate::output;
 use crate::plan::{self, render};
 
@@ -92,11 +92,26 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
     Ok(Exit::Success)
 }
 
+/// Run `kix plan --read-only`, which compares the build with the live
+/// cluster using only `get` and `list`.
+pub fn run_read_only(args: &PlanCommandArgs, ctx: &mut CommandContext) -> Result<Exit> {
+    super::diff::compare(
+        &super::diff::Comparison {
+            command: "kix plan --read-only",
+            cluster: &args.plan.cluster,
+            bundle: args.plan.bundle.as_deref(),
+            baseline: super::diff::Baseline::Live,
+            detail: args.detail,
+            out: args.out.as_deref(),
+        },
+        ctx,
+    )
+}
+
 /// Extract [`PlanFlags`] from CLI arguments.
 pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
     PlanFlags {
-        prune: args.prune,
-        prune_mode: args.skip_orphan_check.then_some(PruneModeFlag::No),
+        prune: PlanFlags::prune_policy_of(args.prune, args.skip_orphan_check),
         reconcile: args.reconcile,
         force_conflicts: args.force_conflicts,
         accept_migrations: args.accept_migrations,
@@ -587,7 +602,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
 
 /// Build the list of [`PruneEntry`] records for orphaned resources.
 fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec<PruneEntry> {
-    let policy = p.checked.flags().prune_policy();
+    let policy = p.checked.flags().prune;
     let mut entries: Vec<PruneEntry> = p
         .checked
         .orphans()
@@ -658,8 +673,9 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         &[RerunReason::Changed, RerunReason::LastRunFailed],
     );
 
-    let deletes = p.checked.flags().prune_policy() == PrunePolicy::Delete;
-    let fate = if p.checked.flags().prune_mode == Some(PruneModeFlag::No) {
+    let prune = p.checked.flags().prune;
+    let deletes = prune == PrunePolicy::Delete;
+    let fate = if prune == PrunePolicy::Skip {
         "still running on the cluster (`--skip-orphan-check`, not deleted)".to_string()
     } else if deletes && p.client.is_none() {
         // `--offline` has not contacted the cluster, so it
