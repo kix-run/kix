@@ -364,7 +364,7 @@ mod hard_scope_tests {
 
     /// Verify that hard GC on a shared Kubernetes cluster ignores another Kix
     /// cluster's objects, keeps shared objects, and only judges unattributed
-    /// objects when `--include-unattributed` is set.
+    /// objects when `--include unattributed` is set.
     #[test]
     fn hard_gc_judges_only_this_clusters_objects() {
         let tenancy = Tenancy::fixture(&[record("a", "a2"), record("b", "b1")], "a");
@@ -394,7 +394,7 @@ mod hard_scope_tests {
     }
 
     /// Verify that controller-created copies of Kix objects are excluded unless
-    /// `--include-copies` is set.
+    /// `--include copies` is set.
     #[test]
     fn hard_gc_judges_copies_only_with_the_flag() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");

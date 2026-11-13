@@ -34,13 +34,13 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
         "  {}",
         output::dim(
             "Kept running on the cluster, because Kix never applied them. \
-             Pass `--include-unstamped` to delete them too."
+             Pass `--include unstamped` to delete them too."
         ),
     );
 }
 
 /// Print objects that name no Activation record on a multi-cluster target, and
-/// state whether `--include-unattributed` includes them.
+/// state whether `--include unattributed` includes them.
 pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
@@ -58,15 +58,15 @@ pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included:
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        "--include-unattributed: objects that name no deployment record on this cluster are checked against this build like this cluster's own objects."
+        "--include unattributed: objects that name no deployment record on this cluster are checked against this build like this cluster's own objects."
     } else {
-        "Kept running on the cluster. Review them and pass `--include-unattributed` to check them against this build and delete any not in it."
+        "Kept running on the cluster. Review them and pass `--include unattributed` to check them against this build and delete any not in it."
     };
     println!("  {}", output::dim(note));
 }
 
 /// Print the copies of Kix objects that other programs made, and state
-/// whether `--include-copies` includes them.
+/// whether `--include copies` includes them.
 pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
@@ -84,9 +84,9 @@ pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool)
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        "--include-copies: objects whose labels were copied by another program are checked against this build like Kix's own objects."
+        "--include copies: objects whose labels were copied by another program are checked against this build like Kix's own objects."
     } else {
-        "Kept running on the cluster, because Kix did not make them. Pass `--include-copies` to check them against this build and delete any not in it."
+        "Kept running on the cluster, because Kix did not make them. Pass `--include copies` to check them against this build and delete any not in it."
     };
     println!("  {}", output::dim(note));
 }
@@ -282,6 +282,10 @@ pub(super) fn deletion_prompt(resources: usize, records: usize) -> String {
 /// Prompt the user for confirmation unless `--yes` is set, stopping with exit
 /// code 1 on a non-interactive terminal without `--yes`.
 pub(super) fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
+    if args.dry_run {
+        println!("\nDry run: nothing was deleted from the cluster.");
+        return Ok(false);
+    }
     if args.yes {
         return Ok(true);
     }

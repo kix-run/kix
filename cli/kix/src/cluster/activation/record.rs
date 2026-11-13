@@ -24,7 +24,7 @@ pub struct Record {
     /// [`super::Records::finalize_deploy`] when a deploy runs to completion.
     pub deployed_at: Option<String>,
     /// `status.previousActivation`, naming the record superseded by this one so
-    /// `kix rollback --list` can reconstruct the deploy chain.
+    /// `kix history` can reconstruct the deploy chain.
     pub previous_activation: Option<String>,
     /// `status.failure.reason`, reported by the next deploy.
     pub failure_reason: Option<String>,
@@ -188,7 +188,7 @@ fn spec_map<T>(
 /// A build whose orphans a deploy reported and kept on the cluster.
 ///
 /// A deploy detects orphans by comparing its build with the builds it replaces.
-/// When orphans are kept (in warn-only mode, `--prune-mode=no`, or after a
+/// When orphans are kept (in warn-only mode, `--skip-orphan-check`, or after a
 /// failed delete), the finalized record records those builds under
 /// `status.orphansKeptFrom` so a subsequent `kix deploy --prune`,
 /// `kix rollback --prune`, or soft `kix gc` can still compare against them.
@@ -216,7 +216,7 @@ pub(crate) struct KeptOrphans {
     /// pruned.
     pub unexamined: Vec<KeptOrphanSource>,
     /// Whether to carry forward `status.orphansKeptFrom` from the record that
-    /// was current at finalize time (used when `--current-activation` bypassed
+    /// was current at finalize time (used when `--offline` bypassed
     /// reading the live record during planning).
     pub carry_current: bool,
 }

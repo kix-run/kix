@@ -309,7 +309,7 @@ pub async fn run(
         // The status is a second call, because the CRD declares a status
         // subresource and a create drops it. Write it whether the record was
         // created now or by an earlier run that died in the gap: a record
-        // with no phase is missing from `kix rollback --list` and
+        // with no phase is missing from `kix history` and
         // reads as Queued to the operator, which would supersede the real
         // Active activation and deploy an old build.
         if let Some(status) = status {

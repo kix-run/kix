@@ -151,20 +151,13 @@ pub fn flags(extra: &[&str]) -> PlanFlags {
         force_conflicts: false,
         accept_migrations: false,
     };
-    let mut args = extra.iter();
-    while let Some(arg) = args.next() {
+    for arg in extra {
         match *arg {
             "--prune" => flags.prune = true,
             "--reconcile" => flags.reconcile = true,
             "--force-conflicts" => flags.force_conflicts = true,
             "--accept-migrations" => flags.accept_migrations = true,
-            "--prune-mode" => {
-                flags.prune_mode = match args.next().copied() {
-                    Some("default") => Some(PruneModeFlag::Default),
-                    Some("no") => Some(PruneModeFlag::No),
-                    other => panic!("--prune-mode {other:?}"),
-                }
-            }
+            "--skip-orphan-check" => flags.prune_mode = Some(PruneModeFlag::No),
             other => panic!("not a planning flag: {other}"),
         }
     }

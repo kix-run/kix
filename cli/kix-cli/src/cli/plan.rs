@@ -8,21 +8,20 @@ pub struct DiffArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Compare against a local build or directory instead of the live
-    /// cluster: a previous build (its `kix.run/built-via` store path, or a
-    /// result directory containing `kix-packages.json`) or a manifest
-    /// directory from `kix snapshot save` or `kix export`
+    /// The build to compare against: a previous build (its
+    /// `kix.run/built-via` store path, or a result directory containing
+    /// `kix-packages.json`) or a manifest directory from `kix snapshot` or
+    /// `kix export`
     #[arg(long, value_name = "PATH")]
     pub from: Option<String>,
 
     /// Read the target build from a `.kixbundle` file instead of evaluating.
-    /// Without `--from` or `--from-bundle`, compares against an empty baseline
-    /// without contacting the cluster.
+    /// Without `--from` or `--from-bundle`, compares against an empty
+    /// baseline.
     #[arg(long, value_name = "FILE")]
     pub bundle: Option<std::path::PathBuf>,
 
-    /// Compare against the baseline build in this `.kixbundle` file instead of
-    /// the live cluster
+    /// Compare against the build in this `.kixbundle` file
     #[arg(
         long,
         value_name = "FILE",
@@ -37,12 +36,13 @@ pub struct DiffArgs {
     pub detail: Detail,
 
     /// Write the comparison to a `.kixplan` file (same format as
-    /// `kix plan --save`), regardless of `--detail` and `--output`
+    /// `kix plan --out`), regardless of `--detail` and `--output`
     #[arg(long, value_name = "FILE")]
-    pub save: Option<std::path::PathBuf>,
+    pub out: Option<std::path::PathBuf>,
 }
 
-/// Detail level for changed resources in `kix diff` JSON and YAML output.
+/// Detail level for changed resources in JSON and YAML output of `kix diff`
+/// and `kix plan --read-only`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Detail {
     /// Resource names and changed field counts only.
@@ -59,11 +59,38 @@ pub struct PlanCommandArgs {
     #[command(flatten)]
     pub plan: PlanArgs,
 
+    /// Compare the build with the live cluster using only `get` and `list`
+    /// permissions, with no server-side dry run.
+    ///
+    /// When the deployed build is available locally, field changes are
+    /// classified as either committed changes or live drift. A read-only plan
+    /// cannot see what only a write shows: admission webhook mutations or
+    /// rejections, field ownership conflicts, and deploy-time refusals. It
+    /// lists these as not checked.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "offline",
+            "reconcile",
+            "prune",
+            "skip_orphan_check",
+            "force_conflicts",
+            "accept_migrations",
+            "deployed_bundles",
+        ]
+    )]
+    pub read_only: bool,
+
+    /// Detail level for `--output json` and `--output yaml` of a read-only
+    /// plan (text and Markdown output are unaffected)
+    #[arg(long, value_enum, default_value_t = Detail::Plain, requires = "read_only")]
+    pub detail: Detail,
+
     /// Write the plan to a `.kixplan` file for `kix deploy --plan` or Kix
     /// Enterprise. Includes changed fields, the build's dependency graph, and
     /// full old and new manifests with Secret values redacted.
     #[arg(long, value_name = "FILE")]
-    pub save: Option<std::path::PathBuf>,
+    pub out: Option<std::path::PathBuf>,
 }
 
 /// Shared planning arguments for `kix plan` and `kix deploy`.
@@ -72,14 +99,14 @@ pub struct PlanArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Use the local activation cache instead of querying the cluster.
+    /// Compare with the build of the last deploy from this machine instead
+    /// of querying the cluster.
     ///
-    /// Runs completely offline by comparing the new build against the locally
-    /// cached activation. Does not inspect live cluster state, in-flight or
-    /// failed deployments, or previously retained orphans, and performs no
-    /// server-side dry run.
+    /// Does not contact the cluster. Does not inspect live cluster state,
+    /// in-flight or failed deployments, or previously retained orphans, and
+    /// performs no server-side dry run.
     #[arg(long)]
-    pub current_activation: bool,
+    pub offline: bool,
 
     /// Re-apply all resources even if activation identity matches (heal drift)
     #[arg(long)]
@@ -92,9 +119,9 @@ pub struct PlanArgs {
     #[arg(long)]
     pub prune: bool,
 
-    /// Prune mode: default (prune after apply), no (skip pruning)
-    #[arg(long, value_name = "MODE")]
-    pub prune_mode: Option<PruneMode>,
+    /// Do not look for orphaned resources at all, and leave them to `kix gc`
+    #[arg(long, conflicts_with = "prune")]
+    pub skip_orphan_check: bool,
 
     /// Take ownership of fields currently owned by other field managers (SSA conflict override).
     /// Without this, conflicts surface as a 409 with the conflicting field paths and current owner.
@@ -111,7 +138,7 @@ pub struct PlanArgs {
 
     /// Read the target build from a `.kixbundle` file instead of evaluating,
     /// verifying every store path against its content first
-    #[arg(long, value_name = "FILE", conflicts_with = "current_activation")]
+    #[arg(long, value_name = "FILE", conflicts_with = "offline")]
     pub bundle: Option<std::path::PathBuf>,
 
     /// Bundle file for a previously deployed build (active, failed, or retained
@@ -119,12 +146,4 @@ pub struct PlanArgs {
     /// Matched by the Activation record's identity hash; repeatable.
     #[arg(long = "deployed-bundle", value_name = "FILE", requires = "bundle")]
     pub deployed_bundles: Vec<std::path::PathBuf>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum PruneMode {
-    /// Prune orphans after every apply has finished (default)
-    Default,
-    /// Skip pruning entirely, defer to `kix gc`
-    No,
 }

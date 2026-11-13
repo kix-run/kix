@@ -56,14 +56,13 @@ impl Command {
             | Command::List(_)
             | Command::Graph(_)
             | Command::Bundle(_)
-            | Command::Inspect(_)
             | Command::Gc(_)
             | Command::Migrate(_)
             | Command::Rollback(_)
+            | Command::History(_)
             | Command::Export(_)
             | Command::Logs(_)
-            | Command::Pf(_)
-            | Command::Images(_)
+            | Command::PortForward(_)
             | Command::Snapshot(_)
             | Command::Compliance(_) => Needs::Project,
         }
@@ -90,22 +89,19 @@ impl Command {
             Command::Check(_) => &[Text, Json, Yaml, Sarif],
             Command::Graph(_) => &[Tree, Dot, Json, Yaml],
             Command::Diff(_) => &[Text, Json, Yaml, Markdown],
-            // A plan is data only as a saved plan file (`--save`).
+            Command::Plan(args) if args.read_only => &[Text, Json, Yaml, Markdown],
+            // A plan is data only as a saved plan file (`--out`).
             Command::Plan(_) => &[Text, Markdown],
             Command::Deploy(args) if args.dry_run && args.saved_plan.is_some() => DATA,
             Command::Deploy(args) if args.dry_run => &[Text, Markdown],
             Command::Deploy(_) => TEXT,
-            Command::Rollback(args) if args.list => DATA,
             Command::Rollback(_) => TEXT,
+            Command::History(_) => DATA,
             Command::Compliance(args) => match args.command {
                 ComplianceCommand::Sbom(_) | ComplianceCommand::Attest(_) => &[Json, Yaml],
                 ComplianceCommand::Audit(_) => TEXT,
             },
-            Command::Status(_)
-            | Command::List(_)
-            | Command::Inspect(_)
-            | Command::Images(_)
-            | Command::Pin(_) => DATA,
+            Command::Status(_) | Command::List(_) | Command::Pin(_) => DATA,
             Command::Completions(_)
             | Command::SelfCmd(_)
             | Command::Doctor
@@ -117,7 +113,7 @@ impl Command {
             | Command::Migrate(_)
             | Command::Export(_)
             | Command::Logs(_)
-            | Command::Pf(_)
+            | Command::PortForward(_)
             | Command::Snapshot(_) => TEXT,
         })
     }
@@ -130,7 +126,7 @@ impl Command {
                 " --plan FILE --dry-run"
             }
             Command::Deploy(args) if args.dry_run => " --dry-run",
-            Command::Rollback(args) if args.list => " --list",
+            Command::Plan(args) if args.read_only => " --read-only",
             _ => "",
         }
     }
@@ -139,7 +135,8 @@ impl Command {
     pub fn format_hint(&self) -> Option<String> {
         let plan = || {
             format!(
-                "To keep the plan as data, write it with `--save FILE.{}`. \
+                "To keep the plan as data, write it with `--out FILE.{}`. \
+                 `kix plan --read-only -o json` prints a read-only plan as JSON, and \
                  `kix deploy --plan FILE --dry-run -o json` compares a saved plan with the cluster.",
                 kix::plan::file::EXTENSION
             )
@@ -177,23 +174,23 @@ pub fn run(cli: &Cli) -> Result<Exit> {
         Command::Lib(command) => commands::library::run(command, global).map(Exit::from),
         Command::Build(args) => commands::build::run(args, ctx).map(Exit::from),
         Command::Diff(args) => commands::diff::run(args, ctx),
-        Command::Plan(args) => commands::plan::run(&args.plan, args.save.as_deref(), ctx),
+        Command::Plan(args) if args.read_only => commands::diff::run_read_only(args, ctx),
+        Command::Plan(args) => commands::plan::run(&args.plan, args.out.as_deref(), ctx),
         Command::Check(args) => commands::check::run(args, ctx),
         Command::Deploy(args) => commands::deploy::run(args, ctx),
         Command::Status(args) => commands::status::run(args, ctx),
         Command::List(args) => commands::list::run(args, ctx).map(Exit::from),
         Command::Graph(args) => commands::graph::run(args, ctx).map(Exit::from),
         Command::Bundle(args) => commands::bundle::run(args, ctx).map(Exit::from),
-        Command::Inspect(args) => commands::inspect::run(args, ctx).map(Exit::from),
         Command::Gc(args) => commands::gc::run(args, ctx).map(Exit::from),
         Command::Migrate(MigrateCommand::Domain(args)) => {
             commands::migrate::run(args, ctx).map(Exit::from)
         }
         Command::Rollback(args) => commands::rollback::run(args, ctx),
+        Command::History(args) => commands::rollback::history(args, ctx).map(Exit::from),
         Command::Export(args) => commands::export::run(args, ctx).map(Exit::from),
         Command::Logs(args) => commands::logs::run(args, ctx).map(Exit::from),
-        Command::Pf(args) => commands::pf::run(args, ctx).map(Exit::from),
-        Command::Images(args) => commands::images::run(args, ctx).map(Exit::from),
+        Command::PortForward(args) => commands::port_forward::run(args, ctx).map(Exit::from),
         Command::Snapshot(args) => commands::snapshot::run(args, ctx).map(Exit::from),
         Command::Compliance(args) => commands::compliance::run(args, ctx).map(Exit::from),
     }
@@ -284,6 +281,7 @@ mod tests {
             &["kix", "plan", "c"],
             &["kix", "deploy", "c"],
             &["kix", "lib", "update"],
+            &["kix", "history", "c"],
             &["kix", "list", "clusters"],
         ] {
             assert_eq!(needs(args), Needs::Project, "{args:?}");
@@ -307,7 +305,13 @@ mod tests {
         assert!(formats(&["kix", "check", "c"]).unwrap().contains(&Sarif));
         assert_eq!(formats(&["kix", "list", "clusters"]), Some(DATA));
         assert_eq!(formats(&["kix", "gc", "c"]), Some(TEXT));
-        assert_eq!(formats(&["kix", "rollback", "c", "--list"]), Some(DATA));
+        assert_eq!(formats(&["kix", "history", "c"]), Some(DATA));
+        assert_eq!(formats(&["kix", "plan", "c"]), Some(&[Text, Markdown][..]));
+        assert!(
+            formats(&["kix", "plan", "c", "--read-only"])
+                .unwrap()
+                .contains(&Json)
+        );
         assert_eq!(formats(&["kix", "deploy", "c"]), Some(TEXT));
         assert_eq!(
             formats(&["kix", "deploy", "c", "--dry-run", "--plan", "p.kixplan"]),

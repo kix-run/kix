@@ -33,7 +33,7 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
         None => kix.version,
     };
     let file = args
-        .file
+        .out
         .clone()
         .unwrap_or_else(|| PathBuf::from(format!("{}.{}", args.cluster, kix_bundle::EXTENSION)));
     let written = kix_bundle::write_build(build.graph(), &kix_rev, Some(provenance), &file)

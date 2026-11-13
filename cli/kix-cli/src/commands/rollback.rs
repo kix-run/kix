@@ -30,7 +30,7 @@ use kix::plan::baseline::{self, Baseline};
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
 
-use crate::cli::RollbackArgs;
+use crate::cli::{HistoryArgs, RollbackArgs};
 use crate::exit::Exit;
 use crate::output::{self, CommandResponse};
 use crate::plan;
@@ -38,24 +38,19 @@ use crate::plan;
 use super::CommandContext;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
-    let lookup = if args.list {
-        super::Lookup::ReadOnly
-    } else {
-        super::Lookup::Mutating
-    };
-    let cluster = ctx.cluster_identity(&args.cluster, lookup)?;
-    if args.list {
-        return ctx
-            .runtime()?
-            .block_on(run_list_async(&cluster, ctx))
-            .map(Exit::from);
-    }
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
     if args.operator {
         return ctx
             .runtime()?
             .block_on(run_operator_async(args, &cluster, ctx));
     }
     ctx.runtime()?.block_on(run_async(args, &cluster, ctx))
+}
+
+/// Run `kix history`: list the deploys `kix rollback` can go back to.
+pub fn history(args: &HistoryArgs, ctx: &mut CommandContext) -> Result<()> {
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
+    ctx.runtime()?.block_on(run_list_async(&cluster, ctx))
 }
 
 /// Connect to the cluster, list superseded activations, and print the rollback

@@ -133,7 +133,7 @@ pub enum InstallError {
     BadArchive { version: String, reason: String },
 
     #[error(
-        "the release notes of Kix {version} cannot be read: {message}. Kix changed nothing. Update Kix with `kix self update` if Kix {version} is newer than Kix {}",
+        "the release notes of Kix {version} cannot be read: {message}. Kix changed nothing. Upgrade Kix with `kix self upgrade` if Kix {version} is newer than Kix {}",
         version::running().release()
     )]
     BadChanges { version: String, message: String },

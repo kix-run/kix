@@ -6,19 +6,21 @@
 //!   `status.orphansKeptFrom` from warn-only deploys. Deletes orphaned
 //!   resources in reverse dependency order without scanning every resource kind
 //!   on the cluster.
-//! - **Hard (`--hard`):** Build the cluster and scan all live Kix-managed
+//! - **Full scan (`--full-scan`):** Build the cluster and scan all live Kix-managed
 //!   resources attributed to this cluster via `kix.run/activations`
 //!   (`inventory::SweepScope::Cluster`). Resources whose `kix.run/identity-hash`
 //!   is absent from the new build are garbage (or, for resources stamped before
 //!   the domain move, resources whose Kubernetes identity is absent). Unstamped
 //!   label carriers, unattributed resources on multi-cluster targets, and
 //!   copies other programs made of Kix objects are reported and only deleted when
-//!   `--include-unstamped`, `--include-unattributed`, or `--include-copies` is
-//!   passed.
+//!   `--include` names them.
 //! - **Operator (`--operator`):** Delete retired Superseded Activation records
 //!   and wait for the operator's finalizer.
 //!
-//! Soft and hard modes never delete resource kinds protected by
+//! `--dry-run` prints what any mode would delete and changes nothing on the
+//! cluster.
+//!
+//! Soft and full-scan modes never delete resource kinds protected by
 //! `lifecycle::never_pruned` (`Namespace`, `CustomResourceDefinition`), listing
 //! them as kept instead.
 //!
@@ -37,7 +39,7 @@ use std::collections::HashSet;
 use miette::{Result, miette};
 use serde_json::Value;
 
-use crate::cli::GcArgs;
+use crate::cli::{GcArgs, Include};
 use crate::client;
 use crate::exit::{Exit, Stopped};
 use crate::output;
@@ -68,7 +70,7 @@ pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
         return ctx.runtime()?.block_on(run_operator(args, &cluster, ctx));
     }
-    if args.hard {
+    if args.full_scan {
         run_hard(args, ctx)
     } else {
         run_soft(args, ctx)
@@ -108,7 +110,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             "{what} '{}' is not on this machine. Run {} first, or use {}.",
             output::bold(&cluster),
             output::bold("kix deploy"),
-            output::bold("kix gc --hard"),
+            output::bold("kix gc --full-scan"),
         );
         return Ok(());
     };
@@ -179,6 +181,17 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if garbage_manifests.is_empty() && kept_garbage.is_empty() && retirement.plan.retire.is_empty()
     {
+        if args.dry_run {
+            crate::say!(
+                "{}",
+                output::green(&format!(
+                    "Nothing to delete ({} object(s) unchanged, {}).",
+                    new_hashes.len(),
+                    retirement.kept_note(),
+                ))
+            );
+            return Ok(());
+        }
         ctx.runtime()?.block_on(clear_kept(
             &cluster,
             &retirement,
@@ -424,15 +437,19 @@ async fn run_hard_async(
             println!("{note}");
         }
         if !sweep.unattributed.is_empty() {
-            print_unattributed(&sweep.unattributed, args.include_unattributed);
+            print_unattributed(&sweep.unattributed, args.includes(Include::Unattributed));
         }
         if !sweep.copies.is_empty() {
-            print_copies(&sweep.copies, args.include_copies);
+            print_copies(&sweep.copies, args.includes(Include::Copies));
         }
     }
     let forbidden_none = sweep.forbidden.is_empty();
-    let unattributed_judged = sweep.unattributed.is_empty() || args.include_unattributed;
-    let live = judged_objects(sweep, args.include_unattributed, args.include_copies);
+    let unattributed_judged = sweep.unattributed.is_empty() || args.includes(Include::Unattributed);
+    let live = judged_objects(
+        sweep,
+        args.includes(Include::Unattributed),
+        args.includes(Include::Copies),
+    );
 
     // Resources stamped before the domain migration have store hashes under the
     // retired domain that cannot match a current build, so `judge_hard`
@@ -446,7 +463,7 @@ async fn run_hard_async(
             "{} {stale} object(s) still carry tracking annotations from before the `{}` \
              move. Their build hashes cannot match a current build, so Kix checks them by \
              Kubernetes kind, namespace, and name instead, the rule `kix gc` without \
-             `--hard` already uses. One deploy updates their annotations.",
+             `--full-scan` already uses. One deploy updates their annotations.",
             crate::output::yellow("Note:"),
             keys::DOMAIN,
         );
@@ -460,12 +477,12 @@ async fn run_hard_async(
     let retirement = plan_records_with(records.into_records(), cluster_name, &policy).await?;
     garbage.extend(record_garbage(&retirement.plan));
 
-    // Separate unstamped resources unless `--include-unstamped` is set.
+    // Separate unstamped resources unless `--include unstamped` is set.
     // Protected kinds remain in `garbage` so they are listed as kept below.
     let (unstamped, garbage): (Vec<GarbageEntry>, Vec<GarbageEntry>) =
         garbage.into_iter().partition(|g| {
             g.reason == GarbageReason::NoIdentityHash
-                && !args.include_unstamped
+                && !args.includes(Include::Unstamped)
                 && !lifecycle::never_pruned(&g.id.kind)
         });
     if !unstamped.is_empty() && !output::quiet() {
@@ -482,7 +499,9 @@ async fn run_hard_async(
     let examined_all = forbidden_none && unattributed_judged;
 
     if garbage.is_empty() {
-        clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
+        if !args.dry_run {
+            clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
+        }
         crate::say!(
             "{}",
             output::green(&format!("Nothing to delete ({}).", retirement.kept_note()))

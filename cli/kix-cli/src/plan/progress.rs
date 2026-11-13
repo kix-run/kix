@@ -30,7 +30,7 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             rollback_rewrites_everything();
             eprintln!(
-                "  Objects that exist only in {activation} are not deleted by this rollback; the new deployment record keeps {activation} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {activation}'s build (or `kix gc --hard {cluster}` from any machine) will remove them."
+                "  Objects that exist only in {activation} are not deleted by this rollback; the new deployment record keeps {activation} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {activation}'s build (or `kix gc --full-scan {cluster}` from any machine) will remove them."
             );
         }
         PlanEvent::ActiveWithoutHash {
@@ -43,7 +43,7 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             rollback_rewrites_everything();
             eprintln!(
-                "  Objects that exist only in {activation} are not deleted by this rollback and nothing names {activation} afterwards; run `kix gc --hard {cluster}` after the rollback to find and remove them."
+                "  Objects that exist only in {activation} are not deleted by this rollback and nothing names {activation} afterwards; run `kix gc --full-scan {cluster}` after the rollback to find and remove them."
             );
         }
         PlanEvent::ActiveUnresolved { record, cluster } => {
@@ -54,7 +54,7 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             rollback_rewrites_everything();
             eprintln!(
-                "  Objects that exist only in {current} are not deleted by this rollback; the new deployment record keeps {current} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {current}'s build (or `kix gc --hard {cluster}` from any machine) will remove them."
+                "  Objects that exist only in {current} are not deleted by this rollback; the new deployment record keeps {current} listed for cleanup, so a later `kix deploy {cluster} --prune` or `kix gc {cluster}` on a machine that has {current}'s build (or `kix gc --full-scan {cluster}` from any machine) will remove them."
             );
         }
         PlanEvent::KeptBuildUnusable { activation, error } => {
@@ -93,7 +93,7 @@ pub fn print(event: PlanEvent<'_>) {
             output::yellow("!"),
         ),
         PlanEvent::OlderBuildsLeftOut(count) => crate::say!(
-            "  {} {count} object(s) of this Kix cluster belong only to older deployments, so this plan leaves them; `kix gc --hard` finds and deletes them.",
+            "  {} {count} object(s) of this Kix cluster belong only to older deployments, so this plan leaves them; `kix gc --full-scan` finds and deletes them.",
             output::dim("Note:"),
         ),
         PlanEvent::DeployInFlight(record) => {
@@ -141,10 +141,10 @@ pub fn print(event: PlanEvent<'_>) {
                 "  This plan goes ahead, but Kix cannot tell what those failed runs applied, so any objects they created that are not in this build remain on the cluster."
             );
             crate::esay!(
-                "  To clean up those objects, run from a machine that has the builds or run `kix gc --hard {cluster}`."
+                "  To clean up those objects, run from a machine that has the builds or run `kix gc --full-scan {cluster}`."
             );
             crate::esay!(
-                "  `kix gc --hard` does not clear failed deployment records; to stop this warning after cleaning up, mark each record Superseded:"
+                "  `kix gc --full-scan` does not clear failed deployment records; to stop this warning after cleaning up, mark each record Superseded:"
             );
             for record in records {
                 crate::esay!(
@@ -169,7 +169,7 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             crate::esay!("  This plan cannot list or delete those orphaned objects.");
             crate::esay!(
-                "  To remove them, run `kix deploy {cluster} --prune` from a machine that has those builds, or run `kix gc --hard {cluster}`."
+                "  To remove them, run `kix deploy {cluster} --prune` from a machine that has those builds, or run `kix gc --full-scan {cluster}`."
             );
         }
     }

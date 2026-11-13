@@ -67,7 +67,7 @@ use crate::manifest::{keys, lifecycle};
 #[derive(Debug, Clone)]
 pub enum OldSide {
     /// The build the local activation cache names, without connecting
-    /// (`--current-activation`). The plan then cannot see failed records or
+    /// (`--offline`). The plan then cannot see failed records or
     /// orphans earlier deploys kept.
     LocalCache,
     /// The cluster's records, through the kube context `context` (`None`
@@ -152,7 +152,7 @@ pub struct CheckedPlan {
     /// The new build's package index, for the record's `status.packageIndex`.
     package_index: RecordPackageIndex,
     /// What the checks a run makes when it connects after the plan
-    /// (`--current-activation`) read from the new build.
+    /// (`--offline`) read from the new build.
     target_checks: TargetChecks,
 }
 
@@ -275,7 +275,7 @@ impl CheckedPlan {
 
     /// Remove orphans that another Kix cluster still deploys ([`keep_shared`])
     /// from the prune set and package diff on a plan made without a client
-    /// (`--current-activation`).
+    /// (`--offline`).
     pub fn keep_shared(&mut self, shared: &[SharedOrphan]) {
         self.orphans
             .retain(|rid| !shared.iter().any(|s| &s.rid == rid));

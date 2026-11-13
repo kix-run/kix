@@ -12,7 +12,7 @@ use clap::{Arg, ArgAction, ArgMatches};
 
 use crate::exit::Exit;
 
-/// Top-level commands that a release removed.
+/// Commands that a release removed.
 pub const COMMANDS: &[RemovedCommand] = &[
     RemovedCommand {
         name: "health",
@@ -20,6 +20,7 @@ pub const COMMANDS: &[RemovedCommand] = &[
             old: "kix health <cluster>",
             new: "kix status <cluster> --check presence",
             id: STATUS_MERGE,
+            note: "",
         },
     },
     RemovedCommand {
@@ -28,12 +29,274 @@ pub const COMMANDS: &[RemovedCommand] = &[
             old: "kix drift",
             new: "kix status [cluster] --check drift",
             id: STATUS_MERGE,
+            note: "",
+        },
+    },
+    RemovedCommand {
+        name: "apply",
+        removed: Removed {
+            old: "kix apply",
+            new: "kix deploy",
+            id: "K9947",
+            note: "",
+        },
+    },
+    RemovedCommand {
+        name: "inspect",
+        removed: Removed {
+            old: "kix inspect",
+            new: "kix list resources",
+            id: "K0450",
+            note: "",
+        },
+    },
+    RemovedCommand {
+        name: "images",
+        removed: Removed {
+            old: "kix images",
+            new: "kix list images",
+            id: "K0450",
+            note: "",
+        },
+    },
+    RemovedCommand {
+        name: "snapshot save",
+        removed: Removed {
+            old: "kix snapshot save CLUSTER DIR",
+            new: "kix snapshot CLUSTER --out DIR",
+            id: "K2314",
+            note: "",
+        },
+    },
+    RemovedCommand {
+        name: "self update",
+        removed: Removed {
+            old: "kix self update",
+            new: "kix self upgrade",
+            id: "K4616",
+            note: "",
         },
     },
 ];
 
+/// `kix bundle CLUSTER FILE`, which names the file with a positional
+/// argument.
+pub const BUNDLE_FILE: Removed = Removed {
+    old: "kix bundle CLUSTER FILE",
+    new: "kix bundle CLUSTER --out FILE",
+    id: "K2314",
+    note: "",
+};
+
+/// `kix diff CLUSTER` with neither a bundle nor a build to compare against,
+/// which compared the build with the live cluster.
+pub const DIFF_WITHOUT_BASELINE: Removed = Removed {
+    old: "kix diff CLUSTER",
+    new: "kix plan CLUSTER --read-only",
+    id: "K3143",
+    note: "`kix diff` now only compares two builds, and needs `--from`, `--from-bundle`, or `--bundle`.",
+};
+
 /// Flags that a release removed from a command.
 pub const FLAGS: &[RemovedFlag] = &[
+    RemovedFlag {
+        command: "plan",
+        long: "current-activation",
+        takes_value: false,
+        removed: Removed {
+            old: "kix plan --current-activation",
+            new: "kix plan --offline",
+            id: "K3428",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "plan",
+        long: "prune-mode",
+        takes_value: true,
+        removed: Removed {
+            old: "kix plan --prune-mode",
+            new: "kix plan --skip-orphan-check",
+            id: "K4285",
+            note: "For `--prune-mode default`, leave the flag out.",
+        },
+    },
+    RemovedFlag {
+        command: "deploy",
+        long: "current-activation",
+        takes_value: false,
+        removed: Removed {
+            old: "kix deploy --current-activation",
+            new: "kix deploy --offline",
+            id: "K3428",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "deploy",
+        long: "prune-mode",
+        takes_value: true,
+        removed: Removed {
+            old: "kix deploy --prune-mode",
+            new: "kix deploy --skip-orphan-check",
+            id: "K4285",
+            note: "For `--prune-mode default`, leave the flag out.",
+        },
+    },
+    RemovedFlag {
+        command: "plan",
+        long: "save",
+        takes_value: true,
+        removed: Removed {
+            old: "kix plan --save FILE",
+            new: "kix plan --out FILE",
+            id: "K2314",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "diff",
+        long: "save",
+        takes_value: true,
+        removed: Removed {
+            old: "kix diff --save FILE",
+            new: "kix diff --out FILE",
+            id: "K2314",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "deploy",
+        long: "tui",
+        takes_value: false,
+        removed: Removed {
+            old: "kix deploy --tui",
+            new: "kix deploy --log-format tui",
+            id: "K5429",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "deploy",
+        long: "group-by-ns",
+        takes_value: false,
+        removed: Removed {
+            old: "kix deploy --group-by-ns",
+            new: "kix deploy --group-by namespace",
+            id: "K5429",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "deploy",
+        long: "fold-height",
+        takes_value: true,
+        removed: Removed {
+            old: "kix deploy --fold-height N",
+            new: "KIX_TUI_HEIGHT=N kix deploy",
+            id: "K5429",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "rollback",
+        long: "list",
+        takes_value: false,
+        removed: Removed {
+            old: "kix rollback CLUSTER --list",
+            new: "kix history CLUSTER",
+            id: "K5914",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "gc",
+        long: "hard",
+        takes_value: false,
+        removed: Removed {
+            old: "kix gc --hard",
+            new: "kix gc --full-scan",
+            id: "K9205",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "gc",
+        long: "include-unstamped",
+        takes_value: false,
+        removed: Removed {
+            old: "kix gc --include-unstamped",
+            new: "kix gc --full-scan --include unstamped",
+            id: "K9205",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "gc",
+        long: "include-unattributed",
+        takes_value: false,
+        removed: Removed {
+            old: "kix gc --include-unattributed",
+            new: "kix gc --full-scan --include unattributed",
+            id: "K9205",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "gc",
+        long: "include-copies",
+        takes_value: false,
+        removed: Removed {
+            old: "kix gc --include-copies",
+            new: "kix gc --full-scan --include copies",
+            id: "K9205",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "list packages",
+        long: "cluster",
+        takes_value: true,
+        removed: Removed {
+            old: "kix list packages --cluster CLUSTER",
+            new: "kix list packages CLUSTER",
+            id: "K0450",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "export",
+        long: "for",
+        takes_value: true,
+        removed: Removed {
+            old: "kix export --for",
+            new: "kix export --with-kix-metadata",
+            id: "K6794",
+            note: "That keeps Kix's annotations and records, as `--for audit` did. For `--for exit`, leave the flag out.",
+        },
+    },
+    RemovedFlag {
+        command: "upgrade",
+        long: "preview",
+        takes_value: false,
+        removed: Removed {
+            old: "kix upgrade --preview",
+            new: "kix upgrade --dry-run",
+            id: "K4616",
+            note: "",
+        },
+    },
+    RemovedFlag {
+        command: "upgrade",
+        long: "ack",
+        takes_value: true,
+        removed: Removed {
+            old: "kix upgrade --ack ID",
+            new: "kix upgrade --acknowledge ID",
+            id: "K4616",
+            note: "",
+        },
+    },
     RemovedFlag {
         command: "check",
         long: "sarif",
@@ -42,6 +305,7 @@ pub const FLAGS: &[RemovedFlag] = &[
             old: "kix check --sarif",
             new: "kix check -o sarif",
             id: "K0719",
+            note: "",
         },
     },
     RemovedFlag {
@@ -52,6 +316,7 @@ pub const FLAGS: &[RemovedFlag] = &[
             old: "kix graph --format",
             new: "kix graph -o tree|dot|json",
             id: "K4721",
+            note: "",
         },
     },
     RemovedFlag {
@@ -62,6 +327,7 @@ pub const FLAGS: &[RemovedFlag] = &[
             old: "kix status --operator",
             new: "kix status <cluster>",
             id: STATUS_MERGE,
+            note: "",
         },
     },
 ];
@@ -79,12 +345,14 @@ pub struct Removed {
     pub new: &'static str,
     /// The id of the change record that removed it, such as `K1234`.
     pub id: &'static str,
+    /// A sentence to add after the replacement, or "".
+    pub note: &'static str,
 }
 
-/// A removed top-level command, such as `kix health`.
+/// A removed command, such as `kix health` or `kix self update`.
 #[derive(Debug)]
 pub struct RemovedCommand {
-    /// The command word, such as `health`.
+    /// The command path, such as `health` or `self update`.
     pub name: &'static str,
     pub removed: Removed,
 }
@@ -106,10 +374,15 @@ pub struct RemovedFlag {
 impl Removed {
     /// Return the line that tells the user what to type instead.
     pub fn message(&self) -> String {
-        format!(
+        let message = format!(
             "[{}] `{}` was removed. Use `{}` instead.",
             self.id, self.old, self.new
-        )
+        );
+        if self.note.is_empty() {
+            message
+        } else {
+            format!("{message} {}", self.note)
+        }
     }
 
     /// Print the refusal and return the exit for a command line Kix no
@@ -128,8 +401,21 @@ pub fn register(
     flags: &[RemovedFlag],
 ) -> clap::Command {
     for c in commands {
-        cmd = cmd.subcommand(
-            clap::Command::new(c.name)
+        let words: Vec<&'static str> = c.name.split(' ').collect();
+        cmd = add_command(cmd, &words);
+    }
+    for f in flags {
+        let words: Vec<&str> = f.command.split(' ').collect();
+        cmd = add_flag(cmd, &words, f);
+    }
+    cmd
+}
+
+fn add_command(cmd: clap::Command, path: &[&'static str]) -> clap::Command {
+    match path {
+        [] => cmd,
+        [name] => cmd.subcommand(
+            clap::Command::new(*name)
                 .hide(true)
                 .disable_help_flag(true)
                 .arg(
@@ -138,13 +424,18 @@ pub fn register(
                         .trailing_var_arg(true)
                         .allow_hyphen_values(true),
                 ),
-        );
+        ),
+        [word, rest @ ..] => cmd.mut_subcommands(|sc| {
+            if sc.get_name() == *word {
+                // A stub below a command that takes required arguments, such
+                // as `snapshot save`, must parse without them.
+                let takes_arguments = sc.get_arguments().any(|a| a.is_required_set());
+                add_command(sc.subcommand_negates_reqs(takes_arguments), rest)
+            } else {
+                sc
+            }
+        }),
     }
-    for f in flags {
-        let words: Vec<&str> = f.command.split(' ').collect();
-        cmd = add_flag(cmd, &words, f);
-    }
-    cmd
 }
 
 fn add_flag(cmd: clap::Command, path: &[&str], flag: &RemovedFlag) -> clap::Command {
@@ -177,23 +468,41 @@ fn flag_id(flag: &RemovedFlag) -> &'static str {
     Box::leak(format!("removed-{}", flag.long).into_boxed_str())
 }
 
+/// Return the removed form that a parsed command uses, for the forms that
+/// [`find`] cannot see: a removed positional argument, and `kix diff` with
+/// nothing to compare against.
+pub fn refused(command: &crate::cli::Command) -> Option<&'static Removed> {
+    use crate::cli::Command;
+    match command {
+        Command::Bundle(args) if args.removed_file.is_some() => Some(&BUNDLE_FILE),
+        Command::Diff(args)
+            if args.from.is_none() && args.from_bundle.is_none() && args.bundle.is_none() =>
+        {
+            Some(&DIFF_WITHOUT_BASELINE)
+        }
+        _ => None,
+    }
+}
+
 /// Return the removed command or flag that `matches` uses, if any.
 pub fn find<'a>(
     matches: &ArgMatches,
     commands: &'a [RemovedCommand],
     flags: &'a [RemovedFlag],
 ) -> Option<&'a Removed> {
-    if let Some(name) = matches.subcommand_name()
-        && let Some(c) = commands.iter().find(|c| c.name == name)
-    {
-        return Some(&c.removed);
-    }
-    flags.iter().map(|f| (f, &f.removed)).find_map(|(f, r)| {
+    let used = |path: &str| {
         let mut m = matches;
-        for word in f.command.split(' ') {
+        for word in path.split(' ') {
             m = m.subcommand_matches(word)?;
         }
-        (m.value_source(flag_id(f)) == Some(ValueSource::CommandLine)).then_some(r)
+        Some(m)
+    };
+    if let Some(c) = commands.iter().find(|c| used(c.name).is_some()) {
+        return Some(&c.removed);
+    }
+    flags.iter().find_map(|f| {
+        let m = used(f.command)?;
+        (m.value_source(flag_id(f)) == Some(ValueSource::CommandLine)).then_some(&f.removed)
     })
 }
 
@@ -208,6 +517,7 @@ mod tests {
             old: "kix lint",
             new: "kix check",
             id: "K9001",
+            note: "",
         },
     }];
 
@@ -220,6 +530,7 @@ mod tests {
                 old: "kix gc --everything",
                 new: "kix gc --full-scan",
                 id: "K9002",
+                note: "",
             },
         },
         RemovedFlag {
@@ -230,6 +541,7 @@ mod tests {
                 old: "kix compliance audit --dir",
                 new: "kix compliance audit --out",
                 id: "K9003",
+                note: "",
             },
         },
     ];
@@ -325,8 +637,155 @@ mod tests {
     fn the_real_stubs_do_not_shadow_live_commands() {
         let live = crate::cli::live_command();
         for c in super::COMMANDS {
-            assert!(live.find_subcommand(c.name).is_none(), "{}", c.name);
+            let mut cmd = Some(&live);
+            for word in c.name.split(' ') {
+                cmd = cmd.and_then(|cmd| cmd.find_subcommand(word));
+            }
+            assert!(cmd.is_none(), "{}", c.name);
         }
         register(live, super::COMMANDS, super::FLAGS).debug_assert();
+    }
+
+    fn refused_id(args: &[&str]) -> Option<&'static str> {
+        let matches = crate::cli::command()
+            .try_get_matches_from(args)
+            .expect("parses");
+        if let Some(r) = find(&matches, super::COMMANDS, super::FLAGS) {
+            return Some(r.id);
+        }
+        let cli = crate::cli::Cli::from_arg_matches(&matches).expect("converts");
+        refused(&cli.command).map(|r| r.id)
+    }
+
+    /// Each renamed command and flag of 0.10 is refused with its record's id,
+    /// and its replacement parses.
+    #[test]
+    fn the_0_10_renames_are_refused() {
+        for (old, new, id) in [
+            (
+                &["kix", "apply", "c"][..],
+                &["kix", "deploy", "c"][..],
+                "[K9947]",
+            ),
+            (
+                &["kix", "inspect", "c"],
+                &["kix", "list", "resources", "c"],
+                "[K0450]",
+            ),
+            (
+                &["kix", "images", "c", "--sources"],
+                &["kix", "list", "images", "c", "--sources"],
+                "[K0450]",
+            ),
+            (
+                &["kix", "list", "packages", "--cluster", "c"],
+                &["kix", "list", "packages", "c"],
+                "[K0450]",
+            ),
+            (
+                &["kix", "snapshot", "save", "c", "d"],
+                &["kix", "snapshot", "c", "--out", "d"],
+                "[K2314]",
+            ),
+            (
+                &["kix", "bundle", "c", "f"],
+                &["kix", "bundle", "c", "--out", "f"],
+                "[K2314]",
+            ),
+            (
+                &["kix", "plan", "c", "--save", "f"],
+                &["kix", "plan", "c", "--out", "f"],
+                "[K2314]",
+            ),
+            (
+                &["kix", "diff", "c", "--from", "x", "--save", "f"],
+                &["kix", "diff", "c", "--from", "x", "--out", "f"],
+                "[K2314]",
+            ),
+            (
+                &["kix", "diff", "c"],
+                &["kix", "plan", "c", "--read-only"],
+                "[K3143]",
+            ),
+            (
+                &["kix", "plan", "c", "--current-activation"],
+                &["kix", "plan", "c", "--offline"],
+                "[K3428]",
+            ),
+            (
+                &["kix", "deploy", "c", "--current-activation"],
+                &["kix", "deploy", "c", "--offline"],
+                "[K3428]",
+            ),
+            (
+                &["kix", "deploy", "c", "--prune-mode", "no"],
+                &["kix", "deploy", "c", "--skip-orphan-check"],
+                "[K4285]",
+            ),
+            (
+                &["kix", "deploy", "c", "--tui"],
+                &["kix", "deploy", "c", "--log-format", "tui"],
+                "[K5429]",
+            ),
+            (
+                &["kix", "deploy", "c", "--group-by-ns"],
+                &["kix", "deploy", "c", "--group-by", "namespace"],
+                "[K5429]",
+            ),
+            (
+                &["kix", "deploy", "c", "--fold-height", "9"],
+                &["kix", "deploy", "c"],
+                "[K5429]",
+            ),
+            (
+                &["kix", "rollback", "c", "--list"],
+                &["kix", "history", "c"],
+                "[K5914]",
+            ),
+            (
+                &["kix", "gc", "c", "--hard"],
+                &["kix", "gc", "c", "--full-scan"],
+                "[K9205]",
+            ),
+            (
+                &["kix", "gc", "c", "--hard", "--include-unstamped"],
+                &[
+                    "kix",
+                    "gc",
+                    "c",
+                    "--full-scan",
+                    "--include",
+                    "unstamped,copies",
+                ],
+                "[K9205]",
+            ),
+            (
+                &["kix", "export", "c", "--for", "audit"],
+                &["kix", "export", "c", "--with-kix-metadata"],
+                "[K6794]",
+            ),
+            (
+                &["kix", "self", "update"],
+                &["kix", "self", "upgrade"],
+                "[K4616]",
+            ),
+            (
+                &["kix", "upgrade", "--preview"],
+                &["kix", "upgrade", "--dry-run"],
+                "[K4616]",
+            ),
+            (
+                &["kix", "upgrade", "--ack", "m"],
+                &["kix", "upgrade", "--acknowledge", "m"],
+                "[K4616]",
+            ),
+        ] {
+            assert_eq!(
+                refused_id(old).map(|id| format!("[{id}]")).as_deref(),
+                Some(id),
+                "{old:?}"
+            );
+            assert_eq!(refused_id(new), None, "{new:?}");
+        }
     }
 }

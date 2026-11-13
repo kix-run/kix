@@ -1,4 +1,4 @@
-//! Arguments of `kix deploy` and `kix rollback`.
+//! Arguments of `kix deploy`, `kix rollback`, and `kix history`.
 
 use super::PlanArgs;
 use clap::ValueEnum;
@@ -19,14 +19,14 @@ pub struct DeployArgs {
     pub dry_run: bool,
 
     /// Deploy only if the current plan matches this `.kixplan` file from
-    /// `kix plan --save`. Uses the planning flags recorded in the file and
+    /// `kix plan --out`. Uses the planning flags recorded in the file and
     /// exits 4 without applying anything if the cluster state, builds, flags,
     /// refusals, reverted drift, or prune deletions have changed.
     #[arg(
         long = "plan",
         id = "saved_plan",
         value_name = "FILE",
-        conflicts_with_all = ["current_activation", "operator"]
+        conflicts_with_all = ["offline", "operator"]
     )]
     pub saved_plan: Option<std::path::PathBuf>,
 
@@ -55,29 +55,20 @@ pub struct DeployArgs {
     )]
     pub record_annotations: Vec<(String, String)>,
 
-    /// Render a live inline graph-streaming dashboard. Falls back to
-    /// line-oriented output on non-interactive terminals.
-    #[arg(long)]
-    pub tui: bool,
-
-    /// Group the tree view by namespace instead of Kix package. Only affects
-    /// rendering; execution order is unchanged.
-    #[arg(long)]
-    pub group_by_ns: bool,
-
-    /// Cap the live viewport height in rows. Default: half the terminal
-    /// height (clamped to [10, 40]). Rows beyond the cap fold into the
-    /// scrollback history above.
-    #[arg(long, value_name = "ROWS")]
-    pub fold_height: Option<u16>,
-
-    /// Output format for the deploy event stream. `pretty` (default on TTY)
-    /// is the colored human stream; `line` is the nix-build-L idiom (one
-    /// line per terminal verdict, no ANSI); `json` emits NDJSON, one event
-    /// per line, suitable for CI/automation. Non-TTY stdout auto-falls-back
-    /// to `line` when `pretty` is requested.
+    /// How to show the deploy's progress. `pretty` (default on a terminal)
+    /// is the colored stream for a person; `line` prints one line per
+    /// finished object, without color; `json` prints one JSON event per line,
+    /// for CI and other programs; `tui` draws a live view of the dependency
+    /// graph. When stdout is not a terminal, `pretty` and `tui` print `line`
+    /// output. The height of the `tui` view is half the terminal height
+    /// (10 to 40 rows), or `KIX_TUI_HEIGHT` rows when that is set.
     #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
     pub log_format: LogFormat,
+
+    /// Group the `tui` view by Kix package or by namespace. Only changes the
+    /// display, not the order of the deploy.
+    #[arg(long, value_enum, default_value_t = GroupBy::Package)]
+    pub group_by: GroupBy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -85,6 +76,13 @@ pub enum LogFormat {
     Pretty,
     Line,
     Json,
+    Tui,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GroupBy {
+    Package,
+    Namespace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -97,13 +95,6 @@ pub enum OnError {
 pub struct RollbackArgs {
     /// Cluster name
     pub cluster: String,
-
-    /// List available Superseded activations without rolling back.
-    /// Shows name, identity-hash, timestamp, source store path, and the
-    /// previousActivation link so the deploy chain is easy to follow.
-    /// Respects `--output json|yaml` for machine consumption.
-    #[arg(long)]
-    pub list: bool,
 
     /// Skip confirmation prompt
     #[arg(short, long)]
@@ -127,6 +118,12 @@ pub struct RollbackArgs {
     /// Delegate rollback to the operator instead of applying directly
     #[arg(long)]
     pub operator: bool,
+}
+
+#[derive(clap::Args)]
+pub struct HistoryArgs {
+    /// Cluster name
+    pub cluster: String,
 }
 
 fn parse_record_annotation(s: &str) -> Result<(String, String), String> {

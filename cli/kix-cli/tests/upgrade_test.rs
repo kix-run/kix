@@ -336,13 +336,13 @@ fn explained_change(s: &Setup) {
 }
 
 #[test]
-fn preview_lists_the_steps_and_records_and_changes_nothing() {
+fn dry_run_lists_the_steps_and_records_and_changes_nothing() {
     let s = Setup::new();
     s.releases(vec![]);
-    let (code, out) = s.upgrade(&["--preview"]);
+    let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.starts_with("Kix 9.1.0 -> 9.3.0 (preview, no files changed)\n"),
+        out.starts_with("Kix 9.1.0 -> 9.3.0 (dry run, no files changed)\n"),
         "{out}"
     );
     assert!(
@@ -369,14 +369,14 @@ fn preview_lists_the_steps_and_records_and_changes_nothing() {
 }
 
 #[test]
-fn preview_asks_the_installed_kix_which_packages_are_in_use() {
+fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
     let s = Setup::new();
     s.releases(vec![]);
     let bin = s.data.join("9.1.0/bin");
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::write(bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0")).unwrap();
     std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let (code, out) = s.upgrade(&["--preview"]);
+    let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
     // Every note is listed. The one whose package an instance is named
     // after is marked as a likely match.
@@ -384,7 +384,7 @@ fn preview_asks_the_installed_kix_which_packages_are_in_use() {
     assert!(out.contains("  * [K0001] web (9.2.0):"), "{out}");
     assert!(out.contains("    [K0002] echo-server (9.2.0):"), "{out}");
     assert!(
-        s.calls().contains("9.1.0 list packages --cluster east"),
+        s.calls().contains("9.1.0 list packages east"),
         "{}",
         s.calls()
     );
@@ -426,7 +426,7 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
         "{out}"
     );
     assert!(
-        out.ends_with("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 2 objects changed in clusters east, west; read the changes above, or run\n     `kix diff <cluster>`, before you deploy.\n"),
+        out.ends_with("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 2 objects changed in clusters east, west; read the changes above, or run\n     `kix plan <cluster>`, before you deploy.\n"),
         "{out}"
     );
     let calls = s.calls();
@@ -568,23 +568,23 @@ fn min_age_in_kix_toml_skips_new_releases() {
         .format("%Y-%m-%d")
         .to_string();
     s.publish("9.3.0", &today, None);
-    let (_, out) = s.upgrade(&["--preview"]);
-    assert!(out.starts_with("Kix 9.1.0 -> 9.3.0 (preview"), "{out}");
+    let (_, out) = s.upgrade(&["--dry-run"]);
+    assert!(out.starts_with("Kix 9.1.0 -> 9.3.0 (dry run"), "{out}");
     s.write(
         "kix.toml",
         "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"7d\"\n",
     );
-    let (_, out) = s.upgrade(&["--preview"]);
-    assert!(out.starts_with("Kix 9.1.0 -> 9.2.0 (preview"), "{out}");
+    let (_, out) = s.upgrade(&["--dry-run"]);
+    assert!(out.starts_with("Kix 9.1.0 -> 9.2.0 (dry run"), "{out}");
     // The flag is gone: the delay is a project setting.
-    let (code, out) = s.upgrade(&["--preview", "--min-age", "0d"]);
+    let (code, out) = s.upgrade(&["--dry-run", "--min-age", "0d"]);
     assert_eq!(code, 1, "{out}");
     // A malformed value is refused.
     s.write(
         "kix.toml",
         "kix = \"9.1.0\"\n\n[upgrade]\nmin-age = \"1w\"\n",
     );
-    let (code, out) = s.upgrade(&["--preview"]);
+    let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 1, "{out}");
 }
 
@@ -609,7 +609,7 @@ fn a_sensitive_change_needs_a_person() {
         "{out}"
     );
     assert!(
-        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west (ClusterRole/db-reader).\n  2. 1 object changed in cluster west; read the changes above, or run `kix diff\n     west`, before you deploy.\n"),
+        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west (ClusterRole/db-reader).\n  2. 1 object changed in cluster west; read the changes above, or run `kix plan\n     west`, before you deploy.\n"),
         "{out}"
     );
     let state = s.state();
@@ -657,7 +657,7 @@ fn a_data_change_stops_deploys_until_acknowledged() {
     })]);
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
-    assert!(out.contains("kix upgrade --ack move-data"), "{out}");
+    assert!(out.contains("kix upgrade --acknowledge move-data"), "{out}");
 
     // Set as if selection chose this Kix, which it does in a real project.
     let chosen = |mut cmd: Command| {
@@ -674,15 +674,17 @@ fn a_data_change_stops_deploys_until_acknowledged() {
         .stderr(predicate::str::contains(
             "  [move-data] (9.3.0, moves stored data):\n    `db` keeps its data in a new volume.",
         ))
-        .stderr(predicate::str::contains("  kix upgrade --ack move-data\n"));
+        .stderr(predicate::str::contains(
+            "  kix upgrade --acknowledge move-data\n",
+        ));
 
     s.kix()
-        .args(["upgrade", "--ack", "nope"])
+        .args(["upgrade", "--acknowledge", "nope"])
         .assert()
         .code(1)
         .stdout(predicate::str::contains("(pending: move-data)"));
     s.kix()
-        .args(["upgrade", "--ack", "move-data"])
+        .args(["upgrade", "--acknowledge", "move-data"])
         .assert()
         .success()
         .stdout("Acknowledged move-data in kix-upgrade.json. You can now run `kix deploy`.\n");
@@ -711,10 +713,10 @@ fn a_prerelease_project_steps_through_its_own_release() {
     let s = Setup::new();
     s.releases(vec![]);
     s.write("kix.toml", "kix = \"9.1.0-rc.1\"\n");
-    let (code, out) = s.upgrade(&["--preview", "-v"]);
+    let (code, out) = s.upgrade(&["--dry-run", "-v"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.starts_with("Kix 9.1.0-rc.1 -> 9.3.0 (preview, no files changed)\n"),
+        out.starts_with("Kix 9.1.0-rc.1 -> 9.3.0 (dry run, no files changed)\n"),
         "{out}"
     );
     assert!(
@@ -807,12 +809,12 @@ fn a_second_upgrade_waits_for_acknowledged_data_changes() {
     s.publish("9.4.0", "2026-04-01", Some(serde_json::json!([])));
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("--ack move-data"), "{out}");
+    assert!(out.contains("--acknowledge move-data"), "{out}");
     assert_eq!(s.read("kix-upgrade.json"), before);
     assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
 
     s.kix()
-        .args(["upgrade", "--ack", "move-data"])
+        .args(["upgrade", "--acknowledge", "move-data"])
         .assert()
         .success();
     let (code, out) = s.upgrade(&[]);
@@ -1072,7 +1074,7 @@ fn a_security_note_shows_its_cves_and_workaround() {
         "workaround": "Set `tls.minVersion` to 1.3.",
         "body": "`web` no longer accepts TLS 1.0.",
     })]);
-    let (code, out) = s.upgrade(&["--preview"]);
+    let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
     assert!(
         out.contains("  Security fixes (builds cleanly, recommended for this upgrade):\n    [tls-fix] web (9.3.0, CVE-2026-0001): `web` no longer accepts TLS 1.0.\n      Without upgrading: Set `tls.minVersion` to 1.3.\n"),
@@ -1089,7 +1091,7 @@ fn a_range_without_listed_notes_says_so() {
         "2026-02-01",
         Some(serde_json::json!([{"name": "a", "kind": "fixed", "body": "Fixed."}])),
     );
-    let (code, out) = s.upgrade(&["--preview"]);
+    let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
     assert!(
         out.contains("No breaking, security, or upgrade notes between 9.1.0 and 9.2.0.\n\n  1 minor feature or bugfix change"),

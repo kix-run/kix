@@ -788,7 +788,7 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str, cluster: &
             })
             .collect();
         let kind = if reviewed.made_by == MadeBy::LiveRead {
-            "because the reviewed plan was saved by `kix diff`"
+            "because the reviewed plan was saved by `kix diff` or `kix plan --read-only`"
         } else {
             "because the reviewed plan did not check them"
         };
@@ -814,7 +814,7 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str, cluster: &
         let _ = writeln!(out, "  Next:");
         let _ = writeln!(
             out,
-            "    Save and review a new plan with `kix plan {cluster} --save {file}`, or run `kix deploy {cluster}` without `--plan`."
+            "    Save and review a new plan with `kix plan {cluster} --out {file}`, or run `kix deploy {cluster}` without `--plan`."
         );
     }
     out

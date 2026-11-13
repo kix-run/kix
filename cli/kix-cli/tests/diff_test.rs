@@ -35,7 +35,7 @@ fn diff_from_empty_manifest_dir_adds_everything() {
         .stdout(predicate::str::contains("added"));
 }
 
-/// Verify that diffing a build against its own `kix export --for audit`
+/// Verify that diffing a build against its own `kix export --with-kix-metadata`
 /// manifest directory exercises the flat-side path (loading, synthesis, and
 /// the package-grouped diff) without a cluster and reports no differences.
 #[test]
@@ -47,8 +47,7 @@ fn diff_from_own_audit_export_is_identical() {
         .args([
             "export",
             "minimal",
-            "--for",
-            "audit",
+            "--with-kix-metadata",
             "--out",
             export_dir.to_str().unwrap(),
         ])
@@ -167,7 +166,7 @@ fn diff_refuses_a_from_bundle_that_does_not_verify() {
         .stderr(predicate::str::contains("cannot use the bundle"));
 }
 
-/// Verify that `kix diff --save` writes a plan file whose plan matches `-o json
+/// Verify that `kix diff --out` writes a plan file whose plan matches `-o json
 /// --detail fields` and whose graph matches `kix graph`.
 #[test]
 fn diff_save_writes_the_document_and_the_graph() {
@@ -186,7 +185,7 @@ fn diff_save_writes_the_document_and_the_graph() {
         ])
         .arg("--bundle")
         .arg(&bundle)
-        .arg("--save")
+        .arg("--out")
         .arg(&path)
         .output()
         .unwrap();

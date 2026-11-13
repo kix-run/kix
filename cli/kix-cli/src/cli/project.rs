@@ -15,12 +15,12 @@ pub struct UpgradeArgs {
     /// Print the target version and the release notes in the range with likely
     /// matches marked, and change nothing
     #[arg(long)]
-    pub preview: bool,
+    pub dry_run: bool,
 
     /// Acknowledge a data migration by its id or name so `kix deploy` goes ahead, and
     /// do nothing else
-    #[arg(long, value_name = "ID", num_args = 1.., conflicts_with_all = ["to", "preview"])]
-    pub ack: Vec<String>,
+    #[arg(long, value_name = "ID", num_args = 1.., conflicts_with_all = ["to", "dry_run"])]
+    pub acknowledge: Vec<String>,
 }
 
 /// Manage the Kix library this project pins in flake.lock.
@@ -85,7 +85,7 @@ pub enum SelfCommand {
     ///
     /// Works when the install script installed this Kix. Otherwise it says
     /// how to upgrade Kix the way it was installed.
-    Update,
+    Upgrade,
 }
 
 #[derive(clap::Args)]

@@ -4,7 +4,7 @@
 //! archive to `<data dir>/<version>/`, which holds `bin/kix` and the Kix
 //! runtime in `libexec/kix`. The data directory also holds `receipt.json`,
 //! which records how this tree was installed and which `kix` link the
-//! install script made, so `kix self update` knows whether it may move that
+//! install script made, so `kix self upgrade` knows whether it may move that
 //! link. Unpacking happens in a
 //! `tmp-*` directory beside the versions, so a version directory either holds
 //! a whole release or does not exist.
@@ -173,7 +173,7 @@ pub struct Receipt {
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_at: Option<String>,
-    /// The `kix` link the installer made, which `kix self update` moves.
+    /// The `kix` link the installer made, which `kix self upgrade` moves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<PathBuf>,
 }

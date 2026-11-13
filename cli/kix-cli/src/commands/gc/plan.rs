@@ -36,7 +36,7 @@ impl GarbageReason {
                 "build hash is not in the build made from the current files"
             }
             GarbageReason::NoIdentityHash => {
-                "carries Kix's label but no Kix build annotation (`--include-unstamped`)"
+                "carries Kix's label but no Kix build annotation (`--include unstamped`)"
             }
             GarbageReason::RetiredActivation => "activation record retired by retention",
         }

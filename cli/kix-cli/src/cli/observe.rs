@@ -1,7 +1,5 @@
 //! Arguments of the commands that read a live cluster: `status`, `logs`,
-//! `pf`, and `snapshot`.
-
-use clap::Subcommand;
+//! `port-forward`, and `snapshot`.
 
 /// Arguments of `kix status`.
 #[derive(clap::Args)]
@@ -92,25 +90,14 @@ pub struct PortForwardArgs {
     pub address: Option<String>,
 }
 
-#[derive(clap::Args)]
-pub struct SnapshotArgs {
-    #[command(subcommand)]
-    pub command: SnapshotCommand,
-}
-
-#[derive(Subcommand)]
-pub enum SnapshotCommand {
-    /// Save a snapshot of one Kix cluster's live objects
-    Save(SnapshotSaveArgs),
-}
-
 /// Save live objects belonging to a single Kix cluster, identified via its
 /// Activation records without evaluating a flake.
 #[derive(clap::Args)]
-pub struct SnapshotSaveArgs {
+pub struct SnapshotArgs {
     /// Kix cluster whose objects to save
     pub cluster: String,
 
     /// Directory to save the snapshot to
-    pub dir: String,
+    #[arg(long, value_name = "DIR")]
+    pub out: String,
 }

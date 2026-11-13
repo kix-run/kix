@@ -32,7 +32,7 @@ pub(crate) use scoped::live_command;
 #[command(
     name = "kix",
     version = kix::VERSION,
-    about = "Kubernetes manifest generator",
+    about = "Kix is a Kubernetes compiler.",
     after_help = "Plugins: `kix NAME ARGS...` runs `kix-NAME ARGS...` from PATH."
 )]
 pub struct Cli {
@@ -137,19 +137,12 @@ pub enum Command {
     /// Render manifests to stdout
     Build(BuildArgs),
 
-    /// Compare the build with the live cluster or a directory, read-only
+    /// Compare the build with another build, a snapshot, or an export
     ///
-    /// Compares the build against the live cluster's Kix-managed resources
-    /// (requiring only `get` and `list` permissions), a snapshot from
-    /// `kix snapshot save`, or another build (`--from <DIR>`, which requires
-    /// no cluster access). When the currently deployed build is available
-    /// locally, field changes are classified as either committed changes or
-    /// live drift.
-    ///
-    /// Because `kix diff` is read-only, it cannot detect write-time effects
-    /// such as admission webhook mutations or rejections, server-side apply
-    /// ownership conflicts, or deploy-time refusals. Use `kix plan` to check
-    /// those with a server-side dry run.
+    /// Compares the build with a previous build or a manifest directory
+    /// (`--from`), with a bundled build (`--from-bundle`), or, given only
+    /// `--bundle`, with nothing. It never contacts a cluster. To compare the build with the live cluster, use
+    /// `kix plan --read-only`.
     ///
     /// Exits 2 when any differences are found.
     Diff(DiffArgs),
@@ -165,8 +158,9 @@ pub enum Command {
     /// prompting, and `kix deploy --dry-run` runs this command.
     ///
     /// Because dry-run writes require the same RBAC permissions as real
-    /// writes, use `kix diff` when you only have read-only access. A dry run
-    /// cannot verify whether Pods will start or pass readiness probes.
+    /// writes, use `kix plan --read-only` when you only have read-only
+    /// access. A dry run cannot verify whether Pods will start or pass
+    /// readiness probes.
     ///
     /// Exits 0 when the deploy would make no changes, 2 when changes would be
     /// made, and 3 when the deploy would be blocked by a rejected write or an
@@ -177,13 +171,11 @@ pub enum Command {
     ///
     /// Runs constructor validators, cross-resource checks, and error-severity
     /// scorecard rules; any failure marks the `eval` row as `fail`. The
-    /// `scorecard` row summarizes findings by severity. To validate rendered
-    /// manifests against Kubernetes schemas, run `nix flake check` (via the
-    /// `schema-cluster-<name>` check). Exits 1 when any row reports `fail`.
+    /// `scorecard` row summarizes findings by severity. Exits 1 when any row
+    /// reports `fail`.
     Check(CheckArgs),
 
     /// Wave-based deployment with confirmation
-    #[command(alias = "apply")]
     Deploy(DeployArgs),
 
     /// Check that what Kix deployed is present, unchanged, and ready
@@ -199,7 +191,7 @@ pub enum Command {
     /// missing, changed, or not ready, and 1 when Kix could not answer.
     Status(StatusArgs),
 
-    /// List clusters, packages, or other resources
+    /// List clusters, packages, resources, or images
     List(ListArgs),
 
     /// Dependency DAG visualization
@@ -214,9 +206,6 @@ pub enum Command {
     /// references and reject any mismatch.
     Bundle(BundleArgs),
 
-    /// Summarize a cluster's rendered resources by namespace and kind
-    Inspect(InspectArgs),
-
     /// Garbage-collect stale Kix-managed resources
     Gc(GcArgs),
 
@@ -227,21 +216,24 @@ pub enum Command {
     /// Rollback to the previous activation
     Rollback(RollbackArgs),
 
-    /// Export cluster manifests as plain Kubernetes YAML (exit-strategy / audit bundle)
+    /// List the earlier deploys that `kix rollback` can go back to
+    ///
+    /// Shows each deploy record's name, identity hash, time, build, and the
+    /// deploy it replaced, so the chain of deploys is easy to follow.
+    History(HistoryArgs),
+
+    /// Export cluster manifests as plain Kubernetes YAML
     Export(ExportArgs),
 
     /// Tail logs for a package's primary workload
     Logs(LogsArgs),
 
     /// Port-forward to a package's primary workload
-    #[command(alias = "port-forward")]
-    Pf(PortForwardArgs),
+    #[command(name = "port-forward", visible_alias = "pf")]
+    PortForward(PortForwardArgs),
 
-    /// Manage cluster snapshots for CI/offline use
+    /// Save a cluster's Kix-managed objects for offline comparisons
     Snapshot(SnapshotArgs),
-
-    /// List all container images in a cluster activation (for airgap preloading)
-    Images(ImagesArgs),
 
     /// Generate shell completions
     Completions(CompletionsArgs),
@@ -320,16 +312,17 @@ impl Command {
             Command::Status(a) => a.cluster.as_deref(),
             Command::Graph(a) => Some(&a.cluster),
             Command::Bundle(a) => Some(&a.cluster),
-            Command::Inspect(a) => Some(&a.cluster),
             Command::Gc(a) => Some(&a.cluster),
             Command::Migrate(MigrateCommand::Domain(a)) => Some(&a.cluster),
             Command::Rollback(a) => Some(&a.cluster),
+            Command::History(a) => Some(&a.cluster),
             Command::Export(a) => Some(&a.cluster),
             Command::Logs(a) => Some(&a.cluster),
-            Command::Pf(a) => Some(&a.cluster),
-            Command::Images(a) => Some(&a.cluster),
+            Command::PortForward(a) => Some(&a.cluster),
             Command::List(a) => match &a.command {
                 ListCommand::Packages(p) => p.cluster.as_deref(),
+                ListCommand::Resources(r) => Some(&r.cluster),
+                ListCommand::Images(i) => Some(&i.cluster),
                 ListCommand::Clusters => None,
             },
             Command::Compliance(a) => match &a.command {
@@ -337,9 +330,7 @@ impl Command {
                 ComplianceCommand::Attest(s) => Some(&s.cluster),
                 ComplianceCommand::Audit(s) => Some(&s.cluster),
             },
-            Command::Snapshot(a) => match &a.command {
-                SnapshotCommand::Save(s) => Some(&s.cluster),
-            },
+            Command::Snapshot(a) => Some(&a.cluster),
             Command::Completions(_)
             | Command::Doctor
             | Command::Pin(_)
@@ -447,16 +438,21 @@ mod tests {
             let content = std::fs::read_to_string(&file).expect("read mdx file");
             for raw_cmd in extract_command_strings(&content) {
                 let argv = normalize_command(&raw_cmd);
-                assert!(
-                    !argv.iter().any(|arg| arg == "apply"),
-                    "{}: use `kix deploy` instead of `kix apply` in `{raw_cmd}`",
-                    file.display()
-                );
                 match command().try_get_matches_from(&argv) {
                     Ok(matches) => {
+                        if let Some(removed) = crate::removed::find(
+                            &matches,
+                            crate::removed::COMMANDS,
+                            crate::removed::FLAGS,
+                        ) {
+                            panic!("{}: `{raw_cmd}`: {}", file.display(), removed.message());
+                        }
                         let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| {
                             panic!("{}: `{raw_cmd}` failed FromArgMatches: {e}", file.display())
                         });
+                        if let Some(removed) = crate::removed::refused(&cli.command) {
+                            panic!("{}: `{raw_cmd}`: {}", file.display(), removed.message());
+                        }
                         if let Command::Plugin(args) = &cli.command {
                             let plugin_name = args.first().and_then(|a| a.to_str()).unwrap_or("");
                             assert_eq!(

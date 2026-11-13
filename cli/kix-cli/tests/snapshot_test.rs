@@ -51,9 +51,9 @@ fn snapshot_list_default() {
 #[test]
 fn snapshot_inspect_example() {
     let output = kix()
-        .args(["inspect", "example"])
+        .args(["list", "resources", "example"])
         .output()
-        .expect("failed to run kix inspect");
+        .expect("failed to run kix list resources");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     insta::assert_snapshot!("inspect_example", stdout);

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate};
+use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate, PruneModeFlag};
 
 /// One comparison rule between a reviewed plan and a fresh plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
@@ -58,7 +58,8 @@ pub struct Comparison {
     pub matches: bool,
     pub mismatches: Vec<Mismatch>,
     /// Rules the reviewed plan could not be held to, because it did not
-    /// make that check (a `kix diff` plan checks no refusals or prune).
+    /// make that check (a plan from `kix diff` or `kix plan --read-only` checks
+    /// no refusals or prune).
     pub skipped: Vec<Rule>,
     /// The two Kix binaries, reviewed then fresh, when they differ. Reported
     /// and not refused: the objects digest already holds the deploy to the
@@ -71,15 +72,15 @@ pub struct Comparison {
 /// a deploy of `cluster`, or `None` when it is valid.
 pub fn unusable(reviewed: &Plan, file: &str, cluster: &str) -> Option<String> {
     let fresh = format!(
-        "Nothing was applied to the cluster. Next: save a fresh plan with `kix plan {cluster} --save {file}`."
+        "Nothing was applied to the cluster. Next: save a fresh plan with `kix plan {cluster} --out {file}`."
     );
     let against = format!(
-        "Nothing was applied to the cluster. Next: save a plan against the cluster with `kix plan {cluster} --save {file}` or `kix diff {cluster} --save {file}`."
+        "Nothing was applied to the cluster. Next: save a plan against the cluster with `kix plan {cluster} --out {file}` or `kix plan {cluster} --read-only --out {file}`."
     );
     if reviewed.schema_version != super::document::SCHEMA_VERSION {
         let version = crate::version::running().release();
         return Some(format!(
-            "the plan file uses schema version {}, and Kix {version} reads version {} (saved by another Kix version). Nothing was applied to the cluster. Next: save a new plan with `kix plan {cluster} --save {file}` using Kix {version}.",
+            "the plan file uses schema version {}, and Kix {version} reads version {} (saved by another Kix version). Nothing was applied to the cluster. Next: save a new plan with `kix plan {cluster} --out {file}` using Kix {version}.",
             reviewed.schema_version,
             super::document::SCHEMA_VERSION
         ));
@@ -123,7 +124,7 @@ pub fn unusable(reviewed: &Plan, file: &str, cluster: &str) -> Option<String> {
             return Some(format!(
                 "the file does not list the exact objects a deploy writes and deletes, which \
                  only `kix plan` records. Nothing was applied to the cluster. Next: save a \
-                 plan with `kix plan {cluster} --save {file}`."
+                 plan with `kix plan {cluster} --out {file}`."
             ));
         }
     }
@@ -145,7 +146,8 @@ pub fn flags_for(
     cluster: &str,
 ) -> Result<PlanFlags, String> {
     let Some(planned) = reviewed.flags else {
-        // A `kix diff` plan: no reviewer saw what these flags would do.
+        // A plan from `kix diff` or `kix plan --read-only`: no reviewer saw
+        // what these flags would do.
         let refused: Vec<&str> = [
             (given.prune, "--prune"),
             (given.force_conflicts, "--force-conflicts"),
@@ -157,9 +159,9 @@ pub fn flags_for(
         .collect();
         if !refused.is_empty() {
             return Err(format!(
-                "the plan was saved by `kix diff`, which does not check what {} would do. \
+                "the plan was saved by `kix diff` or `kix plan --read-only`, which do not check what {} would do. \
                  Nothing was applied to the cluster. Next: save and review a plan with \
-                 `kix plan {cluster} {} --save {file}`.",
+                 `kix plan {cluster} {} --out {file}`.",
                 refused.join(", "),
                 refused.join(" ")
             ));
@@ -186,12 +188,12 @@ pub fn flags_for(
         }
     }
     if given.prune_mode.is_some() && given.prune_mode != planned.prune_mode {
-        contradicted.push("--prune-mode".into());
+        contradicted.push("--skip-orphan-check".into());
     }
     if !contradicted.is_empty() {
         return Err(format!(
             "the plan was saved without {}. Nothing was applied to the cluster. Next: save \
-             and review a plan with `kix plan {cluster} {} --save {file}`.",
+             and review a plan with `kix plan {cluster} {} --out {file}`.",
             contradicted.join(", "),
             contradicted.join(" ")
         ));
@@ -468,7 +470,7 @@ fn reason_name(reason: super::document::RefusalReason) -> String {
 
 fn describe_flags(flags: Option<&PlanFlags>) -> String {
     let Some(f) = flags else {
-        return "no planning flags (a kix diff)".into();
+        return "no planning flags (a kix diff or kix plan --read-only)".into();
     };
     let mut set: Vec<String> = [
         (f.prune, "--prune"),
@@ -480,12 +482,8 @@ fn describe_flags(flags: Option<&PlanFlags>) -> String {
     .filter(|(on, _)| *on)
     .map(|(_, flag)| flag.to_string())
     .collect();
-    if let Some(mode) = f.prune_mode {
-        let mode = serde_json::to_value(mode)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default();
-        set.push(format!("--prune-mode {mode}"));
+    if f.prune_mode == Some(PruneModeFlag::No) {
+        set.push("--skip-orphan-check".to_string());
     }
     if set.is_empty() {
         "no planning flags".into()

@@ -44,7 +44,7 @@ pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
 /// `apiVersion`, `kind`, `metadata.name`, and `metadata.namespace`, and
 /// redacting `Secret` values.
 ///
-/// `kix diff` and `kix snapshot save` compare this view against a build. Server
+/// `kix plan --read-only` and `kix snapshot` compare this view against a build. Server
 /// defaults (such as deployment strategy, probe thresholds, and scheduler name)
 /// are unowned or owned by a controller, so they are excluded. Kix's
 /// bookkeeping annotations (`kix.run/activations` and `kix.run/applied-hash`)
