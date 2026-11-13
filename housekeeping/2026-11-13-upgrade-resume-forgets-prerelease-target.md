@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix upgrade` · A stopped upgrade to a prerelease cannot resume with plain `kix upgrade`.
+
+An upgrade from 0.9.2 with `--to 0.10.0-rc.3` stopped at a build error and printed "Next: fix the error above, then run `kix upgrade` to finish the upgrade." Running `kix upgrade` then failed with "Cannot resume upgrade from Kix 0.9.2: target Kix 0.9.2 is not newer than 0.9.2", because the resumed run picks its target from the release index again and a prerelease is never chosen unless named. `kix upgrade --to 0.10.0-rc.3` resumed correctly. Look at how `cli/kix-cli/src/commands/upgrade/mod.rs` chooses `target` when `resume` is set; `kix-upgrade.json` already records `to`.
