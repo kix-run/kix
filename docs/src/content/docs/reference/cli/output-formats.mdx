@@ -4,10 +4,11 @@ description: "Which formats each `kix` command prints with `-o`, what each comma
 ---
 
 The global `-o`/`--output` flag takes `text`, `json`, `yaml`, `markdown`,
-`sarif`, `dot`, or `tree`. The `KIX_OUTPUT` environment variable sets the same
-value. Each command prints some of these formats and has its own default. A
-format the command does not print is an error: Kix stops before the command
-runs, exits `1`, and lists the formats the command prints.
+`sarif`, `dot`, or `tree`. Each command prints some of these formats and has
+its own default. A format the command does not print is an error: Kix stops
+before the command runs, exits `1`, and lists the formats the command prints.
+The `--help` of a command lists the same formats, and names the flags a format
+needs, such as `--read-only` for `kix plan -o json`.
 
 ```text
 Error:   × [K2184] `kix list clusters` cannot print sarif output.
@@ -36,7 +37,8 @@ The first format listed is the default.
 | `compliance sbom`, `compliance attest` | `json`, `yaml` |
 | Every other command | `text` |
 
-A plugin (`kix NAME`) gets the format in `KIX_OUTPUT` and decides for itself.
+A plugin (`kix NAME`) gets the format as its first two arguments,
+`--output FORMAT`, and decides for itself.
 
 `deploy` without `--dry-run` prints its progress as text. Its
 `--log-format pretty|line|json|tui` flag picks how; see

@@ -15,8 +15,7 @@ use std::fmt;
 /// How `kix` ends. [`Exit::code`] gives the number the process exits with.
 ///
 /// Code 2 always means that the command finished and found something to look
-/// at, except for [`Exit::UpgradeBuildFailed`]. Several variants share a
-/// number, and each variant names one meaning.
+/// at. Several variants share a number, and each variant names one meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exit {
     /// The command did what it was asked, and found nothing to report. Code 0.
@@ -39,8 +38,7 @@ pub enum Exit {
     /// Code 2.
     StatusFoundProblem,
     /// `kix upgrade` stopped because a build failed, with the current Kix or
-    /// at a step, or the library could not be locked at the new tag. Code 2,
-    /// the one code 2 that is not a finding. The upgrade page documents it.
+    /// at a step, or the library could not be locked at the new tag. Code 1.
     UpgradeBuildFailed,
     /// `kix plan`, or `kix deploy --plan FILE --dry-run`, found that the
     /// deploy would stop: a write the cluster would refuse, or a stateful
@@ -59,11 +57,8 @@ impl Exit {
     pub fn code(self) -> i32 {
         match self {
             Exit::Success => 0,
-            Exit::Failure => 1,
-            Exit::PlanHasChanges
-            | Exit::DiffHasDifferences
-            | Exit::StatusFoundProblem
-            | Exit::UpgradeBuildFailed => 2,
+            Exit::Failure | Exit::UpgradeBuildFailed => 1,
+            Exit::PlanHasChanges | Exit::DiffHasDifferences | Exit::StatusFoundProblem => 2,
             Exit::PlanWouldStop | Exit::UpgradeNeedsPerson => 3,
             Exit::StalePlan => 4,
         }
@@ -128,7 +123,7 @@ mod tests {
             (Exit::PlanHasChanges, 2),
             (Exit::DiffHasDifferences, 2),
             (Exit::StatusFoundProblem, 2),
-            (Exit::UpgradeBuildFailed, 2),
+            (Exit::UpgradeBuildFailed, 1),
             (Exit::PlanWouldStop, 3),
             (Exit::UpgradeNeedsPerson, 3),
             (Exit::StalePlan, 4),

@@ -484,7 +484,7 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
     s.write("fake/fail-9.2.1", "");
     s.write("fake/fail-9.3.0", "");
     let (code, out) = s.upgrade(&[]);
-    assert_eq!(code, 2, "{out}");
+    assert_eq!(code, 1, "{out}");
     assert!(
         out.contains("Building 2 clusters with Kix 9.3.0... failed (east, west)\nStepping one minor release at a time (9.2.1 -> 9.3.0):"),
         "{out}"
@@ -534,7 +534,7 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
     std::fs::remove_file(s.project.join("fake/fail-9.2.1")).unwrap();
     std::fs::remove_file(s.project.join("fake/calls.log")).unwrap();
     let (code, out) = s.upgrade(&[]);
-    assert_eq!(code, 2, "{out}");
+    assert_eq!(code, 1, "{out}");
     assert!(
         out.starts_with(
             "Resuming upgrade Kix 9.1.0 -> 9.3.0 (from 9.2.1, reusing 9.1.0 baseline)\n"
@@ -864,7 +864,7 @@ fn resuming_works_out_a_required_stop_again() {
     s.publish("9.3.0", "2026-03-01", None);
     s.write("fake/fail-9.2.1", "");
     let (code, out) = s.upgrade(&[]);
-    assert_eq!(code, 2, "{out}");
+    assert_eq!(code, 1, "{out}");
     assert_eq!(s.state()["status"], "fix-needed");
     assert_eq!(s.state()["to"], "9.2.1");
 
@@ -882,7 +882,7 @@ fn resuming_without_the_first_builds_is_refused() {
     s.write("fake/fail-9.3.0", "");
     s.write("fake/fail-9.2.1", "");
     let (code, _) = s.upgrade(&[]);
-    assert_eq!(code, 2);
+    assert_eq!(code, 1);
     let before = std::path::PathBuf::from(s.state()["before"].as_str().unwrap());
     std::fs::remove_dir_all(&before).unwrap();
     std::fs::remove_file(s.project.join("fake/calls.log")).unwrap();
@@ -903,7 +903,7 @@ fn pruning_leaves_a_version_installed_before_the_run() {
     std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
     s.write("fake/fail-9.3.0", "");
     let (code, out) = s.upgrade(&[]);
-    assert_eq!(code, 2, "{out}");
+    assert_eq!(code, 1, "{out}");
     assert_eq!(s.pinned(), "9.3.0");
     assert_eq!(s.installed(), ["9.1.0", "9.2.1", "9.3.0"]);
 }
@@ -1156,7 +1156,7 @@ fn a_project_that_does_not_build_now_is_left_alone() {
     s.releases(vec![]);
     s.write("fake/fail-9.1.0", "");
     let (code, out) = s.upgrade(&[]);
-    assert_eq!(code, 2, "{out}");
+    assert_eq!(code, 1, "{out}");
     assert!(
         out.contains("Building 2 clusters with current Kix 9.1.0 (east, west)... failed (2 of 2 failed: east, west)"),
         "{out}"

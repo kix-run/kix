@@ -514,6 +514,23 @@ pub fn refused(command: &crate::cli::Command) -> Option<&'static Removed> {
     }
 }
 
+/// The variable `KIX_OUTPUT`, which set `-o` for every command.
+pub const OUTPUT_VARIABLE: Removed = Removed {
+    old: "KIX_OUTPUT",
+    new: "-o FORMAT",
+    id: "K8738",
+    note: "Unset KIX_OUTPUT, and pass -o to each command whose output a script reads.",
+};
+
+/// Return the removed environment variable that is set, if any.
+///
+/// An empty value counts as unset, as it does for the variables Kix reads.
+pub fn refused_variable() -> Option<&'static Removed> {
+    std::env::var_os("KIX_OUTPUT")
+        .is_some_and(|v| !v.is_empty())
+        .then_some(&OUTPUT_VARIABLE)
+}
+
 /// Return the removed command or flag that `matches` uses, if any.
 pub fn find<'a>(
     matches: &ArgMatches,

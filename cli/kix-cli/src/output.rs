@@ -368,13 +368,11 @@ pub fn result<R: CommandResponse>(response: &R) -> miette::Result<()> {
 const UNSUPPORTED_FORMAT_ID: &str = "K2184";
 
 /// Return the error for a `-o` value that `command` (such as
-/// `kix list clusters`) does not print. `from_env` says the value came from
-/// `KIX_OUTPUT`, and `hint` adds a command's own advice.
+/// `kix list clusters`) does not print. `hint` adds a command's own advice.
 pub fn unsupported_format(
     command: &str,
     asked: OutputFormat,
     supported: &[OutputFormat],
-    from_env: bool,
     hint: Option<&str>,
 ) -> miette::Report {
     let names: Vec<String> = supported
@@ -388,12 +386,6 @@ pub fn unsupported_format(
         [] => String::new(),
     };
     let mut help = format!("Use {choices}.");
-    if from_env {
-        help.push_str(&format!(
-            " The format came from KIX_OUTPUT={}.",
-            asked.name()
-        ));
-    }
     if let Some(hint) = hint {
         help.push(' ');
         help.push_str(hint);
@@ -417,7 +409,6 @@ mod tests {
             "kix list clusters",
             OutputFormat::Sarif,
             &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Yaml],
-            true,
             None,
         );
         let help = report.help().expect("help").to_string();

@@ -63,10 +63,12 @@ const FLAGS: &[&str] = &[
     "path:/b",
 ];
 
-const SHOWN: &str = "arg one
+const SHOWN: &str = "arg --output
+arg json
+arg one
 arg --two
 arg -o
-KIX_OUTPUT=json
+KIX_OUTPUT=unset
 KIX_VERBOSE=2
 KIX_QUIET=true
 KIX_CONTEXT=ctx
@@ -76,8 +78,9 @@ KIX_OVERRIDE_INPUT=a path:/a b path:/b
 NO_COLOR=1
 ";
 
-/// The flags before the plugin's name become variables; the arguments after
-/// it reach the plugin unchanged, flags included.
+/// The flags before the plugin's name become variables, except `-o`, which
+/// comes first in the plugin's arguments as `--output FORMAT`. The arguments
+/// after the name reach the plugin unchanged, flags included.
 #[test]
 fn a_plugin_gets_its_arguments_and_the_global_flags() {
     let dir = tempfile::tempdir().unwrap();
@@ -92,7 +95,8 @@ fn a_plugin_gets_its_arguments_and_the_global_flags() {
 
 /// A kix the plugin runs reads the variables, so it has the user's flags
 /// without being given any: here it passes them on, unchanged, to a second
-/// plugin.
+/// plugin. The format reaches the second plugin because the first passes its
+/// arguments on.
 #[test]
 fn a_kix_the_plugin_runs_has_the_same_flags() {
     let dir = tempfile::tempdir().unwrap();

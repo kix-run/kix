@@ -8,8 +8,8 @@ import Command from '/src/components/Command.astro';
 These flags are accepted by every `kix` command and may appear before or
 after the subcommand. A command that has no use for a flag ignores it, and its
 `--help` does not list it. `kix --help` lists them all. Each flag except
-`--no-color` can also be set with the environment variable in the table; the
-flag wins over the variable.
+`-o` and `--no-color` can also be set with the environment variable in the
+table; the flag wins over the variable.
 
 This page is hand-maintained. Check `GlobalArgs` and `SCOPED_GLOBALS` in
 `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/main.rs`, and
@@ -20,7 +20,7 @@ for plugins.
 
 | Flag | Variable | Default | Meaning |
 | --- | --- | --- | --- |
-| `-o`, `--output <FORMAT>` | `KIX_OUTPUT` | Varies by command | `text`, `json`, `yaml`, `markdown`, `sarif`, `dot`, or `tree`. A command refuses a format it does not print, and its `--help` lists only the formats it prints. See [Output formats](/docs/reference/cli/output-formats/) for the formats of each command. |
+| `-o`, `--output <FORMAT>` | | Varies by command | `text`, `json`, `yaml`, `markdown`, `sarif`, `dot`, or `tree`. A command refuses a format it does not print. Its `--help` lists only the formats it prints, and names the flags a format needs, such as `--read-only` for `kix plan -o json`. See [Output formats](/docs/reference/cli/output-formats/) for the formats of each command. |
 | `-v`, `--verbose` | `KIX_VERBOSE`, a count | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. Without it, warnings are logged, except those the Kubernetes client writes for an error response it then returns to Kix. |
 | `-q`, `--quiet` | `KIX_QUIET` | Off | Suppress progress and informational output, and log errors only. Results still print. |
 | `--no-color` | `NO_COLOR`, below | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
@@ -71,6 +71,7 @@ Activation record in the current context already carries `<CLUSTER>` as its
 | `KIX_LOG` | A tracing filter, such as `kix=debug` or `debug`, that replaces the level chosen by `-v` and `-q`. |
 | `KIX_NO_INTERACTIVE` | Any value makes Kix treat the terminal as non-interactive, so commands that ask for confirmation refuse to prompt and need `--yes`. Stdin that is not a terminal has the same effect. |
 | `KIX_RUNTIME_DIR` | Directory that holds the Kix runtime (`nix`, `helm`, `kubectl`, `sops`) and `manifest.json`. See [`kix doctor`](/docs/reference/cli/doctor/#how-kix-locates-its-runtime). |
+| `KIX_OUTPUT` | Removed. Kix refuses to run while it is set. Pass `-o` to each command instead. |
 | `KIX_STORE_ROOT` | Root directory for Kix's local store under the default `kix` builder. Defaults to `$XDG_CACHE_HOME/kix/store` (or `~/.cache/kix/store` when `XDG_CACHE_HOME` is unset). Setting `KIX_STORE_ROOT` on a project that sets `builder = "nix"` in [`kix.toml`](/docs/reference/kix-toml/) is an error. |
 
 The variables that tune how Kix talks to the Kubernetes API are listed in
@@ -88,15 +89,18 @@ the way git and cargo find their external commands. A plugin can be any
 executable; NAME may hold letters, digits, `-`, and `_`.
 
 - **Global flags go before NAME.** Kix passes them to the plugin as the
-  variables in the table above, and `--no-color` as `NO_COLOR=1`. Everything
+  variables in the table above, and `--no-color` as `NO_COLOR=1`. `-o` is
+  the exception: Kix passes it as the plugin's first two arguments, so
+  `kix -o json NAME ARGS...` runs `kix-NAME --output json ARGS...`. Everything
   after NAME goes to the plugin unchanged. `KIX_FLAKE` is passed as given, so
   a relative path such as `../infra` is relative to the directory `kix` ran
   in. An `--override-input` value with a space can't be passed, and Kix
   refuses it.
 - **`KIX_BIN`** is the path of the `kix` that ran the plugin. A plugin that
   runs `$KIX_BIN` gets the same version, and that `kix` reads the same
-  variables, so it has the user's flags without being given them. Pass a flag
-  to override one.
+  variables, so it has the user's flags without being given them. It does not
+  have the format: pass `--output` on to it when it should print the same
+  one. Pass a flag to override one.
 - **Kix replaces itself with the plugin**, so its exit status is the plugin's.
 - **A NAME with no plugin** is an error, as before, with a suggestion when it
   is close to a command. `kix help NAME` does not reach a plugin; run
