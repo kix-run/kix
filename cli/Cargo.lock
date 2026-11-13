@@ -1827,7 +1827,7 @@ dependencies = [
 
 [[package]]
 name = "kix-bundle"
-version = "0.10.0-rc.2"
+version = "0.10.0-rc.3"
 dependencies = [
  "kix-container",
  "kix-lib",
@@ -1844,7 +1844,7 @@ dependencies = [
 
 [[package]]
 name = "kix-cli"
-version = "0.10.0-rc.2"
+version = "0.10.0-rc.3"
 dependencies = [
  "assert_cmd",
  "base64 0.22.1",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "kix-container"
-version = "0.10.0-rc.2"
+version = "0.10.0-rc.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1893,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "kix-core"
-version = "0.10.0-rc.2"
+version = "0.10.0-rc.3"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "kix-lib"
-version = "0.10.0-rc.2"
+version = "0.10.0-rc.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1954,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "kix-operator"
-version = "0.10.0-rc.2"
+version = "0.10.0-rc.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
