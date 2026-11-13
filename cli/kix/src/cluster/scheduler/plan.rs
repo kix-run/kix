@@ -8,7 +8,7 @@ use crate::manifest::keys;
 use crate::manifest::lifecycle;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use super::super::apply::{ChangeAction, wants_rerun};
+use super::super::apply::{ChangeAction, changed, wants_rerun};
 use super::super::graph::ResourceGraph;
 use super::super::readiness::{self, ImportTarget};
 use super::super::stream::{NodeId, NodeMeta, PlanNode, TransitionKind};
@@ -26,9 +26,9 @@ pub struct PlanNodeEntry {
     pub action: ChangeAction,
     pub meta: NodeMeta,
     /// The manifest when it carries the `kix.run/rerun` annotation. A Job
-    /// whose own content changed is tagged `Recreate`. Any other keeps its
-    /// `Apply` or `Skip` tag, but still runs a task to recreate the live
-    /// object if its previous run failed.
+    /// that runs again is tagged `Recreate`. Any other keeps its `Apply` or
+    /// `Skip` tag, and an unchanged one still runs a task that reports a
+    /// failed last run.
     pub rerun: Option<Value>,
 }
 
@@ -59,7 +59,7 @@ impl DeployPlan {
         let mut by_id: HashMap<String, &ChangeAction> = HashMap::new();
         for action in changes {
             let rid = match action {
-                ChangeAction::Apply(m) | ChangeAction::Recreate(m) => ResourceId::from_value(m),
+                ChangeAction::Apply(m) | ChangeAction::Recreate(m, _) => ResourceId::from_value(m),
                 ChangeAction::Skip(rid) => rid.clone(),
                 ChangeAction::Orphan(_) => continue,
             };
@@ -100,7 +100,7 @@ impl DeployPlan {
             }
             let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
             let action = match by_id.get(&k8s_id) {
-                Some(action @ (ChangeAction::Apply(_) | ChangeAction::Recreate(_))) => {
+                Some(action @ (ChangeAction::Apply(_) | ChangeAction::Recreate(..))) => {
                     (*action).clone()
                 }
                 Some(ChangeAction::Skip(rid)) => ChangeAction::Skip(rid.clone()),
@@ -109,7 +109,7 @@ impl DeployPlan {
             };
             let rerun = wants_rerun(&node.manifest).then(|| node.manifest.clone());
             let kind = match &action {
-                ChangeAction::Recreate(_) => TransitionKind::Recreate,
+                ChangeAction::Recreate(..) => TransitionKind::Recreate,
                 ChangeAction::Apply(_) => TransitionKind::Apply,
                 ChangeAction::Skip(_) => TransitionKind::Skip,
                 ChangeAction::Orphan(_) => TransitionKind::Delete,
@@ -146,14 +146,76 @@ impl DeployPlan {
         Ok(DeployPlan { nodes, edges })
     }
 
-    /// Return the nodes of the plan in graph order.
-    /// Return whether any `Skip` node reads its live object before it counts
-    /// as unchanged (see [`skip_reads_live`]). A caller that would exit on
-    /// "nothing to apply" asks [`failed_skipped_jobs`] first when this holds.
-    pub fn has_skipped_jobs(&self) -> bool {
-        self.nodes.iter().any(skip_reads_live)
+    /// Return whether the plan has a Job whose last run decides what the
+    /// plan does with it (see [`reads_last_run`]).
+    pub(crate) fn reads_last_runs(&self) -> bool {
+        self.nodes.iter().any(reads_last_run)
     }
 
+    /// Read the live object of every Job whose last run decides what the
+    /// plan does with it, and apply [`DeployPlan::rerun_failed`] to the Jobs
+    /// whose last run failed. Return the unchanged Jobs that failed and do
+    /// not run again. A Job Kix cannot read is left as the plan has it, and
+    /// the run reads it again (see `skip_reads_live`).
+    pub(crate) async fn read_last_runs(
+        &mut self,
+        client: &kube::Client,
+        discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    ) -> Vec<ResourceId> {
+        let mut failed = HashSet::new();
+        for entry in self.nodes.iter().filter(|e| reads_last_run(e)) {
+            let NodeId::Resource(rid) = &entry.id else {
+                continue;
+            };
+            let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
+                continue;
+            };
+            let api = super::super::discovery::api_for(client, ar, scope, rid);
+            match api.get_opt(&rid.name).await {
+                Ok(Some(live))
+                    if readiness::classify_workload_terminal(&live.data, &rid.kind).is_some() =>
+                {
+                    failed.insert(rid.clone());
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(resource = %rid, error = %e, "could not read a Job's live object");
+                }
+            }
+        }
+        self.rerun_failed(&failed)
+    }
+
+    /// Recreate every Job under `kix.run/rerun` in `failed`, the Jobs whose
+    /// last run failed, through [`changed`], which names that reason. Return
+    /// the other Jobs in `failed` that the plan leaves unchanged, which the
+    /// run reports as failed.
+    pub(crate) fn rerun_failed(&mut self, failed: &HashSet<ResourceId>) -> Vec<ResourceId> {
+        let mut reported = Vec::new();
+        for node in &mut self.nodes {
+            let NodeId::Resource(rid) = &node.id else {
+                continue;
+            };
+            if !failed.contains(rid) || node.kind == TransitionKind::Wait {
+                continue;
+            }
+            match &node.rerun {
+                Some(rerun) => {
+                    let manifest = node.action.written().unwrap_or(rerun).clone();
+                    node.action = changed(&manifest, None, true);
+                    node.kind = TransitionKind::Recreate;
+                }
+                None if matches!(node.action, ChangeAction::Skip(_)) => {
+                    reported.push(rid.clone());
+                }
+                None => {}
+            }
+        }
+        reported.sort();
+        reported
+    }
+
+    /// Return the nodes of the plan in graph order.
     pub fn nodes(&self) -> &[PlanNodeEntry] {
         &self.nodes
     }
@@ -162,10 +224,8 @@ impl DeployPlan {
     #[cfg(any(test, feature = "test-util"))]
     pub fn applying(manifests: &[Value]) -> Self {
         let graph = ResourceGraph::from_manifests(manifests).expect("a test plan's graph");
-        let changes: Vec<ChangeAction> = manifests
-            .iter()
-            .map(|m| super::super::apply::changed(m, None))
-            .collect();
+        let changes: Vec<ChangeAction> =
+            manifests.iter().map(|m| changed(m, None, false)).collect();
         Self::from_graph_and_changes(&graph, &changes).expect("a test plan's markers")
     }
 
@@ -351,11 +411,20 @@ impl SchedulerState {
     }
 }
 
+/// Return whether the plan reads the live object of `entry` to learn whether
+/// its last run failed: a Job under `kix.run/rerun`, which then runs again,
+/// or a Job the plan leaves unchanged, which is then reported.
+fn reads_last_run(entry: &PlanNodeEntry) -> bool {
+    entry.kind != TransitionKind::Wait && (entry.rerun.is_some() || skip_reads_live(entry))
+}
+
 /// Return whether a `Skip` node still reads its live object before it counts
 /// as unchanged. Every Job does: an unchanged Job is never applied again, so
 /// a run that failed would otherwise read as healthy on every later deploy
-/// and reconcile. A Job carrying `kix.run/rerun` can then be recreated; any
-/// other Job is reported.
+/// and reconcile. The run reports such a Job as failed. The plan recreates a
+/// Job carrying `kix.run/rerun` whose last run it saw fail
+/// ([`DeployPlan::rerun_failed`]), so only one that failed after the plan, or
+/// one an operator's plan left, is reported here.
 pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
     match (&entry.action, &entry.rerun) {
         (ChangeAction::Skip(_), Some(_)) => true,
@@ -401,44 +470,6 @@ fn checked_unchanged(
         }
     }
     checked
-}
-
-/// Return the `Skip` Jobs whose live object is in a terminal failed state.
-///
-/// `kix deploy` and `kix rollback` short-circuit before invoking the scheduler
-/// when a plan has no changes to apply. They call this function first so an
-/// unchanged Job whose previous run failed is still reported, or recreated
-/// when it carries `kix.run/rerun`, by a scheduler run.
-pub async fn failed_skipped_jobs(
-    client: &kube::Client,
-    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
-    plan: &DeployPlan,
-) -> Vec<ResourceId> {
-    let mut failed = Vec::new();
-    for entry in &plan.nodes {
-        if !skip_reads_live(entry) {
-            continue;
-        }
-        let ChangeAction::Skip(rid) = &entry.action else {
-            continue;
-        };
-        let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
-            continue;
-        };
-        let api = super::super::discovery::api_for(client, ar, scope, rid);
-        match api.get_opt(&rid.name).await {
-            Ok(Some(live))
-                if readiness::classify_workload_terminal(&live.data, &rid.kind).is_some() =>
-            {
-                failed.push(rid.clone());
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::debug!(resource = %rid, error = %e, "could not read a skipped Job's live object");
-            }
-        }
-    }
-    failed
 }
 
 pub(super) fn is_crd_like(entry: &PlanNodeEntry) -> bool {

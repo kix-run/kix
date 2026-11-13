@@ -239,7 +239,6 @@ mod run_end_tests {
                 cancel: kix::cluster::cancel::CancelToken::new(),
                 concurrency: scheduler::CONCURRENCY,
                 stall: StallPolicy::off(),
-                rerun_failed: true,
                 check_unchanged: true,
                 names_flags: true,
             },

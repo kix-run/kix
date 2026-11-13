@@ -26,12 +26,14 @@ use crate::exit::Exit;
 use crate::output;
 use crate::plan;
 use kix::cluster::activation::{OpenedRecords, Records};
+use kix::cluster::apply::RerunReason;
 use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult, NodeId};
 use kix::cluster::watchdog::StallPolicy;
+use kix::manifest::types::ResourceId;
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, Target};
 
@@ -144,61 +146,25 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let cluster = p.build.graph().cluster_name.clone();
     let active_hash = p.baseline.active_hash().map(str::to_string);
 
+    if p.checked.nothing_to_do() {
+        // Supersede folded-in failed records even when their resources
+        // need no changes or pruning, because the scheduler will not run
+        // `finalize_deploy` on this early-return path.
+        if let Some(client) = &p.client {
+            supersede_consumed(ctx, client, &p.baseline.failed().consumed);
+        }
+        match (p.checked.activation_identity_hash(), active_hash.as_deref()) {
+            (Some(new), Some(old)) if new == old => crate::say!(
+                "{} activation identical to active ({}...). Nothing to apply.",
+                output::dim("="),
+                &new[..8.min(new.len())],
+            ),
+            _ => crate::say!("Nothing to apply."),
+        }
+        return Ok(Exit::Success);
+    }
     if total_apply == 0 && p.checked.orphans().is_empty() {
-        // Even when no resources changed, an unchanged Job whose previous run
-        // failed must be reported, and run again under `kix.run/rerun`.
-        // Because the failed deploy did not advance the active activation,
-        // the next deploy sees identical hashes and relies on the scheduler's
-        // `Skip` path to read the live Job.
-        let has_skipped_jobs = p.checked.plan().has_skipped_jobs();
-        let failed_jobs = match &p.client {
-            Some(client) if has_skipped_jobs => ctx.runtime()?.block_on(async {
-                let discovery = discovery::discover_resources(client)
-                    .await
-                    .map_err(|e| miette!("{e}"))?;
-                Ok::<_, miette::Report>(
-                    scheduler::failed_skipped_jobs(client, &discovery, p.checked.plan()).await,
-                )
-            })?,
-            _ => Vec::new(),
-        };
-        // Under `--offline` there is no pre-confirm client, so let
-        // the scheduler inspect the live Jobs during execution.
-        let engine_decides = p.client.is_none() && has_skipped_jobs;
-        if failed_jobs.is_empty() && !engine_decides {
-            // Supersede folded-in failed records even when their resources
-            // need no changes or pruning, because the scheduler will not run
-            // `finalize_deploy` on this early-return path.
-            if let Some(client) = &p.client {
-                supersede_consumed(ctx, client, &p.baseline.failed().consumed);
-            }
-            match (p.checked.activation_identity_hash(), active_hash.as_deref()) {
-                (Some(new), Some(old)) if new == old => crate::say!(
-                    "{} activation identical to active ({}...). Nothing to apply.",
-                    output::dim("="),
-                    &new[..8.min(new.len())],
-                ),
-                _ => crate::say!("Nothing to apply."),
-            }
-            return Ok(Exit::Success);
-        }
-        if engine_decides {
-            crate::say!(
-                "{} nothing changed; Kix checks the live Jobs on the cluster and reruns any failed Job with {}",
-                output::yellow("↻"),
-                kix::manifest::keys::RERUN,
-            );
-        }
-        if !failed_jobs.is_empty() {
-            let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
-            crate::say!(
-                "{} nothing changed, but {} Job(s) failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
-                output::yellow("↻"),
-                failed_jobs.len(),
-                kix::manifest::keys::RERUN,
-                names.join(", "),
-            );
-        }
+        say_failed_jobs(p.checked.failed_jobs());
     }
 
     // Build the deployment receipt before confirmation so dirty source state
@@ -272,6 +238,29 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     }
 
     Ok(Exit::failure_if(!end.succeeded))
+}
+
+/// Say why a run whose plan changes nothing still starts: `failed` lists the
+/// unchanged Jobs whose last run failed, or is `None` when the plan has not
+/// read them from the cluster (`--offline`).
+pub(crate) fn say_failed_jobs(failed: Option<&[ResourceId]>) {
+    match failed {
+        Some([]) => {}
+        Some(failed) => {
+            let names: Vec<String> = failed.iter().map(|r| r.to_string()).collect();
+            crate::say!(
+                "{} nothing changed, but {} Job(s) failed on the last run and are reported as failed: {}",
+                output::yellow("↻"),
+                failed.len(),
+                names.join(", "),
+            );
+        }
+        None => crate::say!(
+            "{} nothing changed; Kix checks the live Jobs once connected, reruns any failed Job with {}, and reports any other failed Job",
+            output::yellow("↻"),
+            kix::manifest::keys::RERUN,
+        ),
+    }
 }
 
 /// Outcome of a scheduler run for `kix deploy` or `kix rollback`.
@@ -593,6 +582,13 @@ async fn run_deploy_async(
                     .map_err(|e| miette!("{e}"))?;
             checked.keep_shared(&shared);
             plan::print_shared(&shared);
+            // The plan read the cache, so it learns the last runs of its
+            // Jobs only now.
+            checked
+                .read_last_runs(&client)
+                .await
+                .map_err(|e| miette!("{e}"))?;
+            plan::print_reruns(checked.plan(), &[RerunReason::LastRunFailed]);
             client
         }
     };
@@ -632,7 +628,6 @@ async fn run_deploy_async(
         cancel: kix::cluster::cancel::CancelToken::new(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
-        rerun_failed: true,
         check_unchanged: true,
         names_flags: true,
     };

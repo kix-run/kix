@@ -17,12 +17,14 @@
 //! declare `lifecycle = "ephemeral"` (or leave it unset).
 //!
 //! The mark is stamped on every object of a stateful package, so it does not
-//! say which objects hold data. Import markers and the deploy record never
-//! pair, since they have no content of their own. Two objects of the same kind
-//! pair, as a renamed object usually takes its data with it. Two objects of
-//! different kinds pair only when both may hold data (see [`may_hold_data`]).
-//! That covers moving a database from a StatefulSet to an operator's custom
-//! resource, or from one operator to another.
+//! say which objects hold data. Both sides must also hold data (see
+//! [`may_hold_data`]). Renaming a Job, a ConfigMap, or a NetworkPolicy moves
+//! no data, so it is a plain replacement. Import markers and the deploy record
+//! never pair, since they have no content of their own. A candidate of the
+//! same kind is preferred, as a renamed object usually takes its data with
+//! it. Two objects of different kinds also pair, which covers moving a
+//! database from a StatefulSet to an operator's custom resource, or from one
+//! operator to another.
 //!
 //! # Which objects hold data
 //!
@@ -202,12 +204,11 @@ fn derive_reason(source: &Value, target: &Value) -> String {
 ///   2. have a `(namespace, instance)` slot,
 ///   3. are absent from `new_manifests` under the same Kubernetes identity.
 ///
-/// For each removed stateful resource, looks in `new_manifests` for an
-/// added stateful resource in the same slot that is also absent from
+/// For each removed stateful resource that may hold data (see
+/// [`may_hold_data`]), looks in `new_manifests` for an added stateful
+/// resource in the same slot that may hold data and is absent from
 /// `old_manifests` under the same K8s identity. A candidate of the same kind
-/// wins. A candidate of another kind qualifies only when both it and the
-/// removed resource may hold data (see [`may_hold_data`]). When one is found, emits
-/// a `MigrationPair`.
+/// wins. When one is found, emits a `MigrationPair`.
 ///
 /// This detector runs independently of `detect_changes`, and callers combine
 /// their outputs.
@@ -236,7 +237,7 @@ pub fn detect_migration_pairs(
     // Bucket added stateful manifests by slot.
     let mut added_by_slot: HashMap<String, Vec<(ResourceId, &Value)>> = HashMap::new();
     for manifest in new_manifests {
-        if !is_stateful(manifest) {
+        if !is_stateful(manifest) || !may_hold_data(manifest) {
             continue;
         }
         let rid = ResourceId::from_value(manifest);
@@ -258,7 +259,7 @@ pub fn detect_migration_pairs(
     let mut consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for manifest in old_manifests {
-        if !is_stateful(manifest) {
+        if !is_stateful(manifest) || !may_hold_data(manifest) {
             continue;
         }
         let rid = ResourceId::from_value(manifest);
@@ -274,21 +275,14 @@ pub fn detect_migration_pairs(
             continue;
         };
 
-        let source_may_hold_data = may_hold_data(manifest);
         let unclaimed = |(target_rid, m): &&(ResourceId, &Value)| {
             !consumed.contains(&candidate_key(target_rid, m))
         };
         let chosen = candidates
             .iter()
             .filter(unclaimed)
-            // Same kind always pairs, since a renamed Secret may hold the only copy of a key.
             .find(|(target_rid, _)| target_rid.kind == rid.kind)
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .filter(unclaimed)
-                    .find(|(_, m)| source_may_hold_data && may_hold_data(m))
-            });
+            .or_else(|| candidates.iter().find(|c| unclaimed(c)));
 
         let Some((target_rid, target_manifest)) = chosen else {
             continue;
@@ -491,15 +485,86 @@ mod tests {
         assert_eq!(pairs[0].reason, "PersistentVolume removed, Cluster added");
     }
 
+    /// Return a StatefulSet named `name` in `data/postgres` with a volume
+    /// claim template.
+    fn postgres_statefulset(name: &str, identity_hash: &str) -> Value {
+        with_spec(
+            with_api(in_postgres("StatefulSet", name, identity_hash), "apps/v1"),
+            "volumeClaimTemplates",
+            json!([{ "metadata": { "name": "data" } }]),
+        )
+    }
+
     #[test]
     fn detects_same_kind_rename() {
-        // A renamed object of the same kind pairs whether or not its manifest
-        // declares storage.
-        let old = vec![in_postgres("StatefulSet", "postgres", "aaaa")];
-        let new = vec![in_postgres("StatefulSet", "postgres-v2", "bbbb")];
+        let old = vec![postgres_statefulset("postgres", "aaaa")];
+        let new = vec![postgres_statefulset("postgres-v2", "bbbb")];
         let pairs = detect_migration_pairs(&new, &old);
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].target.name, "postgres-v2");
+    }
+
+    #[test]
+    fn prefers_a_candidate_of_the_same_kind() {
+        let old = vec![postgres_statefulset("postgres", "aaaa")];
+        let new = vec![
+            with_api(
+                in_postgres("Cluster", "postgres", "bbbb"),
+                "postgresql.cnpg.io/v1",
+            ),
+            postgres_statefulset("postgres-v2", "cccc"),
+        ];
+        let pairs = detect_migration_pairs(&new, &old);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].target.name, "postgres-v2");
+    }
+
+    #[test]
+    fn ignores_same_kind_rename_of_objects_without_data() {
+        // Renaming an object that holds no data moves no data, even in a
+        // stateful package. The StatefulSet has no volume claim template.
+        for (kind, api) in [
+            ("Job", "batch/v1"),
+            ("ConfigMap", "v1"),
+            ("Secret", "v1"),
+            ("NetworkPolicy", "networking.k8s.io/v1"),
+            ("StatefulSet", "apps/v1"),
+        ] {
+            let old = vec![with_api(in_postgres(kind, "postgres", "aaaa"), api)];
+            let new = vec![with_api(in_postgres(kind, "postgres-v2", "bbbb"), api)];
+            assert!(detect_migration_pairs(&new, &old).is_empty(), "{kind}");
+        }
+    }
+
+    /// The first deploy of a build that names the bootstrap Job
+    /// `<instance>-<namespace>-bootstrap` removes the Job named after its
+    /// content hash. That rename moves no data, while a renamed claim in
+    /// the same deploy still pairs.
+    #[test]
+    fn bootstrap_job_rename_is_not_a_migration_but_a_claim_rename_is() {
+        let claim = |name: &str, hash: &str| {
+            marked(
+                with_spec(
+                    in_postgres("PersistentVolumeClaim", name, hash),
+                    "resources",
+                    json!({ "requests": { "storage": "10Gi" } }),
+                ),
+                "true",
+            )
+        };
+        let job = |name: &str, hash: &str| with_api(in_postgres("Job", name, hash), "batch/v1");
+        let old = vec![
+            job("postgres-bootstrap-1a2b3c4d", "aaaa"),
+            claim("data-old", "bbbb"),
+        ];
+        let new = vec![
+            job("postgres-data-bootstrap", "cccc"),
+            claim("data-new", "dddd"),
+        ];
+        let pairs = detect_migration_pairs(&new, &old);
+        assert_eq!(pairs.len(), 1, "{pairs:?}");
+        assert_eq!(pairs[0].source.name, "data-old");
+        assert_eq!(pairs[0].target.name, "data-new");
     }
 
     #[test]

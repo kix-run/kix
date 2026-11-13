@@ -387,29 +387,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         return Ok(Exit::Success);
     }
 
-    if total_apply == 0 && checked.orphans().is_empty() {
-        // Same rule as deploy: an unchanged Job whose last run failed is
-        // reported, and run again under `kix.run/rerun`; only the engine
-        // does that.
-        let failed_jobs = if checked.plan().has_skipped_jobs() {
-            scheduler::failed_skipped_jobs(&client, target.discovery(), checked.plan()).await
-        } else {
-            Vec::new()
-        };
-        if failed_jobs.is_empty() {
-            crate::say!(
-                "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."
-            );
-            return Ok(Exit::Success);
-        }
-        let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
+    if checked.nothing_to_do() {
         crate::say!(
-            "{} nothing changed, but {} Job(s) failed on the last run (a Job with {} runs again; any other is reported as failed): {}",
-            output::yellow("↻"),
-            failed_jobs.len(),
-            kix::manifest::keys::RERUN,
-            names.join(", "),
+            "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."
         );
+        return Ok(Exit::Success);
+    }
+    if total_apply == 0 && checked.orphans().is_empty() {
+        super::deploy::say_failed_jobs(checked.failed_jobs());
     }
 
     if !args.yes {
@@ -438,7 +423,6 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         cancel: kix::cluster::cancel::CancelToken::new(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
-        rerun_failed: true,
         check_unchanged: true,
         // Rollback has no --on-error flag, so messages must not suggest it.
         names_flags: false,
@@ -842,7 +826,6 @@ async fn refused_writes(
         cancel: kix::cluster::cancel::CancelToken::new(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
-        rerun_failed: true,
         check_unchanged: true,
         names_flags: false,
     };

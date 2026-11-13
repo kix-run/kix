@@ -1,4 +1,5 @@
 use super::*;
+use crate::cluster::apply::RerunReason;
 use crate::manifest::types::CLUSTER_SCOPED;
 use serde_json::json;
 
@@ -124,7 +125,7 @@ fn plan_tags_rerun_manifests() {
     let manifests = vec![changed.clone(), moved.clone(), same.clone(), plain.clone()];
     let graph = ResourceGraph::from_manifests(&manifests).unwrap();
     let changes = vec![
-        ChangeAction::Recreate(changed),
+        ChangeAction::Recreate(changed, RerunReason::Changed),
         ChangeAction::Apply(moved),
         ChangeAction::Skip(ResourceId::from_value(&same)),
         ChangeAction::Skip(ResourceId::from_value(&plain)),
@@ -146,6 +147,66 @@ fn plan_tags_rerun_manifests() {
     assert!(by_name("cm").rerun.is_none());
 }
 
+/// A Job under the rerun rule whose last run failed runs again, whether the
+/// diff left it unchanged, applied it in place, or recreated it for new
+/// content, and the reason names the failed run. A failed Job without the
+/// rule that the plan leaves unchanged is returned for the run to report.
+#[test]
+fn rerun_failed_recreates_rerun_jobs_and_returns_the_others() {
+    let rerun = |name: &str| {
+        let mut job = manifest("Job", name, "default", &format!("h_{name}"), "");
+        job["metadata"]["annotations"][keys::RERUN] = json!("on-change");
+        job
+    };
+    let (skipped, applied, recreated, ok) = (
+        rerun("skipped"),
+        rerun("applied"),
+        rerun("recreated"),
+        rerun("ok"),
+    );
+    let plain = manifest("Job", "plain", "default", "h_plain", "");
+    let manifests = vec![
+        skipped.clone(),
+        applied.clone(),
+        recreated.clone(),
+        ok.clone(),
+        plain.clone(),
+    ];
+    let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+    let changes = vec![
+        ChangeAction::Skip(ResourceId::from_value(&skipped)),
+        ChangeAction::Apply(applied.clone()),
+        ChangeAction::Recreate(recreated.clone(), RerunReason::Changed),
+        ChangeAction::Skip(ResourceId::from_value(&ok)),
+        ChangeAction::Skip(ResourceId::from_value(&plain)),
+    ];
+    let mut plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
+    let failed: HashSet<ResourceId> = [&skipped, &applied, &recreated, &plain]
+        .into_iter()
+        .map(ResourceId::from_value)
+        .collect();
+    let reported = plan.rerun_failed(&failed);
+    assert_eq!(reported, vec![ResourceId::from_value(&plain)]);
+    let node = |name: &str| {
+        plan.nodes
+            .iter()
+            .find(|n| matches!(&n.id, NodeId::Resource(rid) if rid.name == name))
+            .unwrap()
+    };
+    for name in ["skipped", "applied", "recreated"] {
+        assert_eq!(node(name).kind, TransitionKind::Recreate, "{name}");
+        assert!(
+            matches!(
+                node(name).action,
+                ChangeAction::Recreate(_, RerunReason::LastRunFailed)
+            ),
+            "{name}"
+        );
+    }
+    assert_eq!(node("ok").kind, TransitionKind::Skip);
+    assert_eq!(node("plain").kind, TransitionKind::Skip);
+}
+
 /// The annotation is honoured on Jobs only: a Deployment carrying it
 /// is a plain Apply, never deleted.
 #[test]
@@ -156,7 +217,7 @@ fn plan_ignores_rerun_on_non_jobs() {
     let graph = ResourceGraph::from_manifests(&manifests).unwrap();
     let plan = DeployPlan::from_graph_and_changes(
         &graph,
-        &[crate::cluster::apply::changed(&deploy, None)],
+        &[crate::cluster::apply::changed(&deploy, None, false)],
     )
     .unwrap();
     assert!(matches!(plan.nodes[0].kind, TransitionKind::Apply));

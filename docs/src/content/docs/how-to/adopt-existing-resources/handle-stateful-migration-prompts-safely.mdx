@@ -9,8 +9,16 @@ import diff from '/src/command-output/how-to/adoption-stateful-migration/diff.js
 import refusal from '/src/command-output/how-to/adoption-stateful-migration/refusal.json';
 import acceptedDryRun from '/src/command-output/how-to/adoption-stateful-migration/accepted-dry-run.json';
 
-Kix stops a deployment when one stateful resource replaces another in the
-same package slot. Treat this prompt as a data-migration gate.
+Kix stops a deployment when, in a package with `lifecycle = "stateful"`, an
+object that holds data replaces another that holds data. Treat this prompt as
+a data-migration gate.
+
+An object holds data when its `kix.run/holds-data` annotation is `"true"`.
+Kix sets it on a PersistentVolumeClaim, a PersistentVolume, a StatefulSet
+with volume claim templates, and a custom resource whose kind declares
+`holdsData = true`. Renaming any other object, such as a Job, a ConfigMap,
+or a NetworkPolicy, is an ordinary replacement and does not stop the
+deployment.
 
 The migration gate applies only when one stateful resource replaces another.
 If a stateful resource is removed without a replacement, Kix treats it as an
@@ -35,8 +43,9 @@ Compare the replacement definition with that saved state:
 <Command expandable {...diff} />
 
 Check the logical slot, source, target, and reason. Kix reports this pair
-because both resources have `lifecycle = "stateful"`, occupy the same
-`data/volume` slot, and have different Kubernetes identities.
+because both resources have `lifecycle = "stateful"`, both hold data,
+they occupy the same `data/volume` slot, and they have different
+Kubernetes identities.
 
 ## Prepare the data migration
 

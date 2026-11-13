@@ -1045,7 +1045,7 @@ fn rerun_job_with_new_content_is_recreated() {
     let old = vec![rerun_job("id1", Some("c1"))];
     let new = vec![rerun_job("id2", Some("c2"))];
     let actions = detect_changes(&new, &old);
-    assert!(matches!(&actions[..], [ChangeAction::Recreate(_)]));
+    assert!(matches!(&actions[..], [ChangeAction::Recreate(..)]));
 }
 
 /// A new Job, and a Job deployed by a release that wrote no rerun hash, have
@@ -1055,12 +1055,12 @@ fn rerun_job_without_an_old_rerun_hash_is_recreated() {
     let new = vec![rerun_job("id2", Some("c1"))];
     assert!(matches!(
         &detect_changes(&new, &[])[..],
-        [ChangeAction::Recreate(_)]
+        [ChangeAction::Recreate(..)]
     ));
     let old = vec![rerun_job("id1", None)];
     assert!(matches!(
         &detect_changes(&new, &old)[..],
-        [ChangeAction::Recreate(_)]
+        [ChangeAction::Recreate(..)]
     ));
 }
 
@@ -1107,11 +1107,11 @@ fn live_rerun_job_compares_the_live_rerun_hash() {
     ));
     assert!(matches!(
         &detect_changes_live(&desired, &[live_with("c0")])[..],
-        [ChangeAction::Recreate(_)]
+        [ChangeAction::Recreate(..)]
     ));
     assert!(matches!(
         &detect_changes_live(&desired, &[live_object("Job", "bootstrap", "db", "id1")])[..],
-        [ChangeAction::Recreate(_)]
+        [ChangeAction::Recreate(..)]
     ));
 }
 
@@ -1137,5 +1137,27 @@ fn rerun_job_a_failed_deploy_touched_follows_its_content() {
         &new,
         &[same_content, other_content],
     );
-    assert!(matches!(&folded[..], [ChangeAction::Recreate(_)]));
+    assert!(matches!(&folded[..], [ChangeAction::Recreate(..)]));
+}
+
+/// A Job under the rerun rule whose last run failed runs again, and the
+/// reason names the failed run, whether or not its content changed since the
+/// deployed build. Without the rule a failed run changes nothing.
+#[test]
+fn rerun_job_whose_last_run_failed_names_the_failed_run() {
+    for old_content in [Some("c1"), Some("c0"), None] {
+        assert!(matches!(
+            changed(&rerun_job("id2", Some("c1")), old_content, true),
+            ChangeAction::Recreate(_, RerunReason::LastRunFailed)
+        ));
+    }
+    assert!(matches!(
+        changed(&rerun_job("id2", Some("c1")), Some("c0"), false),
+        ChangeAction::Recreate(_, RerunReason::Changed)
+    ));
+    let plain = manifest("Job", "bootstrap", "db", "id2");
+    assert!(matches!(
+        changed(&plain, None, true),
+        ChangeAction::Apply(_)
+    ));
 }

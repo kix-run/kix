@@ -31,7 +31,6 @@ pub(super) struct NodeCtx {
     pub(super) timeout: Duration,
     pub(super) orphan_set: HashSet<ResourceId>,
     pub(super) dry_run: bool,
-    pub(super) rerun_failed: bool,
     pub(super) progress: Arc<Progress>,
     pub(super) observer: Arc<dyn DeployObserver>,
 }
@@ -120,15 +119,12 @@ pub(super) async fn execute_node(
     if entry.kind == TransitionKind::Wait {
         return wait_for_platform(ctx, entry).await;
     }
-    // Reason a rerun node is deleted before apply. `None` means a standard apply.
-    let mut rerun_reason: Option<&'static str> = None;
     let manifest = match (&entry.action, &entry.rerun) {
-        (ChangeAction::Apply(m) | ChangeAction::Recreate(m), _) => m.clone(),
+        (ChangeAction::Apply(m) | ChangeAction::Recreate(m, _), _) => m.clone(),
         (ChangeAction::Skip(rid), rerun) if super::plan::skip_reads_live(entry) => {
             // An unchanged Job is never applied again, so its last run is
-            // read back. A failed run is recreated under `kix.run/rerun` when
-            // `rerun_failed` is enabled, and reported otherwise. A Job
-            // without the annotation is never deleted here.
+            // read back, and a failed run is reported. The plan decides
+            // whether a Job runs again, so nothing is deleted here.
             let live = ctx.resources.get_live(rid).await;
             let terminal = match &live {
                 Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
@@ -136,27 +132,19 @@ pub(super) async fn execute_node(
             };
             match (live, terminal) {
                 (Ok(Some(_)), Some((reason, detail))) => {
-                    let manifest = match rerun {
-                        Some(manifest) if ctx.rerun_failed => Some(manifest),
-                        _ => None,
+                    let message = format!(
+                        "{}: {detail}; unchanged since its last run, which failed. {}",
+                        reason.as_str(),
+                        job_next_step(rerun.is_some()),
+                    );
+                    return NodeOutcome::Failed {
+                        detail: NodeDetail::ReadinessFailed {
+                            message: message.clone(),
+                            missing_keys: Vec::new(),
+                            output: Vec::new(),
+                        },
+                        message,
                     };
-                    let Some(manifest) = manifest else {
-                        let message = format!(
-                            "{}: {detail}; unchanged since its last run, which failed. {}",
-                            reason.as_str(),
-                            job_next_step(rerun.is_some()),
-                        );
-                        return NodeOutcome::Failed {
-                            detail: NodeDetail::ReadinessFailed {
-                                message: message.clone(),
-                                missing_keys: Vec::new(),
-                                output: Vec::new(),
-                            },
-                            message,
-                        };
-                    };
-                    rerun_reason = Some("the last run failed");
-                    manifest.clone()
                 }
                 // A run that is still going holds back what depends on it,
                 // as a Job this deploy applied would.
@@ -226,32 +214,13 @@ pub(super) async fn execute_node(
         manifest
     };
 
-    // A Job under `kix.run/rerun` whose own content is unchanged is patched
-    // in place. If its last run failed, it is recreated instead, as an
-    // unchanged one is.
-    if entry.kind == TransitionKind::Apply && entry.rerun.is_some() && ctx.rerun_failed {
+    // A Job the plan runs again is never patched in place. Delete the live
+    // object in the foreground first so its pods are removed before
+    // recreating it, or apply directly if no live object exists.
+    let mut rerun_reason: Option<&'static str> = None;
+    if let ChangeAction::Recreate(_, reason) = &entry.action {
         match ctx.resources.get_live(&rid).await {
-            Ok(Some(obj)) if readiness::classify_workload_terminal(&obj, &rid.kind).is_some() => {
-                rerun_reason = Some("the last run failed");
-            }
-            Ok(_) => {}
-            Err(e) => {
-                let message = format!("could not read the live object: {e}");
-                return NodeOutcome::Failed {
-                    detail: NodeDetail::ApplyFailed(message.clone()),
-                    message,
-                };
-            }
-        }
-    }
-
-    // Jobs carrying `kix.run/rerun` whose own content changed are never
-    // patched in place. Delete the live object in the foreground first so its
-    // pods are removed before recreating it, or apply directly if no live
-    // object exists.
-    if matches!(entry.kind, TransitionKind::Recreate) && rerun_reason.is_none() {
-        match ctx.resources.get_live(&rid).await {
-            Ok(Some(_)) => rerun_reason = Some("changed since the last run"),
+            Ok(Some(_)) => rerun_reason = Some(reason.as_str()),
             Ok(None) => {}
             Err(e) => {
                 let message = format!("could not read the live object: {e}");

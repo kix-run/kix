@@ -1,0 +1,5 @@
+# 2026-11-13 · `cli/kix/src/cluster/apply/mod.rs` · A rerun Job runs again after a failed deploy already ran its new content successfully.
+
+A deploy changes a Job with `kix.run/rerun` from content `c1` to `c2`. The Job runs and succeeds, but another object fails, so the record is Failed and Active still holds `c1`. On the next deploy the Job's identity hash differs from Active, so `changed()` compares its rerun hash `c2` with Active's `c1` and recreates it with the reason "changed since the last run". The Job then runs a second time with the same content.
+
+`fold_failed_closures` uses the failed closures' rerun hashes only for a `Skip` action, and on the `Apply` path Kix cannot tell whether the live Job holds the Active content or a failed closure's. The plan already reads the live object of every rerun Job (`DeployPlan::read_last_runs`). One fix is to read the live `kix.run/rerun-hash` there too and pass it to `changed()` as the content the Job last ran with. A Job that is gone from the cluster would still fall back to the records. Jobs must be safe to run again, so this costs a run, not data.
