@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix/src/cluster/migrate.rs` · Renaming a persistent-volume-claim instance moves its consumer to an empty claim with no migration stop.
+
+In `clusters/example.nix`, renaming the `ml-cache` instance to `ml-cache2` (same `modelCache` alias) makes `kix plan example` exit 2 with no "Stateful workload replacements" section. machine-learning is switched to the new, empty claim, and the old claim is only listed as left the build. A migration pair is matched only within one instance (`kix.run/package-namespace` and `kix.run/package`), so a rename is two unrelated instances. The same happens with the 0.10 build before the pairing change.
