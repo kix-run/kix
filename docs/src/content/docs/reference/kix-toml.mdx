@@ -1,11 +1,11 @@
 ---
 title: "kix.toml"
-description: "Project configuration file that names the Kix version a project uses and chooses whether Kix evaluates it with the Kix runtime or the machine's Nix installation."
+description: "Project configuration file that chooses whether Kix evaluates a project with the Kix runtime or the machine's Nix installation, and how kix upgrade picks releases."
 ---
 
 import Command from '../../../components/Command.astro';
 
-`kix.toml` is an optional configuration file placed beside `flake.nix` at the root of a Kix project. It names the version of Kix the project uses (`kix`), and it chooses the project's **builder**: whether Kix evaluates clusters with the Nix in the Kix runtime and Kix's local store (`builder = "kix"`, the default) or with the machine's installed Nix and `/nix/store` (`builder = "nix"`). Because `kix.toml` lives in the repository, every contributor and CI job uses the same Kix version and builder without passing extra flags or environment variables.
+`kix.toml` is an optional configuration file placed beside `flake.nix` at the root of a Kix project. It chooses the project's **builder**: whether Kix evaluates clusters with the Nix in the Kix runtime and Kix's local store (`builder = "kix"`, the default) or with the machine's installed Nix and `/nix/store` (`builder = "nix"`). Because `kix.toml` lives in the repository, every contributor and CI job uses the same builder without passing extra flags or environment variables. The version of Kix a project uses comes from `flake.lock`, as [The version of Kix](#the-version-of-kix) explains.
 
 :::note[Helpful background]
 - [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/): see how the release archive ships the Kix runtime and how to verify your setup with `kix doctor`.
@@ -20,51 +20,36 @@ Kix looks for `kix.toml` in the directory named by [`--flake`](/docs/reference/c
 
 ```toml
 # kix.toml
-kix = "0.8"
 builder = "nix"
 ```
 
-The file and both keys are optional. An absent `kix.toml` or an empty `kix.toml` is equivalent to:
+The file and its settings are optional. An absent `kix.toml` or an empty `kix.toml` is equivalent to:
 
 ```toml
 builder = "kix"
 ```
 
-`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `kix`, `builder`, [`library-input`](#the-library-input-setting), and the [`[upgrade]` table](#the-upgrade-table). Unknown keys, unknown builder names, a `kix` value that is not a version, and TOML syntax errors stop the command before evaluation starts.
+`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `builder`, [`library`](#the-library-setting), and the [`[upgrade]` table](#the-upgrade-table). Unknown keys, unknown builder names, a `kix` line, and TOML syntax errors stop the command before evaluation starts.
 
-## The `kix` setting
+## The version of Kix
 
-`kix` names the version of Kix that runs for this project:
+`kix.toml` does not name a version of Kix. A project's version of Kix is the release tag of the `kix` input in `flake.lock`, such as `v0.10.0` for Kix 0.10.0. Kix reads that tag before it parses its command line and runs the matching version, installing it first when needed. See [Choose the version of Kix for a project](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project).
 
-| Value | Accepts |
-| --- | --- |
-| `"0.8"` | Any 0.8 patch release. Kix runs the newest 0.8 it has, the running one or an installed one. |
-| `"0.8.3"` | Only Kix 0.8.3. |
-| `"0.9.0-rc.1"` | Only the prerelease 0.9.0-rc.1. |
+A `kix` line in `kix.toml` stops every command with error [K4476]. Delete the line, and use [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/) to move the project to another version of Kix.
 
-A minor such as `"0.9"` never matches a prerelease. To try a prerelease in a project, name it in full, and change the setting back when the release is out.
+## The `library` setting
 
-Kix 0.7 and older refuse a `kix.toml` that sets `kix`, so the setting must name Kix 0.8 or newer. A value such as `kix = "0.7"` stops the command with an error.
+`library` says where the project's Kix library comes from. It takes two values:
 
-Before Kix parses its command line, it reads `kix` from `kix.toml` in the directory named by [`--flake`](/docs/reference/cli/global-flags/) (or `KIX_FLAKE`), and then:
+- `library = "input"`, the default: the Kix library is the flake input named `kix`, and its release tag in `flake.lock` is the project's version of Kix. Leaving the setting out means the same.
+- `library = "self"`: the project's own flake provides the Kix library, as the Kix repository does.
 
-| Situation | What Kix does |
-| --- | --- |
-| No `kix.toml`, or no `kix` setting | Runs |
-| The running Kix matches, and no newer matching Kix is installed | Runs |
-| A matching Kix newer than the running one is installed in `~/.local/share/kix/` | Runs that Kix in its place, with the same arguments |
-| No matching Kix is installed | Downloads the newest matching release from kix.run, checks its signature and SHA-256, prints `Installing Kix <version> (this project needs <kix>)`, and runs it |
-| No matching Kix is installed, and `KIX_AUTO_INSTALL=0` | Stops: `` This project needs Kix <kix> (kix.toml), and no Kix <kix> is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <kix>`. `` |
+```toml
+# kix.toml
+library = "self"
+```
 
-`KIX_AUTO_INSTALL` set to `0`, `false`, or `no` stops Kix from downloading versions. [`kix self`](/docs/reference/cli/self/), `kix completions`, `kix init`, `kix help`, and `--help` run in the version you typed, whatever `kix.toml` says. A remote flake reference such as `github:org/repo` is not read. To choose, Kix reads `kix.toml` and lists `~/.local/share/kix/`. It runs no Nix and makes no network request unless it has to install. So a project with `kix = "0.8"` moves to a new 0.8 patch as soon as one is installed.
-
-At this stage Kix reads only the `kix` setting. It ignores other keys and values it does not know, so an older Kix can hand a project over to the newer Kix it names. The Kix that runs the command then checks the whole file.
-
-`kix --version` follows the same rules, except that it never downloads. When no matching Kix is installed, it prints the running version and then, on stderr, `  this project needs Kix <kix>, which is not installed. Any other kix command installs it.`
-
-The Kix that hands over sets `KIX_SELECTED_BY` to its own path for the Kix it runs, and `kix --version` and [`kix doctor`](/docs/reference/cli/doctor/) print it. A Kix that finds `KIX_SELECTED_BY` set runs without choosing again.
-
-Kix also checks that the [Kix library](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#when-kix-and-the-kix-library-do-not-match) in `flake.lock` has the same minor version as Kix and a patch version no newer than Kix's. Set `kix` to the Kix library's minor so that everyone on the project runs a Kix that can build it.
+With `"self"` the project has no `kix` input and no release version. Kix runs the version you started, prints a note that the project uses a [development Kix library](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#work-on-the-kix-library-itself), and compares no versions. Any other value stops the command with an error that names both values.
 
 ## The `builder` setting
 
@@ -115,19 +100,6 @@ min-age = "7d"
 | --- | --- | --- |
 | `min-age` | A number of days, such as `"7d"` | `kix upgrade` picks only releases at least this old, by their release date. |
 
-## The `library-input` setting
-
-`library-input` names the input in `flake.nix` that holds the Kix library:
-
-```toml title="kix.toml"
-library-input = "platform-kix"
-```
-
-`kix upgrade` moves this input when it pins the project to a version of
-Kix. Without the setting, Kix looks for an input named `kix` or `kixpkgs`.
-Set it when the input has another name, or when `flake.nix` has inputs with
-both names. Kix then stops and asks for the setting.
-
 ## Tracking `kix.toml` in Git
 
 Nix flakes only see files that Git tracks. When `kix.lib.mkFlake` evaluates your flake, it reads `${inputs.self}/kix.toml` inside Nix and exposes the chosen builder at `legacyPackages.<system>.kixConfig.builder`.
@@ -147,7 +119,7 @@ Stage `kix.toml` whenever you add or change it:
 Two other conditions must hold for the CLI and the flake library to agree:
 
 1. `flake.nix` must pass `inputs` (which includes `self`) to `kix.lib.mkFlake { inherit inputs; ... }`, so `mkFlake` can locate `${inputs.self}/kix.toml`.
-2. The `kix` flake input locked in `flake.lock` must be new enough to expose `kixConfig`. If the locked library predates `kix.toml` support, `kix` prompts you to run [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/#move-the-kix-library-to-the-version-the-project-is-on) with its own version.
+2. The `kix` flake input locked in `flake.lock` must be new enough to expose `kixConfig`. If the locked library predates `kix.toml` support, `kix` prompts you to run [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/) with its own version.
 
 ## Requirements for `builder = "nix"`
 
@@ -201,12 +173,12 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    kixpkgs.url = "github:kix-run/kix";
-    kixpkgs.inputs.nixpkgs.follows = "nixpkgs";
+    kix.url = "github:kix-run/kix/v0.10.0";
+    kix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = inputs:
-    inputs.kixpkgs.lib.mkFlake {
+    inputs.kix.lib.mkFlake {
       inherit inputs;
       systems = [ "x86_64-linux" ];
       clusters.prod = ./clusters/prod.nix;
@@ -219,11 +191,10 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | Condition | Error message |
 | --- | --- |
 | Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
-| Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder, kix). Check the spelling, or upgrade Kix if the project needs a newer version `` |
-| `kix` is not a version, such as `kix = 8` or `kix = "latest"` | `<path> sets kix = <value>, which is not a Kix version. Write a minor such as kix = "0.8", an exact version such as kix = "0.8.3", or a prerelease such as kix = "0.9.0-rc.1"` |
-| `kix` is a number, such as `kix = 0.8` | `<path> sets kix = 0.8 as a number. Write it in quotes: kix = "0.8"` |
-| `kix` names Kix 0.7 or older, such as `kix = "0.7"` | `<path> sets kix = "0.7", but Kix 0.7 and older cannot read this setting. Name Kix 0.8 or newer, or remove the line.` |
-| `kix` names a version that is not installed, with `KIX_AUTO_INSTALL=0` | `` This project needs Kix <kix> (kix.toml), and no Kix <kix> is installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <kix>`. `` |
+| Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder, library, upgrade). Check the spelling, or upgrade Kix if the project needs a newer version `` |
+| `library` is neither `"input"` nor `"self"` | `<path> sets library = <value>, which Kix does not know. Write library = "input" (the default: the flake input named kix holds the Kix library) or library = "self" (this flake provides the Kix library itself).` |
+| `kix.toml` sets `kix` | `[K4476] <path> sets kix = "<value>", but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml.` |
+| The version of Kix that `flake.lock` names is not installed, with `KIX_AUTO_INSTALL=0` | `` This project uses Kix <version> (flake.lock), and Kix <version> is not installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <version>`. `` |
 | Unknown `builder` value | `<path> sets builder = "<value>", which is not a known builder (Kix <version> supports: kix, nix, remote). Check the spelling, or upgrade Kix if the project needs a newer version` |
 | `builder` without quotes, such as `builder = 3` | `<path> sets builder to a number. Write the builder's name in quotes, such as builder = "kix" (Kix <version> supports: kix, nix, remote)` |
 | `builder = "remote"` | `<path> sets builder = "remote", but remote builders are not supported yet. Set builder = "kix", or remove the setting` |

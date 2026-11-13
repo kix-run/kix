@@ -8,8 +8,8 @@ use clap_complete::Shell;
 pub struct UpgradeArgs {
     /// The version to move to: an exact version such as 0.12.1, a prerelease
     /// named in full such as 0.12.0-rc.1, a minor such as 0.12 (its newest
-    /// patch), or `latest`. The version the project is on already makes
-    /// kix.toml, flake.nix, and flake.lock agree, and builds nothing
+    /// patch), or `latest`. The version the project is on already changes
+    /// nothing
     #[arg(long, value_name = "VERSION")]
     pub to: Option<String>,
 

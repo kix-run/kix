@@ -9,12 +9,12 @@ import Command from "../../../../components/Command.astro";
 (or `$XDG_DATA_HOME/kix/`). Each version is an unpacked release archive in
 its own directory, `~/.local/share/kix/<version>/`. The
 [install script](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
-puts versions there, and so does Kix when a project's
-[`kix` setting](/docs/reference/kix-toml/#the-kix-setting) names a version
+puts versions there, and so does Kix when a project's `flake.lock` names a
+[version of Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project)
 that is not installed.
 
-`kix self` always runs in the version of Kix you typed, whatever the
-project's `kix.toml` says. It reads no flake and contacts no cluster.
+`kix self` always runs in the version of Kix you typed, whatever version the
+project's `flake.lock` names. It reads no flake and contacts no cluster.
 
 :::note
 This page is hand-maintained from `cli/kix-cli/src/cli.rs`,

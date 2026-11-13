@@ -432,8 +432,8 @@ pub(crate) fn clusters_attr() -> &'static str {
 
 /// Check, once per run, that the project's Kix library read the same
 /// builder from `kix.toml` as Kix did ([`crate::project::check_agreement`]),
-/// and that this Kix can build that library
-/// ([`crate::version::policy::library_compatible`]).
+/// and, unless the project uses a development library, that the library is
+/// the running Kix ([`crate::version::policy::check_library`]).
 ///
 /// A library too old to publish its version is left to the checks that
 /// catch it later ([`KixEvalError::NoActivationIndex`] and
@@ -449,34 +449,27 @@ fn check_library(
     let Some(origin) = runtime::builder_source() else {
         return Ok(());
     };
+    // Read the lock before Nix evaluates the project, which writes a new
+    // lock when `flake.nix` changed. Kix chose its version from this lock
+    // before it parsed its arguments and refused a lock it cannot read, so
+    // anything but a release here is a development library or a run that
+    // skipped the choice.
+    let pinned = crate::flake_lock::project_kix(flake_path, input_overrides);
+    // A run that skipped the choice, such as one `kix upgrade` started,
+    // still stops before Nix rewrites the lock.
+    if let Err(e @ crate::flake_lock::LockError::TagMoved { .. }) = pinned {
+        return Err(KixEvalError::TagMoved(e));
+    }
     let facts = library_facts(flake_path, input_overrides)?;
     crate::project::check_agreement(runtime::builder(), &origin, facts.builder.as_deref())?;
-    if let Some(library) = facts.version.as_deref().and_then(|v| v.parse().ok()) {
-        let requirement = crate::project::kix_setting(flake_path)
-            .ok()
-            .flatten()
-            .map(|s| s.requirement);
-        library_compatible(crate::version::running(), library, requirement)?;
+    if let Ok(crate::flake_lock::ProjectKix::Release(pinned)) = pinned
+        && let Some(library) = facts.version.as_deref().and_then(|v| v.parse().ok())
+    {
+        crate::version::policy::check_library(crate::version::running(), &pinned, &library)
+            .map_err(KixEvalError::LibraryMismatch)?;
     }
     let _ = AGREED.set(());
     Ok(())
-}
-
-/// Check that Kix `kix` can build the Kix library `library` of a project
-/// whose `kix` setting is `requirement`.
-fn library_compatible(
-    kix: &crate::version::Version,
-    library: crate::version::Version,
-    requirement: Option<crate::version::policy::Requirement>,
-) -> Result<(), KixEvalError> {
-    crate::version::policy::library_compatible(kix, &library).map_err(|reason| {
-        KixEvalError::LibraryIncompatible(Box::new(crate::version::policy::LibraryIncompatible {
-            kix: kix.clone(),
-            library,
-            reason,
-            requirement,
-        }))
-    })
 }
 
 /// What the project's Kix library publishes about itself.

@@ -1,27 +1,29 @@
-//! Run the version of Kix that the project names in `kix.toml`.
+//! Run the version of Kix that the project's `flake.lock` pins.
 //!
 //! This runs in `main()` before clap parses, because the Kix that should run
 //! may take other arguments than this one. It reads `--flake` (or
-//! `KIX_FLAKE`) from the raw arguments, reads the project's `kix.toml`, and
-//! either runs here, `exec`s an installed version that meets the project's
-//! `kix` setting, or installs one first.
+//! `KIX_FLAKE`) and `--override-input` from the raw arguments, reads the
+//! release tag of the project's `kix` input from `flake.lock`
+//! (`kix::flake_lock`), and either runs here, `exec`s the installed version
+//! of that tag, or installs it first. A project with a development library
+//! runs here.
 //!
 //! The hand-over between two versions of Kix is a contract that every
 //! version keeps: the chooser `exec`s `<install>/bin/kix` with its own
 //! arguments unchanged and sets [`SELECTED_BY_VAR`] to its own path. A Kix
 //! that finds the variable set never selects again, which ends any loop, and
 //! `kix --version` and `kix doctor` print who chose it. The library check
-//! still runs in the chosen Kix, so a project whose requirement it does not
-//! meet still gets told.
+//! still runs in the chosen Kix, so a `flake.nix` that moved its tag after
+//! the choice still gets told.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
+use kix::flake_lock::{self, LockError, ProjectKix};
 use kix::installs::{self, Install};
-use kix::project::{self, KixSetting};
 use kix::release;
-use kix::version::policy::{self, Requirement};
+use kix::version::policy::Requirement;
 use kix::version::{self, Version};
 use miette::miette;
 
@@ -52,6 +54,8 @@ pub struct Scan {
     pub help: bool,
     /// `-V` or `--version` appears before the subcommand.
     pub version: bool,
+    /// Each `--override-input` pair.
+    pub overrides: Vec<(String, String)>,
 }
 
 /// The global flags that take a value, and how many.
@@ -105,6 +109,11 @@ pub fn scan(args: &[OsString]) -> Scan {
                 if name == "flake" {
                     scan.flake = values.first().map(|v| v.to_string());
                 }
+                if name == "override-input"
+                    && let [input, url] = values[..]
+                {
+                    scan.overrides.push((input.to_string(), url.to_string()));
+                }
             }
             continue;
         }
@@ -156,19 +165,20 @@ pub fn raw_flake(scan: &Scan, env_flake: Option<&OsStr>) -> String {
         .unwrap_or_else(|| ".".to_string())
 }
 
-/// What to do about the project's `kix` setting.
+/// What to do about the Kix a project uses.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Decision {
     RunHere,
     Exec(Install),
-    Install(Requirement),
+    Install(Version),
     Refuse(String),
 }
 
-/// Decide which Kix runs a project that needs `req`. `auto_install` is the
-/// value of [`AUTO_INSTALL_VAR`].
+/// Decide which Kix runs a project that uses `kix`, or `None` when the
+/// command reads no local project. `auto_install` is the value of
+/// [`AUTO_INSTALL_VAR`].
 pub fn decide(
-    req: Option<&Requirement>,
+    kix: Option<&ProjectKix>,
     running: &Version,
     installed: &[Install],
     auto_install: Option<&OsStr>,
@@ -177,47 +187,23 @@ pub fn decide(
     if selected_by.is_some() {
         return Decision::RunHere;
     }
-    let Some(req) = req else {
+    let Some(ProjectKix::Release(wanted)) = kix else {
         return Decision::RunHere;
     };
-    let versions: Vec<Version> = installed.iter().map(|i| i.version.clone()).collect();
-    let chosen = policy::choose(req, &versions);
-    // A newer installed patch wins even when this Kix meets the requirement,
-    // so installing a patch is enough to move a project onto it.
-    if policy::satisfies(req, running) && chosen.as_ref().is_none_or(|c| c <= running) {
+    if wanted == running {
         return Decision::RunHere;
     }
-    if let Some(chosen) = chosen {
-        let install = installed
-            .iter()
-            .find(|i| i.version == chosen)
-            .expect("choose returns one of the installed versions");
+    if let Some(install) = installed.iter().find(|i| &i.version == wanted) {
         return Decision::Exec(install.clone());
     }
     if auto_install_on(auto_install) {
-        Decision::Install(req.clone())
+        Decision::Install(wanted.clone())
     } else {
+        let wanted = wanted.release();
         Decision::Refuse(format!(
-            "This project needs Kix {req} (kix.toml), and no Kix {req} is installed. Automatic installs are off ({AUTO_INSTALL_VAR}={}). Run `kix self install {req}`.",
+            "This project uses Kix {wanted} (flake.lock), and Kix {wanted} is not installed. Automatic installs are off ({AUTO_INSTALL_VAR}={}). Run `kix self install {wanted}`.",
             auto_install.unwrap_or_default().to_string_lossy()
         ))
-    }
-}
-
-/// Return the message for an install the project's `kix` setting asked for.
-/// When the only match is a prerelease, the fix is in kix.toml, since
-/// installing the prerelease leaves the setting unmatched.
-fn install_error_for_project(e: release::InstallError) -> String {
-    match e {
-        release::InstallError::NoRelease {
-            req,
-            system,
-            prerelease: Some(pre),
-            ..
-        } => format!(
-            "This project needs Kix {req} (kix.toml), and no Kix {req} release exists for {system}. Kix {pre} is a prerelease, which a minor such as {req} never matches. To use it for this project, set kix = \"{pre}\" in kix.toml"
-        ),
-        e => e.to_string(),
     }
 }
 
@@ -229,17 +215,36 @@ pub fn auto_install_on(value: Option<&OsStr>) -> bool {
         .is_some_and(|v| matches!(v.as_str(), "0" | "false" | "no"))
 }
 
-/// Read the project's `kix` setting for `args`, or `None` when the command
-/// reads no local project or the project sets none.
-fn kix_setting(scan: &Scan) -> miette::Result<Option<KixSetting>> {
+/// Return the Kix the project in `scan` uses, or `None` when the command
+/// reads no local project: `--flake` names a remote flake, or the
+/// directory has no `flake.nix`.
+fn project_kix(scan: &Scan) -> Option<Result<ProjectKix, LockError>> {
     let flake = raw_flake(scan, std::env::var_os("KIX_FLAKE").as_deref());
-    let Some(dir) = crate::commands::project_dir(&flake) else {
-        return Ok(None);
-    };
-    project::kix_setting(&dir).map_err(|e| miette!("{e}"))
+    let dir = crate::commands::project_dir(&flake)?;
+    if !dir.join("flake.nix").is_file() {
+        return None;
+    }
+    Some(flake_lock::project_kix(&dir, &overrides(scan)))
 }
 
-/// Run the version of Kix the project in `args` needs, and print the version
+/// Return the `--override-input` pairs, or else the pairs in
+/// `KIX_OVERRIDE_INPUT`, as `main` reads them.
+fn overrides(scan: &Scan) -> Vec<(String, String)> {
+    if !scan.overrides.is_empty() {
+        return scan.overrides.clone();
+    }
+    let words: Vec<String> = std::env::var("KIX_OVERRIDE_INPUT")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    words
+        .chunks_exact(2)
+        .map(|c| (c[0].clone(), c[1].clone()))
+        .collect()
+}
+
+/// Run the version of Kix the project in `args` uses, and print the version
 /// for `kix --version`. Return only when the command runs in this process.
 pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
     let scan = scan(args);
@@ -247,18 +252,32 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
         return Ok(Outcome::RunHere);
     }
     let selected_by = std::env::var_os(SELECTED_BY_VAR).filter(|v| !v.is_empty());
-    let setting = kix_setting(&scan)?;
-    let req = setting.as_ref().map(|s| &s.requirement);
-    // Listing the installs is one directory read, and only a project that
-    // names a Kix needs it.
-    let installed = if selected_by.is_none() && req.is_some() {
+    // A chosen Kix never selects again, so it reads no lock.
+    let kix = match selected_by {
+        Some(_) => None,
+        None => project_kix(&scan),
+    };
+    let kix = match kix {
+        None => None,
+        Some(Ok(kix)) => Some(kix),
+        // `kix --version` still prints the version.
+        Some(Err(e)) if scan.version => {
+            print_version(selected_by.as_deref());
+            eprintln!("  {e}");
+            return Ok(Outcome::PrintedVersion);
+        }
+        Some(Err(e)) => return Err(miette!("{e}")),
+    };
+    // Listing the installs is one directory read, and only a project on a
+    // release needs it.
+    let installed = if matches!(kix, Some(ProjectKix::Release(_))) {
         installs::installed()
     } else {
         Vec::new()
     };
     let auto_install = std::env::var_os(AUTO_INSTALL_VAR);
     let decision = decide(
-        req,
+        kix.as_ref(),
         version::running(),
         &installed,
         auto_install.as_deref(),
@@ -269,32 +288,53 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
         Decision::Exec(install) => return Err(exec(&install, args)),
         // `kix --version` reports what is installed and never downloads.
         Decision::Install(_) | Decision::Refuse(_) if scan.version => {
-            print_version(selected_by.as_deref(), setting.as_ref());
-            if let Some(req) = req {
-                let next = if auto_install_on(auto_install.as_deref()) {
-                    "Any other kix command installs it.".to_string()
-                } else {
-                    format!("Run `kix self install {req}`.")
-                };
-                eprintln!("  this project needs Kix {req}, which is not installed. {next}");
-            }
+            print_version(selected_by.as_deref());
+            let wanted = wanted_release(kix.as_ref()).unwrap_or_default();
+            let next = if auto_install_on(auto_install.as_deref()) {
+                "Any other kix command installs it.".to_string()
+            } else {
+                format!("Run `kix self install {wanted}`.")
+            };
+            eprintln!("  this project uses Kix {wanted}, which is not installed. {next}");
             return Ok(Outcome::PrintedVersion);
         }
         Decision::Refuse(message) => return Err(miette!("{message}")),
-        Decision::Install(req) => {
+        Decision::Install(wanted) => {
             let system = release::system().map_err(|e| miette!("{e}"))?;
+            let req = Requirement::Exact(wanted.clone());
             let installed = release::install(&req, &system, &release::Source::from_env(), &|v| {
-                eprintln!("Installing Kix {} (this project needs {req})", v.release())
+                eprintln!(
+                    "Installing Kix {} (this project uses {})",
+                    v.release(),
+                    wanted.release()
+                )
             })
-            .map_err(|e| miette!("{}", install_error_for_project(e)))?;
+            .map_err(|e| miette!("{e}"))?;
             return Err(exec(&installed.install, args));
         }
     }
     if scan.version {
-        print_version(selected_by.as_deref(), setting.as_ref());
+        print_version(selected_by.as_deref());
+        if let Some(ProjectKix::Development(from)) = &kix {
+            eprintln!("  this project uses a development Kix library: {from}");
+        }
         return Ok(Outcome::PrintedVersion);
     }
+    if let Some(ProjectKix::Development(from)) = &kix {
+        eprintln!(
+            "note: this project uses a development Kix library ({from}), so Kix {} runs it without checking its version.",
+            version::running().release()
+        );
+    }
     Ok(Outcome::RunHere)
+}
+
+/// Return the release a project on a release uses.
+fn wanted_release(kix: Option<&ProjectKix>) -> Option<String> {
+    match kix {
+        Some(ProjectKix::Release(v)) => Some(v.release()),
+        _ => None,
+    }
 }
 
 /// Replace this process with the Kix of `install`, passing `args` on as they
@@ -316,17 +356,10 @@ fn exec(install: &Install, args: &[OsString]) -> miette::Report {
 /// Print `kix --version`. The first line is exactly `kix <version>`, which
 /// the release job checks. The lines about who chose this Kix and which Kix
 /// is on PATH go to stderr, so scripts that read the version keep working.
-fn print_version(selected_by: Option<&OsStr>, setting: Option<&KixSetting>) {
+fn print_version(selected_by: Option<&OsStr>) {
     println!("kix {}", version::running());
     if let Some(by) = selected_by {
-        let by = Path::new(by).display();
-        match setting {
-            Some(KixSetting { requirement, path }) => eprintln!(
-                "  chosen by kix = \"{requirement}\" in {} (started from {by})",
-                path.display()
-            ),
-            None => eprintln!("  started from {by}"),
-        }
+        eprintln!("  started from {}", Path::new(by).display());
     }
     let me = std::env::current_exe().and_then(|p| p.canonicalize()).ok();
     if let Some(path) = installs::on_path()
@@ -448,68 +481,63 @@ mod tests {
     fn decisions() {
         let running = v("0.8.4+250");
         let installed = [install("0.9.1"), install("0.9.3"), install("0.7.0")];
-        let minor = |m| Requirement::Minor(0, m);
+        let release = |s: &str| ProjectKix::Release(v(s));
+        let development = ProjectKix::Development(flake_lock::Development::OwnLibrary);
 
         assert_eq!(
             decide(None, &running, &installed, None, None),
             Decision::RunHere
         );
         assert_eq!(
-            decide(Some(&minor(8)), &running, &installed, None, None),
-            Decision::RunHere
-        );
-        // A newer installed patch of the same minor wins, and an older one
-        // does not.
-        let with_patches = [install("0.8.3"), install("0.8.6")];
-        assert_eq!(
-            decide(Some(&minor(8)), &running, &with_patches, None, None),
-            Decision::Exec(install("0.8.6"))
-        );
-        assert_eq!(
-            decide(Some(&minor(8)), &running, &with_patches[..1], None, None),
+            decide(Some(&development), &running, &installed, None, None),
             Decision::RunHere
         );
         assert_eq!(
-            decide(Some(&minor(9)), &running, &installed, None, None),
-            Decision::Exec(install("0.9.3"))
+            decide(Some(&release("0.8.4")), &running, &installed, None, None),
+            Decision::RunHere
         );
+        // The exact version runs, never a newer patch.
         assert_eq!(
-            decide(
-                Some(&Requirement::Exact(v("0.9.1"))),
-                &running,
-                &installed,
-                None,
-                None
-            ),
+            decide(Some(&release("0.9.1")), &running, &installed, None, None),
             Decision::Exec(install("0.9.1"))
         );
         assert_eq!(
-            decide(Some(&minor(10)), &running, &installed, None, None),
-            Decision::Install(minor(10))
+            decide(Some(&release("0.8.5")), &running, &installed, None, None),
+            Decision::Install(v("0.8.5"))
         );
         assert_eq!(
             decide(
-                Some(&minor(10)),
+                Some(&release("0.10.0")),
                 &running,
                 &installed,
                 Some(OsStr::new("no")),
                 None
             ),
             Decision::Refuse(
-                "This project needs Kix 0.10 (kix.toml), and no Kix 0.10 is installed. Automatic installs are off (KIX_AUTO_INSTALL=no). Run `kix self install 0.10`.".into()
+                "This project uses Kix 0.10.0 (flake.lock), and Kix 0.10.0 is not installed. Automatic installs are off (KIX_AUTO_INSTALL=no). Run `kix self install 0.10.0`.".into()
             )
         );
-        // A chosen Kix never selects again, even when it does not meet the
-        // project.
+        // A chosen Kix never selects again.
         assert_eq!(
             decide(
-                Some(&minor(9)),
+                Some(&release("0.9.1")),
                 &running,
                 &installed,
                 None,
                 Some(OsStr::new("/usr/bin/kix"))
             ),
             Decision::RunHere
+        );
+    }
+
+    #[test]
+    fn overrides_are_read_from_the_arguments() {
+        let s = scan(&args("--override-input kix path:/x build c"));
+        assert_eq!(s.overrides, [("kix".to_string(), "path:/x".to_string())]);
+        let s = scan(&args("--override-input=nixpkgs path:/n --flake p build c"));
+        assert_eq!(
+            s.overrides,
+            [("nixpkgs".to_string(), "path:/n".to_string())]
         );
     }
 

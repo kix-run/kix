@@ -35,7 +35,7 @@ holds every code Kix ends with.
 | `kix migrate domain` | `1` when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix status` | `2` when an object is missing, changed, or not ready under the selected checks. Objects Kix could not check do not count. `1` when Kix could not answer, such as when the named cluster has no current deploy. See [`kix status`](/docs/reference/cli/status/#exit-status). |
 | `kix pin check` | `1` when a pin fails or, with `--source-rev`, records a different source revision. Warnings do not fail. |
-| `kix doctor` | `1` when the runtime directory cannot be found, `manifest.json` does not match the compiled-in program versions, any file fails its SHA-256 check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix. Warnings and `info` lines do not fail. |
+| `kix doctor` | `1` when the runtime directory cannot be found, `manifest.json` does not match the compiled-in program versions, any file fails its SHA-256 check, `kix.toml` is invalid or sets an unsupported builder, Kix cannot read the project's version of Kix from `flake.lock` or is not that version, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix. Warnings and `info` lines do not fail. |
 | `kix upgrade` | `2` when a cluster does not build (the one `2` that is not a finding), with the version the project used or with a release the upgrade tried. `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first. See [`kix upgrade`](/docs/reference/cli/upgrade/#exit-status). |
 | `kix deploy` (before it starts) | `1` when `kix-upgrade.json` lists a change to stored data that no one has acknowledged with `kix upgrade --acknowledge`. |
 | `kix logs`, `kix port-forward` | kubectl's exit status. Kix replaces itself with `kubectl` once the workload is found. |
@@ -43,9 +43,10 @@ holds every code Kix ends with.
 Answering no to a confirmation prompt (`deploy`, `rollback`, `gc`,
 `migrate domain`) exits `0` without changing anything.
 
-When a project's [`kix` setting](/docs/reference/kix-toml/#the-kix-setting)
-makes Kix run another installed version in its place, the exit status is that
-version's. When no matching version is installed and Kix cannot install one,
+When a project's
+[version of Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project)
+in `flake.lock` makes Kix run another installed version in its place, the exit
+status is that version's. When that version is not installed and Kix cannot install one,
 or `KIX_AUTO_INSTALL=0` is set, Kix exits `1` before it runs the command.
 `kix --version` is the exception: it never installs, and exits `0` after it
 prints the running version and says the project's version is not installed.

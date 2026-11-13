@@ -8,12 +8,12 @@ import Snippet from '/src/components/Snippet.astro';
 import mkFlakeOutputs from '/src/snippets/flake/mkFlakeOutputs.json';
 import listClusters from '/src/command-output/how-to/application-list/list-clusters.json';
 
-Use `kixpkgs.lib.mkFlake` in the repository that owns your cluster definitions.
+Use `kix.lib.mkFlake` in the repository that owns your cluster definitions.
 It exposes the cluster outputs that Kix discovers.
 
 ## Add the flake inputs
 
-Create a `flake.nix` and declare nixpkgs and kixpkgs:
+Create a `flake.nix` and declare nixpkgs and the Kix library, as the input named `kix`:
 
 ```nix title="flake.nix"
 {
@@ -21,19 +21,21 @@ Create a `flake.nix` and declare nixpkgs and kixpkgs:
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    kixpkgs.url = "github:kix-run/kix";
-    kixpkgs.inputs.nixpkgs.follows = "nixpkgs";
+    kix.url = "github:kix-run/kix/v0.10.0";
+    kix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+  outputs = inputs: inputs.kix.lib.mkFlake {
     inherit inputs;
     clusters.production = ./clusters/production.nix;
   };
 }
 ```
 
-Following the same nixpkgs input keeps package evaluation on one nixpkgs
-revision.
+The tag `v0.10.0` in the url of the `kix` input is the project's version of
+Kix, and Kix runs that version for the project. Kix reads only an input named
+`kix`. Following the same nixpkgs input keeps package evaluation on one
+nixpkgs revision.
 
 ## Register cluster files
 
@@ -75,7 +77,7 @@ Either value turns the check off.
 For a single project, a compact registration is enough:
 
 ```nix title="flake.nix"
-outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+outputs = inputs: inputs.kix.lib.mkFlake {
   inherit inputs;
   clusters.application = ./cluster.nix;
 };
@@ -88,7 +90,7 @@ of the cluster's own. Use it for a setting the repository wants everywhere,
 such as making scorecard findings fail the build:
 
 ```nix title="flake.nix"
-outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+outputs = inputs: inputs.kix.lib.mkFlake {
   inherit inputs;
   clusters.production = ./clusters/production.nix;
   clusterModules = [ { scorecard.maxSeverity = "error"; } ];
@@ -106,7 +108,7 @@ List the packages the repository defines under `packages`, and the flake
 gets the check `option-contract-<name>` for each one:
 
 ```nix title="flake.nix"
-outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+outputs = inputs: inputs.kix.lib.mkFlake {
   inherit inputs;
   clusters.production = ./clusters/production.nix;
   packages.billing-api = ./packages/billing-api;
@@ -130,7 +132,7 @@ outputs =
   let
     systems = [ "x86_64-linux" "aarch64-darwin" ];
     forAllSystems = inputs.nixpkgs.lib.genAttrs systems;
-    kixOutputs = inputs.kixpkgs.lib.mkFlake {
+    kixOutputs = inputs.kix.lib.mkFlake {
       inherit inputs systems;
       clusters.production =
         { kix, packages }:
@@ -173,7 +175,7 @@ outputs =
   `option-contract-`, and, under `legacyPackages`, `kix`.
 
 :::caution
-Do not publish Kix's outputs yourself with `kixpkgs.lib.forPkgs`. `forPkgs`
+Do not publish Kix's outputs yourself with `kix.lib.forPkgs`. `forPkgs`
 returns the library but none of the outputs the `kix` program reads, so a flake
 that uses it misses each output `mkFlake` adds, and cannot use
 `builder = "nix"`.
@@ -197,20 +199,15 @@ See [`kix.toml`](/docs/reference/kix-toml/) for the full builder reference.
 
 ## Lock the inputs
 
-Name the version of Kix you installed in `kix.toml`, such as 0.10.0:
+Pin the Kix library and create `flake.lock`. Use the version in the tag of
+the `kix` input, such as 0.10.0:
 
-```toml title="kix.toml"
-kix = "0.10.0"
-```
+<Command commands={["kix upgrade --to 0.10.0"]} cwd="infrastructure/" />
 
-Then lock the Kix library (the `kixpkgs` input) to the release tag of that
-version. With the version the project already names, `kix upgrade` builds
-nothing. It writes `flake.lock`, and leaves `flake.nix` as it is:
-
-<Command commands={["git add kix.toml", "kix upgrade --to 0.10.0"]} cwd="infrastructure/" />
-
-Commit `kix.toml`, `flake.nix`, and `flake.lock` together. Other machines and
-CI will then evaluate the same Kix and nixpkgs revisions.
+Kix writes the tag into `flake.nix` if it is not there yet, and creates
+`flake.lock`. It builds nothing. Commit `flake.nix` and `flake.lock` together.
+Other machines and CI will then run the same version of Kix and evaluate the
+same Kix library and nixpkgs revisions.
 
 ## Verify CLI discovery
 

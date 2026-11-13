@@ -82,7 +82,7 @@ let
   # so kix/kubectl produce ANSI colour even though we redirect to a
   # file (their output detects non-TTY and disables colour otherwise).
   # --context is injected uniformly to keep the trust boundary tight.
-  # `kixOverrideArgs` repoints the workspace's kixpkgs input to the
+  # `kixOverrideArgs` repoints the workspace's kix input to the
   # in-store source.
   invocationFor =
     step:

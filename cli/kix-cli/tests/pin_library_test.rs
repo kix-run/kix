@@ -1,5 +1,6 @@
-//! `kix upgrade --to <the version the project is on>` against a local Git
-//! repository that stands in for the Kix library, so the test needs no
+//! `kix upgrade --to <version>` on a project that pins no version, and the
+//! check of a library tag that moved after the lock, against a local Git
+//! repository that stands in for the Kix library, so the tests need no
 //! network. Needs a Kix runtime (`KIX_RUNTIME_DIR` in the development shell).
 
 use std::path::{Path, PathBuf};
@@ -74,8 +75,8 @@ impl Library {
     }
 }
 
-/// Write a project whose inputs are `inputs` (name and url), whose Kix
-/// library is the input `library`, and whose `kix.toml` names this Kix.
+/// Write a project whose inputs are `inputs` (name and url), and whose Kix
+/// library is the input `library`.
 fn project(dir: &Path, inputs: &[(&str, &str)], library: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let lines: String = inputs
@@ -97,7 +98,6 @@ fn project(dir: &Path, inputs: &[(&str, &str)], library: &str) {
         ),
     )
     .unwrap();
-    std::fs::write(dir.join("kix.toml"), format!("kix = \"{VERSION}\"\n")).unwrap();
 }
 
 fn nix(dir: &Path, args: &[&str]) -> String {
@@ -121,7 +121,7 @@ fn locked_rev(dir: &Path, input: &str) -> String {
         .to_string()
 }
 
-fn repair(project: &Path) -> Command {
+fn upgrade(project: &Path) -> Command {
     let mut cmd = Command::cargo_bin("kix").unwrap();
     cmd.env("NO_COLOR", "true")
         .env("KIX_DATA_DIR", project.join(".kix-data"))
@@ -134,162 +134,79 @@ fn repair(project: &Path) -> Command {
     cmd
 }
 
+fn read(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap()
+}
+
 #[test]
-fn an_input_without_a_ref_is_locked_to_the_tag() {
+fn a_branch_or_a_commit_is_pinned_to_the_tag() {
     let tmp = tempfile::tempdir().unwrap();
     let lib = Library::new(&tmp.path().join("lib"));
-    let proj = tmp.path().join("project");
-    let url = lib.url();
-    project(&proj, &[("kix", &url)], "kix");
-    nix(
-        &proj,
-        &[
-            "flake",
-            "lock",
-            "--override-input",
-            "kix",
-            &format!("{url}?ref=refs/tags/v0.0.1"),
-        ],
-    );
-    let old_rev = locked_rev(&proj, "kix");
-    let flake = std::fs::read_to_string(proj.join("flake.nix")).unwrap();
+    let tagged = format!("{}?ref=refs/tags/v{VERSION}", lib.url());
+    let main_rev = git(&lib.dir, &["rev-parse", "main"]);
+    for (name, url) in [
+        ("branch", format!("{}?ref=main", lib.url())),
+        ("commit", format!("{}?rev={main_rev}", lib.url())),
+    ] {
+        let proj = tmp.path().join(name);
+        project(&proj, &[("kix", &url)], "kix");
+        nix(&proj, &["flake", "lock"]);
 
-    repair(&proj)
-        .arg("--dry-run")
-        .assert()
-        .success()
-        .stdout(format!(
-            "Kix library: 0.0.1 -> {VERSION}. This was a dry run, so Kix changed no files.\nNext: run `kix upgrade --to {VERSION}` to make these changes.\n"
+        upgrade(&proj).assert().success().stdout(format!(
+            "Pinned the Kix library to {VERSION} (updated flake.nix, flake.lock). This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.\nCommit flake.nix and flake.lock.\n"
         ));
-    assert_eq!(locked_rev(&proj, "kix"), old_rev);
+        assert!(read(&proj.join("flake.nix")).contains(&format!("\"{tagged}\"")));
+        assert_eq!(locked_rev(&proj, "kix"), lib.release_rev);
 
-    repair(&proj).assert().success().stdout(format!(
-        "Kix library: 0.0.1 -> {VERSION}.\nCommit flake.lock.\n"
-    ));
-    assert_eq!(locked_rev(&proj, "kix"), lib.release_rev);
-    assert_eq!(
-        std::fs::read_to_string(proj.join("flake.nix")).unwrap(),
-        flake
-    );
+        // A plain evaluation keeps the lock where Kix put it.
+        let system_attr = format!(
+            ".#legacyPackages.{}.kixLibrary.version",
+            kix::eval::nix::current_system()
+        );
+        assert_eq!(nix(&proj, &["eval", "--raw", &system_attr]), VERSION);
+        assert_eq!(locked_rev(&proj, "kix"), lib.release_rev);
 
-    // A plain evaluation keeps the lock where Kix put it.
-    let system_attr = format!(
-        ".#legacyPackages.{}.kixLibrary.version",
-        kix::eval::nix::current_system()
-    );
-    assert_eq!(nix(&proj, &["eval", "--raw", &system_attr]), VERSION);
-    assert_eq!(locked_rev(&proj, "kix"), lib.release_rev);
-
-    repair(&proj)
-        .assert()
-        .success()
-        .stdout(format!("Kix library is already {VERSION}.\n"));
+        upgrade(&proj)
+            .assert()
+            .success()
+            .stdout(format!("Already on Kix {VERSION}. Nothing to upgrade.\n"));
+    }
 }
 
 #[test]
-fn a_version_tag_is_changed_in_flake_nix() {
+fn two_urls_of_the_repository_are_left_to_a_person() {
     let tmp = tempfile::tempdir().unwrap();
     let lib = Library::new(&tmp.path().join("lib"));
     let proj = tmp.path().join("project");
-    let old = format!("{}?ref=refs/tags/v0.0.1", lib.url());
-    project(&proj, &[("kixpkgs", &old)], "kixpkgs");
+    let main = format!("{}?ref=main", lib.url());
+    project(&proj, &[("kix", &main), ("image-kix", &main)], "kix");
     nix(&proj, &["flake", "lock"]);
+    let flake = read(&proj.join("flake.nix"));
+    let lock = read(&proj.join("flake.lock"));
 
-    repair(&proj).assert().success().stdout(format!(
-        "Kix library: 0.0.1 -> {VERSION}. Kix changed the tag in flake.nix.\nCommit flake.nix and flake.lock.\n"
-    ));
-    assert!(
-        std::fs::read_to_string(proj.join("flake.nix"))
-            .unwrap()
-            .contains(&format!("{}?ref=refs/tags/v{VERSION}\"", lib.url()))
-    );
-    assert_eq!(locked_rev(&proj, "kixpkgs"), lib.release_rev);
-}
-
-#[test]
-fn two_urls_on_the_tag_are_left_to_a_person() {
-    let tmp = tempfile::tempdir().unwrap();
-    let lib = Library::new(&tmp.path().join("lib"));
-    let proj = tmp.path().join("project");
-    let old = format!("{}?ref=refs/tags/v0.0.1", lib.url());
-    project(&proj, &[("kix", &old), ("image-kix", &old)], "kix");
-    nix(&proj, &["flake", "lock"]);
-    let flake = std::fs::read_to_string(proj.join("flake.nix")).unwrap();
-    let lock = std::fs::read_to_string(proj.join("flake.lock")).unwrap();
-
-    repair(&proj)
+    upgrade(&proj)
         .assert()
         .code(1)
         .stdout(predicate::str::starts_with(
-            "Kix cannot tell which url in flake.nix is the Kix library input, because more than one names the tag v0.0.1:\n  flake.nix:2:   inputs.kix.url",
+            "Cannot update flake.nix automatically: two inputs use the Kix library's repository:\n  flake.nix:2:   inputs.kix.url",
         ));
-    assert_eq!(
-        std::fs::read_to_string(proj.join("flake.nix")).unwrap(),
-        flake
-    );
-    assert_eq!(
-        std::fs::read_to_string(proj.join("flake.lock")).unwrap(),
-        lock
-    );
+    assert_eq!(read(&proj.join("flake.nix")), flake);
+    assert_eq!(read(&proj.join("flake.lock")), lock);
 }
 
 #[test]
-fn a_branch_or_a_folder_is_left_alone_and_checked() {
+fn a_folder_has_no_versions_to_pin() {
     let tmp = tempfile::tempdir().unwrap();
     let lib = Library::new(&tmp.path().join("lib"));
+    let path = format!("path:{}", lib.dir.display());
     let proj = tmp.path().join("project");
-    let branch = format!("{}?ref=main", lib.url());
-    project(&proj, &[("kix", &branch)], "kix");
-    nix(&proj, &["flake", "lock"]);
-    let lock = std::fs::read_to_string(proj.join("flake.lock")).unwrap();
-    repair(&proj).assert().code(1).stdout(predicate::str::starts_with(
-        format!("The input kix follows the branch main, so Kix leaves it alone. It holds the Kix library 99.0.0-dev, which is newer than Kix {VERSION}. Point the input at the tag v{VERSION}, or at a branch that holds the Kix library {VERSION}.")
-    ));
-    assert_eq!(
-        std::fs::read_to_string(proj.join("flake.lock")).unwrap(),
-        lock
-    );
-
-    // A folder that holds the matching library passes the check.
-    git(&lib.dir, &["checkout", "-q", &format!("v{VERSION}")]);
-    let folder = tmp.path().join("folder");
-    std::fs::create_dir(&folder).unwrap();
-    for file in ["flake.nix", "VERSION"] {
-        std::fs::copy(lib.dir.join(file), folder.join(file)).unwrap();
-    }
-    let path = format!("path:{}", folder.display());
-    let proj = tmp.path().join("project-folder");
     project(&proj, &[("kix", &path)], "kix");
-    repair(&proj).assert().success().stdout(format!(
-        "The input kix is the local folder {}, so Kix leaves it alone. It holds the Kix library {VERSION}.\n",
-        folder.display()
-    ));
-}
-
-#[test]
-fn two_library_names_need_the_setting() {
-    let tmp = tempfile::tempdir().unwrap();
-    let lib = Library::new(&tmp.path().join("lib"));
-    let proj = tmp.path().join("project");
-    let old = format!("{}?ref=refs/tags/v0.0.1", lib.url());
-    project(&proj, &[("kix", &lib.url()), ("kixpkgs", &old)], "kixpkgs");
-    repair(&proj)
+    upgrade(&proj)
         .assert()
         .code(1)
-        .stdout(predicate::str::contains(
-            "flake.nix has an input named kix and an input named kixpkgs",
-        ));
-
-    std::fs::write(
-        proj.join("kix.toml"),
-        format!("kix = \"{VERSION}\"\nlibrary-input = \"kixpkgs\"\n"),
-    )
-    .unwrap();
-    repair(&proj)
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(format!(
-            "Kix library: 0.0.1 -> {VERSION}. Kix changed the tag in flake.nix."
+        .stdout(predicate::str::starts_with(format!(
+            "The input kix is the local folder {}, which has no versions. Point the input at the tag v{VERSION}",
+            lib.dir.display()
         )));
 }
 
@@ -320,34 +237,32 @@ fn secret_hash_is_refused_with_its_change_record() {
 }
 
 #[test]
-fn a_library_of_another_minor_is_refused_with_the_fix() {
+fn a_tag_moved_after_the_lock_is_caught() {
     let tmp = tempfile::tempdir().unwrap();
+    let lib = Library::new(&tmp.path().join("lib"));
     let proj = tmp.path().join("project");
-    std::fs::create_dir(&proj).unwrap();
-    std::fs::write(
-        proj.join("flake.nix"),
-        r#"{
-  outputs = _: {
-    legacyPackages = builtins.listToAttrs (map (system: {
-      name = system;
-      value.kixLibrary.version = "0.1.0";
-    }) [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ]);
-  };
-}
-"#,
-    )
-    .unwrap();
+    let tagged = format!("{}?ref=refs/tags/v{VERSION}", lib.url());
+    project(&proj, &[("kix", &tagged)], "kix");
+    nix(&proj, &["flake", "lock"]);
+    // A person moves the tag in flake.nix, and the lock still pins this Kix.
+    let flake = read(&proj.join("flake.nix")).replace(&format!("v{VERSION}"), "v0.0.1");
+    std::fs::write(proj.join("flake.nix"), flake).unwrap();
+    let lock = read(&proj.join("flake.lock"));
 
     Command::cargo_bin("kix")
         .unwrap()
         .env("NO_COLOR", "true")
         .env("KIX_NO_CACHE", "1")
+        .env_remove("KIX_SELECTED_BY")
+        .env_remove("KIX_FLAKE")
         .arg("--flake")
         .arg(&proj)
         .args(["build", "c"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(format!(
-            "This project's Kix library is 0.1.0, but this is Kix {VERSION}. Run `kix upgrade --to {VERSION}` to move the project to the {VERSION} library"
+            "flake.nix asks for Kix 0.0.1, but flake.lock pins Kix {VERSION}. Run `kix upgrade --to 0.0.1`."
         )));
+    // Kix stopped before Nix ran, so the lock is as it was.
+    assert_eq!(read(&proj.join("flake.lock")), lock);
 }

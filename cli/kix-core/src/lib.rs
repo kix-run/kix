@@ -23,6 +23,7 @@
 pub mod build_source;
 pub mod changes;
 pub mod eval;
+pub mod flake_lock;
 pub mod legacy_domain;
 pub mod library;
 pub mod manifest;

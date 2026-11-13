@@ -16,8 +16,8 @@
 # maintainers locally (`--apply`) to regenerate them. Mirrors
 # `captures-live.nix`'s shape; the only fundamental difference is no
 # kind cluster: `kix` is invoked against the workspace directly, with
-# `kixpkgs` repointed via `--override-input` so the eval stays clear of
-# the workspace flake.lock's pinned-but-stale kixpkgs rev.
+# its `kix` input repointed via `--override-input` so the eval stays clear
+# of the workspace flake.lock's pinned-but-stale library rev.
 
 {
   pkgs,
@@ -49,7 +49,7 @@ let
   # of terminal-width-dependent escapes (the live driver wants ANSI so
   # uses a PTY wrap; offline steps are simpler text output and don't).
   # `--no-cache` so nothing leaks between captures. `kixOverrideArgs`
-  # pins the workspace's kixpkgs input to the in-store source.
+  # pins the workspace's kix input to the in-store source.
   invocationFor =
     step:
     let

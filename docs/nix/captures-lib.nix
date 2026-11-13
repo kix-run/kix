@@ -13,7 +13,7 @@
   kix,
   kixExamples,
   # Store path of the kixpkgs flake source. Forwarded to every kix
-  # invocation as `--override-input kixpkgs path:<store>` so the
+  # invocation as `--override-input kix path:<store>` so the
   # workspace's eval resolves against a known, already-realised
   # source instead of re-fetching via github. The workspace's
   # flake.lock for nixpkgs is left untouched: both drivers run
@@ -98,9 +98,11 @@ let
   # Workspace setup shell. Caller is expected to have:
   #   $workspace: empty writable directory the workspace will live in.
   # After this snippet, $workspace contains kix-examples + (optional)
-  # overlay + applied setup mutations. The workspace's `flake.nix` and
-  # `flake.lock` are untouched; kix-side `--override-input kixpkgs
-  # path:<store>` (see `kixOverrideArgs` below) handles the repoint.
+  # overlay + applied setup mutations. Kix reads the project's Kix library
+  # only from an input named `kix`, so a kix-examples flake that still names
+  # it `kixpkgs` has the input renamed in the workspace copy. Kix-side
+  # `--override-input kix path:<store>` (see `kixOverrideArgs` below)
+  # handles the repoint, and `flake.lock` is left as it is.
   workspaceSetupShell =
     group:
     let
@@ -127,6 +129,9 @@ let
     ''
       cp -r --no-preserve=mode ${kixExamples}/. "$workspace/"
       chmod -R u+w "$workspace"
+      if grep -qw kixpkgs "$workspace/flake.nix"; then
+        sed -i -E 's/\bkixpkgs\b/kix/g' "$workspace/flake.nix"
+      fi
       ${overlayCp}
       ${mutateBlocks}
     '';
@@ -436,11 +441,13 @@ let
   manifest = import ./captures.nix;
 
   # Shared `--override-input` snippet drivers splice into their kix
-  # invocation strings. Pins the workspace's `kixpkgs` input to the
+  # invocation strings. Pins the workspace's `kix` input to the
   # in-store source so the eval kix triggers next never has to
   # re-fetch from github (and so the workspace's own flake.lock,
-  # which still points at a different rev, is harmless).
-  kixOverrideArgs = ''--override-input kixpkgs "path:${kixpkgsSrc}"'';
+  # which still points at a different rev, is harmless). Kix treats an
+  # overridden `kix` input as a development library: it runs itself and
+  # compares no versions.
+  kixOverrideArgs = ''--override-input kix "path:${kixpkgsSrc}"'';
 in
 {
   inherit manifest;

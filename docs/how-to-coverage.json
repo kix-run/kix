@@ -953,7 +953,8 @@
       "status": "implemented",
       "offlineCaptures": [
         "how-to/application-install/version"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "start-and-inspect/list-clusters-and-packages",

@@ -740,6 +740,23 @@ impl TwoClusters {
         t.write_cluster("b", "hello from sweep-b", true);
         git(t.path(), &["init", "-q"]);
         git(t.path(), &["add", "-A"]);
+        // Kix reads the project's Kix library from flake.lock before it
+        // runs a command. The library is a local repository with no ref,
+        // so Kix uses it as a development library.
+        let nix = kix::runtime::program_path(kix::runtime::Tool::Nix, kix::runtime::Want::Shipped)
+            .unwrap();
+        let out = std::process::Command::new(nix)
+            .args([
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "flake",
+                "lock",
+            ])
+            .current_dir(t.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "nix flake lock: {out:?}");
+        git(t.path(), &["add", "-A"]);
         t
     }
 

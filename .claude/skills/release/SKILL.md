@@ -94,7 +94,8 @@ automatic:
   docs site keeps serving the last release's docs.
 - Kix installs it only when it is named in full:
   `kix self install 0.8.0-rc.1`, `KIX_VERSION=0.8.0-rc.1` for the install
-  script, or `kix = "0.8.0-rc.1"` in `kix.toml`. `kix = "0.8"` never picks it.
+  script, `kix upgrade --to 0.8.0-rc.1`, or a project whose `flake.lock`
+  pins the tag `v0.8.0-rc.1`. `kix self install 0.8` never picks it.
 
 The release that follows the prereleases (`0.8.0`) is cut as usual, from the
 same unreleased records, with the version taken from the prerelease.

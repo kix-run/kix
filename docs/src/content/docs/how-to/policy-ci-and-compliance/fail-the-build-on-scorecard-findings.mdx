@@ -30,7 +30,7 @@ findings are unaffected.
 Put the setting in `clusterModules` so each cluster starts from it:
 
 ```nix title="flake.nix"
-outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+outputs = inputs: inputs.kix.lib.mkFlake {
   inherit inputs;
   clusters.production = ./clusters/production.nix;
   clusterModules = [ { scorecard.maxSeverity = "error"; } ];

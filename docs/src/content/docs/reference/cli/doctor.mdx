@@ -5,7 +5,7 @@ description: "Reference for kix doctor, which verifies the programs in the Kix r
 
 import Command from "../../../../components/Command.astro";
 
-`kix doctor` inspects the Kix runtime that Kix uses to run Nix, Helm, `kubectl`, and `sops`, and checks the project's builder setting in [`kix.toml`](/docs/reference/kix-toml/). It confirms that every program in the Kix runtime matches the version compiled into Kix, checks the SHA-256 hash of every file and symlink target in `manifest.json`, and, when the project uses `builder = "nix"`, verifies the machine's `nix` installation. It also reports the Kix version the project names in `kix.toml` and the versions of Kix installed for [`kix self`](/docs/reference/cli/self/).
+`kix doctor` inspects the Kix runtime that Kix uses to run Nix, Helm, `kubectl`, and `sops`, and checks the project's builder setting in [`kix.toml`](/docs/reference/kix-toml/). It confirms that every program in the Kix runtime matches the version compiled into Kix, checks the SHA-256 hash of every file and symlink target in `manifest.json`, and, when the project uses `builder = "nix"`, verifies the machine's `nix` installation. It also reports the version of Kix the project uses, from `flake.lock`, and the versions of Kix installed for [`kix self`](/docs/reference/cli/self/).
 
 :::note
 This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/commands/doctor.rs`, `cli/kix-core/src/runtime.rs`, `cli/kix-core/src/project.rs`, `cli/kix/src/installs.rs`, `cli/kix-core/src/system_nix.rs`, and `cli/kix-core/runtime/programs.json`. When flag definitions or runtime behavior change in the Rust source, update this page in the same change.
@@ -43,7 +43,7 @@ Each build of Kix is compiled against the exact tool versions in `cli/kix-core/r
 ### Version update policy
 
 - **Patch and minor updates:** A patch update of a program in the Kix runtime (for example, `2.35.3` to `2.35.4`) can ship in a Kix patch release. A minor update of a program in the Kix runtime ships in a Kix minor release.
-- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the Kix library and Kix both name the exact Helm versions. A Kix minor release can change a Helm version in the Kix runtime. A patch release can only add one, so it still renders charts for a Kix library of an earlier patch in the same minor. [`kix upgrade`](/docs/reference/cli/upgrade/) moves the Kix library in `flake.lock` with the project's version of Kix. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
+- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the Kix library and Kix both name the exact Helm versions. A project on a release uses a Kix library of the same version as Kix, so the two always agree. [`kix upgrade`](/docs/reference/cli/upgrade/) moves the Kix library in `flake.lock` with the project's version of Kix. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
 
 ## Third-party licenses and LGPL components
 
@@ -60,21 +60,20 @@ Normal `kix` commands check only the program names and versions in `manifest.jso
 
 ## Kix version checks
 
-The first line names the running Kix and its path. When another Kix chose it for a project (`KIX_SELECTED_BY` is set), the line also names that Kix. See [the `kix` setting](/docs/reference/kix-toml/#the-kix-setting).
+The first line names the running Kix and its path. When another Kix chose it for a project (`KIX_SELECTED_BY` is set), the line also names that Kix. See [Choose the version of Kix for a project](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project).
 
-After the builder checks, `kix doctor` reports the Kix version the project names and the versions installed in `~/.local/share/kix/` (or `$XDG_DATA_HOME/kix/`). Only the `✗` line changes the exit status:
+After the builder checks, `kix doctor` reports the version of Kix the project uses, from the tag of the `kix` input in `flake.lock`, and the versions installed in `~/.local/share/kix/` (or `$XDG_DATA_HOME/kix/`). Only the `✗` lines change the exit status:
 
 | Line | Meaning |
 | --- | --- |
-| `✓ Project needs Kix 0.8 (<path>/kix.toml)` | `kix.toml` sets `kix = "0.8"`, and the running Kix matches. |
-| `✗ Project needs Kix 0.9 (<path>/kix.toml), and this is Kix 0.8.4` | The running Kix does not match. Kix normally runs a matching version in its place, so this appears only when `KIX_SELECTED_BY` is set. |
-| `! This project has no kix.toml. Add one with kix = "0.8" so everyone runs a matching Kix` | The directory has a `flake.nix` and no `kix.toml`. |
-| `! kix.toml sets no kix version. Add kix = "0.8" so everyone runs a matching Kix` | `kix.toml` exists and does not name a Kix version. |
+| `✓ Project uses Kix 0.10.0 (flake.lock)` | The `kix` input in `flake.lock` pins `v0.10.0`, and the running Kix is 0.10.0. |
+| `✗ Project uses Kix 0.10.1 (flake.lock), and this is Kix 0.10.0` | The running Kix does not match. The detail line says to run `kix self install 0.10.1`, then `kix doctor` again. Kix normally runs the project's version in its place, so this appears only when `KIX_SELECTED_BY` is set. |
+| `✓ Project uses a development Kix library (<what>)` | The `kix` input is a local folder, a branch, or an input replaced with `--override-input kix`, or the project is the Kix repository. Kix compares no versions. |
+| `✗ Project's version of Kix: unknown` | Kix cannot read the project's version from `flake.lock`. The detail line gives the reason, such as a missing `flake.lock` or a `kix` input with no tag. |
+| `! Git does not track flake.lock, so other clones of this project can run another version of Kix. Run `git add flake.lock` and commit it.` | The project is in Git, and Git does not track `flake.lock`. |
 | `✓ Installed versions: 0.8.4, 0.8.0 (<directory>)` | The versions that [`kix self list`](/docs/reference/cli/self/) shows. |
 | `! No versions installed under <directory>` | The running Kix was not installed there, for example because it was installed with Nix or unpacked from a release archive by hand. |
 | `! No versions installed. Kix cannot find a home directory to install into. Set HOME or XDG_DATA_HOME.` | Neither `HOME` nor `XDG_DATA_HOME` is set. |
-
-The two `!` lines that suggest a `kix` value name the running Kix's minor. A Kix older than 0.8 prints neither, since the setting cannot name it.
 
 ## Project builder checks
 
@@ -94,12 +93,12 @@ Verify a healthy installation in a project using the default `kix` builder:
 <Command commands={["kix doctor"]} />
 
 ```text
-✓ Kix 0.8.0 (/home/me/.local/share/kix/0.8.0/bin/kix)
+✓ Kix 0.10.0 (/home/me/.local/share/kix/0.10.0/bin/kix)
 ✓ Kix runtime: helm 3.19.1, helm 4.3.1, kubectl 1.37.2, nix 2.35.4, sops 3.12.1
 ✓ Kix runtime is intact
 ✓ Builder: kix (default)
-✓ Project needs Kix 0.8 (/home/me/project/kix.toml)
-✓ Installed versions: 0.8.0, 0.7.0 (/home/me/.local/share/kix)
+✓ Project uses Kix 0.10.0 (flake.lock)
+✓ Installed versions: 0.10.0, 0.9.2 (/home/me/.local/share/kix)
 ```
 
 Verify a project that sets `builder = "nix"` in `kix.toml`:
@@ -132,4 +131,4 @@ Each line starts with `✓` (passed), `!` (a warning that does not fail the comm
 ## Exit status
 
 - `0` when the runtime directory and `kix.toml` are valid (including when `KIX_RUNTIME_DIR` points to a custom runtime directory with no `manifest.json`, which prints a `!` line) and, for `builder = "nix"` projects, `nix` on `PATH` is upstream Nix `2.24` or later. Warnings (`!` lines, such as `allow-import-from-derivation` being off) do not change the exit status.
-- `1` when the runtime directory cannot be found, `manifest.json` is unreadable or disagrees with the programs Kix expects, any file listed in `manifest.json` is missing or fails its SHA-256 or symlink check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix.
+- `1` when the runtime directory cannot be found, `manifest.json` is unreadable or disagrees with the programs Kix expects, any file listed in `manifest.json` is missing or fails its SHA-256 or symlink check, `kix.toml` is invalid or sets an unsupported builder, Kix cannot read the project's version of Kix from `flake.lock` or is not that version, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix.
