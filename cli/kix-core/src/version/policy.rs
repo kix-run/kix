@@ -163,7 +163,7 @@ impl fmt::Display for LibraryIncompatible {
             Incompatible::LibraryOlderMinor => {
                 write!(
                     f,
-                    "This project's Kix library is {lib}, but this is Kix {kix}. Run `kix lib update` to move the project to the {kix} library and commit flake.lock."
+                    "This project's Kix library is {lib}, but this is Kix {kix}. Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes."
                 )?;
                 if self.library.minor_key() >= FIRST_SELECTING {
                     write!(
@@ -367,7 +367,7 @@ mod tests {
                 Incompatible::LibraryOlderMinor,
                 None
             ),
-            "This project's Kix library is 0.9.0-rc.1, but this is Kix 0.10.0. Run `kix lib update` to move the project to the 0.10.0 library and commit flake.lock. To keep this project on Kix 0.9.0-rc.1 instead, set kix = \"0.9.0-rc.1\" in kix.toml."
+            "This project's Kix library is 0.9.0-rc.1, but this is Kix 0.10.0. Run `kix upgrade --to 0.10.0` to move the project to the 0.10.0 library, then commit the files it changes. To keep this project on Kix 0.9.0-rc.1 instead, set kix = \"0.9.0-rc.1\" in kix.toml."
         );
     }
 
@@ -385,7 +385,7 @@ mod tests {
     fn an_older_library_names_lib_update_and_a_selectable_minor() {
         assert_eq!(
             message("0.8.1", "0.7.0", Incompatible::LibraryOlderMinor, None),
-            "This project's Kix library is 0.7.0, but this is Kix 0.8.1. Run `kix lib update` to move the project to the 0.8.1 library and commit flake.lock."
+            "This project's Kix library is 0.7.0, but this is Kix 0.8.1. Run `kix upgrade --to 0.8.1` to move the project to the 0.8.1 library, then commit the files it changes."
         );
         assert_eq!(
             message(
@@ -394,7 +394,7 @@ mod tests {
                 Incompatible::LibraryOlderMinor,
                 Some("0.9")
             ),
-            "This project's Kix library is 0.8.0, but this is Kix 0.9.1. Run `kix lib update` to move the project to the 0.9.1 library and commit flake.lock. To keep this project on Kix 0.8 instead, set kix = \"0.8\" in kix.toml."
+            "This project's Kix library is 0.8.0, but this is Kix 0.9.1. Run `kix upgrade --to 0.9.1` to move the project to the 0.9.1 library, then commit the files it changes. To keep this project on Kix 0.8 instead, set kix = \"0.8\" in kix.toml."
         );
     }
 

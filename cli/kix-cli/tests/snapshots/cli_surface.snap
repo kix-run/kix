@@ -357,17 +357,6 @@ kix pin list --verbose -v
 kix pin list --quiet -q
 kix pin list --no-color
 kix pin list --flake <value>
-kix lib
-kix lib --verbose -v
-kix lib --quiet -q
-kix lib --no-color
-kix lib --flake <value>
-kix lib update
-kix lib update --dry-run
-kix lib update --verbose -v
-kix lib update --quiet -q
-kix lib update --no-color
-kix lib update --flake <value>
 kix upgrade
 kix upgrade --to <value>
 kix upgrade --dry-run

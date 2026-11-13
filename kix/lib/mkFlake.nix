@@ -55,7 +55,7 @@ let
     else
       fail {
         message = "kix.toml sets builder = ${builtins.toJSON value}, which is not a known builder (the Kix library supports: ${lib.concatStringsSep ", " builders}).";
-        fix = "Check the spelling, or run `kix lib update` if the project needs a newer Kix library.";
+        fix = "Check the spelling, or run `kix upgrade` if the project needs a newer Kix library.";
         option = "builder";
       };
 

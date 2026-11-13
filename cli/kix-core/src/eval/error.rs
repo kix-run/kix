@@ -36,7 +36,7 @@ pub enum KixEvalError {
         "cluster '{cluster}' uses a Kix library older than Kix {kix}\n  \
          No project files or cluster resources were changed.\n\n  \
          Next (choose one):\n    \
-         - Run `kix lib update` to move the project to the {kix} library and commit `flake.lock`.\n    \
+         - Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.\n    \
          - {KEEP_LIBRARY}",
         kix = crate::version::running().release()
     )]

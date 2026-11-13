@@ -96,7 +96,7 @@ compare versions name both sides with these nouns and their versions.
 | Part | Name | Not |
 |---|---|---|
 | The product, and the installed tool when you mean the tool | **Kix** ("Kix 0.8.1", "Upgrade Kix to 0.8.1") | "the kix binary", "the kix program", "this kix", "the Kix CLI", "the Kix release" for the installed tool |
-| What a person types | `kix`, in code font, only for a command line or a command name (`kix lib update`, "run `kix build`") | bare lowercase kix in prose |
+| What a person types | `kix`, in code font, only for a command line or a command name (`kix upgrade`, "run `kix build`") | bare lowercase kix in prose |
 | The Nix code a project pins in `flake.lock` | **the Kix library** ("This project's Kix library is 0.8.0") | "kixpkgs" in user-facing text, except as the flake input or repository name |
 | The programs that ship with Kix in `libexec/kix` (Nix, Helm, kubectl, sops) | **the Kix runtime**; one program in it is "the Helm in the Kix runtime" | "bundled programs", "bundled runtime", "Kix's programs", "runtime directory" except where the folder itself is meant |
 | Where Kix keeps fetched and built files (`~/.cache/kix/store`) | **Kix's local store** | "Kix's store", "the local build cache", "the evaluation store", "the Kix store" |

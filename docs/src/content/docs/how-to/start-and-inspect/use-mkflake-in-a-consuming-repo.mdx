@@ -197,12 +197,20 @@ See [`kix.toml`](/docs/reference/kix-toml/) for the full builder reference.
 
 ## Lock the inputs
 
-Pin the Kix library (`kixpkgs` in `flake.lock`) to match your installed Kix:
+Name the version of Kix you installed in `kix.toml`, such as 0.10.0:
 
-<Command commands={["kix lib update"]} cwd="infrastructure/" />
+```toml title="kix.toml"
+kix = "0.10.0"
+```
 
-Commit `flake.nix` and `flake.lock` together. Other machines and CI will then
-evaluate the same Kix and nixpkgs revisions.
+Then lock the Kix library (the `kixpkgs` input) to the release tag of that
+version. With the version the project already names, `kix upgrade` builds
+nothing. It writes `flake.lock`, and leaves `flake.nix` as it is:
+
+<Command commands={["git add kix.toml", "kix upgrade --to 0.10.0"]} cwd="infrastructure/" />
+
+Commit `kix.toml`, `flake.nix`, and `flake.lock` together. Other machines and
+CI will then evaluate the same Kix and nixpkgs revisions.
 
 ## Verify CLI discovery
 

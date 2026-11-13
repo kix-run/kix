@@ -64,7 +64,6 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "port-forward",
             "compliance",
             "pin",
-            "lib",
             "doctor",
             "upgrade",
         ],
@@ -144,7 +143,6 @@ const COMMAND_GROUPS: &[(&str, &[&str])] = &[
         "Project and installation",
         &[
             "upgrade",
-            "lib",
             "self",
             "doctor",
             "pin",

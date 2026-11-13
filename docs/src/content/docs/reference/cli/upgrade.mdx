@@ -3,6 +3,8 @@ title: "`upgrade`"
 description: "Reference for kix upgrade, which moves a project to a newer version of Kix, builds every cluster before and after, and lists the release notes that apply."
 ---
 
+import Command from "../../../../components/Command.astro";
+
 `kix upgrade` moves a project to a newer version of Kix. It builds every
 cluster with the version the project uses now, pins the project to the new
 version, and builds every cluster again. Then it compares the two builds and
@@ -30,8 +32,8 @@ kix upgrade --acknowledge <ID>...
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--to <VERSION>` | `latest` | The version to move to: an exact version such as `0.10.2`, a minor such as `0.10` (its newest patch), or `latest`, the newest release that is not a prerelease. |
-| `--dry-run` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. |
+| `--to <VERSION>` | `latest` | The version to move to: an exact version such as `0.10.2`, a prerelease named in full such as `0.11.0-rc.1`, a minor such as `0.10` (its newest patch), or `latest`, the newest release that is not a prerelease. The version the project is on already [moves the Kix library to match it](#move-the-kix-library-to-the-version-the-project-is-on). |
+| `--dry-run` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. With the version the project is on, check the Kix library and change nothing. |
 | `--acknowledge <ID>...` | none | Acknowledge a change to stored data by its id or name, so that `kix deploy` goes ahead. Does nothing else. |
 
 ## The version the project uses
@@ -43,6 +45,46 @@ not newer than that, it prints this and exits `0`:
 
 ```text
 Already on the latest Kix release (0.12.1). Nothing to upgrade.
+```
+
+## Move the Kix library to the version the project is on
+
+A project names its version of Kix in three files: `kix` in `kix.toml`, the
+Kix library input in `flake.nix`, and the locked library in `flake.lock`.
+They can disagree, for example after someone edits `kix.toml` or runs
+`nix flake update`. Kix then stops before it builds, and its message names
+the command that makes them agree, such as:
+
+<Command commands={["kix upgrade --to 0.10.0"]} />
+
+When `--to` names the version the project is on, `kix upgrade` builds
+nothing and does not fetch the release index. It sets `kix` in `kix.toml`
+when that setting does not already match, and moves the Kix library input
+to the release tag `v0.10.0`. Kix finds the input by its name in
+`flake.nix`: `kix` or `kixpkgs`, or the name that
+[`library-input`](/docs/reference/kix-toml/#the-library-input-setting) in `kix.toml`
+gives. A mirror or a fork of the Kix library is moved the same way. What Kix
+does depends on what `flake.nix` says the input follows:
+
+| `flake.nix` says | Kix does | Kix prints |
+| --- | --- | --- |
+| No ref, such as `github:kix-run/kix` | Locks the tag in `flake.lock`. `flake.nix` stays as it is. | `Kix library: v0.9.1 -> 0.10.0.` |
+| A version tag, such as `github:kix-run/kix/v0.9.1` | Changes that tag in `flake.nix`, then locks it. When more than one URL in `flake.nix` names the tag, Kix changes nothing and lists the lines. | `Kix library: v0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.` |
+| A branch or a commit | Nothing. You chose it. | `The input kix follows the branch main, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
+| A local folder | Nothing. | `The input kix is the local folder ../kix, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
+
+Kix then evaluates the version of the Kix library that the project builds
+with, and stops with exit status `1` when Kix `0.10.0` cannot build it. When
+it had moved the input, it puts `flake.nix` and `flake.lock` back. Such a
+library can come from another input that brings its own Kix library, and
+the message names the `follows` line to add to `flake.nix`. When the
+library is an input of another flake only, Kix changes nothing and names the
+lines to add. With `--dry-run`, Kix evaluates the project with the input on
+the tag and writes no file. Commit the files Kix names:
+
+```text
+Kix library: v0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.
+Commit flake.nix and flake.lock.
 ```
 
 ## Release notes
@@ -112,18 +154,20 @@ range has no breaking, security, or upgrade notes, it says
    first.
 2. Pins the project to the target, installs it, and builds every cluster.
    Pinning writes the exact version into `kix.toml` and moves the Kix
-   library in `flake.lock` as [`kix lib update`](/docs/reference/cli/lib/)
-   does. When the library input in `flake.nix` names the project's version
-   as a tag, such as `github:kix-run/kix/v0.9.1`, `?ref=refs/tags/v0.9.1`,
-   or `?ref=v0.9.1` on any host, Kix moves that tag too, but only when
-   exactly one Kix URL in `flake.nix` names it. When two or more do, such as
-   a second input that pins a version of Kix built into an image, Kix changes
+   library input as described in
+   [Move the Kix library](#move-the-kix-library-to-the-version-the-project-is-on).
+   When the library input in `flake.nix` names a tag, such as
+   `github:kix-run/kix/v0.9.1`, `?ref=refs/tags/v0.9.1`, or `?ref=v0.9.1` on
+   any host, Kix changes that tag only when exactly one URL of the library's
+   repository in `flake.nix` names it. When two or more do, such as a second
+   input that pins a version of Kix built into an image, Kix changes
    nothing, names the lines, writes `edit-needed` into `kix-upgrade.json`,
    and exits `3` before it installs the target. Change the library input's
    URL yourself, leave the others, and run `kix upgrade` again. When Kix
-   cannot lock the new tag in `flake.lock`, or `flake.lock` still names
-   another tag afterwards, Kix puts `kix.toml`, `flake.nix`, and `flake.lock`
-   back as they were before that step, names the tag, and exits `2` or `3`.
+   cannot lock the new tag, or the project then builds with a Kix library
+   the target cannot build, Kix puts `kix.toml`, `flake.nix`, and
+   `flake.lock` back as they were before that step, says why, and exits `2`
+   or `3`.
 3. When a cluster does not build with the target, takes one minor release at
    a time: the newest patch of each minor after the project's, ending with
    the target. A project on a prerelease, such as `0.9.0-rc.1`, takes the
@@ -264,6 +308,6 @@ Programs that read the file must skip fields they do not know.
 ## Exit status
 
 - `0` when the project builds with the target, no object changed in any cluster, and nothing needs a person, and with `--dry-run` or `--acknowledge`.
-- `1` when the release index or a release's notes cannot be fetched or verified, a version cannot be installed, or the project cannot be pinned.
+- `1` when the release index or a release's notes cannot be fetched or verified, a version cannot be installed, or the project cannot be pinned. With the version the project is on, `1` when Kix cannot move the Kix library or the project builds with a library that version cannot build.
 - `2` when a cluster does not build, with the version the project used or with a release the upgrade tried.
 - `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first.

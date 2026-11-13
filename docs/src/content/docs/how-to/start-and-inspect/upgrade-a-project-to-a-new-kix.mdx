@@ -25,9 +25,23 @@ inputs.kix.url = "github:kix-run/kix";
 
 `kix upgrade` then updates the Kix library in `flake.lock` without editing
 `flake.nix`. When `flake.nix` names a tag, such as `github:kix-run/kix/v0.9.1`,
-`kix upgrade` updates the tag if no other Kix URL in `flake.nix` uses it. When
-another input uses the same tag, `kix upgrade` stops and asks you to update the
-Kix library URL yourself.
+`kix upgrade` updates the tag if no other URL of that repository in `flake.nix`
+uses it. When another input uses the same tag, `kix upgrade` stops and asks you
+to update the Kix library URL yourself. When the input follows a branch, a
+commit, or a local folder, `kix upgrade` leaves it alone and checks that it
+holds a Kix library the new version can build.
+
+## Make `kix.toml`, `flake.nix`, and `flake.lock` agree
+
+When Kix stops because the Kix library in `flake.lock` does not match the
+version in `kix.toml`, run `kix upgrade --to` with the version the project
+names, such as:
+
+<Command commands={["kix upgrade --to 0.10.0"]} cwd="my-project/" />
+
+With the version the project is on, `kix upgrade` builds nothing. It moves the
+Kix library to that version's release tag and names the files to commit. To
+try a prerelease, name it in full, such as `--to 0.11.0-rc.1`.
 
 ## Preview the upgrade
 

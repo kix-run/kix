@@ -77,6 +77,15 @@ pub const COMMANDS: &[RemovedCommand] = &[
             note: "",
         },
     },
+    RemovedCommand {
+        name: "lib",
+        removed: Removed {
+            old: "kix lib update",
+            new: "kix upgrade --to {running}",
+            id: "K6054",
+            note: "",
+        },
+    },
 ];
 
 /// `kix bundle CLUSTER FILE`, which names the file with a positional
@@ -341,7 +350,8 @@ const STATUS_MERGE: &str = "K6116";
 pub struct Removed {
     /// The old form as the user would type it, such as `kix gc --hard`.
     pub old: &'static str,
-    /// The form that replaces it, such as `kix gc --full-scan`.
+    /// The form that replaces it, such as `kix gc --full-scan`. Kix puts
+    /// its own version in place of [`RUNNING`].
     pub new: &'static str,
     /// The id of the change record that removed it, such as `K1234`.
     pub id: &'static str,
@@ -371,12 +381,19 @@ pub struct RemovedFlag {
     pub removed: Removed,
 }
 
+/// The text in [`Removed::new`] that stands for the version of the running
+/// Kix.
+pub const RUNNING: &str = "{running}";
+
 impl Removed {
     /// Return the line that tells the user what to type instead.
     pub fn message(&self) -> String {
+        let new = self
+            .new
+            .replace(RUNNING, &kix::version::running().release());
         let message = format!(
-            "[{}] `{}` was removed. Use `{}` instead.",
-            self.id, self.old, self.new
+            "[{}] `{}` was removed. Use `{new}` instead.",
+            self.id, self.old
         );
         if self.note.is_empty() {
             message
@@ -553,6 +570,18 @@ mod tests {
     fn found(args: &[&str]) -> Option<&'static str> {
         let matches = command().try_get_matches_from(args).expect("parses");
         find(&matches, COMMANDS, FLAGS).map(|r| r.id)
+    }
+
+    #[test]
+    fn lib_update_names_the_running_version() {
+        let lib = super::COMMANDS.iter().find(|c| c.name == "lib").unwrap();
+        assert_eq!(
+            lib.removed.message(),
+            format!(
+                "[K6054] `kix lib update` was removed. Use `kix upgrade --to {}` instead.",
+                kix::version::running().release()
+            )
+        );
     }
 
     #[test]

@@ -1,40 +1,20 @@
-//! The Kix library a project pins in its `flake.lock`, and moving it to the
-//! version that matches this version of Kix.
+//! The Kix library a project pins in its `flake.lock`, and the Helm versions
+//! it needs.
 //!
 //! The library names the exact Helm versions it renders charts with, and a
 //! version of Kix ships exactly those versions. When the two disagree, Kix stops
 //! before it renders and says which side to move ([`HelmMismatch`]).
-//! `kix lib update` ([`update`]) moves the project's side: it locks the
-//! library input to the release tag `v<version>` of this version of Kix with
-//! `nix flake lock --override-input`. That records the tag's revision in
-//! `flake.lock` and keeps the input's `original` from `flake.nix`, so a later
-//! plain evaluation keeps the lock as it is.
+//! [`crate::pin_library`] moves the project's side.
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
 use crate::eval::nix::{NixCommandError, command, current_system, output};
 use crate::runtime::Tool;
 use crate::version::Version;
-
-/// The GitHub owner and repository of the Kix library.
-pub const LIBRARY_OWNER: &str = "kix-run";
-pub const LIBRARY_REPO: &str = "kix";
-/// The Kix library as a flake URL without a ref.
-pub const LIBRARY_FLAKE: &str = "github:kix-run/kix";
-
-/// The repository the library lived in up to 0.8.0-rc.1. It gets no new
-/// releases, so `kix lib update` asks the user to point the input at
-/// [`LIBRARY_FLAKE`] instead of moving it.
-const FORMER_REPO: &str = "kixpkgs";
-
-/// A Git URL whose nodes in `flake.lock` count as the Kix library, in place of
-/// [`LIBRARY_FLAKE`]. Only tests set it, to run `kix lib update` against
-/// a local repository.
-pub const TEST_REPO_VAR: &str = "KIX_LIB_UPDATE_TEST_REPO";
 
 /// The flake output that holds the library's version (`kix/lib/mkFlake.nix`).
 fn version_attr() -> String {
@@ -54,10 +34,25 @@ pub enum LibraryVersion {
 /// Evaluate the release of the Kix library the flake in `flake_dir` uses.
 /// This never fails. A failed evaluation gives [`LibraryVersion::Unknown`].
 pub fn eval_version(flake_dir: &Path, input_overrides: &[(String, String)]) -> LibraryVersion {
-    let mut cmd = match command(Tool::Nix) {
-        Ok(cmd) => cmd,
-        Err(_) => return LibraryVersion::Unknown,
-    };
+    match try_eval_version(flake_dir, input_overrides) {
+        Ok(version) => version,
+        Err(e) => {
+            tracing::debug!(error = %e, "could not evaluate the Kix library version");
+            LibraryVersion::Unknown
+        }
+    }
+}
+
+/// Evaluate the release of the Kix library the flake in `flake_dir` uses,
+/// without writing `flake.lock`. Each pair in `input_overrides` replaces an
+/// input for this evaluation only. Return [`LibraryVersion::Older`] for a
+/// library without the version output, and the Nix error when the
+/// evaluation fails for another reason.
+pub fn try_eval_version(
+    flake_dir: &Path,
+    input_overrides: &[(String, String)],
+) -> Result<LibraryVersion, NixCommandError> {
+    let mut cmd = command(Tool::Nix)?;
     cmd.args(["eval", "--json", "--no-write-lock-file"])
         .arg(format!(".#{}", version_attr()))
         .args([
@@ -70,14 +65,11 @@ pub fn eval_version(flake_dir: &Path, input_overrides: &[(String, String)]) -> L
     cmd.current_dir(flake_dir);
     match output(&mut cmd) {
         Ok(out) => match serde_json::from_slice::<Value>(&out) {
-            Ok(Value::String(v)) => LibraryVersion::Known(v),
-            _ => LibraryVersion::Unknown,
+            Ok(Value::String(v)) => Ok(LibraryVersion::Known(v)),
+            _ => Ok(LibraryVersion::Unknown),
         },
-        Err(e) if e.missing_attribute() => LibraryVersion::Older,
-        Err(e) => {
-            tracing::debug!(error = %e, "could not evaluate the Kix library version");
-            LibraryVersion::Unknown
-        }
+        Err(e) if e.missing_attribute() => Ok(LibraryVersion::Older),
+        Err(e) => Err(e),
     }
 }
 
@@ -175,11 +167,11 @@ impl fmt::Display for HelmMismatch {
             (Fix::UpgradeProgram, LibraryVersion::Known(lib)) => write!(f, "Upgrade Kix to {lib}."),
             (Fix::UpdateLibrary, _) => write!(
                 f,
-                "Run `kix lib update` to move this project to the {program} library, then commit flake.lock."
+                "Run `kix upgrade --to {program}` to move this project to the {program} library, then commit the files it changes."
             ),
             _ => write!(
                 f,
-                "Run `kix lib update` to move this project to the {program} library and commit flake.lock, or use the version of Kix that matches the library."
+                "Run `kix upgrade --to {program}` to move this project to the {program} library and commit the files it changes, or use the version of Kix that matches the library."
             ),
         }
     }
@@ -187,777 +179,9 @@ impl fmt::Display for HelmMismatch {
 
 impl std::error::Error for HelmMismatch {}
 
-/// Why `kix lib update` did not move the library.
-#[derive(Debug, thiserror::Error)]
-pub enum UpdateError {
-    #[error(
-        "`kix lib update` changes flake.lock on disk, so --flake must name a local directory, not {0}"
-    )]
-    NotLocal(String),
-
-    #[error(
-        "{} has no flake.lock. Run `kix lib update` in the directory that holds your project's flake.nix and flake.lock",
-        .0.display()
-    )]
-    NoLock(PathBuf),
-
-    #[error("could not read {}: {message}", path.display())]
-    BadLock { path: PathBuf, message: String },
-
-    #[error(
-        "flake.lock has no input for the Kix library. Kix looks for an input locked to {LIBRARY_FLAKE}"
-    )]
-    NotFound,
-
-    #[error("Kix cannot move this project's Kix library to {version} by itself.\n{}", .steps.iter().map(|s| format!("- {s}")).collect::<Vec<_>>().join("\n"))]
-    ByHand { version: String, steps: Vec<String> },
-
-    #[error("could not move the Kix library to v{version}: {source}")]
-    Nix {
-        version: String,
-        #[source]
-        source: NixCommandError,
-    },
-}
-
-/// One Kix library input in `flake.lock`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LibraryInput {
-    /// The input names from the root flake to the input that declares this
-    /// node, never through a `follows`.
-    pub path: Vec<String>,
-    /// The locked revision.
-    pub rev: Option<String>,
-    pub action: Action,
-}
-
-/// What `kix lib update` does with a [`LibraryInput`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
-    /// Lock it to `url` with `--override-input`.
-    Move { url: String },
-    /// Kix cannot move it. The text says what to do by hand.
-    ByHand(String),
-}
-
-impl LibraryInput {
-    /// Return the input path as `--override-input` takes it.
-    pub fn override_path(&self) -> String {
-        self.path.join("/")
-    }
-}
-
-/// Return the Kix library inputs in `lock`, a parsed `flake.lock`, with what
-/// to do to move each to the release `version`.
-///
-/// An input counts as the library when it is locked to [`LIBRARY_FLAKE`] (or
-/// to `test_repo`). An input named `kixpkgs` or `kix`, or a repository named
-/// `kixpkgs` or `kix` elsewhere, counts too, so that the former repository, a
-/// fork, or a local path gets instructions instead of being skipped.
-pub fn library_inputs(lock: &Value, version: &str, test_repo: Option<&str>) -> Vec<LibraryInput> {
-    let nodes = &lock["nodes"];
-    let root = lock["root"].as_str().unwrap_or("root");
-    let mut found = Vec::new();
-    let mut seen = std::collections::HashSet::from([root.to_string()]);
-    let mut queue = std::collections::VecDeque::from([(root.to_string(), Vec::<String>::new())]);
-    while let Some((key, path)) = queue.pop_front() {
-        let Some(inputs) = nodes[&key]["inputs"].as_object() else {
-            continue;
-        };
-        for (name, edge) in inputs {
-            // A `follows` points at a node that its owner declares.
-            let Some(child) = edge.as_str() else { continue };
-            if !seen.insert(child.to_string()) {
-                continue;
-            }
-            let mut child_path = path.clone();
-            child_path.push(name.clone());
-            let node = &nodes[child];
-            match classify(node, name, version, test_repo) {
-                Some(action) => found.push(LibraryInput {
-                    rev: node["locked"]["rev"].as_str().map(str::to_string),
-                    action: action(&child_path),
-                    path: child_path,
-                }),
-                None => queue.push_back((child.to_string(), child_path)),
-            }
-        }
-    }
-    found
-}
-
-type ActionFn = Box<dyn Fn(&[String]) -> Action>;
-
-/// Return how to move `node`, the input `name`, when it is the Kix library.
-fn classify(node: &Value, name: &str, version: &str, test_repo: Option<&str>) -> Option<ActionFn> {
-    let original = node["original"].clone();
-    let tag = format!("v{version}");
-    let official = test_repo.is_some_and(|t| original["url"].as_str() == Some(t))
-        || kix_run_repo(&original).is_some_and(|r| r.eq_ignore_ascii_case(LIBRARY_REPO));
-    if !official {
-        let named = matches!(name, "kixpkgs" | "kix");
-        let is_lib_name =
-            |r: &str| r.eq_ignore_ascii_case(FORMER_REPO) || r.eq_ignore_ascii_case(LIBRARY_REPO);
-        let repo = original["repo"].as_str().is_some_and(is_lib_name)
-            || original["url"].as_str().is_some_and(|u| {
-                let u = u.trim_end_matches('/').trim_end_matches(".git");
-                u.rsplit('/').next().is_some_and(is_lib_name)
-            });
-        if !named && !repo {
-            return None;
-        }
-        let from = flake_url(&original);
-        if kix_run_repo(&original).is_some_and(|r| r.eq_ignore_ascii_case(FORMER_REPO)) {
-            return Some(Box::new(move |path| {
-                Action::ByHand(format!(
-                    "The input `{}` reads the Kix library from {from}, which has moved to {LIBRARY_FLAKE} and gets no new releases. Point the input at {LIBRARY_FLAKE} in flake.nix, then run `kix lib update` again.",
-                    path.join("/")
-                ))
-            }));
-        }
-        return Some(Box::new(move |path| {
-            Action::ByHand(format!(
-                "The input `{}` reads the Kix library from {from} instead of {LIBRARY_FLAKE}, so Kix cannot move it. Point it at {LIBRARY_FLAKE}/{tag} in flake.nix, or move that copy to the {tag} release. Then run `kix lib update` again.",
-                path.join("/")
-            ))
-        }));
-    }
-    let target = tagged_url(&original, &tag);
-    let pinned = original.get("rev").is_some()
-        || original["ref"].as_str().is_some_and(|r| {
-            let r = r.strip_prefix("refs/tags/").unwrap_or(r);
-            r != tag && r.starts_with('v') && r[1..].starts_with(|c: char| c.is_ascii_digit())
-        });
-    if !pinned {
-        return Some(Box::new(move |_| Action::Move {
-            url: target.clone(),
-        }));
-    }
-    let from = flake_url(&original);
-    Some(Box::new(move |path| {
-        Action::ByHand(match path {
-            [only] => format!(
-                "flake.nix pins the input `{only}` to {from}. Change it to {target} in flake.nix, then run `kix lib update` again."
-            ),
-            [owners @ .., last] => {
-                let attr = path
-                    .iter()
-                    .map(|p| format!("inputs.{p}"))
-                    .collect::<Vec<_>>()
-                    .join(".");
-                format!(
-                    "The input `{owner}` pins its input `{last}` to {from} in its own flake.nix. Move `{owner}` to a release that uses Kix {version}, or add `{attr}.url = \"{target}\";` to your flake.nix. Then run `kix lib update` again.",
-                    owner = owners.join("/"),
-                    version = &tag[1..],
-                )
-            }
-            [] => unreachable!("an input path has at least one name"),
-        })
-    }))
-}
-
-/// Return the repository name when `original` points at a repository of
-/// [`LIBRARY_OWNER`] on github.com.
-fn kix_run_repo(original: &Value) -> Option<&str> {
-    match original["type"].as_str() {
-        Some("github") => {
-            let owner = original["owner"].as_str()?;
-            (original.get("host").is_none() && owner.eq_ignore_ascii_case(LIBRARY_OWNER))
-                .then(|| original["repo"].as_str())
-                .flatten()
-        }
-        Some("git") => {
-            let url = original["url"].as_str()?;
-            let rest = url
-                .strip_prefix("https://")
-                .or_else(|| url.strip_prefix("ssh://git@"))
-                .unwrap_or(url);
-            let rest = rest.trim_end_matches('/').trim_end_matches(".git");
-            let (host, path) = rest.split_once('/')?;
-            if !host.eq_ignore_ascii_case("github.com") {
-                return None;
-            }
-            let (owner, repo) = path.split_once('/')?;
-            (owner.eq_ignore_ascii_case(LIBRARY_OWNER) && !repo.contains('/')).then_some(repo)
-        }
-        _ => None,
-    }
-}
-
-/// Return the flake URL of the same repository at the tag `tag`.
-fn tagged_url(original: &Value, tag: &str) -> String {
-    match original["type"].as_str() {
-        Some("github") => format!(
-            "github:{}/{}/{tag}",
-            original["owner"].as_str().unwrap_or_default(),
-            original["repo"].as_str().unwrap_or_default()
-        ),
-        _ => format!(
-            "git+{}?ref=refs/tags/{tag}",
-            original["url"].as_str().unwrap_or_default()
-        ),
-    }
-}
-
-/// Return a flake URL for the `original` of a lock node, as a person would
-/// write it in `flake.nix`.
-pub fn flake_url(original: &Value) -> String {
-    let s = |k: &str| original[k].as_str();
-    match s("type") {
-        Some("github" | "gitlab" | "sourcehut") => {
-            let mut url = format!(
-                "{}:{}/{}",
-                s("type").unwrap_or_default(),
-                s("owner").unwrap_or_default(),
-                s("repo").unwrap_or_default()
-            );
-            if let Some(r) = s("ref").or(s("rev")) {
-                url.push('/');
-                url.push_str(r);
-            }
-            url
-        }
-        Some("path") => format!("path:{}", s("path").unwrap_or_default()),
-        Some(kind) => {
-            let mut url = format!("{kind}+{}", s("url").unwrap_or_default());
-            let query: Vec<String> = ["ref", "rev"]
-                .iter()
-                .filter_map(|k| s(k).map(|v| format!("{k}={v}")))
-                .collect();
-            if !query.is_empty() {
-                url.push('?');
-                url.push_str(&query.join("&"));
-            }
-            url
-        }
-        None => "an input of unknown type".to_string(),
-    }
-}
-
-/// Return the locked revision of the input at `path` in `lock`, following
-/// `follows`.
-fn rev_at(lock: &Value, path: &[String]) -> Option<String> {
-    fn node_at(lock: &Value, path: &[String], depth: usize) -> Option<String> {
-        if depth > 32 {
-            return None;
-        }
-        let mut key = lock["root"].as_str().unwrap_or("root").to_string();
-        for name in path {
-            let edge = &lock["nodes"][&key]["inputs"][name];
-            key = match edge {
-                Value::String(k) => k.clone(),
-                Value::Array(follows) => {
-                    let follows: Vec<String> = follows
-                        .iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect();
-                    node_at(lock, &follows, depth + 1)?
-                }
-                _ => return None,
-            };
-        }
-        Some(key)
-    }
-    let key = node_at(lock, path, 0)?;
-    lock["nodes"][&key]["locked"]["rev"]
-        .as_str()
-        .map(str::to_string)
-}
-
-/// Return the release named by the tag (`vX.Y.Z`) that `original` holds for
-/// the input at `path` in `lock`, following `follows`.
-fn locked_tag(lock: &Value, path: &[String]) -> Option<String> {
-    let mut key = lock["root"].as_str().unwrap_or("root").to_string();
-    for name in path {
-        key = lock["nodes"][&key]["inputs"][name].as_str()?.to_string();
-    }
-    let original = &lock["nodes"][&key]["original"];
-    let tag = original["ref"].as_str()?;
-    let tag = tag.strip_prefix("refs/tags/").unwrap_or(tag);
-    tag.strip_prefix('v')
-        .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
-        .map(str::to_string)
-}
-
-/// What [`update`] did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Updated {
-    /// The library release before the update.
-    pub from: LibraryVersion,
-    /// The library release the lock now pins.
-    pub to: String,
-    /// Whether any locked revision changed.
-    pub changed: bool,
-}
-
-/// Move the Kix library inputs of the flake in `flake` to the version of Kix
-/// running now, the tag `v<release>`. With `dry_run`, work out the new lock
-/// without writing it.
-pub fn update(flake: &str, dry_run: bool) -> Result<Updated, UpdateError> {
-    update_to(flake, &crate::version::running().release(), dry_run)
-}
-
-/// Move the Kix library inputs of the flake in `flake` to the tag
-/// `v<release>`. With `dry_run`, work out the new lock without writing it.
-pub fn update_to(flake: &str, release: &str, dry_run: bool) -> Result<Updated, UpdateError> {
-    let dir = Path::new(flake);
-    if !dir.is_dir() {
-        return Err(UpdateError::NotLocal(flake.to_string()));
-    }
-    let lock_path = dir.join("flake.lock");
-    if !lock_path.is_file() {
-        return Err(UpdateError::NoLock(dir.to_path_buf()));
-    }
-    let lock = read_lock(&lock_path)?;
-    let test_repo = std::env::var(TEST_REPO_VAR).ok().filter(|v| !v.is_empty());
-    let release = release.to_string();
-    let by_hand_steps = |inputs: &[LibraryInput]| -> Vec<String> {
-        inputs
-            .iter()
-            .filter_map(|i| match &i.action {
-                Action::ByHand(text) => Some(text.clone()),
-                Action::Move { .. } => None,
-            })
-            .collect()
-    };
-    let mut inputs = library_inputs(&lock, &release, test_repo.as_deref());
-    let mut by_hand = by_hand_steps(&inputs);
-    if !by_hand.is_empty() {
-        // flake.lock still records an input as flake.nix spelled it before
-        // the person followed one of these steps. Read the lock that
-        // flake.nix gives now, without writing it, and decide again.
-        if let Ok(current) = current_lock(dir, &release) {
-            inputs = library_inputs(&current, &release, test_repo.as_deref());
-            by_hand = by_hand_steps(&inputs);
-        }
-    }
-    if inputs.is_empty() {
-        return Err(UpdateError::NotFound);
-    }
-    // A copy Kix cannot move, such as a mirror, may already be at the
-    // release because the person moved it by hand. Then only flake.lock
-    // has to catch up.
-    if !by_hand.is_empty() && eval_version(dir, &[]) == LibraryVersion::Known(release.clone()) {
-        let new_lock = if dry_run {
-            current_lock(dir, &release)?
-        } else {
-            self::lock(dir, &release)?;
-            read_lock(&lock_path)?
-        };
-        let changed = inputs
-            .iter()
-            .any(|i| rev_at(&new_lock, &i.path) != rev_at(&lock, &i.path));
-        return Ok(Updated {
-            from: LibraryVersion::Unknown,
-            to: release,
-            changed,
-        });
-    }
-    if !by_hand.is_empty() {
-        return Err(UpdateError::ByHand {
-            version: release,
-            steps: by_hand,
-        });
-    }
-
-    // Nix evaluates flake.nix as it is now, which already names the new
-    // release when the person moved a pinned input by hand. The old tag in
-    // flake.lock then tells the release the project had.
-    let from = match eval_version(dir, &[]) {
-        LibraryVersion::Known(v) if v == release => inputs
-            .iter()
-            .find_map(|i| locked_tag(&lock, &i.path))
-            .filter(|old| *old != release)
-            .map_or(LibraryVersion::Known(v), LibraryVersion::Known),
-        other => other,
-    };
-    let nix_error = |source| UpdateError::Nix {
-        version: release.clone(),
-        source,
-    };
-    let mut cmd = command(Tool::Nix).map_err(nix_error)?;
-    if dry_run {
-        cmd.args(["flake", "metadata", "--json", "--no-write-lock-file"]);
-    } else {
-        cmd.args(["flake", "lock"]);
-    }
-    cmd.args(["--extra-experimental-features", "nix-command flakes"]);
-    for input in &inputs {
-        if let Action::Move { url } = &input.action {
-            cmd.arg("--override-input")
-                .arg(input.override_path())
-                .arg(url);
-        }
-    }
-    cmd.current_dir(dir);
-    let out = output(&mut cmd).map_err(nix_error)?;
-    let new_lock = if dry_run {
-        let metadata: Value = serde_json::from_slice(&out).map_err(|e| UpdateError::BadLock {
-            path: lock_path.clone(),
-            message: format!("`nix flake metadata` printed no JSON: {e}"),
-        })?;
-        metadata["locks"].clone()
-    } else {
-        read_lock(&lock_path)?
-    };
-    // Compare with flake.lock as it was on disk, which `inputs` may not
-    // describe when flake.nix changed since the last lock.
-    let changed = inputs
-        .iter()
-        .any(|i| rev_at(&new_lock, &i.path) != rev_at(&lock, &i.path));
-    Ok(Updated {
-        from,
-        to: release,
-        changed,
-    })
-}
-
-/// Run `nix flake lock` in `dir`, which locks each input whose entry in
-/// `flake.nix` changed, such as a Kix library input moved to another tag.
-pub fn lock(dir: &Path, release: &str) -> Result<(), UpdateError> {
-    let nix_error = |source| UpdateError::Nix {
-        version: release.to_string(),
-        source,
-    };
-    let mut cmd = command(Tool::Nix).map_err(nix_error)?;
-    cmd.args([
-        "flake",
-        "lock",
-        "--extra-experimental-features",
-        "nix-command flakes",
-    ])
-    .current_dir(dir);
-    output(&mut cmd).map(|_| ()).map_err(nix_error)
-}
-
-/// Return the lock that `flake.nix` in `dir` gives now, with each input whose
-/// entry changed locked again, without writing `flake.lock`.
-fn current_lock(dir: &Path, release: &str) -> Result<Value, UpdateError> {
-    let nix_error = |source| UpdateError::Nix {
-        version: release.to_string(),
-        source,
-    };
-    let mut cmd = command(Tool::Nix).map_err(nix_error)?;
-    cmd.args([
-        "flake",
-        "metadata",
-        "--json",
-        "--no-write-lock-file",
-        "--extra-experimental-features",
-        "nix-command flakes",
-    ])
-    .current_dir(dir);
-    let out = output(&mut cmd).map_err(nix_error)?;
-    let metadata: Value = serde_json::from_slice(&out).map_err(|e| UpdateError::BadLock {
-        path: dir.join("flake.lock"),
-        message: format!("`nix flake metadata` printed no JSON: {e}"),
-    })?;
-    Ok(metadata["locks"].clone())
-}
-
-fn read_lock(path: &Path) -> Result<Value, UpdateError> {
-    let bad = |message: String| UpdateError::BadLock {
-        path: path.to_path_buf(),
-        message,
-    };
-    let text = std::fs::read_to_string(path).map_err(|e| bad(e.to_string()))?;
-    serde_json::from_str(&text).map_err(|e| bad(e.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    fn github(owner: &str, rev: &str) -> Value {
-        json!({
-            "locked": { "type": "github", "owner": owner, "repo": "kix", "rev": rev },
-            "original": { "type": "github", "owner": owner, "repo": "kix" }
-        })
-    }
-
-    #[test]
-    fn the_library_flake_names_the_owner_and_repository() {
-        assert_eq!(
-            LIBRARY_FLAKE,
-            format!("github:{LIBRARY_OWNER}/{LIBRARY_REPO}")
-        );
-    }
-
-    fn nixpkgs() -> Value {
-        json!({
-            "locked": { "type": "github", "owner": "NixOS", "repo": "nixpkgs", "rev": "n" },
-            "original": { "type": "github", "owner": "NixOS", "repo": "nixpkgs" }
-        })
-    }
-
-    fn moves(inputs: &[LibraryInput]) -> Vec<(String, String)> {
-        inputs
-            .iter()
-            .map(|i| match &i.action {
-                Action::Move { url } => (i.override_path(), url.clone()),
-                Action::ByHand(text) => (i.override_path(), format!("by hand: {text}")),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn reads_the_release_of_a_tag_in_the_lock() {
-        let lock = json!({
-            "root": "root",
-            "nodes": {
-                "root": { "inputs": { "kixpkgs": "kixpkgs" } },
-                "kixpkgs": { "original": { "type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.9.1" } }
-            }
-        });
-        assert_eq!(
-            locked_tag(&lock, &["kixpkgs".into()]).as_deref(),
-            Some("0.9.1")
-        );
-        assert_eq!(locked_tag(&lock, &["other".into()]), None);
-    }
-
-    #[test]
-    fn finds_a_direct_input() {
-        let lock = json!({
-            "root": "root",
-            "nodes": {
-                "root": { "inputs": { "kixpkgs": "kixpkgs", "nixpkgs": "nixpkgs" } },
-                "kixpkgs": github("kix-run", "a"),
-                "nixpkgs": nixpkgs(),
-            }
-        });
-        let found = library_inputs(&lock, "0.8.1", None);
-        assert_eq!(
-            moves(&found),
-            [("kixpkgs".into(), "github:kix-run/kix/v0.8.1".into())]
-        );
-        assert_eq!(found[0].rev.as_deref(), Some("a"));
-    }
-
-    #[test]
-    fn finds_an_input_of_an_input() {
-        let lock = json!({
-            "root": "root",
-            "nodes": {
-                "root": { "inputs": { "platform": "platform" } },
-                "platform": {
-                    "inputs": { "kix": "kixpkgs" },
-                    "locked": { "type": "github", "owner": "acme", "repo": "platform", "rev": "p" },
-                    "original": { "type": "github", "owner": "acme", "repo": "platform" }
-                },
-                "kixpkgs": github("kix-run", "a"),
-            }
-        });
-        assert_eq!(
-            moves(&library_inputs(&lock, "0.8.1", None)),
-            [("platform/kix".into(), "github:kix-run/kix/v0.8.1".into())]
-        );
-    }
-
-    #[test]
-    fn moves_the_owner_of_a_follows() {
-        let lock = json!({
-            "root": "root",
-            "nodes": {
-                "root": { "inputs": { "kixpkgs": ["platform", "kixpkgs"], "platform": "platform" } },
-                "platform": {
-                    "inputs": { "kixpkgs": "kixpkgs_2" },
-                    "locked": { "type": "github", "owner": "acme", "repo": "platform", "rev": "p" },
-                    "original": { "type": "github", "owner": "acme", "repo": "platform" }
-                },
-                "kixpkgs_2": github("kix-run", "a"),
-            }
-        });
-        let found = library_inputs(&lock, "0.8.1", None);
-        assert_eq!(
-            moves(&found),
-            [(
-                "platform/kixpkgs".into(),
-                "github:kix-run/kix/v0.8.1".into()
-            )]
-        );
-        assert_eq!(
-            rev_at(&lock, &["kixpkgs".to_string()]).as_deref(),
-            Some("a")
-        );
-    }
-
-    #[test]
-    fn a_path_input_is_by_hand() {
-        let lock = json!({
-            "root": "root",
-            "nodes": {
-                "root": { "inputs": { "kixpkgs": "kixpkgs" } },
-                "kixpkgs": {
-                    "locked": { "type": "path", "path": "/src/kixpkgs", "narHash": "x" },
-                    "original": { "type": "path", "path": "/src/kixpkgs" }
-                },
-            }
-        });
-        let [input] = &library_inputs(&lock, "0.8.1", None)[..] else {
-            panic!("one input")
-        };
-        let Action::ByHand(text) = &input.action else {
-            panic!("by hand")
-        };
-        assert!(text.contains("path:/src/kixpkgs"), "{text}");
-        assert!(text.contains("github:kix-run/kix/v0.8.1"), "{text}");
-    }
-
-    #[test]
-    fn a_fork_is_by_hand() {
-        let lock = json!({
-            "root": "root",
-            "nodes": {
-                "root": { "inputs": { "infra": "kixpkgs" } },
-                "kixpkgs": github("someone", "a"),
-            }
-        });
-        let [input] = &library_inputs(&lock, "0.8.1", None)[..] else {
-            panic!("one input")
-        };
-        assert!(
-            matches!(&input.action, Action::ByHand(t) if t.contains("github:someone/kix")),
-            "{input:?}"
-        );
-    }
-
-    #[test]
-    fn the_former_repository_is_by_hand() {
-        let former = |original: Value| {
-            json!({
-                "root": "root",
-                "nodes": {
-                    "root": { "inputs": { "kixpkgs": "kixpkgs" } },
-                    "kixpkgs": { "locked": original.clone(), "original": original }
-                }
-            })
-        };
-        for original in [
-            json!({ "type": "github", "owner": "kix-run", "repo": "kixpkgs", "ref": "v0.7.0" }),
-            json!({ "type": "github", "owner": "kix-run", "repo": "kixpkgs" }),
-            json!({ "type": "git", "url": "https://github.com/kix-run/kixpkgs.git" }),
-        ] {
-            let [input] = &library_inputs(&former(original.clone()), "0.8.1", None)[..] else {
-                panic!("one input for {original}")
-            };
-            let Action::ByHand(text) = &input.action else {
-                panic!("by hand for {original}")
-            };
-            assert!(
-                text.contains("which has moved to github:kix-run/kix"),
-                "{text}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_pinned_tag_is_by_hand() {
-        let mut node = github("kix-run", "a");
-        node["original"]["ref"] = json!("v0.8.0");
-        let lock = json!({
-            "root": "root",
-            "nodes": { "root": { "inputs": { "kixpkgs": "kixpkgs" } }, "kixpkgs": node }
-        });
-        let [input] = &library_inputs(&lock, "0.8.1", None)[..] else {
-            panic!("one input")
-        };
-        assert_eq!(
-            input.action,
-            Action::ByHand(
-                "flake.nix pins the input `kixpkgs` to github:kix-run/kix/v0.8.0. Change it to github:kix-run/kix/v0.8.1 in flake.nix, then run `kix lib update` again.".into()
-            )
-        );
-    }
-
-    #[test]
-    fn a_pin_in_another_flake_is_by_hand() {
-        let mut node = github("kix-run", "a");
-        node["original"]["rev"] = json!("0123abc");
-        let lock = json!({
-            "root": "root",
-            "nodes": {
-                "root": { "inputs": { "platform": "platform" } },
-                "platform": {
-                    "inputs": { "kixpkgs": "kixpkgs" },
-                    "locked": { "type": "github", "owner": "acme", "repo": "platform", "rev": "p" },
-                    "original": { "type": "github", "owner": "acme", "repo": "platform" }
-                },
-                "kixpkgs": node,
-            }
-        });
-        let [input] = &library_inputs(&lock, "0.8.1", None)[..] else {
-            panic!("one input")
-        };
-        let Action::ByHand(text) = &input.action else {
-            panic!("by hand")
-        };
-        assert!(
-            text.contains(
-                "add `inputs.platform.inputs.kixpkgs.url = \"github:kix-run/kix/v0.8.1\";`"
-            ),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn the_matching_tag_or_a_branch_moves() {
-        for r in ["v0.8.1", "refs/tags/v0.8.1", "main"] {
-            let mut node = github("kix-run", "a");
-            node["original"]["ref"] = json!(r);
-            let lock = json!({
-                "root": "root",
-                "nodes": { "root": { "inputs": { "kixpkgs": "kixpkgs" } }, "kixpkgs": node }
-            });
-            assert!(
-                matches!(
-                    library_inputs(&lock, "0.8.1", None)[0].action,
-                    Action::Move { .. }
-                ),
-                "{r}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_git_url_and_the_test_repo_move() {
-        let git = |url: &str| {
-            json!({
-                "root": "root",
-                "nodes": {
-                    "root": { "inputs": { "k": "k" } },
-                    "k": {
-                        "locked": { "type": "git", "url": url, "rev": "a" },
-                        "original": { "type": "git", "url": url }
-                    }
-                }
-            })
-        };
-        assert_eq!(
-            moves(&library_inputs(
-                &git("https://github.com/kix-run/kix.git"),
-                "0.8.1",
-                None
-            )),
-            [(
-                "k".into(),
-                "git+https://github.com/kix-run/kix.git?ref=refs/tags/v0.8.1".into()
-            )]
-        );
-        assert!(library_inputs(&git("file:///tmp/lib"), "0.8.1", None).is_empty());
-        assert_eq!(
-            moves(&library_inputs(
-                &git("file:///tmp/lib"),
-                "0.8.1",
-                Some("file:///tmp/lib")
-            )),
-            [(
-                "k".into(),
-                "git+file:///tmp/lib?ref=refs/tags/v0.8.1".into()
-            )]
-        );
-    }
 
     fn mismatch(library: LibraryVersion, wanted: &str, program: &str) -> HelmMismatch {
         HelmMismatch {
@@ -974,7 +198,7 @@ mod tests {
         assert_eq!(m.fix(), Fix::UpdateLibrary);
         assert_eq!(
             m.to_string(),
-            "This project's Kix library is 0.8.0 and renders Helm charts with Helm 4.3.1, but Kix is 0.8.1 and ships Helm 4.3.2. Run `kix lib update` to move this project to the 0.8.1 library, then commit flake.lock."
+            "This project's Kix library is 0.8.0 and renders Helm charts with Helm 4.3.1, but Kix is 0.8.1 and ships Helm 4.3.2. Run `kix upgrade --to 0.8.1` to move this project to the 0.8.1 library, then commit the files it changes."
         );
     }
 
@@ -1010,7 +234,7 @@ mod tests {
             let m = mismatch(library, "4.3.1", "0.8.1");
             assert_eq!(m.fix(), Fix::Either);
             let text = m.to_string();
-            assert!(text.contains("Run `kix lib update`"), "{text}");
+            assert!(text.contains("Run `kix upgrade --to 0.8.1`"), "{text}");
             assert!(text.contains("or use the version of Kix"), "{text}");
         }
     }

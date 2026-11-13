@@ -50,16 +50,39 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     }
     let config = kix::project::ProjectConfig::read(Some(&dir), None).map_err(|e| miette!("{e}"))?;
     let previous = UpgradeState::read(&dir).map_err(|e| miette!("{e}"))?;
-    let source = Source::from_env();
-    let system = release::system().map_err(|e| miette!("{e}"))?;
-    let index = release::fetch_index(&source).map_err(|e| miette!("{e}"))?;
-    let releases = plan::usable(&index.releases, &system);
 
     // A run that a build failure, a flake.nix edit, or an interruption
     // stopped goes on from where it was.
     let resume = previous
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
+    let from: Version = match &resume {
+        Some(s) => s
+            .from
+            .parse()
+            .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
+        None => current_version(&dir, &config)?,
+    };
+    let to = match args.to.as_deref() {
+        None | Some("latest") => None,
+        Some(text) => match text.parse::<Requirement>() {
+            Ok(req) => Some(req),
+            Err(_) => {
+                return refuse(&format!(
+                    "Invalid `--to` value `{text}`: expected a version (such as `0.12.1`), a minor series (such as `0.12`), or `latest`."
+                ));
+            }
+        },
+    };
+    // The version the project is on already: nothing is upgraded, so the
+    // release index and the builds are not needed.
+    if resume.is_none()
+        && let Some(Requirement::Exact(v)) = &to
+        && *v == from
+    {
+        return repair(&dir, &config, v, args.dry_run);
+    }
+
     if resume.is_none()
         && !args.dry_run
         && let Some(p) = &previous
@@ -84,35 +107,24 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         ));
     }
 
-    let from: Version = match &resume {
-        Some(s) => s
-            .from
-            .parse()
-            .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
-        None => current_version(&dir, &config)?,
-    };
-    let to = match args.to.as_deref() {
-        None | Some("latest") => None,
-        Some(text) => match text.parse::<Requirement>() {
-            Ok(req) => Some(req),
-            Err(_) => {
-                return refuse(&format!(
-                    "Invalid `--to` value `{text}`: expected a version (such as `0.12.1`), a minor series (such as `0.12`), or `latest`."
-                ));
-            }
-        },
-    };
-    if let Some(Requirement::Exact(v)) = &to
-        && v.is_prerelease()
-        && index.releases.iter().any(|r| r.version == *v)
-    {
-        return refuse(&format!(
-            "Kix {v} is a prerelease, and `kix upgrade` moves only to releases.\nNo project files were modified.\nNext: to try {v}, set kix = \"{v}\" in kix.toml and run `kix lib update`, which moves flake.lock to the Kix library {v}."
-        ));
-    }
+    let source = Source::from_env();
+    let system = release::system().map_err(|e| miette!("{e}"))?;
+    let index = release::fetch_index(&source).map_err(|e| miette!("{e}"))?;
+    let releases = plan::usable(&index.releases, &system);
     let min_age = config.upgrade_min_age;
     let today = chrono::Utc::now().date_naive();
-    let Some(target) = plan::choose_target(&releases, to.as_ref(), min_age, today) else {
+    // A prerelease is a target only when `--to` names it in full.
+    let prerelease = match &to {
+        Some(Requirement::Exact(v)) if v.is_prerelease() => index
+            .releases
+            .iter()
+            .find(|r| r.version == *v && r.systems.contains(&system))
+            .map(|r| r.version.clone()),
+        _ => None,
+    };
+    let Some(target) =
+        prerelease.or_else(|| plan::choose_target(&releases, to.as_ref(), min_age, today))
+    else {
         let newest_age = plan::newest_age(&releases, today).map(|d| {
             format!(
                 "newest release is {d} {} old",
@@ -550,6 +562,84 @@ fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<V
     unreachable!("refuse exits")
 }
 
+/// Make `kix.toml`, `flake.nix`, and `flake.lock` of the project in `dir`
+/// agree on `version`, the version the project is on, without building.
+/// With `dry_run`, check the library and change nothing.
+fn repair(
+    dir: &Path,
+    config: &kix::project::ProjectConfig,
+    version: &Version,
+    dry_run: bool,
+) -> Result<()> {
+    let release = version.release();
+    let toml_path = dir.join(kix::project::FILE);
+    let old = std::fs::read_to_string(&toml_path).unwrap_or_default();
+    let keeps = config
+        .kix
+        .as_ref()
+        .is_some_and(|r| kix::version::policy::satisfies(r, version));
+    let new_toml = if keeps {
+        None
+    } else {
+        match pin::set_kix(&old, &release) {
+            Ok(text) => Some(text),
+            Err(message) => return refuse(&message),
+        }
+    };
+    let mut files: Vec<&str> = Vec::new();
+    let has_flake = dir.join("flake.nix").is_file();
+    if has_flake {
+        super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
+        kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
+        match kix::pin_library::pin_library(dir, version, dry_run) {
+            Ok(pinned) => {
+                println!("{}", pinned.summary());
+                files.extend(pinned.changed);
+            }
+            Err(e) => {
+                let detail = match &e {
+                    kix::pin_library::PinLibraryError::Lock {
+                        url,
+                        repo,
+                        tag,
+                        source,
+                    } => format!(
+                        "Nix could not lock {url}:\n{}\nCheck that {repo} has the tag {tag}. For a mirror, push the tag to the mirror.",
+                        out::excerpt(&source.stderr)
+                            .iter()
+                            .map(|l| format!("  {l}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                    e => match e.nix_output() {
+                        Some(output) => out::excerpt(output).join("\n"),
+                        None => e.to_string(),
+                    },
+                };
+                return refuse(&format!(
+                    "{detail}\nNext: make that change, then run `kix upgrade --to {release}` again."
+                ));
+            }
+        }
+    }
+    if let Some(text) = new_toml {
+        if dry_run {
+            println!("Kix would set kix = \"{release}\" in kix.toml.");
+        } else {
+            std::fs::write(&toml_path, text)
+                .map_err(|e| miette!("could not write {}: {e}", toml_path.display()))?;
+            println!("Set kix = \"{release}\" in kix.toml.");
+            files.insert(0, "kix.toml");
+        }
+    }
+    if !dry_run && !files.is_empty() {
+        println!("Commit {}.", out::and_list(&files));
+    } else if !has_flake && keeps {
+        println!("kix.toml already names Kix {release}. Nothing to change.");
+    }
+    Ok(())
+}
+
 /// Return the directory `kix upgrade` keeps its builds of the project in
 /// `dir` in, under Kix's cache directory.
 fn work_dir(dir: &Path) -> PathBuf {
@@ -562,9 +652,9 @@ fn work_dir(dir: &Path) -> PathBuf {
 }
 
 /// Fetch the change records of every release after `from` up to `target`
-/// that is not a prerelease, whichever systems it was built for: a change
-/// applies to a project whatever machine upgrades it. Also return the
-/// releases that shipped no records.
+/// that is not a prerelease, and of `target` itself, whichever systems it
+/// was built for: a change applies to a project whatever machine upgrades
+/// it. Also return the releases that shipped no records.
 fn fetch_records(
     source: &Source,
     releases: &[release::index::Release],
@@ -575,7 +665,11 @@ fn fetch_records(
     let mut without: Vec<String> = Vec::new();
     let mut in_range: Vec<&release::index::Release> = releases
         .iter()
-        .filter(|r| !r.version.is_prerelease() && &r.version > from && &r.version <= target)
+        .filter(|r| {
+            (!r.version.is_prerelease() || &r.version == target)
+                && &r.version > from
+                && &r.version <= target
+        })
         .collect();
     in_range.sort_by(|a, b| a.version.cmp(&b.version));
     in_range.dedup_by(|a, b| a.version == b.version);
@@ -703,7 +797,7 @@ impl Run {
 
     /// Return the text of the stop for an edit a person must make in
     /// `flake.nix`.
-    fn edit_message(&self, edit: &pin::HandEdit) -> String {
+    fn edit_message(&self, edit: &kix::pin_library::HandEdit) -> String {
         let count = match edit.lines.len() {
             2 => "two".to_string(),
             3 => "three".to_string(),
@@ -759,14 +853,29 @@ impl Run {
         });
         self.state_mut().status = Status::FixNeeded;
         self.save()?;
-        if let Some(edit) = pin::needs_hand_edit(&self.dir, &self.pinned, version) {
-            let message = self.edit_message(&edit);
-            return self
-                .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
-                .map(|()| Ok(()));
-        }
+        let plan = match pin::prepare(&self.dir, &self.pinned, version) {
+            Ok(plan) => plan,
+            Err(pin::PinError::Edit(edit)) => {
+                let message = self.edit_message(&edit);
+                return self
+                    .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
+                    .map(|()| Ok(()));
+            }
+            Err(pin::PinError::ByHand(message)) => {
+                return self
+                    .stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON)
+                    .map(|()| Ok(()));
+            }
+            Err(pin::PinError::Lock(message)) => {
+                self.finish_step("failed", &Vec::new())?;
+                return self
+                    .stop(Status::FixNeeded, &message, EXIT_BUILD_FAILED)
+                    .map(|()| Ok(()));
+            }
+            Err(e) => return Err(miette!("{e}")),
+        };
         let kix = self.kix(version)?;
-        match pin::pin(&self.dir, &self.pinned, version) {
+        match pin::pin(&self.dir, &self.pinned, version, plan.as_ref()) {
             Ok(files) => {
                 if !files.is_empty() {
                     println!(

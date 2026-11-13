@@ -13,7 +13,6 @@ pub mod graph;
 pub mod graph_stream;
 pub mod images;
 pub mod inspect;
-pub mod library;
 pub mod list;
 pub mod logs;
 pub mod migrate;

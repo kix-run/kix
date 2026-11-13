@@ -99,11 +99,11 @@ evaluates and names the fix. For example, when Kix is newer than the Kix
 library:
 
 ```text
-This project's Kix library is 0.8.0, but this is Kix 0.9.1. Run `kix lib update` to move the project to the 0.9.1 library and commit flake.lock. To keep this project on Kix 0.8 instead, set kix = "0.8" in kix.toml.
+This project's Kix library is 0.8.0, but this is Kix 0.9.1. Run `kix upgrade --to 0.9.1` to move the project to the 0.9.1 library, then commit the files it changes. To keep this project on Kix 0.8 instead, set kix = "0.8" in kix.toml.
 ```
 
-Run [`kix lib update`](/docs/reference/cli/lib/) to move the project to the
-Kix library of the running Kix. To keep the Kix library, set `kix` in
+Run [`kix upgrade --to 0.9.1`](/docs/reference/cli/upgrade/) to move the
+project to the Kix library of the running Kix. To keep the Kix library, set `kix` in
 `kix.toml` to the Kix library's minor, and Kix runs that version for the
 project. Installing a version with `kix self install` alone does not change
 which Kix runs, because Kix chooses a version only from `kix.toml`.

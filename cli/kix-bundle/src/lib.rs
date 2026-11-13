@@ -312,8 +312,9 @@ pub enum BundleError {
     )]
     NotARecord(String),
     #[error(
-        "the Activation record {} does not reference {INDEX_NAME}, because it was built with an older Kix library. Run `kix lib update` to update the Kix library in flake.lock, then build the bundle again",
-        printable(.0)
+        "the Activation record {} does not reference {INDEX_NAME}, because it was built with an older Kix library. Run `kix upgrade --to {}` to move the project to the Kix library of this version of Kix, then build the bundle again",
+        printable(.0),
+        kix::version::running().release()
     )]
     NoIndex(String),
     #[error(

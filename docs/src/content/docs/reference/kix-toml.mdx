@@ -30,7 +30,7 @@ The file and both keys are optional. An absent `kix.toml` or an empty `kix.toml`
 builder = "kix"
 ```
 
-`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `kix`, `builder`, and the [`[upgrade]` table](#the-upgrade-table). Unknown keys, unknown builder names, a `kix` value that is not a version, and TOML syntax errors stop the command before evaluation starts.
+`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `kix`, `builder`, [`library-input`](#the-library-input-setting), and the [`[upgrade]` table](#the-upgrade-table). Unknown keys, unknown builder names, a `kix` value that is not a version, and TOML syntax errors stop the command before evaluation starts.
 
 ## The `kix` setting
 
@@ -115,6 +115,19 @@ min-age = "7d"
 | --- | --- | --- |
 | `min-age` | A number of days, such as `"7d"` | `kix upgrade` picks only releases at least this old, by their release date. |
 
+## The `library-input` setting
+
+`library-input` names the input in `flake.nix` that holds the Kix library:
+
+```toml title="kix.toml"
+library-input = "platform-kix"
+```
+
+`kix upgrade` moves this input when it pins the project to a version of
+Kix. Without the setting, Kix looks for an input named `kix` or `kixpkgs`.
+Set it when the input has another name, or when `flake.nix` has inputs with
+both names. Kix then stops and asks for the setting.
+
 ## Tracking `kix.toml` in Git
 
 Nix flakes only see files that Git tracks. When `kix.lib.mkFlake` evaluates your flake, it reads `${inputs.self}/kix.toml` inside Nix and exposes the chosen builder at `legacyPackages.<system>.kixConfig.builder`.
@@ -134,7 +147,7 @@ Stage `kix.toml` whenever you add or change it:
 Two other conditions must hold for the CLI and the flake library to agree:
 
 1. `flake.nix` must pass `inputs` (which includes `self`) to `kix.lib.mkFlake { inherit inputs; ... }`, so `mkFlake` can locate `${inputs.self}/kix.toml`.
-2. The `kix` flake input locked in `flake.lock` must be new enough to expose `kixConfig`. If the locked library predates `kix.toml` support, `kix` prompts you to run [`kix lib update`](/docs/reference/cli/lib/).
+2. The `kix` flake input locked in `flake.lock` must be new enough to expose `kixConfig`. If the locked library predates `kix.toml` support, `kix` prompts you to run [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/#move-the-kix-library-to-the-version-the-project-is-on) with its own version.
 
 ## Requirements for `builder = "nix"`
 
@@ -215,7 +228,7 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | `builder` without quotes, such as `builder = 3` | `<path> sets builder to a number. Write the builder's name in quotes, such as builder = "kix" (Kix <version> supports: kix, nix, remote)` |
 | `builder = "remote"` | `<path> sets builder = "remote", but remote builders are not supported yet. Set builder = "kix", or remove the setting` |
 | `builder = "nix"` in `kix.toml`, but `kix.toml` is not tracked by Git | `` <path> is not tracked by Git, so Nix ignores it. Run `git add kix.toml` `` |
-| `builder = "nix"` in `kix.toml`, but the flake publishes no `legacyPackages.<system>.kixConfig` | ``<path> sets `builder = "nix"`, which this project's flake did not configure``. The rest of the message says why: the Kix library in `flake.lock` is older than the `builder` setting (run `kix lib update`), or `flake.nix` does not call `kix.lib.mkFlake`. |
+| `builder = "nix"` in `kix.toml`, but the flake publishes no `legacyPackages.<system>.kixConfig` | ``<path> sets `builder = "nix"`, which this project's flake did not configure``. The rest of the message says why: the Kix library in `flake.lock` is older than the `builder` setting (run `kix upgrade --to <version>` with the version of Kix you run), or `flake.nix` does not call `kix.lib.mkFlake`. |
 | `KIX_STORE_ROOT` set when `builder = "nix"` | `KIX_STORE_ROOT is set, but it does not apply to this project. The project's builder is "nix", which uses the machine's Nix and its store. Unset KIX_STORE_ROOT` |
 | `nix` not found on `PATH` when `builder = "nix"` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), but `nix` is not on PATH. Install Nix 2.24 or later, or remove `builder = "nix"` from kix.toml `` |
 | Nix older than 2.24 on `PATH` | `` this project uses the `nix` builder (`builder = "nix"` in kix.toml), which requires Nix 2.24 or later, but `nix --version` reported <version>. Upgrade Nix, or remove `builder = "nix"` from kix.toml `` |
