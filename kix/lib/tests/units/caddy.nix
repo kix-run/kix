@@ -94,7 +94,7 @@ let
         instanceName = "caddy";
       };
     in
-    map (a: a.message) (
+    map (a: "[${a.id}] ${a.message} ${a.fix}") (
       builtins.filter (a: !a.assertion) (
         attrs.assertions {
           config = evaluated;
@@ -125,7 +125,7 @@ in
         extra = caddyfileSecret;
       })).spec.replicas == 4
       && failedOf { replicas = 4; } == [ ]
-      && old == [ "[K6965] caddy: replicaCount was removed. Set config.replicas instead." ]
+      && old == [ "[K6965] replicaCount was removed. Set config.replicas instead." ]
       && evalFails (clusterWith {
         config.replicaCount = 3;
         extra = caddyfileSecret;

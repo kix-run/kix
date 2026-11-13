@@ -28,8 +28,14 @@ compose
   # Stop evaluation with an error for a person to fix (`core/error.nix`).
   inherit (errors) fail;
   options = compose.options // {
-    oidc = throw "[K0106] kix.options.oidc moved to kix.contracts.oidc.options.";
-    mail = throw "[K0106] kix.options.mail moved to kix.contracts.smtp.options.";
+    oidc = errors.fail {
+      id = "K0106";
+      message = "kix.options.oidc moved to kix.contracts.oidc.options.";
+    };
+    mail = errors.fail {
+      id = "K0106";
+      message = "kix.options.mail moved to kix.contracts.smtp.options.";
+    };
   };
   # Map availability levels to replica counts, quorums, and topology spread
   # constraints (`core/availability.nix`). Single-replica workloads set a

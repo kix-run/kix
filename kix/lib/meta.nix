@@ -98,7 +98,7 @@ rec {
   peekPackageMeta =
     { package, kixlib }:
     if (package._type or "") == "kix-moved" then
-      throw package.message
+      errors.fail package.error
     else if builtins.isAttrs package && package ? build then
       package.meta or { }
     else if (package._type or "") == "kix-import" then

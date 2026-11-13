@@ -239,15 +239,21 @@ def record_paths(root: pathlib.Path) -> list[tuple[pathlib.Path, str | None]]:
     return found
 
 
+# An id as an error carries it: in brackets in a message, such as `[K0001]`,
+# or as the `id` field of a `kix.fail` error, such as `id = "K0001";`.
+ID_IN_SOURCE_RE = re.compile(r'\[(K\d{4})\]|\bid\s*=\s*"\[?(K\d{4})\]?"')
+
+
 def ids_in_source(root: pathlib.Path) -> set[str]:
-    """Return every id written in brackets, such as `[K0001]`, in Nix and Rust files under kix/ and cli/."""
+    """Return every id an error carries in Nix and Rust files under kix/ and cli/."""
     found: set[str] = set()
     for top in ("kix", "cli"):
         for path in (root / top).rglob("*"):
             if path.suffix not in (".nix", ".rs") or not path.is_file():
                 continue
             try:
-                found.update(re.findall(r"\[(K\d{4})\]", path.read_text()))
+                for bracketed, field in ID_IN_SOURCE_RE.findall(path.read_text()):
+                    found.add(bracketed or field)
             except (OSError, UnicodeDecodeError):
                 continue
     return found
@@ -297,7 +303,8 @@ def load(root: pathlib.Path) -> tuple[list[Record], list[str]]:
             if record.id not in printed:
                 problems.append(
                     f"{record.path.relative_to(root)}: no file under kix/ or cli/ prints "
-                    f"[{record.id}]. Start the error that refuses the old form with [{record.id}]"
+                    f"[{record.id}]. Give the error that refuses the old form the id: "
+                    f'`kix.fail {{ id = "{record.id}"; ... }}`, or start its message with [{record.id}]'
                 )
     seen: dict[str, pathlib.Path] = {}
     for record in records:

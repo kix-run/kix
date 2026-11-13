@@ -1,6 +1,7 @@
 { lib, k8s }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
@@ -399,10 +400,10 @@ in
           rawSpec = attrs.spec or { };
           spec = if kind == "StatefulSet" then _expandHeadlessService rawSpec else rawSpec;
           selector =
-            spec.selector.matchLabels or (throw (
-              "${namespaceName}/${instanceName}: ${kind} '${attrs.name or "?"}' (built with ${builderFor.${kind}}) is missing spec.selector.matchLabels."
-              + "\nFix: set `spec.selector.matchLabels = scope.selectorLabels;` in the ${builderFor.${kind}} call."
-            ));
+            spec.selector.matchLabels or (fail {
+              message = "${namespaceName}/${instanceName}: ${kind} '${attrs.name or "?"}' (built with ${builderFor.${kind}}) is missing spec.selector.matchLabels.";
+              fix = "set `spec.selector.matchLabels = scope.selectorLabels;` in the ${builderFor.${kind}} call.";
+            });
           templateMeta = spec.template.metadata or { };
           rawTemplateSpec = spec.template.spec or { };
           templateSpec = _expandServiceAccount rawTemplateSpec;

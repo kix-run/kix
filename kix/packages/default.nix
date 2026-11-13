@@ -18,9 +18,9 @@ let
       # An instance whose `package` is the marker fails with the message, and
       # a dependency that only the marked package would answer from
       # `availablePackages` fails with advice to add it.
-      demoted = name: message: {
+      demoted = name: error: {
         _type = "kix-moved";
-        inherit name message;
+        inherit name error;
         spelled = "packages.${name}";
         experimentalPackage = byLevel.experimental.${name};
       };
@@ -37,7 +37,7 @@ let
   misplaced = lib.mapAttrs (name: package: {
     _type = "kix-moved";
     inherit name;
-    message = "`packages.stable.${name}` does not exist, because ${name} is an experimental package. Write `packages.experimental.${name}`.";
+    error.message = "`packages.stable.${name}` does not exist, because ${name} is an experimental package. Write `packages.experimental.${name}`.";
     spelled = "packages.stable.${name}";
     experimentalPackage = package;
   }) (removeAttrs byLevel.experimental (builtins.attrNames byLevel.stable));

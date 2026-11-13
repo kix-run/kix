@@ -3,7 +3,7 @@
 # gives the new one. Remove this file once the refusals have been in a minor
 # release.
 {
-  id = "[K0549]";
+  id = "K0549";
   names = [
     "alertmanager"
     "arc"

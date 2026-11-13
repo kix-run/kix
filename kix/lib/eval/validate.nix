@@ -2,7 +2,8 @@
 # manifests.
 #
 # `crossResourceFailures { manifests, identityHashes, owners, externalNames }`
-# returns a list of failure messages. `identityHashes` and `owners` align with
+# returns a list of failures. A failure is a message, or `{ message; fix; }`
+# when the check knows what to change. `identityHashes` and `owners` align with
 # `manifests` and record the store hash used in `kix.run/depends-on` and the
 # `<namespace>/<instance>` owner of each resource. `externalNames` contains
 # `<namespace>/<name>` entries marked with `kix.untrackedRef` before string
@@ -24,6 +25,9 @@ let
   kixKeys = kixAnnotations.keys;
 in
 rec {
+  # Return a failure of `crossResourceFailures` as one text, for tests.
+  failureText = f: if builtins.isString f then f else "${f.message}\nFix: ${f.fix}";
+
   crossResourceFailures =
     {
       manifests,
@@ -296,11 +300,12 @@ rec {
           [ ]
         else
           [
-            (
-              "${w.kind} ${ns}/${w.metadata.name} sets serviceAccountName '${saName}', which no ServiceAccount in namespace '${ns}' creates."
-              + "\n    Fix: check '${saName}' for a typo, or add the ServiceAccount to the package and set serviceAccount = self.<part>; on the workload."
-              + "\n    If something outside Kix creates '${saName}', set serviceAccountName = kix.untrackedRef \"${saName}\"; or declare a kix.mkImport instance."
-            )
+            {
+              message = "${w.kind} ${ns}/${w.metadata.name} sets serviceAccountName '${saName}', which no ServiceAccount in namespace '${ns}' creates.";
+              fix =
+                "check '${saName}' for a typo, or add the ServiceAccount to the package and set serviceAccount = self.<part>; on the workload."
+                + "\nIf something outside Kix creates '${saName}', set serviceAccountName = kix.untrackedRef \"${saName}\"; or declare a kix.mkImport instance.";
+            }
           ]
       ) workloads;
 
@@ -320,11 +325,12 @@ rec {
               [ ]
             else
               [
-                (
-                  "${binding.kind} ${ns}/${binding.metadata.name} references ${refKind} '${refName}', which no resource in this cluster creates."
-                  + "\n    Fix: check '${refName}' for a typo, or add the ${refKind} to the package or cluster and reference its .out.name."
-                  + "\n    If something outside Kix creates '${refName}', wrap the name in kix.untrackedRef \"${refName}\" or declare a kix.mkImport instance."
-                )
+                {
+                  message = "${binding.kind} ${ns}/${binding.metadata.name} references ${refKind} '${refName}', which no resource in this cluster creates.";
+                  fix =
+                    "check '${refName}' for a typo, or add the ${refKind} to the package or cluster and reference its .out.name."
+                    + "\nIf something outside Kix creates '${refName}', wrap the name in kix.untrackedRef \"${refName}\" or declare a kix.mkImport instance.";
+                }
               ]
           )
           (
@@ -358,11 +364,12 @@ rec {
           in
           if cmName != null && !(hasResource "ConfigMap" ns cmName) then
             [
-              (
-                "${w.kind} ${ns}/${w.metadata.name} mounts ConfigMap '${cmName}', which no resource in namespace '${ns}' creates."
-                + "\n    Fix: check '${cmName}' for a typo, or add the ConfigMap to the package and mount it with kix.mount.configMap (or reference its .out.name)."
-                + "\n    If something outside Kix creates '${cmName}', wrap the name in kix.untrackedRef \"${cmName}\" (with by = <creator> when a resource in this build creates it at runtime)."
-              )
+              {
+                message = "${w.kind} ${ns}/${w.metadata.name} mounts ConfigMap '${cmName}', which no resource in namespace '${ns}' creates.";
+                fix =
+                  "check '${cmName}' for a typo, or add the ConfigMap to the package and mount it with kix.mount.configMap (or reference its .out.name)."
+                  + "\nIf something outside Kix creates '${cmName}', wrap the name in kix.untrackedRef \"${cmName}\" (with by = <creator> when a resource in this build creates it at runtime).";
+              }
             ]
           else
             [ ]
@@ -385,24 +392,24 @@ rec {
             [ ]
           else if operandOf svc != null && builtins.length (lib.splitString "/" (operandOf svc)) != 3 then
             [
-              (
-                "Service ${ns}/${svc.metadata.name} sets ${operandOfAnnotation}=${operandOf svc}, which is not in the form <group>/<Kind>/<name>."
-                + "\n    Fix: write the annotation as \"<group>/<Kind>/<name>\", for example \"postgresql.cnpg.io/Cluster/db\"."
-              )
+              {
+                message = "Service ${ns}/${svc.metadata.name} sets ${operandOfAnnotation}=${operandOf svc}, which is not in the form <group>/<Kind>/<name>.";
+                fix = "write the annotation as \"<group>/<Kind>/<name>\", for example \"postgresql.cnpg.io/Cluster/db\".";
+              }
             ]
           else if operandOf svc != null then
             [
-              (
-                "Service ${ns}/${svc.metadata.name} sets ${operandOfAnnotation}=${operandOf svc}, which no custom resource in namespace '${ns}' creates."
-                + "\n    Fix: check the annotation for a typo, or include the custom resource in namespace '${ns}'."
-              )
+              {
+                message = "Service ${ns}/${svc.metadata.name} sets ${operandOfAnnotation}=${operandOf svc}, which no custom resource in namespace '${ns}' creates.";
+                fix = "check the annotation for a typo, or include the custom resource in namespace '${ns}'.";
+              }
             ]
           else
             [
-              (
-                "Service ${ns}/${svc.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template in namespace '${ns}'."
-                + "\n    Fix: update spec.selector to match the target workload's pod labels, or build the Service with kix.service.fromWorkload."
-              )
+              {
+                message = "Service ${ns}/${svc.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template in namespace '${ns}'.";
+                fix = "update spec.selector to match the target workload's pod labels, or build the Service with kix.service.fromWorkload.";
+              }
             ]
       ) (builtins.filter (r: r.kind == "Service") resources);
 
@@ -420,11 +427,12 @@ rec {
           [ ]
         else
           [
-            (
-              "HorizontalPodAutoscaler ${ns}/${hpa.metadata.name} targets ${refKind} '${refName}', which no resource in namespace '${ns}' creates."
-              + "\n    Fix: check scaleTargetRef.name ('${refName}') for a typo, or set name = <workload>.out.name; so it points to a workload in namespace '${ns}'."
-              + "\n    If something outside Kix creates '${refName}', wrap the name in kix.untrackedRef \"${refName}\" or declare a kix.mkImport instance."
-            )
+            {
+              message = "HorizontalPodAutoscaler ${ns}/${hpa.metadata.name} targets ${refKind} '${refName}', which no resource in namespace '${ns}' creates.";
+              fix =
+                "check scaleTargetRef.name ('${refName}') for a typo, or set name = <workload>.out.name; so it points to a workload in namespace '${ns}'."
+                + "\nIf something outside Kix creates '${refName}', wrap the name in kix.untrackedRef \"${refName}\" or declare a kix.mkImport instance.";
+            }
           ]
       ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources);
 
@@ -550,11 +558,12 @@ rec {
             [ ]
           else
             [
-              (
-                "Ingress ${ns}/${ing.metadata.name} routes to Service '${svcName}', which no resource in namespace '${ns}' creates."
-                + "\n    Fix: check '${svcName}' for a typo, or add the Service in namespace '${ns}' and reference its .out.name."
-                + "\n    If something outside Kix creates '${svcName}', wrap the name in kix.untrackedRef \"${svcName}\" or declare a kix.mkImport instance."
-              )
+              {
+                message = "Ingress ${ns}/${ing.metadata.name} routes to Service '${svcName}', which no resource in namespace '${ns}' creates.";
+                fix =
+                  "check '${svcName}' for a typo, or add the Service in namespace '${ns}' and reference its .out.name."
+                  + "\nIf something outside Kix creates '${svcName}', wrap the name in kix.untrackedRef \"${svcName}\" or declare a kix.mkImport instance.";
+              }
             ]
         ) allBackends
       ) (builtins.filter (r: r.kind == "Ingress") resources);
@@ -604,12 +613,10 @@ rec {
             ) resources
           );
         in
-        map (
-          ns:
-          "Namespace '${ns}' is used by resources in this build, but no Namespace '${ns}' resource is in the build."
-          + "\n    Fix: declare the namespace in your cluster definition:"
-          + "\n      namespaces.${ns} = { };"
-        ) missingNs;
+        map (ns: {
+          message = "Namespace '${ns}' is used by resources in this build, but no Namespace '${ns}' resource is in the build.";
+          fix = "declare the namespace in your cluster definition:\n  namespaces.${ns} = { };";
+        }) missingNs;
 
       # --- 12. NetworkPolicy podSelector matching ---
       # A NetworkPolicy's podSelector should match at least one workload's pod
@@ -781,11 +788,12 @@ rec {
           [ ]
         else
           [
-            (
-              "${w.kind} ${ns}/${w.metadata.name} sets priorityClassName '${pcName}', which no PriorityClass in this cluster creates. Kubernetes would reject its pods at admission."
-              + "\n    Fix: check '${pcName}' for a typo, or add the PriorityClass to the cluster and reference its .out.name."
-              + "\n    If the cluster environment provides '${pcName}', wrap the name in kix.untrackedRef \"${pcName}\" or declare a kix.mkImport instance."
-            )
+            {
+              message = "${w.kind} ${ns}/${w.metadata.name} sets priorityClassName '${pcName}', which no PriorityClass in this cluster creates. Kubernetes would reject its pods at admission.";
+              fix =
+                "check '${pcName}' for a typo, or add the PriorityClass to the cluster and reference its .out.name."
+                + "\nIf the cluster environment provides '${pcName}', wrap the name in kix.untrackedRef \"${pcName}\" or declare a kix.mkImport instance.";
+            }
           ]
       ) workloads;
 
@@ -822,11 +830,12 @@ rec {
             [ ]
           else
             [
-              (
-                "${w.kind} ${ns}/${w.metadata.name} mounts PersistentVolumeClaim '${claim}', which no resource in namespace '${ns}' creates. Its pods would stay Pending."
-                + "\n    Fix: take a persistent-volume-claim instance as a package dependency and mount its .out.name (or kix.mount.pvc)."
-                + "\n    If an operator or the environment creates '${claim}', wrap the name in kix.untrackedRef \"${claim}\" (with by = <creator> when a resource in this build creates it) or declare a kix.mkImport instance."
-              )
+              {
+                message = "${w.kind} ${ns}/${w.metadata.name} mounts PersistentVolumeClaim '${claim}', which no resource in namespace '${ns}' creates. Its pods would stay Pending.";
+                fix =
+                  "take a persistent-volume-claim instance as a package dependency and mount its .out.name (or kix.mount.pvc)."
+                  + "\nIf an operator or the environment creates '${claim}', wrap the name in kix.untrackedRef \"${claim}\" (with by = <creator> when a resource in this build creates it) or declare a kix.mkImport instance.";
+              }
             ]
         ) (safeList ((getPodSpec w).volumes or [ ]))
       ) workloads;
@@ -863,18 +872,19 @@ rec {
           [ ]
         else
           [
-            (
-              "${who} requests StorageClass '${sc}', which no resource or import in this cluster provides. The claim would stay Pending."
-              + "\n    Fix: if '${sc}' is provided by your cluster environment, declare it as an import in your cluster definition (include `roles = [ \"storageClasses\" ];` if it is the cluster's default class):"
-              + "\n      instances.kube-system.platform-storage.package = kix.mkImport {"
-              + "\n        kind = \"StorageClass\";"
-              + "\n        apiVersion = \"storage.k8s.io/v1\";"
-              + "\n        roles = [ \"storageClasses\" ];"
-              + "\n        out = { name = \"${sc}\"; storageClassName = \"${sc}\"; };"
-              + "\n      };"
-              + "\n    To use the cluster's default StorageClass instead of hardcoding '${sc}', omit storageClassName on the claim (or read `<storageClasses>.out.storageClassName` from the package's `storageClasses` dependency)."
-              + "\n    If something outside Kix provides '${sc}' and you want this build check to skip it without declaring an import, wrap the name in kix.untrackedRef \"${sc}\"."
-            )
+            {
+              message = "${who} requests StorageClass '${sc}', which no resource or import in this cluster provides. The claim would stay Pending.";
+              fix =
+                "if '${sc}' is provided by your cluster environment, declare it as an import in your cluster definition (include `roles = [ \"storageClasses\" ];` if it is the cluster's default class):"
+                + "\n  instances.kube-system.platform-storage.package = kix.mkImport {"
+                + "\n    kind = \"StorageClass\";"
+                + "\n    apiVersion = \"storage.k8s.io/v1\";"
+                + "\n    roles = [ \"storageClasses\" ];"
+                + "\n    out = { name = \"${sc}\"; storageClassName = \"${sc}\"; };"
+                + "\n  };"
+                + "\nTo use the cluster's default StorageClass instead of hardcoding '${sc}', omit storageClassName on the claim (or read `<storageClasses>.out.storageClassName` from the package's `storageClasses` dependency)."
+                + "\nIf something outside Kix provides '${sc}' and you want this build check to skip it without declaring an import, wrap the name in kix.untrackedRef \"${sc}\".";
+            }
           ];
 
       storageClassFailures =

@@ -273,11 +273,27 @@ in
 
       _passwordCheck =
         if config.password != null then
-          throw "[K9503] ${who}: password was removed, because it put the password in plain text in Kix's local store and in the built Secrets. ${passwordAdvice}"
+          scope.fail {
+            id = "K9503";
+            package = "cnpg-database";
+            option = "config.password";
+            message = "password was removed, because it put the password in plain text in Kix's local store and in the built Secrets.";
+            fix = passwordAdvice;
+          }
         else if config.passwordSource != null || config.passwordHash != null then
-          throw "[K6023] ${who}: passwordSource and passwordHash were removed. ${passwordAdvice} Use the same file and hash."
+          scope.fail {
+            id = "K6023";
+            package = "cnpg-database";
+            option = "config.passwordSource";
+            message = "passwordSource and passwordHash were removed.";
+            fix = "${passwordAdvice} Use the same file and hash.";
+          }
         else if password == null then
-          throw "${who}: has no `password` dependency. ${passwordAdvice}"
+          scope.fail {
+            package = "cnpg-database";
+            message = "has no `password` dependency.";
+            fix = passwordAdvice;
+          }
         else
           null;
 

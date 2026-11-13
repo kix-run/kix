@@ -107,14 +107,21 @@ rec {
       cluster = if cluster == null then null else plain cluster;
     };
 
-  # Stop evaluation with one error for a person to fix. `e` is a message, or
+  # Stop evaluation with an error for a person to fix. `e` is a message, or
   # `{ message; fix ? null; id ? null; instance ? null; package ? null;
-  # option ? null; }`. `id` is the change record id, such as "K0001", and
-  # `option` the path of the setting to change.
+  # option ? null; }`, or a list of them to report several at once. `id` is
+  # the change record id, such as "K0001", and `option` the path of the
+  # setting to change.
   fail =
     e:
     throw (text {
-      errors = [ e ];
+      errors =
+        if e == [ ] then
+          throw "kix.fail needs at least one error."
+        else if builtins.isList e then
+          e
+        else
+          [ e ];
       strict = true;
     });
 
@@ -124,15 +131,13 @@ rec {
   failAll = args: throw (text args);
 
   # Return `scope.fail` for an instance: `fail` with `instance` set to
-  # "<namespace>/<name>" unless the error sets it.
+  # "<namespace>/<name>" on every error that does not set it.
   failFor =
     instance: e:
-    fail (
-      {
-        inherit instance;
-      }
-      // (if builtins.isString e then { message = e; } else e)
-    );
+    let
+      withInstance = e: { inherit instance; } // (if builtins.isString e then { message = e; } else e);
+    in
+    fail (if builtins.isList e then map withInstance e else withInstance e);
 
   # Return the error record of a failed assertion: its error fields, with
   # `instance` set unless it sets one. Other fields are dropped.

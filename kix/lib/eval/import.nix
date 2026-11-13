@@ -11,6 +11,7 @@
 }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s)
@@ -223,11 +224,12 @@ rec {
           if entry.namespace == nsName && entry.instanceName == instName then
             throw "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
           else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
-            throw (
-              "${who} lists ${refText}, which is not a declared instance. '${entry.instanceName}' is in availablePackages, and a ref pointer in extraDeps does not create it automatically."
-              + "\nFix: declare the instance in your cluster definition:"
-              + "\n  instances.${entry.namespace}.${entry.instanceName}.package = packages.<package>;"
-            )
+            fail {
+              message = "${who} lists ${refText}, which is not a declared instance. '${entry.instanceName}' is in availablePackages, and a ref pointer in extraDeps does not create it automatically.";
+              fix =
+                "declare the instance in your cluster definition:"
+                + "\n  instances.${entry.namespace}.${entry.instanceName}.package = packages.<package>;";
+            }
           else
             null
         else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
@@ -244,10 +246,10 @@ rec {
         if entries == [ ] then
           null
         else if (instCfg.package._type or "") != "kix-import" then
-          throw (
-            "${who} is set, and this instance is not a kix.mkImport. Instance-level extraDeps orders only kix.mkImport instances."
-            + "\nFix: remove instances.${nsName}.${instName}.extraDeps, and set `requires` or `extraDeps` on the `scope.mk*` resource builder call in the package instead."
-          )
+          fail {
+            message = "${who} is set, and this instance is not a kix.mkImport. Instance-level extraDeps orders only kix.mkImport instances.";
+            fix = "remove instances.${nsName}.${instName}.extraDeps, and set `requires` or `extraDeps` on the `scope.mk*` resource builder call in the package instead.";
+          }
         else
           builtins.foldl' (acc: e: builtins.seq (checkEntry who nsName instName e) acc) null entries;
     in
@@ -294,12 +296,13 @@ rec {
             depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
             mkDepProxy =
               depName:
-              builtins.throw (
-                "${namespaceName}/${instanceName}: kix.mkImport { from = ...; } tried to read dependency '${depName}' while deriving 'out' from the package. Imports represent external services and do not resolve package dependencies."
-                + "\nFix: set the output fields that depend on '${depName}' directly in instances.${namespaceName}.${instanceName}.package:"
-                + "\n  kix.mkImport { from = ...; out = { <field> = \"...\"; }; }"
-                + "\nIf you know all output fields, omit 'from' and write `kix.mkImport { out = { ... }; }`."
-              );
+              fail {
+                message = "${namespaceName}/${instanceName}: kix.mkImport { from = ...; } tried to read dependency '${depName}' while deriving 'out' from the package. Imports represent external services and do not resolve package dependencies.";
+                fix =
+                  "set the output fields that depend on '${depName}' directly in instances.${namespaceName}.${instanceName}.package:"
+                  + "\n  kix.mkImport { from = ...; out = { <field> = \"...\"; }; }"
+                  + "\nIf you know all output fields, omit 'from' and write `kix.mkImport { out = { ... }; }`.";
+              };
             nullDeps = builtins.listToAttrs (
               map (name: {
                 inherit name;

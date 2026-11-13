@@ -14,6 +14,7 @@ let
   builder = import ../lib/vocab/contract.nix { inherit lib; };
   compose = import ../lib/vocab/compose.nix { inherit lib; };
   moved = import ./moved.nix { inherit lib; };
+  errors = import ../lib/core/error.nix { inherit lib; };
 
   load =
     level:
@@ -41,10 +42,10 @@ levels.merge {
   experimental = load "experimental";
   # Contracts that were stable before Kix 0.10. Remove these names once the
   # refusals have been in a minor release.
-  demoted = _: throw;
+  demoted = _: errors.fail;
   demotedNames = [
     "oidcProvider"
     "otlpEndpoint"
   ];
-  demotedId = "[K0549]";
+  demotedId = "K0549";
 }

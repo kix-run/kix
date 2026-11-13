@@ -4,6 +4,7 @@
 }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   # Allowed result keys per hook channel. `collectHooks` validates each hook's
   # return value against this map so misspelled keys fail immediately.
   channelResultKeys = {
@@ -173,27 +174,29 @@ rec {
     in
     builtins.seq _known (
       if managed != [ ] && binding == "exclusive" then
-        throw (
-          "role '${role}' is already provided by the cluster environment"
-          + lib.optionalString (envProvider != null) " (${envProvider})"
-          + " (cluster.roles.${role}.binding = \"exclusive\"), so Kix cannot also deploy ${fmt managed}."
-          + "\nFix: remove ${fmt managed} from your cluster definition."
-          + "\nIf you disabled ${
-            if envProvider != null then envProvider else "the environment's '${role}' provider"
-          } on this cluster and want ${fmt managed} to replace it, set `cluster.roles.${role}.binding = \"absent\";` in your cluster definition."
-        )
+        fail {
+          message =
+            "role '${role}' is already provided by the cluster environment"
+            + lib.optionalString (envProvider != null) " (${envProvider})"
+            + " (cluster.roles.${role}.binding = \"exclusive\"), so Kix cannot also deploy ${fmt managed}.";
+          fix =
+            "remove ${fmt managed} from your cluster definition."
+            + "\nIf you disabled ${
+              if envProvider != null then envProvider else "the environment's '${role}' provider"
+            } on this cluster and want ${fmt managed} to replace it, set `cluster.roles.${role}.binding = \"absent\";` in your cluster definition.";
+        }
       else if builtins.length managed > 1 then
-        throw (
-          "role '${role}' is claimed by multiple instances (via meta.roles = [ \"${role}\" ]): ${fmt managed}. A cluster can have only one active provider per role."
-          + "\nFix: keep one of these instances in your cluster definition and remove the others."
-        )
+        fail {
+          message = "role '${role}' is claimed by multiple instances (via meta.roles = [ \"${role}\" ]): ${fmt managed}. A cluster can have only one active provider per role.";
+          fix = "keep one of these instances in your cluster definition and remove the others.";
+        }
       else if managed != [ ] then
         builtins.head managed
       else if builtins.length imports > 1 then
-        throw (
-          "role '${role}' is claimed by multiple kix.mkImport instances: ${fmt imports}. A cluster can have only one environment import per role."
-          + "\nFix: keep one import for role '${role}' and remove the others."
-        )
+        fail {
+          message = "role '${role}' is claimed by multiple kix.mkImport instances: ${fmt imports}. A cluster can have only one environment import per role.";
+          fix = "keep one import for role '${role}' and remove the others.";
+        }
       else if imports != [ ] then
         builtins.head imports
       else

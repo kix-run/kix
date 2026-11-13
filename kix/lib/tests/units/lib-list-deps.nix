@@ -19,7 +19,12 @@
 }:
 
 let
-  caught = builtins.scopedImport { throw = message: { thrown = message; }; };
+  # `kix.fail` (core/error.nix) is loaded the same way, so its errors are
+  # caught too.
+  caught = builtins.scopedImport {
+    throw = message: { thrown = message; };
+    import = path: if baseNameOf path == "error.nix" then caught path else import path;
+  };
   resolveCaught = caught ../../eval/resolve.nix { inherit lib kixlib; };
 
   # A ConfigMap named `name` whose `marker` a consumer can inject.

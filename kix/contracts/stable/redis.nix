@@ -60,7 +60,7 @@ mkContract {
     # consumer's `deps.redis.renamedFrom`.
     renamedFrom = {
       name = "valkey";
-      id = "[K9191]";
+      id = "K9191";
     };
 
     # Return whether the server behind `dep` publishes Sentinel.

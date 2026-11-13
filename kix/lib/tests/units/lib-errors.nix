@@ -155,6 +155,13 @@ in
   # field it does not take, a missing message, and an id in brackets.
   lib-errors-fail-throws =
     fails (kixlib.fail "boom")
+    && fails (
+      kixlib.fail [
+        "a"
+        { message = "b"; }
+      ]
+    )
+    && fails (kixlib.fail [ ])
     && fails (publicKix.fail { message = "boom"; })
     && fails (
       errors.text {
