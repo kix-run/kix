@@ -27,7 +27,7 @@ When `kix` starts, it resolves its runtime directory (`libexec/kix`) using the f
 2. **`../libexec/kix` next to the `kix` command** (after resolving symlinks to the binary), when that directory contains `manifest.json`. Because Kix resolves symlinks on the `kix` executable first, symlinking `~/.local/bin/kix` to an unpacked `bin/kix` still finds the sibling `libexec/kix/`.
 3. **The compiled-in runtime path** (`KIX_BUILTIN_RUNTIME_DIR`), when that directory contains `manifest.json`. This is used when `kix` is built through Nix (`nix run` or `nix profile install`).
 
-On normal commands (`kix check`, `kix diff`, `kix deploy`), `kix` reads `<runtime>/manifest.json` (when present) and verifies that the program set and version strings match what the binary expects. `kix doctor` goes further and hashes every file and symlink target listed in `manifest.json` to detect corrupted or incomplete installations.
+On normal commands (`kix check`, `kix plan`, `kix deploy`), `kix` reads `<runtime>/manifest.json` (when present) and verifies that the program set and version strings match what the binary expects. `kix doctor` goes further and hashes every file and symlink target listed in `manifest.json` to detect corrupted or incomplete installations.
 
 ## Programs in the Kix runtime
 
@@ -37,7 +37,7 @@ Each build of Kix is compiled against the exact tool versions in `cli/kix-core/r
 | --- | --- | --- |
 | `nix` | `2.35.4` | Evaluating cluster flakes and storing rendered manifests in Kix's local store (`$XDG_CACHE_HOME/kix/store` or `~/.cache/kix/store`, overridden by `KIX_STORE_ROOT`). |
 | `helm` | `4.3.1` (default), `3.19.1` | Fetching Helm chart tarballs (`fetchHelmChart`) and rendering templates (`importChart`). |
-| `kubectl` | `1.37.2` | Streaming workload logs (`kix logs`) and forwarding local ports (`kix pf`). |
+| `kubectl` | `1.37.2` | Streaming workload logs (`kix logs`) and forwarding local ports (`kix port-forward`). |
 | `sops` | `3.12.1` | Decrypting SOPS-encrypted secrets (`kix.mkSopsSecret`) during `kix deploy`. |
 
 ### Version update policy

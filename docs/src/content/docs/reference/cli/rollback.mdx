@@ -1,14 +1,15 @@
 ---
 title: "`rollback`"
-description: "Re-apply a previous activation of a cluster from Kix's local store, or list the activations available to roll back to."
+description: "Re-apply a previous activation of a cluster from Kix's local store."
 ---
 
 import Command from '/src/components/Command.astro';
 
 `kix rollback` switches a cluster back to one of its Superseded activations.
 It does not build: it finds the target activation's build in Kix's local
-store and applies it through the same engine as `kix deploy`. With `--list`
-it prints the activation history and changes nothing.
+store and applies it through the same engine as `kix deploy`. To see the
+activations it can roll back to, run
+[`kix history`](/docs/reference/cli/history/).
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/rollback.rs` when in doubt.
@@ -16,14 +17,12 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix rollback <CLUSTER> [--list [-o text|json|yaml]] [--flake <FLAKE>] [--context <CONTEXT>]
 kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--force-conflicts] [--operator] [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
 | --- | --- |
 | `<CLUSTER>` | Cluster name, as recorded on its Activation records. |
-| `--list` | Print the active activation and every Superseded one (name, identity hash, deploy time, source store path, previous activation, and whether the build is in the local store), then exit. Honours `-o json` and `-o yaml`. |
 | `-y`, `--yes` | Roll back to the most recent Superseded activation without prompting. |
 | `--dry-run` | Print the plan and stop. |
 | `--prune` | Delete resources the current activation has and the target does not, and orphans earlier deploys kept. Without it they are listed and kept, and the target Activation records where they came from, as a deploy does. |
@@ -67,7 +66,7 @@ stops at the first failure.
 ## Examples
 
 <Command commands={[
-  "kix rollback demo --list",
+  "kix history demo",
   "kix rollback demo --dry-run",
   "kix rollback demo --yes",
 ]} />

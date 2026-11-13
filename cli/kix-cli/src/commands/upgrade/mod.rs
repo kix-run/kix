@@ -45,8 +45,8 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             global.flake
         ));
     };
-    if !args.ack.is_empty() {
-        return acknowledge(&dir, &args.ack);
+    if !args.acknowledge.is_empty() {
+        return acknowledge(&dir, &args.acknowledge);
     }
     let config = kix::project::ProjectConfig::read(Some(&dir), None).map_err(|e| miette!("{e}"))?;
     let previous = UpgradeState::read(&dir).map_err(|e| miette!("{e}"))?;
@@ -61,7 +61,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
     if resume.is_none()
-        && !args.preview
+        && !args.dry_run
         && let Some(p) = &previous
         && !p.unacknowledged().is_empty()
     {
@@ -76,7 +76,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             "unacknowledged data migrations"
         };
         return refuse(&format!(
-            "Cannot start a new upgrade: the previous upgrade to Kix {} has {migration} ({}).\nNo project files were modified.\nNext: review {} in kix-upgrade.json, run `kix upgrade --ack {}`, then run `kix upgrade` again.",
+            "Cannot start a new upgrade: the previous upgrade to Kix {} has {migration} ({}).\nNo project files were modified.\nNext: review {} in kix-upgrade.json, run `kix upgrade --acknowledge {}`, then run `kix upgrade` again.",
             p.to,
             out::list(&refs),
             out::list(&refs),
@@ -189,7 +189,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             .map(|p| p.iter().cloned().collect::<BTreeSet<String>>())
     };
 
-    if args.preview {
+    if args.dry_run {
         let from_kix = installs::installed()
             .into_iter()
             .find(|i| i.version == from)
@@ -200,7 +200,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 Known::of(s.packages_in_use.is_some(), None),
             ),
             (None, Some(kix)) => {
-                let in_use = packages_in_use(kix, &dir);
+                let in_use = packages_in_use(kix, &from, &dir);
                 let count = clusters(kix, &dir).ok().map(|c| c.len());
                 let known = Known::of(in_use.is_some(), count);
                 (in_use, known)
@@ -269,7 +269,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                     from.release()
                 ));
             }
-            let in_use = packages_in_use(&from_kix, &dir);
+            let in_use = packages_in_use(&from_kix, &from, &dir);
             let built = run.build_all(&from_kix, &from, &before);
             let failed: Vec<String> = built.failures.iter().map(|f| f.cluster.clone()).collect();
             println!(
@@ -885,11 +885,17 @@ impl Run {
         for cluster in &names {
             let dest = out.join(cluster);
             let dest_text = dest.display().to_string();
-            if let Err(output) = run_kix(
-                kix,
-                &self.dir,
-                &["export", cluster, "--out", &dest_text, "--for", "audit"],
-            ) {
+            let keep_metadata: &[&str] = if new_command_line(version) {
+                &["--with-kix-metadata"]
+            } else {
+                &["--for", "audit"]
+            };
+            let args = [
+                &["export", cluster.as_str(), "--out", &dest_text][..],
+                keep_metadata,
+            ]
+            .concat();
+            if let Err(output) = run_kix(kix, &self.dir, &args) {
                 let path = logs.join(format!("{cluster}.log"));
                 let log = std::fs::create_dir_all(&logs)
                     .and_then(|()| std::fs::write(&path, &output))
@@ -969,18 +975,30 @@ fn clusters(kix: &Path, dir: &Path) -> std::result::Result<Vec<String>, String> 
         .map_err(|e| format!("`kix list clusters` printed no list of clusters: {e}"))
 }
 
-/// Return the packages the project's clusters install, or `None` when `kix`
-/// cannot list them. `kix list packages --cluster` names instances, so
-/// instance names stand in for package names.
-fn packages_in_use(kix: &Path, dir: &Path) -> Option<BTreeSet<String>> {
+/// Return whether Kix `version` takes the command line of Kix 0.10, which
+/// renamed the flags this module passes to `kix export` and `kix list
+/// packages`. Earlier versions refuse the new names, and later ones refuse
+/// the old.
+fn new_command_line(version: &Version) -> bool {
+    let first = Version {
+        pre: Some("rc.4".to_string()),
+        ..Version::new(0, 10, 0)
+    };
+    *version >= first
+}
+
+/// Return the packages the project's clusters install, or `None` when Kix
+/// `version` at `kix` cannot list them. `kix list packages` names instances,
+/// so instance names stand in for package names.
+fn packages_in_use(kix: &Path, version: &Version, dir: &Path) -> Option<BTreeSet<String>> {
     let mut in_use = BTreeSet::new();
     for cluster in clusters(kix, dir).ok()? {
-        let out = run_kix(
-            kix,
-            dir,
-            &["-o", "json", "list", "packages", "--cluster", &cluster],
-        )
-        .ok()?;
+        let mut args = vec!["-o", "json", "list", "packages"];
+        if !new_command_line(version) {
+            args.push("--cluster");
+        }
+        args.push(&cluster);
+        let out = run_kix(kix, dir, &args).ok()?;
         if out.trim().is_empty() {
             continue;
         }
@@ -1172,7 +1190,7 @@ struct Preview<'a> {
 
 fn preview(p: &Preview) {
     let (from, target) = (p.from.release(), p.target.release());
-    println!("Kix {from} -> {target} (preview, no files changed)");
+    println!("Kix {from} -> {target} (dry run, no files changed)");
     if let Some((stop, until)) = p.stop {
         println!();
         println!(
@@ -1304,11 +1322,11 @@ fn acknowledge(dir: &Path, refs: &[String]) -> Result<()> {
     match remaining.len() {
         0 => println!("Acknowledged {acked} in kix-upgrade.json. You can now run `kix deploy`."),
         1 => println!(
-            "Acknowledged {acked} in kix-upgrade.json. 1 data migration still requires `--ack` before `kix deploy`: {}.",
+            "Acknowledged {acked} in kix-upgrade.json. 1 data migration still requires `--acknowledge` before `kix deploy`: {}.",
             remaining[0]
         ),
         n => println!(
-            "Acknowledged {acked} in kix-upgrade.json. {n} data migrations still require `--ack` before `kix deploy`: {}.",
+            "Acknowledged {acked} in kix-upgrade.json. {n} data migrations still require `--acknowledge` before `kix deploy`: {}.",
             out::list(&remaining)
         ),
     }
@@ -1347,7 +1365,7 @@ pub fn check_deploy(dir: &Path) -> Result<()> {
     }
     let refs: Vec<&str> = open.iter().map(|d| d.reference.as_str()).collect();
     text.push_str(&format!(
-        "\nNext: once you are ready for {}, run:\n  kix upgrade --ack {}\nThen run `kix deploy` again.",
+        "\nNext: once you are ready for {}, run:\n  kix upgrade --acknowledge {}\nThen run `kix deploy` again.",
         if one {
             "this migration"
         } else {

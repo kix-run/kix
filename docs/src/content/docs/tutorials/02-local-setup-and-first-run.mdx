@@ -23,7 +23,7 @@ it, and make one config edit. The point is to feel the loop:
   1. **Edit** the cluster or package.
   2. **Check** what Kix can prove before touching the cluster.
   3. **Deploy** the checked activation.
-  4. **Verify** with `kix pf`, `curl`, or `kubectl`.
+  4. **Verify** with `kix port-forward`, `curl`, or `kubectl`.
 </Steps>
 
 ## Prerequisites
@@ -128,9 +128,9 @@ directly:
 ## Reach The Service
 
 The first example installs an `echo-server` package instance named
-`hello-world`. Use `kix pf` to port-forward to its primary workload:
+`hello-world`. Use `kix port-forward` to port-forward to its primary workload:
 
-<Command commands={["kix pf 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
+<Command commands={["kix port-forward 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
 
 Leave that command running. In another terminal, call the service:
 
@@ -138,14 +138,14 @@ Leave that command running. In another terminal, call the service:
 
 Stop the port-forward with `Ctrl-C`.
 
-`kix pf` resolves the package instance to the workload Kix built, then delegates
+`kix port-forward` resolves the package instance to the workload Kix built, then delegates
 to `kubectl port-forward`. The package name can also be written as
 `namespace/name` when a cluster has duplicate instance names, but this first
 cluster only has one.
 
 :::tip[Use it in a task]
 This tutorial explains how Kix port forwarding works. For flags and command
-syntax, see [Use `kix pf`](/docs/how-to/operate-a-cluster/use-kix-pf/).
+syntax, see [Use `kix port-forward`](/docs/how-to/operate-a-cluster/use-kix-port-forward/).
 :::
 
 ## Make One Edit
@@ -168,7 +168,7 @@ Deploy again:
 
 Port-forward and curl again:
 
-<Command commands={["kix pf 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
+<Command commands={["kix port-forward 02-hello-world hello-world 8080:8080"]} cwd="kix-examples/" />
 
 In another terminal:
 
@@ -186,8 +186,8 @@ You have now used:
 
 - `kix list clusters` to discover cluster names;
 - `kix deploy <cluster> -y` to apply one cluster;
-- `kix list packages --cluster <cluster>` to inspect installed packages;
-- `kix pf <cluster> <package> <local>:<remote>` to reach a workload.
+- `kix list packages <cluster>` to inspect installed packages;
+- `kix port-forward <cluster> <package> <local>:<remote>` to reach a workload.
 
 The next tutorial steps back from the running cluster and looks at the repo
 shape that made those commands work.

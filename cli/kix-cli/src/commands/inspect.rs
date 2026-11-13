@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use miette::Result;
 
-use crate::cli::InspectArgs;
+use crate::cli::ListResourcesArgs;
 use crate::output::{self, CommandResponse};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
@@ -107,7 +107,7 @@ impl CommandResponse for InspectResponse {
     }
 }
 
-pub fn run(args: &InspectArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &ListResourcesArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
 
     let manifests = &cluster.raw_manifests;

@@ -66,7 +66,7 @@ pub struct Baseline {
 #[derive(Debug, Default)]
 pub(crate) enum ActiveSource {
     /// No Active record to compare with: a first deploy, or no cached
-    /// build under `--current-activation`.
+    /// build under `--offline`.
     #[default]
     NoRecord,
     /// The Active record's build, from this machine.
@@ -280,7 +280,7 @@ impl Baseline {
         }
     }
 
-    /// Build the baseline under `--current-activation` from the local
+    /// Build the baseline under `--offline` from the local
     /// activation cache for `cluster` without connecting to the cluster.
     /// Because the cache has no `orphansKeptFrom` or failed records, orphans
     /// kept by earlier deploys are omitted from the plan and carried forward
@@ -803,7 +803,7 @@ pub fn target_build(
              The build for {name} is not in Kix's local store on this machine (it may have been removed or built on another machine, such as CI).\n\n  \
              Next (choose one):\n    \
              - Run `kix rollback {cluster}` on a machine that has {name}'s build.\n    \
-             - Run `kix rollback {cluster}` interactively on this machine and pick a deployment record marked `[available]` (or run `kix rollback {cluster} --list` to inspect them).\n    \
+             - Run `kix rollback {cluster}` interactively on this machine and pick a deployment record marked `[available]` (or run `kix history {cluster}` to see them).\n    \
              - Check out the git commit that deployed {name} and run `kix deploy {cluster}`."
         )
     })

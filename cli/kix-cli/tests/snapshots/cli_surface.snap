@@ -25,25 +25,26 @@ kix diff --from <value>
 kix diff --bundle <value>
 kix diff --from-bundle <value>
 kix diff --detail <value> [plain|fields|manifests]
-kix diff --save <value>
+kix diff --out <value>
 kix diff --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix diff --verbose -v
 kix diff --quiet -q
 kix diff --no-color
-kix diff --context <value>
 kix diff --flake <value>
 kix diff --override-input <value>
 kix plan
 kix plan <cluster> required
-kix plan --current-activation
+kix plan --offline
 kix plan --reconcile
 kix plan --prune
-kix plan --prune-mode <value> [default|no]
+kix plan --skip-orphan-check
 kix plan --force-conflicts
 kix plan --accept-migrations
 kix plan --bundle <value>
 kix plan --deployed-bundle <value>
-kix plan --save <value>
+kix plan --read-only
+kix plan --detail <value> [plain|fields|manifests]
+kix plan --out <value>
 kix plan --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix plan --verbose -v
 kix plan --quiet -q
@@ -62,10 +63,10 @@ kix check --no-cache
 kix check --override-input <value>
 kix deploy
 kix deploy <cluster> required
-kix deploy --current-activation
+kix deploy --offline
 kix deploy --reconcile
 kix deploy --prune
-kix deploy --prune-mode <value> [default|no]
+kix deploy --skip-orphan-check
 kix deploy --force-conflicts
 kix deploy --accept-migrations
 kix deploy --bundle <value>
@@ -77,10 +78,8 @@ kix deploy --on-error <value> [stop|continue]
 kix deploy --timeout <value>
 kix deploy --operator
 kix deploy --record-annotation <value>
-kix deploy --tui
-kix deploy --group-by-ns
-kix deploy --fold-height <value>
-kix deploy --log-format <value> [pretty|line|json]
+kix deploy --log-format <value> [pretty|line|json|tui]
+kix deploy --group-by <value> [package|namespace]
 kix deploy --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix deploy --verbose -v
 kix deploy --quiet -q
@@ -114,7 +113,7 @@ kix list clusters --flake <value>
 kix list clusters --no-cache
 kix list clusters --override-input <value>
 kix list packages
-kix list packages --cluster <value>
+kix list packages <cluster>
 kix list packages --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix list packages --verbose -v
 kix list packages --quiet -q
@@ -122,6 +121,25 @@ kix list packages --no-color
 kix list packages --flake <value>
 kix list packages --no-cache
 kix list packages --override-input <value>
+kix list resources
+kix list resources <cluster> required
+kix list resources --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
+kix list resources --verbose -v
+kix list resources --quiet -q
+kix list resources --no-color
+kix list resources --flake <value>
+kix list resources --no-cache
+kix list resources --override-input <value>
+kix list images
+kix list images <cluster> required
+kix list images --sources
+kix list images --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
+kix list images --verbose -v
+kix list images --quiet -q
+kix list images --no-color
+kix list images --flake <value>
+kix list images --no-cache
+kix list images --override-input <value>
 kix graph
 kix graph <cluster> required
 kix graph --bundle <value>
@@ -134,27 +152,17 @@ kix graph --no-cache
 kix graph --override-input <value>
 kix bundle
 kix bundle <cluster> required
-kix bundle <file>
+kix bundle --out <value>
 kix bundle --verbose -v
 kix bundle --quiet -q
 kix bundle --no-color
-kix inspect
-kix inspect <cluster> required
-kix inspect --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
-kix inspect --verbose -v
-kix inspect --quiet -q
-kix inspect --no-color
-kix inspect --flake <value>
-kix inspect --no-cache
-kix inspect --override-input <value>
 kix gc
 kix gc <cluster> required
 kix gc --yes -y
-kix gc --hard
+kix gc --dry-run
+kix gc --full-scan
 kix gc --operator
-kix gc --include-unstamped
-kix gc --include-unattributed
-kix gc --include-copies
+kix gc --include <value> [unstamped|unattributed|copies]
 kix gc --keep <value>
 kix gc --keep-max <value>
 kix gc --keep-for <value>
@@ -183,7 +191,6 @@ kix migrate domain --flake <value>
 kix migrate domain --override-input <value>
 kix rollback
 kix rollback <cluster> required
-kix rollback --list
 kix rollback --yes -y
 kix rollback --dry-run
 kix rollback --prune
@@ -196,10 +203,19 @@ kix rollback --no-color
 kix rollback --context <value>
 kix rollback --flake <value>
 kix rollback --override-input <value>
+kix history
+kix history <cluster> required
+kix history --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
+kix history --verbose -v
+kix history --quiet -q
+kix history --no-color
+kix history --context <value>
+kix history --flake <value>
+kix history --override-input <value>
 kix export
 kix export <cluster> required
 kix export --out <value>
-kix export --for <value> [exit|audit]
+kix export --with-kix-metadata
 kix export --force
 kix export --verbose -v
 kix export --quiet -q
@@ -220,39 +236,24 @@ kix logs --no-color
 kix logs --context <value>
 kix logs --flake <value>
 kix logs --override-input <value>
-kix pf
-kix pf <cluster> required
-kix pf <package> required
-kix pf <ports> required
-kix pf --address <value>
-kix pf --verbose -v
-kix pf --quiet -q
-kix pf --no-color
-kix pf --context <value>
-kix pf --flake <value>
-kix pf --override-input <value>
+kix port-forward
+kix port-forward <cluster> required
+kix port-forward <package> required
+kix port-forward <ports> required
+kix port-forward --address <value>
+kix port-forward --verbose -v
+kix port-forward --quiet -q
+kix port-forward --no-color
+kix port-forward --context <value>
+kix port-forward --flake <value>
+kix port-forward --override-input <value>
 kix snapshot
+kix snapshot <cluster> required
+kix snapshot --out <value> required
 kix snapshot --verbose -v
 kix snapshot --quiet -q
 kix snapshot --no-color
 kix snapshot --context <value>
-kix snapshot save
-kix snapshot save <cluster> required
-kix snapshot save <dir> required
-kix snapshot save --verbose -v
-kix snapshot save --quiet -q
-kix snapshot save --no-color
-kix snapshot save --context <value>
-kix images
-kix images <cluster> required
-kix images --sources
-kix images --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
-kix images --verbose -v
-kix images --quiet -q
-kix images --no-color
-kix images --flake <value>
-kix images --no-cache
-kix images --override-input <value>
 kix completions
 kix completions <shell> required [bash|elvish|fish|powershell|zsh]
 kix completions --verbose -v
@@ -378,8 +379,8 @@ kix secret hash --quiet -q
 kix secret hash --no-color
 kix upgrade
 kix upgrade --to <value>
-kix upgrade --preview
-kix upgrade --ack <value>
+kix upgrade --dry-run
+kix upgrade --acknowledge <value>
 kix upgrade --verbose -v
 kix upgrade --quiet -q
 kix upgrade --no-color
@@ -402,7 +403,7 @@ kix self prune --dry-run
 kix self prune --verbose -v
 kix self prune --quiet -q
 kix self prune --no-color
-kix self update
-kix self update --verbose -v
-kix self update --quiet -q
-kix self update --no-color
+kix self upgrade
+kix self upgrade --verbose -v
+kix self upgrade --quiet -q
+kix self upgrade --no-color

@@ -87,7 +87,7 @@ pub fn note(a: &Applying, indent: usize, preview: bool) -> Vec<String> {
     }
     if preview && r.kind == Kind::Silent && r.touches_data {
         lines.push(format!(
-            "{more}Requires `kix upgrade --ack {}` before `kix deploy`.",
+            "{more}Requires `kix upgrade --acknowledge {}` before `kix deploy`.",
             a.reference()
         ));
     }
@@ -427,8 +427,8 @@ impl Review {
                 format!("{} objects", self.changed)
             };
             let command = match self.changed_clusters.as_slice() {
-                [one] => format!("kix diff {one}"),
-                _ => "kix diff <cluster>".to_string(),
+                [one] => format!("kix plan {one}"),
+                _ => "kix plan <cluster>".to_string(),
             };
             items.push(wrap_item(&format!(
                 "{what} changed in {}; read the changes above, or run `{command}`, before you deploy.",
@@ -494,7 +494,7 @@ pub fn data_item(a: &Applying) -> Vec<String> {
     vec![
         first,
         "     migration, unblock deploy with:".to_string(),
-        format!("       kix upgrade --ack {}", a.reference()),
+        format!("       kix upgrade --acknowledge {}", a.reference()),
     ]
 }
 

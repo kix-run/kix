@@ -100,27 +100,21 @@ fn graph_tree() {
 }
 
 #[test]
-fn inspect_text() {
+fn list_resources_text() {
     kix()
-        .args(["inspect", "example"])
+        .args(["list", "resources", "example"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Cluster: example"));
 }
 
 /// Verify that `deploy --dry-run` (equivalent to `kix plan`) with
-/// `--current-activation` compares two builds offline and exits 2 when the
+/// `--offline` compares two builds offline and exits 2 when the
 /// plan has changes.
 #[test]
 fn deploy_dry_run() {
     kix()
-        .args([
-            "deploy",
-            "example",
-            "--dry-run",
-            "--yes",
-            "--current-activation",
-        ])
+        .args(["deploy", "example", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(2)
         .stdout(predicate::str::contains("Plan:"))
@@ -134,7 +128,7 @@ fn bundle_reads_back() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("example.kixbundle");
     kix()
-        .args(["bundle", "example"])
+        .args(["bundle", "example", "--out"])
         .arg(&file)
         .assert()
         .success();
@@ -163,7 +157,7 @@ fn every_test_cluster_bundles() {
     let mut failed = Vec::new();
     for name in &clusters {
         let out = kix()
-            .args(["--quiet", "bundle", name])
+            .args(["--quiet", "bundle", name, "--out"])
             .arg(dir.path().join(format!("{name}.kixbundle")))
             .output()
             .unwrap();
@@ -229,7 +223,7 @@ fn bundle_reads_back_an_aliased_resource() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("bundle-alias.kixbundle");
     kix()
-        .args(["bundle", "bundle-alias"])
+        .args(["bundle", "bundle-alias", "--out"])
         .arg(&file)
         .assert()
         .success();
@@ -243,7 +237,7 @@ fn bundle_reads_back_a_platform_and_its_consumer() {
     let dir = tempfile::tempdir().unwrap();
     for name in ["consumers-platform", "consumers-acme"] {
         kix()
-            .args(["bundle", name])
+            .args(["bundle", name, "--out"])
             .arg(dir.path().join(format!("{name}.kixbundle")))
             .assert()
             .success();

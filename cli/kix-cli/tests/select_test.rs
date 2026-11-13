@@ -625,10 +625,10 @@ fn self_install_list_and_prune() {
 }
 
 #[test]
-fn self_update_refuses_a_kix_the_script_did_not_install() {
+fn self_upgrade_refuses_a_kix_the_script_did_not_install() {
     let s = Setup::new("9.9");
     s.kix()
-        .args(["self", "update"])
+        .args(["self", "upgrade"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
@@ -637,7 +637,7 @@ fn self_update_refuses_a_kix_the_script_did_not_install() {
 }
 
 #[test]
-fn self_update_installs_the_newest_release_and_moves_the_link() {
+fn self_upgrade_installs_the_newest_release_and_moves_the_link() {
     let s = Setup::new("9.9");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
@@ -658,7 +658,7 @@ fn self_update_installs_the_newest_release_and_moves_the_link() {
         s.kix_at(&bin.join("kix"))
             .env("HOME", &home)
             .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
-            .args(["self", "update"]),
+            .args(["self", "upgrade"]),
     );
     assert_eq!(out, format!("Kix {VERSION} -> 9.9.1\n"));
     assert_eq!(
@@ -670,7 +670,7 @@ fn self_update_installs_the_newest_release_and_moves_the_link() {
 }
 
 #[test]
-fn self_update_moves_the_link_the_receipt_names() {
+fn self_upgrade_moves_the_link_the_receipt_names() {
     let s = Setup::new("9.9");
     let signer = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
@@ -697,7 +697,7 @@ fn self_update_moves_the_link_the_receipt_names() {
         s.kix_at(&bin.join("kix"))
             .env("HOME", &home)
             .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
-            .args(["self", "update"]),
+            .args(["self", "upgrade"]),
     );
     assert_eq!(out, format!("Kix {VERSION} -> 9.9.1\n"));
     assert_eq!(

@@ -1,4 +1,4 @@
-//! `kix self`: install, list, prune, and update the versions of Kix under the
+//! `kix self`: install, list, prune, and upgrade the versions of Kix under the
 //! data directory ([`kix::installs`]).
 
 use std::path::Path;
@@ -19,7 +19,7 @@ pub fn run(command: &SelfCommand) -> miette::Result<()> {
             Ok(())
         }
         SelfCommand::Prune { keep, dry_run } => prune(*keep, *dry_run),
-        SelfCommand::Update => update(),
+        SelfCommand::Upgrade => upgrade(),
     }
 }
 
@@ -120,7 +120,7 @@ fn prune(keep: usize, dry_run: bool) -> miette::Result<()> {
     Ok(())
 }
 
-fn update() -> miette::Result<()> {
+fn upgrade() -> miette::Result<()> {
     let exe = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| miette!("could not find the running Kix: {e}"))?;
@@ -172,7 +172,7 @@ fn point_link(link: &Path, install: &Install) -> miette::Result<()> {
         && !meta.file_type().is_symlink()
     {
         return Err(miette!(
-            "{} exists and was not installed by the install script. Remove it, then run `kix self update` again",
+            "{} exists and was not installed by the install script. Remove it, then run `kix self upgrade` again",
             link.display()
         ));
     }

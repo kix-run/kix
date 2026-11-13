@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use miette::Result;
 use serde::Serialize;
 
-use crate::cli::ImagesArgs;
+use crate::cli::ListImagesArgs;
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
@@ -59,7 +59,7 @@ impl CommandResponse for ImagesResponse {
     }
 }
 
-pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &ListImagesArgs, ctx: &mut CommandContext) -> Result<()> {
     let spinner = output::spinner(format!("Evaluating cluster '{}'...", args.cluster));
 
     let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster);

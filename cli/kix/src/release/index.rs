@@ -116,7 +116,7 @@ impl Index {
     }
 
     /// Return the newest release that has an archive for `system`, the one
-    /// `kix self update` moves Kix `running` to. Prereleases count only when
+    /// `kix self upgrade` moves Kix `running` to. Prereleases count only when
     /// `running` is a prerelease of the same release, so trying one leads to
     /// the next one or to its release and no further.
     pub fn latest_for(&self, system: &str, running: &Version) -> Option<&Release> {

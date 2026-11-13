@@ -34,7 +34,7 @@ Kix library URL yourself.
 Start from a clean git working tree, so that you can see each file the
 upgrade changes. Then preview it:
 
-<Command commands={["kix upgrade --preview"]} cwd="my-project/" />
+<Command commands={["kix upgrade --dry-run"]} cwd="my-project/" />
 
 The preview opens with the version the project uses and the release it would
 move to, such as `Kix 0.10.0 -> 0.12.1 (preview, no files changed)`. It lists
@@ -86,8 +86,8 @@ tries that release again and continues to the newest one.
 read what changed before you deploy. It ends with a numbered list under
 `Upgraded to Kix 0.12.1, but review before deploying:`. An item names:
 
-- objects that changed in any cluster; read them, or run `kix diff <cluster>`
-  to see what deploying would change in the live cluster,
+- objects that changed in any cluster; read them, or run
+  `kix plan <cluster>` to see what deploying would change in the live cluster,
 - objects marked `[review: <Kind>]`, such as a Secret, a ClusterRole, or an
   Ingress whose TLS settings changed,
 - a change that alters behavior with no build error, or
@@ -106,7 +106,7 @@ When a change moves or reinterprets the data a package stores, `kix deploy`
 refuses until someone acknowledges it. The refusal prints the release note.
 Read it, take any backup it asks for, then acknowledge it by its id:
 
-<Command commands={["kix upgrade --ack K0012"]} cwd="my-project/" />
+<Command commands={["kix upgrade --acknowledge K0012"]} cwd="my-project/" />
 
 Commit `kix-upgrade.json`, so that whoever deploys next sees the
 acknowledgement.

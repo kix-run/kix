@@ -1,19 +1,19 @@
 ---
 title: "`diff`"
-description: "Compare a cluster build with the live cluster, a previous build, or a saved manifest directory, package by package."
+description: "Compare a cluster build with a previous build, a bundle, or a saved manifest directory, package by package, without contacting a cluster."
 ---
 
 `kix diff` evaluates and builds a cluster, or reads the build from a bundle
-with `--bundle`, then compares the result with an old side: the live cluster
-by default, a directory passed with `--from`, or a bundle passed with
-`--from-bundle`. It only reads, so it needs `get` and `list` on the cluster,
-or no cluster at all with `--from`, `--from-bundle`, or `--bundle`. It never
-changes the cluster.
+with `--bundle`, then compares the result with a baseline: a directory
+passed with `--from`, or a bundle passed with `--from-bundle`. With
+`--bundle` and no baseline, it compares the bundle with nothing, so every
+package is added. It never contacts a cluster, so it needs no cluster access
+at all. `kix diff <CLUSTER>` with none of these flags is refused.
 
-A read cannot see what shows only on the write path: admission webhooks and
-policies, field ownership conflicts, and what the deploy itself refuses. To
-preview a deploy you are about to run, use
-[`kix plan`](/docs/reference/cli/plan/), which sends each write as a
+To compare a build with the live cluster, use
+[`kix plan --read-only`](/docs/reference/cli/plan/#read-only-plans), which
+reads the cluster with `get` and `list`. To preview a deploy you are about to
+run, use [`kix plan`](/docs/reference/cli/plan/), which sends each write as a
 server-side dry run.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
@@ -22,63 +22,45 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix diff <CLUSTER> [--bundle <FILE>] [--from <PATH> | --from-bundle <FILE>]
+kix diff <CLUSTER> --from <PATH> [--bundle <FILE>]
          [-o text|json|yaml|markdown]
-         [--detail plain|fields|manifests] [--save <FILE>]
-         [--flake <FLAKE>] [--context <CONTEXT>]
+         [--detail plain|fields|manifests] [--out <FILE>]
+         [--flake <FLAKE>]
+kix diff <CLUSTER> --bundle <FILE> [--from-bundle <FILE>] [...]
 ```
 
 | Argument or flag | Meaning |
 | --- | --- |
 | `<CLUSTER>` | Cluster name to evaluate and build from the flake. This is the new side of the comparison. |
-| `--bundle <FILE>` | Read the new side from a bundle written by `kix bundle` instead of building from the flake. Without `--from` or `--from-bundle`, the old side is an empty build. |
-| `--from <PATH>` | Use a local build or manifest directory as the old side instead of the live cluster. See [Old side](#old-side). |
-| `--from-bundle <FILE>` | Use a bundle as the old side. Needs `--bundle`. |
+| `--bundle <FILE>` | Read the new side from a bundle written by `kix bundle` instead of building from the flake. |
+| `--from <PATH>` | Use a local build or manifest directory as the baseline. See [Baseline](#baseline). |
+| `--from-bundle <FILE>` | Use a bundle as the baseline. Needs `--bundle`. Not with `--from`. |
 | `-o`, `--output` | `text` (default), `json`, `yaml` (the JSON document as YAML), or `markdown` for pull request comments. |
 | `--detail <LEVEL>` | How much `json` and `yaml` say about each change: `plain` (default) names each changed resource and counts its changed fields, `fields` also lists each field change, and `manifests` also includes the old and new manifest of each changed, added, or removed resource. Text and Markdown are the same at every level. |
-| `--save <FILE>` | Also write the comparison to `FILE` as a [plan file](/docs/reference/cli/plan/#plan-file), whatever `--detail` and `--output` say. It is for reading, by people and Kix Enterprise; `kix deploy --plan` takes only a `kix plan` plan file. |
+| `--out <FILE>` | Also write the comparison to `FILE` as a [plan file](/docs/reference/cli/plan/#plan-file), whatever `--detail` and `--output` say. It is for reading, by people and Kix Enterprise; `kix deploy --plan` takes only a `kix plan` plan file. |
 | `--flake <FLAKE>` | Flake to evaluate. Defaults to the current directory. |
-| `--context <CONTEXT>` | Kubeconfig context for the live cluster. Ignored with `--from`. |
 
-## Old side
+## Baseline
 
-| Old side | How to select it | Needs cluster access |
-| --- | --- | --- |
-| Live cluster | Omit `--from` | Yes |
-| Bundled build | `--from-bundle <FILE>`, with `--bundle` for the new side | No |
-| Saved manifests | `--from <DIR>` where `<DIR>` holds YAML written by `kix snapshot save` or `kix export --for audit` | No |
-| Previous build | `--from <PATH>` where `<PATH>` is the activation index path (`kix.run/built-via`) of a build in Kix's local store, or a directory containing `kix-packages.json` whose referenced store paths exist in Kix's local store | No |
-| Nothing | `--bundle <FILE>` alone: every package is added | No |
+| Baseline | How to select it |
+| --- | --- |
+| Bundled build | `--from-bundle <FILE>`, with `--bundle` for the new side |
+| Nothing (every package is added) | `--bundle <FILE>` alone |
+| Saved manifests | `--from <DIR>` where `<DIR>` holds YAML written by `kix snapshot` or `kix export --with-kix-metadata` |
+| Previous build | `--from <PATH>` where `<PATH>` is the activation index path (`kix.run/built-via`) of a build in Kix's local store, or a directory containing `kix-packages.json` whose referenced store paths exist in Kix's local store |
 
 Each bundle is checked against its content as it is read, and must be a build
-of `<CLUSTER>`, as for `kix plan --bundle`. A bundled old side is a build, so
+of `<CLUSTER>`, as for `kix plan --bundle`. A bundled baseline is a build, so
 the report is the one `--from <build>` gives.
 
-For the live cluster, Kix reads only the fields it applied to each managed
-resource. Kubernetes records which tool set each field through server-side
-apply, and Kix keeps its own fields and drops the rest: server defaults,
-status, fields set by controllers or `kubectl`, and the bookkeeping
-annotations Kix writes after every apply. A cluster that matches its build
-reports no differences.
-
-The live side holds only the named cluster's resources: those whose
-`kix.run/activations` annotation names one of its Activation records. When the
-Kubernetes cluster also runs other Kix clusters, their resources are not
-reported as removals, and stderr says how many were skipped per cluster. A
-resource the build drops that another Kix cluster's current build still
-contains is left out too, since `kix deploy --prune` keeps it.
-
-Against a live cluster, `kix diff` also prints an error for each build
-resource whose kind the cluster serves as namespaced but whose manifest has
-no `metadata.namespace`. `kix deploy` refuses to apply a build that contains
-one.
-
 A manifest directory must carry the Kix annotations that name each resource's
-package and identity hash. The default `kix export` mode strips them, so use
-`--for audit` when the old side comes from an export.
+package and identity hash. The default `kix export` output strips them, so use
+`--with-kix-metadata` when the baseline comes from an export.
 
-Every old side goes through the same comparison. The live cluster and a
-snapshot of it produce the same report.
+Every baseline goes through the same comparison that
+[`kix plan --read-only`](/docs/reference/cli/plan/#read-only-plans) runs
+against the live cluster. The live cluster and a snapshot of it produce the
+same report.
 
 ## What is compared
 
@@ -86,8 +68,8 @@ The report is organised by package. Each package lands in one group:
 
 | Group | Meaning |
 | --- | --- |
-| added | The package is in the build but not on the old side |
-| removed | The package is on the old side but not in the build |
+| added | The package is in the build but not in the baseline |
+| removed | The package is in the baseline but not in the build |
 | changed | The package exists on both sides and at least one resource differs |
 | unchanged | Every resource in the package matches |
 
@@ -105,7 +87,7 @@ Two more sections follow the packages:
   as namespaces and custom resource definitions. Text output labels the
   group `cluster-level resources`; JSON uses the key `_cluster`.
 - **Activation** shows the old and new activation record names when they
-  differ. A build whose content matches the old side keeps the same record
+  differ. A build whose content matches the baseline keeps the same record
   name, so this line appears only alongside other changes.
 
 When a stateful resource appears to have moved between packages or names,
@@ -114,20 +96,10 @@ Kix does not migrate data.
 
 ## Labels and drift
 
-When the deployed build's manifests are on this machine, each field change
-is labelled `intended` (the deployed and new builds differ here),
-`reverts_drift` (the live object differs from the deployed build and the
-deploy puts the deployed value back), or `drift_kept` (the live object
-differs, and the deploy leaves the object alone because its identity hash
-did not change). [`kix plan`](/docs/reference/cli/plan/#field-change-labels)
-defines them in full. With `--from <build>` every change is `intended`.
-Without the deployed build nothing is labelled, and the drift section is not
-checked.
-
-A Drift section lists each field where the live object differs from the
-deployed build, with its live and deployed values, the field managers that
-own it live, and whether the deploy reverts it. `kix deploy --reconcile`
-reverts the fields the deploy would otherwise leave alone.
+Against a previous build, every field change is labelled `intended`, and
+drift is not checked. The labels, and the Drift section that
+`kix plan --read-only` adds against the live cluster, are described under
+[Field change labels](/docs/reference/cli/plan/#field-change-labels).
 
 ## Output formats
 
@@ -139,8 +111,8 @@ migration section or `No differences found.` A field change that puts back a
 drifted field is tagged `(reverts drift)`, and one the deploy leaves alone is
 tagged `(drift; deploy leaves this object alone)`. The Drift section follows
 when any field drifted. When there are changes, the output ends with a note
-that `kix diff` cannot see admission webhooks, field ownership conflicts, or
-what the deploy refuses. Colour
+that the comparison cannot see admission webhooks, field ownership conflicts,
+or what the deploy refuses. Colour
 follows `--no-color` and the `NO_COLOR` environment variable.
 
 ### JSON and YAML
@@ -152,13 +124,13 @@ describes the top-level keys, the checked-section shape, and the
 
 | Key | Value from `kix diff` |
 | --- | --- |
-| `made_by` | `live_read` against the cluster or a snapshot; `builds` with `--from <build>`, `--from-bundle`, or `--bundle` alone |
+| `made_by` | `live_read` with a snapshot or export directory; `builds` with `--from <build>` or `--from-bundle` |
 | `build` | The new build, as for `kix plan` |
-| `deployed` | The old side's Activation record: the cluster's current record, the `--from` build's record, or the record in a `--from` snapshot. `null` when there is none |
+| `deployed` | The baseline's Activation record: the `--from` build's record, or the record in a `--from` snapshot. `null` when there is none |
 | `flags` | `null`: a diff plans no deploy |
 | `migrations` | Checked: the stateful migrations the comparison found |
-| `drift` | Checked against the live cluster when the deployed build is on this machine. Otherwise `not_checked`: `deployed_build_unavailable` for a snapshot or a missing deployed build, `builds_only` with `--from <build>` |
-| `conflicts`, `admission`, `prune` | `not_checked`, reason `read_only` (or `builds_only` with `--from <build>`) |
+| `drift` | `not_checked`: `deployed_build_unavailable` for a snapshot, `builds_only` with `--from <build>` |
+| `conflicts`, `admission`, `prune` | `not_checked`, reason `read_only` for a snapshot, `builds_only` with `--from <build>` |
 | `readiness` | `not_checked`, reason `not_previewable` |
 | `not_checked` | Always empty |
 
@@ -198,7 +170,7 @@ when present.
 | --- | --- |
 | `0` | No differences |
 | `2` | At least one difference, or a stateful migration was detected |
-| `1` | Evaluation, build, or cluster error |
+| `1` | Evaluation or build error |
 
 The status is the same for every output format, so a CI job can write
 Markdown to a file and still branch on the result.
@@ -206,11 +178,11 @@ Markdown to a file and still branch on the result.
 :::note[Reference]
 See [`kix snapshot`](/docs/reference/cli/snapshot/) for how a snapshot
 directory is produced, and [`kix export`](/docs/reference/cli/export/) for
-the audit export mode.
+`--with-kix-metadata`.
 :::
 
 :::tip[Use it in a task]
-See [Preview changes with `kix plan` and `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+See [Preview changes with `kix plan`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-plan/)
 for the live workflow and
 [Use snapshots for offline or CI diffs](/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/)
 when the comparison must run without cluster access.

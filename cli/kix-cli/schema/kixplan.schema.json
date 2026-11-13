@@ -1026,7 +1026,7 @@
               "type": "null"
             }
           ],
-          "description": "The build the plan compares against: the cluster's current\nActivation record for `kix plan` and `kix diff` against the cluster,\nthe cached record under `--current-activation`, the `--from` build,\nor the Activation record in a `--from` snapshot. `null` when there is\nnone: a first deploy, or a snapshot without a record."
+          "description": "The build the plan compares against: the cluster's current\nActivation record for `kix plan` (also with `--read-only`), the cached\nrecord under `--offline`, the `--from` build,\nor the Activation record in a `--from` snapshot. `null` when there is\nnone: a first deploy, or a snapshot without a record."
         },
         "drift": {
           "$ref": "#/$defs/Checked4",
@@ -1146,7 +1146,7 @@
               "type": "null"
             }
           ],
-          "description": "`--prune-mode`, `null` when not given."
+          "description": "`no` with `--skip-orphan-check`, `null` otherwise. A plan saved by an\nolder Kix can hold `default`."
         },
         "reconcile": {
           "type": "boolean"
@@ -1200,7 +1200,7 @@
         },
         {
           "const": "kept_skipped",
-          "description": "Kept by `--prune-mode=no`.",
+          "description": "Kept by `--skip-orphan-check`.",
           "type": "string"
         },
         {

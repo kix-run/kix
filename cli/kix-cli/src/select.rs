@@ -404,7 +404,7 @@ mod tests {
         for line in [
             "self list",
             "--flake p self install 0.8",
-            "--flake p upgrade --preview",
+            "--flake p upgrade --dry-run",
             "completions bash",
             "init",
             "help",

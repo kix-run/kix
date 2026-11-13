@@ -21,7 +21,7 @@ use kix::manifest::lifecycle::{self, Lifecycle};
 use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::types::{ResourceId, to_manifest_value};
 
-use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
+use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat, PlanCommandArgs};
 use crate::output::{self, CommandResponse};
 use crate::plan::{self, render};
 use kix::plan::document::{Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan};
@@ -32,10 +32,15 @@ use kube::api::DynamicObject;
 use super::CommandContext;
 use crate::exit::Exit;
 
-/// The result of `kix diff`. JSON and YAML print the plan document.
+/// The result of `kix diff` and `kix plan --read-only`. JSON and YAML print
+/// the plan document.
 #[derive(serde::Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub(crate) struct DiffResult {
+    /// The command, as the Markdown heading names it.
+    #[serde(skip)]
+    #[schemars(skip)]
+    command: &'static str,
     #[serde(skip)]
     #[schemars(skip)]
     packages: PackageDiff,
@@ -76,15 +81,77 @@ enum OldSide {
     Live(Box<LiveSide>),
 }
 
+/// The build to compare, and what to compare it with.
+struct Comparison<'a> {
+    /// The command, as the Markdown heading names it.
+    command: &'static str,
+    cluster: &'a str,
+    /// Read the new build from this bundle instead of evaluating the project.
+    bundle: Option<&'a Path>,
+    baseline: Baseline<'a>,
+    detail: DetailArg,
+    /// Write the comparison to this plan file.
+    out: Option<&'a Path>,
+}
+
+/// What a build is compared with.
+enum Baseline<'a> {
+    /// A build or a manifest directory (`--from`).
+    From(&'a str),
+    /// The build in a bundle (`--from-bundle`).
+    FromBundle(&'a Path),
+    /// Nothing, so every object is added (`--bundle` alone).
+    Empty,
+    /// The live cluster's Kix-owned view.
+    Live,
+}
+
+/// Run `kix diff`, which compares the build with another build and never
+/// contacts the cluster.
+pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
+    let baseline = match (&args.from_bundle, &args.from, &args.bundle) {
+        (Some(path), _, _) => Baseline::FromBundle(path),
+        (None, Some(from), _) => Baseline::From(from),
+        (None, None, Some(_)) => Baseline::Empty,
+        (None, None, None) => return Ok(crate::removed::DIFF_WITHOUT_BASELINE.refuse()),
+    };
+    compare(
+        &Comparison {
+            command: "kix diff",
+            cluster: &args.cluster,
+            bundle: args.bundle.as_deref(),
+            baseline,
+            detail: args.detail,
+            out: args.out.as_deref(),
+        },
+        ctx,
+    )
+}
+
+/// Run `kix plan --read-only`, which compares the build with the live
+/// cluster using only `get` and `list`.
+pub fn run_read_only(args: &PlanCommandArgs, ctx: &mut CommandContext) -> Result<Exit> {
+    compare(
+        &Comparison {
+            command: "kix plan --read-only",
+            cluster: &args.plan.cluster,
+            bundle: args.plan.bundle.as_deref(),
+            baseline: Baseline::Live,
+            detail: args.detail,
+            out: args.out.as_deref(),
+        },
+        ctx,
+    )
+}
+
 /// Compare two store graphs and render the diff using the deploy plan format.
 ///
-/// The new side is built from the flake or loaded from `--bundle`. The old side
-/// is loaded from `--from` or `--from-bundle`, empty when `--bundle` is passed
-/// alone, or synthesized from a manifest directory or the live cluster's
-/// Kix-owned view.
-pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
-    let new_graph = match &args.bundle {
-        Some(path) => kix_bundle::read_build(path, &[], &args.cluster)
+/// The new side is built from the project or loaded from a bundle. The old
+/// side is loaded from a build or a bundle, or synthesized from a manifest
+/// directory or the live cluster's Kix-owned view.
+fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exit> {
+    let new_graph = match args.bundle {
+        Some(path) => kix_bundle::read_build(path, &[], args.cluster)
             .map_err(|e| miette!("{e}"))?
             .into_graph(),
         None => {
@@ -92,7 +159,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
             let status = |msg: &str| set_spinner(&spinner, msg);
             let build = super::build_flake(
                 &ctx.global,
-                &args.cluster,
+                args.cluster,
                 &status,
                 super::ACTIVATION_BUILD_FAILED,
             )?;
@@ -101,65 +168,74 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
         }
     };
 
-    let (old_graph, side) = if let Some(path) = &args.from_bundle {
-        let old = kix_bundle::read_build(path, &[], &args.cluster).map_err(|e| miette!("{e}"))?;
-        (old.into_graph(), OldSide::Build)
-    } else if args.bundle.is_some() && args.from.is_none() {
-        (StoreGraph::empty(&args.cluster), OldSide::Build)
-    } else if let Some(from) = &args.from {
-        let path = store::follow_into_store(Path::new(from));
-        let on_disk = store::disk_path(&path).unwrap_or_else(|_| path.clone());
-        let build = BuildFiles::is_build(&path);
-        if !build && !on_disk.is_dir() {
-            return Err(miette!("from directory does not exist: {from}"));
-        }
-        let spinner = output::spinner("Loading old side...");
-        let loaded = if build {
-            let status = |msg: &str| set_spinner(&spinner, msg);
-            let old = build_source::Build::local(&path, &status).into_diagnostic()?;
+    let (old_graph, side) = match args.baseline {
+        Baseline::FromBundle(path) => {
+            let old =
+                kix_bundle::read_build(path, &[], args.cluster).map_err(|e| miette!("{e}"))?;
             (old.into_graph(), OldSide::Build)
-        } else {
-            let manifests: Vec<Value> = load_manifests_from_dir(&on_disk)
-                .map_err(|e| miette!("failed to load manifest directory {from}: {e}"))?
-                .into_iter()
-                .map(|(_, v)| v)
-                .collect();
+        }
+        Baseline::Empty => (StoreGraph::empty(args.cluster), OldSide::Build),
+        Baseline::From(from) => {
+            let path = store::follow_into_store(Path::new(from));
+            let on_disk = store::disk_path(&path).unwrap_or_else(|_| path.clone());
+            let build = BuildFiles::is_build(&path);
+            if !build && !on_disk.is_dir() {
+                return Err(miette!("from directory does not exist: {from}"));
+            }
+            let spinner = output::spinner("Loading old side...");
+            let loaded = if build {
+                let status = |msg: &str| set_spinner(&spinner, msg);
+                let old = build_source::Build::local(&path, &status).into_diagnostic()?;
+                (old.into_graph(), OldSide::Build)
+            } else {
+                let manifests: Vec<Value> = load_manifests_from_dir(&on_disk)
+                    .map_err(|e| miette!("failed to load manifest directory {from}: {e}"))?
+                    .into_iter()
+                    .map(|(_, v)| v)
+                    .collect();
+                (
+                    StoreGraph::synthesize(&manifests, &new_graph),
+                    OldSide::Manifests,
+                )
+            };
+            clear_spinner(&spinner);
+            loaded
+        }
+        Baseline::Live => {
+            let spinner = output::spinner("Fetching live cluster state...");
+            let global = ctx.global.clone();
+            let live = ctx
+                .runtime()?
+                .block_on(fetch_live_manifests(&global, &new_graph))?;
+            clear_spinner(&spinner);
+            // The current record's package index places each live object where
+            // the deployed build put it. Without one, the new build does.
+            let deployed = live
+                .current
+                .as_ref()
+                .and_then(|record| activation::Record::of(record).package_index);
             (
-                StoreGraph::synthesize(&manifests, &new_graph),
-                OldSide::Manifests,
+                StoreGraph::synthesize_placed(
+                    &live.manifests,
+                    &new_graph,
+                    &Vec::from_iter(&deployed),
+                ),
+                OldSide::Live(Box::new(live)),
             )
-        };
-        clear_spinner(&spinner);
-        loaded
-    } else {
-        let spinner = output::spinner("Fetching live cluster state...");
-        let global = ctx.global.clone();
-        let live = ctx
-            .runtime()?
-            .block_on(fetch_live_manifests(&global, &new_graph))?;
-        clear_spinner(&spinner);
-        // The current record's package index places each live object where
-        // the deployed build put it. Without one, the new build does.
-        let deployed = live
-            .current
-            .as_ref()
-            .and_then(|record| activation::Record::of(record).package_index);
-        (
-            StoreGraph::synthesize_placed(&live.manifests, &new_graph, &Vec::from_iter(&deployed)),
-            OldSide::Live(Box::new(live)),
-        )
+        }
     };
 
-    // Plan files always store full manifests, so `--save` builds the document at
+    // Plan files always store full manifests, so `--out` builds the document at
     // `Detail::Manifests` before trimming it to the requested `--detail` level.
     let index = ManifestIndex::new(&old_graph, &new_graph);
-    let detail = match (args.detail, &args.save) {
+    let detail = match (args.detail, &args.out) {
         (_, Some(_)) | (DetailArg::Manifests, None) => Detail::Manifests(&index),
         (DetailArg::Fields, None) => Detail::Fields,
         (DetailArg::Plain, None) => Detail::Plain,
     };
     let mut result = diff_graphs(&old_graph, &new_graph, &side, detail);
-    if let Some(path) = &args.save {
+    result.command = args.command;
+    if let Some(path) = args.out {
         let sha256 = plan::save(result.doc.clone(), &new_graph, path)?;
         crate::esay!(
             "Saved the comparison to {} (sha256:{sha256})",
@@ -278,6 +354,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
         }
     };
     DiffResult {
+        command: "kix diff",
         packages,
         migration_pairs,
         doc,
@@ -501,7 +578,7 @@ fn text_output(result: &DiffResult) -> String {
         );
     }
 
-    // Always render resource-level detail in `kix diff`.
+    // Always render resource-level detail.
     out.push_str(&plan::render_package_plan(pkg, true));
 
     if let Some(a) = &pkg.activation {
@@ -536,7 +613,11 @@ fn text_output(result: &DiffResult) -> String {
 
 fn markdown_output(result: &DiffResult) -> String {
     // Share the package-level Markdown renderer with the deploy modal and CI PR comments.
-    let mut out = plan::render_package_diff_markdown(&result.packages);
+    let mut out = plan::render_package_diff_markdown(&result.packages).replacen(
+        "### kix diff",
+        &format!("### {}", result.command),
+        1,
+    );
 
     if !result.migration_pairs.is_empty() {
         let _ = writeln!(

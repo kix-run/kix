@@ -12,6 +12,9 @@ import remarkDocsBase from './src/lib/remark-docs-base.mjs';
 
 const base = process.env.KIX_DOCS_BASE ?? '/docs';
 
+// Return a docs path with the base in front, for redirect targets.
+const under = (path) => `${base.replace(/\/$/, '')}${path}`;
+
 // https://astro.build/config
 export default defineConfig({
   // Deployed under kix.run/docs/. CI builds the docs once per Kix version
@@ -20,6 +23,19 @@ export default defineConfig({
   // /docs/main, older minor releases at /docs/v<major>.<minor>.
   site: 'https://kix.run',
   base,
+  // Pages that 0.10 renamed or folded into another page. Astro prefixes
+  // the old path with `base` and leaves the new one as written.
+  redirects: {
+    '/reference/cli/deploy-apply': under('/reference/cli/deploy'),
+    '/reference/cli/pf': under('/reference/cli/port-forward'),
+    '/reference/cli/inspect': under('/reference/cli/list'),
+    '/reference/cli/images': under('/reference/cli/list'),
+    '/reference/cli/health': under('/reference/cli/status'),
+    '/reference/cli/drift': under('/reference/cli/status'),
+    '/how-to/operate-a-cluster/preview-changes-with-kix-diff': under('/how-to/operate-a-cluster/preview-changes-with-kix-plan'),
+    '/how-to/operate-a-cluster/use-kix-pf': under('/how-to/operate-a-cluster/use-kix-port-forward'),
+    '/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff': under('/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-plan'),
+  },
   markdown: {
     remarkPlugins: [[remarkDocsBase, { base }]],
     rehypePlugins: [rehypeTableWrap, [rehypeLinkTypes, { base }]],

@@ -60,7 +60,8 @@ fn output<T: schemars::JsonSchema>() -> schemars::Schema {
 }
 
 /// The JSON and YAML output of a command, one schema per response type.
-/// `kix diff -o json` prints the plan document (`plan.schema.json`).
+/// `kix diff -o json` and `kix plan --read-only -o json` print the plan
+/// document (`plan.schema.json`).
 /// `kix compliance sbom` and `attest` print documents that published
 /// standards define.
 #[test]
@@ -69,8 +70,6 @@ fn the_command_output_schemas_match_their_types() {
     check("build.schema.json", output::<build::BuildResponse>());
     check("check.schema.json", output::<check::CheckResponse>());
     check("graph.schema.json", output::<graph::GraphResponse>());
-    check("images.schema.json", output::<images::ImagesResponse>());
-    check("inspect.schema.json", output::<inspect::InspectResponse>());
     check(
         "list-clusters.schema.json",
         output::<list::ClustersResponse>(),
@@ -79,14 +78,19 @@ fn the_command_output_schemas_match_their_types() {
         "list-packages.schema.json",
         output::<list::PackagesResponse>(),
     );
+    check(
+        "list-resources.schema.json",
+        output::<inspect::InspectResponse>(),
+    );
+    check(
+        "list-images.schema.json",
+        output::<images::ImagesResponse>(),
+    );
     check("pin-set.schema.json", output::<pin::PinSetResponse>());
     check("pin-rm.schema.json", output::<pin::PinRmResponse>());
     check("pin-check.schema.json", output::<pin::PinCheckResponse>());
     check("pin-list.schema.json", output::<pin::PinListResponse>());
-    check(
-        "rollback-list.schema.json",
-        output::<rollback::HistoryResponse>(),
-    );
+    check("history.schema.json", output::<rollback::HistoryResponse>());
     check(
         "plan-comparison.schema.json",
         output::<deploy::ComparisonResponse<'static>>(),

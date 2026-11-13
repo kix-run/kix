@@ -382,7 +382,7 @@ pub(crate) enum Previous {
     Active(String),
     /// The cluster had no Active record: this is its first deploy.
     FirstDeploy,
-    /// This run did not read the cluster's records (`--current-activation`).
+    /// This run did not read the cluster's records (`--offline`).
     Unknown,
 }
 

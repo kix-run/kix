@@ -24,7 +24,7 @@ for plugins.
 | `-v`, `--verbose` | `KIX_VERBOSE`, a count | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. Without it, warnings are logged, except those the Kubernetes client writes for an error response it then returns to Kix. |
 | `-q`, `--quiet` | `KIX_QUIET` | Off | Suppress progress and informational output, and log errors only. Results still print. |
 | `--no-color` | `NO_COLOR`, below | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
-| `--context <CONTEXT>` | `KIX_CONTEXT` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
+| `--context <CONTEXT>` | `KIX_CONTEXT` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `port-forward` pass it to `kubectl`. |
 | `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed as a remote flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
 | `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and re-evaluate the cluster every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
 | `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL during evaluation. Repeatable, two values each time. Kix skips the [eval cache](/docs/reference/cli/eval-cache-behavior/) when this is set. |
@@ -39,14 +39,15 @@ flags are accepted and have no effect.
 
 | Command | `-o` | `--context` | `--flake` | `--no-cache` | `--override-input` |
 | --- | --- | --- | --- | --- | --- |
-| `build`, `check`, `graph`, `inspect`, `images`, `list` | yes | | yes | yes | yes |
+| `build`, `check`, `graph`, `list` | yes | | yes | yes | yes |
 | `status` | yes | yes | | | |
-| `diff` | yes | yes | yes | | yes |
+| `diff` | yes | | yes | | yes |
 | `plan` | yes | yes | yes | | yes |
-| `deploy`, `gc`, `migrate domain`, `logs`, `pf` | | yes | yes | | yes |
+| `deploy`, `gc`, `migrate domain`, `logs`, `port-forward` | | yes | yes | | yes |
 | `export` | | | yes | | yes |
-| `rollback` | yes | yes | yes | | yes |
-| `snapshot save` | | yes | | | |
+| `rollback` | | yes | yes | | yes |
+| `history` | yes | yes | yes | | yes |
+| `snapshot` | | yes | | | |
 | `compliance sbom` | yes | | yes | | yes |
 | `compliance attest` | yes | yes | yes | | yes |
 | `compliance audit` | | | yes | yes | yes |
@@ -57,10 +58,10 @@ flags are accepted and have no effect.
 `--no-cache` applies only to commands that read the
 [eval cache](/docs/reference/cli/eval-cache-behavior/). `kix pin` uses
 `--flake` only as a place to look for `pins.json`, and `kix doctor` uses it to
-locate [`kix.toml`](/docs/reference/kix-toml/). `rollback` uses `--flake` and
-`--override-input` only to evaluate the cluster name when no Activation record in the current context already carries
-`<CLUSTER>` as its `kix.run/cluster` label. `-o` on `rollback` applies only
-with `--list`, and on `deploy` only with `--dry-run`.
+locate [`kix.toml`](/docs/reference/kix-toml/). `rollback` and `history` use
+`--flake` and `--override-input` only to evaluate the cluster name when no
+Activation record in the current context already carries `<CLUSTER>` as its
+`kix.run/cluster` label. `-o` on `deploy` applies only with `--dry-run`.
 
 ## Environment variables
 

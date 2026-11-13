@@ -1,4 +1,4 @@
-//! Shared helpers for `kix logs` / `kix pf`: build the cluster, resolve a
+//! Shared helpers for `kix logs` / `kix port-forward`: build the cluster, resolve a
 //! package-instance name to its primary workload (Deployment / StatefulSet /
 //! DaemonSet), and extract the label selector for downstream `kubectl` calls.
 //!

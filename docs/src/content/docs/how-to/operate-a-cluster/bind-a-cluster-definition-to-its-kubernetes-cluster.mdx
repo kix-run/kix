@@ -68,8 +68,8 @@ bound build carries it as the label `kix.run/kubernetes-uid`.
 
 Every command that applies a build of the definition checks the binding after
 it connects and before it reads or writes anything else: `kix deploy` in all
-its modes (including `--plan`, `--bundle`, `--current-activation`, and
-`--operator`), `kix plan`, `kix gc` (soft and `--hard`), and the operator when
+its modes (including `--plan`, `--bundle`, `--offline`, and
+`--operator`), `kix plan`, `kix gc` (with and without `--full-scan`), and the operator when
 it picks up a Queued record.
 
 - **The definition names another Kubernetes cluster.** The command stops and
@@ -90,7 +90,7 @@ it picks up a Queued record.
 refuses only a target that names another Kubernetes cluster. A target built
 before the definition set `cluster.kubernetes.uid` rolls back as usual.
 
-Read-only commands such as `kix diff` and `kix status` do not check the
+Read-only commands such as `kix plan --read-only` and `kix status` do not check the
 binding. The operator marks a refused record `Failed` with the message and
 emits a Warning event on it.
 
@@ -154,7 +154,7 @@ which overrides the file.
 Two things go ahead on a mismatch, so that a Kubernetes upgrade never blocks
 them: `kix rollback` prints one line saying the target build was made for
 another version and rolls back anyway, and the operator keeps repairing an
-`Active` record. `kix diff` does not check. A definition that leaves
+`Active` record. `kix plan --read-only` does not check. A definition that leaves
 `k8sVersion` unset is not compared, and nothing is printed.
 
 ## Move a definition to a rebuilt cluster

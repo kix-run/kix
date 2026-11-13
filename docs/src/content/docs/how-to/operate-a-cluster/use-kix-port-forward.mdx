@@ -1,19 +1,20 @@
 ---
-title: "Use `kix pf`"
+title: "Use `kix port-forward`"
 description: "Forward local ports to the primary workload of a package instance."
 ---
 
 import Command from '/src/components/Command.astro';
 
-Use `kix pf` to reach a package workload from your machine without first
-looking up its Kubernetes resource name.
+Use `kix port-forward` to reach a package workload from your machine without
+first looking up its Kubernetes resource name. `kix pf` is a shorter alias
+for the same command.
 
 ## Forward a local port
 
 Provide the cluster, package instance, and a `LOCAL:REMOTE` port mapping:
 
 <Command
-  commands={["kix pf how-to-application production 8080:80"]}
+  commands={["kix port-forward how-to-application production 8080:80"]}
   cwd="kix-examples/"
 />
 
@@ -30,7 +31,7 @@ attached to that workload. Stop it with `Ctrl-C`.
 Prefix the remote port with a colon and leave the local side empty:
 
 <Command
-  commands={["kix pf how-to-application production :80"]}
+  commands={["kix port-forward how-to-application production :80"]}
   cwd="kix-examples/"
 />
 
@@ -46,7 +47,7 @@ port 80 is occupied or requires additional privileges.
 Add each mapping as another argument:
 
 <Command
-  commands={["kix pf how-to-application production 8080:80 8443:443"]}
+  commands={["kix port-forward how-to-application production 8080:80 8443:443"]}
   cwd="kix-examples/"
 />
 
@@ -57,7 +58,7 @@ must listen on another local interface:
 
 <Command
   commands={[
-    "kix pf how-to-application production 8080:80 --address 0.0.0.0",
+    "kix port-forward how-to-application production 8080:80 --address 0.0.0.0",
   ]}
   cwd="kix-examples/"
 />
@@ -70,4 +71,4 @@ If an instance name is ambiguous, qualify it as `<namespace>/<name>`. Pass
 `--context` to select a Kubernetes context and `--flake` to evaluate the
 cluster from another directory.
 
-See the [`pf` command reference](/docs/reference/cli/pf/) for every option.
+See the [`port-forward` command reference](/docs/reference/cli/port-forward/) for every option.

@@ -49,9 +49,9 @@ Render the Deployment and Service to verify their labels and selectors:
 <Command {...workloadLabels} />
 
 Compare the rendered Deployment selector with the live selector from the first
-step. `kix diff` cannot make this comparison because it finds live resources
-through Kix's management labels. A Helm-owned workload does not have those
-labels, so the diff shows it as a new resource.
+step. `kix plan --read-only` cannot make this comparison because it finds
+live resources through Kix's management labels. A Helm-owned workload does
+not have those labels, so the read-only plan shows it as a new resource.
 
 Ask the API server to review the complete ownership change instead:
 

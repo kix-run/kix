@@ -92,7 +92,7 @@ Before deploying, adjust these settings for the cluster:
 Grafana has no route until you set
 `instances.monitoring-system.grafana.config.ingress.host`. With that host and
 an ingress controller or a gateway, Grafana gets a route at the host, and
-that URL is its `root_url`. Without it, reach Grafana with `kix pf`. Grafana
+that URL is its `root_url`. Without it, reach Grafana with `kix port-forward`. Grafana
 serves its own metrics at `/metrics` without a login, so a route makes them
 reachable too. To keep them private on a routed Grafana, set
 `instances.monitoring-system.grafana.config.settings.metrics.enabled = false`
@@ -170,7 +170,7 @@ become ready while their images are pulled.
 To open Grafana locally, forward its port:
 
 <Command
-  commands={["kix pf how-to-package-monitoring grafana 3000:3000"]}
+  commands={["kix port-forward how-to-package-monitoring grafana 3000:3000"]}
   cwd="kix-examples/"
 />
 

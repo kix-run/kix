@@ -61,9 +61,9 @@ use crate::manifest::types::ResourceId;
 pub enum PlanEvent<'a> {
     /// Connecting to the cluster before reading state.
     Connecting,
-    /// `--current-activation` found no cached build, so this is a first deploy.
+    /// `--offline` found no cached build, so this is a first deploy.
     NoCachedBuild,
-    /// `--current-activation` is loading the cached build.
+    /// `--offline` is loading the cached build.
     LoadingCache,
     /// The cluster has no Active record, so this is a first deploy.
     NoActiveRecord,

@@ -41,13 +41,13 @@ pub(super) fn load_saved_plan(
                     "deploy without `--plan`, or plan fewer objects per cluster.".to_string()
                 }
                 PlanFileError::NotAPlanFile => {
-                    format!("create the file with `kix plan {cluster} --save {shown}`.")
+                    format!("create the file with `kix plan {cluster} --out {shown}`.")
                 }
                 PlanFileError::WrongFormat { .. } => format!(
-                    "save a new plan file with `kix plan {cluster} --save {shown}` using Kix {}.",
+                    "save a new plan file with `kix plan {cluster} --out {shown}` using Kix {}.",
                     kix::version::running().release()
                 ),
-                _ => format!("save a fresh plan with `kix plan {cluster} --save {shown}`."),
+                _ => format!("save a fresh plan with `kix plan {cluster} --out {shown}`."),
             };
             miette!(
                 "cannot read the plan {shown}: {e}. Nothing was applied to the cluster. Next: {next}"

@@ -1,7 +1,7 @@
 //! Plan files (`*.kixplan`): a plan, its build's graph, and the manifests
 //! of each object it changes, in one file.
 //!
-//! `kix plan --save` and `kix diff --save` write one; `kix deploy --plan`
+//! `kix plan --out` and `kix diff --out` write one; `kix deploy --plan`
 //! reads one; Kix Enterprise stores the file as uploaded and reads the
 //! header for each page, and one or two files for an object's page.
 //!
@@ -46,7 +46,7 @@
 //!
 //! # Caps
 //!
-//! Each is checked before what it guards is read. `kix plan --save` fails,
+//! Each is checked before what it guards is read. `kix plan --out` fails,
 //! naming the cap, when a plan would pass one.
 //!
 //! | Cap | Protects |

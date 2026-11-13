@@ -7,14 +7,14 @@ import Command from '/src/components/Command.astro';
 import auditExport from '/src/command-output/how-to/application-export-audit/export.json';
 import internalCrs from '/src/command-output/how-to/application-export-audit/internal-crs.json';
 
-Use the audit export mode when the exported manifests need to retain the Kix
+Use `kix export --with-kix-metadata` when the exported manifests need to retain the Kix
 metadata that connects resources to packages, dependencies, and an
 activation. This export is intended as evidence or as input to an audit
 process.
 
 ## Create the audit export
 
-Pass `--for audit` and choose an output directory:
+Pass `--with-kix-metadata` and choose an output directory:
 
 <Command {...auditExport} />
 
@@ -39,7 +39,7 @@ Do not use the audit export when another deployment system needs ordinary
 application manifests. Its internal custom resources and Kix annotations are
 part of the evidence being preserved.
 
-Use the default mode for that workflow:
+Leave out `--with-kix-metadata` for that workflow:
 
 <Command
   commands={["kix export how-to-application --out ./handoff"]}
@@ -52,6 +52,6 @@ you need manifests for handoff or application by another tool.
 :::
 
 :::note[Reference]
-See [`kix export`](/docs/reference/cli/export/) for the exact behavior of each
-export mode.
+See [`kix export`](/docs/reference/cli/export/) for exactly what each export
+keeps.
 :::

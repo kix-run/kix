@@ -6,8 +6,8 @@ description: "Delete Kix-managed resources a cluster no longer declares, and ret
 import Command from '/src/components/Command.astro';
 
 `kix gc` removes what a cluster's build no longer contains. It has three
-modes: soft (the default) compares the last deployed build with a fresh one,
-`--hard` scans every Kix-managed resource of the named cluster, and `--operator`
+modes: the default compares the last deployed build with a fresh one,
+`--full-scan` scans every Kix-managed resource of the named cluster, and `--operator`
 deletes Activation records and lets the Kix operator clean up after them.
 Every mode also retires old Superseded Activation records.
 
@@ -17,7 +17,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed] [--include-copies]] [--operator]
+kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed,copies]] [--operator]
        [--keep <N>] [--keep-max <N>] [--keep-for <DURATION>]
        [--flake <FLAKE>] [--context <CONTEXT>]
 ```
@@ -26,10 +26,15 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed] [--
 | --- | --- |
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal. |
-| `--hard` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the fresh build. |
-| `--include-unstamped` | With `--hard`, also delete resources that carry the label but no `kix.run/identity-hash`. Kix never applied these, so by default they are only listed. |
-| `--include-unattributed` | With `--hard` (required), also judge resources that name no Activation record on the cluster. When another Kix cluster has records on the same Kubernetes cluster, Kix cannot tell whose these are, so by default they are only listed. |
-| `--include-copies` | With `--hard` (required), also judge copies. A copy carries Kix's labels and annotations, but Kix never wrote it: an operator copied them from an object Kix made, such as the data volumes it makes for a database. By default copies are only listed. |
+| `--dry-run` | Print what gc would delete, both resources and Activation records, and delete nothing. |
+| `--full-scan` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the fresh build. |
+| `--include <KINDS>` | With `--full-scan` (required), also judge the kinds of resource a full scan only lists by default. A comma-separated list of the values below. |
+
+| `--include` value | Resources it adds |
+| --- | --- |
+| `unstamped` | Resources that carry the label but no `kix.run/identity-hash`. Kix never applied these, so by default they are only listed. |
+| `unattributed` | Resources that name no Activation record on the cluster. When another Kix cluster has records on the same Kubernetes cluster, Kix cannot tell whose these are, so by default they are only listed. |
+| `copies` | Copies. A copy carries Kix's labels and annotations, but Kix never wrote it: an operator copied them from an object Kix made, such as the data volumes it makes for a database. By default copies are only listed. |
 | `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |
 | `--keep <N>` | Always keep at least the `N` newest Superseded records, whatever their age. Default `10`. `0` keeps none. |
 | `--keep-max <N>` | Never keep more than `N` Superseded records. Default `50`. A value below `--keep` is raised to it. |
@@ -40,20 +45,20 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed] [--
 
 | Mode | Old side | What is deleted |
 | --- | --- | --- |
-| Soft | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from Kix's local store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace, and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
-| `--hard` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
+| Default | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from Kix's local store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace, and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
+| `--full-scan` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
-:::caution[Soft gc can omit cluster-level garbage from its plan]
-Soft gc currently deletes stale resources that belong to no package, but its
-confirmation plan does not list them. Use `--hard` when you need the plan to
-inventory those resources before deletion.
+:::caution[The default mode can omit cluster-level garbage from its plan]
+The default mode currently deletes stale resources that belong to no package,
+but its confirmation plan does not list them. Use `--full-scan` when you need
+the plan to inventory those resources before deletion.
 :::
 
-`--hard` judges the resources of the cluster you name. Each resource Kix
+`--full-scan` judges the resources of the cluster you name. Each resource Kix
 deploys lists, in its `kix.run/activations` annotation, the Activation records
 whose builds contain it, and each record carries a `kix.run/cluster` label.
-When one Kubernetes cluster hosts several Kix clusters, hard mode reads those
+When one Kubernetes cluster hosts several Kix clusters, a full scan reads those
 records to decide whose each resource is:
 
 - A resource that names only another cluster's records is skipped, and the
@@ -62,10 +67,10 @@ records to decide whose each resource is:
   listed as `kept ..., still deployed by Kix cluster <name>`.
 - A resource that names no record on the cluster (its records were retired,
   or it predates the annotation) is listed under "No deployment record on this cluster" and kept
-  unless you pass `--include-unattributed`. With only one Kix cluster on the
+  unless you pass `--include unattributed`. With only one Kix cluster on the
   Kubernetes cluster, such a resource is judged like any other.
 
-Soft gc, `kix deploy --prune`, and `kix rollback --prune` apply the same rule to
+The default mode, `kix deploy --prune`, and `kix rollback --prune` apply the same rule to
 a resource both clusters deploy: when the named cluster's build drops it and
 another cluster's current build still contains it, the plan lists it as kept.
 
@@ -79,14 +84,14 @@ CustomResourceDefinitions are skipped. A resource that is already gone when
 gc deletes it is reported, not counted as a failure.
 
 A deploy without `--prune` keeps its orphans and lists the builds they came
-from on the new Activation, under `status.orphansKeptFrom`. Soft gc deletes
-those orphans too, listed under "Orphans kept by earlier deploys". When soft
-or hard gc deletes without failures and the fresh build is the one the
-Active record describes, it removes the list. Soft gc leaves the list if this
-machine could not read one of the builds, and hard gc leaves it if it was
-forbidden to list some kinds. Deploying with `--prune` every time keeps the
-list empty, so soft gc has no kept orphans to find; see
-[`deploy`](/docs/reference/cli/deploy-apply/).
+from on the new Activation, under `status.orphansKeptFrom`. The default
+mode deletes those orphans too, listed under "Orphans kept by earlier
+deploys". When gc deletes without failures in either mode and the fresh build
+is the one the Active record describes, it removes the list. The default mode
+leaves the list if this machine could not read one of the builds, and a full
+scan leaves it if it was forbidden to list some kinds. Deploying with
+`--prune` every time keeps the list empty, so the default mode has no kept
+orphans to find; see [`deploy`](/docs/reference/cli/deploy/).
 
 Retiring a record removes it as a rollback target. Each record kept adds one
 entry to the `kix.run/activations` annotation on every managed resource, which
@@ -97,7 +102,9 @@ since it was listed.
 
 <Command commands={[
   "kix gc demo",
-  "kix gc demo --hard --yes",
+  "kix gc demo --dry-run",
+  "kix gc demo --full-scan --yes",
+  "kix gc demo --full-scan --include unattributed,copies",
   "kix gc demo --keep 5 --keep-for 14d",
 ]} />
 
@@ -105,7 +112,7 @@ since it was listed.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Nothing to collect, everything planned was deleted, or the prompt was declined |
+| `0` | Nothing to collect, everything planned was deleted, `--dry-run` printed the plan, or the prompt was declined |
 | `1` | A deletion failed; confirmation was needed on a non-interactive terminal; or a build or cluster error |
 
 :::tip[Use it in a task]

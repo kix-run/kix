@@ -459,7 +459,7 @@
       ]
     },
     {
-      "page": "operate-a-cluster/preview-changes-with-kix-diff",
+      "page": "operate-a-cluster/preview-changes-with-kix-plan",
       "scenario": "operations",
       "status": "implemented",
       "liveCaptures": [
@@ -495,7 +495,7 @@
       ]
     },
     {
-      "page": "operate-a-cluster/use-kix-pf",
+      "page": "operate-a-cluster/use-kix-port-forward",
       "scenario": "operations",
       "status": "implemented"
     },
@@ -875,7 +875,7 @@
       ]
     },
     {
-      "page": "policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff",
+      "page": "policy-ci-and-compliance/generate-pr-review-markdown-from-kix-plan",
       "scenario": "policy",
       "status": "implemented"
     },

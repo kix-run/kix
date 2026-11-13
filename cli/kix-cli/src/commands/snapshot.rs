@@ -10,15 +10,9 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::Client;
 use kube::api::DynamicObject;
 
-use crate::cli::{SnapshotArgs, SnapshotCommand, SnapshotSaveArgs};
+use crate::cli::SnapshotArgs;
 
 use super::CommandContext;
-
-pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
-    match &args.command {
-        SnapshotCommand::Save(save_args) => run_save(save_args, ctx),
-    }
-}
 
 /// Discover API resources and sweep all objects managed by `cluster`.
 ///
@@ -52,8 +46,8 @@ async fn sweep_cluster(client: &Client, cluster: &str) -> Result<inventory::Mana
     Ok(sweep)
 }
 
-fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
-    let out_dir = Path::new(&args.dir);
+pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
+    let out_dir = Path::new(&args.out);
 
     for component in out_dir.components() {
         if matches!(component, std::path::Component::ParentDir) {
@@ -97,10 +91,10 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
              **Context:** {context}\n\
              **Resources written:** {written}\n\n\
              ## Command\n\n\
-             ```\nkix snapshot save {cluster} {dir}\n```\n",
+             ```\nkix snapshot {cluster} --out {dir}\n```\n",
             cluster = args.cluster,
             context = global.context.as_deref().unwrap_or("(current)"),
-            dir = args.dir,
+            dir = args.out,
         );
         std::fs::write(tmp_path.join("README.md"), &readme).into_diagnostic()?;
 
@@ -111,7 +105,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
         let persist_path = tmp_dir.keep();
         std::fs::rename(&persist_path, out_dir).into_diagnostic()?;
 
-        crate::esay!("Saved {written} resources to {}/", args.dir);
+        crate::esay!("Saved {written} resources to {}/", args.out);
 
         Ok(())
     })

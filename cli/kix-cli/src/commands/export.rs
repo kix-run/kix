@@ -1,12 +1,10 @@
 //! Export a built cluster activation as Kubernetes YAML.
 //!
-//! `--for` selects one of two export modes:
-//!
-//! - `exit` (default) strips all `kix.run/*` annotations and omits Kix-internal
-//!   custom resources (`Activation`, `PackageInstance`), producing standard
-//!   Kubernetes YAML for tools such as `kubectl`, Flux, or Argo CD.
-//! - `audit` preserves `kix.run/*` provenance annotations and all manifests so
-//!   auditors can trace which build produced each resource.
+//! By default the export strips all `kix.run/*` annotations and omits
+//! Kix-internal custom resources (`Activation`, `PackageInstance`), producing
+//! standard Kubernetes YAML for tools such as `kubectl`, Flux, or Argo CD.
+//! `--with-kix-metadata` keeps the annotations and all manifests so auditors
+//! can trace which build produced each resource.
 //!
 //! Files are written to `<out>/<namespace>/<Kind>-<name>.yaml`, matching the
 //! layout expected by `manifest::serialize::load_manifests_from_dir` so
@@ -22,14 +20,15 @@ use kix::manifest::hash::strip_kix_annotations;
 use kix::manifest::serialize::strip_nulls;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use crate::cli::{ExportArgs, ExportMode};
+use crate::cli::ExportArgs;
 use crate::output;
 
 use super::CommandContext;
 
 pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
     crate::esay!("Building cluster '{}'...", args.cluster);
-    // Build the full stamped graph; `--for=exit` strips Kix annotations below.
+    // Build the full stamped graph. Without `--with-kix-metadata`, Kix
+    // annotations are stripped below.
     let status = |msg: &str| {
         crate::esay!("  {msg}");
     };
@@ -72,16 +71,14 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
         let manifest = &node.manifest;
         let rid = ResourceId::from_value(manifest);
 
-        // In `exit` mode, omit Kix-internal custom resources that only apply to
-        // Kix deployments.
-        if matches!(args.for_mode, ExportMode::Exit)
-            && kix::manifest::lifecycle::is_kix_internal_kind(&rid.kind)
-        {
+        // Omit Kix-internal custom resources that only apply to Kix
+        // deployments, unless the export keeps Kix's metadata.
+        if !args.with_kix_metadata && kix::manifest::lifecycle::is_kix_internal_kind(&rid.kind) {
             skipped_internal += 1;
             continue;
         }
 
-        let transformed = transform_manifest(manifest, args.for_mode);
+        let transformed = transform_manifest(manifest, args.with_kix_metadata);
         let yaml = manifest_to_yaml(&transformed)?;
         let path = output_path_for(&out_dir, &rid);
 
@@ -92,9 +89,10 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
         written += 1;
     }
 
-    let mode = match args.for_mode {
-        ExportMode::Exit => "exit (kix-neutral)",
-        ExportMode::Audit => "audit (kix provenance preserved)",
+    let mode = if args.with_kix_metadata {
+        "with Kix metadata"
+    } else {
+        "plain Kubernetes YAML"
     };
     crate::esay!();
     crate::esay!(
@@ -114,19 +112,14 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-/// Strip nulls from `manifest`, and in `Exit` mode also strip `kix.run/*`
-/// annotations.
-fn transform_manifest(manifest: &Value, mode: ExportMode) -> Value {
+/// Strip nulls from `manifest`, and unless `with_kix_metadata` also strip
+/// `kix.run/*` annotations.
+fn transform_manifest(manifest: &Value, with_kix_metadata: bool) -> Value {
     let mut v = manifest.clone();
-    match mode {
-        ExportMode::Exit => {
-            strip_kix_annotations(&mut v);
-            strip_nulls(&mut v);
-        }
-        ExportMode::Audit => {
-            strip_nulls(&mut v);
-        }
+    if !with_kix_metadata {
+        strip_kix_annotations(&mut v);
     }
+    strip_nulls(&mut v);
     v
 }
 

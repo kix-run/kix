@@ -1,5 +1,5 @@
 ---
-title: "Preview changes with `kix plan` and `kix diff`"
+title: "Preview changes with `kix plan`"
 description: "Preview a deploy with a server-side dry run, or compare rendered manifests with live Kubernetes resources using read-only access."
 ---
 
@@ -8,13 +8,17 @@ import diffClean from '/src/command-output/how-to/application-diff/diff-clean.js
 import diffChange from '/src/command-output/how-to/application-diff/diff-message-change.json';
 import diffMarkdown from '/src/command-output/how-to/application-diff/diff-markdown.json';
 
-Kix has two previews, and neither changes the cluster:
+`kix plan` previews a deploy in two ways, and neither changes the cluster:
 
 - `kix plan` runs the deploy with every write sent as a server-side dry run.
   Use it to preview a deploy you are about to run. It needs the same
   permissions as the deploy.
-- `kix diff` only reads. Use it where the job has read-only credentials, or
-  no cluster access at all, such as a pull request check.
+- `kix plan --read-only` only reads. Use it where the job has read-only
+  credentials, such as a pull request check.
+
+For a pull request check with no cluster access at all, compare against a
+snapshot with `kix diff`; see
+[Use snapshots for offline or CI diffs](/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/).
 
 ## Preview a deploy with `kix plan`
 
@@ -43,7 +47,7 @@ dry run. The plan lists them under "Not checked by the dry run" with the
 changes from comparing builds. On a cluster's first deploy most objects are
 in this list.
 
-## Compare desired and live resources with `kix diff`
+## Compare desired and live resources with `kix plan --read-only`
 
 Start from a cluster that matches what is deployed. Kix compares only the
 fields it applied, so an unchanged cluster reports nothing and exits 0:
@@ -61,7 +65,7 @@ own. Their identity hash moves because they depend on the ConfigMap, so Kix
 writes them again on the next deploy to update the annotation. Their pods do
 not restart.
 
-## Read the diff
+## Read the report
 
 The report is grouped by package, and each line tells you something different:
 
@@ -75,15 +79,15 @@ The report is grouped by package, and each line tells you something different:
 - A deployment record line names the deployment record this change would create.
 
 Read the packages you edited first, then the dependent resources, which tell
-you how far the rollout reaches. A non-empty diff exits with status 2, which
-lets CI tell a change from a clean comparison.
+you how far the rollout reaches. A non-empty report exits with status 2,
+which lets CI tell a change from a clean comparison.
 
 When the deployed build is on this machine, a field someone changed on the
 cluster is tagged `(reverts drift)` when the deploy puts it back, and a
 Drift section at the end names the field manager that changed it. When there
-are changes, the last line reminds you that `kix diff` cannot see admission
-webhooks, field ownership conflicts, or deploy refusals. Run `kix plan` for
-those.
+are changes, the last line reminds you that a read-only plan cannot see
+admission webhooks, field ownership conflicts, or deploy refusals. Run
+`kix plan` without `--read-only` for those.
 
 ## Select the flake and context
 
@@ -92,7 +96,7 @@ context. Set either input explicitly when needed:
 
 <Command
   commands={[
-    "kix diff how-to-application --flake ./infrastructure --context kind-kix-demo",
+    "kix plan how-to-application --read-only --flake ./infrastructure --context kind-kix-demo",
   ]}
 />
 
@@ -109,28 +113,29 @@ review:
 Redirect it into a file for the job to publish:
 
 <Command
-  commands={["kix diff how-to-application --output markdown > kix-diff.md"]}
+  commands={["kix plan how-to-application --read-only --output markdown > kix-plan.md"]}
   cwd="kix-examples/"
 />
 
-`kix plan --output markdown` produces the same layout with the write-path
-checks added, for a job that has the deployer's credentials.
+Without `--read-only`, `kix plan --output markdown` produces the same layout
+with the write-path checks added, for a job that has the deployer's
+credentials.
 
 Use JSON when another program will process the result:
 
 <Command
-  commands={["kix diff how-to-application --output json > kix-diff.json"]}
+  commands={["kix plan how-to-application --read-only --output json > kix-plan.json"]}
   cwd="kix-examples/"
 />
 
-The document is the one a `kix plan --save` [plan file](/docs/reference/cli/plan/#plan-file)
-holds, so one consumer can read either. The checks a read-only diff cannot make read
+The document is the one a `kix plan --out` [plan file](/docs/reference/cli/plan/#plan-file)
+holds, so one consumer can read either. The checks a read-only plan cannot make read
 `{ "status": "not_checked", "reason": "read_only" }`. By default the JSON
 names each changed resource and counts its changed fields. Add
 `--detail fields` to list each field change, old to new:
 
 <Command
-  commands={["kix diff how-to-application --output json --detail fields > kix-diff.json"]}
+  commands={["kix plan how-to-application --read-only --output json --detail fields > kix-plan.json"]}
   cwd="kix-examples/"
 />
 
@@ -147,7 +152,7 @@ plan file the two manifests of an object the cluster checked are the live
 object and the cluster's dry-run result:
 
 <Command
-  commands={["kix diff how-to-application --output json --detail manifests > kix-diff.json"]}
+  commands={["kix plan how-to-application --read-only --output json --detail manifests > kix-plan.json"]}
   cwd="kix-examples/"
 />
 
@@ -159,11 +164,11 @@ value or into a ConfigMap is shown as it is, so keep secrets in Secrets.
 
 ## Confirm a clean result
 
-After deploying the intended change, run `kix diff` or `kix plan` again. A
-clean result confirms that Kix does not currently plan another content
-change.
+After deploying the intended change, run `kix plan` again, with or without
+`--read-only`. A clean result confirms that Kix does not currently plan
+another content change.
 
-`kix diff` compares the fields Kix applied. Use
+`kix plan --read-only` compares the fields Kix applied. Use
 [`kix status <cluster> --check drift`](/docs/how-to/operate-a-cluster/check-resource-status/#find-changed-objects)
 when you need to know who else owns a field and what they changed.
 
@@ -173,7 +178,7 @@ and exit codes.
 :::
 
 :::note[Related guides]
-See [Generate PR-review Markdown from `kix diff`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff/)
+See [Generate PR-review Markdown from `kix plan`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-plan/)
 for CI usage and [Reconcile drift](/docs/how-to/operate-a-cluster/reconcile-drift/)
 when live resources need to be reapplied.
 :::

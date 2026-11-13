@@ -4,8 +4,8 @@
 //! [`kix::plan::Planner`], which computes the deploy's actions; [`dry_run`]
 //! runs the engine over them with every write sent as `dryRun=All`, so the
 //! apiserver answers for each object; [`document`] turns those answers into
-//! the [`Plan`] document `kix diff` also emits. `kix deploy` runs the same
-//! three steps before it asks for confirmation.
+//! the [`Plan`] document `kix diff` and `kix plan --read-only` also emit.
+//! `kix deploy` runs the same three steps before it asks for confirmation.
 
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
@@ -35,7 +35,7 @@ use kix::plan::document::{
 use kix::plan::server::comparable;
 use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
 
-use crate::cli::{OutputFormat, PlanArgs, PruneMode};
+use crate::cli::{OutputFormat, PlanArgs};
 use crate::output;
 use crate::plan::{self, render};
 
@@ -95,10 +95,7 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
 pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
     PlanFlags {
         prune: args.prune,
-        prune_mode: args.prune_mode.map(|m| match m {
-            PruneMode::Default => PruneModeFlag::Default,
-            PruneMode::No => PruneModeFlag::No,
-        }),
+        prune_mode: args.skip_orphan_check.then_some(PruneModeFlag::No),
         reconcile: args.reconcile,
         force_conflicts: args.force_conflicts,
         accept_migrations: args.accept_migrations,
@@ -106,9 +103,9 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
 }
 
 /// Select the baseline source (`OldSide`) for planning: the local cache under
-/// `--current-activation`, or the live cluster otherwise.
+/// `--offline`, or the live cluster otherwise.
 fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
-    if args.current_activation {
+    if args.offline {
         OldSide::LocalCache
     } else {
         OldSide::Cluster {
@@ -675,9 +672,9 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
 
     let deletes = p.checked.flags().prune_policy() == PrunePolicy::Delete;
     let fate = if p.checked.flags().prune_mode == Some(PruneModeFlag::No) {
-        "still running on the cluster (`--prune-mode no`, not deleted)".to_string()
+        "still running on the cluster (`--skip-orphan-check`, not deleted)".to_string()
     } else if deletes && p.client.is_none() {
-        // `--current-activation` has not contacted the cluster, so it
+        // `--offline` has not contacted the cluster, so it
         // cannot yet tell which orphans another Kix cluster deploys.
         "to be deleted after the apply (`--prune`) except any still deployed by \
          another Kix cluster (checked once connected)"

@@ -119,7 +119,7 @@ pub fn record_of(manifests: &[Value]) -> Option<&Value> {
 }
 
 /// Return whether `kind` is a Kix-internal bookkeeping kind (`Activation` or
-/// `PackageInstance`) that `kix export --for=exit` omits.
+/// `PackageInstance`) that `kix export` omits without `--with-kix-metadata`.
 pub fn is_kix_internal_kind(kind: &str) -> bool {
     kind == RECORD_KIND || kind == PACKAGE_INSTANCE_KIND
 }

@@ -86,28 +86,19 @@ mod prune_flag_tests {
     fn prune_policy_follows_the_flags() {
         assert_eq!(prune_policy(&[]), PrunePolicy::WarnOnly);
         assert_eq!(prune_policy(&["--prune"]), PrunePolicy::Delete);
-        assert_eq!(
-            prune_policy(&["--prune", "--prune-mode", "default"]),
-            PrunePolicy::Delete
-        );
-        assert_eq!(
-            prune_policy(&["--prune-mode", "default"]),
-            PrunePolicy::WarnOnly
-        );
-        assert_eq!(
-            prune_policy(&["--prune", "--prune-mode", "no"]),
-            PrunePolicy::Skip
-        );
+        assert_eq!(prune_policy(&["--skip-orphan-check"]), PrunePolicy::Skip);
     }
 
-    /// Verify that `--prune-mode` rejects `eager`.
+    /// `--prune` deletes orphans and `--skip-orphan-check` does not look for
+    /// them, so a deploy takes one or the other.
     #[test]
-    fn eager_is_no_longer_a_prune_mode() {
-        let err = match Cli::try_parse_from(["kix", "deploy", "x", "--prune-mode", "eager"]) {
-            Ok(_) => panic!("eager must not parse"),
-            Err(e) => e,
-        };
-        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+    fn prune_and_skip_orphan_check_conflict() {
+        let err =
+            match Cli::try_parse_from(["kix", "deploy", "x", "--prune", "--skip-orphan-check"]) {
+                Ok(_) => panic!("both must not parse"),
+                Err(e) => e,
+            };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 }
 
@@ -475,7 +466,7 @@ mod operator_tests {
     /// Verify that `operator_flags` always forces `PrunePolicy::Delete`.
     #[test]
     fn an_operator_deploy_is_checked_as_one_that_prunes() {
-        for extra in [&[][..], &["--prune-mode", "no"][..]] {
+        for extra in [&[][..], &["--skip-orphan-check"][..]] {
             let argv = [&["kix", "deploy", "x", "--operator"][..], extra].concat();
             let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command
             else {

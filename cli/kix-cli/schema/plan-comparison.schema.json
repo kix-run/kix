@@ -37,7 +37,7 @@
           ]
         },
         "skipped": {
-          "description": "Rules the reviewed plan could not be held to, because it did not\nmake that check (a `kix diff` plan checks no refusals or prune).",
+          "description": "Rules the reviewed plan could not be held to, because it did not\nmake that check (a plan from `kix diff` or `kix plan --read-only` checks\nno refusals or prune).",
           "items": {
             "$ref": "#/$defs/Rule"
           },

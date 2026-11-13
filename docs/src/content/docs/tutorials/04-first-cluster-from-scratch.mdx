@@ -15,7 +15,7 @@ In the previous tutorial you read the files that make an example cluster work.
 Now you will create one small cluster yourself.
 
 You will add a new cluster to your `kix-examples` checkout, deploy one
-`echo-server` instance to kind, and reach it through `kix pf`.
+`echo-server` instance to kind, and reach it through `kix port-forward`.
 
 ## Prerequisites
 
@@ -130,7 +130,7 @@ You should see one Pod and one Service for the `hello-world` instance.
 
 Port-forward to the package instance:
 
-<Command commands={["kix pf 04-from-scratch hello-world 8080:8080"]} cwd="kix-examples/" />
+<Command commands={["kix port-forward 04-from-scratch hello-world 8080:8080"]} cwd="kix-examples/" />
 
 Leave that running. In another terminal:
 

@@ -20,7 +20,7 @@ use std::time::Duration;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use crate::cli::{DeployArgs, OnError};
+use crate::cli::{DeployArgs, GroupBy, LogFormat, OnError};
 use crate::client;
 use crate::exit::Exit;
 use crate::output;
@@ -175,7 +175,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             })?,
             _ => Vec::new(),
         };
-        // Under `--current-activation` there is no pre-confirm client, so let
+        // Under `--offline` there is no pre-confirm client, so let
         // the scheduler inspect the live Jobs during execution.
         let engine_decides = p.client.is_none() && has_skipped_jobs;
         if failed_jobs.is_empty() && !engine_decides {
@@ -246,7 +246,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         }
     }
 
-    let previous = if args.plan.current_activation {
+    let previous = if args.plan.offline {
         Previous::Unknown
     } else {
         match p.baseline.active() {
@@ -262,7 +262,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         &cluster,
         Some(&receipt),
         p.client,
-        if args.plan.current_activation {
+        if args.plan.offline {
             active_hash.as_deref()
         } else {
             None
@@ -274,7 +274,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // Update the local activation cache only when this build's record became
     // current. Caching a build whose deploy left nodes unattempted would cause
     // soft `kix gc` to treat the live resources as garbage and the next
-    // `--current-activation` plan to skip unapplied nodes.
+    // `--offline` plan to skip unapplied nodes.
     if end.current
         && p.build.is_local()
         && let Err(e) = kix::eval::store::save_activation_path(&cluster, &p.build.graph().built_via)
@@ -315,7 +315,7 @@ impl RunEnd {
     }
 }
 
-/// Verify that the cached build used by `--current-activation` matches the
+/// Verify that the cached build used by `--offline` matches the
 /// Active record of `cluster` in the connected Kubernetes context.
 ///
 /// Because the local activation cache is keyed only by cluster name, deploying
@@ -365,7 +365,7 @@ pub(super) async fn check_cached_baseline(
              Why:\n    \
              Applying an offline plan built against {cached} when the cluster has no active deployment record would compare against the wrong baseline.\n\n  \
              Next:\n    \
-             Run `{next}` without `--current-activation`."
+             Run `{next}` without `--offline`."
         ));
     };
     let name = &active.name;
@@ -395,7 +395,7 @@ pub(super) async fn check_cached_baseline(
          Why:\n    \
          Applying a plan made against {cached} would compare against the wrong build: objects belonging to {name} could be treated as orphans and deleted.\n\n  \
          Next:\n    \
-         Run `{next}` without `--current-activation`."
+         Run `{next}` without `--offline`."
     ))
 }
 
@@ -553,6 +553,22 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
     }
 }
 
+/// Return the height of the tui view that `KIX_TUI_HEIGHT` sets, or `None`
+/// for the default.
+fn tui_height() -> Option<u16> {
+    let value = std::env::var("KIX_TUI_HEIGHT").ok()?;
+    match value.trim().parse::<u16>() {
+        Ok(rows) if rows > 0 => Some(rows),
+        _ => {
+            eprintln!(
+                "{} KIX_TUI_HEIGHT is {value:?}, which is not a positive number of rows. Kix uses the default height. Set KIX_TUI_HEIGHT to a positive number of rows, or unset it.",
+                output::yellow("warning:"),
+            );
+            None
+        }
+    }
+}
+
 /// Execute the deploy plan in `checked` using the flags recorded when `checked`
 /// was built.
 #[allow(clippy::too_many_arguments)]
@@ -600,7 +616,7 @@ async fn run_deploy_async(
     let discovery = target.discovery();
 
     // Open `Records` again to enforce the domain migration gate. When
-    // `--current-activation` is used, planning reads the local cache without
+    // `--offline` is used, planning reads the local cache without
     // contacting the cluster, so this is the first point that blocks pruning
     // retired CRDs and cascading their Activation records.
     let records = Records::open(target.client(), discovery)
@@ -638,17 +654,16 @@ async fn run_deploy_async(
     config.cancel.cancel_on_interrupt();
 
     let interactive = output::is_interactive();
-    let use_tui = args.tui && interactive;
+    let use_tui = args.log_format == LogFormat::Tui && interactive;
     let tui_driver = if use_tui {
-        let axis = if args.group_by_ns {
-            super::graph_stream::GroupAxis::Namespace
-        } else {
-            super::graph_stream::GroupAxis::Package
+        let axis = match args.group_by {
+            GroupBy::Namespace => super::graph_stream::GroupAxis::Namespace,
+            GroupBy::Package => super::graph_stream::GroupAxis::Package,
         };
         match super::graph_stream::GraphStreamDriver::spawn(
             cluster_name.to_string(),
             config.cancel.clone(),
-            args.fold_height,
+            tui_height(),
             axis,
             super::graph_stream::GlyphStyle::detect(),
         ) {
@@ -656,7 +671,7 @@ async fn run_deploy_async(
             Err(e) => {
                 eprintln!(
                     "{} {e}. Falling back to plain output",
-                    output::yellow("warn: failed to start --tui renderer:"),
+                    output::yellow("warn: failed to start the tui view:"),
                 );
                 None
             }
@@ -667,12 +682,14 @@ async fn run_deploy_async(
 
     // In JSON log mode, emit a final NDJSON summary object instead of a text
     // summary line.
-    let json_log = (tui_driver.is_none() && args.log_format == crate::cli::LogFormat::Json)
+    let json_log = (tui_driver.is_none() && args.log_format == LogFormat::Json)
         .then(|| Arc::new(super::deploy_log::JsonObserver::new()));
     let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
         (Some(d), _) => d.observer(),
         (None, Some(json)) => json.clone(),
-        (None, None) if args.log_format == crate::cli::LogFormat::Pretty && interactive => {
+        (None, None)
+            if matches!(args.log_format, LogFormat::Pretty | LogFormat::Tui) && interactive =>
+        {
             Arc::new(StreamCliObserver {
                 verbose: global.verbose > 0,
             })
@@ -813,7 +830,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         return Ok(Exit::Failure);
     }
     let cluster = p.build.graph().cluster_name.clone();
-    // A plan made from the local cache (`--current-activation`) did not
+    // A plan made from the local cache (`--offline`) did not
     // connect, so the target checks run once the command connects below.
     let target_checks = p
         .client

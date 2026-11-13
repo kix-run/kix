@@ -10,12 +10,12 @@ import diffFromSnapshot from '/src/command-output/how-to/application-snapshot/di
 
 Use a snapshot when you want `kix diff` without a connection to the cluster:
 on a laptop off the VPN, in a CI job that holds no cluster credentials, or
-when several people need the same old side for a review.
+when several people need the same baseline for a review.
 
-`kix snapshot save` writes the fields Kix applied to each resource of the
-named cluster.
-`kix diff --from` then compares a build with that directory the same way it
-compares with the live cluster, so the two reports match.
+`kix snapshot` writes the fields Kix applied to each resource of the named
+cluster. `kix diff --from` then compares a build with that directory the same
+way `kix plan --read-only` compares with the live cluster, so the two reports
+match.
 
 This guide assumes the cluster has been deployed at least once and that you
 can reach it when saving. The examples use the `how-to-application` cluster
@@ -61,27 +61,27 @@ save again, or the next diff will keep showing the change you already shipped.
 A simple rule: every command that deploys is followed by a save of the same
 context.
 
-When you can reach the cluster, run `kix diff how-to-application` without
-`--from`. It reads the same fields from the live resources and needs no
-saved copy.
+When you can reach the cluster, run
+`kix plan how-to-application --read-only`. It reads the same fields from the
+live resources and needs no saved copy.
 
 ## Compare with a previous build instead
 
-A bundled build works as the old side too. Package the cluster from the old
+A bundled build works as the baseline too. Package the cluster from the old
 revision with `kix bundle`, build a second bundle from the current revision,
 and compare the two:
 
 <Command
   commands={[
-    "kix bundle how-to-application before.kixbundle",
-    "kix bundle how-to-application after.kixbundle",
+    "kix bundle how-to-application --out before.kixbundle",
+    "kix bundle how-to-application --out after.kixbundle",
     "kix diff how-to-application --bundle after.kixbundle --from-bundle before.kixbundle",
   ]}
   cwd="kix-examples/"
 />
 
-You can also export the old revision with `kix export --for audit --out
-./before` and pass `--from ./before`. Both approaches compare two builds of the
+You can also export the old revision with `kix export --with-kix-metadata
+--out ./before` and pass `--from ./before`. Both approaches compare two builds of the
 source without contacting a cluster. Use them to check what a branch changes
 relative to `main`.
 
@@ -89,7 +89,8 @@ relative to `main`.
 
 **Every resource shows as removed or cluster-level.** The directory was
 written by `kix export` in its default mode, which strips the annotations the
-comparison needs. Save a snapshot instead, or export with `--for audit`.
+comparison needs. Save a snapshot instead, or export with
+`--with-kix-metadata`.
 
 **The diff reports changes you did not make.** The snapshot is older than the
 last deploy. Save a fresh one and compare again.

@@ -22,9 +22,8 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "status",
             "list",
             "graph",
-            "inspect",
             "rollback",
-            "images",
+            "history",
             "compliance sbom",
             "compliance attest",
             "pin",
@@ -33,15 +32,15 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
     (
         "context",
         &[
-            "diff",
             "plan",
             "deploy",
             "status",
             "gc",
             "migrate",
             "rollback",
+            "history",
             "logs",
-            "pf",
+            "port-forward",
             "snapshot",
             "compliance attest",
         ],
@@ -56,14 +55,13 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "deploy",
             "list",
             "graph",
-            "inspect",
             "gc",
             "migrate",
             "rollback",
+            "history",
             "export",
             "logs",
-            "pf",
-            "images",
+            "port-forward",
             "compliance",
             "pin",
             "lib",
@@ -74,15 +72,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
     // Only commands that evaluate through the SQLite eval cache.
     (
         "no_cache",
-        &[
-            "build",
-            "check",
-            "list",
-            "graph",
-            "inspect",
-            "images",
-            "compliance audit",
-        ],
+        &["build", "check", "list", "graph", "compliance audit"],
     ),
     (
         "override_input",
@@ -94,14 +84,13 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "deploy",
             "list",
             "graph",
-            "inspect",
             "gc",
             "migrate",
             "rollback",
+            "history",
             "export",
             "logs",
-            "pf",
-            "images",
+            "port-forward",
             "compliance",
         ],
     ),
@@ -130,7 +119,71 @@ pub(crate) fn live_command() -> clap::Command {
         .filter(|a| a.is_global_set())
         .cloned()
         .collect();
+    let template = help_template(&cmd);
     cmd.mut_subcommands(|sc| hide_unread_globals(sc, "", &globals))
+        .help_template(template)
+}
+
+/// The headings of `kix --help`, each with its commands in the order listed.
+const COMMAND_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "Build and check (no cluster access)",
+        &[
+            "check", "build", "graph", "list", "diff", "bundle", "export",
+        ],
+    ),
+    (
+        "Preview and deploy",
+        &["plan", "deploy", "rollback", "history", "gc"],
+    ),
+    (
+        "Operate",
+        &["status", "logs", "port-forward", "snapshot", "migrate"],
+    ),
+    (
+        "Project and installation",
+        &[
+            "upgrade",
+            "lib",
+            "self",
+            "doctor",
+            "pin",
+            "secret",
+            "compliance",
+            "completions",
+        ],
+    ),
+];
+
+/// Return the help template of `kix`, which lists the commands under the
+/// headings of [`COMMAND_GROUPS`].
+fn help_template(cmd: &clap::Command) -> String {
+    let name = |sc: &clap::Command| {
+        let aliases: Vec<&str> = sc.get_visible_aliases().collect();
+        if aliases.is_empty() {
+            sc.get_name().to_string()
+        } else {
+            format!("{} ({})", sc.get_name(), aliases.join(", "))
+        }
+    };
+    let width = cmd
+        .get_subcommands()
+        .filter(|sc| !sc.is_hide_set())
+        .map(|sc| name(sc).len())
+        .max()
+        .unwrap_or(0);
+    let mut groups = String::new();
+    for (heading, names) in COMMAND_GROUPS {
+        groups.push_str(&format!("{heading}:\n"));
+        for sc in names.iter().filter_map(|n| cmd.find_subcommand(n)) {
+            let about = sc.get_about().map(|a| a.to_string()).unwrap_or_default();
+            groups.push_str(&format!("  {:width$}  {about}\n", name(sc)));
+        }
+        groups.push('\n');
+    }
+    format!(
+        "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{groups}Options:\n{{options}}{{after-help}}"
+    )
 }
 
 /// Hide each scoped global flag that `cmd` does not read.
@@ -173,6 +226,32 @@ mod tests {
             .expect_err("--help exits");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
         err.render().to_string()
+    }
+
+    /// A command missing from [`COMMAND_GROUPS`] would not appear in
+    /// `kix --help`.
+    #[test]
+    fn help_lists_every_command_under_one_heading() {
+        let cmd = Cli::command();
+        let mut listed: Vec<&str> = COMMAND_GROUPS
+            .iter()
+            .flat_map(|(_, names)| names.iter().copied())
+            .collect();
+        for name in &listed {
+            assert!(cmd.find_subcommand(name).is_some(), "no command `{name}`");
+        }
+        let mut visible: Vec<&str> = cmd
+            .get_subcommands()
+            .filter(|sc| !sc.is_hide_set())
+            .map(|sc| sc.get_name())
+            .collect();
+        listed.sort();
+        visible.sort();
+        assert_eq!(listed, visible);
+        let help = command().render_long_help().to_string();
+        assert!(help.starts_with("Kix is a Kubernetes compiler."), "{help}");
+        assert!(help.contains("Preview and deploy:\n  plan "), "{help}");
+        assert!(help.contains("  port-forward (pf)  "), "{help}");
     }
 
     #[test]

@@ -49,7 +49,7 @@ pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result
     file::write(doc, graph, BufWriter::new(temp.as_file_mut())).map_err(|e| {
         if e.kind() == std::io::ErrorKind::InvalidInput {
             miette!(
-                "cannot write plan file {path}: {e}; {path} was not written. Next: plan fewer objects in this cluster, or run `kix plan` or `kix diff` without `--save`.",
+                "cannot write plan file {path}: {e}; {path} was not written. Next: plan fewer objects in this cluster, or run `kix plan` or `kix diff` without `--out`.",
                 path = path.display()
             )
         } else {
@@ -63,7 +63,7 @@ pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result
         .len();
     if stored > file::MAX_STORED_BYTES {
         return Err(miette!(
-            "cannot write plan file {path}: the saved file would be {stored} bytes, over the 64 MiB limit ({} bytes); {path} was not written. Next: plan fewer objects in this cluster, or run `kix plan` or `kix diff` without `--save`.",
+            "cannot write plan file {path}: the saved file would be {stored} bytes, over the 64 MiB limit ({} bytes); {path} was not written. Next: plan fewer objects in this cluster, or run `kix plan` or `kix diff` without `--out`.",
             file::MAX_STORED_BYTES,
             path = path.display()
         ));

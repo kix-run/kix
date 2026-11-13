@@ -8,7 +8,7 @@ import exportCluster from '/src/command-output/how-to/application-export-exit/ex
 import exportFiles from '/src/command-output/how-to/application-export-exit/files.json';
 
 Use `kix export` when you need a directory of Kubernetes manifests without
-Kix's deployment records. The default export mode removes Kix annotations and
+Kix's deployment records. By default, the export removes Kix annotations and
 omits `Activation` and `PackageInstance` resources.
 
 ## Export the cluster
@@ -28,7 +28,7 @@ under `_cluster`:
 Each filename contains the resource kind and name, such as
 `how-to-app/Deployment-production.yaml`.
 
-Exit mode omits the `Activation` and `PackageInstance` objects, but includes
+The export omits the `Activation` and `PackageInstance` objects, but includes
 the two CustomResourceDefinitions for those kinds. The CRDs are ordinary
 cluster-scoped resources in the graph, so they appear under `_cluster`. Remove
 them manually if the receiving system should contain no Kix resources.
@@ -42,7 +42,7 @@ Compare the files with a live cluster before handing them to another system:
   cwd="kix-examples/"
 />
 
-Exit mode strips all `kix.run/*` annotations from the exported manifests.
+The export strips all `kix.run/*` annotations from the exported manifests.
 Labels such as `app.kubernetes.io/managed-by` remain part of the resource
 metadata, so review and adjust labels if the receiving system has its own
 ownership convention.
@@ -67,6 +67,6 @@ file or a symbolic link, it reports the path and refuses to continue. Remove
 or relocate the directory yourself.
 
 :::note[Reference]
-See [`kix export`](/docs/reference/cli/export/) for the exact modes, directory
+See [`kix export`](/docs/reference/cli/export/) for what each export keeps, the directory
 layout, and options.
 :::

@@ -224,7 +224,7 @@ pub const SECRET_KEYS: &str = key!("secret-keys");
 
 /// Return whether `key` is one of Kix's own annotation or label keys.
 ///
-/// Used where Kix strips its own stamps (`kix export --for=exit` and the
+/// Used where Kix strips its own stamps (`kix export` without `--with-kix-metadata` and the
 /// content hash that drift compares).
 pub fn is_kix_key(key: &str) -> bool {
     key.starts_with(PREFIX) || crate::legacy_domain::is_legacy_key(key)

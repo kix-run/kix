@@ -85,9 +85,9 @@ and leaves the install to the next `kix` command.
 [`kix self`](/docs/reference/cli/self/) installs, lists, and removes versions
 of Kix:
 
-<Command commands={["kix self list", "kix self install 0.8", "kix self prune", "kix self update"]} />
+<Command commands={["kix self list", "kix self install 0.8", "kix self prune", "kix self upgrade"]} />
 
-`kix self update` installs the latest release and moves the `kix` link the
+`kix self upgrade` installs the latest release and moves the `kix` link the
 install script made to it, when the install script installed the running Kix.
 
 ## When Kix and the Kix library do not match
@@ -111,7 +111,7 @@ which Kix runs, because Kix chooses a version only from `kix.toml`.
 When the Kix library is a newer patch of the running Kix's minor, such as
 library 0.8.3 and Kix 0.8.1, run `kix self install 0.8`. With `kix = "0.8"` in
 `kix.toml`, Kix then runs the new patch for this project. Without a `kix`
-setting, run `kix self update` to move the `kix` on your PATH.
+setting, run `kix self upgrade` to move the `kix` on your PATH.
 
 ## Verify the installation
 
@@ -172,7 +172,7 @@ Keep both directories in the same parent directory (or symlink
 somewhere else, set `KIX_RUNTIME_DIR` to its path.
 :::
 
-`kix self update` does not update a Kix installed this way. A project that
+`kix self upgrade` does not upgrade a Kix installed this way. A project that
 sets `kix` in `kix.toml` still gets its matching version, which Kix installs
 under `~/.local/share/kix/`.
 
@@ -183,7 +183,7 @@ repository, which is not public yet, you can install Kix from its flake:
 
 <Command commands={["nix profile install github:kix-run/kix#kix"]} />
 
-Upgrade it with `nix profile upgrade kix`. `kix self update` prints that
+Upgrade it with `nix profile upgrade kix`. `kix self upgrade` prints that
 command instead of upgrading a Kix installed this way.
 
 :::note[Reference]

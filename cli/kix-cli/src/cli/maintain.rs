@@ -1,6 +1,6 @@
 //! Arguments of `kix gc` and `kix migrate`.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 pub struct GcArgs {
@@ -11,32 +11,36 @@ pub struct GcArgs {
     #[arg(short, long)]
     pub yes: bool,
 
-    /// Full cluster scan (default: diff old vs new activation store graphs)
+    /// Print what gc would delete, and delete nothing
     #[arg(long)]
-    pub hard: bool,
+    pub dry_run: bool,
+
+    /// Scan every Kix-managed object on the cluster and delete the ones this
+    /// cluster's build does not contain. Without it, gc compares the previous
+    /// deploy's build with the new build on this machine.
+    #[arg(long)]
+    pub full_scan: bool,
 
     /// Delegate garbage collection to the operator (deletes the Activation records the retention policy retires)
     #[arg(long)]
     pub operator: bool,
 
-    /// Also delete resources that carry the Kix label but no `kix.run/identity-hash`.
-    /// Kix never applied those, so by default `--hard` only reports them.
-    #[arg(long)]
-    pub include_unstamped: bool,
-
-    /// With `--hard`, also evaluate Kix resources that reference no Activation
-    /// record on the cluster. When multiple Kix clusters share a Kubernetes
-    /// cluster, Kix cannot tell which cluster owns unattributed resources, so
-    /// by default `--hard` only reports them.
-    #[arg(long, requires = "hard")]
-    pub include_unattributed: bool,
-
-    /// With `--hard`, also check copies against the build. A copy carries
-    /// Kix's labels and annotations, but Kix never wrote it: another program,
-    /// usually an operator, copied them from an object Kix made. By default
-    /// `--hard` only lists copies.
-    #[arg(long, requires = "hard")]
-    pub include_copies: bool,
+    /// Also judge objects that `--full-scan` only reports, as a
+    /// comma-separated list. `unstamped`: objects that carry the Kix label
+    /// but no `kix.run/identity-hash`, which Kix never applied.
+    /// `unattributed`: Kix objects that name no deployment record on the
+    /// cluster; when several Kix clusters share a Kubernetes cluster, Kix
+    /// cannot tell which one owns them. `copies`: objects another program,
+    /// usually an operator, copied with Kix's labels and annotations from an
+    /// object Kix made.
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        value_name = "KINDS",
+        requires = "full_scan"
+    )]
+    pub include: Vec<Include>,
 
     /// Minimum number of newest completed (`Superseded`) Activation records to
     /// retain as rollback targets, regardless of age (`0` retains none)
@@ -53,6 +57,21 @@ pub struct GcArgs {
     /// retirement)
     #[arg(long, value_name = "DURATION", default_value = "30d")]
     pub keep_for: String,
+}
+
+/// Objects that `kix gc --full-scan` judges only when `--include` names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Include {
+    Unstamped,
+    Unattributed,
+    Copies,
+}
+
+impl GcArgs {
+    /// Return whether `--include` names `kind`.
+    pub fn includes(&self, kind: Include) -> bool {
+        self.include.contains(&kind)
+    }
 }
 
 #[derive(Subcommand, Debug)]

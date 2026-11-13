@@ -208,7 +208,7 @@ impl fmt::Display for LibraryIncompatible {
                         f,
                         "Set kix = \"{lib}\" in kix.toml so Kix installs and runs {lib} for this project."
                     ),
-                    None => write!(f, "Run `kix self update`."),
+                    None => write!(f, "Run `kix self upgrade`."),
                 }
             }
         }
@@ -446,7 +446,7 @@ mod tests {
         );
         assert_eq!(
             message("0.8.1", "0.8.3", Incompatible::LibraryNewerPatch, None),
-            "This project's Kix library is 0.8.3, which needs Kix 0.8.3 or newer, and this is Kix 0.8.1. Run `kix self update`."
+            "This project's Kix library is 0.8.3, which needs Kix 0.8.3 or newer, and this is Kix 0.8.1. Run `kix self upgrade`."
         );
     }
 

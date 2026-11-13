@@ -59,8 +59,8 @@ Run an API-server dry run without taking ownership:
 
 <Command expandable {...conflict} />
 
-Kix discovers live state through its management labels, so `kix diff` does not
-compare a resource that Kix has not managed before. The deployment dry run
+Kix discovers live state through its management labels, so
+`kix plan --read-only` does not compare a resource that Kix has not managed before. The deployment dry run
 sends the intended manifests to the API server without persisting them.
 
 The API server rejects a change when another field manager owns a field Kix is

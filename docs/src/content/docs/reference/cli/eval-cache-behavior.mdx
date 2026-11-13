@@ -30,12 +30,12 @@ edit. Switching back to a branch you used before evaluates its clusters again.
 
 | Entry | Used by |
 | --- | --- |
-| A cluster's evaluation: rendered manifests and the scorecard report | `build`, `check`, `graph`, `inspect`, `images`, `compliance audit` |
+| A cluster's evaluation: rendered manifests and the scorecard report | `build`, `check`, `graph`, `list resources`, `list images`, `compliance audit` |
 | The flake's cluster names | `list clusters`, and the "did you mean" list when a cluster is not found |
 | Available packages, and a cluster's instances | `list packages` |
 
 Commands that evaluate the cluster's activation index directly, such as
-`deploy`, `plan`, `diff`, `bundle`, `export`, `logs`, and `pf`, do not read
+`deploy`, `plan`, `diff`, `bundle`, `export`, `logs`, and `port-forward`, do not read
 the eval cache. They evaluate the cluster each time. The store
 (`<cache dir>/kix/store` under the default `kix` builder, or `/nix/store`
 under `builder = "nix"`) keeps the project's inputs and rendered Helm charts,

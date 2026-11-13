@@ -18,7 +18,7 @@ use super::workload::resolve_package_workload;
 pub fn run(args: &PortForwardArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.ports.is_empty() {
         return Err(miette!(
-            "no ports specified. Usage: kix pf <cluster> <package> <port> [<port>...] \
+            "no ports specified. Usage: kix port-forward <cluster> <package> <port> [<port>...] \
              (each port is LOCAL:REMOTE or a bare REMOTE)"
         ));
     }

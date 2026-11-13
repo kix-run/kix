@@ -33,7 +33,7 @@ pub enum Exit {
     Failure,
     /// `kix plan` found changes the deploy would make. Code 2.
     PlanHasChanges,
-    /// `kix diff` found differences. Code 2.
+    /// `kix diff` or `kix plan --read-only` found differences. Code 2.
     DiffHasDifferences,
     /// `kix status` found an object that is missing, changed, or not ready.
     /// Code 2.

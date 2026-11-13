@@ -8,7 +8,7 @@
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix images how-to-application --output json",
+      "command": "kix list images how-to-application --output json",
       "stdout": "[\n  {\n    \"image\": \"docker.io/curlimages/curl:8.14.1@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b\",\n    \"sources\": [\n      {\n        \"kind\": \"Job\",\n        \"namespace\": \"how-to-app\",\n        \"name\": \"production-health\",\n        \"container\": \"probe\"\n      }\n    ]\n  },\n  {\n    \"image\": \"docker.io/library/nginx:1.27-alpine\",\n    \"sources\": [\n      {\n        \"kind\": \"Deployment\",\n        \"namespace\": \"how-to-app\",\n        \"name\": \"preview\",\n        \"container\": \"nginx\"\n      },\n      {\n        \"kind\": \"Deployment\",\n        \"namespace\": \"how-to-app\",\n        \"name\": \"production\",\n        \"container\": \"nginx\"\n      }\n    ]\n  }\n]\n",
       "stderr": "",
       "stdoutDrift": "\"container\": \"nginx\"\n\"container\": \"probe\"\n\"image\": \"docker.io/curlimages/curl:8.14.1@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b\",\n\"image\": \"docker.io/library/nginx:1.27-alpine\",\n\"kind\": \"Deployment\",\n\"kind\": \"Job\",\n\"name\": \"preview\",\n\"name\": \"production\",\n\"name\": \"production-health\",\n\"namespace\": \"how-to-app\",\n\"sources\": [\n[\n]\n{\n}\n},\n",

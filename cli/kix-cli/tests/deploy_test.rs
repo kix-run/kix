@@ -7,7 +7,7 @@ fn kix() -> Command {
     let mut cmd = Command::cargo_bin("kix").unwrap();
     cmd.env("NO_COLOR", "true");
     // Belt-and-braces: tests must never reach for the user's kubeconfig and
-    // hit a real cluster. `--current-activation --dry-run` should be
+    // hit a real cluster. `--offline --dry-run` should be
     // entirely offline, but if any future change introduces a stray client
     // call we'd rather fail fast against `/dev/null` than auth against
     // whatever cluster the developer happens to be pointed at.
@@ -22,20 +22,14 @@ fn kix() -> Command {
     cmd
 }
 
-/// `deploy --dry-run` runs `kix plan`. With `--current-activation` and no
+/// `deploy --dry-run` runs `kix plan`. With `--offline` and no
 /// cached build it compares the build with nothing, offline, so every
 /// package is added, the plan says no cluster was read, and the exit status
 /// is 2 because the plan has changes.
 #[test]
 fn deploy_dry_run_shows_plan() {
     kix()
-        .args([
-            "deploy",
-            "example",
-            "--dry-run",
-            "--yes",
-            "--current-activation",
-        ])
+        .args(["deploy", "example", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(2)
         .stdout(predicate::str::contains("Plan:"))
@@ -46,28 +40,23 @@ fn deploy_dry_run_shows_plan() {
 }
 
 #[test]
-fn apply_alias_works() {
+fn apply_is_refused() {
     kix()
-        .args([
-            "apply",
-            "example",
-            "--dry-run",
-            "--yes",
-            "--current-activation",
-        ])
+        .args(["apply", "example", "--dry-run", "--yes", "--offline"])
         .assert()
-        .code(2)
-        .stdout(predicate::str::contains("Made by comparing two builds"));
+        .code(1)
+        .stderr(predicate::str::contains("[K9947]"))
+        .stderr(predicate::str::contains("`kix deploy`"));
 }
 
-/// `kix plan --save` writes a plan file that reads back as a plan made
+/// `kix plan --out` writes a plan file that reads back as a plan made
 /// from builds, with the build's graph and each added object's manifest.
 #[test]
 fn plan_save_writes_the_plan_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("plan.kixplan");
     kix()
-        .args(["plan", "example", "--current-activation", "--save"])
+        .args(["plan", "example", "--offline", "--out"])
         .arg(&path)
         .assert()
         .code(2)
@@ -107,10 +96,10 @@ fn plan_save_writes_the_plan_file() {
 fn plan_refuses_json_and_points_at_save() {
     for format in ["json", "yaml"] {
         kix()
-            .args(["plan", "example", "--current-activation", "-o", format])
+            .args(["plan", "example", "--offline", "-o", format])
             .assert()
             .code(1)
-            .stderr(predicate::str::contains("--save"));
+            .stderr(predicate::str::contains("--out"));
     }
 }
 
@@ -130,7 +119,7 @@ fn deploy_plan_refuses_json_and_a_changed_plan_file() {
 
     let saved = dir.path().join("plan.kixplan");
     kix()
-        .args(["plan", "example", "--current-activation", "--save"])
+        .args(["plan", "example", "--offline", "--out"])
         .arg(&saved)
         .assert()
         .code(2);
@@ -171,13 +160,7 @@ fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
 
     kix()
         .env("XDG_CACHE_HOME", cache.path())
-        .args([
-            "deploy",
-            "minimal",
-            "--dry-run",
-            "--yes",
-            "--current-activation",
-        ])
+        .args(["deploy", "minimal", "--dry-run", "--yes", "--offline"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -197,7 +180,7 @@ fn the_json_deploy_log_has_stdout_to_itself() {
         .args([
             "deploy",
             "example",
-            "--current-activation",
+            "--offline",
             "--yes",
             "--log-format",
             "json",
@@ -225,18 +208,11 @@ fn the_json_deploy_log_has_stdout_to_itself() {
 #[test]
 fn deploy_dry_run_refuses_json_in_its_own_name() {
     kix()
-        .args([
-            "deploy",
-            "example",
-            "--dry-run",
-            "--current-activation",
-            "-o",
-            "json",
-        ])
+        .args(["deploy", "example", "--dry-run", "--offline", "-o", "json"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
             "`kix deploy --dry-run` cannot print json output",
         ))
-        .stderr(predicate::str::contains("--save FILE.kixplan"));
+        .stderr(predicate::str::contains("--out FILE.kixplan"));
 }

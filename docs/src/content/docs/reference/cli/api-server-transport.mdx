@@ -54,7 +54,7 @@ on the first real request.
 
 ## Listing managed resources
 
-`diff`, `snapshot save`, `gc`, `status`, and `deploy` (when
+`plan --read-only`, `snapshot`, `gc`, `status`, and `deploy` (when
 it must reconstruct the previous state from the cluster) list every resource
 type the cluster serves, filtered by the Kix managed-by label. At most
 `KIX_SWEEP_CONCURRENCY` lists run at once. A resource type the account may not
@@ -73,7 +73,7 @@ cancels the run with that list as the reason. A slow rollout that keeps
 reporting readiness status is progress and does not count as a stall.
 
 :::note[Reference]
-See [`kix deploy`](/docs/reference/cli/deploy-apply/) for the deploy readiness
+See [`kix deploy`](/docs/reference/cli/deploy/) for the deploy readiness
 timeout, which is separate from the stall timeout.
 :::
 

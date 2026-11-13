@@ -43,7 +43,7 @@ const retiredPattern = /\b(?:docs-legacy|guide|fibery_docs)\/[a-zA-Z0-9_./-]*|\b
 const bannedTokens = [
   { pattern: /\bkix scorecard\b/g, reason: 'use `kix check` (no `kix scorecard` subcommand exists)' },
   { pattern: /\bkix validate\b/g, reason: 'use `kix check` (no `kix validate` subcommand exists)' },
-  { pattern: /\bkix inspect package\b/g, reason: 'use `kix list packages` or `kix inspect <cluster>`' },
+  { pattern: /\bkix inspect package\b/g, reason: 'use `kix list packages` or `kix list resources <cluster>`' },
   { pattern: /\bkix\.flavors\.vanilla\b/g, reason: 'use `kix.flavors.generic` or `kix.flavors.kubeadm`' },
   { pattern: /\bkix\.rules\.recommended\b/g, reason: 'use explicit rule categories (`kix.rules.security`, etc.)' },
   { pattern: /\bscope\.byAvailability\b/g, reason: 'use `kix.byAvailability availability`' },
@@ -91,9 +91,9 @@ for (const file of filesToCheck) {
     }
   }
 
-  if (!relFile.endsWith('reference/cli/deploy-apply.mdx') && relFile !== 'ROADMAP.md') {
+  if (relFile !== 'ROADMAP.md') {
     for (const match of source.matchAll(kixApplyPattern)) {
-      errors.push(`${relFile}: references "${match[0]}"; prefer "kix deploy" outside deploy-apply.mdx`);
+      errors.push(`${relFile}: references "${match[0]}"; use "kix deploy" (no \`kix apply\` command exists)`);
     }
   }
 

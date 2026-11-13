@@ -148,7 +148,7 @@ fn deploy_and_gc() {
     let plan0_file =
         std::env::temp_dir().join(format!("kix-first-plan-{}.kixplan", std::process::id()));
     let plan0 = kix(KIND_CLUSTER)
-        .args(["plan", KIX_CLUSTER, "--save", plan0_file.to_str().unwrap()])
+        .args(["plan", KIX_CLUSTER, "--out", plan0_file.to_str().unwrap()])
         .output()
         .expect("plan should run");
     assert_eq!(
@@ -233,7 +233,7 @@ fn deploy_and_gc() {
 
     // Phase 2b: Plan and diff of a changed build list the same objects, and
     // the plan applies nothing.
-    eprintln!("\n=== Phase 2b: kix plan and kix diff agree ===");
+    eprintln!("\n=== Phase 2b: kix plan and kix plan --read-only agree ===");
 
     let dir = std::env::temp_dir().join(format!("kix-saved-plan-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -241,11 +241,17 @@ fn deploy_and_gc() {
     let forced = dir.join("forced.kixplan");
     let diffed = dir.join("diff.kixplan");
     let plan = kix(KIND_CLUSTER)
-        .args(["plan", "kind-v2", "--save", unforced.to_str().unwrap()])
+        .args(["plan", "kind-v2", "--out", unforced.to_str().unwrap()])
         .output()
         .expect("plan should run");
     let diff = kix(KIND_CLUSTER)
-        .args(["diff", "kind-v2", "--save", diffed.to_str().unwrap()])
+        .args([
+            "plan",
+            "kind-v2",
+            "--read-only",
+            "--out",
+            diffed.to_str().unwrap(),
+        ])
         .output()
         .expect("diff should run");
     assert_eq!(
@@ -384,7 +390,7 @@ fn deploy_and_gc() {
             "plan",
             "kind-v2",
             "--force-conflicts",
-            "--save",
+            "--out",
             forced.to_str().unwrap(),
         ])
         .output()
@@ -459,7 +465,7 @@ fn deploy_and_gc() {
     eprintln!("\n=== Phase 4: Hard GC (no garbage expected) ===");
 
     let gc_hard = kix(KIND_CLUSTER)
-        .args(["gc", KIX_CLUSTER, "--hard", "--yes"])
+        .args(["gc", KIX_CLUSTER, "--full-scan", "--yes"])
         .output()
         .expect("hard gc should run");
 
@@ -478,7 +484,7 @@ fn deploy_and_gc() {
     // Create a ConfigMap stamped like a Kix object, with an identity hash no
     // build has. It is written under Kix's field manager because a stamped
     // object with no `managedFields` entry for `kix` counts as a copy another
-    // program made, which hard gc keeps unless `--include-copies` is passed.
+    // program made, which a full-scan gc keeps unless `--include copies` is passed.
     let orphan_dir = tempfile::tempdir().unwrap();
     let orphan_file = orphan_dir.path().join("orphan.yaml");
     std::fs::write(
@@ -517,7 +523,7 @@ fn deploy_and_gc() {
 
     // Hard GC should now detect this as garbage
     let gc_orphan = kix(KIND_CLUSTER)
-        .args(["gc", KIX_CLUSTER, "--hard", "--yes"])
+        .args(["gc", KIX_CLUSTER, "--full-scan", "--yes"])
         .output()
         .expect("hard gc with orphan should run");
 
@@ -879,13 +885,13 @@ fn two_kix_clusters_share_one_kind_cluster() {
     assert!(flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]).0);
     assert_b_intact(&ctx);
 
-    // 1. `kix diff sweep-a` reports no change: sweep-b's objects are not
+    // 1. `kix plan sweep-a --read-only` reports no change: sweep-b's objects are not
     //    removals.
-    let (ok, out) = flake.kix(&ctx, &["diff", "sweep-a"]);
+    let (ok, out) = flake.kix(&ctx, &["plan", "sweep-a", "--read-only"]);
     assert!(ok, "diff sweep-a should report no change:\n{out}");
     assert!(out.contains("belong to Kix cluster sweep-b"), "{out}");
 
-    // 2. `kix status sweep-a` and `kix snapshot save sweep-a` contain none
+    // 2. `kix status sweep-a` and `kix snapshot sweep-a` contain none
     //    of sweep-b's objects.
     let (ok, out) = flake.kix(&ctx, &["status", "sweep-a"]);
     assert!(ok && !out.contains("echo-b"), "{out}");
@@ -893,7 +899,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     let snap_dir = snap.path().join("a");
     let (ok, _) = flake.kix(
         &ctx,
-        &["snapshot", "save", "sweep-a", snap_dir.to_str().unwrap()],
+        &["snapshot", "sweep-a", "--out", snap_dir.to_str().unwrap()],
     );
     assert!(ok);
     assert!(!snap_dir.join("echo-b").exists());
@@ -943,8 +949,8 @@ fn two_kix_clusters_share_one_kind_cluster() {
     );
     assert_b_intact(&ctx);
 
-    // 4. `kix gc sweep-a --hard --yes` deletes nothing of sweep-b's.
-    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--hard", "--yes"]);
+    // 4. `kix gc sweep-a --full-scan --yes` deletes nothing of sweep-b's.
+    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--full-scan", "--yes"]);
     assert!(ok, "{out}");
     assert_b_intact(&ctx);
 
@@ -959,19 +965,19 @@ fn two_kix_clusters_share_one_kind_cluster() {
         "{out}"
     );
     assert_b_intact(&ctx);
-    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--hard", "--yes"]);
+    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--full-scan", "--yes"]);
     assert!(ok, "{out}");
     assert_b_intact(&ctx);
 
-    // `--include-unattributed` needs `--hard`.
-    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--include-unattributed"]);
-    assert!(!ok && out.contains("--hard"), "{out}");
+    // `--include unattributed` needs `--full-scan`.
+    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--include", "unattributed"]);
+    assert!(!ok && out.contains("--full-scan"), "{out}");
 
     // 6. Binding. `kix status` shows the kind cluster's ID, and sweep-a
     //    bound to it deploys and labels its record. From then on the
     //    unbound sweep-b is refused, a sweep-b bound to another ID is
     //    refused before the plan, and a sweep-b bound to this ID deploys.
-    //    `kix diff` stays read-only and is not checked.
+    //    `kix plan --read-only` stays read-only and is not checked.
     let uid = kubectl_stdout(
         &ctx,
         &[
@@ -1016,7 +1022,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
         )),
         "{out}"
     );
-    let (ok, out) = flake.kix(&ctx, &["diff", "sweep-b"]);
+    let (ok, out) = flake.kix(&ctx, &["plan", "sweep-b", "--read-only"]);
     assert!(ok, "diff is read-only and not checked:\n{out}");
     assert_b_intact(&ctx);
 

@@ -52,9 +52,9 @@ Render the workload and compare both label sets with the live Deployment:
 The rendered selector and Pod labels contain the existing `app` and `tier`
 values. Compare them against the `kubectl get` output from the first step.
 
-`kix diff` cannot make this comparison. It finds live resources through Kix's
-management labels, which the existing workload does not yet have. The diff
-therefore shows the workload as a new resource and never compares the
+`kix plan --read-only` cannot make this comparison. It finds live resources
+through Kix's management labels, which the existing workload does not yet
+have. The read-only plan therefore shows the workload as a new resource and never compares the
 selectors.
 
 Ask the API server instead:

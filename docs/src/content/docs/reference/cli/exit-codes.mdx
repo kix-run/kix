@@ -25,9 +25,9 @@ holds every code Kix ends with.
 
 | Command | Non-zero status beyond errors |
 | --- | --- |
-| `kix diff` | `2` when there is at least one difference or a stateful migration was detected. `0` means no differences. |
+| `kix diff`, `kix plan --read-only` | `2` when there is at least one difference or a stateful migration was detected. `0` means no differences. |
 | `kix plan`, `kix deploy --dry-run` | `2` when the deploy would change something or the prune would delete something. `3` when it would stop: a refused write, a refused prune delete, or a stateful migration without `--accept-migrations`. `0` means the deploy would change and delete nothing. |
-| `kix deploy --plan` | `4` when the reviewed plan no longer matches the plan made now; nothing is applied. With `--dry-run`, `3` when it matches but the deploy would stop (a refused write, or a migration not accepted), and `0` when it matches and would not. See [Deploy a reviewed plan](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan). |
+| `kix deploy --plan` | `4` when the reviewed plan no longer matches the plan made now; nothing is applied. With `--dry-run`, `3` when it matches but the deploy would stop (a refused write, or a migration not accepted), and `0` when it matches and would not. See [Deploy a reviewed plan](/docs/reference/cli/deploy/#deploy-a-reviewed-plan). |
 | `kix check` | `1` when any step reports `fail`: cluster evaluation, which includes error-level scorecard findings, or the scorecard report. Applies with `-o sarif` too. |
 | `kix deploy` | `1` when a resource operation fails (under `--on-error continue` too, and including a prune delete) or the run is stopped or cancelled, when the plan shows a refused write under `--on-error stop`, when stateful migrations are detected without `--accept-migrations`, or when confirmation is needed on a non-interactive terminal without `--yes`. With `--operator`, a `Degraded`, `Failed`, or unexpectedly `Superseded` Activation and a 10-minute wait timeout also exit `1`. |
 | `kix rollback` | `1` when the rollback fails, including a failed prune delete or, with `--operator`, a `Degraded` Activation, or when confirmation is needed on a non-interactive terminal without `--yes`. |
@@ -38,8 +38,8 @@ holds every code Kix ends with.
 | `kix doctor` | `1` when the runtime directory cannot be found, `manifest.json` does not match the compiled-in program versions, any file fails its SHA-256 check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix. Warnings and `info` lines do not fail. |
 | `kix lib update` | `1` when the flake has no `kixpkgs` input, when `flake.nix` pins a ref, fork, or `path:` input that `kix lib update` cannot update on its own, or when Kix cannot fetch the target release tag. |
 | `kix upgrade` | `2` when a cluster does not build (the one `2` that is not a finding), with the version the project used or with a release the upgrade tried. `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first. See [`kix upgrade`](/docs/reference/cli/upgrade/#exit-status). |
-| `kix deploy` (before it starts) | `1` when `kix-upgrade.json` lists a change to stored data that no one has acknowledged with `kix upgrade --ack`. |
-| `kix logs`, `kix pf` | kubectl's exit status. Kix replaces itself with `kubectl` once the workload is found. |
+| `kix deploy` (before it starts) | `1` when `kix-upgrade.json` lists a change to stored data that no one has acknowledged with `kix upgrade --acknowledge`. |
+| `kix logs`, `kix port-forward` | kubectl's exit status. Kix replaces itself with `kubectl` once the workload is found. |
 
 Answering no to a confirmation prompt (`deploy`, `rollback`, `gc`,
 `migrate domain`) exits `0` without changing anything.

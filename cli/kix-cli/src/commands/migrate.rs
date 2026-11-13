@@ -68,8 +68,8 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
 fn kix_crds_from_build(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<Vec<Value>> {
     crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
     // Stamp the build so the installed CRDs carry an identity hash like every
-    // other Kix-managed object. Without a stamp, `kix gc --hard
-    // --include-unstamped` would delete `activations.<current>` and cascade
+    // other Kix-managed object. Without a stamp, `kix gc --full-scan
+    // --include unstamped` would delete `activations.<current>` and cascade
     // to every Activation record on the cluster.
     //
     // `installable()` also rejects builds pinned to a pre-migration revision

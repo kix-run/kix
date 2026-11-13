@@ -189,6 +189,9 @@ fn run() -> miette::Result<Exit> {
         Ok(cli) => cli,
         Err(e) => return Ok(exit::clap_error(&e)),
     };
+    if let Some(removed) = removed::refused(&cli.command) {
+        return Ok(removed.refuse());
+    }
     override_input_from_env(&mut cli.global)?;
     check_format(&cli, &matches)?;
     init_tracing(cli.global.verbose, cli.global.quiet);

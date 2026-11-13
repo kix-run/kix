@@ -50,8 +50,8 @@ pub struct Plan {
     /// The build the plan is for: the new side.
     pub build: Build,
     /// The build the plan compares against: the cluster's current
-    /// Activation record for `kix plan` and `kix diff` against the cluster,
-    /// the cached record under `--current-activation`, the `--from` build,
+    /// Activation record for `kix plan` (also with `--read-only`), the cached
+    /// record under `--offline`, the `--from` build,
     /// or the Activation record in a `--from` snapshot. `null` when there is
     /// none: a first deploy, or a snapshot without a record.
     pub deployed: Option<DeployedBuild>,
@@ -204,7 +204,8 @@ impl DeployedBuild {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanFlags {
     pub prune: bool,
-    /// `--prune-mode`, `null` when not given.
+    /// `no` with `--skip-orphan-check`, `null` otherwise. A plan saved by an
+    /// older Kix can hold `default`.
     pub prune_mode: Option<PruneModeFlag>,
     pub reconcile: bool,
     pub force_conflicts: bool,
@@ -219,7 +220,7 @@ pub enum PruneModeFlag {
 }
 
 impl PlanFlags {
-    /// Return the [`PrunePolicy`] requested by these flags. `--prune-mode=no`
+    /// Return the [`PrunePolicy`] requested by these flags. `--skip-orphan-check`
     /// skips pruning, default `deploy` reports orphans without deleting
     /// (warn-only), and `--prune` deletes them.
     pub fn prune_policy(&self) -> PrunePolicy {
@@ -577,7 +578,7 @@ pub enum PruneFate {
     /// Kept by a deploy without `--prune`, and recorded on the new
     /// activation for a later `--prune` or `kix gc`.
     KeptWarnOnly,
-    /// Kept by `--prune-mode=no`.
+    /// Kept by `--skip-orphan-check`.
     KeptSkipped,
     /// A Namespace or CRD: never deleted automatically.
     KeptNeverPruned,
