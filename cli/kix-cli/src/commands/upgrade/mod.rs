@@ -56,13 +56,11 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let resume = previous
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
-    let (from, library): (Version, Option<Version>) = match &resume {
-        Some(s) => (
-            s.from
-                .parse()
-                .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
-            None,
-        ),
+    let from: Version = match &resume {
+        Some(s) => s
+            .from
+            .parse()
+            .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
         None => current_version(&dir, &config)?,
     };
     let to = match args.to.as_deref() {
@@ -82,7 +80,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         && let Some(Requirement::Exact(v)) = &to
         && *v == from
     {
-        return repair(&dir, &config, v, library.as_ref(), args.dry_run);
+        return repair(&dir, &config, v, args.dry_run);
     }
 
     if resume.is_none()
@@ -190,11 +188,8 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         work: work_dir(&dir),
         installed_here: Vec::new(),
         from: from.clone(),
-        // A resumed run may be pinned to a step past `from`. A new run starts
-        // where the project is, which can be an older library than kix.toml
-        // names.
-        pinned: match (&resume, &config.kix) {
-            (Some(_), Some(Requirement::Exact(v))) => v.clone(),
+        pinned: match &config.kix {
+            Some(Requirement::Exact(v)) => v.clone(),
             _ => from.clone(),
         },
         state: None,
@@ -551,29 +546,16 @@ fn exit(code: Exit) -> Result<()> {
     Err(Stopped(code).into())
 }
 
-/// Return the version of Kix the project uses
-/// ([`kix::version::policy::project_version`]), and the version of its Kix
-/// library when Kix could read it.
-fn current_version(
-    dir: &Path,
-    config: &kix::project::ProjectConfig,
-) -> Result<(Version, Option<Version>)> {
-    let setting = match &config.kix {
-        Some(Requirement::Exact(v)) => Some(v),
-        _ => None,
-    };
-    let library = if setting.is_none() || dir.join("flake.nix").is_file() {
-        super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
-        kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
-        match kix::library::eval_version(dir, &[]) {
-            kix::library::LibraryVersion::Known(v) => v.parse().ok(),
-            _ => None,
-        }
-    } else {
-        None
-    };
-    if let Some(version) = kix::version::policy::project_version(setting, library.as_ref()) {
-        return Ok((version, library));
+/// Return the version of Kix the project uses: the exact version in
+/// `kix.toml`, or else the version of its Kix library.
+fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<Version> {
+    if let Some(Requirement::Exact(v)) = &config.kix {
+        return Ok(v.clone());
+    }
+    super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
+    kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
+    if let Some(version) = library_version(dir) {
+        return Ok(version);
     }
     refuse(&format!(
         "Cannot determine the current Kix version for this project from kix.toml or flake.lock.\nNo project files were modified.\nNext: set the exact version in kix.toml (for example `kix = \"{}\"`), then run `kix upgrade` again.",
@@ -582,15 +564,22 @@ fn current_version(
     unreachable!("refuse exits")
 }
 
+/// Return the version of the Kix library the project in `dir` builds with,
+/// or `None` when Kix cannot read it.
+fn library_version(dir: &Path) -> Option<Version> {
+    match kix::library::eval_version(dir, &[]) {
+        kix::library::LibraryVersion::Known(v) => v.parse().ok(),
+        _ => None,
+    }
+}
+
 /// Make `kix.toml`, `flake.nix`, and `flake.lock` of the project in `dir`
 /// agree on `version`, the version the project is on, without building.
-/// `library` is the version of the project's Kix library now, when Kix could
-/// read it. With `dry_run`, check the library and change nothing.
+/// With `dry_run`, check the library and change nothing.
 fn repair(
     dir: &Path,
     config: &kix::project::ProjectConfig,
     version: &Version,
-    library: Option<&Version>,
     dry_run: bool,
 ) -> Result<()> {
     let release = version.release();
@@ -614,9 +603,12 @@ fn repair(
     if has_flake {
         super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
         kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
+        // Read before the move, so the summary can name the old library by
+        // its version.
+        let library = library_version(dir);
         match kix::pin_library::pin_library(dir, version, dry_run) {
             Ok(pinned) => {
-                println!("{}", pinned.summary(library));
+                println!("{}", pinned.summary(library.as_ref()));
                 would_change |= pinned.moves();
                 files.extend(pinned.changed);
             }
@@ -1524,7 +1516,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("kix.toml"), "kix = \"0.8.0-rc.1\"\n").unwrap();
         let config = kix::project::ProjectConfig::read(Some(dir.path()), None).unwrap();
-        let (v, _) = current_version(dir.path(), &config).unwrap();
+        let v = current_version(dir.path(), &config).unwrap();
         assert_eq!(v.release(), "0.8.0-rc.1");
         assert!(v < "0.8.0".parse().unwrap());
     }

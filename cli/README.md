@@ -280,10 +280,7 @@ or installs it. `FIRST_SELECTING` (0.8) is the first minor that reads
   older, since Kix 0.7 rejects the key. `choose` picks the newest installed patch of the minor,
   or the exact version. `library_compatible` requires the same minor and a Kix
   patch at least the library's, and returns `Incompatible::LibraryNewerMinor`,
-  `LibraryOlderMinor`, or `LibraryNewerPatch` otherwise. `project_version`
-  gives the version `kix upgrade` starts from: the exact `kix` in
-  `kix.toml`, or the library's version when the library is on an older
-  minor or `kix.toml` names no exact version. The 1.0 change to
+  `LibraryOlderMinor`, or `LibraryNewerPatch` otherwise. The 1.0 change to
   "a newer Kix builds older libraries" happens here and in `specVersion` in
   `kix/lib/helm.nix` (`fetchSpec`).
 - **Library check** (`check_library` in `kix-core/src/eval/nix.rs`): once per run,
@@ -463,15 +460,12 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   `default_cache_dir()/upgrade/<sha256 of the project path, 16 hex>/`
   (`before/`, and one directory per version). `Run::step` plans the
   library move, and stops for a `flake.nix` edit, before it installs the
-  version, then pins and builds. `current_version` gives the version the
-  project is on with `policy::project_version`: the exact `kix` in
-  `kix.toml`, unless the library (evaluated when `flake.nix` exists) is on an
-  older minor, which makes `from` the library's version and the run a full
-  upgrade. `--to` with the version the project is on (`repair`) runs before
-  the release index is fetched: it sets `kix` in `kix.toml` when the setting
-  does not match and calls `pin_library::pin_library`, and builds nothing;
-  `--dry-run` makes it a dry run that ends with the command to run. The
-  summary names the old library by the version `current_version` read, else
+  version, then pins and builds. `--to` with the version the project is on
+  (`repair`) runs before the release index is fetched: it sets `kix` in
+  `kix.toml` when the setting does not match and calls
+  `pin_library::pin_library`, and builds nothing; `--dry-run` makes it a
+  dry run that ends with the command to run. `repair` evaluates the library
+  version first, so the summary names the old library by its version, else
   by its tag or commit. A dry run's `Next:` line repeats `--to` as typed. An exact prerelease in `--to` is a target, found in the full
   index, and its own change records count.
   Exit 2 on a failed build or lock, 3 when a person should read the result

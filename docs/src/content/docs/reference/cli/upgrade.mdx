@@ -40,12 +40,8 @@ kix upgrade --acknowledge <ID>...
 
 `kix upgrade` starts from the exact version in `kix.toml`, such as
 `kix = "0.9.1"`. When `kix.toml` names a minor or no version, it starts from
-the version of the project's Kix library in `flake.lock`. It also starts from
-the library's version when the library is on an older minor than `kix.toml`
-names, such as the Kix library `0.9.2` with `kix = "0.10.0"`. Kix `0.10.0` cannot
-build that library, so moving to it is a full upgrade with its own release
-notes. When the target is not newer than the version the project uses,
-`kix upgrade` prints this and exits `0`:
+the version of the project's Kix library in `flake.lock`. When the target is
+not newer than that, it prints this and exits `0`:
 
 ```text
 Already on the latest Kix release (0.12.1). Nothing to upgrade.
@@ -62,9 +58,7 @@ the command that makes them agree, such as:
 <Command commands={["kix upgrade --to 0.10.0"]} />
 
 When `--to` names the version the project is on, `kix upgrade` builds
-nothing and does not fetch the release index. This happens only when the
-library is on the same minor as that version. A library on an older minor
-gets the full upgrade (see [The version the project uses](#the-version-the-project-uses)). It sets `kix` in `kix.toml`
+nothing and does not fetch the release index. It sets `kix` in `kix.toml`
 when that setting does not already match, and moves the Kix library input
 to the release tag `v0.10.0`. Kix finds the input by its name in
 `flake.nix`: `kix` or `kixpkgs`, or the name that
@@ -74,8 +68,8 @@ does depends on what `flake.nix` says the input follows:
 
 | `flake.nix` says | Kix does | Kix prints |
 | --- | --- | --- |
-| No ref, such as `github:kix-run/kix` | Locks the tag in `flake.lock`. `flake.nix` stays as it is. | `Kix library: 0.10.0-rc.2 -> 0.10.0.` |
-| A version tag, such as `github:kix-run/kix/v0.10.0-rc.2` | Changes that tag in `flake.nix`, then locks it. When more than one URL in `flake.nix` names the tag, Kix changes nothing and lists the lines. | `Kix library: 0.10.0-rc.2 -> 0.10.0. Kix changed the tag in flake.nix.` |
+| No ref, such as `github:kix-run/kix` | Locks the tag in `flake.lock`. `flake.nix` stays as it is. | `Kix library: 0.9.1 -> 0.10.0.` |
+| A version tag, such as `github:kix-run/kix/v0.9.1` | Changes that tag in `flake.nix`, then locks it. When more than one URL in `flake.nix` names the tag, Kix changes nothing and lists the lines. | `Kix library: 0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.` |
 | A branch or a commit | Nothing. You chose it. | `The input kix follows the branch main, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
 | A local folder | Nothing. | `The input kix is the local folder ../kix, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
 
@@ -91,7 +85,7 @@ names the library by its version, or by its commit when it cannot read the
 version. Commit the files Kix names:
 
 ```text
-Kix library: 0.10.0-rc.2 -> 0.10.0. Kix changed the tag in flake.nix.
+Kix library: 0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.
 Commit flake.nix and flake.lock.
 ```
 

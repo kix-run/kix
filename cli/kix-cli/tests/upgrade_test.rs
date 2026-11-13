@@ -1226,36 +1226,3 @@ fn the_version_the_project_is_on_needs_no_release_index() {
     assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
     assert!(!s.project.join("kix-upgrade.json").exists());
 }
-
-/// Needs a Kix runtime (`KIX_RUNTIME_DIR` in the development shell), since
-/// Kix reads the library version with Nix.
-#[test]
-fn a_library_on_an_older_minor_gets_the_full_upgrade() {
-    let s = Setup::new();
-    s.releases(vec![]);
-    // kix.toml names 9.2.0 already, but the Kix library is still 9.1.0.
-    s.write("kix.toml", "kix = \"9.2.0\"\n");
-    s.write(
-        "flake.nix",
-        r#"{
-  outputs = _: {
-    legacyPackages = builtins.listToAttrs (map (system: {
-      name = system;
-      value.kixLibrary.version = "9.1.0";
-    }) [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ]);
-  };
-}
-"#,
-    );
-    let (code, out) = s.upgrade(&["--to", "9.2.0", "--dry-run"]);
-    assert_eq!(code, 0, "{out}");
-    assert!(
-        out.starts_with("Kix 9.1.0 -> 9.2.0 (dry run, no files changed)\n"),
-        "{out}"
-    );
-    assert!(out.contains("    [K0001] web (9.2.0):"), "{out}");
-    assert!(
-        out.ends_with("Next: run `kix upgrade --to 9.2.0`.\n"),
-        "{out}"
-    );
-}

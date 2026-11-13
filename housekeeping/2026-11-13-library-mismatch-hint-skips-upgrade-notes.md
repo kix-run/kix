@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix upgrade` · The library mismatch error sends a 0.9 project through the path that skips the release notes.
+
+A project with `kix = "0.10.0-rc.3"` in `kix.toml` and the 0.9.2 Kix library fails to build with "Run `kix upgrade --to 0.10.0-rc.3`". `kix upgrade` takes the version in `kix.toml` as the version the project is on, so `--to` that version takes the repair path: it moves the library pin, builds nothing, and lists none of the 0.10 breaking changes. The same value of `--to` means "repair" or "upgrade" depending on the project's state. This is a design question, not yet decided.
