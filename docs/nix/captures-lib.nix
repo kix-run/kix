@@ -98,11 +98,10 @@ let
   # Workspace setup shell. Caller is expected to have:
   #   $workspace: empty writable directory the workspace will live in.
   # After this snippet, $workspace contains kix-examples + (optional)
-  # overlay + applied setup mutations. Kix reads the project's Kix library
-  # only from an input named `kix`, so a kix-examples flake that still names
-  # it `kixpkgs` has the input renamed in the workspace copy. Kix-side
+  # overlay + applied setup mutations. Kix-side
   # `--override-input kix path:<store>` (see `kixOverrideArgs` below)
-  # handles the repoint, and `flake.lock` is left as it is.
+  # points the workspace's Kix library at this checkout, and `flake.lock`
+  # is left as it is.
   workspaceSetupShell =
     group:
     let
@@ -129,9 +128,6 @@ let
     ''
       cp -r --no-preserve=mode ${kixExamples}/. "$workspace/"
       chmod -R u+w "$workspace"
-      if grep -qw kixpkgs "$workspace/flake.nix"; then
-        sed -i -E 's/\bkixpkgs\b/kix/g' "$workspace/flake.nix"
-      fi
       ${overlayCp}
       ${mutateBlocks}
     '';
