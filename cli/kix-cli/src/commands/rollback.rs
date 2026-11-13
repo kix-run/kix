@@ -28,12 +28,13 @@ use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
 
 use crate::cli::{OutputFormat, RollbackArgs};
+use crate::exit::Exit;
 use crate::output;
 use crate::plan;
 
 use super::CommandContext;
 
-pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let lookup = if args.list {
         super::Lookup::ReadOnly
     } else {
@@ -41,7 +42,10 @@ pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let cluster = ctx.cluster_identity(&args.cluster, lookup)?;
     if args.list {
-        return ctx.runtime.block_on(run_list_async(&cluster, ctx));
+        return ctx
+            .runtime
+            .block_on(run_list_async(&cluster, ctx))
+            .map(Exit::from);
     }
     if args.operator {
         return ctx
@@ -207,7 +211,7 @@ fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Rec
     );
 }
 
-async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
+async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<Exit> {
     crate::say!("Connecting to cluster...");
 
     let client = client::make_client(ctx.global.context.as_deref())
@@ -235,7 +239,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         cluster,
         current.deployed_with.as_deref(),
         super::deploy::stops::Writer::Rollback,
-    );
+    )?;
 
     let superseded = records
         .rollback_targets(cluster)
@@ -358,7 +362,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             "{}",
             output::dim("Dry run. Nothing was applied to the cluster.")
         );
-        return Ok(());
+        return Ok(Exit::Success);
     }
 
     if total_apply == 0 && checked.orphans().is_empty() {
@@ -374,7 +378,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             crate::say!(
                 "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."
             );
-            return Ok(());
+            return Ok(Exit::Success);
         }
         let names: Vec<String> = failed_jobs.iter().map(|r| r.to_string()).collect();
         crate::say!(
@@ -388,7 +392,10 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     if !args.yes {
         if !output::is_interactive() {
-            output::refuse_unconfirmed(output::Unconfirmed::Rollback, cluster);
+            return Err(output::refuse_unconfirmed(
+                output::Unconfirmed::Rollback,
+                cluster,
+            ));
         }
         print!("\nProceed with rollback? [y/N] ");
         std::io::stdout().flush().into_diagnostic()?;
@@ -397,7 +404,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
             println!("Rollback cancelled. Nothing was applied to the cluster.");
-            return Ok(());
+            return Ok(Exit::Success);
         }
     }
 
@@ -466,17 +473,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         }
     }
     // A prune delete that fails leaves `result` `Ok` with `failed > 0`.
-    if !end.succeeded {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(Exit::failure_if(!end.succeeded))
 }
 
 async fn run_operator_async(
     args: &RollbackArgs,
     cluster: &str,
     ctx: &CommandContext,
-) -> Result<()> {
+) -> Result<Exit> {
     let (client, records) =
         super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
 
@@ -573,12 +577,15 @@ async fn run_operator_async(
             "{}",
             output::dim("Dry run. Nothing was applied to the cluster.")
         );
-        return Ok(());
+        return Ok(Exit::Success);
     }
 
     if !args.yes {
         if !output::is_interactive() {
-            output::refuse_unconfirmed(output::Unconfirmed::Rollback, cluster);
+            return Err(output::refuse_unconfirmed(
+                output::Unconfirmed::Rollback,
+                cluster,
+            ));
         }
         print!("\nDelegate rollback to operator? [y/N] ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
@@ -587,7 +594,7 @@ async fn run_operator_async(
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
             println!("Rollback cancelled. Nothing was applied to the cluster.");
-            return Ok(());
+            return Ok(Exit::Success);
         }
     }
 
@@ -639,10 +646,9 @@ async fn run_operator_async(
         }
     }
 
-    if reconciled == super::operator::Reconciled::Degraded {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(Exit::failure_if(
+        reconciled == super::operator::Reconciled::Degraded,
+    ))
 }
 
 /// Print the current active activation name and short identity hash.

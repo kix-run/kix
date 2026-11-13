@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::cli::{DeployArgs, OnError};
 use crate::client;
+use crate::exit::Exit;
 use crate::output;
 use crate::plan;
 use kix::cluster::activation::{OpenedRecords, Records};
@@ -43,7 +44,7 @@ use self::observer::*;
 pub(crate) use self::observer::{StreamCliObserver, counts, held_back};
 use self::saved_plan::*;
 
-pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let saved = match &args.saved_plan {
         Some(path) => Some(load_saved_plan(
             path,
@@ -78,14 +79,14 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // rather than `args.plan`.
     let flags = saved.as_ref().map_or(flags_of(&args.plan), |s| s.flags);
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
-        return Ok(());
+        return Ok(Exit::Success);
     };
     // A cluster that has never run a required stop must deploy it first.
     stops::check(
         &args.plan.cluster,
         p.baseline.active().and_then(|r| r.deployed_with.as_deref()),
         stops::Writer::Deploy,
-    );
+    )?;
     let sops = p.sops_sources(false).map_err(|e| miette!("{e}"))?;
     p.annotate_record(&args.record_annotations)
         .map_err(|e| miette!("{e}"))?;
@@ -102,7 +103,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             let cluster = &p.build.graph().cluster_name;
             eprintln!();
             eprint!("{}", plan::migrations::stop(cluster, &pairs, fate));
-            std::process::exit(1);
+            return Ok(Exit::Failure);
         }
         output::progress_text(&format!("\n{}", plan::migrations::accepted(&pairs, prune)));
     }
@@ -139,7 +140,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             plan::render::render_comparison(&comparison, &s.reviewed, &s.path, &s.cluster)
         );
         if !comparison.matches {
-            std::process::exit(EXIT_STALE);
+            return Ok(Exit::StalePlan);
         }
     }
 
@@ -160,7 +161,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             "Fix them and deploy again, or rerun with --on-error continue to apply everything else."
         };
         eprintln!("{}", output::yellow(next));
-        std::process::exit(1);
+        return Ok(Exit::Failure);
     }
 
     let cluster = p.build.graph().cluster_name.clone();
@@ -202,7 +203,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
                 ),
                 _ => crate::say!("Nothing to apply."),
             }
-            return Ok(());
+            return Ok(Exit::Success);
         }
         if engine_decides {
             crate::say!(
@@ -239,7 +240,10 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if !args.yes {
         if !output::is_interactive() {
-            output::refuse_unconfirmed(output::Unconfirmed::Deploy, &cluster);
+            return Err(output::refuse_unconfirmed(
+                output::Unconfirmed::Deploy,
+                &cluster,
+            ));
         }
         output::progress_text("\nProceed with deploy? [y/N] ");
         std::io::stdout().flush().into_diagnostic()?;
@@ -248,7 +252,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
             output::progress_text("Deploy cancelled.\n");
-            return Ok(());
+            return Ok(Exit::Success);
         }
     }
 
@@ -290,10 +294,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         );
     }
 
-    if !end.succeeded {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(Exit::failure_if(!end.succeeded))
 }
 
 /// Outcome of a scheduler run for `kix deploy` or `kix rollback`.
@@ -774,11 +775,11 @@ pub(super) fn operator_flags(flags: PlanFlags) -> PlanFlags {
     }
 }
 
-fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
+fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // Run the same plan and pre-flight checks as a direct deploy so invalid
     // builds are rejected before the Activation is submitted to the cluster.
     let Some(p) = prepare(&args.plan, operator_flags(flags_of(&args.plan)), ctx)? else {
-        return Ok(());
+        return Ok(Exit::Success);
     };
     let checked = &p.checked;
     let activation_name = checked
@@ -811,7 +812,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
                 plan::migrations::SourceFate::OperatorPrunes
             )
         );
-        std::process::exit(1);
+        return Ok(Exit::Failure);
     }
     let cluster = p.build.graph().cluster_name.clone();
     // A plan made from the local cache (`--current-activation`) did not
@@ -833,7 +834,10 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if !args.yes {
         if !output::is_interactive() {
-            output::refuse_unconfirmed(output::Unconfirmed::Deploy, &cluster);
+            return Err(output::refuse_unconfirmed(
+                output::Unconfirmed::Deploy,
+                &cluster,
+            ));
         }
         print!("\nDelegate deploy to operator? [y/N] ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
@@ -842,7 +846,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
             println!("Deploy cancelled.");
-            return Ok(());
+            return Ok(Exit::Success);
         }
     }
 
@@ -907,8 +911,5 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         );
     }
 
-    if reconciled == Reconciled::Degraded {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(Exit::failure_if(reconciled == Reconciled::Degraded))
 }

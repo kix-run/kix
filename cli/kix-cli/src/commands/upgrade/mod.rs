@@ -25,16 +25,17 @@ use kix::version::policy::Requirement;
 use miette::{Result, miette};
 
 use crate::cli::{GlobalArgs, UpgradeArgs};
+use crate::exit::{Exit, Stopped};
 use out::Failed;
 use plan::{Applying, ReleaseRecords};
 use state::{DataChange, Status, Step, UpgradeState};
 
 /// A build failed.
-const EXIT_BUILD_FAILED: i32 = 2;
+const EXIT_BUILD_FAILED: Exit = Exit::UpgradeBuildFailed;
 /// The upgrade finished, and a person should read what changed.
-const EXIT_NEEDS_PERSON: i32 = 3;
+const EXIT_NEEDS_PERSON: Exit = Exit::UpgradeNeedsPerson;
 /// Kix refused to start.
-const EXIT_REFUSED: i32 = 1;
+const EXIT_REFUSED: Exit = Exit::Failure;
 
 pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let verbose = global.verbose > 0;
@@ -523,10 +524,10 @@ fn refuse(text: &str) -> Result<()> {
     exit(EXIT_REFUSED)
 }
 
-/// Flush stdout and exit with `code`.
-fn exit(code: i32) -> Result<()> {
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-    std::process::exit(code)
+/// Return the error that ends `kix upgrade` with `code` once it has printed
+/// why.
+fn exit(code: Exit) -> Result<()> {
+    Err(Stopped(code).into())
 }
 
 /// Return the version of Kix the project uses: the exact version in
@@ -674,8 +675,7 @@ impl Run {
                 println!(
                     "Next: check your network connection, then run `kix upgrade` to resume at Kix {v}."
                 );
-                exit(EXIT_REFUSED)?;
-                unreachable!("exit does not return")
+                return Err(Stopped(EXIT_REFUSED).into());
             }
             Err(e) => {
                 println!("Installing Kix {}... failed", version.release());
@@ -691,7 +691,7 @@ impl Run {
 
     /// Save the state as `status`, print `message`, remove what this run
     /// installed, and exit with `code`.
-    fn stop(&mut self, status: Status, message: &str, code: i32) -> Result<()> {
+    fn stop(&mut self, status: Status, message: &str, code: Exit) -> Result<()> {
         self.state_mut().status = status;
         self.save()?;
         println!();

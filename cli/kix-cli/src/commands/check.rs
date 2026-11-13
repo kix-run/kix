@@ -1,6 +1,7 @@
 use miette::Result;
 
 use crate::cli::CheckArgs;
+use crate::exit::Exit;
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
@@ -247,7 +248,7 @@ fn eval_failure_sarif(message: &str) -> serde_json::Value {
     })
 }
 
-pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let mut results: Vec<CheckResult> = Vec::new();
 
     let spinner = output::spinner(format!("Checking cluster '{}'...", args.cluster));
@@ -346,10 +347,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
             serde_json::to_string_pretty(&sarif).expect("SARIF serialization should not fail")
         );
 
-        if has_failure {
-            std::process::exit(1);
-        }
-        return Ok(());
+        return Ok(Exit::failure_if(has_failure));
     }
 
     let response = CheckResponse {
@@ -357,12 +355,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         verbose: ctx.global.verbose > 0,
     };
     output::result(&response)?;
-
-    if has_failure {
-        std::process::exit(1);
-    }
-
-    Ok(())
+    Ok(Exit::failure_if(has_failure))
 }
 
 #[cfg(test)]

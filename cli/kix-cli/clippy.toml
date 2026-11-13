@@ -1,0 +1,5 @@
+# `main` is the only place that ends the process, so every exit code is an
+# `Exit` variant (src/exit.rs) and destructors run.
+disallowed-methods = [
+    { path = "std::process::exit", reason = "return an `Exit` from the command, or `Err(Stopped(exit).into())` from a helper" },
+]

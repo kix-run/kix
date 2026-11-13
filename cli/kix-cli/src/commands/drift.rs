@@ -13,9 +13,10 @@ use kix::cluster::discovery;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner, UnrecordedScale};
 
 use crate::cli::{DriftArgs, GlobalArgs, OutputFormat};
+use crate::exit::Exit;
 use crate::output;
 
-pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
+pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<Exit> {
     let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
 
     let json = output::format() == OutputFormat::Json;
@@ -67,10 +68,7 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
         );
     }
 
-    if drifted > 0 {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(Exit::failure_if(drifted > 0))
 }
 
 /// Print a line for each resource Kix could not show to be in sync, and a

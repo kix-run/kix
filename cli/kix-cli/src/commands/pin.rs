@@ -18,16 +18,17 @@ use kix::registry::{Reference, RegistryClient, RegistryError, is_sha256_digest};
 use crate::cli::{
     GlobalArgs, OutputFormat, PinCheckArgs, PinCommand, PinListArgs, PinRmArgs, PinSetArgs,
 };
+use crate::exit::Exit;
 use crate::output;
 
 mod locate;
 
-pub fn run(command: &PinCommand, global: &GlobalArgs) -> Result<()> {
+pub fn run(command: &PinCommand, global: &GlobalArgs) -> Result<Exit> {
     match command {
-        PinCommand::Set(args) => set(args, global),
-        PinCommand::Rm(args) => rm(args, global),
+        PinCommand::Set(args) => set(args, global).map(Exit::from),
+        PinCommand::Rm(args) => rm(args, global).map(Exit::from),
         PinCommand::Check(args) => check(args, global),
-        PinCommand::List(args) => list(args, global),
+        PinCommand::List(args) => list(args, global).map(Exit::from),
     }
 }
 
@@ -290,7 +291,7 @@ impl Verdict {
     }
 }
 
-fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
+fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<Exit> {
     let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
     let pins_file = located.path.as_path();
     let file = PinFile::read(pins_file).into_diagnostic()?;
@@ -379,10 +380,7 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
         );
     }
 
-    if failed {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(Exit::failure_if(failed))
 }
 
 fn judge(

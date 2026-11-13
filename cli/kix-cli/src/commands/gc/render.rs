@@ -5,6 +5,7 @@ use std::io::Write;
 use miette::{IntoDiagnostic, Result};
 
 use crate::cli::GcArgs;
+use crate::exit::{Exit, Stopped};
 use crate::output;
 use kix::cluster::activation::{Record, RetentionPolicy, RetireReason};
 use kix::manifest::types::{ResourceId, to_manifest_value};
@@ -240,7 +241,7 @@ pub(super) fn print_record_plan(retirement: &RecordRetirement, policy: &Retentio
     );
 }
 
-/// Print the final GC summary line and exit non-zero if `failed > 0`.
+/// Print the final GC summary line, and stop with exit code 1 if `failed > 0`.
 pub(super) fn finish(
     cluster: &str,
     deleted: usize,
@@ -265,7 +266,7 @@ pub(super) fn finish(
         output::red(&failed.to_string())
     );
     println!("  Resolve the deletion failure(s) listed above and run `kix gc {cluster}` again.");
-    std::process::exit(1);
+    Err(Stopped(Exit::Failure).into())
 }
 
 /// Build the confirmation prompt for deleting `resources` resources and
@@ -278,14 +279,17 @@ pub(super) fn deletion_prompt(resources: usize, records: usize) -> String {
     }
 }
 
-/// Prompt the user for confirmation unless `--yes` is set, exiting 1 on a
-/// non-interactive terminal without `--yes`.
+/// Prompt the user for confirmation unless `--yes` is set, stopping with exit
+/// code 1 on a non-interactive terminal without `--yes`.
 pub(super) fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
     if args.yes {
         return Ok(true);
     }
     if !output::is_interactive() {
-        output::refuse_unconfirmed(output::Unconfirmed::GarbageCollect, &args.cluster);
+        return Err(output::refuse_unconfirmed(
+            output::Unconfirmed::GarbageCollect,
+            &args.cluster,
+        ));
     }
     print!("\n{prompt}");
     std::io::stdout().flush().into_diagnostic()?;

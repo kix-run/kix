@@ -39,6 +39,7 @@ use serde_json::Value;
 
 use crate::cli::GcArgs;
 use crate::client;
+use crate::exit::{Exit, Stopped};
 use crate::output;
 use crate::plan::{
     print_never_pruned, print_package_plan, print_plan_summary, print_shared, progress,
@@ -588,7 +589,7 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
     );
 
     if failed > 0 {
-        std::process::exit(1);
+        return Err(Stopped(Exit::Failure).into());
     }
 
     Ok(())

@@ -39,14 +39,9 @@ use crate::output;
 use crate::plan::{self, render};
 
 use super::CommandContext;
+use crate::exit::Exit;
 
-/// Exit status when the deploy would stop: a refused write, or a stateful
-/// migration not accepted with `--accept-migrations`.
-pub(crate) const EXIT_WOULD_STOP: i32 = 3;
-/// Exit status when the deploy would change something.
-const EXIT_CHANGES: i32 = 2;
-
-pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Result<Exit> {
     let format = output::format();
     if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
         return Err(miette!(
@@ -65,7 +60,7 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
                 path.display()
             ));
         }
-        return Ok(());
+        return Ok(Exit::Success);
     };
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
@@ -95,12 +90,12 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
     let migrations_refused =
         !doc.migrations.items().is_empty() && !p.checked.flags().accept_migrations;
     if doc.stops() || migrations_refused {
-        std::process::exit(EXIT_WOULD_STOP);
+        return Ok(Exit::PlanWouldStop);
     }
     if doc.has_changes() {
-        std::process::exit(EXIT_CHANGES);
+        return Ok(Exit::PlanHasChanges);
     }
-    Ok(())
+    Ok(Exit::Success)
 }
 
 /// Extract [`PlanFlags`] from CLI arguments.

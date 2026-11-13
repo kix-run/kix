@@ -3,6 +3,7 @@ mod cli;
 mod cli_surface;
 mod client;
 mod commands;
+mod exit;
 mod output;
 mod plan;
 mod plugin;
@@ -13,6 +14,7 @@ pub mod trace_sink;
 
 use clap::FromArgMatches;
 use cli::{Cli, Command, OutputFormat};
+use exit::Exit;
 
 /// Validate cluster name format.
 ///
@@ -142,6 +144,24 @@ fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
 }
 
 fn main() -> miette::Result<()> {
+    let exit = match run() {
+        Ok(exit) => exit,
+        Err(report) => match exit::stopped(&report) {
+            Some(exit) => exit,
+            None => return Err(report),
+        },
+    };
+    if exit != Exit::Success {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        #[allow(clippy::disallowed_methods)]
+        std::process::exit(exit.code());
+    }
+    Ok(())
+}
+
+/// Parse the command line and run the command, returning how `kix` ends.
+fn run() -> miette::Result<Exit> {
     // Wrapping helps only a person reading a terminal. In a log or a pipe, a
     // line break can fall inside a path or a command, which breaks searching
     // and copying, and makes the text depend on how long its paths are.
@@ -154,13 +174,19 @@ fn main() -> miette::Result<()> {
     // version may take other arguments.
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     if select::run(&args)? == select::Outcome::PrintedVersion {
-        return Ok(());
+        return Ok(Exit::Success);
     }
 
-    let mut cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
+    let parsed = cli::command()
+        .try_get_matches_from(&args)
+        .and_then(|m| Cli::from_arg_matches(&m));
+    let mut cli = match parsed {
+        Ok(cli) => cli,
+        Err(e) => return Ok(clap_exit(&e)),
+    };
     override_input_from_env(&mut cli.global)?;
     if let Command::Plugin(args) = &cli.command {
-        return plugin::run(args, &cli.global);
+        return plugin::run(args, &cli.global).map(Exit::from);
     }
     init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);
@@ -168,16 +194,16 @@ fn main() -> miette::Result<()> {
 
     // Completions doesn't need a CommandContext (no evaluator, no runtime)
     if let Command::Completions(args) = &cli.command {
-        return commands::completions::run(args, &cli.global);
+        return commands::completions::run(args, &cli.global).map(Exit::from);
     }
 
     if let Command::SelfCmd(command) = &cli.command {
-        return commands::self_cmd::run(command);
+        return commands::self_cmd::run(command).map(Exit::from);
     }
 
     // Doctor reports a broken runtime instead of stopping on it.
     if let Command::Doctor = &cli.command {
-        return commands::doctor::run(&cli.global);
+        return commands::doctor::run(&cli.global).map(Exit::from);
     }
 
     // `kix pin` operates directly on the pin file without evaluating the
@@ -189,7 +215,7 @@ fn main() -> miette::Result<()> {
     // `kix upgrade` runs every evaluation in the Kix version of each step,
     // so it needs no evaluator, and no runtime unless it moves flake.lock.
     if let Command::Upgrade(args) = &cli.command {
-        return commands::upgrade::run(args, &cli.global);
+        return commands::upgrade::run(args, &cli.global).map(Exit::from);
     }
 
     // A deploy waits for a person to acknowledge each change to stored data
@@ -210,7 +236,7 @@ fn main() -> miette::Result<()> {
     // `kix secret` reads only the SOPS file it is given, inside or outside a
     // project.
     if let Command::Secret(command) = &cli.command {
-        return commands::secret::run(command);
+        return commands::secret::run(command).map(Exit::from);
     }
 
     // Validate cluster names before initializing the Nix backend (which is slow).
@@ -228,7 +254,7 @@ fn main() -> miette::Result<()> {
     // `kix lib update` repairs flake.lock, so it needs no evaluator or eval
     // cache.
     if let Command::Lib(command) = &cli.command {
-        return commands::library::run(command, &cli.global);
+        return commands::library::run(command, &cli.global).map(Exit::from);
     }
 
     let mut ctx = commands::CommandContext::new(
@@ -236,29 +262,29 @@ fn main() -> miette::Result<()> {
         &commands::compliance::receipt::ComplianceReceipts,
     )?;
 
-    match &cli.command {
-        Command::Build(args) => commands::build::run(args, &mut ctx),
-        Command::Diff(args) => commands::diff::run(args, &mut ctx),
-        Command::Plan(args) => commands::plan::run(&args.plan, args.save.as_deref(), &mut ctx),
-        Command::Check(args) => commands::check::run(args, &mut ctx),
-        Command::Deploy(args) => commands::deploy::run(args, &mut ctx),
-        Command::Status(args) => commands::status::run(args, &mut ctx),
-        Command::List(args) => commands::list::run(args, &mut ctx),
-        Command::Graph(args) => commands::graph::run(args, &mut ctx),
-        Command::Bundle(args) => commands::bundle::run(args, &mut ctx),
-        Command::Inspect(args) => commands::inspect::run(args, &mut ctx),
-        Command::Gc(args) => commands::gc::run(args, &mut ctx),
+    let exit = match &cli.command {
+        Command::Build(args) => commands::build::run(args, &mut ctx).map(Exit::from)?,
+        Command::Diff(args) => commands::diff::run(args, &mut ctx)?,
+        Command::Plan(args) => commands::plan::run(&args.plan, args.save.as_deref(), &mut ctx)?,
+        Command::Check(args) => commands::check::run(args, &mut ctx)?,
+        Command::Deploy(args) => commands::deploy::run(args, &mut ctx)?,
+        Command::Status(args) => commands::status::run(args, &mut ctx).map(Exit::from)?,
+        Command::List(args) => commands::list::run(args, &mut ctx).map(Exit::from)?,
+        Command::Graph(args) => commands::graph::run(args, &mut ctx).map(Exit::from)?,
+        Command::Bundle(args) => commands::bundle::run(args, &mut ctx).map(Exit::from)?,
+        Command::Inspect(args) => commands::inspect::run(args, &mut ctx).map(Exit::from)?,
+        Command::Gc(args) => commands::gc::run(args, &mut ctx).map(Exit::from)?,
         Command::Migrate(cli::MigrateCommand::Domain(args)) => {
-            commands::migrate::run(args, &mut ctx)
+            commands::migrate::run(args, &mut ctx).map(Exit::from)?
         }
-        Command::Rollback(args) => commands::rollback::run(args, &mut ctx),
-        Command::Export(args) => commands::export::run(args, &mut ctx),
-        Command::Logs(args) => commands::logs::run(args, &mut ctx),
-        Command::Pf(args) => commands::pf::run(args, &mut ctx),
-        Command::Health(args) => commands::health::run(args, &mut ctx),
-        Command::Images(args) => commands::images::run(args, &mut ctx),
-        Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
-        Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
+        Command::Rollback(args) => commands::rollback::run(args, &mut ctx)?,
+        Command::Export(args) => commands::export::run(args, &mut ctx).map(Exit::from)?,
+        Command::Logs(args) => commands::logs::run(args, &mut ctx).map(Exit::from)?,
+        Command::Pf(args) => commands::pf::run(args, &mut ctx).map(Exit::from)?,
+        Command::Health(args) => commands::health::run(args, &mut ctx)?,
+        Command::Images(args) => commands::images::run(args, &mut ctx).map(Exit::from)?,
+        Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx).map(Exit::from)?,
+        Command::Compliance(args) => commands::compliance::run(args, &mut ctx).map(Exit::from)?,
         Command::Completions(_)
         | Command::Doctor
         | Command::Drift(_)
@@ -268,6 +294,19 @@ fn main() -> miette::Result<()> {
         | Command::Upgrade(_)
         | Command::SelfCmd(_)
         | Command::Plugin(_) => unreachable!(),
+    };
+    Ok(exit)
+}
+
+/// Print a clap parse error, or the help or version text clap carries as an
+/// error, and return the exit clap gives it.
+fn clap_exit(e: &clap::Error) -> Exit {
+    // A closed pipe is not worth reporting.
+    let _ = e.print();
+    if e.use_stderr() {
+        Exit::Usage
+    } else {
+        Exit::Success
     }
 }
 

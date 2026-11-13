@@ -187,13 +187,16 @@ fn print_report(cluster: &str, report: &migrate::Report) {
 
 /// Prompt the user for confirmation unless `--yes` was passed.
 ///
-/// Exits with code 1 when stdin is not interactive and `--yes` is absent.
+/// Stops with exit code 1 when stdin is not interactive and `--yes` is absent.
 fn confirm(args: &MigrateArgs, from: &str) -> Result<bool> {
     if args.yes {
         return Ok(true);
     }
     if !output::is_interactive() {
-        output::refuse_unconfirmed(output::Unconfirmed::MigrateDomain, &args.cluster);
+        return Err(output::refuse_unconfirmed(
+            output::Unconfirmed::MigrateDomain,
+            &args.cluster,
+        ));
     }
     print!(
         "\nCopy the deployment records and delete the old {} resource types? [y/N] ",
