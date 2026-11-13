@@ -73,13 +73,18 @@ pub enum OnErrorPolicy {
 }
 
 /// Policy for handling orphaned resources after all plan nodes terminate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A saved plan records it as `flags.prune`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum PrunePolicy {
-    /// Skip pruning entirely.
+    /// Do not look for orphans at all (`--skip-orphan-check`).
     Skip,
-    /// Report orphans but do not delete them.
+    /// Report orphans and keep them, recorded on the new Activation for a
+    /// later `--prune` or `kix gc` (the default).
     WarnOnly,
-    /// Delete orphans in reverse-topological order.
+    /// Delete orphans in reverse-topological order (`--prune`).
     Delete,
 }
 

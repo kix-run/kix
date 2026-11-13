@@ -21,7 +21,7 @@ use kix::manifest::lifecycle::{self, Lifecycle};
 use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::types::{ResourceId, to_manifest_value};
 
-use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat, PlanCommandArgs};
+use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
 use crate::output::{self, CommandResponse};
 use crate::plan::{self, render};
 use kix::plan::document::{Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan};
@@ -82,20 +82,20 @@ enum OldSide {
 }
 
 /// The build to compare, and what to compare it with.
-struct Comparison<'a> {
+pub(super) struct Comparison<'a> {
     /// The command, as the Markdown heading names it.
-    command: &'static str,
-    cluster: &'a str,
+    pub(super) command: &'static str,
+    pub(super) cluster: &'a str,
     /// Read the new build from this bundle instead of evaluating the project.
-    bundle: Option<&'a Path>,
-    baseline: Baseline<'a>,
-    detail: DetailArg,
+    pub(super) bundle: Option<&'a Path>,
+    pub(super) baseline: Baseline<'a>,
+    pub(super) detail: DetailArg,
     /// Write the comparison to this plan file.
-    out: Option<&'a Path>,
+    pub(super) out: Option<&'a Path>,
 }
 
 /// What a build is compared with.
-enum Baseline<'a> {
+pub(super) enum Baseline<'a> {
     /// A build or a manifest directory (`--from`).
     From(&'a str),
     /// The build in a bundle (`--from-bundle`).
@@ -128,28 +128,12 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
     )
 }
 
-/// Run `kix plan --read-only`, which compares the build with the live
-/// cluster using only `get` and `list`.
-pub fn run_read_only(args: &PlanCommandArgs, ctx: &mut CommandContext) -> Result<Exit> {
-    compare(
-        &Comparison {
-            command: "kix plan --read-only",
-            cluster: &args.plan.cluster,
-            bundle: args.plan.bundle.as_deref(),
-            baseline: Baseline::Live,
-            detail: args.detail,
-            out: args.out.as_deref(),
-        },
-        ctx,
-    )
-}
-
 /// Compare two store graphs and render the diff using the deploy plan format.
 ///
 /// The new side is built from the project or loaded from a bundle. The old
 /// side is loaded from a build or a bundle, or synthesized from a manifest
 /// directory or the live cluster's Kix-owned view.
-fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exit> {
+pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exit> {
     let new_graph = match args.bundle {
         Some(path) => kix_bundle::read_build(path, &[], args.cluster)
             .map_err(|e| miette!("{e}"))?

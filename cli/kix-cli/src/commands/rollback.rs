@@ -726,8 +726,7 @@ impl RollbackPlan {
 /// never accepts stateful migrations.
 fn flags(prune: bool, force_conflicts: bool) -> PlanFlags {
     PlanFlags {
-        prune,
-        prune_mode: None,
+        prune: PlanFlags::prune_policy_of(prune, false),
         reconcile: false,
         force_conflicts,
         accept_migrations: false,

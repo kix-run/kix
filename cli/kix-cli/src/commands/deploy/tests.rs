@@ -79,7 +79,7 @@ mod prune_flag_tests {
         let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command else {
             unreachable!()
         };
-        super::flags_of(&args.plan).prune_policy()
+        super::flags_of(&args.plan).prune
     }
 
     #[test]
@@ -502,7 +502,7 @@ mod operator_tests {
                 unreachable!()
             };
             let flags = operator_flags(flags_of(&args.plan));
-            assert_eq!(flags.prune_policy(), PrunePolicy::Delete, "{extra:?}");
+            assert_eq!(flags.prune, PrunePolicy::Delete, "{extra:?}");
         }
     }
 

@@ -29,7 +29,7 @@ use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::readiness;
-use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
+use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult, NodeId};
 use kix::cluster::watchdog::StallPolicy;
 use kix::plan::document::PlanFlags;
@@ -745,7 +745,7 @@ fn migration_gate(p: &kix::plan::Planned) -> bool {
         return true;
     }
     let pairs = plan::migrations::of_pairs(&p.migration_pairs);
-    let prune = p.checked.flags().prune;
+    let prune = p.checked.flags().prune == PrunePolicy::Delete;
     if !p.checked.flags().accept_migrations {
         let fate = if prune {
             plan::migrations::SourceFate::Pruned
@@ -837,12 +837,11 @@ pub(super) fn parse_timeout(s: Option<&str>) -> Result<Duration> {
     ))
 }
 
-/// Force `prune: true` for operator deploys so pre-flight checks validate all
-/// orphan deletions that the operator will perform.
+/// Force [`PrunePolicy::Delete`] for operator deploys so pre-flight checks
+/// validate all orphan deletions that the operator will perform.
 pub(super) fn operator_flags(flags: PlanFlags) -> PlanFlags {
     PlanFlags {
-        prune: true,
-        prune_mode: None,
+        prune: PrunePolicy::Delete,
         ..flags
     }
 }

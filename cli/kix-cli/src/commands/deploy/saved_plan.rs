@@ -43,7 +43,7 @@ pub(super) fn load_saved_plan(
                 PlanFileError::NotAPlanFile => {
                     format!("create the file with `kix plan {cluster} --out {shown}`.")
                 }
-                PlanFileError::WrongFormat { .. } => format!(
+                PlanFileError::WrongFormat { .. } | PlanFileError::WrongSchema(_) => format!(
                     "save a new plan file with `kix plan {cluster} --out {shown}` using Kix {}.",
                     kix::version::running().release()
                 ),

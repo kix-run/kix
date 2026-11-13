@@ -8,7 +8,8 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate, PruneModeFlag};
+use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate};
+use crate::cluster::scheduler::PrunePolicy;
 
 /// One comparison rule between a reviewed plan and a fresh plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
@@ -77,14 +78,6 @@ pub fn unusable(reviewed: &Plan, file: &str, cluster: &str) -> Option<String> {
     let against = format!(
         "Nothing was applied to the cluster. Next: save a plan against the cluster with `kix plan {cluster} --out {file}` or `kix plan {cluster} --read-only --out {file}`."
     );
-    if reviewed.schema_version != super::document::SCHEMA_VERSION {
-        let version = crate::version::running().release();
-        return Some(format!(
-            "the plan file uses schema version {}, and Kix {version} reads version {} (saved by another Kix version). Nothing was applied to the cluster. Next: save a new plan with `kix plan {cluster} --out {file}` using Kix {version}.",
-            reviewed.schema_version,
-            super::document::SCHEMA_VERSION
-        ));
-    }
     // A plan's sections follow from how it was made. One that reads
     // otherwise was edited, and an edit can only loosen the comparison:
     // a section marked not checked is skipped, and flags are taken as given.
@@ -149,7 +142,7 @@ pub fn flags_for(
         // A plan from `kix diff` or `kix plan --read-only`: no reviewer saw
         // what these flags would do.
         let refused: Vec<&str> = [
-            (given.prune, "--prune"),
+            (given.prune == PrunePolicy::Delete, "--prune"),
             (given.force_conflicts, "--force-conflicts"),
             (given.reconcile, "--reconcile"),
             (given.accept_migrations, "--accept-migrations"),
@@ -169,8 +162,14 @@ pub fn flags_for(
         return Ok(*given);
     };
     let mut contradicted = Vec::new();
+    // The default policy takes the plan's. A policy asked for on the
+    // command line must be the plan's.
+    if let Some(flag) = PlanFlags::prune_flag(given.prune)
+        && given.prune != planned.prune
+    {
+        contradicted.push(flag.to_string());
+    }
     for (set, in_plan, flag) in [
-        (given.prune, planned.prune, "--prune"),
         (given.reconcile, planned.reconcile, "--reconcile"),
         (
             given.force_conflicts,
@@ -186,9 +185,6 @@ pub fn flags_for(
         if set && !in_plan {
             contradicted.push(flag.to_string());
         }
-    }
-    if given.prune_mode.is_some() && given.prune_mode != planned.prune_mode {
-        contradicted.push("--skip-orphan-check".into());
     }
     if !contradicted.is_empty() {
         return Err(format!(
@@ -270,7 +266,7 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
 
     let flags_differ = match (&reviewed.flags, &fresh.flags) {
         (Some(r), Some(f)) => r != f,
-        (None, Some(f)) => f.prune || f.force_conflicts || f.reconcile,
+        (None, Some(f)) => f.prune == PrunePolicy::Delete || f.force_conflicts || f.reconcile,
         (_, None) => false,
     };
     if flags_differ {
@@ -472,19 +468,18 @@ fn describe_flags(flags: Option<&PlanFlags>) -> String {
     let Some(f) = flags else {
         return "no planning flags (a kix diff or kix plan --read-only)".into();
     };
-    let mut set: Vec<String> = [
-        (f.prune, "--prune"),
-        (f.reconcile, "--reconcile"),
-        (f.force_conflicts, "--force-conflicts"),
-        (f.accept_migrations, "--accept-migrations"),
-    ]
-    .into_iter()
-    .filter(|(on, _)| *on)
-    .map(|(_, flag)| flag.to_string())
-    .collect();
-    if f.prune_mode == Some(PruneModeFlag::No) {
-        set.push("--skip-orphan-check".to_string());
-    }
+    let set: Vec<&str> = PlanFlags::prune_flag(f.prune)
+        .into_iter()
+        .chain(
+            [
+                (f.reconcile, "--reconcile"),
+                (f.force_conflicts, "--force-conflicts"),
+                (f.accept_migrations, "--accept-migrations"),
+            ]
+            .into_iter()
+            .filter_map(|(on, flag)| on.then_some(flag)),
+        )
+        .collect();
     if set.is_empty() {
         "no planning flags".into()
     } else {
@@ -529,8 +524,7 @@ mod tests {
             store_path: None,
         });
         p.flags = Some(PlanFlags {
-            prune: false,
-            prune_mode: None,
+            prune: PrunePolicy::WarnOnly,
             reconcile: false,
             force_conflicts: false,
             accept_migrations: false,
@@ -608,7 +602,7 @@ mod tests {
         assert!(rules(&compare(&plan(), &other)).contains(&Rule::Cluster));
 
         let mut pruned = plan();
-        pruned.flags.as_mut().unwrap().prune = true;
+        pruned.flags.as_mut().unwrap().prune = PrunePolicy::Delete;
         assert_eq!(rules(&compare(&plan(), &pruned)), vec![Rule::Flags]);
     }
 
@@ -702,7 +696,7 @@ mod tests {
         assert!(flags_for(&diff, &accepting, "p.kixplan", "c").is_err());
 
         let given = PlanFlags {
-            prune: true,
+            prune: PrunePolicy::Delete,
             ..plan().flags.unwrap()
         };
         assert!(flags_for(&diff, &given, "p.kixplan", "c").is_err());
@@ -714,9 +708,13 @@ mod tests {
         assert_eq!(flags_for(&plan(), &none, "p.kixplan", "c"), Ok(none));
 
         let mut with_prune = plan();
-        with_prune.flags.as_mut().unwrap().prune = true;
+        with_prune.flags.as_mut().unwrap().prune = PrunePolicy::Delete;
         let taken = flags_for(&with_prune, &none, "p.kixplan", "c").unwrap();
-        assert!(taken.prune, "the plan's flags are used");
+        assert_eq!(
+            taken.prune,
+            PrunePolicy::Delete,
+            "the plan's flags are used"
+        );
 
         let given = PlanFlags {
             reconcile: true,
@@ -724,6 +722,52 @@ mod tests {
         };
         let err = flags_for(&plan(), &given, "p.kixplan", "c").unwrap_err();
         assert!(err.contains("--reconcile"), "{err}");
+    }
+
+    /// A prune policy given on the command line must be the plan's, and the
+    /// default takes the plan's.
+    #[test]
+    fn a_prune_policy_given_must_be_the_plans() {
+        let with = |prune| {
+            let mut p = plan();
+            p.flags.as_mut().unwrap().prune = prune;
+            p
+        };
+        let given = |prune| PlanFlags {
+            prune,
+            ..plan().flags.unwrap()
+        };
+        for (planned, asked, refused) in [
+            (PrunePolicy::Skip, PrunePolicy::WarnOnly, None),
+            (PrunePolicy::Skip, PrunePolicy::Skip, None),
+            (PrunePolicy::Delete, PrunePolicy::Delete, None),
+            (
+                PrunePolicy::WarnOnly,
+                PrunePolicy::Skip,
+                Some("--skip-orphan-check"),
+            ),
+            (PrunePolicy::Skip, PrunePolicy::Delete, Some("--prune")),
+            (
+                PrunePolicy::Delete,
+                PrunePolicy::Skip,
+                Some("--skip-orphan-check"),
+            ),
+        ] {
+            let got = flags_for(&with(planned), &given(asked), "p.kixplan", "c");
+            match refused {
+                None => assert_eq!(got.map(|f| f.prune), Ok(planned), "{planned:?} {asked:?}"),
+                Some(flag) => {
+                    let err = got.unwrap_err();
+                    assert!(err.contains(flag), "{planned:?} {asked:?}: {err}");
+                }
+            }
+        }
+        let skipped = with(PrunePolicy::Skip);
+        let c = compare(&plan(), &skipped);
+        assert_eq!(
+            c.mismatches[0].items[0],
+            "the plan was made with no planning flags, this deploy uses --skip-orphan-check"
+        );
     }
 
     #[test]
@@ -800,9 +844,6 @@ mod tests {
         builds.made_by = MadeBy::Builds;
         assert!(unusable(&builds, "p.kixplan", "c").is_some());
         assert!(unusable(&plan(), "p.kixplan", "c").is_none());
-        let mut future = plan();
-        future.schema_version = "2099-01-01".into();
-        assert!(unusable(&future, "p.kixplan", "c").is_some());
     }
 
     /// A deploy writes and deletes the objects the reviewed plan lists, by

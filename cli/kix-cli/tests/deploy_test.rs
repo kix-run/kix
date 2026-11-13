@@ -81,7 +81,10 @@ fn plan_save_writes_the_plan_file() {
         doc.build.store_path
     );
     assert!(doc.build.identity_hash.is_some());
-    assert_eq!(doc.flags.map(|f| f.prune), Some(false));
+    assert_eq!(
+        doc.flags.map(|f| f.prune),
+        Some(kix::cluster::scheduler::PrunePolicy::WarnOnly)
+    );
     // A first deploy writes every object of the build, each as added.
     let writes = &doc.objects.as_ref().expect("objects").writes;
     assert!(!writes.is_empty());
