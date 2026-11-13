@@ -122,20 +122,32 @@ impl fmt::Display for LockError {
                 f,
                 "flake.nix uses the Kix library without a version. Run `kix upgrade --to {v}` to pin one."
             ),
-            LockError::TagMoved { locked, asked } => {
-                let asked = asked.release();
-                write!(
-                    f,
-                    "flake.nix asks for Kix {asked}, but flake.lock pins Kix {}. Run `kix upgrade --to {asked}`.",
-                    locked.release()
-                )
-            }
+            LockError::TagMoved { locked, asked } => write!(
+                f,
+                "flake.nix asks for Kix {}, but flake.lock pins Kix {}. {}",
+                asked.release(),
+                locked.release(),
+                moved_tag_next_step(locked, asked)
+            ),
             LockError::Setting(message) => f.write_str(message),
         }
     }
 }
 
 impl std::error::Error for LockError {}
+
+/// Return what to do when `flake.nix` asks for Kix `asked` but `flake.lock`
+/// pins Kix `locked`. `kix upgrade` only moves a project to a newer version,
+/// so an older `asked` gets the two ways out that do not need it.
+pub fn moved_tag_next_step(locked: &Version, asked: &Version) -> String {
+    if asked > locked {
+        return format!("Run `kix upgrade --to {}`.", asked.release());
+    }
+    let (locked, asked) = (locked.release(), asked.release());
+    format!(
+        "`kix upgrade` only moves a project to a newer version of Kix. To stay on Kix {locked}, set the tag in flake.nix back to v{locked}. To go back to Kix {asked}, restore flake.nix and flake.lock from a commit that pinned it."
+    )
+}
 
 /// Return which Kix the project in `dir` uses. `overrides` are the
 /// `--override-input` pairs of the command. An override of `kix`, or
@@ -447,9 +459,32 @@ mod tests {
             err.to_string(),
             "flake.nix asks for Kix 0.10.2, but flake.lock pins Kix 0.10.0. Run `kix upgrade --to 0.10.2`."
         );
+        // An older tag cannot be reached with `kix upgrade`.
+        flake("v0.9.2");
+        assert_eq!(
+            project_kix(dir.path(), &[]).unwrap_err().to_string(),
+            "flake.nix asks for Kix 0.9.2, but flake.lock pins Kix 0.10.0. `kix upgrade` only moves a project to a newer version of Kix. To stay on Kix 0.10.0, set the tag in flake.nix back to v0.10.0. To go back to Kix 0.9.2, restore flake.nix and flake.lock from a commit that pinned it."
+        );
         // A branch is no release, so it is left to the check after evaluation.
         flake("main");
         assert!(project_kix(dir.path(), &[]).is_ok());
+    }
+
+    #[test]
+    fn a_moved_tag_names_upgrade_only_for_a_newer_version() {
+        let step = |locked: &str, asked: &str| moved_tag_next_step(&v(locked), &v(asked));
+        assert_eq!(
+            step("0.10.0-rc.2", "0.10.0-rc.3"),
+            "Run `kix upgrade --to 0.10.0-rc.3`."
+        );
+        assert_eq!(
+            step("0.10.0-rc.3", "0.10.0"),
+            "Run `kix upgrade --to 0.10.0`."
+        );
+        assert_eq!(
+            step("0.10.0-rc.3", "0.10.0-rc.2"),
+            "`kix upgrade` only moves a project to a newer version of Kix. To stay on Kix 0.10.0-rc.3, set the tag in flake.nix back to v0.10.0-rc.3. To go back to Kix 0.10.0-rc.2, restore flake.nix and flake.lock from a commit that pinned it."
+        );
     }
 
     #[test]

@@ -1272,6 +1272,37 @@ fn the_version_the_project_is_on_needs_no_release_index() {
 }
 
 #[test]
+fn an_older_target_is_refused_and_changes_nothing() {
+    let s = Setup::new();
+    s.pin_to("9.2.1");
+    let lock = s.read("flake.lock");
+    let flake = s.read("flake.nix");
+    let refused = "Cannot move this project to Kix 9.1.0: it is on Kix 9.2.1, and `kix upgrade` only moves a project to a newer version.\nNo project files were modified.\nNext: to go back to Kix 9.1.0, restore flake.nix and flake.lock from a commit that pinned it.\n";
+
+    // An exact version needs no release index.
+    for args in [&["--to", "9.1.0"][..], &["--to", "9.1.0", "--dry-run"]] {
+        let (code, out) = s.upgrade(args);
+        assert_eq!(code, 1, "{out}");
+        assert_eq!(out, refused);
+    }
+    // A minor series resolves to an older release.
+    s.releases(vec![]);
+    let (code, out) = s.upgrade(&["--to", "9.1"]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(out, refused);
+
+    // A tag moved back by hand stays as the person wrote it.
+    let moved = flake.replace("v9.2.1", "v9.1.0");
+    s.write("flake.nix", &moved);
+    let (code, out) = s.upgrade(&["--to", "9.1.0"]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(out, refused);
+    assert_eq!(s.read("flake.nix"), moved);
+    assert_eq!(s.read("flake.lock"), lock);
+    assert!(!s.project.join("kix-upgrade.json").exists());
+}
+
+#[test]
 fn a_tag_moved_by_hand_upgrades_from_the_locked_version() {
     let s = Setup::new();
     s.releases(vec![]);

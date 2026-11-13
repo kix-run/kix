@@ -127,10 +127,11 @@ impl fmt::Display for LibraryMismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let pinned = self.pinned.release();
         if self.pinned == self.kix {
-            let library = self.library.release();
             write!(
                 f,
-                "flake.lock pins Kix {pinned}, but flake.nix now asks for {library}. Run `kix upgrade --to {library}`."
+                "flake.lock pins Kix {pinned}, but flake.nix now asks for {}. {}",
+                self.library.release(),
+                crate::flake_lock::moved_tag_next_step(&self.pinned, &self.library)
             )
         } else {
             write!(
@@ -229,6 +230,12 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "flake.lock pins Kix 0.10.3, but flake.nix now asks for 0.10.4. Run `kix upgrade --to 0.10.4`."
+        );
+        assert!(
+            check_library(&kix, &kix, &v("0.10.2"))
+                .unwrap_err()
+                .to_string()
+                .starts_with("flake.lock pins Kix 0.10.3, but flake.nix now asks for 0.10.2. `kix upgrade` only moves a project to a newer version of Kix.")
         );
         assert_eq!(
             check_library(&kix, &v("0.10.1"), &v("0.10.1"))

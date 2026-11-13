@@ -261,7 +261,7 @@ fn a_tag_moved_after_the_lock_is_caught() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(format!(
-            "flake.nix asks for Kix 0.0.1, but flake.lock pins Kix {VERSION}. Run `kix upgrade --to 0.0.1`."
+            "flake.nix asks for Kix 0.0.1, but flake.lock pins Kix {VERSION}. `kix upgrade` only moves a project to a newer version of Kix. To stay on Kix {VERSION}, set the tag in flake.nix back to v{VERSION}."
         )));
     // Kix stopped before Nix ran, so the lock is as it was.
     assert_eq!(read(&proj.join("flake.lock")), lock);
