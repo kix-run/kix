@@ -891,7 +891,18 @@ in
           extraImages = if extraImages == null then null else jsonFile "kix-extra-images.json" extraImages;
           imageSources = jsonFile "kix-image-sources.json" imageSources;
           interfaces = if platformSide == null then { } else platformSide.interfaces;
+        }
+        # A cluster with no warnings keeps the index it had before the
+        # library listed warnings in it.
+        // lib.optionalAttrs (libraryWarnings != [ ]) {
+          warnings = jsonFile "kix-warnings.json" (map builtins.unsafeDiscardStringContext libraryWarnings);
         };
+
+      # The library's warnings that are not scorecard findings. The CLI reads
+      # them from `kix-warnings.json`, because it shows Nix's trace output
+      # only when an evaluation fails. The scorecard report carries the
+      # scorecard's own warnings.
+      libraryWarnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
 
       # The platform whose interface file supplied `k8sVersion`, or null when
       # the definition writes it or nothing sets it. `kix.interface` sets the
@@ -1291,7 +1302,7 @@ in
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
         inherit allInstancesList;
-        extraWarnings = crossScorecardDiag.warnings;
+        scorecardWarnings = crossScorecardDiag.warnings;
         extraAssertions =
           crossScorecardDiag.assertions
           ++ map (refusal: { assertion = false; } // refusal) autoResult.besideConsumerRefusals
@@ -1397,7 +1408,7 @@ in
                       interfaces = if platformSide == null then { } else platformSide.interfaces;
 
                       diagnostics = {
-                        warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                        warnings = libraryWarnings;
                         inherit (clusterDiagnostics) assertions failedAssertions;
                       };
 

@@ -8,7 +8,7 @@
           "type": "string"
         },
         "findings": {
-          "description": "The scorecard's findings on the scorecard row, and the Kix library's\nerrors on the eval row, which its details already show as text.",
+          "description": "The scorecard's findings on the scorecard row. On the eval row, the\nKix library's errors when the evaluation failed, which its details\nalready show as text, or its warnings when it passed. A warning has\n`severity` and `message`.",
           "items": true,
           "type": "array"
         },

@@ -202,6 +202,7 @@ let
           + link "kix-scorecard.json" files.scorecard
           + link "kix-extra-images.json" files.extraImages
           + link "kix-image-sources.json" files.imageSources
+          + link "kix-warnings.json" (files.warnings or null)
           + lib.concatStrings (
             lib.mapAttrsToList (consumer: file: link "kix-interface-${consumer}.json" file) files.interfaces
           )

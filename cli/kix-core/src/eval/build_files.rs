@@ -40,6 +40,9 @@ pub struct BuildFiles {
     pub extra_images: Option<PathBuf>,
     /// Where each image option value came from.
     pub image_sources: Option<PathBuf>,
+    /// The Kix library's warnings that are not scorecard findings, when it
+    /// gave any.
+    pub warnings: Option<PathBuf>,
     /// Each consumer's interface file, by consumer name.
     pub interfaces: BTreeMap<String, PathBuf>,
 }
@@ -56,6 +59,8 @@ struct IndexFile {
     extra_images: Option<PathBuf>,
     #[serde(default)]
     image_sources: Option<PathBuf>,
+    #[serde(default)]
+    warnings: Option<PathBuf>,
     #[serde(default)]
     interfaces: BTreeMap<String, PathBuf>,
 }
@@ -105,6 +110,7 @@ impl BuildFiles {
             scorecard: index.scorecard,
             extra_images: index.extra_images,
             image_sources: index.image_sources,
+            warnings: index.warnings,
             interfaces: index.interfaces,
         })
     }
@@ -135,6 +141,7 @@ impl BuildFiles {
             scorecard: optional("kix-scorecard.json"),
             extra_images: optional("kix-extra-images.json"),
             image_sources: optional("kix-image-sources.json"),
+            warnings: optional("kix-warnings.json"),
             interfaces,
         })
     }
@@ -201,6 +208,7 @@ mod tests {
         let packages = file("x-kix-packages.json");
         let scorecard = file("x-kix-scorecard.json");
         let interface = file("x-kix-interface-acme.json");
+        let warnings = file("x-kix-warnings.json");
 
         let dir = tmp.path().join("result");
         std::fs::create_dir(&dir).unwrap();
@@ -208,6 +216,7 @@ mod tests {
         symlink(&packages, dir.join("kix-packages.json")).unwrap();
         symlink(&scorecard, dir.join("kix-scorecard.json")).unwrap();
         symlink(&interface, dir.join("kix-interface-acme.json")).unwrap();
+        symlink(&warnings, dir.join("kix-warnings.json")).unwrap();
 
         let index = tmp.path().join("kix-activation-c.json");
         std::fs::write(
@@ -220,6 +229,7 @@ mod tests {
                 "extraImages": null,
                 "imageSources": null,
                 "interfaces": { "acme": interface },
+                "warnings": warnings,
             })
             .to_string(),
         )
@@ -231,6 +241,7 @@ mod tests {
         assert_eq!(from_index.activation, activation);
         assert_eq!(from_index.extra_images, None);
         assert_eq!(from_index.interfaces["acme"], interface);
+        assert_eq!(from_index.warnings, Some(warnings));
     }
 
     /// An index of another version, a file that is no index, and a

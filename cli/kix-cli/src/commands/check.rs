@@ -16,8 +16,10 @@ pub(crate) struct CheckResult {
     result: String,
     /// One line, or the evaluation error.
     details: String,
-    /// The scorecard's findings on the scorecard row, and the Kix library's
-    /// errors on the eval row, which its details already show as text.
+    /// The scorecard's findings on the scorecard row. On the eval row, the
+    /// Kix library's errors when the evaluation failed, which its details
+    /// already show as text, or its warnings when it passed. A warning has
+    /// `severity` and `message`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     findings: Vec<serde_json::Value>,
 }
@@ -58,8 +60,12 @@ impl CommandResponse for CheckResponse {
             text.push_str("\n\n");
             text.push_str(&detail);
         }
-        for r in self.results.iter().filter(|r| r.tool != "eval") {
-            let listed = list_findings(&r.findings, self.verbose);
+        for r in &self.results {
+            let listed = match (r.tool.as_str(), r.result.as_str()) {
+                ("eval", "pass") => list_warnings(&r.findings),
+                ("eval", _) => String::new(),
+                _ => list_findings(&r.findings, self.verbose),
+            };
             if !listed.is_empty() {
                 text.push_str("\n\n");
                 text.push_str(&listed);
@@ -89,14 +95,42 @@ impl CheckResponse {
         {
             return to_sarif(&eval_failure_sarif(&failed.details));
         }
-        let findings = self
-            .results
-            .iter()
-            .find(|r| r.tool == "scorecard")
-            .map(|r| r.findings.clone())
-            .unwrap_or_default();
+        let mut findings = Vec::new();
+        for r in &self.results {
+            for finding in &r.findings {
+                let mut finding = finding.clone();
+                if r.tool == "eval" {
+                    finding["rule"] = LIBRARY_WARNING_RULE.into();
+                }
+                findings.push(finding);
+            }
+        }
         to_sarif(&serde_json::json!({ "findings": findings }))
     }
+}
+
+/// The SARIF rule of the Kix library's warnings, which belong to no
+/// scorecard rule.
+const LIBRARY_WARNING_RULE: &str = "kix/library-warning";
+
+/// Return the Kix library's warnings as text, one to a line, with the lines
+/// of a longer warning indented under its first.
+fn list_warnings(warnings: &[serde_json::Value]) -> String {
+    let messages: Vec<&str> = warnings
+        .iter()
+        .filter_map(|w| w.get("message").and_then(|m| m.as_str()))
+        .collect();
+    if messages.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("Warnings from the Kix library, {}:", messages.len());
+    for message in messages {
+        for (i, line) in message.trim_end().lines().enumerate() {
+            out.push_str(if i == 0 { "\n  " } else { "\n    " });
+            out.push_str(line);
+        }
+    }
+    out
 }
 
 /// Return the scorecard findings as text, grouped by rule, errors first.
@@ -284,6 +318,26 @@ fn eval_failure_sarif(message: &str) -> serde_json::Value {
     })
 }
 
+/// Return the eval row of an evaluation that passed. The Kix library's
+/// warnings become its findings, because Kix does not show Nix's trace
+/// output for an evaluation that passed.
+fn eval_passed(output: &kix::eval::ClusterOutput) -> CheckResult {
+    let mut details = format!("{} manifests evaluated", output.raw_manifests.len());
+    if !output.warnings.is_empty() {
+        details.push_str(&format!(", {} warnings", output.warnings.len()));
+    }
+    CheckResult {
+        tool: "eval".into(),
+        result: "pass".into(),
+        details,
+        findings: output
+            .warnings
+            .iter()
+            .map(|w| serde_json::json!({ "severity": "warning", "message": w }))
+            .collect(),
+    }
+}
+
 pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let mut results: Vec<CheckResult> = Vec::new();
 
@@ -300,12 +354,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
 
     let cluster_output = match eval_result {
         Ok(output) => {
-            results.push(CheckResult {
-                tool: "eval".into(),
-                result: "pass".into(),
-                details: format!("{} manifests evaluated", output.raw_manifests.len()),
-                findings: Vec::new(),
-            });
+            results.push(eval_passed(&output));
             Some(output)
         }
         Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
@@ -408,6 +457,46 @@ mod sarif_tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["ruleId"], "kix/eval-failure");
         assert_eq!(results[0]["level"], "error");
+    }
+
+    fn passed_with(warnings: &[&str]) -> CheckResponse {
+        let output = kix::eval::ClusterOutput {
+            name: "c".into(),
+            raw_manifests: vec![serde_json::json!({})],
+            scorecard_report: None,
+            extra_images: None,
+            warnings: warnings.iter().map(|w| w.to_string()).collect(),
+        };
+        CheckResponse {
+            results: vec![eval_passed(&output)],
+            verbose: false,
+        }
+    }
+
+    /// The library's warnings follow the table, with the further lines of a
+    /// warning indented under its first.
+    #[test]
+    fn library_warnings_are_listed_under_the_table() {
+        let text = passed_with(&["[a] first", "[b] second\nFix: do this"]).text();
+        assert!(text.contains("1 manifests evaluated, 2 warnings"), "{text}");
+        assert!(
+            text.ends_with(
+                "Warnings from the Kix library, 2:\n  [a] first\n  [b] second\n    Fix: do this"
+            ),
+            "{text}"
+        );
+        assert!(!passed_with(&[]).text().contains("Warnings"));
+    }
+
+    /// SARIF lists each library warning under one rule of its own.
+    #[test]
+    fn library_warnings_are_sarif_results() {
+        let sarif = passed_with(&["[a] first"]).sarif();
+        let results = sarif["runs"][0]["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["ruleId"], LIBRARY_WARNING_RULE);
+        assert_eq!(results[0]["level"], "warning");
+        assert_eq!(results[0]["message"]["text"], "[a] first");
     }
 
     /// Verify that a successful evaluation with the scorecard disabled emits an

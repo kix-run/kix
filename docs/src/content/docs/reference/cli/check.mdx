@@ -22,7 +22,7 @@ kix check <CLUSTER> [-o text|json|yaml|sarif] [--flake <FLAKE>]
 | Argument or flag | Default | Meaning |
 | --- | --- | --- |
 | `<CLUSTER>` | | Cluster name to evaluate. |
-| `-o`, `--output` | `text` | `text` prints a `TOOL`, `RESULT`, `DETAILS` table, then the scorecard findings. `json` and `yaml` print an array of `{ tool, result, details }`, and the `scorecard` entry also has `findings`. `sarif` prints SARIF 2.1.0 JSON, described below. |
+| `-o`, `--output` | `text` | `text` prints a `TOOL`, `RESULT`, `DETAILS` table, then the scorecard findings. `json` and `yaml` print an array of `{ tool, result, details }`. The `scorecard` entry also has `findings`, and so does the `eval` entry when there are library warnings or errors. `sarif` prints SARIF 2.1.0 JSON, described below. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate. |
 | `--override-input <INPUT> <URL>` | None | Override a flake input for the evaluation. Repeatable. |
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
@@ -31,7 +31,7 @@ kix check <CLUSTER> [-o text|json|yaml|sarif] [--flake <FLAKE>]
 
 | Tool | What it reports |
 | --- | --- |
-| `eval` | `pass` with the number of manifests, or `fail` with the evaluation error. Evaluation runs the constructor validators, the cross-resource checks, and every error-severity scorecard rule, so a failure in any of them appears here. |
+| `eval` | `pass` with the number of manifests and of library warnings, or `fail` with the evaluation error. Evaluation runs the constructor validators, the cross-resource checks, and every error-severity scorecard rule, so a failure in any of them appears here. |
 | `scorecard` | The counts of error, warning, and info findings. `fail` when there is at least one error, `skip` when the cluster does not enable the scorecard. |
 
 When `eval` fails, the `scorecard` step does not run, and the evaluation error
@@ -39,6 +39,19 @@ is printed under the table.
 
 Text output lists the error and warning findings under the table, grouped by
 rule. Add `-v` to list the info findings too.
+
+## Library warnings
+
+The Kix library warns about problems that do not stop the build. For example,
+it warns when it skips a `meta.compatibleWith` check because a dependency
+reports no version, or when an instance cannot reach the availability you asked
+for. A package's own `warnings` and its structural warnings are listed here
+too. When `eval` passes, text output lists these warnings under the table. In
+`json` and `yaml`, the `eval` entry lists each one in `findings` with a
+`severity` of `warning` and its `message`.
+
+Scorecard warnings are not repeated here. They appear only as scorecard
+findings.
 
 `kix check` runs constructor validators, cross-resource checks, and scorecard
 rules. It does not validate rendered manifests against external Kubernetes
@@ -48,8 +61,9 @@ OpenAPI schemas or check for deprecated API versions.
 
 With `-o sarif`, each scorecard finding becomes a SARIF result with its rule
 ID, level (`error`, `warning`, or `note`), message, and a logical location of
-the form `namespace/instance/resource`. A cluster with no findings, or with
-the scorecard disabled, produces an empty run.
+the form `namespace/instance/resource`. Each library warning becomes a
+`warning` result with the rule ID `kix/library-warning`. A cluster with no
+findings and no library warnings produces an empty run.
 
 An error-severity finding stops evaluation, so there is no report to convert.
 Kix then writes the evaluation failure as one error result. Its rule ID is

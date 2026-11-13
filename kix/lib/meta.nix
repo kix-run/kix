@@ -389,6 +389,10 @@ rec {
   # An assertion is `{ assertion; message; fix ? null; id ? null; option ?
   # null; }`, with the fields `kix.fail` takes (`core/error.nix`). Each one
   # gets `instance` set to the instance that raised it.
+  #
+  # `scorecardWarnings` are traced but left out of `allWarnings`, because the
+  # scorecard report already carries them as findings and the CLI shows that
+  # report.
   combineDiagnostics =
     {
       instanceName,
@@ -396,6 +400,7 @@ rec {
       metaResult,
       packageResult,
       structuralWarnings,
+      scorecardWarnings ? [ ],
     }:
     let
       instance = "${namespaceName}/${instanceName}";
@@ -411,27 +416,28 @@ rec {
     in
     {
       inherit allWarnings allAssertions failedAssertions;
-      emitWarnings = emitTraces "warning: " allWarnings;
+      emitWarnings = emitTraces "warning: " (allWarnings ++ scorecardWarnings);
       emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (
         map (a: "${a.instance}: ${a.message}") failedAssertions
       );
     };
 
   # Aggregate diagnostics across all instances and attach cluster- and
-  # namespace-level findings (`extraWarnings` and `extraAssertions`).
-  # `emitExtraWarnings` traces only `extraWarnings` because instance warnings
-  # are already traced during instance evaluation.
+  # namespace-level ones. `scorecardWarnings` are traced but left out of
+  # `warnings`, as in `combineDiagnostics`. `emitExtraWarnings` traces only
+  # them because instance warnings are already traced during instance
+  # evaluation.
   collectClusterDiagnostics =
     {
       clusterName,
       allInstancesList,
-      extraWarnings ? [ ],
+      scorecardWarnings ? [ ],
       extraAssertions ? [ ],
     }:
     let
       collect =
         field: builtins.concatMap (inst: (inst._diagnostics or noDiagnostics).${field}) allInstancesList;
-      warnings = collect "warnings" ++ extraWarnings;
+      warnings = collect "warnings";
       assertions = collect "assertions" ++ extraAssertions;
       failedAssertions = collect "failedAssertions" ++ builtins.filter (a: !a.assertion) extraAssertions;
       assertionCheck =
@@ -450,6 +456,6 @@ rec {
         failedAssertions
         assertionCheck
         ;
-      emitExtraWarnings = emitTraces "warning: " extraWarnings;
+      emitExtraWarnings = emitTraces "warning: " scorecardWarnings;
     };
 }

@@ -92,6 +92,42 @@ fn check_passes() {
         .stdout(predicate::str::contains("pass"));
 }
 
+/// The Kix library's warnings reach `kix check` when the evaluation passes.
+/// The example cluster asks for more availability than immich supports,
+/// which the library reports only as a warning.
+#[test]
+fn check_shows_library_warnings() {
+    let warning = "availability \"node\" was requested";
+    kix()
+        .args(["check", "example"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Warnings from the Kix library"))
+        .stdout(predicate::str::contains(warning));
+
+    let out = kix()
+        .args(["check", "example", "-o", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let eval = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tool"] == "eval")
+        .expect("an eval row");
+    assert_eq!(eval["result"], "pass");
+    let listed = eval["findings"].as_array().expect("eval findings");
+    assert!(
+        listed
+            .iter()
+            .any(|f| f["severity"] == "warning"
+                && f["message"].as_str().unwrap_or("").contains(warning)),
+        "{eval}"
+    );
+}
+
 #[test]
 fn graph_tree() {
     kix()

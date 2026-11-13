@@ -201,31 +201,38 @@ in
       warnings = cluster.instances.a.consumer._diagnostics.warnings;
       message = "optional dependency 'svc' has no instance in namespace 'a', so Kix skipped it. b/svc matches in another namespace.\nFix: to use it, add this line to instances.a.consumer:\n  deps.svc = ref.b.svc;";
       expected = "a/consumer: ${message}";
-      # With the scorecard on, the same text is a warning-level finding, so
-      # `kix check` shows it.
-      findings =
-        (mkCluster [
-          {
-            instances.a.consumer.package = optionalConsumer;
-            instances.b.svc.package = plain;
-            scorecard = {
-              enable = true;
-              rules.architecture = import ../../rules/architecture.nix { inherit lib; };
+      # The cluster lists the warning in the file the CLI reads, so `kix
+      # check` shows it.
+      listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);
+    in
+    (boundTo cluster == "none" && builtins.elem expected warnings && builtins.elem expected listed)
+    || throw "optional foreign dependency: bound to ${boundTo cluster}; warnings ${builtins.toJSON warnings}; listed ${builtins.toJSON listed}";
+
+  # Scorecard warnings stay in the scorecard report and out of the cluster's
+  # warnings, so the CLI shows each one once.
+  dependency-scope-scorecard-warnings-not-listed =
+    let
+      cluster = mkCluster [
+        {
+          instances.b.svc.package = plain;
+          scorecard = {
+            enable = true;
+            rules.organization.alwaysWarns = {
+              level = "package";
+              severity = "warning";
+              check = _: [ { message = "always"; } ];
             };
-          }
-        ]).scorecardReport.findings;
-      finding = lib.findFirst (f: f.rule == "dependencies.optionalInOtherNamespace") null findings;
+          };
+        }
+      ];
+      findings = map (f: f.rule) cluster.scorecardReport.findings;
+      listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);
     in
     (
-      boundTo cluster == "none"
-      && builtins.elem expected warnings
-      && finding != null
-      && finding.severity == "warning"
-      && finding.namespace == "a"
-      && finding.instance == "consumer"
-      && finding.message == message
+      builtins.elem "organization.alwaysWarns" findings
+      && !(builtins.any (lib.hasInfix "alwaysWarns") (cluster.diagnostics.warnings ++ listed))
     )
-    || throw "optional foreign dependency: bound to ${boundTo cluster}; warnings ${builtins.toJSON warnings}; finding ${builtins.toJSON finding}";
+    || throw "scorecard warnings: findings ${builtins.toJSON findings}; warnings ${builtins.toJSON cluster.diagnostics.warnings}";
 
   # A serving provider in another namespace binds an optional argument
   # without a warning.
