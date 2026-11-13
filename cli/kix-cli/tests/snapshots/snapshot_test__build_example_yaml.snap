@@ -13257,8 +13257,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: 87an52f6lmn5vyb0vbg2bljg94107cib,9wbgmw2p6szs2dh2sa9h4p494bn0ra63,awzwpm53w1kb4ysngrwmj47whaddgkih,c073szfvlp53msl934m074dhgy8issg3,chzjyyh4lw12a8giil0n4vlzvhihhhar,k7x17sc733q2jxarkgk3x95hi9il1m2l,l0i4jhq0fafvzzgsak5lsmkvzppzw5ny,x0i1407l4qpzq5k6gx4d5iicd8vb81np,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
-    kix.run/identity-hash: 1smm6rcyjn4lmrb4a1jlx23312cwyvxg
+    kix.run/depends-on: 5qk1fhp6yw20k7bwqs2v46g8kgwjpvkg,87an52f6lmn5vyb0vbg2bljg94107cib,awzwpm53w1kb4ysngrwmj47whaddgkih,gw8jd09lbcdgsly9c877ycfqd3sbdq4n,k7x17sc733q2jxarkgk3x95hi9il1m2l,l0i4jhq0fafvzzgsak5lsmkvzppzw5ny,l1q9xp7kj39caahhlr0njxyimx4xfay9,yfj5s4fszbi03rkj21fdl205iyrh6ba0,requires:yxjbiwd469y1d049cyiqy1an4hdll766
+    kix.run/identity-hash: 1385gbdizfn0rbr7nmxvm2dinvavfls6
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -13280,8 +13280,8 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/database: chzjyyh4lw12a8giil0n4vlzvhihhhar
-        checksum/valkey-password: k7x17sc733q2jxarkgk3x95hi9il1m2l
+        checksum/database: e2f70f336e7f0155ae347f8565d59ea1817d3c25bc214fcbe45af031b4b28d36
+        checksum/valkey-password: dd2fdaa57e948adc4794ba37c88ac35356e86884b53dd8f4487f11bdebff20e7
       labels:
         app.kubernetes.io/instance: immich
         app.kubernetes.io/name: immich
@@ -13492,7 +13492,7 @@ kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: k4nq3dnshw33hgvwnbyd7glcycmgv12s,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,wb6sy6x5d9gi2z49ws6rxylh3r4xh93i
-    kix.run/identity-hash: s00c4ccc393csapv154k1liybvknsi30
+    kix.run/identity-hash: 0vc6i32sszfq2l99cdbyjy0xmxrn63qv
     kix.run/package: coredns
     kix.run/package-namespace: kube-system
   labels:
@@ -13512,7 +13512,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/corefile: wb6sy6x5d9gi2z49ws6rxylh3r4xh93i
+        checksum/corefile: 82691f48546addce8542761d3e2d7d9efaab8b7affac5b7431cfdb2d3a2f03a6
       labels:
         app.kubernetes.io/instance: coredns
         app.kubernetes.io/name: coredns
@@ -13742,9 +13742,9 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   annotations:
-    kix.run/depends-on: 1sv4x4cz02dks21gy0706xp90pbpcff1,6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,k7x17sc733q2jxarkgk3x95hi9il1m2l,pnp59yfhnv6byw601crmpvk6sippsnyr,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
+    kix.run/depends-on: 1sv4x4cz02dks21gy0706xp90pbpcff1,6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,k7x17sc733q2jxarkgk3x95hi9il1m2l,pnp59yfhnv6byw601crmpvk6sippsnyr,requires:yxjbiwd469y1d049cyiqy1an4hdll766
     kix.run/holds-data: "true"
-    kix.run/identity-hash: jzvbd0gd2sdkq4cbcgqldxhfzaqrbdfm
+    kix.run/identity-hash: ldilvswz5pan2svqwn76bhq3idbc18ik
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: immich
@@ -13767,8 +13767,8 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/configMap: 1sv4x4cz02dks21gy0706xp90pbpcff1
-        checksum/valkeyPassword: k7x17sc733q2jxarkgk3x95hi9il1m2l
+        checksum/configMap: 7723af8c3ba51cc23dfa814b7fbeca7b8c3767a6f46e67d5a8d3c9bae3934dac
+        checksum/valkeyPassword: dd2fdaa57e948adc4794ba37c88ac35356e86884b53dd8f4487f11bdebff20e7
       labels:
         app.kubernetes.io/instance: valkey
         app.kubernetes.io/name: valkey
@@ -14036,8 +14036,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
-    kix.run/depends-on: 76cazchqn1zkj7fr61j3zfasf8pdjk99,7vbv1m75c3v9v12560ap82vikz33f80s,awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np
-    kix.run/identity-hash: 9wbgmw2p6szs2dh2sa9h4p494bn0ra63
+    kix.run/depends-on: 5qk1fhp6yw20k7bwqs2v46g8kgwjpvkg,91zwv1qizys59flq5rmaannzyl46rwwq,awzwpm53w1kb4ysngrwmj47whaddgkih,nji4vxb0gnpwzfnkvr3pcymhwjcg0qsn
+    kix.run/identity-hash: yfj5s4fszbi03rkj21fdl205iyrh6ba0
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -14258,15 +14258,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/7s991wcxzrrag6yqza0i80y2kx99ni1r-kix-activation-example.json
-    kix.run/depends-on: 0x9r939vb7jd9ywk36x8vx16x66j5g00,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,5apmafahpdbyc84x065li01wpq24jf6a,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,dv4jibzfryy6wrcdlm6nliywvbsa39dn,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,spi8qjq6x9y4l363wip2342h53n7r7pa,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
-    kix.run/identity-hash: 4yvk0nr01qclclbkfd66j2a9rzbciss2
+    kix.run/built-via: /nix/store/s14f997mmg3kphxk6gchsyzrgw25wgn1-kix-activation-example.json
+    kix.run/depends-on: 1mca17qqf22pd9n20lvscfj5f8ybw65r,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,dd0si3rkg4yak9q2hpnb29g4spj7grzs,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,kxp256xpy6sfk61m1c61g58a82niijxk,ljsl8hzpyip89yvlcv1ngbyz335bdfld,njkwydx2cac9nkh1c92kzicm8qzgxviz,pvv7pxv13vmrf17v5qlzs9i4jsy6ws47,spi8qjq6x9y4l363wip2342h53n7r7pa,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
+    kix.run/identity-hash: 1vrvgcxhh7mic128jjvix8f0frqmlys8
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-4yvk0nr01qcl
+  name: example-1vrvgcxhh7mi
 spec:
   instances:
     cert-manager:
@@ -14315,8 +14315,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,xhmlhncil46rwxq94zip6x53nqk3ly98,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: dv4jibzfryy6wrcdlm6nliywvbsa39dn
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,flp1m60bvv9cka35ziqrx42vzi3cxp0w,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: njkwydx2cac9nkh1c92kzicm8qzgxviz
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: immich-server
@@ -14336,8 +14336,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: 9wbgmw2p6szs2dh2sa9h4p494bn0ra63,awzwpm53w1kb4ysngrwmj47whaddgkih,chzjyyh4lw12a8giil0n4vlzvhihhhar,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: 5apmafahpdbyc84x065li01wpq24jf6a
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,gw8jd09lbcdgsly9c877ycfqd3sbdq4n,yfj5s4fszbi03rkj21fdl205iyrh6ba0,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: ljsl8hzpyip89yvlcv1ngbyz335bdfld
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/post-hooks: Job/immich-db-immich-bootstrap
@@ -14422,8 +14422,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: 514wqwqxzddrv440fpkwp8486fs3bdfc,7vbv1m75c3v9v12560ap82vikz33f80s,awzwpm53w1kb4ysngrwmj47whaddgkih,lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw,w8a823n086xidlsr1ydcdfp9230hd5jm,x0i1407l4qpzq5k6gx4d5iicd8vb81np,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: 9nvkd56qfxsb4b2ir0jylv49n9aga7ql
+    kix.run/depends-on: 3hlmscrrpf98g6zbnllslkm4llyjnw8z,5qk1fhp6yw20k7bwqs2v46g8kgwjpvkg,awzwpm53w1kb4ysngrwmj47whaddgkih,lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw,nji4vxb0gnpwzfnkvr3pcymhwjcg0qsn,w8a823n086xidlsr1ydcdfp9230hd5jm,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: pvv7pxv13vmrf17v5qlzs9i4jsy6ws47
     kix.run/inverse-deps: PackageInstance/postgres
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -14446,8 +14446,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:514wqwqxzddrv440fpkwp8486fs3bdfc
-    kix.run/identity-hash: 7vbv1m75c3v9v12560ap82vikz33f80s
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:3hlmscrrpf98g6zbnllslkm4llyjnw8z
+    kix.run/identity-hash: nji4vxb0gnpwzfnkvr3pcymhwjcg0qsn
     kix.run/import-apiversion: v1
     kix.run/import-kind: Secret
     kix.run/import-name: postgres
@@ -14473,8 +14473,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:514wqwqxzddrv440fpkwp8486fs3bdfc
-    kix.run/identity-hash: x0i1407l4qpzq5k6gx4d5iicd8vb81np
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:3hlmscrrpf98g6zbnllslkm4llyjnw8z
+    kix.run/identity-hash: 5qk1fhp6yw20k7bwqs2v46g8kgwjpvkg
     kix.run/import-apiversion: v1
     kix.run/import-kind: Service
     kix.run/import-name: postgres
@@ -14521,8 +14521,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: 6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,b1x8mbkx4kvwpz8wp0rmnqc175z0kayc,c073szfvlp53msl934m074dhgy8issg3,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: 0x9r939vb7jd9ywk36x8vx16x66j5g00
+    kix.run/depends-on: 6mg77slij034mw8das74wy6pvmf2bflk,awzwpm53w1kb4ysngrwmj47whaddgkih,b1x8mbkx4kvwpz8wp0rmnqc175z0kayc,l1q9xp7kj39caahhlr0njxyimx4xfay9,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: dd0si3rkg4yak9q2hpnb29g4spj7grzs
     kix.run/inverse-deps: PodDisruptionBudget/valkey
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -14567,8 +14567,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: d1kyph30k0zja4nw6zp9ic1n2lpjksj8,igd4fpr82lsrzlh8d967wmi8wrf97q4a,q4zbl6p5zm8d373lqlx9amq9lv5xlz0z,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: i9x9p2zin5iy88a0m2m4cypg66x2g8rw
+    kix.run/depends-on: d1kyph30k0zja4nw6zp9ic1n2lpjksj8,igd4fpr82lsrzlh8d967wmi8wrf97q4a,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,yxjbiwd469y1d049cyiqy1an4hdll766,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: 1mca17qqf22pd9n20lvscfj5f8ybw65r
     kix.run/inverse-deps: ClusterRoleBinding/coredns,PodDisruptionBudget/coredns
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -16764,9 +16764,9 @@ apiVersion: stackgres.io/v1
 kind: SGCluster
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw,pnp59yfhnv6byw601crmpvk6sippsnyr,w8a823n086xidlsr1ydcdfp9230hd5jm,requires:6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,requires:ax0ravwlg79b6irbwpdl9mm7gq5an367,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,lkna9yrlld7dz8yg3hzy9zq2k5pqy2hw,pnp59yfhnv6byw601crmpvk6sippsnyr,w8a823n086xidlsr1ydcdfp9230hd5jm,requires:6bjx4rplzad4w6g6ni10iwsxyc6gz3lg,requires:ax0ravwlg79b6irbwpdl9mm7gq5an367,requires:yxjbiwd469y1d049cyiqy1an4hdll766
     kix.run/holds-data: "true"
-    kix.run/identity-hash: 514wqwqxzddrv440fpkwp8486fs3bdfc
+    kix.run/identity-hash: 3hlmscrrpf98g6zbnllslkm4llyjnw8z
     kix.run/lifecycle: stateful
     kix.run/package: postgres
     kix.run/package-namespace: immich
@@ -17270,8 +17270,8 @@ kind: Secret
 metadata:
   annotations:
     kix.run/classification: credential
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np,z6va4ipl6hqciqdfm57i81bx6wil9nb4
-    kix.run/identity-hash: chzjyyh4lw12a8giil0n4vlzvhihhhar
+    kix.run/depends-on: 5qk1fhp6yw20k7bwqs2v46g8kgwjpvkg,awzwpm53w1kb4ysngrwmj47whaddgkih,z6va4ipl6hqciqdfm57i81bx6wil9nb4
+    kix.run/identity-hash: gw8jd09lbcdgsly9c877ycfqd3sbdq4n
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -17301,8 +17301,8 @@ kind: Secret
 metadata:
   annotations:
     kix.run/classification: credential
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np,z6va4ipl6hqciqdfm57i81bx6wil9nb4
-    kix.run/identity-hash: 76cazchqn1zkj7fr61j3zfasf8pdjk99
+    kix.run/depends-on: 5qk1fhp6yw20k7bwqs2v46g8kgwjpvkg,awzwpm53w1kb4ysngrwmj47whaddgkih,z6va4ipl6hqciqdfm57i81bx6wil9nb4
+    kix.run/identity-hash: 91zwv1qizys59flq5rmaannzyl46rwwq
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -17399,8 +17399,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: 1smm6rcyjn4lmrb4a1jlx23312cwyvxg,awzwpm53w1kb4ysngrwmj47whaddgkih
-    kix.run/identity-hash: xhmlhncil46rwxq94zip6x53nqk3ly98
+    kix.run/depends-on: 1385gbdizfn0rbr7nmxvm2dinvavfls6,awzwpm53w1kb4ysngrwmj47whaddgkih
+    kix.run/identity-hash: flp1m60bvv9cka35ziqrx42vzi3cxp0w
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -17449,8 +17449,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,jzvbd0gd2sdkq4cbcgqldxhfzaqrbdfm
-    kix.run/identity-hash: c073szfvlp53msl934m074dhgy8issg3
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,ldilvswz5pan2svqwn76bhq3idbc18ik
+    kix.run/identity-hash: l1q9xp7kj39caahhlr0njxyimx4xfay9
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: immich
@@ -17514,8 +17514,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: s00c4ccc393csapv154k1liybvknsi30,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
-    kix.run/identity-hash: q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
+    kix.run/depends-on: 0vc6i32sszfq2l99cdbyjy0xmxrn63qv,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
+    kix.run/identity-hash: yxjbiwd469y1d049cyiqy1an4hdll766
     kix.run/package: coredns
     kix.run/package-namespace: kube-system
   labels:
