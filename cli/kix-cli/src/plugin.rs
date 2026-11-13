@@ -2,11 +2,12 @@
 //!
 //! `kix` replaces its own process with the plugin executable so the plugin's
 //! exit status and signal handling apply directly. Global flags passed before
-//! `<NAME>` are forwarded via their corresponding `KIX_*` environment
-//! variables (`KIX_FLAKE`, `KIX_CONTEXT`, `KIX_OUTPUT`, and others on
-//! `GlobalArgs`), and `--no-color` is forwarded as `NO_COLOR`. `KIX_BIN` is
-//! set to the path of the current `kix` binary so the plugin can invoke the
-//! exact same version.
+//! `<NAME>` are forwarded via the `KIX_*` environment variables Kix reads
+//! them from (`KIX_FLAKE`, `KIX_CONTEXT`, and others on `GlobalArgs`), and
+//! `--no-color` is forwarded as `NO_COLOR`. `-o` is the exception: Kix reads
+//! no variable for it, so the plugin gets `--output FORMAT` as its first two
+//! arguments. `KIX_BIN` is set to the path of the current `kix` binary so the
+//! plugin can invoke the exact same version.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
@@ -82,8 +83,9 @@ fn find(name: &str, path: &OsStr) -> Option<PathBuf> {
         })
 }
 
-/// Build the [`std::process::Command`] for `program`, forwarding global flags
-/// via the environment variables `kix` reads them from.
+/// Build the [`std::process::Command`] for `program`, forwarding `-o` as
+/// arguments and the other global flags via the environment variables `kix`
+/// reads them from.
 fn command(
     program: &Path,
     args: &[OsString],
@@ -98,7 +100,6 @@ fn command(
             .to_owned()
     });
     let vars = [
-        ("KIX_OUTPUT", output),
         ("KIX_VERBOSE", Some(global.verbose.to_string())),
         ("KIX_QUIET", Some(global.quiet.to_string())),
         ("KIX_CONTEXT", global.context.clone()),
@@ -112,6 +113,9 @@ fn command(
     ];
     let mut command = std::process::Command::new(program);
     // A `kix` the plugin runs is a new command, which selects its own Kix.
+    if let Some(format) = output {
+        command.arg("--output").arg(format);
+    }
     command
         .args(args)
         .env("KIX_BIN", kix)
@@ -158,7 +162,7 @@ mod tests {
 
     // Verify that every global flag is forwarded to plugins via an environment
     // variable (`--no-color` maps to `NO_COLOR`, and `--override-input` maps to
-    // `KIX_OVERRIDE_INPUT`).
+    // `KIX_OVERRIDE_INPUT`), except `-o`, which goes in the arguments.
     #[test]
     fn every_global_flag_reaches_a_plugin() {
         let set = vars(&[
@@ -183,6 +187,7 @@ mod tests {
                 "no_color" => "NO_COLOR",
                 // Read in `main`: see `override_input_from_env`.
                 "override_input" => "KIX_OVERRIDE_INPUT",
+                "output" => continue,
                 id => arg
                     .get_env()
                     .unwrap_or_else(|| panic!("the global flag {id} has no environment variable"))
@@ -209,6 +214,26 @@ mod tests {
         ] {
             assert_eq!(get(unset), None, "{unset}");
         }
+    }
+
+    /// Return the arguments `command` passes to the plugin for `argv`.
+    fn args(argv: &[&str], rest: &[&str]) -> Vec<String> {
+        let matches = cli::command().get_matches_from(argv);
+        let global = cli::Cli::from_arg_matches(&matches).unwrap().global;
+        let rest: Vec<OsString> = rest.iter().map(OsString::from).collect();
+        command(Path::new("/p/kix-x"), &rest, &global, Path::new("/p/kix"))
+            .get_args()
+            .map(|a| a.to_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_format_comes_first_in_the_plugin_arguments() {
+        assert_eq!(
+            args(&["kix", "-o", "json", "x"], &["a", "-o", "b"]),
+            ["--output", "json", "a", "-o", "b"]
+        );
+        assert_eq!(args(&["kix", "x"], &["a"]), ["a"]);
     }
 
     #[test]

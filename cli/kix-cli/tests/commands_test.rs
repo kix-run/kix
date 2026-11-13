@@ -33,7 +33,7 @@ fn list_clusters() {
 }
 
 /// A format the command does not print stops it before it evaluates
-/// anything, whether `-o` or `KIX_OUTPUT` asked for it.
+/// anything.
 #[test]
 fn an_unsupported_format_is_refused() {
     kix()
@@ -43,12 +43,25 @@ fn an_unsupported_format_is_refused() {
         .stdout("")
         .stderr(predicate::str::contains("[K2184]"))
         .stderr(predicate::str::contains("-o yaml"));
+}
+
+/// Kix no longer reads `KIX_OUTPUT`, and refuses to run while it is set, so a
+/// script that set it learns why its output changed.
+#[test]
+fn kix_output_is_refused() {
     kix()
-        .args(["gc", "example"])
+        .args(["list", "clusters"])
         .env("KIX_OUTPUT", "json")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("KIX_OUTPUT=json"));
+        .stdout("")
+        .stderr(predicate::str::contains("[K8738]"))
+        .stderr(predicate::str::contains("-o FORMAT"));
+    kix()
+        .args(["list", "clusters"])
+        .env("KIX_OUTPUT", "")
+        .assert()
+        .success();
 }
 
 /// A command line clap cannot parse, and a removed flag, exit 1.

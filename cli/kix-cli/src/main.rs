@@ -99,19 +99,16 @@ fn check_format(cli: &Cli, matches: &clap::ArgMatches) -> miette::Result<()> {
     if formats.contains(&asked) {
         return Ok(());
     }
-    // A global flag's value is found on the deepest subcommand.
     let mut words = vec!["kix"];
     let mut leaf = matches;
     while let Some((name, sub)) = leaf.subcommand() {
         words.push(name);
         leaf = sub;
     }
-    let from_env = leaf.value_source("output") == Some(clap::parser::ValueSource::EnvVariable);
     Err(output::unsupported_format(
         &(words.join(" ") + cli.command.format_flags()),
         asked,
         formats,
-        from_env,
         cli.command.format_hint().as_deref(),
     ))
 }
@@ -189,7 +186,7 @@ fn run() -> miette::Result<Exit> {
         Ok(cli) => cli,
         Err(e) => return Ok(exit::clap_error(&e)),
     };
-    if let Some(removed) = removed::refused(&cli.command) {
+    if let Some(removed) = removed::refused(&cli.command).or_else(removed::refused_variable) {
         return Ok(removed.refuse());
     }
     override_input_from_env(&mut cli.global)?;

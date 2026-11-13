@@ -47,7 +47,7 @@ pub struct Cli {
 pub struct GlobalArgs {
     /// Output format. Each command prints some of these formats and refuses
     /// the others. The default depends on the command.
-    #[arg(short, long, global = true, env = "KIX_OUTPUT")]
+    #[arg(short, long, global = true)]
     pub output: Option<OutputFormat>,
 
     /// Increase verbosity (-v, -vv, etc.)

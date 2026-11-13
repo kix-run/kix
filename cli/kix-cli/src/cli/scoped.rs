@@ -4,6 +4,7 @@
 use clap::{CommandFactory, ValueEnum};
 
 use super::{Cli, OutputFormat};
+use crate::dispatch::HelpFormat;
 
 /// Global flags that apply only to specific subcommands, paired with the
 /// command paths that read them. A command path covers its subcommands, and a
@@ -209,28 +210,69 @@ fn hide_unread_globals(cmd: clap::Command, parent: &str, globals: &[clap::Arg]) 
         } else if *id == "output"
             && let Some((formats, default)) = crate::cli::Command::help_formats(&path)
         {
-            let long_help = match default {
-                Some(f) => format!("Output format. The default is {}.", f.name()),
-                None => "Output format".to_string(),
-            };
-            cmd = cmd.arg(
-                arg.clone()
-                    .value_parser(FormatParser(formats))
-                    .help("Output format")
-                    .long_help(long_help),
-            );
+            cmd = cmd.arg(output_arg(arg, formats, default));
         }
     }
     cmd.mut_subcommands(|sc| hide_unread_globals(sc, &path, globals))
 }
 
+/// Return the `-o` flag of a command that prints `formats`.
+///
+/// When some format needs flags, clap's short list of possible values would
+/// drop them, so the help names the flags in its own text instead.
+fn output_arg(
+    arg: &clap::Arg,
+    formats: Vec<HelpFormat>,
+    default: Option<OutputFormat>,
+) -> clap::Arg {
+    let mut long_help = match default {
+        Some(f) => format!("Output format. The default is {}.", f.name()),
+        None => "Output format".to_string(),
+    };
+    let mut help = "Output format".to_string();
+    let conditional = formats.iter().any(|h| h.needs.is_some());
+    if conditional {
+        // Group the formats by the flags they need, in the order listed.
+        let mut groups: Vec<(Option<&str>, Vec<&str>)> = Vec::new();
+        for h in &formats {
+            match groups.iter_mut().find(|(needs, _)| *needs == h.needs) {
+                Some((_, names)) => names.push(h.format.name()),
+                None => groups.push((h.needs, vec![h.format.name()])),
+            }
+        }
+        let parts: Vec<String> = groups
+            .iter()
+            .map(|(needs, names)| {
+                let names = names.join(", ");
+                match needs {
+                    Some(flags) => format!("{names} with {flags}"),
+                    None => names,
+                }
+            })
+            .collect();
+        help = format!("Output format: {}", parts.join("; "));
+        long_help.push_str("\n\nFormats:");
+        for h in &formats {
+            long_help.push_str(&format!("\n- {}", h.format.name()));
+            if let Some(flags) = h.needs {
+                long_help.push_str(&format!(" (with {flags})"));
+            }
+        }
+    }
+    arg.clone()
+        .value_parser(FormatParser(formats))
+        .hide_possible_values(conditional)
+        .help(help)
+        .long_help(long_help)
+}
+
 /// Parse `-o` like the global flag, and list only the formats a command
-/// prints in its help and shell completions.
+/// prints in its help and shell completions, each with the flags it needs.
 ///
 /// The other formats still parse, so that `main` refuses them with a message
 /// that names the formats the command prints.
 #[derive(Clone)]
-struct FormatParser(Vec<OutputFormat>);
+struct FormatParser(Vec<HelpFormat>);
 
 impl clap::builder::TypedValueParser for FormatParser {
     type Value = OutputFormat;
@@ -247,13 +289,18 @@ impl clap::builder::TypedValueParser for FormatParser {
     fn possible_values(
         &self,
     ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
-        let shown = self.0.iter();
+        let shown = self.0.iter().filter_map(|h| {
+            let value = h.format.to_possible_value()?;
+            Some(match h.needs {
+                Some(flags) => value.help(format!("with {flags}")),
+                None => value,
+            })
+        });
         let hidden = OutputFormat::value_variants()
             .iter()
-            .filter(|f| !self.0.contains(f));
-        Some(Box::new(shown.filter_map(|f| f.to_possible_value()).chain(
-            hidden.filter_map(|f| f.to_possible_value().map(|v| v.hide(true))),
-        )))
+            .filter(|f| !self.0.iter().any(|h| h.format == **f))
+            .filter_map(|f| f.to_possible_value().map(|v| v.hide(true)));
+        Some(Box::new(shown.chain(hidden)))
     }
 }
 
@@ -334,6 +381,37 @@ mod tests {
             assert!(!help.contains(flag), "{flag} in:\n{help}");
         }
         assert!(help.contains("--quiet"));
+    }
+
+    /// The help names the flags a format needs, in `-h` and in `--help`, so
+    /// it never offers a format the command would refuse.
+    #[test]
+    fn help_names_the_flags_a_format_needs() {
+        let short = |path: &[&str]| {
+            let argv = ["kix"].iter().chain(path).chain(&["-h"]);
+            let err = command().try_get_matches_from(argv).expect_err("-h exits");
+            err.render().to_string()
+        };
+        let deploy = short(&["deploy"]);
+        assert!(
+            deploy.contains(
+                "Output format: text; markdown with --dry-run; json, yaml with --plan FILE --dry-run"
+            ),
+            "{deploy}"
+        );
+        assert!(
+            !deploy.contains("[possible values: text, markdown"),
+            "{deploy}"
+        );
+        let plan = long_help(&["plan"]);
+        assert!(plan.contains("- markdown\n"), "{plan}");
+        assert!(plan.contains("- json (with --read-only)"), "{plan}");
+        // A command whose formats need no flags keeps clap's own list.
+        let status = short(&["status"]);
+        assert!(
+            status.contains("[possible values: text, json, yaml]"),
+            "{status}"
+        );
     }
 
     #[test]

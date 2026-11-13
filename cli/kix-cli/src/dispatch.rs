@@ -112,6 +112,15 @@ const FORMATS: &[(&str, &str, &[OutputFormat])] = &[
     ("snapshot", "", TEXT),
 ];
 
+/// A format that the help of a command lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelpFormat {
+    pub format: OutputFormat,
+    /// The flags the command prints the format with, as a user types them,
+    /// such as `--dry-run`, or `None` when it needs none.
+    pub needs: Option<&'static str>,
+}
+
 /// Return whether `path` is `row` or one of its subcommands, such as
 /// `list clusters` for `list`.
 fn under(path: &str, row: &str) -> bool {
@@ -125,8 +134,8 @@ impl Command {
     /// Return the `-o` formats the command prints, the default first, or
     /// `None` when Kix does not decide.
     ///
-    /// `main` refuses any other format before the command runs. A plugin
-    /// reads `KIX_OUTPUT` itself, so Kix passes any format on.
+    /// `main` refuses any other format before the command runs. Kix passes
+    /// any format on to a plugin as `--output`, and the plugin decides.
     pub fn formats(&self) -> Option<&'static [OutputFormat]> {
         let path = self.format_path()?;
         let flags = self.format_flags();
@@ -175,25 +184,39 @@ impl Command {
     }
 
     /// Return the formats that the help of the command at `path`, such as
-    /// `compliance sbom`, lists: every format it prints with some flags. The
-    /// second value is the default, or `None` for a command such as
-    /// `compliance` whose subcommands differ. Return `None` for a path
-    /// [`FORMATS`] does not list.
-    pub fn help_formats(path: &str) -> Option<(Vec<OutputFormat>, Option<OutputFormat>)> {
+    /// `compliance sbom`, lists: every format it prints with some flags,
+    /// each with the flags it needs, or `None` when the command prints it
+    /// without flags. The second value is the default, or `None` for a
+    /// command such as `compliance` whose subcommands differ. Return `None`
+    /// for a path [`FORMATS`] does not list.
+    pub fn help_formats(path: &str) -> Option<(Vec<HelpFormat>, Option<OutputFormat>)> {
         let rows: Vec<&(&str, &str, &[OutputFormat])> = FORMATS
             .iter()
             .filter(|(row, _, _)| under(path, row) || under(row, path))
             .collect();
-        let mut formats: Vec<OutputFormat> = Vec::new();
-        for f in rows.iter().flat_map(|(_, _, formats)| formats.iter()) {
-            if !formats.contains(f) {
-                formats.push(*f);
-            }
-        }
         let default = rows
             .iter()
             .find(|(row, flags, _)| under(path, row) && flags.is_empty())
             .map(|(_, _, formats)| formats[0]);
+        // Rows that need no flags come first, so that a format one of them
+        // lists needs none. A subcommand's row, as `compliance sbom` is to
+        // `compliance`, needs no flags of the command at `path`.
+        let (plain, flagged): (Vec<_>, Vec<_>) = rows
+            .into_iter()
+            .map(|(row, flags, list)| (if under(path, row) { *flags } else { "" }, *list))
+            .partition(|(flags, _)| flags.is_empty());
+        let mut formats: Vec<HelpFormat> = Vec::new();
+        for (flags, list) in plain.into_iter().chain(flagged) {
+            for f in list {
+                if !formats.iter().any(|h| h.format == *f) {
+                    let flags = flags.trim();
+                    formats.push(HelpFormat {
+                        format: *f,
+                        needs: (!flags.is_empty()).then_some(flags),
+                    });
+                }
+            }
+        }
         (!formats.is_empty()).then_some((formats, default))
     }
 
@@ -395,18 +418,98 @@ mod tests {
         assert_eq!(formats(&["kix", "some-plugin"]), None);
     }
 
-    /// The help of a command lists every format it prints with some flags,
-    /// and its default first.
+    fn help(
+        path: &str,
+    ) -> (
+        Vec<(OutputFormat, Option<&'static str>)>,
+        Option<OutputFormat>,
+    ) {
+        let (formats, default) = Command::help_formats(path).unwrap();
+        let formats = formats.iter().map(|h| (h.format, h.needs)).collect();
+        (formats, default)
+    }
+
+    /// The help of a command lists every format it prints, its default
+    /// first, and the flags each format needs.
     #[test]
-    fn help_lists_the_formats_of_every_mode() {
-        let (status, default) = Command::help_formats("status").unwrap();
-        assert_eq!((status, default), (DATA.to_vec(), Some(Text)));
-        let (deploy, _) = Command::help_formats("deploy").unwrap();
-        assert_eq!(deploy, [Text, Markdown, Json, Yaml]);
-        let (list, _) = Command::help_formats("list clusters").unwrap();
-        assert_eq!(list, DATA);
-        let (compliance, default) = Command::help_formats("compliance").unwrap();
-        assert_eq!((compliance, default), (vec![Json, Yaml, Text], None));
+    fn help_lists_each_format_with_the_flags_it_needs() {
+        assert_eq!(
+            help("status"),
+            (vec![(Text, None), (Json, None), (Yaml, None)], Some(Text))
+        );
+        let dry_run = Some("--dry-run");
+        let saved = Some("--plan FILE --dry-run");
+        assert_eq!(
+            help("deploy").0,
+            [
+                (Text, None),
+                (Markdown, dry_run),
+                (Json, saved),
+                (Yaml, saved)
+            ]
+        );
+        let read_only = Some("--read-only");
+        assert_eq!(
+            help("plan").0,
+            [
+                (Text, None),
+                (Markdown, None),
+                (Json, read_only),
+                (Yaml, read_only)
+            ]
+        );
+        assert_eq!(
+            help("list clusters").0,
+            [(Text, None), (Json, None), (Yaml, None)]
+        );
+        assert_eq!(
+            help("compliance"),
+            (vec![(Json, None), (Yaml, None), (Text, None)], None)
+        );
+    }
+
+    /// A format the help lists without flags is one the command prints
+    /// without flags, and one it lists with flags is one the command prints
+    /// with exactly those flags. So the help never offers a format that
+    /// `main` refuses.
+    #[test]
+    fn help_agrees_with_what_each_command_accepts() {
+        let cases: &[(&str, &[&str])] = &[
+            ("deploy", &["kix", "deploy", "c"]),
+            ("deploy", &["kix", "deploy", "c", "--dry-run"]),
+            (
+                "deploy",
+                &["kix", "deploy", "c", "--dry-run", "--plan", "p.kixplan"],
+            ),
+            ("plan", &["kix", "plan", "c"]),
+            ("plan", &["kix", "plan", "c", "--read-only"]),
+            ("status", &["kix", "status"]),
+            ("build", &["kix", "build", "c"]),
+        ];
+        for (path, argv) in cases {
+            let accepted = formats(argv).unwrap();
+            let typed = argv.get(3..).unwrap_or_default().join(" ");
+            let typed = typed.replace("p.kixplan", "FILE");
+            for h in Command::help_formats(path).unwrap().0 {
+                let offered = match h.needs {
+                    None => true,
+                    Some(flags) => {
+                        let mut want: Vec<&str> = flags.split(' ').collect();
+                        let mut have: Vec<&str> = typed.split(' ').collect();
+                        want.sort();
+                        have.sort();
+                        want == have
+                    }
+                };
+                assert_eq!(
+                    offered,
+                    accepted.contains(&h.format),
+                    "{argv:?}: help says {:?} needs {:?}",
+                    h.format,
+                    h.needs
+                );
+            }
+        }
     }
 
     /// Every command has a row in [`FORMATS`], so none falls back to text
