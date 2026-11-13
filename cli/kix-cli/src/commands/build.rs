@@ -5,18 +5,26 @@ use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 
-struct BuildResponse {
+/// The cluster's manifests. JSON is one array, and YAML is one document per
+/// manifest, as `kubectl apply -f` reads it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct BuildResponse {
+    /// Kubernetes objects.
     manifests: Vec<serde_json::Value>,
 }
 
 impl CommandResponse for BuildResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
         kix::manifest::serialize::manifests_to_yaml(&self.manifests)
             .expect("YAML serialization of valid manifests should not fail")
     }
 
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::Value::Array(self.manifests.clone())
+    fn render(&self, format: OutputFormat) -> Result<String> {
+        match format {
+            OutputFormat::Yaml => Ok(self.text()),
+            other => output::render(self, other),
+        }
     }
 }
 
@@ -35,13 +43,5 @@ pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
         manifests: cluster_output.raw_manifests,
     };
 
-    // Default to multi-document YAML unless JSON output is requested.
-    match output::format() {
-        OutputFormat::Yaml | OutputFormat::Text | OutputFormat::Markdown => {
-            print!("{}", response.format_text());
-        }
-        OutputFormat::Json => output::result(&response)?,
-    }
-
-    Ok(())
+    output::result(&response)
 }

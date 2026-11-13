@@ -1,0 +1,74 @@
+{
+  "$defs": {
+    "InspectNamespace": {
+      "description": "One namespace of [`InspectResponse`], as JSON shows it.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "resources": {
+          "items": {
+            "$ref": "#/$defs/InspectResource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "resources"
+      ],
+      "type": "object"
+    },
+    "InspectResource": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A cluster's rendered resources by namespace and kind.",
+  "properties": {
+    "cluster": {
+      "type": "string"
+    },
+    "kindCounts": {
+      "additionalProperties": {
+        "format": "uint",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": "The number of resources of each kind.",
+      "type": "object"
+    },
+    "namespaces": {
+      "description": "The namespaces in name order. `_cluster` holds cluster-scoped\nresources.",
+      "items": {
+        "$ref": "#/$defs/InspectNamespace"
+      },
+      "type": "array"
+    },
+    "totalResources": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "cluster",
+    "totalResources",
+    "namespaces",
+    "kindCounts"
+  ],
+  "title": "InspectResponse",
+  "type": "object"
+}

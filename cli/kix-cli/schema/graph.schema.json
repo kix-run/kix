@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "GraphListing": {
+      "additionalProperties": false,
+      "description": "The dependency graph as data: what `kix graph -o json` prints and\na plan file carries.",
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/ListedEdge"
+          },
+          "type": "array"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/ListedNode"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes",
+        "edges"
+      ],
+      "type": "object"
+    },
+    "ListedEdge": {
+      "additionalProperties": false,
+      "description": "`from` depends on `to`.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "ListedNode": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "`Kind/name@namespace`, or `Kind/name` for a cluster-scoped object.",
+          "type": "string"
+        },
+        "identityHash": {
+          "description": "The object's identity hash annotation, by which other objects'\ndepends-on annotations name it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isImport": {
+          "description": "An import marker: an object another package owns, which this build\nonly depends on.",
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "description": "`_cluster` for a cluster-scoped object.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "namespace",
+        "identityHash",
+        "isImport"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/GraphListing",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The dependency graph of a cluster's resources. JSON and YAML print the\ngraph's nodes and edges.",
+  "title": "GraphResponse"
+}

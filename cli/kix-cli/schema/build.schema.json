@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The cluster's manifests. JSON is one array, and YAML is one document per\nmanifest, as `kubectl apply -f` reads it.",
+  "items": true,
+  "title": "BuildResponse",
+  "type": "array"
+}

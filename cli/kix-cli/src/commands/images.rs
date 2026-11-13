@@ -3,21 +3,21 @@ use std::collections::BTreeMap;
 use miette::Result;
 use serde::Serialize;
 
-use crate::cli::{ImagesArgs, OutputFormat};
+use crate::cli::ImagesArgs;
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 
 /// A single container image reference found in the cluster manifests.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-struct ImageEntry {
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ImageEntry {
     /// Full image reference (for example, `"quay.io/jetstack/cert-manager-controller:v1.21.2"`).
     image: String,
     /// Workload containers that reference this image.
     sources: Vec<ImageSource>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, PartialEq, Eq, PartialOrd, Ord)]
 struct ImageSource {
     kind: String,
     namespace: String,
@@ -25,13 +25,20 @@ struct ImageSource {
     container: String,
 }
 
-struct ImagesResponse {
+/// The container images of a cluster. JSON and YAML print the bare list.
+#[derive(Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct ImagesResponse {
     images: Vec<ImageEntry>,
+    /// Whether the text lists the containers that use each image.
+    #[serde(skip)]
+    #[schemars(skip)]
+    sources: bool,
 }
 
 impl CommandResponse for ImagesResponse {
-    fn format_text(&self) -> String {
-        if self.images.is_empty() {
+    fn text(&self) -> String {
+        if self.images.is_empty() && !self.sources {
             return "No container images found.\n".to_string();
         }
 
@@ -39,12 +46,16 @@ impl CommandResponse for ImagesResponse {
         for entry in &self.images {
             out.push_str(&entry.image);
             out.push('\n');
+            if self.sources {
+                for src in &entry.sources {
+                    out.push_str(&format!(
+                        "  {} {}/{} (container: {})\n",
+                        src.kind, src.namespace, src.name, src.container
+                    ));
+                }
+            }
         }
         out
-    }
-
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::to_value(&self.images).unwrap_or_default()
     }
 }
 
@@ -120,26 +131,9 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
         .map(|(image, sources)| ImageEntry { image, sources })
         .collect();
 
-    let response = ImagesResponse { images };
-
-    match output::format() {
-        OutputFormat::Text | OutputFormat::Markdown => {
-            if args.sources {
-                for entry in &response.images {
-                    println!("{}", entry.image);
-                    for src in &entry.sources {
-                        println!(
-                            "  {} {}/{} (container: {})",
-                            src.kind, src.namespace, src.name, src.container
-                        );
-                    }
-                }
-            } else {
-                print!("{}", response.format_text());
-            }
-        }
-        OutputFormat::Json | OutputFormat::Yaml => output::result(&response)?,
-    }
-
-    Ok(())
+    let response = ImagesResponse {
+        images,
+        sources: args.sources,
+    };
+    output::result(&response)
 }

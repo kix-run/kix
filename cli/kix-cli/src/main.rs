@@ -70,16 +70,11 @@ fn init_tracing(verbose: u8, quiet: bool) {
 
 /// Compute the [`output::Mode`] for `cli`.
 fn output_mode(cli: &Cli) -> output::Mode {
-    let default = match &cli.command {
-        Command::Build(_) => OutputFormat::Yaml,
-        Command::Compliance(args) => match args.command {
-            cli::ComplianceCommand::Sbom(_) | cli::ComplianceCommand::Attest(_) => {
-                OutputFormat::Json
-            }
-            cli::ComplianceCommand::Audit(_) => OutputFormat::Text,
-        },
-        _ => OutputFormat::Text,
-    };
+    let default = cli
+        .command
+        .formats()
+        .and_then(|formats| formats.first().copied())
+        .unwrap_or(OutputFormat::Text);
     let format = cli.global.output.unwrap_or(default);
     // Route progress output to stderr when stdout carries a structured plan
     // document or JSON deploy log.
@@ -94,6 +89,31 @@ fn output_mode(cli: &Cli) -> output::Mode {
         format,
         progress_on_stderr: document,
     }
+}
+
+/// Refuse an `-o` format the command does not print.
+fn check_format(cli: &Cli, matches: &clap::ArgMatches) -> miette::Result<()> {
+    let (Some(asked), Some(formats)) = (cli.global.output, cli.command.formats()) else {
+        return Ok(());
+    };
+    if formats.contains(&asked) {
+        return Ok(());
+    }
+    // A global flag's value is found on the deepest subcommand.
+    let mut words = vec!["kix"];
+    let mut leaf = matches;
+    while let Some((name, sub)) = leaf.subcommand() {
+        words.push(name);
+        leaf = sub;
+    }
+    let from_env = leaf.value_source("output") == Some(clap::parser::ValueSource::EnvVariable);
+    Err(output::unsupported_format(
+        &(words.join(" ") + cli.command.format_flags()),
+        asked,
+        formats,
+        from_env,
+        cli.command.format_hint().as_deref(),
+    ))
 }
 
 /// Populate `global.override_input` from `KIX_OVERRIDE_INPUT` when
@@ -170,6 +190,7 @@ fn run() -> miette::Result<Exit> {
         Err(e) => return Ok(exit::clap_error(&e)),
     };
     override_input_from_env(&mut cli.global)?;
+    check_format(&cli, &matches)?;
     init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);
     output::init(output_mode(&cli));

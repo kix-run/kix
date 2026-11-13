@@ -42,6 +42,8 @@ use super::plan::{document, dry_run, flags_of, prepare, print_text};
 
 use self::observer::*;
 pub(crate) use self::observer::{StreamCliObserver, counts, held_back};
+#[cfg(test)]
+pub(crate) use self::saved_plan::ComparisonResponse;
 use self::saved_plan::*;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
@@ -56,18 +58,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     if args.dry_run {
         return match &saved {
             Some(s) => check_saved_plan(s, &args.plan, ctx),
-            None if matches!(
-                output::format(),
-                crate::cli::OutputFormat::Json | crate::cli::OutputFormat::Yaml
-            ) =>
-            {
-                Err(miette!(
-                    "kix deploy --dry-run prints text or Markdown. To keep the plan as data, \
-                     write it with `kix plan --save FILE.{}`; `kix deploy --plan FILE --dry-run \
-                     -o json` prints the comparison with a saved plan as JSON",
-                    kix::plan::file::EXTENSION
-                ))
-            }
             None => super::plan::run(&args.plan, None, ctx),
         };
     }

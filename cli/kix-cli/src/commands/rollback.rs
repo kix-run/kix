@@ -6,6 +6,7 @@
 //! in the local Nix store.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -27,9 +28,9 @@ use kix::plan::baseline::{self, Baseline};
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
 
-use crate::cli::{OutputFormat, RollbackArgs};
+use crate::cli::RollbackArgs;
 use crate::exit::Exit;
-use crate::output;
+use crate::output::{self, CommandResponse};
 use crate::plan;
 
 use super::CommandContext;
@@ -81,134 +82,162 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let format = output::format();
-    match format {
-        OutputFormat::Json | OutputFormat::Yaml => {
-            let value = serde_json::json!({
-                "cluster": cluster,
-                "current": current.as_ref().map(|c| serde_json::json!({
-                    "name": c.name,
-                    "identity_hash": c.identity_hash,
-                    "built_via": c.built_via,
-                })),
-                "superseded": superseded.iter().map(|s| {
-                    let available = s
-                        .identity_hash
-                        .as_deref()
-                        .and_then(|h| {
-                            kix::eval::store::resolve_activation_by_hash(cluster, h)
-                        })
-                        .is_some();
-                    serde_json::json!({
-                        "name": s.name,
-                        "identity_hash": s.identity_hash,
-                        "deployed_at": s.deployed_at,
-                        "built_via": s.built_via,
-                        "previous_activation": s.previous_activation,
-                        "available_locally": available,
-                    })
-                }).collect::<Vec<_>>(),
-            });
-            if matches!(format, OutputFormat::Yaml) {
-                print!("{}", kix::yaml::to_string(&value).into_diagnostic()?);
+    output::result(&HistoryResponse {
+        cluster: cluster.to_string(),
+        current: current.map(|c| CurrentDeploy {
+            name: c.name,
+            identity_hash: c.identity_hash,
+            built_via: c.built_via,
+        }),
+        superseded: superseded
+            .into_iter()
+            .map(|s| {
+                let available_locally = s
+                    .identity_hash
+                    .as_deref()
+                    .and_then(|h| kix::eval::store::resolve_activation_by_hash(cluster, h))
+                    .is_some();
+                EarlierDeploy {
+                    name: s.name,
+                    identity_hash: s.identity_hash,
+                    deployed_at: s.deployed_at,
+                    built_via: s.built_via,
+                    previous_activation: s.previous_activation,
+                    available_locally,
+                }
+            })
+            .collect(),
+    })
+}
+
+/// The deploys of a cluster that `kix rollback` can go back to.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub(crate) struct HistoryResponse {
+    cluster: String,
+    /// The deploy live on the cluster, or null when there is none.
+    current: Option<CurrentDeploy>,
+    /// Earlier deploys that ran to completion, most recent first.
+    superseded: Vec<EarlierDeploy>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct CurrentDeploy {
+    /// The name of the deploy record.
+    name: String,
+    identity_hash: Option<String>,
+    /// The store path of the build.
+    built_via: Option<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct EarlierDeploy {
+    /// The name of the deploy record.
+    name: String,
+    identity_hash: Option<String>,
+    /// When the deploy finished, in RFC 3339.
+    deployed_at: Option<String>,
+    /// The store path of the build.
+    built_via: Option<String>,
+    /// The deploy record this one replaced.
+    previous_activation: Option<String>,
+    /// Whether this machine has the build, which `kix rollback` needs.
+    available_locally: bool,
+}
+
+/// Return `build <first 8 characters>...` for an identity hash.
+fn hash_preview(hash: Option<&str>) -> String {
+    hash.map(|h| format!("build {}...", &h[..8.min(h.len())]))
+        .unwrap_or_else(|| "no build hash".to_string())
+}
+
+impl CommandResponse for HistoryResponse {
+    fn text(&self) -> String {
+        let cluster = &self.cluster;
+        let mut out = format!(
+            "{} deployment history for '{}'\n\n",
+            output::bold("Rollback:"),
+            cluster,
+        );
+
+        if let Some(c) = &self.current {
+            let _ = writeln!(
+                out,
+                "  {} {} ({})  {}",
+                output::green("● current "),
+                output::bold(&c.name),
+                hash_preview(c.identity_hash.as_deref()),
+                output::dim("← live on the cluster"),
+            );
+            if let Some(path) = c.built_via.as_deref() {
+                let _ = writeln!(
+                    out,
+                    "    {} {}",
+                    output::dim("build:   "),
+                    output::dim(path)
+                );
+            }
+            out.push('\n');
+        }
+
+        if self.superseded.is_empty() {
+            let _ = writeln!(
+                out,
+                "{}",
+                output::dim(&format!(
+                    "No earlier deployments recorded for '{cluster}'. Nothing to roll back to."
+                ))
+            );
+            return out;
+        }
+
+        let _ = writeln!(
+            out,
+            "  {}\n",
+            output::bold("Earlier deployments (most recent first):")
+        );
+        for (i, s) in self.superseded.iter().enumerate() {
+            let ts = s
+                .deployed_at
+                .clone()
+                .filter(|at| !at.is_empty())
+                .unwrap_or_else(|| output::dim("unknown time").into_owned());
+            let availability = if s.available_locally {
+                output::green("available")
             } else {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&value).into_diagnostic()?
+                output::red("build not on this machine")
+            };
+            let _ = writeln!(
+                out,
+                "  {} {} ({})  deployed {}  [{}]",
+                output::bold(&format!("[{}]", i + 1)),
+                s.name,
+                hash_preview(s.identity_hash.as_deref()),
+                ts,
+                availability,
+            );
+            if let Some(path) = s.built_via.as_deref() {
+                let _ = writeln!(
+                    out,
+                    "      {} {}",
+                    output::dim("build:   "),
+                    output::dim(path)
+                );
+            }
+            if let Some(prev) = s.previous_activation.as_deref() {
+                let _ = writeln!(
+                    out,
+                    "      {} {}",
+                    output::dim("previous:"),
+                    output::dim(prev)
                 );
             }
         }
-        OutputFormat::Text | OutputFormat::Markdown => {
-            print_history_text(cluster, current.as_ref(), &superseded);
-        }
-    }
-
-    Ok(())
-}
-
-fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Record]) {
-    println!(
-        "{} deployment history for '{}'",
-        output::bold("Rollback:"),
-        cluster,
-    );
-    println!();
-
-    if let Some(c) = current {
-        let hash_preview = c
-            .identity_hash
-            .as_deref()
-            .map(|h| format!("build {}...", &h[..8.min(h.len())]))
-            .unwrap_or_else(|| "no build hash".to_string());
-        println!(
-            "  {} {} ({})  {}",
-            output::green("● current "),
-            output::bold(&c.name),
-            hash_preview,
-            output::dim("← live on the cluster"),
+        let _ = write!(
+            out,
+            "\nNext:\n  Run `kix rollback {cluster}` to choose a deployment interactively, or `kix rollback {cluster} -y` to restore [1].\n"
         );
-        if let Some(path) = c.built_via.as_deref() {
-            println!("    {} {}", output::dim("build:   "), output::dim(path));
-        }
-        println!();
+        out
     }
-
-    if superseded.is_empty() {
-        println!(
-            "{}",
-            output::dim(&format!(
-                "No earlier deployments recorded for '{cluster}'. Nothing to roll back to."
-            ))
-        );
-        return;
-    }
-
-    println!(
-        "  {}",
-        output::bold("Earlier deployments (most recent first):")
-    );
-    println!();
-    for (i, s) in superseded.iter().enumerate() {
-        let hash_preview = s
-            .identity_hash
-            .as_deref()
-            .map(|h| format!("build {}...", &h[..8.min(h.len())]))
-            .unwrap_or_else(|| "no build hash".to_string());
-        let ts = s
-            .deployed_at
-            .clone()
-            .filter(|at| !at.is_empty())
-            .unwrap_or_else(|| output::dim("unknown time").into_owned());
-        let available = s
-            .identity_hash
-            .as_deref()
-            .and_then(|h| kix::eval::store::resolve_activation_by_hash(cluster, h))
-            .is_some();
-        let availability = if available {
-            output::green("available")
-        } else {
-            output::red("build not on this machine")
-        };
-        println!(
-            "  {} {} ({})  deployed {}  [{}]",
-            output::bold(&format!("[{}]", i + 1)),
-            s.name,
-            hash_preview,
-            ts,
-            availability,
-        );
-        if let Some(path) = s.built_via.as_deref() {
-            println!("      {} {}", output::dim("build:   "), output::dim(path));
-        }
-        if let Some(prev) = s.previous_activation.as_deref() {
-            println!("      {} {}", output::dim("previous:"), output::dim(prev),);
-        }
-    }
-    println!();
-    println!("Next:");
-    println!(
-        "  Run `kix rollback {cluster}` to choose a deployment interactively, or `kix rollback {cluster} -y` to restore [1]."
-    );
 }
 
 async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<Exit> {

@@ -1,17 +1,26 @@
 use miette::{IntoDiagnostic, Result};
 
-use crate::cli::{GraphArgs, GraphFormat};
+use crate::cli::{GraphArgs, OutputFormat};
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 
-struct GraphResponse {
+/// The dependency graph of a cluster's resources. JSON and YAML print the
+/// graph's nodes and edges.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct GraphResponse {
+    listing: kix::cluster::graph::GraphListing,
+    #[serde(skip)]
+    #[schemars(skip)]
     tree: String,
-    json: serde_json::Value,
+    #[serde(skip)]
+    #[schemars(skip)]
+    dot: String,
 }
 
 impl CommandResponse for GraphResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
         if self.tree.is_empty() {
             "(no resources)".to_string()
         } else {
@@ -19,8 +28,12 @@ impl CommandResponse for GraphResponse {
         }
     }
 
-    fn as_json(&self) -> serde_json::Value {
-        self.json.clone()
+    fn render(&self, format: OutputFormat) -> Result<String> {
+        match format {
+            OutputFormat::Tree => Ok(self.text()),
+            OutputFormat::Dot => Ok(self.dot.clone()),
+            other => output::render(self, other),
+        }
     }
 }
 
@@ -43,31 +56,11 @@ pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let graph = kix::cluster::graph::ResourceGraph::from_manifests(&manifests).into_diagnostic()?;
 
-    // Prefer `--format` over the global `-o` flag.
-    match args.format {
-        Some(GraphFormat::Dot) => {
-            print!("{}", graph.to_dot());
-        }
-        Some(GraphFormat::Json) => {
-            let json = graph.to_json();
-            println!("{}", serde_json::to_string_pretty(&json).into_diagnostic()?);
-        }
-        Some(GraphFormat::Tree) => {
-            let tree = graph.to_tree();
-            if tree.is_empty() {
-                println!("(no resources)");
-            } else {
-                print!("{tree}");
-            }
-        }
-        None => {
-            let response = GraphResponse {
-                tree: graph.to_tree(),
-                json: graph.to_json(),
-            };
-            output::result(&response)?;
-        }
-    }
+    output::result(&GraphResponse {
+        listing: graph.listing(),
+        tree: graph.to_tree(),
+        dot: graph.to_dot(),
+    })?;
 
     crate::esay!(
         "{} resources, {} dependencies",

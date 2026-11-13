@@ -110,7 +110,7 @@ fn count_findings(findings: &[Value]) -> (usize, usize, usize) {
 }
 
 fn build_sarif(findings: &[Value]) -> Value {
-    // Match the SARIF structure emitted by `kix check --sarif` so the audit
+    // Match the SARIF structure printed by `kix check -o sarif` so the audit
     // bundle is compatible with GitHub Code Scanning.
     let mut rules: Vec<Value> = Vec::new();
     let mut rule_indices: BTreeMap<String, usize> = BTreeMap::new();

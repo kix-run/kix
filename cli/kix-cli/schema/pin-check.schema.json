@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "CheckedPin": {
+      "description": "One pin that `kix pin check` checked.",
+      "properties": {
+        "key": {
+          "description": "The image pin name or instance name.",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "option": {
+          "description": "The option path of an instance pin, or null for an image pin.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "`ok`, `warning`, or `failed`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "option",
+        "result",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Stale": {
+      "description": "A pin that records a source revision other than the one being checked for.",
+      "properties": {
+        "builtFrom": {
+          "type": "string"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "builtFrom",
+        "expected"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What `kix pin check` found.",
+  "properties": {
+    "ok": {
+      "description": "Whether every pin passed and none is stale.",
+      "type": "boolean"
+    },
+    "pins": {
+      "items": {
+        "$ref": "#/$defs/CheckedPin"
+      },
+      "type": "array"
+    },
+    "pinsFile": {
+      "description": "The pin file, as a path.",
+      "type": "string"
+    },
+    "stale": {
+      "description": "Pins built from a source revision other than `--source-rev`.",
+      "items": {
+        "$ref": "#/$defs/Stale"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "pinsFile",
+    "pins",
+    "stale",
+    "ok"
+  ],
+  "title": "PinCheckResponse",
+  "type": "object"
+}

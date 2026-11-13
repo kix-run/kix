@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "CheckResult": {
+      "description": "One row of `kix check`.",
+      "properties": {
+        "details": {
+          "description": "One line, or the evaluation error.",
+          "type": "string"
+        },
+        "findings": {
+          "description": "The scorecard's findings, on the scorecard row only.",
+          "items": true,
+          "type": "array"
+        },
+        "result": {
+          "description": "`pass`, `fail`, or `skip`.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "What ran: `eval` or `scorecard`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "result",
+        "details"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The rows of `kix check`. JSON and YAML print the bare list.",
+  "items": {
+    "$ref": "#/$defs/CheckResult"
+  },
+  "title": "CheckResponse",
+  "type": "array"
+}

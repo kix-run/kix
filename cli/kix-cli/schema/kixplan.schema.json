@@ -598,7 +598,7 @@
     },
     "GraphListing": {
       "additionalProperties": false,
-      "description": "The dependency graph as data: what `kix graph --format json` prints and\na plan file carries.",
+      "description": "The dependency graph as data: what `kix graph -o json` prints and\na plan file carries.",
       "properties": {
         "edges": {
           "items": {

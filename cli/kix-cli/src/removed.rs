@@ -16,7 +16,28 @@ use crate::exit::Exit;
 pub const COMMANDS: &[RemovedCommand] = &[];
 
 /// Flags that a release removed from a command.
-pub const FLAGS: &[RemovedFlag] = &[];
+pub const FLAGS: &[RemovedFlag] = &[
+    RemovedFlag {
+        command: "check",
+        long: "sarif",
+        takes_value: false,
+        removed: Removed {
+            old: "kix check --sarif",
+            new: "kix check -o sarif",
+            id: "K0719",
+        },
+    },
+    RemovedFlag {
+        command: "graph",
+        long: "format",
+        takes_value: true,
+        removed: Removed {
+            old: "kix graph --format",
+            new: "kix graph -o tree|dot|json",
+            id: "K4721",
+        },
+    },
+];
 
 /// What a user typed that no longer works, and what to type instead.
 #[derive(Debug, PartialEq, Eq)]
@@ -97,7 +118,15 @@ pub fn register(
 
 fn add_flag(cmd: clap::Command, path: &[&str], flag: &RemovedFlag) -> clap::Command {
     match path.split_first() {
-        Some((word, rest)) => cmd.mut_subcommand(*word, |sc| add_flag(sc, rest, flag)),
+        // `mut_subcommand` would move the command to the end of the list,
+        // which reorders completions and the CLI surface snapshot.
+        Some((word, rest)) => cmd.mut_subcommands(|sc| {
+            if sc.get_name() == *word {
+                add_flag(sc, rest, flag)
+            } else {
+                sc
+            }
+        }),
         None => {
             let arg = Arg::new(flag_id(flag)).long(flag.long).hide(true);
             cmd.arg(if flag.takes_value {
@@ -175,7 +204,7 @@ mod tests {
     ];
 
     fn command() -> clap::Command {
-        register(crate::cli::command(), COMMANDS, FLAGS)
+        register(crate::cli::live_command(), COMMANDS, FLAGS)
     }
 
     fn found(args: &[&str]) -> Option<&'static str> {
@@ -227,6 +256,31 @@ mod tests {
     }
 
     #[test]
+    fn the_old_format_flags_are_refused() {
+        let found = |args: &[&str]| {
+            let matches = crate::cli::command()
+                .try_get_matches_from(args)
+                .expect("parses");
+            find(&matches, super::COMMANDS, super::FLAGS).map(|r| r.id)
+        };
+        assert_eq!(found(&["kix", "check", "c", "--sarif"]), Some("K0719"));
+        assert_eq!(
+            found(&["kix", "graph", "c", "--format", "dot"]),
+            Some("K4721")
+        );
+        assert_eq!(found(&["kix", "graph", "c", "-o", "dot"]), None);
+        let messages: Vec<String> = super::FLAGS.iter().map(|f| f.removed.message()).collect();
+        assert!(
+            messages.iter().any(|m| m.starts_with("[K0719] ")),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.starts_with("[K4721] ")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
     fn stubs_stay_out_of_help() {
         let help = command().render_long_help().to_string();
         assert!(!help.contains("lint"), "{help}");
@@ -238,7 +292,7 @@ mod tests {
     /// A stub must not shadow a live command or flag.
     #[test]
     fn the_real_stubs_do_not_shadow_live_commands() {
-        let live = crate::cli::command();
+        let live = crate::cli::live_command();
         for c in super::COMMANDS {
             assert!(live.find_subcommand(c.name).is_none(), "{}", c.name);
         }

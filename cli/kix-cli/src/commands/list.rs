@@ -7,12 +7,16 @@ use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 
-struct ClustersResponse {
+/// The clusters this project defines. JSON and YAML print the bare list of
+/// names.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct ClustersResponse {
     clusters: Vec<String>,
 }
 
 impl CommandResponse for ClustersResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
         table.set_header(["NAME"]);
@@ -21,31 +25,42 @@ impl CommandResponse for ClustersResponse {
         }
         table.to_string()
     }
-
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::json!(self.clusters)
-    }
 }
 
-struct PackageRow {
+/// One package of `kix list packages`.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub(crate) struct PackageRow {
     name: String,
+    /// The package's version, or `-`.
     version: String,
+    /// The package's owner, or `-`.
     owner: String,
+    /// With a cluster: `installed [<namespace>]`, `installed (auto)
+    /// [<namespace>]`, `import [<namespace>]`, or `available`. Absent
+    /// without a cluster.
+    #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
-    is_import: bool,
+    /// With a cluster: whether the instance is an import. Absent without a
+    /// cluster.
+    #[serde(rename = "isImport", skip_serializing_if = "Option::is_none")]
+    is_import: Option<bool>,
 }
 
-struct PackagesResponse {
+/// The packages of the project or of one cluster. JSON and YAML print the
+/// bare list.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct PackagesResponse {
     packages: Vec<PackageRow>,
-    show_status: bool,
 }
 
 impl CommandResponse for PackagesResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
+        let show_status = self.packages.iter().any(|p| p.status.is_some());
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
         let has_owners = self.packages.iter().any(|p| p.owner != "-");
-        if self.show_status {
+        if show_status {
             if has_owners {
                 table.set_header(["NAME", "VERSION", "OWNER", "STATUS"]);
                 for p in &self.packages {
@@ -75,25 +90,6 @@ impl CommandResponse for PackagesResponse {
         }
         table.to_string()
     }
-
-    fn as_json(&self) -> serde_json::Value {
-        let entries: Vec<serde_json::Value> = self
-            .packages
-            .iter()
-            .map(|p| {
-                let mut m = serde_json::Map::new();
-                m.insert("name".into(), serde_json::json!(p.name));
-                m.insert("version".into(), serde_json::json!(p.version));
-                m.insert("owner".into(), serde_json::json!(p.owner));
-                if self.show_status {
-                    m.insert("status".into(), serde_json::json!(p.status));
-                    m.insert("isImport".into(), serde_json::json!(p.is_import));
-                }
-                serde_json::Value::Object(m)
-            })
-            .collect();
-        serde_json::json!(entries)
-    }
 }
 
 pub fn run(args: &ListArgs, ctx: &mut CommandContext) -> Result<()> {
@@ -117,7 +113,6 @@ fn run_clusters(ctx: &mut CommandContext) -> Result<()> {
 
 fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
     let mut rows: BTreeMap<String, PackageRow> = BTreeMap::new();
-    let show_status = cluster.is_some();
 
     if let Some(cluster_name) = cluster {
         let cluster_info = ctx
@@ -142,7 +137,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                         version: inst_info.version.as_deref().unwrap_or("-").to_string(),
                         owner: inst_info.owner.as_deref().unwrap_or("-").to_string(),
                         status: Some(status),
-                        is_import: inst_info.is_import,
+                        is_import: Some(inst_info.is_import),
                     });
             }
         }
@@ -153,7 +148,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                 version: avail_info.version.as_deref().unwrap_or("-").to_string(),
                 owner: avail_info.owner.as_deref().unwrap_or("-").to_string(),
                 status: Some("available".to_string()),
-                is_import: false,
+                is_import: Some(false),
             });
         }
     } else {
@@ -167,7 +162,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                     version: info.version.as_deref().unwrap_or("-").to_string(),
                     owner: info.owner.as_deref().unwrap_or("-").to_string(),
                     status: None,
-                    is_import: false,
+                    is_import: None,
                 },
             );
         }
@@ -180,9 +175,6 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
 
     let packages: Vec<PackageRow> = rows.into_values().collect();
 
-    let response = PackagesResponse {
-        packages,
-        show_status,
-    };
+    let response = PackagesResponse { packages };
     output::result(&response)
 }

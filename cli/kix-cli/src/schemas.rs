@@ -49,3 +49,47 @@ fn the_deploy_log_schema_matches_the_type() {
         schemars::schema_for!(kix::cluster::deploy_log::Line),
     );
 }
+
+/// Return the schema of a command's output. Kix only writes these
+/// documents, so a field that it leaves out when empty is not required.
+fn output<T: schemars::JsonSchema>() -> schemars::Schema {
+    schemars::generate::SchemaSettings::default()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<T>()
+}
+
+/// The JSON and YAML output of a command, one schema per response type.
+/// `kix diff -o json` prints the plan document (`plan.schema.json`).
+/// `kix status`, `kix health`, and `kix drift` have none yet, and
+/// `kix compliance sbom` and `attest` print documents that published
+/// standards define.
+#[test]
+fn the_command_output_schemas_match_their_types() {
+    use crate::commands::*;
+    check("build.schema.json", output::<build::BuildResponse>());
+    check("check.schema.json", output::<check::CheckResponse>());
+    check("graph.schema.json", output::<graph::GraphResponse>());
+    check("images.schema.json", output::<images::ImagesResponse>());
+    check("inspect.schema.json", output::<inspect::InspectResponse>());
+    check(
+        "list-clusters.schema.json",
+        output::<list::ClustersResponse>(),
+    );
+    check(
+        "list-packages.schema.json",
+        output::<list::PackagesResponse>(),
+    );
+    check("pin-set.schema.json", output::<pin::PinSetResponse>());
+    check("pin-rm.schema.json", output::<pin::PinRmResponse>());
+    check("pin-check.schema.json", output::<pin::PinCheckResponse>());
+    check("pin-list.schema.json", output::<pin::PinListResponse>());
+    check(
+        "rollback-list.schema.json",
+        output::<rollback::HistoryResponse>(),
+    );
+    check(
+        "plan-comparison.schema.json",
+        output::<deploy::ComparisonResponse<'static>>(),
+    );
+}

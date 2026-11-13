@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "Pin": {
+      "additionalProperties": false,
+      "description": "One image reference resolved at promotion time.\n\nUses `deny_unknown_fields` because the Nix reader rejects unknown fields.\nAccepting an unknown field here and dropping it on the next write would\nsilently delete user data.",
+      "properties": {
+        "digest": {
+          "description": "Manifest digest that `tag` resolved to, or `None` when the pin has not\nbeen resolved against a registry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "description": "Human note about this entry. Kix preserves it across digest updates,\nand `kix pin set` drops it when switching the entry to a different\nimage.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promotedBy": {
+          "description": "Identity of the actor or CI job that promoted this pin.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repository": {
+          "description": "Repository including the registry host.",
+          "type": "string"
+        },
+        "resolvedAt": {
+          "description": "RFC 3339 timestamp when the digest was resolved.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceRev": {
+          "description": "Source revision this image was built from, or `None` for upstream\nimages.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "description": "Tag requested before digest resolution, naming a release stream rather\nthan a specific build.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "tag"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The pins in a pin file, as the file holds them.",
+  "properties": {
+    "images": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Pin"
+      },
+      "description": "Image pins, by pin name.",
+      "type": "object"
+    },
+    "instances": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "$ref": "#/$defs/Pin"
+        },
+        "type": "object"
+      },
+      "description": "Instance pins, by `<namespace>/<instance>`, then option path.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "images",
+    "instances"
+  ],
+  "title": "PinListResponse",
+  "type": "object"
+}

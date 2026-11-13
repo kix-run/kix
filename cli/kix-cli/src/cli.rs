@@ -25,6 +25,8 @@ pub use pin::*;
 pub use plan::*;
 pub use project::*;
 pub use scoped::command;
+#[cfg(test)]
+pub(crate) use scoped::live_command;
 
 #[derive(Parser)]
 #[command(
@@ -43,7 +45,8 @@ pub struct Cli {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct GlobalArgs {
-    /// Output format (text, json, yaml, markdown). Default varies by command.
+    /// Output format. Each command prints some of these formats and refuses
+    /// the others. The default depends on the command.
     #[arg(short, long, global = true, env = "KIX_OUTPUT")]
     pub output: Option<OutputFormat>,
 
@@ -106,6 +109,27 @@ pub enum OutputFormat {
     Yaml,
     /// GitHub-flavored markdown suitable for PR comments
     Markdown,
+    /// SARIF 2.1.0 JSON, for GitHub code scanning
+    Sarif,
+    /// Graphviz DOT
+    Dot,
+    /// An indented tree
+    Tree,
+}
+
+impl OutputFormat {
+    /// Return the value a user types after `-o`.
+    pub fn name(self) -> &'static str {
+        match self {
+            OutputFormat::Text => "text",
+            OutputFormat::Json => "json",
+            OutputFormat::Yaml => "yaml",
+            OutputFormat::Markdown => "markdown",
+            OutputFormat::Sarif => "sarif",
+            OutputFormat::Dot => "dot",
+            OutputFormat::Tree => "tree",
+        }
+    }
 }
 
 #[derive(Subcommand)]

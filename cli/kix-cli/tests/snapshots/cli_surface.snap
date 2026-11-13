@@ -2,7 +2,7 @@
 source: kix-cli/src/cli_surface.rs
 ---
 kix
-kix --output -o <value> [text|json|yaml|markdown]
+kix --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix --verbose -v
 kix --quiet -q
 kix --no-color
@@ -12,7 +12,7 @@ kix --no-cache
 kix --override-input <value>
 kix build
 kix build <cluster> required
-kix build --output -o <value> [text|json|yaml|markdown]
+kix build --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix build --verbose -v
 kix build --quiet -q
 kix build --no-color
@@ -26,7 +26,7 @@ kix diff --bundle <value>
 kix diff --from-bundle <value>
 kix diff --detail <value> [plain|fields|manifests]
 kix diff --save <value>
-kix diff --output -o <value> [text|json|yaml|markdown]
+kix diff --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix diff --verbose -v
 kix diff --quiet -q
 kix diff --no-color
@@ -44,7 +44,7 @@ kix plan --accept-migrations
 kix plan --bundle <value>
 kix plan --deployed-bundle <value>
 kix plan --save <value>
-kix plan --output -o <value> [text|json|yaml|markdown]
+kix plan --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix plan --verbose -v
 kix plan --quiet -q
 kix plan --no-color
@@ -53,8 +53,7 @@ kix plan --flake <value>
 kix plan --override-input <value>
 kix check
 kix check <cluster> required
-kix check --sarif
-kix check --output -o <value> [text|json|yaml|markdown]
+kix check --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix check --verbose -v
 kix check --quiet -q
 kix check --no-color
@@ -82,7 +81,7 @@ kix deploy --tui
 kix deploy --group-by-ns
 kix deploy --fold-height <value>
 kix deploy --log-format <value> [pretty|line|json]
-kix deploy --output -o <value> [text|json|yaml|markdown]
+kix deploy --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix deploy --verbose -v
 kix deploy --quiet -q
 kix deploy --no-color
@@ -92,7 +91,7 @@ kix deploy --override-input <value>
 kix status
 kix status <cluster> required
 kix status --operator
-kix status --output -o <value> [text|json|yaml|markdown]
+kix status --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix status --verbose -v
 kix status --quiet -q
 kix status --no-color
@@ -101,7 +100,7 @@ kix status --flake <value>
 kix status --no-cache
 kix status --override-input <value>
 kix list
-kix list --output -o <value> [text|json|yaml|markdown]
+kix list --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix list --verbose -v
 kix list --quiet -q
 kix list --no-color
@@ -109,7 +108,7 @@ kix list --flake <value>
 kix list --no-cache
 kix list --override-input <value>
 kix list clusters
-kix list clusters --output -o <value> [text|json|yaml|markdown]
+kix list clusters --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix list clusters --verbose -v
 kix list clusters --quiet -q
 kix list clusters --no-color
@@ -118,7 +117,7 @@ kix list clusters --no-cache
 kix list clusters --override-input <value>
 kix list packages
 kix list packages --cluster <value>
-kix list packages --output -o <value> [text|json|yaml|markdown]
+kix list packages --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix list packages --verbose -v
 kix list packages --quiet -q
 kix list packages --no-color
@@ -127,9 +126,8 @@ kix list packages --no-cache
 kix list packages --override-input <value>
 kix graph
 kix graph <cluster> required
-kix graph --format <value> [tree|dot|json]
 kix graph --bundle <value>
-kix graph --output -o <value> [text|json|yaml|markdown]
+kix graph --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix graph --verbose -v
 kix graph --quiet -q
 kix graph --no-color
@@ -144,7 +142,7 @@ kix bundle --quiet -q
 kix bundle --no-color
 kix inspect
 kix inspect <cluster> required
-kix inspect --output -o <value> [text|json|yaml|markdown]
+kix inspect --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix inspect --verbose -v
 kix inspect --quiet -q
 kix inspect --no-color
@@ -193,7 +191,7 @@ kix rollback --dry-run
 kix rollback --prune
 kix rollback --force-conflicts
 kix rollback --operator
-kix rollback --output -o <value> [text|json|yaml|markdown]
+kix rollback --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix rollback --verbose -v
 kix rollback --quiet -q
 kix rollback --no-color
@@ -245,7 +243,7 @@ kix health --flake <value>
 kix health --override-input <value>
 kix drift
 kix drift --cluster <value>
-kix drift --output -o <value> [text|json|yaml|markdown]
+kix drift --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix drift --verbose -v
 kix drift --quiet -q
 kix drift --no-color
@@ -265,7 +263,7 @@ kix snapshot save --context <value>
 kix images
 kix images <cluster> required
 kix images --sources
-kix images --output -o <value> [text|json|yaml|markdown]
+kix images --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix images --verbose -v
 kix images --quiet -q
 kix images --no-color
@@ -283,7 +281,7 @@ kix doctor --quiet -q
 kix doctor --no-color
 kix doctor --flake <value>
 kix compliance
-kix compliance --output -o <value> [text|json|yaml|markdown]
+kix compliance --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix compliance --verbose -v
 kix compliance --quiet -q
 kix compliance --no-color
@@ -293,7 +291,7 @@ kix compliance --no-cache
 kix compliance --override-input <value>
 kix compliance sbom
 kix compliance sbom <cluster> required
-kix compliance sbom --output -o <value> [text|json|yaml|markdown]
+kix compliance sbom --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix compliance sbom --verbose -v
 kix compliance sbom --quiet -q
 kix compliance sbom --no-color
@@ -304,7 +302,7 @@ kix compliance attest <cluster> required
 kix compliance attest --builder-id <value>
 kix compliance attest --invocation-id <value>
 kix compliance attest --from-cluster
-kix compliance attest --output -o <value> [text|json|yaml|markdown]
+kix compliance attest --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix compliance attest --verbose -v
 kix compliance attest --quiet -q
 kix compliance attest --no-color
@@ -324,7 +322,7 @@ kix compliance audit --flake <value>
 kix compliance audit --no-cache
 kix compliance audit --override-input <value>
 kix pin
-kix pin --output -o <value> [text|json|yaml|markdown]
+kix pin --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix pin --verbose -v
 kix pin --quiet -q
 kix pin --no-color
@@ -342,7 +340,7 @@ kix pin set --note <value>
 kix pin set --init
 kix pin set --force
 kix pin set --pins-file <value>
-kix pin set --output -o <value> [text|json|yaml|markdown]
+kix pin set --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix pin set --verbose -v
 kix pin set --quiet -q
 kix pin set --no-color
@@ -352,7 +350,7 @@ kix pin rm <key> required
 kix pin rm --option <value>
 kix pin rm --force
 kix pin rm --pins-file <value>
-kix pin rm --output -o <value> [text|json|yaml|markdown]
+kix pin rm --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix pin rm --verbose -v
 kix pin rm --quiet -q
 kix pin rm --no-color
@@ -363,14 +361,14 @@ kix pin check --source-rev <value>
 kix pin check --allow-unresolved
 kix pin check --offline
 kix pin check --pins-file <value>
-kix pin check --output -o <value> [text|json|yaml|markdown]
+kix pin check --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix pin check --verbose -v
 kix pin check --quiet -q
 kix pin check --no-color
 kix pin check --flake <value>
 kix pin list
 kix pin list --pins-file <value>
-kix pin list --output -o <value> [text|json|yaml|markdown]
+kix pin list --output -o <value> [text|json|yaml|markdown|sarif|dot|tree]
 kix pin list --verbose -v
 kix pin list --quiet -q
 kix pin list --no-color

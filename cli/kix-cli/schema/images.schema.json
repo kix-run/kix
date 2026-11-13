@@ -1,0 +1,55 @@
+{
+  "$defs": {
+    "ImageEntry": {
+      "description": "A single container image reference found in the cluster manifests.",
+      "properties": {
+        "image": {
+          "description": "Full image reference (for example, `\"quay.io/jetstack/cert-manager-controller:v1.21.2\"`).",
+          "type": "string"
+        },
+        "sources": {
+          "description": "Workload containers that reference this image.",
+          "items": {
+            "$ref": "#/$defs/ImageSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "image",
+        "sources"
+      ],
+      "type": "object"
+    },
+    "ImageSource": {
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "namespace",
+        "name",
+        "container"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The container images of a cluster. JSON and YAML print the bare list.",
+  "items": {
+    "$ref": "#/$defs/ImageEntry"
+  },
+  "title": "ImagesResponse",
+  "type": "array"
+}

@@ -89,7 +89,7 @@ pub const DEFAULT_OPTION: &str = "image";
 /// Uses `deny_unknown_fields` because the Nix reader rejects unknown fields.
 /// Accepting an unknown field here and dropping it on the next write would
 /// silently delete user data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Pin {
     /// Repository including the registry host.
