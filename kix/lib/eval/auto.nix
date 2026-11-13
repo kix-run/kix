@@ -8,6 +8,7 @@
 
 let
   inherit (resolve) discoverBuildDeps refsOf;
+  inherit (import ../core/error.nix { inherit lib; }) fail;
 in
 
 rec {
@@ -168,14 +169,16 @@ rec {
         let
           names = lib.unique movedByKey.${item.depName};
         in
-        throw (
-          "[K0549] ${item.requester} needs dependency '${item.depName}'. `availablePackages = packages` offered ${
+        fail {
+          id = "K0549";
+          message = "${item.requester} needs dependency '${item.depName}'. `availablePackages = packages` offered ${
             lib.concatMapStringsSep " or " (n: "`${n}`") names
-          } for it, but that package is experimental now, and `packages` offers only stable packages."
-          + "\nFix: add it by name:"
-          + "\n  availablePackages = packages // { inherit (packages.experimental) ${builtins.head names}; };"
-          + "\nOr declare the instance under `instances` with `packages.experimental.${builtins.head names}`."
-        );
+          } for it, but that package is experimental now, and `packages` offers only stable packages.";
+          fix =
+            "add it by name:"
+            + "\n  availablePackages = packages // { inherit (packages.experimental) ${builtins.head names}; };"
+            + "\nOr declare the instance under `instances` with `packages.experimental.${builtins.head names}`.";
+        };
 
       # Return the reasons an availablePackages entry matches `key`, for error
       # messages.
@@ -347,16 +350,17 @@ rec {
         else if builtins.length tier == 1 then
           builtins.head tier
         else
-          throw (
-            "${item.requester}: dependency '${item.depName}' matches ${toString (builtins.length tier)} optional instances${
+          fail {
+            message = "${item.requester}: dependency '${item.depName}' matches ${toString (builtins.length tier)} optional instances${
               lib.optionalString (sameNs != [ ]) " in namespace '${item.requesterNs}'"
-            }: ${builtins.concatStringsSep ", " (map (o: "${o.ns}/${o.instName}") tier)}."
-            + "\nFix: wire the one ${item.requester} should use in instances.${
-              builtins.replaceStrings [ "/" ] [ "." ] item.requester
-            }:"
-            + "\n  deps.${item.depName} = ref.${(builtins.head tier).ns}.${(builtins.head tier).instName};"
-            + "\nIf this cluster needs only one of those optional instances, remove the others."
-          );
+            }: ${builtins.concatStringsSep ", " (map (o: "${o.ns}/${o.instName}") tier)}.";
+            fix =
+              "wire the one ${item.requester} should use in instances.${
+                builtins.replaceStrings [ "/" ] [ "." ] item.requester
+              }:"
+              + "\n  deps.${item.depName} = ref.${(builtins.head tier).ns}.${(builtins.head tier).instName};"
+              + "\nIf this cluster needs only one of those optional instances, remove the others.";
+          };
 
       # Return the optional instance that `item` activates, or null.
       activatedBy =
@@ -379,22 +383,24 @@ rec {
         if builtins.length claimants == 1 then
           builtins.head claimants
         else
-          throw (
-            builtins.concatStringsSep "\n" (
+          fail {
+            message = builtins.concatStringsSep "\n" (
               [
                 "${item.requester}: ${describeDemand item}, and ${toString (builtins.length claimants)} packages in availablePackages match '${item.depName}':"
               ]
               ++ map (
                 name: "  ${name} (${builtins.concatStringsSep ", " (claimSources name item.depName)})"
               ) claimants
-              ++ [
-                "Fix: declare the package this cluster should use as an optional instance (created only when something depends on it):"
+            );
+            fix = builtins.concatStringsSep "\n" (
+              [
+                "declare the package this cluster should use as an optional instance (created only when something depends on it):"
                 "  instances.<namespace>.${item.depName} = { package = packages.<one of the above>; optional = true; };"
                 "If the other matching packages are not used in this cluster, remove them from availablePackages."
               ]
               ++ lib.optional (builtins.elem item.depName roles.roleNames) "If the cluster environment already provides '${item.depName}', set `cluster.roles.${item.depName}.binding = \"shadowable\";` (or `\"exclusive\";`) in your cluster definition instead."
-            )
-          );
+            );
+          };
 
       shelfInstance =
         item:
@@ -575,19 +581,22 @@ rec {
           reason = onePerClusterReason name;
           placed = normalizedAvail.${name}.namespace != null || autoNamespace != null;
         in
-        lib.optional (builtins.length namespaces == 1 && reason != null && !placed) (
-          builtins.concatStringsSep "\n" (
+        lib.optional (builtins.length namespaces == 1 && reason != null && !placed) {
+          id = "K2377";
+          message = builtins.concatStringsSep "\n" (
             [
-              "[K2377] ${name} runs once per cluster (${reason}), and nothing names its namespace. Kix would add it to namespace ${builtins.head namespaces}, beside the package that needs it:"
+              "${name} runs once per cluster (${reason}), and nothing names its namespace. Kix would add it to namespace ${builtins.head namespaces}, beside the package that needs it:"
             ]
             ++ map (p: "  ${labelRequester p.requester}, for dependency '${p.depName}'") ps
             ++ [
-              "Removing that package would then remove ${name} for the whole cluster. Declare ${name} once, in a namespace of its own:"
-              "  instances.<namespace>.${name}.package = ${packageSpelling name};"
-              "or set autoNamespace to place every package Kix adds there."
+              "Removing that package would then remove ${name} for the whole cluster."
             ]
-          )
-        )
+          );
+          fix =
+            "declare ${name} once, in a namespace of its own:"
+            + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
+            + "\nOr set autoNamespace to place every package Kix adds there.";
+        }
       ) (builtins.attrNames placementsByName);
 
       traceMsg =

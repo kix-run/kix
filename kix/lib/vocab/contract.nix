@@ -1,6 +1,9 @@
 # Build provider/consumer contract validators for `kix.contracts.*`.
 { lib }:
 
+let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+in
 {
   # Build the field for a login a contract carries in `out.credentials`: a
   # Secret, or a secret instance, whose `out.keyRef` reads each of `keys`.
@@ -80,9 +83,12 @@
         else
           "the instance it resolved to";
 
-      consumerMessage =
-        who: dep: found:
-        "${who}: deps.${alias} resolved to ${providerOf dep}, whose out does not honour the ${name} contract: ${lib.concatStringsSep "; " found}. Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another ${remedyNoun} with deps.${alias} = ref.<ns>.<instance> (${here}).";
+      # Return the error, as `kix.fail` takes it, for a consumer whose
+      # dependency `dep` breaks the contract.
+      consumerError = who: dep: found: {
+        message = "${who}: deps.${alias} resolved to ${providerOf dep}, whose out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
+        fix = "set them on that instance's out (a kix.mkImport sets them in `out`), or wire another ${remedyNoun} with deps.${alias} = ref.<ns>.<instance>.";
+      };
     in
     {
       inherit
@@ -106,7 +112,10 @@
         if found == [ ] then
           out
         else
-          throw "${who}: root.out does not honour the ${name} contract: ${lib.concatStringsSep "; " found} (${here})";
+          fail {
+            message = "${who}: root.out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
+            fix = "set the missing fields in the out of the package's root resource.";
+          };
 
       # Build dependency assertions for a consumer of `dep`.
       assertions =
@@ -114,10 +123,7 @@
         let
           found = problemsWith false (dep.out or { });
         in
-        lib.optional (found != [ ]) {
-          assertion = false;
-          message = consumerMessage who dep found;
-        };
+        lib.optional (found != [ ]) ({ assertion = false; } // consumerError who dep found);
 
       # Validate a consumer dependency `dep` eagerly and return `dep`, or throw.
       require =
@@ -125,6 +131,6 @@
         let
           found = problemsWith false (dep.out or { });
         in
-        if found == [ ] then dep else throw (consumerMessage who dep found);
+        if found == [ ] then dep else fail (consumerError who dep found);
     };
 }

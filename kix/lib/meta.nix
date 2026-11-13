@@ -5,6 +5,7 @@ let
   roles = import ./eval/roles.nix { inherit lib; };
 
   versions = import ./core/version.nix { inherit lib; };
+  errors = import ./core/error.nix { inherit lib; };
 
   fail = message: {
     assertion = false;
@@ -97,7 +98,7 @@ rec {
   peekPackageMeta =
     { package, kixlib }:
     if (package._type or "") == "kix-moved" then
-      throw package.message
+      errors.fail package.error
     else if builtins.isAttrs package && package ? build then
       package.meta or { }
     else if (package._type or "") == "kix-import" then
@@ -277,7 +278,7 @@ rec {
           );
         in
         lib.optional (matching != [ ]) (
-          fail "${namespaceName}/${instanceName} conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
+          fail "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
         )
       ) (packageMeta.conflictsWith or [ ]);
 
@@ -363,29 +364,35 @@ rec {
       assertions = (if raw ? assertions then raw.assertions ctx else [ ]) ++ depDiagnostics.assertions;
     };
 
+  # An assertion is `{ assertion; message; fix ? null; id ? null; option ?
+  # null; }`, with the fields `kix.fail` takes (`core/error.nix`). Each one
+  # gets `instance` set to the instance that raised it.
   combineDiagnostics =
     {
       instanceName,
+      namespaceName,
       metaResult,
       packageResult,
       structuralWarnings,
     }:
     let
+      instance = "${namespaceName}/${instanceName}";
       allWarnings = lib.concatLists [
         metaResult.warnings
         structuralWarnings
         (map (w: "[${instanceName}] ${w}") packageResult.warnings)
       ];
-      allAssertions = lib.concatLists [
-        metaResult.assertions
-        (map (a: a // { message = "[${instanceName}] ${a.message}"; }) packageResult.assertions)
-      ];
+      allAssertions = map (a: { inherit instance; } // a) (
+        metaResult.assertions ++ packageResult.assertions
+      );
       failedAssertions = builtins.filter (a: !a.assertion) allAssertions;
     in
     {
       inherit allWarnings allAssertions failedAssertions;
       emitWarnings = emitTraces "warning: " allWarnings;
-      emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (map (a: a.message) failedAssertions);
+      emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (
+        map (a: "${a.instance}: ${a.message}") failedAssertions
+      );
     };
 
   # Aggregate diagnostics across all instances and attach cluster- and
@@ -409,10 +416,10 @@ rec {
         if failedAssertions == [ ] then
           null
         else
-          throw (
-            "cluster '${clusterName}' has ${toString (builtins.length failedAssertions)} problem(s):\n"
-            + builtins.concatStringsSep "\n" (map (a: "  - ${a.message}") failedAssertions)
-          );
+          errors.failAll {
+            cluster = clusterName;
+            errors = map (errors.fromAssertion null) failedAssertions;
+          };
     in
     {
       inherit

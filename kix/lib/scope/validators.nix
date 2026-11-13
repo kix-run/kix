@@ -1,6 +1,7 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   # Coerce null to an empty list because Helm charts often render unset list
   # fields such as `volumes` or `env` as null.
   lst = v: if v == null then [ ] else v;
@@ -99,13 +100,15 @@ in
         if capabilities == { } then
           null
         else if status == "absent" then
-          throw (
-            desc
-            + " nothing in this cluster provides it (cluster.roles.metricsApi.binding = \"absent\" and no metrics-server instance is declared)."
-            + "\nFix: add a metrics-server instance to your cluster definition:"
-            + "\n  instances.kube-system.metrics-server.package = packages.experimental.metrics-server;"
-            + "\nIf your cluster environment already runs metrics-server, set `cluster.roles.metricsApi.binding = \"exclusive\";` in your cluster definition instead."
-          )
+          fail {
+            message =
+              desc
+              + " nothing in this cluster provides it (cluster.roles.metricsApi.binding = \"absent\" and no metrics-server instance is declared).";
+            fix =
+              "add a metrics-server instance to your cluster definition:"
+              + "\n  instances.kube-system.metrics-server.package = packages.experimental.metrics-server;"
+              + "\nIf your cluster environment already runs metrics-server, set `cluster.roles.metricsApi.binding = \"exclusive\";` in your cluster definition instead.";
+          }
         else if status == "unknown" then
           builtins.trace (
             "warning: "
@@ -280,13 +283,15 @@ in
           && !(hasProviderClass (args.spec or { }) || hasProviderClass (args.extra.spec or { }))
         then
           if status == "absent" then
-            throw (
-              serviceDesc
-              + " this cluster has no load balancer configured (cluster.roles.loadBalancer.binding = \"absent\")."
-              + "\nFix: if your cluster environment provides a load balancer (such as a cloud controller or MetalLB), add this line to your cluster definition:"
-              + "\n  cluster.roles.loadBalancer.binding = \"shadowable\";"
-              + "\nIf this cluster has no load balancer, change the Service to `type = \"ClusterIP\";` (or `\"NodePort\"`)."
-            )
+            fail {
+              message =
+                serviceDesc
+                + " this cluster has no load balancer configured (cluster.roles.loadBalancer.binding = \"absent\").";
+              fix =
+                "if your cluster environment provides a load balancer (such as a cloud controller or MetalLB), add this line to your cluster definition:"
+                + "\n  cluster.roles.loadBalancer.binding = \"shadowable\";"
+                + "\nIf this cluster has no load balancer, change the Service to `type = \"ClusterIP\";` (or `\"NodePort\"`).";
+            }
           else if status == "unknown" then
             builtins.trace (
               "warning: "
@@ -427,17 +432,19 @@ in
               refReflected = fragment._kix.reflected or false;
             in
             if builtins.getContext refName == { } then
-              throw (
-                "instance '${instanceName}': ${fieldDesc} uses a plain string \"${plainName}\" for a ${kind} name, so Kix cannot order the workload after the ${kind} or verify that it exists."
-                + "\nFix: reference the ${kind} resource's .out.name (or use kix.mount.${kind} / .out.keyRef)."
-                + "\nIf \"${plainName}\" is created outside Kix, wrap it in kix.untrackedRef \"${plainName}\"."
-              )
+              fail {
+                message = "instance '${instanceName}': ${fieldDesc} uses a plain string \"${plainName}\" for a ${kind} name, so Kix cannot order the workload after the ${kind} or verify that it exists.";
+                fix =
+                  "reference the ${kind} resource's .out.name (or use kix.mount.${kind} / .out.keyRef)."
+                  + "\nIf \"${plainName}\" is created outside Kix, wrap it in kix.untrackedRef \"${plainName}\".";
+              }
             else if refNs != null && refNs != namespaceName && !refReflected then
-              throw (
-                "instance '${instanceName}': ${fieldDesc} references ${kind} \"${plainName}\" in namespace \"${refNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a mounted or referenced ${kind} to be in the workload's own namespace."
-                + "\nFix: create the ${kind} in namespace \"${namespaceName}\" (or in a dependency instance in \"${namespaceName}\")."
-                + "\nIf this is a Secret replicated across namespaces by a controller such as Reflector, set reflect = true on its scope.mkSecretRef call."
-              )
+              fail {
+                message = "instance '${instanceName}': ${fieldDesc} references ${kind} \"${plainName}\" in namespace \"${refNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a mounted or referenced ${kind} to be in the workload's own namespace.";
+                fix =
+                  "create the ${kind} in namespace \"${namespaceName}\" (or in a dependency instance in \"${namespaceName}\")."
+                  + "\nIf this is a Secret replicated across namespaces by a controller such as Reflector, set reflect = true on its scope.mkSecretRef call.";
+              }
             else
               null;
 
@@ -499,18 +506,19 @@ in
               in
               if builtins.getContext saName == { } then
                 [
-                  (throw (
-                    "instance '${instanceName}': spec.template.spec.serviceAccountName uses a plain string \"${plainName}\", so Kix cannot order the workload after the ServiceAccount or verify its namespace."
-                    + "\nFix: pass the ServiceAccount resource as serviceAccount = self.<part>; in spec.template.spec (or set serviceAccountName = self.<part>.out.name;)."
-                    + "\nIf \"${plainName}\" is created outside Kix, set serviceAccountName = kix.untrackedRef \"${plainName}\";."
-                  ))
+                  (fail {
+                    message = "instance '${instanceName}': spec.template.spec.serviceAccountName uses a plain string \"${plainName}\", so Kix cannot order the workload after the ServiceAccount or verify its namespace.";
+                    fix =
+                      "pass the ServiceAccount resource as serviceAccount = self.<part>; in spec.template.spec (or set serviceAccountName = self.<part>.out.name;)."
+                      + "\nIf \"${plainName}\" is created outside Kix, set serviceAccountName = kix.untrackedRef \"${plainName}\";.";
+                  })
                 ]
               else if saNs != null && saNs != namespaceName then
                 [
-                  (throw (
-                    "instance '${instanceName}': spec.template.spec.serviceAccount references ServiceAccount \"${plainName}\" in namespace \"${saNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a pod's ServiceAccount to be in the pod's own namespace."
-                    + "\nFix: define a ServiceAccount part in this package with `serviceAccount = scope.mkResource { apiVersion = \"v1\"; kind = \"ServiceAccount\"; ... };` and set `serviceAccount = self.serviceAccount;` in spec.template.spec."
-                  ))
+                  (fail {
+                    message = "instance '${instanceName}': spec.template.spec.serviceAccount references ServiceAccount \"${plainName}\" in namespace \"${saNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a pod's ServiceAccount to be in the pod's own namespace.";
+                    fix = "define a ServiceAccount part in this package with `serviceAccount = scope.mkResource { apiVersion = \"v1\"; kind = \"ServiceAccount\"; ... };` and set `serviceAccount = self.serviceAccount;` in spec.template.spec.";
+                  })
                 ]
               else
                 [ null ]

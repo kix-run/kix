@@ -3,6 +3,7 @@
 { lib, options, ... }:
 let
   versions = import ./core/version.nix { inherit lib; };
+  errors = import ./core/error.nix { inherit lib; };
 
   isMoved = package: (package._type or "") == "kix-moved";
 
@@ -38,7 +39,7 @@ let
     lib.unique (lib.concatMap fromDef options.instances.definitions);
 
   # Return the error for an instance whose package moved to experimental:
-  # the package's own message, or one that lists every moved package the
+  # the package's own error, or one that lists every moved package the
   # cluster names, so a migration takes one build rather than one per name.
   movedMessage =
     package:
@@ -50,16 +51,18 @@ let
       names = lib.unique ([ own ] ++ movedNames);
     in
     if builtins.length names == 1 then
-      package.message
+      package.error
     else
-      lib.concatStringsSep "\n" (
-        [
-          "${(import ../packages/was-stable.nix).id} These ${toString (builtins.length names)} packages are experimental now, so they may change in any release. Write the new names:"
-        ]
-        ++ map (n: "  ${n.spelled} -> packages.experimental.${n.name}") (
-          lib.sort (a: b: a.spelled < b.spelled) names
-        )
-      );
+      {
+        inherit (import ../packages/was-stable.nix) id;
+        message = "These ${toString (builtins.length names)} packages are experimental now, so they may change in any release.";
+        fix = lib.concatStringsSep "\n" (
+          [ "write the new names:" ]
+          ++ map (n: "  ${n.spelled} -> packages.experimental.${n.name}") (
+            lib.sort (a: b: a.spelled < b.spelled) names
+          )
+        );
+      };
 in
 {
   imports = [
@@ -139,7 +142,7 @@ in
                 apply =
                   package:
                   if isMoved package then
-                    throw (movedMessage package)
+                    errors.fail (movedMessage package)
                   else if builtins.isPath package then
                     throw "An instance's `package` is set to the path ${toString package} without `import`. Write `package = import ${toString package};`."
                   else

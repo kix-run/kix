@@ -435,9 +435,11 @@ in
         if errors == [ ] then
           true
         else
-          throw (
-            "${who}: ${toString (builtins.length errors)} problem(s):\n"
-            + lib.concatMapStringsSep "\n" (e: "- ${e}") errors
+          scope.fail (
+            map (message: {
+              package = "cluster-issuer";
+              inherit message;
+            }) errors
           );
     in
     {

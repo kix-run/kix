@@ -4,6 +4,7 @@
 # been in a minor release.
 { lib }:
 let
+  inherit (import ../lib/core/error.nix { inherit lib; }) fail;
   # Old names that did not move under `helpers`, by contract.
   elsewhere = {
     oidc.clientOptions = "options";
@@ -30,7 +31,10 @@ let
   };
   refuse =
     name: old: new:
-    throw "[K6218] kix.contracts.${name}.${old} moved to kix.contracts.${name}.${new}.";
+    fail {
+      id = "K6218";
+      message = "kix.contracts.${name}.${old} moved to kix.contracts.${name}.${new}.";
+    };
 in
 # Return the refusals for the contract called `name`.
 name:

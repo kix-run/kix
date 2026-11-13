@@ -13,6 +13,7 @@
 }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s) mkPackageInstance;
@@ -338,10 +339,10 @@ in
         );
 
         rawRoot =
-          parts.root or (throw (
-            "${namespaceName}/${instanceName}: package build returned no 'root' attribute. Every package must set 'root' to the primary resource that other instances depend on."
-            + "\nFix: add `root = self.<part>;` to the attribute set returned by `build` in the package."
-          ));
+          parts.root or (fail {
+            message = "${namespaceName}/${instanceName}: package build returned no 'root' attribute. Every package must set 'root' to the primary resource that other instances depend on.";
+            fix = "add `root = self.<part>;` to the attribute set returned by `build` in the package.";
+          });
 
         rootRes =
           if rawRoot ? resource then
@@ -349,10 +350,10 @@ in
           else if rawRoot ? _type && rawRoot._type == "k8s-resource" then
             rawRoot
           else
-            throw (
-              "${namespaceName}/${instanceName}: package 'root' must be a resource (from scope.mk*) or `{ resource, requires?, postHooks?, out? }`."
-              + "\nFix: set `root = self.<part>;` or `root = { resource = self.<part>; requires = [ ... ]; };` in the package's `build`."
-            );
+            fail {
+              message = "${namespaceName}/${instanceName}: package 'root' must be a resource (from scope.mk*) or `{ resource, requires?, postHooks?, out? }`.";
+              fix = "set `root = self.<part>;` or `root = { resource = self.<part>; requires = [ ... ]; };` in the package's `build`.";
+            };
 
         # Monitor and rule objects reference nothing else in the instance,
         # so the PackageInstance requires them directly. Matching by kind
@@ -404,12 +405,13 @@ in
           if builtins.elem (plainPath rootRes) partPaths then
             null
           else
-            throw (
-              "${namespaceName}/${instanceName}: package 'root' points to ${rootRes.kind or "a resource"} '${rootRes.name or "?"}', which is not one of this package's named parts (for example, it was built inline on 'root' or taken from a dependency). Kix renders only named parts of the package, so a resource built inline on 'root' would be left out of the build."
-              + "\nFix: define the resource as a named part of this package and point 'root' to it:"
-              + "\n  main = scope.mkResource { ... };"
-              + "\n  root = self.main;"
-            );
+            fail {
+              message = "${namespaceName}/${instanceName}: package 'root' points to ${rootRes.kind or "a resource"} '${rootRes.name or "?"}', which is not one of this package's named parts (for example, it was built inline on 'root' or taken from a dependency). Kix renders only named parts of the package, so a resource built inline on 'root' would be left out of the build.";
+              fix =
+                "define the resource as a named part of this package and point 'root' to it:"
+                + "\n  main = scope.mkResource { ... };"
+                + "\n  root = self.main;";
+            };
 
         allPartResources = builtins.seq _rootRendersCheck (
           _partResourcesFromParts ++ _scopeInjectedResources
@@ -866,6 +868,7 @@ in
         diagnostics = meta.combineDiagnostics {
           inherit
             instanceName
+            namespaceName
             metaResult
             packageResult
             structuralWarnings

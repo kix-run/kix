@@ -257,12 +257,14 @@ let
       ]
       ++ ms;
     in
-    validate.crossResourceFailures {
-      manifests = all;
-      identityHashes = map idOf all;
-      owners = map (m: owners.${idOf m} or null) all;
-      inherit externalNames;
-    };
+    map validate.failureText (
+      validate.crossResourceFailures {
+        manifests = all;
+        identityHashes = map idOf all;
+        owners = map (m: owners.${idOf m} or null) all;
+        inherit externalNames;
+      }
+    );
 
   # Exactly one failure per needle, each containing its needle.
   expectFailures =

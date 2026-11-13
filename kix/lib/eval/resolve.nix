@@ -1,6 +1,7 @@
 { lib, kixlib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   systemArgNames = [
     "scope"
     "lib"
@@ -115,13 +116,14 @@ rec {
             if (mergedInstances.${r.namespace} or { }) ? ${r.instanceName} then
               acc
             else
-              throw (
-                "${nsName}/${instName}: ${
+              fail {
+                instance = "${nsName}/${instName}";
+                option = "instances.${nsName}.${instName}.deps.${arg}";
+                message = "${
                   if builtins.isList v then "deps.${arg} lists" else "deps.${arg} ="
-                } ref.${r.namespace}.${r.instanceName}, which is not a declared instance. '${r.instanceName}' is in availablePackages, and a ref pointer does not create it automatically."
-                + "\nFix: declare the instance in your cluster definition:"
-                + "\n  instances.${r.namespace}.${r.instanceName}.package = packages.<package>;"
-              )
+                } ref.${r.namespace}.${r.instanceName}, which is not a declared instance. '${r.instanceName}' is in availablePackages, and a ref pointer does not create it automatically.";
+                fix = "declare the instance in your cluster definition:\n  instances.${r.namespace}.${r.instanceName}.package = packages.<package>;";
+              }
           ) acc (refsOf v)
         ) acc (instCfg.deps or { })
       ) acc nsInsts
@@ -147,11 +149,12 @@ rec {
       requesterName ? null,
       # `{ name; id; }` from the package's `deps.<arg>.renamedFrom`, when the
       # dependency had another name in an earlier release. `id` is the id of
-      # the change record for the rename, in brackets as an error prints it.
+      # the change record for the rename, such as "K1234".
       renamedFrom ? null,
     }:
     let
-      prefix = lib.optionalString (requester != null) "${requester}: ";
+      # Fail with `e`, naming the requesting instance.
+      refuse = e: fail ({ instance = requester; } // e);
       label = c: "${c.namespace}/${c.instName}";
       labels = cs: builtins.concatStringsSep ", " (map label cs);
       depLine = c: "  deps.${argName} = ref.${c.namespace}.${c.instName};";
@@ -178,11 +181,12 @@ rec {
           c = indexed t;
         in
         if t.namespace != requesterNamespace && c != null && (c.meta.scope or null) == "namespace" then
-          throw (
-            "${prefix}deps.${argName} = ref.${t.namespace}.${t.instanceName} points to an instance in namespace '${t.namespace}' whose package sets meta.scope = \"namespace\", so it cannot be used from namespace '${requesterNamespace}'."
-            + "\nFix: declare a separate instance in namespace '${requesterNamespace}' and point ${consumerPath}.deps.${argName} to it."
-            + "\nIf the package can safely serve every namespace, set meta.scope = \"cluster\" in its package instead."
-          )
+          refuse {
+            message = "deps.${argName} = ref.${t.namespace}.${t.instanceName} points to an instance in namespace '${t.namespace}' whose package sets meta.scope = \"namespace\", so it cannot be used from namespace '${requesterNamespace}'.";
+            fix =
+              "declare a separate instance in namespace '${requesterNamespace}' and point ${consumerPath}.deps.${argName} to it."
+              + "\nIf the package can safely serve every namespace, set meta.scope = \"cluster\" in its package instead.";
+          }
         else
           t;
     in
@@ -206,10 +210,10 @@ rec {
             direct = false;
           }
         else
-          throw (
-            "${prefix}${consumerPath}.deps.${argName} is a list that mixes ref.<namespace>.<instance> entries with plain values."
-            + "\nFix: make every list entry a ref.<namespace>.<instance>, or pass a list of plain values without refs."
-          )
+          refuse {
+            message = "${consumerPath}.deps.${argName} is a list that mixes ref.<namespace>.<instance> entries with plain values.";
+            fix = "make every list entry a ref.<namespace>.<instance>, or pass a list of plain values without refs.";
+          }
       else
         {
           found = true;
@@ -252,36 +256,36 @@ rec {
           instanceName = c.instName;
           direct = false;
         };
-        none = "${prefix}dependency '${argName}' has no instance in namespace '${requesterNamespace}', and";
-        several =
-          cs:
-          "${none} ${toString (builtins.length cs)} instances in other namespaces match: ${labels cs}."
-          + "\nFix: choose one by adding one of these lines to ${consumerPath}:"
-          + "\n${depLines cs}";
+        none = "dependency '${argName}' has no instance in namespace '${requesterNamespace}', and";
+        several = cs: {
+          message = "${none} ${toString (builtins.length cs)} instances in other namespaces match: ${labels cs}.";
+          fix = "choose one by adding one of these lines to ${consumerPath}:\n${depLines cs}";
+        };
       in
       if builtins.length own == 1 then
         bind (builtins.head own)
 
       else if builtins.length own > 1 then
-        throw (
-          "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
+        refuse {
+          message = "dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
             builtins.concatStringsSep ", " (map (c: c.instName) own)
-          }."
-          + "\nFix: choose one by adding one of these lines to ${consumerPath}:"
-          + "\n${depLines own}"
-        )
+          }.";
+          fix = "choose one by adding one of these lines to ${consumerPath}:\n${depLines own}";
+        }
 
       else if builtins.length shared == 1 then
         bind (builtins.head shared)
 
       else if builtins.length shared > 1 then
-        throw (several (shared ++ nameable))
+        refuse (several (shared ++ nameable))
 
       else if hasDefault then
         {
           found = false;
           warnings = lib.optional (nameable != [ ]) (
-            "${prefix}optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
+            "${
+              lib.optionalString (requester != null) "${requester}: "
+            }optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
             + (
               if builtins.length nameable == 1 then
                 "${labels nameable} matches in another namespace.\nFix: to use it, add this line to ${consumerPath}:"
@@ -293,31 +297,39 @@ rec {
         }
 
       else if builtins.length nameable == 1 then
-        throw (
-          "${none} 1 instance in another namespace matches: ${labels nameable}."
-          + "\nFix: to use ${labels nameable}, add this line to ${consumerPath}:"
-          + "\n${depLines nameable}"
-          + "\nIf this package serves every namespace in the cluster, set meta.scope = \"cluster\" in its package instead."
-        )
+        refuse {
+          message = "${none} 1 instance in another namespace matches: ${labels nameable}.";
+          fix =
+            "to use ${labels nameable}, add this line to ${consumerPath}:"
+            + "\n${depLines nameable}"
+            + "\nIf this package serves every namespace in the cluster, set meta.scope = \"cluster\" in its package instead.";
+        }
 
       else if builtins.length nameable > 1 then
-        throw (several nameable)
+        refuse (several nameable)
 
       else
-        throw (
-          lib.optionalString (renamedFrom != null) "${renamedFrom.id} "
-          + "${prefix}dependency '${argName}' has no matching instance in namespace '${requesterNamespace}'."
-          +
-            lib.optionalString (namespaced != [ ])
-              " Matching instances in other namespaces (${labels namespaced}) set meta.scope = \"namespace\" and serve only their own namespace."
-          + "\nFix: declare an instance named '${argName}' in namespace '${requesterNamespace}':"
-          + "\n  instances.${requesterNamespace}.${argName}.package = packages.<package>;"
-          + "\nIf another instance in '${requesterNamespace}' provides '${argName}', wire it in ${consumerPath}:"
-          + "\n  deps.${argName} = ref.${requesterNamespace}.<instance>;"
-          + lib.optionalString (renamedFrom != null) (
-            "\nThis dependency was named '${renamedFrom.name}' in earlier releases. An instance named '${renamedFrom.name}' no longer answers it, and neither does deps.${renamedFrom.name}. Rename the instance to '${argName}', or wire it with the deps.${argName} line above."
-          )
-        );
+        refuse {
+          # Older packages give the id in brackets, as an error printed it.
+          id =
+            if renamedFrom == null then null else lib.removeSuffix "]" (lib.removePrefix "[" renamedFrom.id);
+          message =
+            "dependency '${argName}' has no matching instance in namespace '${requesterNamespace}'."
+            +
+              lib.optionalString (namespaced != [ ])
+                " Matching instances in other namespaces (${labels namespaced}) set meta.scope = \"namespace\" and serve only their own namespace."
+            + lib.optionalString (renamedFrom != null) (
+              " This dependency was named '${renamedFrom.name}' in earlier releases. An instance named '${renamedFrom.name}' no longer answers it, and neither does deps.${renamedFrom.name}."
+            );
+          fix =
+            "declare an instance named '${argName}' in namespace '${requesterNamespace}':"
+            + "\n  instances.${requesterNamespace}.${argName}.package = packages.<package>;"
+            + "\nIf another instance in '${requesterNamespace}' provides '${argName}', wire it in ${consumerPath}:"
+            + "\n  deps.${argName} = ref.${requesterNamespace}.<instance>;"
+            + lib.optionalString (renamedFrom != null) (
+              "\nOr rename the instance named '${renamedFrom.name}' to '${argName}'."
+            );
+        };
 
   # Unwrap `deferredModule` definitions into `{ file, value }` pairs,
   # preserving the innermost `_file` for error reporting.
@@ -427,16 +439,16 @@ rec {
             configPath =
               if named then "instances.${namespaceName}.${instanceName}.config" else "the instance config";
           in
-          throw (
-            "${instanceText}: config option(s) ${
+          fail {
+            message = "${instanceText}: config option(s) ${
               builtins.concatStringsSep ", " (map (c: "'${c.key}' (set by consumer ${c.source})") lockedConflicts)
             } cannot be changed by a dependency because ${configPath} locks ${
               if builtins.length lockedConflicts == 1 then "it" else "them"
-            } with kix.mkLocked."
-            + "\nFix: update the locked value in ${configPath} to include what ${
+            } with kix.mkLocked.";
+            fix = "update the locked value in ${configPath} to include what ${
               builtins.concatStringsSep " and " (lib.unique (map (c: c.source) lockedConflicts))
-            } needs, or remove kix.mkLocked so the consumer can set it."
-          )
+            } needs, or remove kix.mkLocked so the consumer can set it.";
+          }
         else
           null;
 

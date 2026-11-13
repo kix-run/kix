@@ -88,7 +88,7 @@ The following markers satisfy existence and selector checks:
 When one or more checks fail, cluster evaluation stops and lists every violation:
 
 ```text
-error: cluster 'homelab-kind' has 1 problem(s):
+cluster 'homelab-kind' has 1 problem:
   - Service data/postgres-metrics selector {"app":"pg"} matches no workload pod template in namespace 'data'.
     Fix: update spec.selector to match the target workload's pod labels, or build the Service with kix.service.fromWorkload.
 ```

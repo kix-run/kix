@@ -98,11 +98,19 @@ in
     [
       {
         assertion = config.replicaCount == null;
-        message = "[K6965] caddy: replicaCount was removed. Set config.replicas instead.";
+        id = "K6965";
+        package = "caddy";
+        option = "config.replicaCount";
+        message = "replicaCount was removed.";
+        fix = "Set config.replicas instead.";
       }
       {
         assertion = config.configSecretName == null;
-        message = "[K2263] caddy: configSecretName was removed. Give the Caddyfile through the caddyfile dependency, a secret with the key Caddyfile, such as a packages.secret instance with aliases = [ \"caddyfile\" ].";
+        id = "K2263";
+        package = "caddy";
+        option = "config.configSecretName";
+        message = "configSecretName was removed.";
+        fix = "Give the Caddyfile through the caddyfile dependency, a secret with the key Caddyfile, such as a packages.secret instance with aliases = [ \"caddyfile\" ].";
       }
     ];
 

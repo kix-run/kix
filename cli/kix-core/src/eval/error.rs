@@ -65,6 +65,10 @@ pub enum KixEvalError {
     #[error(transparent)]
     Nix(#[from] super::nix::NixCommandError),
 
+    /// Errors the Kix library raised for a person to fix (`kix.fail`).
+    #[error("{0}")]
+    Library(super::library_error::LibraryErrors),
+
     /// The machine's Nix refused to build a Helm chart during evaluation.
     #[error(
         "cannot render Helm charts with the `nix` builder (`builder = \"nix\"` in kix.toml) because `allow-import-from-derivation` is off in this machine's Nix. Set `allow-import-from-derivation = true` in nix.conf"

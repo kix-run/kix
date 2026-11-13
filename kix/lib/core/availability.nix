@@ -12,6 +12,7 @@
 { lib }:
 
 let
+  inherit (import ./error.nix { inherit lib; }) fail;
   levels = [
     "none"
     "pod"
@@ -190,11 +191,12 @@ let
           "cluster.capabilities.multiNode = true";
       _substrateCheck =
         if overSubstrate && sub.certain then
-          throw (
-            "${where}: ${requestedFrom} = \"${requested}\", which requires ${needs}, and this cluster's capabilities offer at most \"${sub.level}\"."
-            + "\nFix: lower ${requestedFrom} to \"${sub.level}\" (or lower)."
-            + "\nIf this cluster has the required nodes or zones, declare ${needs} in your cluster definition."
-          )
+          fail {
+            message = "${where}: ${requestedFrom} = \"${requested}\", which requires ${needs}, and this cluster's capabilities offer at most \"${sub.level}\".";
+            fix =
+              "lower ${requestedFrom} to \"${sub.level}\" (or lower)."
+              + "\nIf this cluster has the required nodes or zones, declare ${needs} in your cluster definition.";
+          }
         else
           null;
     in

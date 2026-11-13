@@ -236,9 +236,9 @@ the defaults fails there.
   contract's own functions go under `helpers`
   (`kix/contracts/stable/redis.nix`).
 - A package that renames a dependency sets `deps.<arg>.renamedFrom = { name
-  = "<old name>"; id = "[K1234]"; }`, with the id of the `error` change
-  record in brackets. The error for a missing dependency then starts with
-  the id and says what the dependency was called before (immich:191-194).
+  = "<old name>"; id = "K1234"; }`, with the id of the `error` change
+  record. The error for a missing dependency then carries the id and says
+  what the dependency was called before (immich:191-194).
 - A consumer that reads an optional field (`username`, `extensions`, `tls`)
   handles its absence on a `kix.mkImport` stand-in
   (`kix/contracts/stable/postgresDatabase.nix:1-8`, D22), and acts on it where the
@@ -370,6 +370,19 @@ deploy says where it was observed. Operators add
    `Replicas:` and `Moving to another release:` (cnpg-operator:49, 98).
    A version that existing installs cannot take with a plain deploy adds
    `Upgrades:`, saying what an operator does first (clickhouse-cluster:28).
+
+### Errors
+
+Raise an error a person must fix with `scope.fail`, never a bare `throw`.
+Give `message` (what is wrong), `fix` (what to change), and, when they
+apply, `option` (the setting's path) and `id` (the change record id of a
+removed option, such as `"K9503"`). `scope.fail` adds the instance, so the
+message does not start with a `who` prefix. Pass a list to report several
+problems at once (cluster-issuer). An assertion takes the same `fix`, `id`,
+and `option` fields. Kix shows these errors from their fields, without a
+stack trace (`docs/src/content/docs/reference/package-anatomy.mdx`,
+"Raising an error with `scope.fail`"). The database packages'
+`_passwordCheck` is the model (cnpg-database).
 
 ### Pattern to reference package
 

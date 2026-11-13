@@ -31,6 +31,9 @@
   self,
 }:
 
+let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+in
 {
   buildCluster =
     {
@@ -213,10 +216,10 @@
         if mostPermissive == null then
           declared
         else if declaredRank != null && declaredRank > mostPermissive.rank then
-          throw (
-            "${nsName}/${mostPermissive.instName}: package sets meta.podSecurity = \"${mostPermissive.level}\", which is more permissive than namespaces.${nsName}.podSecurity = \"${declared}\". Kubernetes would refuse its pods in namespace '${nsName}'."
-            + "\nFix: set `namespaces.${nsName}.podSecurity = \"${mostPermissive.level}\";` in your cluster definition, or move '${mostPermissive.instName}' to a namespace that allows \"${mostPermissive.level}\"."
-          )
+          fail {
+            message = "${nsName}/${mostPermissive.instName}: package sets meta.podSecurity = \"${mostPermissive.level}\", which is more permissive than namespaces.${nsName}.podSecurity = \"${declared}\". Kubernetes would refuse its pods in namespace '${nsName}'.";
+            fix = "set `namespaces.${nsName}.podSecurity = \"${mostPermissive.level}\";` in your cluster definition, or move '${mostPermissive.instName}' to a namespace that allows \"${mostPermissive.level}\".";
+          }
         else
           mostPermissive.level;
 
@@ -933,10 +936,13 @@
       # each failure into a build assertion.
       crossResourceAssertions =
         map
-          (f: {
-            assertion = false;
-            message = f;
-          })
+          (
+            f:
+            {
+              assertion = false;
+            }
+            // (if builtins.isString f then { message = f; } else f)
+          )
           (
             validate.crossResourceFailures {
               manifests = rawManifestList;
@@ -979,8 +985,9 @@
               in
               lib.optional (found != [ ]) {
                 assertion = false;
+                instance = owner;
                 message =
-                  "kix: instance ${owner}: ${plain m.kind} ${plain m.metadata.name} breaks Pod Security level \"${level}\", "
+                  "${plain m.kind} ${plain m.metadata.name} breaks Pod Security level \"${level}\", "
                   + "which namespace ${ns} enforces (${sourceOf ns}). Kubernetes would refuse its pods. Change:"
                   + lib.concatMapStrings (v: "\n      ${v.where}: ${v.problem}") found;
               }
@@ -1278,10 +1285,7 @@
         extraWarnings = crossScorecardDiag.warnings;
         extraAssertions =
           crossScorecardDiag.assertions
-          ++ map (message: {
-            assertion = false;
-            inherit message;
-          }) autoResult.besideConsumerRefusals
+          ++ map (refusal: { assertion = false; } // refusal) autoResult.besideConsumerRefusals
           ++ sharedClusterObjectAssertions
           ++ podSecurityAssertions
           ++ quotaAssertions

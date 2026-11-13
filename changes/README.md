@@ -69,14 +69,17 @@ Otherwise it is a patch release.
 
 ## Ids
 
-An `error` record needs an id, and the refusal starts with it in brackets,
-such as `[K0001]`. People search CHANGELOG.md for the id, and tools match it. `scripts/change-records.py next-id` prints
+An `error` record needs an id. `scripts/change-records.py next-id` prints
 an id no record uses. It picks one at random, so that branches worked on at
 the same time do not pick the same id.
 
-The error that refuses the old form starts with the id in brackets, such as
-`[K0001] caddy: ...`. The check fails until a file under `kix/` or `cli/`
-prints it. People search `CHANGELOG.md` for the id, and tools match on it.
+The error that refuses the old form carries the id. In the Kix library it is
+the `id` field of `scope.fail` or `kix.fail`, such as `scope.fail { id =
+"K0001"; message = "replicaCount was removed."; ... }`, and Kix prints it as
+`[K0001]` at the start of the error. Elsewhere the message starts with the id
+in brackets, such as `[K0001] ...`. The check fails until a file under
+`kix/` or `cli/` carries it. People search `CHANGELOG.md` for the id, and
+tools match on it.
 
 ## Commands
 

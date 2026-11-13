@@ -32,20 +32,24 @@ let
   };
   failures =
     ms:
-    validate.crossResourceFailures {
-      manifests = ms;
-      identityHashes = map idOf ms;
-      owners = map (_: null) ms;
-    };
+    map validate.failureText (
+      validate.crossResourceFailures {
+        manifests = ms;
+        identityHashes = map idOf ms;
+        owners = map (_: null) ms;
+      }
+    );
 
   # Failures with externalNames set as well.
   failuresWith =
     { manifests, externalNames }:
-    validate.crossResourceFailures {
-      inherit manifests externalNames;
-      identityHashes = map idOf manifests;
-      owners = map (_: null) manifests;
-    };
+    map validate.failureText (
+      validate.crossResourceFailures {
+        inherit manifests externalNames;
+        identityHashes = map idOf manifests;
+        owners = map (_: null) manifests;
+      }
+    );
 
   # A manifest with the labels every kix resource carries.
   res =

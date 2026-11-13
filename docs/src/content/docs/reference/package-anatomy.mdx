@@ -115,7 +115,7 @@ The package returns an attribute set with the following top-level keys:
 | `deps` | attrset | No | Per-dependency configuration injection (`config`), `warnings`, and `assertions` keyed by `build` argument name. |
 | `build` | function or list of functions | Yes | One or more functions returning named resource parts and a `root` entry. |
 | `warnings` | `{ config, self, deps }: [ string ]` | No | Evaluation-time warnings collected into `cluster.warnings`. |
-| `assertions` | `{ config, self, deps }: [ { assertion; message; } ]` | No | Evaluation-time assertions checked before building manifests. |
+| `assertions` | `{ config, self, deps }: [ { assertion; message; fix ? null; id ? null; option ? null; } ]` | No | Evaluation-time assertions checked before building manifests. |
 
 ### The `root` entry and part reachability
 
@@ -474,7 +474,7 @@ deps.postgres = {
 | `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider instance's `config` in the cluster definition locked the target option with `kix.mkLocked`. |
 | `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. |
 | `warnings` | `dep: [ string ]` | Warnings evaluated only when `<arg>` is non-null. |
-| `renamedFrom` | `{ name; id; }` | The name this dependency had in earlier releases, and a change id such as `"[K1234]"`. When no instance matches the dependency, the error starts with `id` and adds a sentence saying that the dependency was named `name` in earlier releases. |
+| `renamedFrom` | `{ name; id; }` | The name this dependency had in earlier releases, and a change id such as `"K1234"`. When no instance matches the dependency, the error carries `id` and adds a sentence saying that the dependency was named `name` in earlier releases. |
 
 ### Built-in dependency contracts (`kix.contracts.*`)
 
@@ -564,12 +564,50 @@ assertions =
   [
     {
       assertion = !(config.tls.enable && config.tls.secretName == null);
-      message = "echo: config.tls.secretName must be set when config.tls.enable is true.";
+      message = "config.tls.secretName is not set, and config.tls.enable is true.";
+      fix = "Set config.tls.secretName to the Secret that holds the certificate.";
+      option = "config.tls.secretName";
     }
   ];
 ```
 
-Failed `assertions` abort evaluation immediately with all failed messages. `warnings` are collected into `cluster.warnings` and reported by `kix check` and `kix build`.
+An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, and `option`. Kix adds the instance, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` are collected into `cluster.warnings` and reported by `kix check` and `kix build`.
+
+### Raising an error with `scope.fail`
+
+A package stops evaluation with `scope.fail` when something it was given cannot work. Do not use `throw` for an error a person must fix: Kix shows a `scope.fail` error from its fields, without a stack trace, and `kix check -o json` carries the fields.
+
+```nix
+_passwordCheck =
+  if config.password != null then
+    scope.fail {
+      id = "K9503";
+      option = "config.password";
+      message = "password was removed, because it put the password in plain text.";
+      fix = "Give the password as the dependency `password`.";
+    }
+  else
+    null;
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `message` | Yes | What is wrong. `scope.fail "text"` is short for `scope.fail { message = "text"; }`. |
+| `fix` | No | What to change. It may span several lines, such as a line to paste into the cluster definition. |
+| `id` | No | The change record id, such as `"K0001"`, when the error refuses something an upgrade removed. |
+| `option` | No | The path of the setting to change. |
+| `instance` | No | Set by `scope.fail` to `<namespace>/<instance>`. |
+| `package` | No | The package's name. |
+
+`scope.fail` also takes a list of errors, to report several problems at once. A cluster definition, which has no `scope`, uses `kix.fail`, which takes the same arguments and leaves out the instance.
+
+Kix shows the error as:
+
+```text
+[K9503] shop/db: password was removed, because it put the password in plain text.
+Option: config.password
+Fix: Give the password as the dependency `password`.
+```
 
 ### Structural build-time warnings
 

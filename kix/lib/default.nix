@@ -100,7 +100,7 @@ in
   inherit kixlib;
 
   # Expose image and pin helpers to cluster definitions as well as packages.
-  inherit (kixlib) pins image;
+  inherit (kixlib) pins image fail;
 
   inherit (meta) peekPackageMeta;
 

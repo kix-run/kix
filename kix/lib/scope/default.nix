@@ -14,6 +14,7 @@ let
   validatorsMod = import ./validators.nix { inherit lib; };
   buildersMod = import ./builders.nix { inherit lib k8s; };
   unsafe = import ../unsafe.nix { inherit lib; };
+  errors = import ../core/error.nix { inherit lib; };
 
   emptyEdgeAnalysis = {
     edgesFor = _: {
@@ -158,6 +159,10 @@ rec {
         namespace = namespaceResource;
 
         mkResource = scopeMkResource;
+
+        # Stop evaluation with an error for a person to fix, naming this
+        # instance (`core/error.nix`). Takes what `kix.fail` takes.
+        fail = errors.failFor "${homeNamespaceName}/${instanceName}";
 
         # Verify that the cluster serves `metrics.k8s.io` for `subject`. Packages
         # whose workloads read the metrics API without an HPA call this directly.

@@ -1,6 +1,7 @@
 { lib }:
 
 let
+  inherit (import ./error.nix { inherit lib; }) fail;
   kixAnnotations = import ./annotations.nix;
   kixKeys = kixAnnotations.keys;
 in
@@ -35,10 +36,10 @@ rec {
               unknown = builtins.filter (k: !(builtins.elem k validKixKeys)) (builtins.attrNames value._kix);
             in
             if unknown != [ ] then
-              throw (
-                "resource manifest contains an internal `_kix` attribute with unknown key(s): ${builtins.concatStringsSep ", " unknown} (expected only: ${builtins.concatStringsSep ", " validKixKeys})."
-                + "\nFix: remove `_kix` from your manifest data, or if you are constructing a reference helper fragment, use only the keys above."
-              )
+              fail {
+                message = "resource manifest contains an internal `_kix` attribute with unknown key(s): ${builtins.concatStringsSep ", " unknown} (expected only: ${builtins.concatStringsSep ", " validKixKeys}).";
+                fix = "remove `_kix` from your manifest data, or if you are constructing a reference helper fragment, use only the keys above.";
+              }
             else
               null
           else
@@ -285,12 +286,12 @@ rec {
           let
             topArgs = builtins.concatStringsSep ", " (lib.unique (map (p: builtins.head p) _shadowedPaths));
           in
-          throw (
-            "${kind} '${name}': extra sets ${
+          fail {
+            message = "${kind} '${name}': extra sets ${
               builtins.concatStringsSep ", " (map (p: "extra.${builtins.concatStringsSep "." p}") _shadowedPaths)
-            }, which conflicts with the top-level ${topArgs} argument on this builder call."
-            + "\nFix: move those fields into the top-level ${topArgs} argument (for example, `spec = { ... };` instead of `extra.spec = { ... };`), and use `extra` only for top-level manifest fields that have no dedicated builder argument."
-          )
+            }, which conflicts with the top-level ${topArgs} argument on this builder call.";
+            fix = "move those fields into the top-level ${topArgs} argument (for example, `spec = { ... };` instead of `extra.spec = { ... };`), and use `extra` only for top-level manifest fields that have no dedicated builder argument.";
+          }
         else
           null;
 

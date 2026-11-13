@@ -171,8 +171,8 @@ in
     (
       evalFails (withPackage packages.dns-exporter)
       && !(evalFails (withPackage packages.experimental.dns-exporter))
-      && (packages.dns-exporter.message or "") != ""
-      && lib.hasPrefix "[K0549] " packages.dns-exporter.message
+      && packages.dns-exporter.error.id == "K0549"
+      && lib.hasPrefix "`packages.dns-exporter` is experimental now" packages.dns-exporter.error.message
       && manifests shelf != [ ]
     )
     || throw "levels: the old name of an experimental package was accepted, or the registry read it";
@@ -186,7 +186,7 @@ in
         experimental = { };
         demoted = _: throw;
         demotedNames = [ "a" ];
-        demotedId = "[K0000]";
+        demotedId = "K0000";
       }
     )
     || throw "levels: a stable name was accepted as moved to experimental";
@@ -237,13 +237,13 @@ in
         prefix = "packages";
         stable = { };
         experimental.provider = provider;
-        demoted = name: message: {
+        demoted = name: error: {
           _type = "kix-moved";
-          inherit name message;
+          inherit name error;
           experimentalPackage = provider;
         };
         demotedNames = [ "provider" ];
-        demotedId = "[K0549]";
+        demotedId = "K0549";
       };
       withShelf =
         availablePackages:
