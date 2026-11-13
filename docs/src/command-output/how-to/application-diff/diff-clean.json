@@ -1,14 +1,14 @@
 {
   "id": "how-to/application-diff/diff-clean",
   "group": "how-to/application-diff",
-  "page": "/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/",
+  "page": "/docs/how-to/operate-a-cluster/preview-changes-with-kix-plan/",
   "cwd": "kix-examples/",
   "generator": "live",
   "outputExcerpt": false,
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix diff how-to-application",
+      "command": "kix plan how-to-application --read-only",
       "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 17 resources across 60 resource types\n4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
       "stderr": "",
       "stdoutDrift": "4 packages: 4 unchanged, 0 changed, 0 added, 0 removed\nFetched 17 resources across 60 resource types\nFetching managed resources (60 resource types)...\nNo differences found.\n⠁ Fetching live cluster state... Discovering API resources...\n",
