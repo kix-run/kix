@@ -368,7 +368,7 @@ in
               replicas = 1;
               selector.matchLabels = scope.selectorLabels;
               template = {
-                metadata.annotations."checksum/config" = self.configMap.out.identityHash;
+                metadata.annotations."checksum/config" = self.configMap.out.contentHash;
                 spec = {
                   serviceAccount = self.serviceAccount;
                   automountServiceAccountToken = false;

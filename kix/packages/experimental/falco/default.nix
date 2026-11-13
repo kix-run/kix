@@ -461,10 +461,10 @@ in
                 selector.matchLabels = scope.selectorLabels;
                 template = {
                   metadata.annotations = {
-                    "checksum/config" = self.configMap.out.identityHash;
+                    "checksum/config" = self.configMap.out.contentHash;
                   }
                   // lib.optionalAttrs hasRules {
-                    "checksum/rules" = self.rulesConfigMap.out.identityHash;
+                    "checksum/rules" = self.rulesConfigMap.out.contentHash;
                   };
                   spec = {
                     serviceAccount = self.serviceAccount;

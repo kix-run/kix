@@ -458,18 +458,18 @@ in
             replicas = 1;
             selector.matchLabels = scope.selectorLabels;
             strategy.type = "Recreate";
-            # Carrying `datasourcesConfigMap.out.identityHash` on the pod
+            # Carrying `datasourcesConfigMap.out.contentHash` on the pod
             # template propagates datasource Service facts for derived network
             # policy and restarts the pod when datasources, grafana.ini, or
             # credentials change.
             template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-              "checksum/datasources" = self.datasourcesConfigMap.out.identityHash;
-              "checksum/config" = self.configMap.out.identityHash;
-              "checksum/grafana-admin" = admin.out.identityHash or null;
-              "checksum/oidc-client" = if oidcOn then oidcCredentials.out.identityHash or null else null;
+              "checksum/datasources" = self.datasourcesConfigMap.out.contentHash;
+              "checksum/config" = self.configMap.out.contentHash;
+              "checksum/grafana-admin" = admin.out.contentHash or null;
+              "checksum/oidc-client" = if oidcOn then oidcCredentials.out.contentHash or null else null;
               "checksum/smtp" =
                 if relay != null && relay.credentials != null then
-                  relay.credentials.out.identityHash or null
+                  relay.credentials.out.contentHash or null
                 else
                   null;
             };

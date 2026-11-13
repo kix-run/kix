@@ -92,7 +92,7 @@
 #
 # Known limits: the server runs one pod and rolls out with Recreate, so
 # every rollout stops it briefly. A database or valkey password, an OIDC
-# client secret, or a mail login from a secret-ref has no identity hash, so
+# client secret, or a mail login from a secret-ref has no content hash, so
 # rotating it restarts the server only with reloader.
 
 {
@@ -728,18 +728,15 @@ in
               strategy.type = "Recreate";
               selector.matchLabels = scope.selectorLabels;
               # Immich reads its config file and credentials once at start.
-              # A secret-ref has no identity hash, so a password rotated
+              # A secret-ref has no content hash, so a password rotated
               # outside Kix needs reloader to restart the pod.
               template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                "checksum/config" = if self.configMap != null then self.configMap.out.identityHash else null;
-                "checksum/database" = dbCreds.identityHash or null;
+                "checksum/config" = if self.configMap != null then self.configMap.out.contentHash else null;
+                "checksum/database" = dbCreds.contentHash or null;
                 "checksum/valkey-password" =
-                  if redisServer.out ? credentials then
-                    redisServer.out.credentials.out.identityHash or null
-                  else
-                    null;
-                "checksum/oidc-client" = if oidcOn then oidcCredentials.out.identityHash or null else null;
-                "checksum/smtp" = if mailLogin then relay.credentials.out.identityHash or null else null;
+                  if redisServer.out ? credentials then redisServer.out.credentials.out.contentHash or null else null;
+                "checksum/oidc-client" = if oidcOn then oidcCredentials.out.contentHash or null else null;
+                "checksum/smtp" = if mailLogin then relay.credentials.out.contentHash or null else null;
               };
               template.spec = {
                 # Kubernetes default: Immich documents no shutdown drain.

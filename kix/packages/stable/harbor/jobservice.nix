@@ -221,8 +221,8 @@ in
         revisionHistoryLimit = 5;
         selector.matchLabels = jobserviceSelector;
         template.metadata.annotations = {
-          "checksum/config" = self.jobserviceConfigMap.out.identityHash;
-          "checksum/env" = self.jobserviceEnvConfigMap.out.identityHash;
+          "checksum/config" = self.jobserviceConfigMap.out.contentHash;
+          "checksum/env" = self.jobserviceEnvConfigMap.out.contentHash;
         }
         // checksumOf "harbor-secrets" secrets
         // checksumOf "ca-bundle" ca
@@ -341,7 +341,7 @@ in
           revisionHistoryLimit = 5;
           selector.matchLabels = componentSelector "exporter";
           template.metadata.annotations = {
-            "checksum/env" = self.exporterEnvConfigMap.out.identityHash;
+            "checksum/env" = self.exporterEnvConfigMap.out.contentHash;
           }
           // checksumOf "harbor-secrets" secrets
           // checksumOf "ca-bundle" ca

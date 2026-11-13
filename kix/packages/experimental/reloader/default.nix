@@ -332,7 +332,7 @@ in
             scope.fail {
               package = "reloader";
               message = "${prefix} got ${kind} '${r.out.name or "?"}', whose content is part of the build.";
-              fix = "Put \"checksum/<name>\" = <ref>.out.identityHash on the pod template instead, so the rollout appears in the deploy plan. reloader would restart the workload a second time.";
+              fix = "Put \"checksum/<name>\" = <ref>.out.contentHash on the pod template instead, so the rollout appears in the deploy plan. reloader would restart the workload a second time.";
             }
           else if !(kind == "PackageInstance" && r ? out.keyRef) then
             scope.fail {

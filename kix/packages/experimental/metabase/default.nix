@@ -261,8 +261,8 @@ in
               # content hash; an External Secret rolls the pods through
               # reloader's `withReloadOn`.
               template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                "checksum/database" = database.out.credentials.out.identityHash or null;
-                "checksum/encryption-key" = ek.out.identityHash or null;
+                "checksum/database" = database.out.credentials.out.contentHash or null;
+                "checksum/encryption-key" = ek.out.contentHash or null;
               };
               template.spec = {
                 automountServiceAccountToken = false;

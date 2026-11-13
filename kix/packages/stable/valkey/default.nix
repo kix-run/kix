@@ -499,12 +499,12 @@ in
               selector.matchLabels = scope.selectorLabels;
               template = {
                 metadata.annotations = {
-                  "checksum/configMap" = self.configMap.out.identityHash;
+                  "checksum/configMap" = self.configMap.out.contentHash;
                 }
-                # A secret-ref has no identityHash, so a rotation of that
+                # A secret-ref has no contentHash, so a rotation of that
                 # Secret does not roll the pods.
-                // lib.optionalAttrs (password.out ? identityHash) {
-                  "checksum/valkeyPassword" = password.out.identityHash;
+                // lib.optionalAttrs (password.out ? contentHash) {
+                  "checksum/valkeyPassword" = password.out.contentHash;
                 };
                 spec = {
                   automountServiceAccountToken = false;

@@ -440,7 +440,7 @@ in
           template = {
             metadata = {
               # node-agent reads its ConfigMap at start.
-              annotations."checksum/node-agent-config" = self.nodeAgentConfig.out.identityHash;
+              annotations."checksum/node-agent-config" = self.nodeAgentConfig.out.contentHash;
             };
             spec = {
               serviceAccount = self.serviceAccount;

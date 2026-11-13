@@ -276,7 +276,7 @@ in
             spec = {
               selector.matchLabels = scope.selectorLabels;
               template = {
-                metadata.annotations."checksum/config" = self.configMap.out.identityHash;
+                metadata.annotations."checksum/config" = self.configMap.out.contentHash;
                 spec = vectorAgent.podSpec {
                   inherit
                     scope

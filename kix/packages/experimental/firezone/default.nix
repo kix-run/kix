@@ -320,7 +320,7 @@ in
           };
 
         # The container reads every secret once, at start, so a changed
-        # secret must roll the pod. A Kix-built Secret has an identity hash
+        # secret must roll the pod. A Kix-built Secret has a content hash
         # for the pod template; a `secret-ref` Secret has none, and the
         # reloader restarts the pod instead.
         secretDeps = lib.filterAttrs (_: d: d != null) {
@@ -330,9 +330,9 @@ in
           saml-certificate = saml;
           database-credentials = dbCreds;
         };
-        kixBuilt = lib.filterAttrs (_: d: d.out ? identityHash) secretDeps;
-        untracked = builtins.attrValues (lib.filterAttrs (_: d: !(d.out ? identityHash)) secretDeps);
-        checksums = lib.mapAttrs' (n: d: lib.nameValuePair "checksum/${n}" d.out.identityHash) kixBuilt;
+        kixBuilt = lib.filterAttrs (_: d: d.out ? contentHash) secretDeps;
+        untracked = builtins.attrValues (lib.filterAttrs (_: d: !(d.out ? contentHash)) secretDeps);
+        checksums = lib.mapAttrs' (n: d: lib.nameValuePair "checksum/${n}" d.out.contentHash) kixBuilt;
         withReload =
           args:
           if reloader == null || untracked == [ ] then args else reloader.out.withReloadOn untracked args;

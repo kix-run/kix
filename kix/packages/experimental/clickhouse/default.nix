@@ -460,8 +460,8 @@ in
                 selector.matchLabels = scope.selectorLabels;
                 template = {
                   metadata.annotations = {
-                    "checksum/config" = self.serverConfigMap.out.identityHash;
-                    "checksum/users" = self.usersConfigMap.out.identityHash;
+                    "checksum/config" = self.serverConfigMap.out.contentHash;
+                    "checksum/users" = self.usersConfigMap.out.contentHash;
                   };
                   spec = {
                     serviceAccountName = self.serviceAccount.out.name;

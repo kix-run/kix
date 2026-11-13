@@ -311,7 +311,7 @@ in
               };
               selector.matchLabels = scope.selectorLabels;
               template = {
-                metadata.annotations."checksum/policy" = self.policyConfigMap.out.identityHash;
+                metadata.annotations."checksum/policy" = self.policyConfigMap.out.contentHash;
                 spec = {
                   serviceAccount = self.serviceAccount;
                   # SIGTERM cancels the run in progress and releases the

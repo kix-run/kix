@@ -109,10 +109,10 @@ in
       };
 
       # The container reads the token into its environment once, so a
-      # changed token must roll the pods. A Kix-built Secret has an identity
+      # changed token must roll the pods. A Kix-built Secret has a content
       # hash to put on the pod template; a `secret-ref` Secret has none, and
       # the reloader restarts the pods instead.
-      kixBuilt = token.out ? identityHash;
+      kixBuilt = token.out ? contentHash;
       withReload =
         args: if kixBuilt || reloader == null then args else reloader.out.withReloadOn [ token ] args;
     in
@@ -124,7 +124,7 @@ in
             replicas = config.replicas;
             selector.matchLabels = scope.selectorLabels;
             template.metadata.annotations = lib.optionalAttrs kixBuilt {
-              "checksum/tunnel-token" = token.out.identityHash;
+              "checksum/tunnel-token" = token.out.contentHash;
             };
             template.spec = {
               # Matches cloudflared's `--grace-period` default of 30s, the

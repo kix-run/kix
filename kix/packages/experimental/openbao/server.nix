@@ -382,11 +382,11 @@ in
         selector.matchLabels = labelsFor "server";
         template = {
           metadata.annotations = {
-            "checksum/config" = self.configMap.out.identityHash;
+            "checksum/config" = self.configMap.out.contentHash;
           }
-          # A secret-ref has no identityHash. The key is read at start.
-          // lib.optionalAttrs (unseal != null && unseal.out ? identityHash) {
-            "checksum/unsealKey" = unseal.out.identityHash;
+          # A secret-ref has no contentHash. The key is read at start.
+          // lib.optionalAttrs (unseal != null && unseal.out ? contentHash) {
+            "checksum/unsealKey" = unseal.out.contentHash;
           };
           spec = {
             serviceAccount = self.serviceAccount;

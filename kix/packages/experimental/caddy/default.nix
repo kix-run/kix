@@ -233,10 +233,10 @@ in
         keys = [ "Caddyfile" ];
       };
 
-      # A Kix-built Secret has an identity hash. A changed Caddyfile then
+      # A Kix-built Secret has a content hash. A changed Caddyfile then
       # rolls the pods, since Caddy reads it only at start.
-      configAnnotations = lib.optionalAttrs (caddyfileSecret.out ? identityHash) {
-        "checksum/caddyfile" = caddyfileSecret.out.identityHash;
+      configAnnotations = lib.optionalAttrs (caddyfileSecret.out ? contentHash) {
+        "checksum/caddyfile" = caddyfileSecret.out.contentHash;
       };
 
       dataVolume =
