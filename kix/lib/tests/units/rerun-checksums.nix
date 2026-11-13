@@ -135,7 +135,7 @@ in
   # A Job without the rerun annotation is replaced on any change, so the
   # check skips it.
   rerun-checksums-only-rerun-jobs =
-    warningsOf { rerun = false; } == [ ] || throw "a Job without kix.run/rerun should not warn";
+    warningsOf { rerun = false; } == [ ] || throw "a Job without the rerun annotation should not warn";
 
   # The warning reaches the file the CLI reads.
   rerun-checksums-in-warnings-file =
