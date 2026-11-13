@@ -7,8 +7,13 @@
 //! server committed. When they differ, `managedFields` attributes which manager
 //! modified each field and when.
 //!
-//! This check queries only the cluster and does not require a Nix build or
-//! store.
+//! The check also compares the cluster against the package index of each
+//! cluster's current Activation record, and reports each object the record's
+//! build has and the cluster lacks.
+//!
+//! This check queries only the cluster and does not require a Nix build. It
+//! reads the local store, when it has the build, only to name missing
+//! objects.
 
 use kube::{
     api::DynamicObject,
@@ -17,13 +22,16 @@ use kube::{
 };
 use serde_json::Value;
 
-use super::activation::OpenedRecords;
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use super::activation::{OpenedRecords, Record};
 use super::errors::FetchError;
 use super::fieldsv1::{self, KIX_FIELD_MANAGER};
 use super::inventory;
 use super::tenancy::Tenancy;
+use crate::eval::store_graph::{self, StoreEntry};
 use crate::manifest::keys;
-use crate::manifest::types::ResourceId;
+use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 /// Per-resource drift verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +54,11 @@ pub enum DriftVerdict {
     /// `managedFields` is missing or has no Kix entry, so the drift check
     /// cannot run for this object.
     NoFieldset,
+    /// The current Activation record's build has an object with this
+    /// identity hash, and the cluster has no object with that hash. The
+    /// report's `rid` is read from the local store, or is an `Unknown`
+    /// placeholder when this machine does not have the build.
+    Missing { identity_hash: String },
 }
 
 /// A non-Kix field manager owning parts of the object, flattened from its
@@ -126,6 +139,19 @@ pub async fn check_cluster(
         Some(cluster) => inventory::SweepScope::Cluster(cluster),
         None => inventory::SweepScope::All,
     };
+    // Read the records before the objects. A deploy applies its objects
+    // before its record becomes current, so every object a record read here
+    // lists is on the cluster when the sweep lists it, unless it is gone.
+    let mut current = match records.records() {
+        Some(records) => records
+            .all_current()
+            .await
+            .map_err(FetchError::RecordsError)?,
+        None => BTreeMap::new(),
+    };
+    if let Some(cluster) = cluster {
+        current.retain(|name, _| name == cluster);
+    }
     let sweep = inventory::sweep_managed(client, discovery, records, scope).await?;
     let mut reports: Vec<DriftReport> = sweep
         .managed
@@ -135,8 +161,83 @@ pub async fn check_cluster(
             ..check_object(obj)
         })
         .collect();
+    let live: Vec<&DynamicObject> = sweep
+        .managed
+        .iter()
+        .chain(&sweep.unattributed)
+        .chain(&sweep.unstamped)
+        .collect();
+    reports.extend(missing_objects(&current, &live, |hashes| {
+        store_graph::lookup_hashes(hashes.iter().copied())
+    }));
     reports.sort_by(|a, b| a.rid.cmp(&b.rid));
     Ok((reports, sweep.tenancy))
+}
+
+/// Report each object that a current record's package index lists and that
+/// is not among `live`, with the clusters whose records list it.
+///
+/// `lookup` names the missing hashes from the local store (see
+/// [`store_graph::lookup_hashes`]). When it names an object that is on the
+/// cluster under another identity hash, the object is not missing: an older
+/// version of it is live, which a deploy that failed partway can leave. A
+/// record with no package index is skipped.
+pub fn missing_objects(
+    current: &BTreeMap<String, Record>,
+    live: &[&DynamicObject],
+    lookup: impl FnOnce(&[&str]) -> HashMap<String, StoreEntry>,
+) -> Vec<DriftReport> {
+    let live_hashes: HashSet<&str> = live
+        .iter()
+        .filter_map(|o| {
+            o.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+        })
+        .collect();
+
+    let mut expected: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (cluster, record) in current {
+        let Some(index) = &record.package_index else {
+            continue;
+        };
+        for hash in index.hashes() {
+            if live_hashes.contains(hash) || record.identity_hash.as_deref() == Some(hash) {
+                continue;
+            }
+            expected.entry(hash).or_default().push(cluster.clone());
+        }
+    }
+    if expected.is_empty() {
+        return Vec::new();
+    }
+
+    let store = lookup(&expected.keys().copied().collect::<Vec<_>>());
+    let live_rids: HashSet<ResourceId> = live.iter().map(|o| resource_id(o)).collect();
+    expected
+        .into_iter()
+        .filter_map(|(hash, mut clusters)| {
+            let rid = match store.get(hash) {
+                Some(StoreEntry::Resource(rid)) if live_rids.contains(rid) => return None,
+                Some(StoreEntry::Resource(rid)) => rid.clone(),
+                _ => ResourceId {
+                    kind: "Unknown".to_string(),
+                    namespace: CLUSTER_SCOPED.to_string(),
+                    name: format!("(hash: {}...)", &hash[..12.min(hash.len())]),
+                },
+            };
+            clusters.sort();
+            clusters.dedup();
+            Some(DriftReport {
+                rid,
+                verdict: DriftVerdict::Missing {
+                    identity_hash: hash.to_string(),
+                },
+                clusters,
+            })
+        })
+        .collect()
 }
 
 /// Run the drift check on one live object. `clusters` is left empty and
@@ -506,6 +607,120 @@ mod tests {
             flatten_paths(&fields),
             vec!["spec.containers[name=web]".to_string()]
         );
+    }
+
+    mod missing {
+        use super::*;
+        use crate::eval::package_index::{FORMAT, IndexedPackage, RecordPackageIndex};
+
+        fn h(c: char) -> String {
+            c.to_string().repeat(32)
+        }
+
+        fn record(hash: char, resources: &[String]) -> Record {
+            Record {
+                identity_hash: Some(h(hash)),
+                package_index: Some(RecordPackageIndex {
+                    format: FORMAT,
+                    packages: BTreeMap::from([(
+                        "cnpg-system/cnpg-operator".to_string(),
+                        IndexedPackage {
+                            instance: h('p'),
+                            resources: resources.to_vec(),
+                        },
+                    )]),
+                    cluster_level: vec![h(hash)],
+                }),
+                ..Record::default()
+            }
+        }
+
+        fn object(kind: &str, ns: &str, name: &str, hash: &str) -> DynamicObject {
+            serde_json::from_value(json!({
+                "apiVersion": "v1",
+                "kind": kind,
+                "metadata": {
+                    "name": name,
+                    "namespace": ns,
+                    "annotations": { (keys::IDENTITY_HASH): hash },
+                },
+            }))
+            .unwrap()
+        }
+
+        fn svc() -> ResourceId {
+            ResourceId {
+                kind: "Service".to_string(),
+                namespace: "cnpg-system".to_string(),
+                name: "cnpg-webhook-service".to_string(),
+            }
+        }
+
+        /// The record lists a Service the cluster lacks. The report names it
+        /// from the store and counts as missing for the record's cluster.
+        #[test]
+        fn an_object_the_record_lists_and_the_cluster_lacks_is_missing() {
+            let current =
+                BTreeMap::from([("kindtest".to_string(), record('r', &[h('a'), h('s')]))]);
+            let pi = object("PackageInstance", "cnpg-system", "cnpg-operator", &h('p'));
+            let dep = object("Deployment", "cnpg-system", "cnpg", &h('a'));
+            let activation = object("Activation", "kix-system", "r", &h('r'));
+
+            let reports = missing_objects(&current, &[&pi, &dep, &activation], |hashes| {
+                assert_eq!(hashes, [h('s').as_str()]);
+                HashMap::from([(h('s'), StoreEntry::Resource(svc()))])
+            });
+
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].rid, svc());
+            assert_eq!(
+                reports[0].verdict,
+                DriftVerdict::Missing {
+                    identity_hash: h('s')
+                }
+            );
+            assert_eq!(reports[0].clusters, ["kindtest"]);
+        }
+
+        #[test]
+        fn a_missing_object_this_machine_cannot_name_shows_its_hash() {
+            let current = BTreeMap::from([("kindtest".to_string(), record('r', &[h('s')]))]);
+            let pi = object("PackageInstance", "cnpg-system", "cnpg-operator", &h('p'));
+
+            let reports = missing_objects(&current, &[&pi], |_| HashMap::new());
+
+            assert_eq!(reports.len(), 1);
+            assert_eq!(
+                reports[0].rid.to_string(),
+                "Unknown/(hash: ssssssssssss...)"
+            );
+        }
+
+        /// An older version of the object is live under another hash. That
+        /// is not a missing object.
+        #[test]
+        fn an_object_live_under_another_hash_is_not_missing() {
+            let current = BTreeMap::from([("kindtest".to_string(), record('r', &[h('s')]))]);
+            let pi = object("PackageInstance", "cnpg-system", "cnpg-operator", &h('p'));
+            let old = object("Service", "cnpg-system", "cnpg-webhook-service", &h('o'));
+
+            let reports = missing_objects(&current, &[&pi, &old], |_| {
+                HashMap::from([(h('s'), StoreEntry::Resource(svc()))])
+            });
+
+            assert!(reports.is_empty());
+        }
+
+        #[test]
+        fn a_record_without_a_package_index_reports_nothing() {
+            let mut record = record('r', &[h('s')]);
+            record.package_index = None;
+            let current = BTreeMap::from([("kindtest".to_string(), record)]);
+
+            let reports = missing_objects(&current, &[], |_| unreachable!());
+
+            assert!(reports.is_empty());
+        }
     }
 
     #[test]

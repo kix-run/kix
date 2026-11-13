@@ -79,11 +79,20 @@ let
         }:
         let
           found = contract.problems (dep.out or { });
+          name = dep.name or (dep.out.name or null);
+          kind = dep.root.kind or (dep.raw.kind or (dep.kind or null));
+          what =
+            if kind == "PackageInstance" && builtins.isString name then
+              "the instance ${name}"
+            else if builtins.isString kind then
+              "the ${kind}${lib.optionalString (builtins.isString name) " ${name}"}"
+            else
+              "something else";
         in
         if dep == null then
           null
         else if found != [ ] then
-          throw "${who}: deps.${arg} is not a secret: ${lib.concatStringsSep "; " found}. Wire a secret instance, such as packages.secret (plain text or a SOPS file) or packages.secret-ref (a Secret something else writes), with deps.${arg} = ref.<ns>.<instance>."
+          throw "${who}: deps.${arg} must be a secret, but it is ${what}. Wire a secret instance, such as packages.secret (plain text or a SOPS file) or packages.secret-ref (a Secret something else writes), with deps.${arg} = ref.<ns>.<instance>."
         else
           compose.checkSecretKeys {
             inherit

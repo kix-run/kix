@@ -465,7 +465,7 @@
           "06-service-dep"
         ];
         allowFailure = true;
-        stdoutGrep = "error: .*dependency 'backend' has no matching instance|Fix: declare an instance named|instances\\.[a-z0-9-]*\\.backend\\.package|If another instance|deps\\.backend = ref";
+        stdoutGrep = "dependency 'backend' has no matching instance|Fix: declare an instance named|instances\\.[a-z0-9-]*\\.backend\\.package|If another instance|deps\\.backend = ref";
       }
     ];
   }
@@ -582,7 +582,7 @@
           "how-to-auto-instantiation"
         ];
         allowFailure = true;
-        stdoutGrep = "error: .*dependency 'database'|^ *(database|postgres) \\(|Fix: declare the package|instances\\.<namespace>\\.database|remove them from availablePackages";
+        stdoutGrep = "dependency 'database'|^ *(database|postgres) \\(|Fix: declare the package|instances\\.<namespace>\\.database|remove them from availablePackages";
       }
     ];
   }

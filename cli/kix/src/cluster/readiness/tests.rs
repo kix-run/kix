@@ -1842,3 +1842,122 @@ fn declared_failure_trusts_a_transition_after_the_apply() {
             .confirmed
     );
 }
+
+fn pulling_pod(reason: &str, message: &str) -> Value {
+    json!({
+        "metadata": {"name": "cnpg-operator-7d9f"},
+        "status": {
+            "phase": "Pending",
+            "containerStatuses": [{
+                "name": "manager",
+                "state": {"waiting": {"reason": reason, "message": message}},
+                "restartCount": 0
+            }]
+        }
+    })
+}
+
+const TLS_TIMEOUT_PULL: &str = "failed to pull and unpack image \"ghcr.io/cloudnative-pg/cloudnative-pg:1.25.0\": failed to copy: httpReadSeeker: failed open: failed to authorize: failed to fetch anonymous token: Get \"https://ghcr.io/token?scope=repository%3Acloudnative-pg%2Fcloudnative-pg%3Apull&service=ghcr.io\": net/http: TLS handshake timeout";
+
+#[test]
+fn a_network_pull_error_keeps_the_deploy_waiting() {
+    for (reason, message) in [
+        ("ErrImagePull", TLS_TIMEOUT_PULL.to_string()),
+        (
+            "ImagePullBackOff",
+            format!("Back-off pulling image \"ghcr.io/x\": ErrImagePull: {TLS_TIMEOUT_PULL}"),
+        ),
+    ] {
+        let pod = pulling_pod(reason, &message);
+        assert_eq!(classify_pod_terminal(&pod), None, "{reason}");
+        let retrying = transient_pull_error(&pod).expect("transient");
+        assert!(
+            retrying.starts_with(&format!("pod cnpg-operator-7d9f/manager: {reason}: ")),
+            "{retrying}"
+        );
+        assert!(retrying.contains("TLS handshake timeout"));
+    }
+}
+
+#[test]
+fn pull_errors_are_sorted_by_whether_a_retry_can_fix_them() {
+    for transient in [
+        "dial tcp 1.2.3.4:443: i/o timeout",
+        "read tcp 10.0.0.1:5000->1.2.3.4:443: read: connection reset by peer",
+        "dial tcp 1.2.3.4:443: connect: connection refused",
+        "Get \"https://registry-1.docker.io/v2/\": EOF",
+        "unexpected EOF",
+        "dial tcp: lookup ghcr.io: Temporary failure in name resolution",
+        "unexpected status from HEAD request: 503 Service Unavailable",
+        "unexpected status code 502 Bad Gateway",
+        "toomanyrequests: You have reached your pull rate limit",
+        "429 Too Many Requests",
+        "context deadline exceeded",
+    ] {
+        assert_eq!(
+            classify_pull_error(transient),
+            PullError::Transient,
+            "{transient}"
+        );
+    }
+    for permanent in [
+        "failed to resolve reference \"ghcr.io/x:v9\": ghcr.io/x:v9: not found",
+        "manifest unknown: manifest unknown",
+        "pull access denied, repository does not exist or may require authorization",
+        "unexpected status: 401 Unauthorized",
+        "unexpected status: 403 Forbidden",
+        "couldn't parse image reference \"x::y\": invalid reference format",
+        "no matching manifest for linux/arm64 in the manifest list entries",
+        "Back-off pulling image \"registry/foo:v3\"",
+        "something Kix has not seen before",
+        // A URL parameter named timeout is not a timeout.
+        "Get \"https://r.example/v2/?timeout=10s\": manifest unknown",
+    ] {
+        assert_eq!(
+            classify_pull_error(permanent),
+            PullError::Permanent,
+            "{permanent}"
+        );
+    }
+}
+
+#[test]
+fn a_permanent_pull_error_still_fails_fast() {
+    let pod = pulling_pod(
+        "ErrImagePull",
+        "failed to resolve reference \"ghcr.io/x:v9\": ghcr.io/x:v9: not found",
+    );
+    let (reason, msg) = classify_pod_terminal(&pod).expect("terminal");
+    assert_eq!(reason, TerminalReason::ImagePull);
+    assert!(msg.starts_with("pod cnpg-operator-7d9f/manager: ErrImagePull: "));
+    assert_eq!(transient_pull_error(&pod), None);
+}
+
+#[test]
+fn a_retried_pull_moving_between_its_two_states_is_not_progress() {
+    let obj = make_obj(json!({
+        "metadata": {"name": "app", "generation": 1},
+        "spec": {"replicas": 1},
+        "status": {"observedGeneration": 1, "readyReplicas": 0, "updatedReplicas": 1}
+    }));
+    let err = progress_fingerprint(
+        &obj,
+        "Deployment",
+        &[pulling_pod("ErrImagePull", TLS_TIMEOUT_PULL)],
+    );
+    let backoff = progress_fingerprint(
+        &obj,
+        "Deployment",
+        &[pulling_pod("ImagePullBackOff", "Back-off pulling image")],
+    );
+    assert_eq!(err, backoff);
+}
+
+#[test]
+fn a_listed_pod_keeps_its_name_for_failure_messages() {
+    let mut pod = make_obj(json!({"status": {"phase": "Pending"}}));
+    pod.metadata.name = Some("web-5c7d".into());
+    let value = serde_json::to_value(pod).unwrap();
+    assert_eq!(value.pointer("/metadata/name"), Some(&json!("web-5c7d")));
+    assert_eq!(value.pointer("/status/phase"), Some(&json!("Pending")));
+}

@@ -1,4 +1,6 @@
-//! Check runtime content drift using the `kix.run/applied-hash` annotation.
+//! Check runtime content drift using the `kix.run/applied-hash` annotation,
+//! and report objects the current Activation record lists that the cluster
+//! lacks.
 //!
 //! Because Kix stamps the hash on each object at apply time, this command needs
 //! only a kubeconfig and does not evaluate the flake or run a Nix build.
@@ -41,10 +43,12 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
         Ok::<_, miette::Report>(reports)
     })?;
 
-    let drifted = reports
-        .iter()
-        .filter(|r| matches!(r.verdict, DriftVerdict::Drifted { .. }))
-        .count();
+    let drifted = count(&reports, |v| {
+        matches!(
+            v,
+            DriftVerdict::Drifted { .. } | DriftVerdict::Missing { .. }
+        )
+    });
 
     if json {
         print_json(&reports)?;
@@ -73,7 +77,8 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
 /// summary. Resources in sync get a line of their own only when `verbose`,
 /// so one drifted object does not hide among dozens.
 fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str>, verbose: bool) {
-    crate::say!("{} Kix-managed resources", reports.len());
+    let live = reports.len() - count(reports, |v| matches!(v, DriftVerdict::Missing { .. }));
+    crate::say!("{} Kix-managed resources", live);
     crate::say!();
 
     for report in reports {
@@ -113,6 +118,20 @@ fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str
                     output::yellow("not checked (no Kubernetes field ownership entry for Kix)"),
                 );
             }
+            DriftVerdict::Missing { .. } => {
+                println!(
+                    "  {} {:<50} {}",
+                    output::red("✗"),
+                    rid,
+                    output::red("MISSING")
+                );
+                println!(
+                    "      {}",
+                    output::dim(
+                        "the current deployment record lists this object, and the cluster does not have it"
+                    ),
+                );
+            }
             DriftVerdict::Drifted {
                 foreign,
                 unrecorded_scale,
@@ -144,11 +163,15 @@ fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str
     let drifted = count(reports, |v| matches!(v, DriftVerdict::Drifted { .. }));
     let unstamped = count(reports, |v| matches!(v, DriftVerdict::Unstamped));
     let no_fieldset = count(reports, |v| matches!(v, DriftVerdict::NoFieldset));
+    let missing = count(reports, |v| matches!(v, DriftVerdict::Missing { .. }));
 
     println!();
     print!("Drift: {} in sync", output::green(&in_sync.to_string()));
     if drifted > 0 {
         print!(", {} drifted", output::red(&drifted.to_string()));
+    }
+    if missing > 0 {
+        print!(", {} missing", output::red(&missing.to_string()));
     }
     if unstamped > 0 {
         print!(
@@ -166,13 +189,20 @@ fn print_text(reports: &[DriftReport], name_clusters: bool, cluster: Option<&str
         print!("{}", output::dim(" (-v lists the resources in sync)"));
     }
     println!();
-    if drifted > 0 {
+    if drifted > 0 || missing > 0 {
         let cluster = cluster.unwrap_or("<cluster>");
         println!();
         println!("Next:");
-        println!(
-            "  Run `kix plan {cluster}` to see how a deploy handles these objects, or `kix deploy {cluster} --reconcile` to restore Kix's values (add `--force-conflicts` when another tool owns the field)."
-        );
+        if drifted > 0 {
+            println!(
+                "  Run `kix plan {cluster}` to see how a deploy handles these objects, or `kix deploy {cluster} --reconcile` to restore Kix's values (add `--force-conflicts` when another tool owns the field)."
+            );
+        }
+        if missing > 0 {
+            println!(
+                "  Run `kix deploy {cluster} --reconcile` to create the missing objects again. A deploy without `--reconcile` skips objects whose build did not change."
+            );
+        }
     }
 }
 
@@ -241,12 +271,13 @@ fn print_json(reports: &[DriftReport]) -> Result<()> {
                 DriftVerdict::InSync => ("in-sync", vec![], None),
                 DriftVerdict::Unstamped => ("unstamped", vec![], None),
                 DriftVerdict::NoFieldset => ("no-fieldset", vec![], None),
+                DriftVerdict::Missing { .. } => ("missing", vec![], None),
                 DriftVerdict::Drifted {
                     foreign,
                     unrecorded_scale,
                 } => ("drifted", foreign.clone(), unrecorded_scale.as_ref()),
             };
-            serde_json::json!({
+            let mut item = serde_json::json!({
                 "kind": r.rid.kind,
                 "namespace": r.rid.namespace,
                 "name": r.rid.name,
@@ -264,7 +295,11 @@ fn print_json(reports: &[DriftReport]) -> Result<()> {
                     "deployed": s.deployed,
                     "live": s.live,
                 })),
-            })
+            });
+            if let DriftVerdict::Missing { identity_hash } = &r.verdict {
+                item["identityHash"] = serde_json::json!(identity_hash);
+            }
+            item
         })
         .collect();
 
@@ -273,6 +308,7 @@ fn print_json(reports: &[DriftReport]) -> Result<()> {
         "drifted": count(reports, |v| matches!(v, DriftVerdict::Drifted { .. })),
         "unstamped": count(reports, |v| matches!(v, DriftVerdict::Unstamped)),
         "noFieldset": count(reports, |v| matches!(v, DriftVerdict::NoFieldset)),
+        "missing": count(reports, |v| matches!(v, DriftVerdict::Missing { .. })),
     });
 
     let out = serde_json::json!({ "resources": items, "summary": summary });

@@ -386,6 +386,15 @@ kix lib update --verbose -v
 kix lib update --quiet -q
 kix lib update --no-color
 kix lib update --flake <value>
+kix secret
+kix secret --verbose -v
+kix secret --quiet -q
+kix secret --no-color
+kix secret hash
+kix secret hash <file> required
+kix secret hash --verbose -v
+kix secret hash --quiet -q
+kix secret hash --no-color
 kix upgrade
 kix upgrade --to <value>
 kix upgrade --preview

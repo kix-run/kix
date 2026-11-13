@@ -54,6 +54,14 @@ Kix reads the sealed manifest for a dependency's hash from the local Nix
 store to name a missing resource. On a machine that never built this
 activation, missing resources are shown by hash.
 
+`kix.run/depends-on` also lists files a manifest refers to that are not
+Kubernetes objects, such as the SOPS file of a Secret. Health counts a hash as
+missing only when the Active record's list of deployed objects includes it.
+A record written without that list, such as one from a deploy before the list
+existed, falls back to two checks: the hash is not the Secret's own
+`kix.run/sops-source`, and Kix's local store does not hold it as a file
+other than a manifest.
+
 A finished Job counts as present. Jobs that Kix builds do not delete
 themselves, so a Job that is gone is missing, whether it finished or not.
 

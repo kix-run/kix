@@ -24,6 +24,7 @@ pub mod pf;
 pub mod pin;
 pub mod plan;
 pub mod rollback;
+pub mod secret;
 pub mod self_cmd;
 pub mod snapshot;
 pub mod status;

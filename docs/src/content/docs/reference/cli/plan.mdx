@@ -232,6 +232,7 @@ comparing builds. Most of a cluster's first deploy is in this list.
 | `crd_changed_by_this_deploy` | Its kind's CRD is changed by this deploy, and the cluster refused the object when checking it against the CRD it has now. The deploy applies the CRD first, so the refusal may not happen. |
 | `namespace_created_by_this_deploy` | Its namespace is created by this deploy. |
 | `webhook_no_dry_run` | An admission webhook that would be called does not support dry run. |
+| `webhook_service_written_by_this_deploy` | An admission webhook that would be called could not reach its Service, because the Service does not exist or has no ready pods, and this deploy writes that Service. `detail` names the webhook and the Service. A webhook that answers and denies the write is still a refusal. |
 | `dependency_not_checked` | The engine did not try the object, for example because the dry run was cancelled. `detail` names the object it waited on when there is one. |
 
 ## Offline plans

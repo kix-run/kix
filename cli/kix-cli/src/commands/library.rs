@@ -14,21 +14,15 @@ pub fn run(command: &LibCommand, global: &GlobalArgs) -> Result<()> {
                 println!("Kix library is already {}.", updated.to);
                 return Ok(());
             }
-            let from = match &updated.from {
-                LibraryVersion::Known(v) => v.as_str(),
-                LibraryVersion::Older => "an older version",
-                LibraryVersion::Unknown => "an unknown version",
+            let moved = match &updated.from {
+                LibraryVersion::Known(v) => format!("{v} -> {}", updated.to),
+                LibraryVersion::Older => format!("an older version -> {}", updated.to),
+                LibraryVersion::Unknown => updated.to.clone(),
             };
             if args.dry_run {
-                println!(
-                    "Kix library: {from} -> {}. This was a dry run, so flake.lock is unchanged.",
-                    updated.to
-                );
+                println!("Kix library: {moved}. This was a dry run, so flake.lock is unchanged.");
             } else {
-                println!(
-                    "Kix library: {from} -> {}. Commit flake.lock to share this with your team.",
-                    updated.to
-                );
+                println!("Kix library: {moved}. Commit flake.lock to share this with your team.");
             }
             Ok(())
         }

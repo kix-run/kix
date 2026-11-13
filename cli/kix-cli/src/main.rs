@@ -49,7 +49,9 @@ fn default_filter(verbose: u8, quiet: bool) -> &'static str {
         return "error";
     }
     match verbose {
-        0 => "warn,kube_client::client=error,kube_client::client::tls=warn",
+        // kube_client logs every failed request as an error, including the
+        // ones Kix retries and then reports itself.
+        0 => "warn,kube_client::client=off,kube_client::client::tls=warn",
         1 => "kix=info",
         2 => "kix=debug",
         _ => "debug",
@@ -62,16 +64,25 @@ fn default_filter(verbose: u8, quiet: bool) -> &'static str {
 fn init_tracing(verbose: u8, quiet: bool) {
     use tracing_subscriber::EnvFilter;
 
-    let filter = std::env::var("KIX_LOG")
+    let custom = std::env::var("KIX_LOG").ok();
+    // Without -v or KIX_LOG, only warnings show, so drop the timestamp and
+    // module path that are there for debugging.
+    let plain = custom.is_none() && verbose == 0;
+    let filter = custom
         .map(EnvFilter::new)
-        .unwrap_or_else(|_| EnvFilter::new(default_filter(verbose, quiet)));
+        .unwrap_or_else(|| EnvFilter::new(default_filter(verbose, quiet)));
 
-    tracing_subscriber::fmt()
+    let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(trace_sink::make_writer)
-        .with_timer(tracing_subscriber::fmt::time::uptime())
-        .with_ansi(false)
-        .init();
+        .with_ansi(false);
+    if plain {
+        builder.without_time().with_target(false).init();
+    } else {
+        builder
+            .with_timer(tracing_subscriber::fmt::time::uptime())
+            .init();
+    }
 }
 
 /// Compute the [`output::Mode`] for `cli`.
@@ -196,6 +207,12 @@ fn main() -> miette::Result<()> {
         return commands::drift::run(args, &cli.global);
     }
 
+    // `kix secret` reads only the SOPS file it is given, inside or outside a
+    // project.
+    if let Command::Secret(command) = &cli.command {
+        return commands::secret::run(command);
+    }
+
     // Validate cluster names before initializing the Nix backend (which is slow).
     if let Some(name) = cli.command.cluster_name() {
         validate_cluster_name(name)?;
@@ -247,6 +264,7 @@ fn main() -> miette::Result<()> {
         | Command::Drift(_)
         | Command::Pin(_)
         | Command::Lib(_)
+        | Command::Secret(_)
         | Command::Upgrade(_)
         | Command::SelfCmd(_)
         | Command::Plugin(_) => unreachable!(),
@@ -289,7 +307,9 @@ mod tracing_filter_tests {
             tracing::warn!(target: "kube_client::client::tls", "Server cert bypassed");
             tracing::warn!(target: "kube_client::config", "impersonating user");
             tracing::warn!(target: "kix::cluster", "a kix warning");
+            tracing::error!(target: "kube_client::client::builder", "failed with status 500 Internal Server Error");
         });
+        assert!(!out.contains("status 500"), "{out}");
         assert!(!out.contains("404 page not found"), "{out}");
         assert!(out.contains("Server cert bypassed"), "{out}");
         assert!(out.contains("impersonating user"), "{out}");

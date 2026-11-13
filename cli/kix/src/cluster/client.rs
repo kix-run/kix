@@ -547,9 +547,9 @@ pub async fn make_client(
                 .await
                 .map_err(|e| FetchError::ClientError(Box::new(e)))?
         }
-        None => Config::infer()
-            .await
-            .map_err(|e| FetchError::ClientError(Box::new(e)))?,
+        None => Config::infer().await.map_err(|e| FetchError::NoCluster {
+            detail: e.to_string(),
+        })?,
     };
 
     let endpoint = config.cluster_url.to_string();
