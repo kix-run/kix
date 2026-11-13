@@ -16,20 +16,22 @@ use std::path::{Path, PathBuf};
 use clap::ValueEnum;
 
 use crate::cli::{self, GlobalArgs};
+use crate::exit::Exit;
 
 /// Execute the external plugin named by `args`, replacing the current process.
 /// Returns only if the plugin cannot be found or executed.
-pub fn run(args: &[OsString], global: &GlobalArgs) -> miette::Result<()> {
+pub fn run(args: &[OsString], global: &GlobalArgs) -> miette::Result<Exit> {
     let (name, rest) = args.split_first().expect("clap passes the name first");
     let path = std::env::var_os("PATH").unwrap_or_default();
     let Some(program) = name.to_str().and_then(|name| find(name, &path)) else {
         // Re-parse with external subcommands disabled so clap emits its
         // standard unknown-subcommand error and "did you mean" suggestion.
-        cli::command()
+        let error = cli::command()
             .allow_external_subcommands(false)
             .external_subcommand_value_parser(clap::builder::Resettable::Reset)
-            .get_matches();
-        unreachable!("clap accepted an unknown command");
+            .try_get_matches()
+            .expect_err("clap accepted an unknown command");
+        return Ok(crate::exit::clap_error(&error));
     };
     if let Some(value) = global
         .override_input

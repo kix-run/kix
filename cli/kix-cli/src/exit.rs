@@ -30,7 +30,8 @@ pub enum Exit {
     Failure,
     /// The command line could not be parsed. Code 2.
     ///
-    /// clap exits with this code itself.
+    /// clap uses this code for its own errors, and [`crate::removed`] for a
+    /// command or flag that a release removed.
     Usage,
     /// `kix plan` found changes the deploy would make. Code 2.
     PlanHasChanges,
@@ -93,6 +94,18 @@ impl fmt::Display for Stopped {
 impl std::error::Error for Stopped {}
 
 impl miette::Diagnostic for Stopped {}
+
+/// Print a clap parse error, or the help or version text clap carries as an
+/// error, and return the exit clap gives it.
+pub fn clap_error(e: &clap::Error) -> Exit {
+    // A closed pipe is not worth reporting.
+    let _ = e.print();
+    if e.use_stderr() {
+        Exit::Usage
+    } else {
+        Exit::Success
+    }
+}
 
 /// Return the exit an error report asks for when it is a [`Stopped`].
 pub fn stopped(report: &miette::Report) -> Option<Exit> {

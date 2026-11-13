@@ -83,7 +83,7 @@ pub fn run(cli: &Cli) -> Result<Exit> {
     let ctx = &mut ctx;
     let global = &cli.global;
     match &cli.command {
-        Command::Plugin(args) => crate::plugin::run(args, global).map(Exit::from),
+        Command::Plugin(args) => crate::plugin::run(args, global),
         Command::Completions(args) => commands::completions::run(args, global).map(Exit::from),
         Command::SelfCmd(command) => commands::self_cmd::run(command).map(Exit::from),
         Command::Doctor => commands::doctor::run(global).map(Exit::from),

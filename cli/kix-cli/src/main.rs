@@ -8,6 +8,7 @@ mod exit;
 mod output;
 mod plan;
 mod plugin;
+mod removed;
 #[cfg(test)]
 mod schemas;
 mod select;
@@ -157,30 +158,22 @@ fn run() -> miette::Result<Exit> {
         return Ok(Exit::Success);
     }
 
-    let parsed = cli::command()
-        .try_get_matches_from(&args)
-        .and_then(|m| Cli::from_arg_matches(&m));
-    let mut cli = match parsed {
+    let matches = match cli::command().try_get_matches_from(&args) {
+        Ok(matches) => matches,
+        Err(e) => return Ok(exit::clap_error(&e)),
+    };
+    if let Some(removed) = removed::find(&matches, removed::COMMANDS, removed::FLAGS) {
+        return Ok(removed.refuse());
+    }
+    let mut cli = match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
-        Err(e) => return Ok(clap_exit(&e)),
+        Err(e) => return Ok(exit::clap_error(&e)),
     };
     override_input_from_env(&mut cli.global)?;
     init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);
     output::init(output_mode(&cli));
     dispatch::run(&cli)
-}
-
-/// Print a clap parse error, or the help or version text clap carries as an
-/// error, and return the exit clap gives it.
-fn clap_exit(e: &clap::Error) -> Exit {
-    // A closed pipe is not worth reporting.
-    let _ = e.print();
-    if e.use_stderr() {
-        Exit::Usage
-    } else {
-        Exit::Success
-    }
 }
 
 #[cfg(test)]

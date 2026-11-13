@@ -128,7 +128,8 @@ pub fn command() -> clap::Command {
         .filter(|a| a.is_global_set())
         .cloned()
         .collect();
-    cmd.mut_subcommands(|sc| hide_unread_globals(sc, "", &globals))
+    let cmd = cmd.mut_subcommands(|sc| hide_unread_globals(sc, "", &globals));
+    crate::removed::register(cmd, crate::removed::COMMANDS, crate::removed::FLAGS)
 }
 
 /// Hide each scoped global flag that `cmd` does not read.
