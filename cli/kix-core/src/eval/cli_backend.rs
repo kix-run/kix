@@ -68,6 +68,21 @@ impl LocalBuilder {
 }
 
 impl Builder for LocalBuilder {
+    fn source_fingerprint(&mut self, flake_path: &Path) -> Option<String> {
+        // The fingerprint describes the inputs `flake.lock` names, and an
+        // override replaces one of them.
+        if !self.input_overrides.is_empty() || !flake_path.is_dir() {
+            return None;
+        }
+        match nix::flake_fingerprint(flake_path) {
+            Ok(fingerprint) => fingerprint,
+            Err(e) => {
+                tracing::debug!(flake = %flake_path.display(), error = %e, "could not read the flake's fingerprint; evaluating from source");
+                None
+            }
+        }
+    }
+
     fn eval_cluster(
         &mut self,
         flake_path: &Path,
@@ -439,5 +454,121 @@ mod tests {
             backend.list_cluster_packages(dir.path(), "c").unwrap_err(),
             KixEvalError::ClusterNotFound { .. }
         ));
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// Make a flake whose one cluster is named by the text of `name.txt`,
+    /// and return the folder to evaluate. With `git`, the flake is `proj/`
+    /// in a Git repository and reads the file from the input `path:../lib`.
+    /// Without, the flake is a plain folder that holds the file.
+    fn flake_reading_a_file(root: &Path, in_git: bool) -> std::path::PathBuf {
+        let system = nix::current_system();
+        let clusters = "kixClusters = { ${builtins.readFile ./name.txt} = { }; }";
+        if !in_git {
+            std::fs::write(
+                root.join("flake.nix"),
+                format!("{{ outputs = _: {{ legacyPackages.{system}.{clusters}; }}; }}"),
+            )
+            .unwrap();
+            std::fs::write(root.join("name.txt"), "one").unwrap();
+            return root.to_path_buf();
+        }
+        let (proj, lib) = (root.join("proj"), root.join("lib"));
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(
+            lib.join("flake.nix"),
+            format!("{{ outputs = _: {{ {clusters}; }}; }}"),
+        )
+        .unwrap();
+        std::fs::write(lib.join("name.txt"), "one").unwrap();
+        std::fs::write(
+            proj.join("flake.nix"),
+            format!(
+                "{{ inputs.lib.url = \"path:../lib\"; outputs = inputs: {{ legacyPackages.{system}.kixClusters = inputs.lib.kixClusters; }}; }}"
+            ),
+        )
+        .unwrap();
+        // The lock Nix writes for a relative path input.
+        std::fs::write(
+            proj.join("flake.lock"),
+            r#"{"nodes":{"lib":{"locked":{"path":"../lib","type":"path"},"original":{"path":"../lib","type":"path"},"parent":[]},"root":{"inputs":{"lib":"lib"}}},"root":"root","version":7}"#,
+        )
+        .unwrap();
+        git(root, &["init", "-q", "."]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "init"]);
+        proj
+    }
+
+    /// List the clusters as a new run of Kix would, with the cache in
+    /// `cache_dir`.
+    fn list_cached(flake: &Path, cache_dir: &Path) -> Vec<String> {
+        crate::eval::KixEvaluator::new(LocalBuilder::new(), flake, cache_dir)
+            .unwrap()
+            .list_clusters()
+            .unwrap()
+    }
+
+    /// A changed file that an input outside the flake folder reads with
+    /// `builtins.readFile` gives a new result, with no `--no-cache`.
+    #[test]
+    fn a_changed_file_in_a_relative_path_input_is_evaluated_again() {
+        let (root, cache_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let proj = flake_reading_a_file(root.path(), true);
+        let mut backend = LocalBuilder::new();
+        let before = backend.source_fingerprint(&proj).expect("a fingerprint");
+        assert_eq!(list_cached(&proj, cache_dir.path()), ["one"]);
+
+        std::fs::write(root.path().join("lib/name.txt"), "two").unwrap();
+        assert_ne!(backend.source_fingerprint(&proj), Some(before));
+        assert_eq!(list_cached(&proj, cache_dir.path()), ["two"]);
+        assert_eq!(list_cached(&proj, cache_dir.path()), ["two"]);
+    }
+
+    /// Nix leaves a file Git does not track out of the flake, so it cannot
+    /// change a result, and it does not change the fingerprint.
+    #[test]
+    fn an_untracked_file_keeps_the_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let proj = flake_reading_a_file(root.path(), true);
+        let mut backend = LocalBuilder::new();
+        let before = backend.source_fingerprint(&proj).expect("a fingerprint");
+        std::fs::write(root.path().join("lib/untracked.txt"), "x").unwrap();
+        std::fs::write(proj.join("untracked.nix"), "{ }").unwrap();
+        assert_eq!(backend.source_fingerprint(&proj), Some(before));
+    }
+
+    /// A flake in a plain folder reads every file in it, whatever its name.
+    #[test]
+    fn a_changed_file_in_a_plain_folder_is_evaluated_again() {
+        let (root, cache_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let flake = flake_reading_a_file(root.path(), false);
+        assert_eq!(list_cached(&flake, cache_dir.path()), ["one"]);
+        std::fs::write(flake.join("name.txt"), "two").unwrap();
+        assert_eq!(list_cached(&flake, cache_dir.path()), ["two"]);
+        std::fs::write(flake.join("run.sh"), "true").unwrap();
+        let mut backend = LocalBuilder::new();
+        let before = backend.source_fingerprint(&flake).expect("a fingerprint");
+        std::fs::write(flake.join("run.sh"), "false").unwrap();
+        assert_ne!(backend.source_fingerprint(&flake), Some(before));
+    }
+
+    #[test]
+    fn an_overridden_input_has_no_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let flake = flake_reading_a_file(root.path(), false);
+        let mut backend = LocalBuilder::with_overrides(vec![("lib".into(), "path:/x".into())]);
+        assert_eq!(backend.source_fingerprint(&flake), None);
     }
 }

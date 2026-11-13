@@ -70,7 +70,7 @@ pub struct GlobalArgs {
     #[arg(long, global = true, env = "KIX_FLAKE", default_value = ".")]
     pub flake: String,
 
-    /// Skip the SQLite eval cache (always re-evaluate from Nix)
+    /// Skip the eval cache and evaluate the project again
     #[arg(long, global = true, env = "KIX_NO_CACHE", value_parser = FalseyValueParser::new())]
     pub no_cache: bool,
 
