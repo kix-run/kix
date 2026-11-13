@@ -67,6 +67,34 @@ rec {
   extractStoreHash =
     path: builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString path));
 
+  # Return the SHA-256 of a manifest's own content, which `out.contentHash`
+  # carries. It leaves out every `kix.run/*` annotation and label except
+  # `kixAnnotations.contentKeys`, and drops the string context that records
+  # dependencies. A change below the resource in the graph, or a new Kix
+  # annotation, therefore leaves the hash unchanged.
+  contentHashOf =
+    manifest:
+    let
+      isKixKey =
+        k: lib.hasPrefix "${kixAnnotations.domain}/" k && !(builtins.elem k kixAnnotations.contentKeys);
+      ownEntries = attrs: lib.filterAttrs (k: _: !(isKixKey k)) attrs;
+      metadata = manifest.metadata or { };
+      ownMetadata =
+        removeAttrs metadata [
+          "annotations"
+          "labels"
+        ]
+        // lib.optionalAttrs (ownEntries (metadata.annotations or { }) != { }) {
+          annotations = ownEntries metadata.annotations;
+        }
+        // lib.optionalAttrs (ownEntries (metadata.labels or { }) != { }) {
+          labels = ownEntries metadata.labels;
+        };
+    in
+    builtins.hashString "sha256" (
+      builtins.unsafeDiscardStringContext (builtins.toJSON (manifest // { metadata = ownMetadata; }))
+    );
+
   # Return whether a manifest holds data, as `kix.run/holds-data` records it:
   # `declared` (the kind's `holdsData`) when it is set, true for a
   # PersistentVolumeClaim, a PersistentVolume, or a StatefulSet with volume
@@ -564,6 +592,10 @@ rec {
           else
             attachConnectCtx "${name}.${nsKey}.svc.${clusterDomain}";
         identityHash = attachCtx (extractStoreHash _identityPathPlain);
+        # Carries the same dependency as identityHash, so a pod template
+        # annotation built from it still orders the workload after this
+        # resource.
+        contentHash = attachCtx (contentHashOf rawManifest);
       }
       // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;

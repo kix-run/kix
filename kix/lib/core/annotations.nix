@@ -108,6 +108,11 @@ rec {
     optionalActivated = key "optional-activated";
   };
 
+  # Kix annotations that stand for data Kix writes into the object at deploy
+  # time. `out.contentHash` leaves out every other `kix.run/*` key, so these
+  # are the only ones that change it.
+  contentKeys = [ keys.sopsDigest ];
+
   # Values Kix gives its own keys, where more than one module compares them.
   values = {
     # Instructs the deploy engine to delete and recreate a Job instead of
