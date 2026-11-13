@@ -39,6 +39,7 @@ use serde_json::Value;
 
 use crate::cli::GcArgs;
 use crate::client;
+use crate::exit::{Exit, Stopped};
 use crate::output;
 use crate::plan::{
     print_never_pruned, print_package_plan, print_plan_summary, print_shared, progress,
@@ -65,7 +66,7 @@ use super::CommandContext;
 pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.operator {
         let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
-        return ctx.runtime.block_on(run_operator(args, &cluster, ctx));
+        return ctx.runtime()?.block_on(run_operator(args, &cluster, ctx));
     }
     if args.hard {
         run_hard(args, ctx)
@@ -84,7 +85,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let policy = retention_policy(args)?;
     let global = ctx.global.clone();
     let retirement = ctx
-        .runtime
+        .runtime()?
         .block_on(plan_record_retirement(&global, &cluster, &policy))?;
 
     // Validate the cached build path against the Active record so a cache entry
@@ -178,7 +179,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if garbage_manifests.is_empty() && kept_garbage.is_empty() && retirement.plan.retire.is_empty()
     {
-        ctx.runtime.block_on(clear_kept(
+        ctx.runtime()?.block_on(clear_kept(
             &cluster,
             &retirement,
             kept_baseline.unresolved.is_empty(),
@@ -209,10 +210,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let (ordered_rids, kept) = split_never_pruned(ordered_rids);
     let client = ctx
-        .runtime
+        .runtime()?
         .block_on(client::make_client(global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    ctx.runtime
+    ctx.runtime()?
         .block_on(binding::check(
             &client,
             &binding::Connection::of_context(global.context.as_deref()),
@@ -222,7 +223,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         ))
         .map_err(|e| miette!("{e}"))?;
     let (ordered_rids, shared) = ctx
-        .runtime
+        .runtime()?
         .block_on(kix::plan::keep_shared(
             &client,
             &new_graph.cluster_name,
@@ -274,14 +275,14 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let done = ctx.runtime.block_on(delete_resources(
+    let done = ctx.runtime()?.block_on(delete_resources(
         &client,
         &new_graph.cluster_name,
         &ordered_rids,
     ))?;
-    let (retired, records_failed) = ctx.runtime.block_on(delete_records(&retirement))?;
+    let (retired, records_failed) = ctx.runtime()?.block_on(delete_records(&retirement))?;
     if done.failed == 0 && done.changed == 0 {
-        ctx.runtime.block_on(clear_kept(
+        ctx.runtime()?.block_on(clear_kept(
             &cluster,
             &retirement,
             kept_baseline.unresolved.is_empty(),
@@ -358,7 +359,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let global = ctx.global.clone();
     let cluster_name = graph.cluster_name.clone();
-    ctx.runtime.block_on(run_hard_async(
+    ctx.runtime()?.block_on(run_hard_async(
         args,
         &global,
         &expected_hashes,
@@ -588,7 +589,7 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
     );
 
     if failed > 0 {
-        std::process::exit(1);
+        return Err(Stopped(Exit::Failure).into());
     }
 
     Ok(())

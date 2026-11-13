@@ -3,6 +3,8 @@
 
 use kix::cluster::stops::{self, SkippedStop};
 
+use crate::exit::{Exit, Stopped};
+
 /// The command that would write the deploy.
 #[derive(Clone, Copy)]
 pub(crate) enum Writer {
@@ -11,13 +13,15 @@ pub(crate) enum Writer {
 }
 
 /// Refuse the deploy or rollback of `cluster`, whose last deploy Kix `last`
-/// made, when it would skip a required stop. Print why and exit 1.
-pub(crate) fn check(cluster: &str, last: Option<&str>, writer: Writer) {
+/// made, when it would skip a required stop. Print why and stop with exit
+/// code 1.
+pub(crate) fn check(cluster: &str, last: Option<&str>, writer: Writer) -> miette::Result<()> {
     let running = kix::version::running();
     if let Err(refusal) = stops::check(last, running, &stops::required_stops()) {
         eprint!("{}", render(cluster, &refusal, writer));
-        std::process::exit(1);
+        return Err(Stopped(Exit::Failure).into());
     }
+    Ok(())
 }
 
 fn render(cluster: &str, refusal: &SkippedStop, writer: Writer) -> String {

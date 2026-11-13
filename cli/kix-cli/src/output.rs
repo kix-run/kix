@@ -6,6 +6,7 @@ use owo_colors::OwoColorize;
 use miette::IntoDiagnostic;
 
 use crate::cli::{GlobalArgs, OutputFormat};
+use crate::exit::{Exit, Stopped};
 
 pub use kix::text::printable;
 
@@ -259,9 +260,10 @@ impl Unconfirmed {
     }
 }
 
-/// Stop with exit code 1 because the command needs a confirmation and stdin
-/// is not a terminal. The message repeats the command line with `--yes`.
-pub fn refuse_unconfirmed(what: Unconfirmed, cluster: &str) -> ! {
+/// Print why the command stops because it needs a confirmation and stdin is
+/// not a terminal, and return the error that ends it with exit code 1. The
+/// message repeats the command line with `--yes`.
+pub fn refuse_unconfirmed(what: Unconfirmed, cluster: &str) -> miette::Report {
     let (headline, nothing, does) = what.wording(cluster);
     eprintln!(
         "{} {headline}: confirmation required in non-interactive mode.",
@@ -272,7 +274,7 @@ pub fn refuse_unconfirmed(what: Unconfirmed, cluster: &str) -> ! {
     eprintln!("  Next:");
     eprintln!("    Pass '--yes' ('-y') to {does} without prompting:");
     eprintln!("      {}", with_yes(std::env::args().skip(1)));
-    std::process::exit(1);
+    Stopped(Exit::Failure).into()
 }
 
 /// Return the command line `kix <args> --yes`, quoting arguments that a

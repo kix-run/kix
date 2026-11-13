@@ -16,6 +16,7 @@ use kix::eval::store_graph::{self, StoreEntry};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
 
 use crate::cli::HealthArgs;
+use crate::exit::Exit;
 use crate::output;
 
 use super::CommandContext;
@@ -99,12 +100,12 @@ impl PackageHealth {
     }
 }
 
-pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
 
     crate::say!("Connecting to cluster...");
 
-    let (activation, resources) = ctx.runtime.block_on(async {
+    let (activation, resources) = ctx.runtime()?.block_on(async {
         let client = client::make_client(ctx.global.context.as_deref())
             .await
             .map_err(|e| miette!("failed to connect: {e}"))?;
@@ -227,11 +228,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     display_results(&packages, ctx.global.verbose);
 
     let has_issues = packages.iter().any(|p| !p.is_healthy());
-    if has_issues {
-        std::process::exit(1);
-    }
-
-    Ok(())
+    Ok(Exit::failure_if(has_issues))
 }
 
 /// Return the `(resource, dependency)` pairs whose dependency hash names no

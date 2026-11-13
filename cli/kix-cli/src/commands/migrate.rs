@@ -22,7 +22,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     let crds = kix_crds_from_build(args, ctx)?;
 
     let client = ctx
-        .runtime
+        .runtime()?
         .block_on(client::make_client(ctx.global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let ops = KubeMigrationOps::new(client);
@@ -30,7 +30,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     // Run a dry-run pass first so we can display the migration plan before
     // prompting for confirmation.
     let plan = ctx
-        .runtime
+        .runtime()?
         .block_on(migrate::run(&ops, &args.cluster, &crds, true))
         .map_err(|e| miette!("{e}"))?;
 
@@ -53,7 +53,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let report = ctx
-        .runtime
+        .runtime()?
         .block_on(migrate::run(&ops, &args.cluster, &crds, false))
         .map_err(|e| miette!("{e}"))?;
 
@@ -187,13 +187,16 @@ fn print_report(cluster: &str, report: &migrate::Report) {
 
 /// Prompt the user for confirmation unless `--yes` was passed.
 ///
-/// Exits with code 1 when stdin is not interactive and `--yes` is absent.
+/// Stops with exit code 1 when stdin is not interactive and `--yes` is absent.
 fn confirm(args: &MigrateArgs, from: &str) -> Result<bool> {
     if args.yes {
         return Ok(true);
     }
     if !output::is_interactive() {
-        output::refuse_unconfirmed(output::Unconfirmed::MigrateDomain, &args.cluster);
+        return Err(output::refuse_unconfirmed(
+            output::Unconfirmed::MigrateDomain,
+            &args.cluster,
+        ));
     }
     print!(
         "\nCopy the deployment records and delete the old {} resource types? [y/N] ",

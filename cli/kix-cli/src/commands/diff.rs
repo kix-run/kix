@@ -29,6 +29,7 @@ use kix::plan::{ManifestIndex, PackageDiff};
 use kube::api::DynamicObject;
 
 use super::CommandContext;
+use crate::exit::Exit;
 
 struct DiffResult {
     packages: PackageDiff,
@@ -61,7 +62,7 @@ enum OldSide {
 /// is loaded from `--from` or `--from-bundle`, empty when `--bundle` is passed
 /// alone, or synthesized from a manifest directory or the live cluster's
 /// Kix-owned view.
-pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let new_graph = match &args.bundle {
         Some(path) => kix_bundle::read_build(path, &[], &args.cluster)
             .map_err(|e| miette!("{e}"))?
@@ -114,7 +115,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         let spinner = output::spinner("Fetching live cluster state...");
         let global = ctx.global.clone();
         let live = ctx
-            .runtime
+            .runtime()?
             .block_on(fetch_live_manifests(&global, &new_graph))?;
         clear_spinner(&spinner);
         // The current record's package index places each live object where
@@ -173,10 +174,9 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     if result.has_diff() {
-        std::process::exit(2);
+        return Ok(Exit::DiffHasDifferences);
     }
-
-    Ok(())
+    Ok(Exit::Success)
 }
 
 fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {

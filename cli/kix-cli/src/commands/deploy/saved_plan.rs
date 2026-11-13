@@ -3,16 +3,13 @@
 use miette::{IntoDiagnostic, Result, miette};
 
 use crate::cli::PlanArgs;
+use crate::exit::Exit;
 use crate::output;
 use crate::plan;
 use kix::plan::document::PlanFlags;
 
 use super::super::CommandContext;
 use super::super::plan::{document, dry_run, prepare};
-
-/// Exit status of `kix deploy --plan` when the reviewed plan no longer
-/// matches.
-pub(super) const EXIT_STALE: i32 = 4;
 
 /// Saved plan loaded for `kix deploy --plan`, paired with its resolved planning
 /// flags.
@@ -73,15 +70,15 @@ pub(super) fn load_saved_plan(
 }
 
 /// Recompute the plan for `kix deploy --plan <file> --dry-run`, compare it
-/// against `saved`, and exit 0 on a match or [`EXIT_STALE`] on a mismatch.
+/// against `saved`, and exit 0 on a match or [`Exit::StalePlan`] on a mismatch.
 pub(super) fn check_saved_plan(
     saved: &SavedPlan,
     args: &PlanArgs,
     ctx: &mut CommandContext,
-) -> Result<()> {
+) -> Result<Exit> {
     let format = output::format();
     let Some(mut p) = prepare(args, saved.flags, ctx)? else {
-        return Ok(());
+        return Ok(Exit::Success);
     };
     let report = match p.client.clone() {
         Some(client) => Some(dry_run(&mut p, false, client, ctx)?),
@@ -109,9 +106,9 @@ pub(super) fn check_saved_plan(
         ),
     }
     if !comparison.matches {
-        std::process::exit(EXIT_STALE);
+        return Ok(Exit::StalePlan);
     }
-    // Exit with `EXIT_WOULD_STOP` when a matching plan still has rejected
+    // Exit with `Exit::PlanWouldStop` when a matching plan still has rejected
     // writes or unaccepted migrations, matching `kix plan`.
     let migrations_refused = !doc.migrations.items().is_empty() && !saved.flags.accept_migrations;
     if doc.stops() || migrations_refused {
@@ -123,7 +120,7 @@ pub(super) fn check_saved_plan(
                 )
             );
         }
-        std::process::exit(super::super::plan::EXIT_WOULD_STOP);
+        return Ok(Exit::PlanWouldStop);
     }
-    Ok(())
+    Ok(Exit::Success)
 }

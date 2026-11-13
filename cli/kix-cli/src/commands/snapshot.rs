@@ -65,7 +65,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let global = ctx.global.clone();
 
-    ctx.runtime.block_on(async {
+    ctx.runtime()?.block_on(async {
         let context = global.context.as_deref();
         let client = client::make_client(context)
             .await
