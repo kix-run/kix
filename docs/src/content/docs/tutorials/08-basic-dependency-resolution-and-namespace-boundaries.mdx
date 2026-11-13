@@ -101,9 +101,9 @@ Deploy the cluster to your local kind environment:
 
 <Command commands={["kix deploy 08-namespace-deps"]} cwd="kix-examples/" />
 
-Port-forward to `gateway` in the `app` namespace. Because `gateway` is the only instance with that name in the cluster, `kix pf` finds it directly:
+Port-forward to `gateway` in the `app` namespace. Because `gateway` is the only instance with that name in the cluster, `kix port-forward` finds it directly:
 
-<Command commands={["kix pf 08-namespace-deps gateway 8080:80"]} cwd="kix-examples/" />
+<Command commands={["kix port-forward 08-namespace-deps gateway 8080:80"]} cwd="kix-examples/" />
 
 In another terminal, curl the gateway:
 

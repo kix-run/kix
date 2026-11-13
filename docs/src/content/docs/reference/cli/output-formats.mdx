@@ -26,12 +26,12 @@ The first format listed is the default.
 | `build` | `yaml` (one document per manifest), `json` (one array) |
 | `check` | `text`, `json`, `yaml`, `sarif` (SARIF 2.1.0, for code scanning) |
 | `graph` | `tree`, `dot` (Graphviz), `json`, `yaml` |
-| `diff` | `text`, `json`, `yaml` (the `Plan` document), `markdown` (for pull request comments) |
-| `plan`, `deploy --dry-run` | `text`, `markdown`. A plan kept as data is a [plan file](/docs/reference/cli/plan/#plan-file) (`--save`). |
+| `diff`, `plan --read-only` | `text`, `json`, `yaml` (the `Plan` document), `markdown` (for pull request comments) |
+| `plan`, `deploy --dry-run` | `text`, `markdown`. A plan kept as data is a [plan file](/docs/reference/cli/plan/#plan-file) (`--out`). |
 | `deploy --plan FILE --dry-run` | `text`, `json`, `yaml` (the comparison with the saved plan) |
-| `list clusters`, `list packages` | `text`, `json`, `yaml` |
-| `inspect`, `images`, `status` | `text`, `json`, `yaml` |
-| `rollback --list` | `text`, `json`, `yaml` |
+| `list clusters`, `list packages`, `list resources`, `list images` | `text`, `json`, `yaml` |
+| `status` | `text`, `json`, `yaml` |
+| `history` | `text`, `json`, `yaml` |
 | `pin set`, `pin rm`, `pin check`, `pin list` | `text`, `json`, `yaml` |
 | `compliance sbom`, `compliance attest` | `json`, `yaml` |
 | Every other command | `text` |
@@ -39,15 +39,15 @@ The first format listed is the default.
 A plugin (`kix NAME`) gets the format in `KIX_OUTPUT` and decides for itself.
 
 `deploy` without `--dry-run` prints its progress as text. Its
-`--log-format pretty|line|json` flag picks how; see
-[`kix deploy`](/docs/reference/cli/deploy-apply/).
+`--log-format pretty|line|json|tui` flag picks how; see
+[`kix deploy`](/docs/reference/cli/deploy/).
 
 ## JSON Schemas
 
 The JSON and YAML output of most commands has a JSON Schema in
 `cli/kix-cli/schema/` in the Kix repository, one file per command, such as
-`check.schema.json` and `list-packages.schema.json`. `kix diff` prints the
-document `plan.schema.json` describes. A new release may add fields, so a
+`check.schema.json` and `list-packages.schema.json`. `kix diff` and
+`kix plan --read-only` print the document `plan.schema.json` describes. A new release may add fields, so a
 program that reads the output must skip fields it does not know.
 `compliance sbom` prints CycloneDX and `compliance attest` prints an in-toto
 statement, which their own specifications describe.
@@ -62,12 +62,13 @@ therefore preserve those sequences.
 
 :::note[Reference]
 See [`kix plan`](/docs/reference/cli/plan/#the-plan-document) for the `Plan`
-document that `kix diff` prints as JSON and YAML and a plan file holds, and
+document that `kix diff` and `kix plan --read-only` print as JSON and YAML
+and a plan file holds, and
 [`kix diff`](/docs/reference/cli/diff/#output-formats) for the values a
 read-only comparison fills in.
 :::
 
 :::tip[Use it in a task]
-See [Generate PR-review markdown from `kix diff`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff/)
+See [Generate PR-review Markdown from `kix plan`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-plan/)
 for the Markdown format in CI.
 :::

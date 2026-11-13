@@ -6,35 +6,29 @@ description: "Save the Kix-owned view of a live cluster as a directory of YAML m
 import Command from '/src/components/Command.astro';
 
 `kix snapshot` saves what Kix currently manages in a cluster to a directory.
-The directory is the old side of a later `kix diff --from`, so a build can be
+The directory is the baseline of a later `kix diff --from`, so a build can be
 compared with the cluster without cluster access.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/snapshot.rs` when in doubt.
 
-## Subcommands
-
-| Subcommand | Purpose |
-| --- | --- |
-| `save <CLUSTER> <DIR>` | Fetch the named Kix cluster's resources from the selected Kubernetes context and write them to `<DIR>` |
-
-## `kix snapshot save <CLUSTER> <DIR>`
+## Synopsis
 
 ```text
-kix snapshot save <CLUSTER> <DIR> [--context <CONTEXT>] [--quiet]
+kix snapshot <CLUSTER> --out <DIR> [--context <CONTEXT>] [--quiet]
 ```
 
 | Argument or flag | Meaning |
 | --- | --- |
 | `<CLUSTER>` | Kix cluster whose resources to save. Kix finds them through the cluster's Activation records, so the name is the one those records carry in their `kix.run/cluster` label. The command fails when the cluster has no records while other Kix clusters do. |
-| `<DIR>` | Directory to write. Kix stages the complete snapshot beside this path before replacing an existing directory. Paths containing `..` are rejected. |
+| `--out <DIR>` | Directory to write. Required. Kix stages the complete snapshot beside this path before replacing an existing directory. Paths containing `..` are rejected. |
 | `--context <CONTEXT>` | Kubeconfig context to read. Defaults to the current context. |
 | `-q`, `--quiet` | Suppress the progress lines on stderr. |
 
 The command reads the cluster only. It does not evaluate a flake, so `--flake`
 and `--no-cache` have no effect.
 
-### What is saved
+## What is saved
 
 The save lists every resource carrying the Kix managed-by label, keeps the
 ones Kix applied for the named cluster, and writes each one as the fields Kix
@@ -67,7 +61,7 @@ redacts every `data` and `stringData` value on `Secret` manifests to
 `"(live value differs from the build, not shown)"`, while `ConfigMap` data and
 literal values in other resources are written as applied.
 
-### Directory layout
+## Directory layout
 
 ```text
 <DIR>/
@@ -79,14 +73,14 @@ literal values in other resources are written as applied.
 Kinds are lower-cased in file names, for example
 `how-to-app/production-deployment.yaml`.
 
-### Exit status
+## Exit status
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Snapshot written |
 | `1` | The cluster could not be reached, API discovery failed, a listing failed, or the named cluster has no Activation records while other Kix clusters do |
 
-### Using a snapshot
+## Using a snapshot
 
 Pass the directory to `kix diff`:
 
@@ -96,7 +90,7 @@ That comparison runs without Kubernetes access. Save a fresh snapshot after
 each deploy; a snapshot describes the cluster at the moment it was taken.
 
 :::note[Reference]
-See [`kix diff`](/docs/reference/cli/diff/) for the other old-side sources
+See [`kix diff`](/docs/reference/cli/diff/) for the other baselines
 and the output formats.
 :::
 

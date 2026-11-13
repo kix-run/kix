@@ -1,6 +1,6 @@
 ---
 title: "`self`"
-description: "Reference for kix self install, list, prune, and update, which manage the versions of Kix installed in ~/.local/share/kix."
+description: "Reference for kix self install, list, prune, and upgrade, which manage the versions of Kix installed in ~/.local/share/kix."
 ---
 
 import Command from "../../../../components/Command.astro";
@@ -29,7 +29,7 @@ source, update this page in the same change.
 kix self install <VERSION>
 kix self list
 kix self prune [--keep <N>] [--dry-run]
-kix self update
+kix self upgrade
 ```
 
 ## `kix self install`
@@ -85,7 +85,7 @@ runs, and prints each version it removes.
 A project whose `kix` setting names a removed version gets it again the next
 time it runs, unless `KIX_AUTO_INSTALL=0` is set.
 
-## `kix self update`
+## `kix self upgrade`
 
 When the install script installed the running Kix, installs the newest
 release for this machine and moves the `kix` link the script made to it
@@ -97,7 +97,7 @@ Kix 0.8.3 -> 0.8.4
 
 When the running Kix is already the newest release, it prints
 `Kix <version> is the newest release` and changes nothing. A release never
-updates to a prerelease. A prerelease updates to a newer prerelease of the
+upgrades to a prerelease. A prerelease upgrades to a newer prerelease of the
 same release, such as 0.9.0-rc.1 to 0.9.0-rc.2, or to the newest release.
 
 When the install script did not install the running Kix, it changes nothing,
@@ -121,4 +121,4 @@ Kix knows the install script installed it, and which link it made, from
 ## Exit status
 
 - `0` when the command succeeds.
-- `1` when a release cannot be found, downloaded, or verified, when a version cannot be removed, or when `kix self update` runs in a Kix the install script did not install.
+- `1` when a release cannot be found, downloaded, or verified, when a version cannot be removed, or when `kix self upgrade` runs in a Kix the install script did not install.

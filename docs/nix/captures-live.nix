@@ -112,7 +112,7 @@ let
     "kubectl"
   ];
 
-  # `kix diff`, `status`, `snapshot save`, and `gc` read only the Kix
+  # `kix plan --read-only`, `status`, `snapshot`, and `gc` read only the Kix
   # cluster named on the command line, and print a line counting the
   # objects of each other Kix cluster they skipped. The tutorial groups
   # deploy three other clusters into the shared kind cluster, so a group

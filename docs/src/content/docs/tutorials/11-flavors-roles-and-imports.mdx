@@ -12,7 +12,7 @@ import importExistingService from '/src/snippets/how-to/adoption/cluster/importE
 import consumeImportedService from '/src/snippets/how-to/adoption/client-package/consumeImportedService.json';
 import importedPostgresDatabase from '/src/snippets/clusters/test-doc-how-tos/importedPostgresDatabase.json';
 
-Back in tutorial 02, when you ran `kix list packages --cluster 02-hello-world`, the output included two rows you did not write in `cluster.nix`: `platform-dns` and `platform-storage`, both marked `import [kube-system]`.
+Back in tutorial 02, when you ran `kix list packages 02-hello-world`, the output included two rows you did not write in `cluster.nix`: `platform-dns` and `platform-storage`, both marked `import [kube-system]`.
 
 This tutorial explains where those `import` rows come from and how Kix models pre-existing cluster infrastructure. You will learn how **flavors** (`kix.flavors.kind`) declare what your Kubernetes distribution already provides, how **roles** (`dns`, `storageClasses`) wire those platform capabilities to workloads automatically, and how **`kix.mkImport`** lets your own packages depend on existing services through the standard `.out` contract.
 

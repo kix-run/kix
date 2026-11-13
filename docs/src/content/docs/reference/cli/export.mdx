@@ -1,15 +1,15 @@
 ---
 title: "`export`"
-description: "Build a cluster and write every manifest as plain Kubernetes YAML, one file per resource, either without Kix annotations or with them kept for audit."
+description: "Build a cluster and write every manifest as plain Kubernetes YAML, one file per resource, without Kix annotations or with them kept for audit."
 ---
 
 import Command from '/src/components/Command.astro';
 
 `kix export` builds the cluster's activation and writes each resource to its
-own YAML file. It does not contact a cluster. The default `exit` mode produces
-YAML with no Kix annotations or Kix-internal resources, which `kubectl`, Flux,
-or Argo CD can apply. The `audit` mode keeps everything as evidence of what
-Kix would deploy.
+own YAML file. It does not contact a cluster. By default it writes plain
+Kubernetes YAML with no Kix annotations or Kix-internal resources, which
+`kubectl`, Flux, or Argo CD can apply. With `--with-kix-metadata` it keeps
+everything as evidence of what Kix would deploy.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/export.rs` when in doubt.
@@ -17,7 +17,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix export <CLUSTER> [--out <DIR>] [--for exit|audit] [--force]
+kix export <CLUSTER> [--out <DIR>] [--with-kix-metadata] [--force]
            [--flake <FLAKE>]
 ```
 
@@ -25,7 +25,7 @@ kix export <CLUSTER> [--out <DIR>] [--for exit|audit] [--force]
 | --- | --- | --- |
 | `<CLUSTER>` | | Cluster name to build. |
 | `--out <DIR>` | `./kix-export` | Directory to write. |
-| `--for <MODE>` | `exit` | `exit` or `audit`. See [Modes](#modes). |
+| `--with-kix-metadata` | Off | Keep the `kix.run/*` annotations and Kix's own records. See [What is kept](#what-is-kept). |
 | `--force` | Off | Replace an existing output directory. See [Overwriting](#overwriting). |
 | `--flake <FLAKE>` | `.` | Flake to build. |
 
@@ -33,22 +33,23 @@ kix export <CLUSTER> [--out <DIR>] [--for exit|audit] [--force]
 them. See [Global flags](/docs/reference/cli/global-flags/) for
 `--override-input`.
 
-## Modes
+## What is kept
 
-| Mode | `kix.run/*` annotations | Activation and PackageInstance resources |
+| | `kix.run/*` annotations | Activation and PackageInstance resources |
 | --- | --- | --- |
-| `exit` | Removed | Skipped |
-| `audit` | Kept, including the identity hash and package stamps a deploy writes | Written |
+| Default | Removed | Skipped |
+| `--with-kix-metadata` | Kept, including the identity hash and package stamps a deploy writes | Written |
 
-Both modes drop null fields and write keys in sorted order. Labels are
-written unchanged in both modes.
+Every export drops null fields and writes keys in sorted order. Labels are
+written unchanged.
 
 ## Layout
 
 Each resource is written to `<DIR>/<namespace>/<Kind>-<name>.yaml`.
-Cluster-scoped resources go under `<DIR>/_cluster/`. An `audit` export is a
-valid old side for [`kix diff --from`](/docs/reference/cli/diff/#old-side);
-an `exit` export is not, because the diff needs the Kix annotations.
+Cluster-scoped resources go under `<DIR>/_cluster/`. An export written with
+`--with-kix-metadata` is a valid baseline for
+[`kix diff --from`](/docs/reference/cli/diff/#baseline); a default export is
+not, because the diff needs the Kix annotations.
 
 ## Overwriting
 
@@ -62,7 +63,7 @@ subdirectories and `.yaml` files, or a symlink, and names the first such entry.
 <Command commands={[
   "kix export demo --out handoff/",
   "kubectl diff --server-side -R -f handoff/",
-  "kix export demo --for audit --out evidence/ --force",
+  "kix export demo --with-kix-metadata --out evidence/ --force",
 ]} />
 
 ## Exit status

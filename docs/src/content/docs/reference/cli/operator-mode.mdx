@@ -32,9 +32,9 @@ flag. It reads the cluster's current Activation record the same way whoever
 applied it, and does not need the operator to be running.
 
 Flags that control the local engine have no effect in operator mode:
-`--timeout`, `--on-error`, `--prune`, `--prune-mode`, `--reconcile`,
-`--force-conflicts`, `--tui`, and `--log-format`. `--yes`,
-`--current-activation`, and `--accept-migrations` still apply to the local
+`--timeout`, `--on-error`, `--prune`, `--skip-orphan-check`, `--reconcile`,
+`--force-conflicts`, `--group-by`, and `--log-format`. `--yes`,
+`--offline`, and `--accept-migrations` still apply to the local
 plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
 does not contact the operator.
 

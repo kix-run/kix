@@ -16,14 +16,19 @@ Run `gc` with the cluster name:
 
 <Command commands={["kix gc how-to-application"]} cwd="kix-examples/" />
 
+To see the plan without being asked to confirm, and without deleting
+anything, add `--dry-run`:
+
+<Command commands={["kix gc how-to-application --dry-run"]} cwd="kix-examples/" />
+
 The normal mode compares the previously deployed Activation with a fresh build
 of the cluster. It prints the resources found by that comparison and the
 Activation records it plans to delete, then asks for confirmation.
 
-Soft gc can also find stale cluster-level resources that belong to no package.
-It currently deletes those after confirmation without listing them in the
-plan. Use hard mode when the confirmation plan must be a complete inventory of
-live garbage.
+The normal mode can also find stale cluster-level resources that belong to no
+package. It currently deletes those after confirmation without listing them in
+the plan. Use `--full-scan` when the confirmation plan must be a complete
+inventory of live garbage.
 
 It also deletes orphans that an earlier `kix deploy` without `--prune` listed
 and kept. That deploy records the builds they came from on its Activation; the
@@ -34,7 +39,7 @@ Check the package, kind, namespace, and name of each resource before approving
 the plan. Kix deletes dependants before their dependencies.
 
 A Namespace or CustomResourceDefinition that has left the build is listed
-under **Kept** and is not deleted, in soft and hard mode. Deleting a Namespace deletes
+under **Kept** and is not deleted, in either mode. Deleting a Namespace deletes
 everything in it, and deleting a CustomResourceDefinition deletes every custom
 resource of that kind on the cluster, including ones Kix does not manage.
 `kix deploy --prune` keeps the same kinds. When you do want one removed, delete
@@ -53,30 +58,31 @@ Kix removes.
 
 ## Scan the live cluster for orphans
 
-Use `--hard` when the local activation cache is unavailable or you need to
-find Kix-managed resources outside the previous-to-current build comparison:
+Use `--full-scan` when the local activation cache is unavailable or you need
+to find Kix-managed resources outside the previous-to-current build
+comparison:
 
-<Command commands={["kix gc how-to-application --hard"]} cwd="kix-examples/" />
+<Command commands={["kix gc how-to-application --full-scan"]} cwd="kix-examples/" />
 
-Hard mode scans live resources carrying Kix ownership metadata and compares
+A full scan reads live resources carrying Kix ownership metadata and compares
 them with the expected resources in the current build.
 
-When one Kubernetes cluster hosts more than one Kix cluster, hard mode
+When one Kubernetes cluster hosts more than one Kix cluster, a full scan
 judges only the named cluster's resources. It finds them through the
 Activation records each resource names, skips the other clusters' resources,
 and keeps a resource another cluster's current build also contains. A
 resource that names no Activation record at all cannot be attributed to
-either cluster, so hard mode lists it under "No deployment record on this cluster" and keeps
-it.
-Review those and pass `--include-unattributed` to judge them against the
-build too.
+either cluster, so a full scan lists it under "No deployment record on this
+cluster" and keeps it. Review those and pass `--include unattributed` to judge
+them against the build too.
 
 Resources carrying a Kix label but no `kix.run/identity-hash` are listed under
 "No Kix build annotation" and kept by default. Kix cannot establish that it originally applied
-them. Include them only after checking each reported resource:
+them. Include them only after checking each reported resource. `--include`
+takes a comma-separated list, such as `--include unstamped,unattributed`:
 
 <Command
-  commands={["kix gc how-to-application --hard --include-unstamped"]}
+  commands={["kix gc how-to-application --full-scan --include unstamped"]}
   cwd="kix-examples/"
 />
 
@@ -97,7 +103,7 @@ example:
 
 <Command
   commands={[
-    "kix gc how-to-application --hard --keep 20 --keep-max 100 --keep-for 90d",
+    "kix gc how-to-application --full-scan --keep 20 --keep-max 100 --keep-for 90d",
   ]}
   cwd="kix-examples/"
 />

@@ -104,11 +104,13 @@ Pruning never deletes a Namespace or CustomResourceDefinition. It also keeps
 an orphan that another Kix cluster in the same Kubernetes cluster still
 deploys. The plan lists both as kept.
 
-Use `--prune-mode no` to prevent deletion even if a surrounding script also
-passes `--prune`:
+Use `--skip-orphan-check` to skip looking for orphans at all. The deploy
+deletes nothing and does not list orphans, and they stay on the cluster for
+[`kix gc`](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)
+to find later:
 
 <Command
-  commands={["kix deploy how-to-application --prune --prune-mode no"]}
+  commands={["kix deploy how-to-application --skip-orphan-check"]}
   cwd="kix-examples/"
 />
 
@@ -147,17 +149,19 @@ object with the counts and `succeeded`:
   cwd="kix-examples/"
 />
 
-For a live dependency view in an interactive terminal, use the TUI. This
-example groups resources by namespace and caps the live viewport at 20 rows:
+For a live dependency view in an interactive terminal, use the `tui` log
+format. This example groups resources by namespace and caps the live
+viewport at 20 rows with the `KIX_TUI_HEIGHT` environment variable:
 
 <Command
   commands={[
-    "kix deploy how-to-application --tui --group-by-ns --fold-height 20",
+    "KIX_TUI_HEIGHT=20 kix deploy how-to-application --log-format tui --group-by namespace",
   ]}
   cwd="kix-examples/"
 />
 
-On a non-interactive terminal, `--tui` falls back to line-oriented output.
+On a non-interactive terminal, `--log-format tui` falls back to line-oriented
+output.
 These output options change presentation only; they do not change deployment
 order.
 
@@ -170,6 +174,6 @@ cluster's first deployment is in that list. Run `kix check` for validation
 before the first deploy, and review the listed objects in the plan.
 
 :::note[Reference]
-See [`kix deploy`](/docs/reference/cli/deploy-apply/) for all deploy flags,
+See [`kix deploy`](/docs/reference/cli/deploy/) for all deploy flags,
 defaults, and exit behavior.
 :::

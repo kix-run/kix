@@ -1,12 +1,16 @@
 ---
 title: "`list`"
-description: "List the clusters a flake defines, or its packages, optionally with each package's install status in one cluster."
+description: "List the clusters and packages a flake defines, and the resources and container images a cluster renders."
 ---
 
 import Command from '/src/components/Command.astro';
 
-`kix list` reads the flake and prints the clusters or packages it exposes. It
-does not contact a cluster. Use it to find the names other commands accept.
+`kix list` reads the flake and prints what it defines: its clusters, its
+packages, or the resources and container images one cluster renders. It does
+not contact a cluster. Use it to find the names other commands accept, to
+confirm what a cluster contains before reading the full manifests with
+[`kix build`](/docs/reference/cli/build/), and to collect the images an
+environment without registry access needs.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/list.rs` when in doubt.
@@ -15,14 +19,19 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 
 ```text
 kix list clusters [-o text|json|yaml] [--flake <FLAKE>] [--no-cache]
-kix list packages [--cluster <CLUSTER>] [-o text|json|yaml]
+kix list packages [<CLUSTER>] [-o text|json|yaml]
                   [--flake <FLAKE>] [--no-cache]
+kix list resources <CLUSTER> [-o text|json|yaml]
+                   [--flake <FLAKE>] [--no-cache]
+kix list images <CLUSTER> [--sources] [-o text|json|yaml]
+                [--flake <FLAKE>] [--no-cache]
 ```
 
 | Argument or flag | Default | Meaning |
 | --- | --- | --- |
-| `--cluster <CLUSTER>` | Unset | `list packages` only. List the packages as seen by this cluster, with a status column. |
-| `-o`, `--output` | `text` | `text` prints a table. `json` and `yaml` print an array. |
+| `<CLUSTER>` | | Cluster name to evaluate. Optional for `list packages`, where it adds a status column. |
+| `--sources` | Off | `list images` only. In text output, list under each image the resources that reference it. |
+| `-o`, `--output` | `text` | `text` prints a table or summary. `json` and `yaml` print the same data as one document. |
 | `--flake <FLAKE>` | `.` | Flake to read. |
 | `--no-cache` | Off | Read from Nix instead of the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
 
@@ -35,11 +44,11 @@ stderr.
 
 ## `list packages`
 
-Without `--cluster`, lists every package the flake exposes in
+Without a cluster, lists every package the flake exposes in
 `legacyPackages.<system>.kixPackages`, with `NAME` and `VERSION` columns.
 Experimental packages are listed as `experimental.<name>`.
 
-With `--cluster`, lists the cluster's instances and the packages it could
+With a cluster, lists the cluster's instances and the packages it could
 install, with a `STATUS` column:
 
 | Status | Meaning |
@@ -51,14 +60,59 @@ install, with a `STATUS` column:
 
 Rows are keyed by name and sorted. An `OWNER` column appears when any package
 declares an owner; the rest show `-`. JSON entries have `name`, `version`, and
-`owner`, plus `status` and `isImport` with `--cluster`. An empty result prints
+`owner`, plus `status` and `isImport` with a cluster. An empty result prints
 `No packages found.` on stderr.
+
+## `list resources`
+
+Evaluates the cluster and prints an inventory of its rendered resources. Text
+output has four parts:
+
+1. The cluster name and total resource count.
+2. Each namespace with its resource count. Cluster-scoped resources are
+   listed as `(cluster-scoped)`.
+3. A table of resource kinds, most frequent first.
+4. Every resource as `Kind/name`, grouped by namespace and sorted by kind,
+   then name.
+
+JSON and YAML output is an object with `cluster`, `totalResources`,
+`namespaces` (each `{ name, resources: [{ kind, name }] }`), and
+`kindCounts` (kind to count). Cluster-scoped resources are under the
+namespace name `_cluster`.
+
+`kix list resources` reports rendered resources only. To see dependency
+edges, use [`kix graph`](/docs/reference/cli/graph/).
+
+## `list images`
+
+Evaluates the cluster and lists the container images it needs. Use the list
+to pull, mirror, or preload images before deploying to an environment without
+registry access.
+
+Kix reads the `image` of every container, init container, and ephemeral
+container in Pods and in the pod templates of Deployments, StatefulSets,
+DaemonSets, ReplicaSets, Jobs, and CronJobs. It adds the images a package
+declares in `out.extraImages`, which cover pods an operator creates at run
+time.
+
+Text output prints one image reference per line. Each reference appears
+once, sorted, exactly as written in the manifests: a tag, a digest, or both.
+With `--sources`, the resources that reference each image follow it, as
+`Kind namespace/name (container: <name>)`. A cluster with no images prints
+`No container images found.`
+
+JSON and YAML output is an array of `{ image, sources }`, whatever
+`--sources` says. Each entry in `sources` has `kind`, `namespace`, `name`, and
+`container`. Cluster-scoped sources have the namespace `_cluster`.
 
 ## Examples
 
 <Command commands={[
   "kix list clusters",
-  "kix list packages --cluster demo",
+  "kix list packages demo",
+  "kix list resources demo -o json",
+  "kix list images demo --sources",
+  "kix list images demo | xargs -n1 docker pull",
   "kix --flake ../infra list clusters -o json",
 ]} />
 
@@ -68,5 +122,7 @@ declares an owner; the rest show `-`. JSON entries have `name`, `version`, and
 evaluated or the cluster does not exist.
 
 :::tip[Use it in a task]
-See [List clusters and packages](/docs/how-to/start-and-inspect/list-clusters-and-packages/).
+See [List clusters and packages](/docs/how-to/start-and-inspect/list-clusters-and-packages/),
+[Inspect an instance's deps, parts, and `out`](/docs/how-to/debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out/),
+and [List images for air-gapped preloading](/docs/how-to/operate-a-cluster/list-images-for-airgap-preloading/).
 :::

@@ -85,7 +85,7 @@ little or no Nix experience:
   offline sidecars are current.
 - Regenerate live captures with
   `nix run ./docs#regen-captures -- --apply`. This creates a dedicated kind
-  cluster and captures commands such as `deploy`, `diff`, `status`, and
+  cluster and captures commands such as `deploy`, `plan`, `status`, and
   `kubectl get`. Keep inherently noisy steps out of drift comparison with the
   capture manifest's `skipDriftCheck` flag.
 - The capture workspace uses the checked-in `kix-examples` flake. It cannot
@@ -288,7 +288,7 @@ Tutorials should make progress feel steady and unsurprising.
   twin keeps the list text between the `<Recap>` tags.
 - `<Loop>` (`src/components/Loop.astro`) renders a short ordered list of
   commands as a strip of cells, each item written as `` `kix check` what it
-  does ``. Tutorial 05 uses it for the check, build, diff, deploy, and graph
+  does ``. Tutorial 05 uses it for the check, build, plan, deploy, and graph
   loop. Keep it to a handful of steps.
 
 Code in tutorials should carry teaching comments where they reduce context
@@ -413,8 +413,8 @@ scenario that can exercise a group of related guides.
   progress fails the run by name. Raise it for a genuinely slow command; do
   not raise it to hide one that stopped terminating.
 - Set `resetCluster = true` on the first live group whose output must not
-  depend on what earlier groups deployed. `kix diff`, `status`, `snapshot
-  save`, and `gc` read only the Kix cluster you named, but print a line
+  depend on what earlier groups deployed. `kix plan --read-only`, `status`,
+  `snapshot`, and `gc` read only the Kix cluster you named, but print a line
   counting the objects of each other Kix cluster they skipped, so the
   tutorial deployments would otherwise appear in the capture.
 - Put a group that deliberately breaks the cluster last. A deploy whose probe

@@ -103,7 +103,6 @@
           "kix"
           "list"
           "packages"
-          "--cluster"
           "02-hello-world"
         ];
       }
@@ -258,10 +257,11 @@
         capture = "diff-clean";
         run = [
           "kix"
-          "diff"
+          "plan"
           "04-from-scratch"
+          "--read-only"
         ];
-        # kix diff exits non-zero when drift exists, which is the
+        # A read-only plan exits non-zero when drift exists, which is the
         # whole point of capturing it here.
         allowFailure = true;
       }
@@ -278,8 +278,9 @@
         capture = "diff-after-edit";
         run = [
           "kix"
-          "diff"
+          "plan"
           "04-from-scratch"
+          "--read-only"
         ];
         allowFailure = true;
       }
@@ -732,7 +733,7 @@
     cwd = "kix-examples/";
     # First live group after the tutorials. Reset here so every how-to
     # group below sees a Kubernetes cluster whose only kix cluster is
-    # how-to-application; `kix diff` and `kix gc --hard` both read the
+    # how-to-application; `kix plan --read-only` and `kix gc --full-scan` both read the
     # whole cluster, so the tutorial deployments would otherwise show
     # up as this cluster's removals.
     resetCluster = true;
@@ -876,7 +877,8 @@
         capture = "inspect";
         run = [
           "kix"
-          "inspect"
+          "list"
+          "resources"
           "how-to-application"
         ];
       }
@@ -886,7 +888,6 @@
           "kix"
           "list"
           "packages"
-          "--cluster"
           "how-to-application"
         ];
       }
@@ -1452,7 +1453,6 @@
           "kix"
           "list"
           "packages"
-          "--cluster"
           "how-to-package-monitoring"
         ];
       }
@@ -1478,7 +1478,6 @@
           "kix"
           "list"
           "packages"
-          "--cluster"
           "how-to-package-victoria-metrics"
         ];
       }
@@ -2071,7 +2070,6 @@
           "kix"
           "list"
           "packages"
-          "--cluster"
           "how-to-adoption"
         ];
       }
@@ -2379,8 +2377,7 @@
           "kix"
           "export"
           "how-to-stateful-migration"
-          "--for"
-          "audit"
+          "--with-kix-metadata"
           "--out"
           "stateful-before"
         ];
@@ -2483,7 +2480,6 @@
           "kix"
           "list"
           "packages"
-          "--cluster"
           "how-to-application"
         ];
       }
@@ -2509,7 +2505,6 @@
           "kix"
           "list"
           "packages"
-          "--cluster"
           "how-to-application"
         ];
       }
@@ -2665,7 +2660,7 @@
         prepare = "kix deploy how-to-application --dry-run --log-format json > deploy.ndjson || [ $? -eq 2 ]";
       }
       {
-        prepare = "kix deploy how-to-application --dry-run --tui --group-by-ns --fold-height 20 || [ $? -eq 2 ]";
+        prepare = "KIX_TUI_HEIGHT=20 kix deploy how-to-application --dry-run --log-format tui --group-by namespace || [ $? -eq 2 ]";
       }
       {
         prepare = "KIX_STALL_TIMEOUT=900 kix deploy how-to-application --dry-run || [ $? -eq 2 ]";
@@ -2674,11 +2669,11 @@
   }
 
   {
-    # The diff guide's flagship: an in-sync cluster, then the same
-    # command after one line changes. Both sides come from the live
+    # The preview guide's flagship: an in-sync cluster, then the same
+    # read-only plan after one line changes. Both sides come from the live
     # cluster, which is the comparison the page is about.
     group = "how-to/application-diff";
-    page = "/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/";
+    page = "/docs/how-to/operate-a-cluster/preview-changes-with-kix-plan/";
     cwd = "kix-examples/";
     live = [
       {
@@ -2693,8 +2688,9 @@
         capture = "diff-clean";
         run = [
           "kix"
-          "diff"
+          "plan"
           "how-to-application"
+          "--read-only"
         ];
       }
       {
@@ -2708,8 +2704,9 @@
         capture = "diff-message-change";
         run = [
           "kix"
-          "diff"
+          "plan"
           "how-to-application"
+          "--read-only"
         ];
         allowFailure = true;
       }
@@ -2717,8 +2714,9 @@
         capture = "diff-markdown";
         run = [
           "kix"
-          "diff"
+          "plan"
           "how-to-application"
+          "--read-only"
           "--output"
           "markdown"
         ];
@@ -2726,15 +2724,15 @@
       }
       {
         # The two redirects the page and the CI guide show. No sidecar,
-        # but they run, so the flags cannot rot. `kix diff` exits 2 when
+        # but they run, so the flags cannot rot. A read-only plan exits 2 when
         # it finds differences, and by this point in the group it does,
         # so the redirect has to tolerate that exit the way the CI
         # snippet on the page does.
-        prepare = "kix diff how-to-application --output markdown > kix-diff.md || [ $? -eq 2 ]";
+        prepare = "kix plan how-to-application --read-only --output markdown > kix-plan.md || [ $? -eq 2 ]";
         timeout = "900s";
       }
       {
-        prepare = "kix diff how-to-application --output json > kix-diff.json || [ $? -eq 2 ]";
+        prepare = "kix plan how-to-application --read-only --output json > kix-plan.json || [ $? -eq 2 ]";
         timeout = "900s";
       }
     ];
@@ -2761,8 +2759,8 @@
         run = [
           "kix"
           "snapshot"
-          "save"
           "how-to-application"
+          "--out"
           "./snapshots/how-to-application"
         ];
       }
@@ -2960,18 +2958,16 @@
         capture = "list";
         run = [
           "kix"
-          "rollback"
+          "history"
           "how-to-application"
-          "--list"
         ];
       }
       {
         capture = "list-json";
         run = [
           "kix"
-          "rollback"
+          "history"
           "how-to-application"
-          "--list"
           "--output"
           "json"
         ];
@@ -2988,6 +2984,7 @@
         capture = "list";
         run = [
           "kix"
+          "list"
           "images"
           "how-to-application"
         ];
@@ -2996,6 +2993,7 @@
         capture = "list-with-sources";
         run = [
           "kix"
+          "list"
           "images"
           "how-to-application"
           "--sources"
@@ -3005,6 +3003,7 @@
         capture = "list-json";
         run = [
           "kix"
+          "list"
           "images"
           "how-to-application"
           "--output"
@@ -3012,7 +3011,7 @@
         ];
       }
       {
-        prepare = "kix images how-to-application --output json > images.json";
+        prepare = "kix list images how-to-application --output json > images.json";
       }
     ];
   }
@@ -3060,8 +3059,7 @@
           "kix"
           "export"
           "how-to-application"
-          "--for"
-          "audit"
+          "--with-kix-metadata"
           "--out"
           "./audit-export"
         ];
@@ -3170,7 +3168,7 @@
           "-y"
         ];
       }
-      # No `--hard` capture: hard mode sweeps every
+      # No `--full-scan` capture: a full scan sweeps every
       # Kix-managed resource in the Kubernetes cluster and judges it
       # against this one cluster's build, so it would delete the
       # tutorial deployments the other live groups put here.

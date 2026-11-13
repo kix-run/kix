@@ -177,7 +177,7 @@ Deploy the cluster and check the instance:
 To test it locally, forward the service port:
 
 <Command
-  commands={["kix pf how-to-package-valkey valkey 6379:6379"]}
+  commands={["kix port-forward how-to-package-valkey valkey 6379:6379"]}
   cwd="kix-examples/"
 />
 

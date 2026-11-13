@@ -1,0 +1,68 @@
+---
+title: "`history`"
+description: "List a cluster's current deploy and the earlier deploys that kix rollback can go back to."
+---
+
+import Command from '/src/components/Command.astro';
+
+`kix history` reads a cluster's Activation records and lists the deploy that
+runs now and the earlier deploys [`kix rollback`](/docs/reference/cli/rollback/)
+can go back to. It changes nothing. Run it before a rollback to choose the
+target and to check that this machine has its build.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/rollback.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix history <CLUSTER> [-o text|json|yaml] [--flake <FLAKE>] [--context <CONTEXT>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name, as recorded on its Activation records. |
+| `-o`, `--output` | `text` (default), `json`, or `yaml`. |
+| `--flake <FLAKE>` | Flake reference used to evaluate the cluster name when no Activation record in the context carries `<CLUSTER>`. See [Global flags](/docs/reference/cli/global-flags/). |
+| `--context <CONTEXT>` | Kubeconfig context. See [Global flags](/docs/reference/cli/global-flags/). |
+
+## Output
+
+Text output shows the current deploy first, marked as live on the cluster,
+then each earlier deploy, most recent first, numbered from `[1]`. Each entry
+gives the Activation record's name, the start of its identity hash, the store
+path of its build, and for an earlier deploy its deploy time, the record it
+replaced, and whether the build is on this machine (`available`) or not
+(`build not on this machine`). `kix rollback` can only go back to an
+`available` deploy. The numbers are the ones `kix rollback` asks for.
+
+Only records that were once the cluster's running state are listed. A deploy
+that stopped part way is not. How many records exist depends on
+[`kix gc`](/docs/reference/cli/gc/) retention.
+
+JSON and YAML output is one object:
+
+| Key | Content |
+| --- | --- |
+| `cluster` | The cluster name. |
+| `current` | `{ name, identity_hash, built_via }` for the deploy live on the cluster, or `null` when there is none. `built_via` is the store path of the build. |
+| `superseded` | The earlier deploys, most recent first, each `{ name, identity_hash, deployed_at, built_via, previous_activation, available_locally }`. `deployed_at` is RFC 3339. `available_locally` says whether this machine has the build, which `kix rollback` needs. |
+
+Its JSON Schema is `cli/kix-cli/schema/history.schema.json`.
+
+## Examples
+
+<Command commands={[
+  "kix history demo",
+  "kix history demo -o json",
+]} />
+
+## Exit status
+
+`0` when the history was read, including when there are no earlier deploys.
+`1` on a cluster error.
+
+:::tip[Use it in a task]
+See [Roll back an activation](/docs/how-to/operate-a-cluster/roll-back-an-activation/)
+for choosing a target and rolling back.
+:::

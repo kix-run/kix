@@ -8,7 +8,7 @@ import imageList from '/src/command-output/how-to/application-images/list.json';
 import imageSources from '/src/command-output/how-to/application-images/list-with-sources.json';
 import imageJson from '/src/command-output/how-to/application-images/list-json.json';
 
-Use `kix images` to produce a deduplicated list of the container images in a
+Use `kix list images` to produce a deduplicated list of the container images in a
 cluster definition. The command evaluates the cluster locally and does not
 connect to Kubernetes.
 
@@ -44,7 +44,7 @@ Because the default output is one image per line, you can pass it to an image
 tool. For example, pull every image into the local Docker image store:
 
 <Command
-  commands={["kix images how-to-application | xargs -n1 docker pull"]}
+  commands={["kix list images how-to-application | xargs -n1 docker pull"]}
   cwd="kix-examples/"
 />
 
@@ -52,16 +52,16 @@ To load those images into a local kind cluster:
 
 <Command
   commands={[
-    "kix images how-to-application | xargs -n1 kind load docker-image --name kix-demo",
+    "kix list images how-to-application | xargs -n1 kind load docker-image --name kix-demo",
   ]}
   cwd="kix-examples/"
 />
 
 For a remote or air-gapped cluster, copy or mirror the listed references using
-the tool your registry workflow already uses. Run `kix images` again whenever
+the tool your registry workflow already uses. Run `kix list images` again whenever
 the cluster definition or its image pins change.
 
 :::note[Reference]
-See [`kix images`](/docs/reference/cli/images/) for output formats and command
-options.
+See [`kix list images`](/docs/reference/cli/list/#list-images) for output
+formats and command options.
 :::

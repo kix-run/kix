@@ -20,7 +20,7 @@ cluster to look more closely at the Kix loop:
 <Loop>
 1. `kix check` validates the evaluated cluster
 2. `kix build` shows the rendered resources
-3. `kix diff` previews against live state
+3. `kix plan --read-only` previews against live state
 4. `kix deploy` applies the checked result
 5. `kix graph` inspects what Kix knows
 </Loop>
@@ -77,11 +77,11 @@ Ask Kix what is different from the live cluster:
 
 <Command expandable {...diffCleanOutput} />
 
-If your live cluster already matches the checked result, the diff should be
+If your live cluster already matches the checked result, the preview should be
 empty or say there is nothing to change. If the hello-world cluster from the
 [local setup tutorial](/docs/tutorials/02-local-setup-and-first-run/) is still
 deployed in the same kind cluster, Kix reports that it skipped its objects:
-`kix diff` compares only the Kix cluster you name.
+`kix plan --read-only` compares only the Kix cluster you name.
 
 Now make a visible edit in `tutorial-04/cluster.nix`:
 
@@ -98,7 +98,7 @@ Check that Git sees the edit:
 Because `tutorial-04/cluster.nix` is already tracked, Nix can see this dirty
 edit. You do not need to commit it.
 
-Run the diff again:
+Run the preview again:
 
 <Command expandable {...diffAfterEditOutput} />
 
@@ -107,7 +107,7 @@ basic preview loop: edit locally, evaluate locally, inspect the change, then
 deploy.
 
 :::tip[Use it in a task]
-See [Preview changes with `kix plan` and `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+See [Preview changes with `kix plan`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-plan/)
 when you already know the model and just need the command steps.
 :::
 
@@ -126,7 +126,7 @@ Check the resource status:
 
 Then port-forward and verify the response:
 
-<Command commands={["kix pf 04-from-scratch hello-world 8080:8080"]} cwd="kix-examples/" />
+<Command commands={["kix port-forward 04-from-scratch hello-world 8080:8080"]} cwd="kix-examples/" />
 
 In another terminal:
 
@@ -161,7 +161,7 @@ You used the same local cluster definition through the main Kix loop:
 <Recap>
 - `kix check` catches problems before deploy;
 - `kix build` shows the rendered Kubernetes resources;
-- `kix diff` previews changes against the live cluster;
+- `kix plan --read-only` previews changes against the live cluster;
 - `kix deploy` applies the evaluated result;
 - `kix status` and `kix graph` inspect what Kix knows afterward.
 </Recap>

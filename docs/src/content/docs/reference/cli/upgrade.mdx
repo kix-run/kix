@@ -22,8 +22,8 @@ in the Rust source, update this page in the same change.
 ## Synopsis
 
 ```text
-kix upgrade [--to <VERSION>] [--preview]
-kix upgrade --ack <ID>...
+kix upgrade [--to <VERSION>] [--dry-run]
+kix upgrade --acknowledge <ID>...
 ```
 
 ## Flags
@@ -31,8 +31,8 @@ kix upgrade --ack <ID>...
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--to <VERSION>` | `latest` | The version to move to: an exact version such as `0.10.2`, a minor such as `0.10` (its newest patch), or `latest`, the newest release that is not a prerelease. |
-| `--preview` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. |
-| `--ack <ID>...` | none | Acknowledge a change to stored data by its id or name, so that `kix deploy` goes ahead. Does nothing else. |
+| `--dry-run` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. |
+| `--acknowledge <ID>...` | none | Acknowledge a change to stored data by its id or name, so that `kix deploy` goes ahead. Does nothing else. |
 
 ## The version the project uses
 
@@ -58,7 +58,7 @@ none, and the first run of an upgrade says so:
 Note: Kix 0.9.1 has no release notes; see CHANGELOG.md.
 ```
 
-`kix upgrade --preview` lists every breaking, security, and upgrade note in
+`kix upgrade --dry-run` lists every breaking, security, and upgrade note in
 the range, and every release that every cluster must deploy, grouped by what
 you must do. Added, changed, and fixed notes are counted. It changes
 nothing:
@@ -78,7 +78,7 @@ Kix 0.10.0 -> 0.12.1 (preview, no files changed)
       unmatched egress traffic in namespaces with at least one workload.
   * [K0007] harbor (0.12.0, moves stored data): Registry blob metadata moved
       to v2 layout; existing PVCs are migrated in place on first start.
-      Requires `kix upgrade --ack K0007` before `kix deploy`.
+      Requires `kix upgrade --acknowledge K0007` before `kix deploy`.
 
   Security fixes (builds cleanly, recommended for this upgrade):
   * [K0008] caddy (0.11.2, CVE-2026-4102): Fixes HTTP/2 CONTINUATION frame
@@ -96,8 +96,7 @@ Next: run `kix upgrade`.
 ```
 
 A note names packages, and Kix sees only the instance names a cluster uses
-(from `kix list packages --cluster <name>`, run with the project's current
-Kix). So Kix cannot tell which notes affect a project. It lists them all,
+(from `kix list packages <name>`, run with the project's current Kix). So Kix cannot tell which notes affect a project. It lists them all,
 and marks with `*` a note whose package name equals the name of an instance
 in use. An unmarked note can still affect an instance with another name.
 When the current Kix is not installed, the preview marks nothing. When the
@@ -106,8 +105,8 @@ range has no breaking, security, or upgrade notes, it says
 
 ## What a run does
 
-1. Builds every cluster with the version the project uses now, with
-   `kix export <cluster> --for audit`, into
+1. Builds every cluster with the version the project uses now, and exports
+   it with its Kix annotations kept, into
    `~/.cache/kix/upgrade/<project>/before/`. When a cluster does not build,
    it stops with exit status `2`. Fix the project on its current version
    first.
@@ -179,10 +178,10 @@ range has no breaking, security, or upgrade notes, it says
      1. 3 Secrets changed in cluster xdi1 (Secret/harbor-core@registry,
         Secret/harbor-exporter@registry, Secret/harbor-jobservice@registry).
      2. 5 objects changed in clusters lt1, xdi1; read the changes above, or run
-        `kix diff <cluster>`, before you deploy.
+        `kix plan <cluster>`, before you deploy.
      3. [K0007] moves stored data in harbor. Once you are ready for the
         migration, unblock deploy with:
-          kix upgrade --ack K0007
+          kix upgrade --acknowledge K0007
    ```
 
    Any object that changed in any cluster is on this list, and the run
@@ -201,7 +200,7 @@ Upgraded to Kix 0.11.2, but review before deploying:
 Next: commit this 0.11.2 step and deploy every cluster with `kix deploy <cluster>`, then run `kix upgrade` to continue to 0.12.1.
 ```
 
-[`kix deploy`](/docs/reference/cli/deploy-apply/#required-stops) refuses a
+[`kix deploy`](/docs/reference/cli/deploy/#required-stops) refuses a
 cluster that would skip the release.
 
 ## Changes to stored data
@@ -219,11 +218,11 @@ No clusters were contacted.
     place on first start.
 
 Next: once you are ready for this migration, run:
-  kix upgrade --ack K0007
+  kix upgrade --acknowledge K0007
 Then run `kix deploy` again.
 ```
 
-`kix upgrade --ack K0007` records the acknowledgement in
+`kix upgrade --acknowledge K0007` records the acknowledgement in
 `kix-upgrade.json`:
 
 ```text
@@ -247,7 +246,7 @@ moved by hand gets no refusal. Commit `kix-upgrade.json` with the upgrade.
 | `steps` | Each version the project was built with: `version`, `result` (`ok`, `failed`, or `started` for a step that stopped before it built), and `failed`, the clusters that did not build. |
 | `records` | The ids (or names, for a note without an id) of the release notes that apply, by kind. |
 | `dataChanges` | The changes to stored data: `reference`, `release`, and `body`. |
-| `acknowledged` | The data changes someone acknowledged with `--ack`. |
+| `acknowledged` | The data changes someone acknowledged with `--acknowledge`. |
 | `sensitiveChanges` | How many changed objects are sensitive. |
 | `cliHits` | Each project line that uses a changed command or flag: `text`, `file`, `line`. |
 | `before` | The directory of the builds made with the version the upgrade started from. |
@@ -264,7 +263,7 @@ Programs that read the file must skip fields they do not know.
 
 ## Exit status
 
-- `0` when the project builds with the target, no object changed in any cluster, and nothing needs a person, and with `--preview` or `--ack`.
+- `0` when the project builds with the target, no object changed in any cluster, and nothing needs a person, and with `--dry-run` or `--acknowledge`.
 - `1` when the release index or a release's notes cannot be fetched or verified, a version cannot be installed, or the project cannot be pinned.
 - `2` when a cluster does not build, with the version the project used or with a release the upgrade tried.
 - `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first.

@@ -1,6 +1,6 @@
 ---
 title: "`plan`"
-description: "Preview a deploy as a server-side dry run: the field changes the apiserver would make, the writes it would refuse, prune fates, migrations, and drift."
+description: "Preview a deploy as a server-side dry run, or read the live cluster with get and list only: field changes, refused writes, prune fates, migrations, and drift."
 ---
 
 import Command from '/src/components/Command.astro';
@@ -15,6 +15,10 @@ Activation record is created or changed.
 it, with field changes shown under `-v`. `kix deploy --dry-run` runs
 `kix plan` with the same flags.
 
+With `--read-only`, `kix plan` sends no writes at all, dry run or not. It
+reads the live cluster with `get` and `list` and compares it with the build.
+See [Read-only plans](#read-only-plans).
+
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
 `cli/kix-cli/src/commands/plan.rs`, `cli/kix/src/plan/file.rs`,
 `cli/kix-cli/schema/plan.schema.json`, and
@@ -23,23 +27,32 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
 ## Synopsis
 
 ```text
-kix plan <CLUSTER> [--prune | --prune-mode default|no] [--reconcile]
-         [--force-conflicts] [--accept-migrations] [--current-activation]
-         [-o text|markdown] [--save <FILE>]
+kix plan <CLUSTER> [--prune | --skip-orphan-check] [--reconcile]
+         [--force-conflicts] [--accept-migrations] [--offline]
+         [--bundle <FILE> [--deployed-bundle <FILE>]...]
+         [-o text|markdown] [--out <FILE>]
          [--flake <FLAKE>] [--context <CONTEXT>]
+
+kix plan <CLUSTER> --read-only [--bundle <FILE>]
+         [-o text|markdown|json|yaml] [--detail plain|fields|manifests]
+         [--out <FILE>] [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
 | --- | --- |
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `--prune` | Plan the prune a `kix deploy --prune` would run: each orphan's delete is sent as a dry run. Without it, orphans are listed as kept. |
-| `--prune-mode <MODE>` | `default` prunes according to `--prune`. `no` plans no prune, even with `--prune`. |
+| `--skip-orphan-check` | Do not look for orphans, and plan no prune. Not with `--prune`. |
 | `--reconcile` | Plan a re-apply of every resource, including those whose identity hash matches the running activation. |
 | `--force-conflicts` | Plan the apply with forced field ownership. Fields another manager owns show as drift the deploy reverts instead of as conflicts. |
 | `--accept-migrations` | Accept the stateful migrations the plan lists, so they do not count as a reason the deploy would stop. |
-| `--current-activation` | Take the previous activation from the local cache and connect to nothing. The plan compares the cached build with the new one, and every write-path check reads `not_checked`. See [Offline plans](#offline-plans). |
-| `-o`, `--output` | `text` (default) or `markdown`. With `markdown`, progress lines go to stderr so stdout holds the Markdown alone. `json` and `yaml` are refused: save a [plan file](#plan-file) instead. |
-| `--save <FILE>` | Also write the plan to `FILE` as a [plan file](#plan-file), which [`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan) reads. The file is written beside `FILE`, read back, and only then renamed, so a file that would be refused never appears at `FILE`. The text or Markdown output is printed as well. |
+| `--offline` | Take the previous activation from the local cache and connect to nothing. The plan compares the cached build with the new one, and every write-path check reads `not_checked`. See [Offline plans](#offline-plans). |
+| `--read-only` | Read the live cluster instead of sending a dry run. See [Read-only plans](#read-only-plans). |
+| `--bundle <FILE>` | Read the build from a bundle written by `kix bundle` instead of building from the flake. Not with `--offline`. |
+| `--deployed-bundle <FILE>` | With `--bundle`, a bundle of a previously deployed build to use when that build is not in Kix's local store. Matched by the Activation record's identity hash. Repeatable. Not with `--read-only`. |
+| `-o`, `--output` | `text` (default) or `markdown`. With `markdown`, progress lines go to stderr so stdout holds the Markdown alone. With `--read-only`, also `json` or `yaml` (the JSON document as YAML). Without it, `json` and `yaml` are refused: write a [plan file](#plan-file) instead. |
+| `--detail <LEVEL>` | With `--read-only`, how much `json` and `yaml` say about each change: `plain` (default), `fields`, or `manifests`. See [`kix diff`](/docs/reference/cli/diff/#json-and-yaml). |
+| `--out <FILE>` | Also write the plan to `FILE` as a [plan file](#plan-file), which [`kix deploy --plan`](/docs/reference/cli/deploy/#deploy-a-reviewed-plan) reads. The file is written beside `FILE`, read back, and only then renamed, so a file that would be refused never appears at `FILE`. The text or Markdown output is printed as well. |
 | `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). |
 
 The planning flags are the ones `kix deploy` takes, so a plan made with the
@@ -49,8 +62,8 @@ same flags is the plan the deploy runs.
 
 A dry run is authorised like the write it simulates, so `kix plan` needs the
 permissions of the deploy it previews. A user who may only `get` and `list`
-gets `forbidden` refusals. Use [`kix diff`](/docs/reference/cli/diff/) for a
-read-only comparison.
+gets `forbidden` refusals. Use `kix plan --read-only` for a comparison that
+needs only `get` and `list`.
 
 ## What it reports
 
@@ -99,8 +112,8 @@ check in a `<details>` block.
 
 ## Plan file
 
-`--save plan.kixplan` writes the plan as one file that
-[`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan)
+`--out plan.kixplan` writes the plan as one file that
+[`kix deploy --plan`](/docs/reference/cli/deploy/#deploy-a-reviewed-plan)
 and Kix Enterprise read. It holds:
 
 - the `Plan` document, with each field change listed;
@@ -133,23 +146,24 @@ of more than a million JSON values, more than 100,000 files, and a file over
 
 ### The `Plan` document
 
-`kix diff -o json` prints the same document, so a consumer can read either.
+`kix plan --read-only -o json` and `kix diff -o json` print the same
+document, so a consumer can read any of them.
 Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 
 | Key | Content |
 | --- | --- |
 | `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-10-07"`. It changes only when the document changes in a way that is not backward compatible. |
-| `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --current-activation` or `kix diff --from <build>`; `live_read` from `kix diff` against the cluster or a snapshot. |
+| `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --offline` or `kix diff --from <build>`; `live_read` from `kix plan --read-only` or `kix diff --from <snapshot>`. |
 | `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the store path of the binary, or `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
-| `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--current-activation`). `null` on a first deploy. |
-| `flags` | The planning flags: `{ prune, prune_mode, reconcile, force_conflicts, accept_migrations }`. `prune_mode` is `default`, `no`, or `null` when not given. `null` from `kix diff`. |
+| `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
+| `flags` | The planning flags: `{ prune, prune_mode, reconcile, force_conflicts, accept_migrations }`. `prune_mode` is `no` with `--skip-orphan-check` and `null` otherwise. `null` from `kix plan --read-only` and `kix diff`. |
 | `packages` | The package-grouped changes, described under [`kix diff`](/docs/reference/cli/diff/#json-and-yaml). |
 | `migrations` | Checked section of `{ slot, source, target, reason }`. |
 | `conflicts` | Checked section of `{ resource, owners, message }`, each owner `{ manager, fields }`. |
 | `admission` | Checked section of `{ resource, reason, webhook, message }`. See [Refusal reasons](#refusal-reasons). |
-| `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix diff` also lists drift the deploy leaves alone, with `reverted` false. |
+| `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix plan --read-only` also lists drift the deploy leaves alone, with `reverted` false. |
 | `prune` | Checked section of `{ resource, fate, detail }`. See [Prune fates](#prune-fates). |
 | `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
 | `not_checked` | Array of `{ resource, reason, because, detail }`. `because` names the Namespace, CustomResourceDefinition, or Service that this deploy changes and that the answer depends on, when Kix knows which. Empty unless `made_by` is `dry_run`. |
@@ -182,7 +196,7 @@ change:
 | --- | --- |
 | `intended` | The deployed build and the new build differ here. |
 | `reverts_drift` | The live object differs from the deployed build here, and the deploy applies the object, so it puts the deployed value back. |
-| `drift_kept` | From `kix diff` only. The live object differs from the deployed build here, and the deploy leaves the object alone because its identity hash did not change. `kix deploy --reconcile` applies it. |
+| `drift_kept` | From `kix plan --read-only` only. The live object differs from the deployed build here, and the deploy leaves the object alone because its identity hash did not change. `kix deploy --reconcile` applies it. |
 
 A change can carry both `intended` and a drift label when the commit changes
 a field that was also changed on the cluster. Without the deployed build,
@@ -214,7 +228,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `delete` | `--prune` deletes it, and the dry-run delete was accepted. |
 | `delete_refused` | `--prune` would delete it, but the dry-run delete was refused. The deploy would stop on it. |
 | `kept_warn_only` | Kept by a deploy without `--prune`, and recorded on the new Activation for a later `--prune` or `kix gc`. |
-| `kept_skipped` | Kept by `--prune-mode no`. |
+| `kept_skipped` | Kept by `--skip-orphan-check`. |
 | `kept_never_pruned` | A Namespace or CustomResourceDefinition, which Kix never deletes automatically. |
 | `kept_shared` | Another Kix cluster's current build contains it. |
 | `kept_changed` | It changed since it was read; the next prune checks it again. |
@@ -245,12 +259,12 @@ webhook's backend running again, or, if someone deleted the Service, run
 
 ## Offline plans
 
-With `--current-activation`, `kix plan` connects to nothing. It compares the
+With `--offline`, `kix plan` connects to nothing. It compares the
 cached build with the new one, `made_by` is `builds`, and `conflicts`,
 `admission`, `drift`, and `prune` are `not_checked` with reason
 `builds_only`. The
 cache is keyed by cluster name only; see
-[`kix deploy`](/docs/reference/cli/deploy-apply/) for what an offline plan
+[`kix deploy`](/docs/reference/cli/deploy/) for what an offline plan
 cannot see.
 
 ## Exit status
@@ -269,7 +283,7 @@ In CI, treat `0` and `2` as success and fail the job on anything else:
 
 ```bash
 status=0
-kix plan prod --save plan.kixplan || status=$?
+kix plan prod --out plan.kixplan || status=$?
 case "$status" in
   0|2) ;;
   3) echo "the deploy would stop; see the plan above" >&2; exit 1 ;;
@@ -278,12 +292,12 @@ esac
 ```
 
 A build with no resources prints `Nothing to deploy.` and exits `0` when
-`--save` is not set. With `--save`, it fails with
+`--out` is not set. With `--out`, it fails with
 `the build has no resources, so there is no plan to save`, writes no file, and
 exits `1`.
 
 To deploy exactly what a reviewer approved, pass the plan file to
-[`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan),
+[`kix deploy --plan`](/docs/reference/cli/deploy/#deploy-a-reviewed-plan),
 which refuses when the plan made at deploy time differs.
 
 A dry run relies on every server it reaches to honour `dryRun=All`. An
@@ -291,35 +305,85 @@ aggregated API server that ignores the parameter, or an admission webhook
 that declares `sideEffects: None` but has side effects, can still change
 something.
 
+## Read-only plans
+
+`kix plan --read-only` reads the live cluster and sends no writes, so it
+needs only `get` and `list`. It compares the build with what the cluster
+runs and prints the same package-grouped report as
+[`kix diff`](/docs/reference/cli/diff/#what-is-compared). A read cannot see
+what shows only on the write path, so the report ends with the checks it
+could not make: admission webhooks and policies, field ownership conflicts,
+and what the deploy itself refuses.
+
+It cannot be combined with `--offline`, `--reconcile`, `--prune`,
+`--skip-orphan-check`, `--force-conflicts`, `--accept-migrations`, or
+`--deployed-bundle`.
+
+For each managed resource, Kix reads only the fields it applied. Kubernetes
+records which tool set each field through server-side apply, and Kix keeps its
+own fields and drops the rest: server defaults, status, fields set by
+controllers or `kubectl`, and the bookkeeping annotations Kix writes after
+every apply. A cluster that matches its build reports no differences.
+
+The live side holds only the named cluster's resources: those whose
+`kix.run/activations` annotation names one of its Activation records. When
+the Kubernetes cluster also runs other Kix clusters, their resources are not
+reported as removals, and stderr says how many were skipped per cluster. A
+resource the build drops that another Kix cluster's current build still
+contains is left out too, since `kix deploy --prune` keeps it.
+
+A read-only plan also prints an error for each build resource whose kind the
+cluster serves as namespaced but whose manifest has no `metadata.namespace`.
+`kix deploy` refuses to apply a build that contains one.
+
+When the deployed build's manifests are on this machine, each field change
+carries a [label](#field-change-labels), and a Drift section lists each field
+where the live object differs from the deployed build, with its live and
+deployed values, the field managers that own it live, and whether the deploy
+reverts it. Without the deployed build nothing is labelled, and the drift
+section is not checked.
+
+In the `Plan` document, `made_by` is `live_read`, `flags` is `null`,
+`conflicts`, `admission`, and `prune` are `not_checked` with reason
+`read_only`, and `not_checked` is empty.
+
+The exit status is `0` when nothing differs, `2` when something does or a
+stateful migration was detected, and `1` on an evaluation, build, or cluster
+error.
+
 ## Relation to `kix diff` and `kix deploy`
 
-| | `kix plan` | `kix diff` |
-| --- | --- | --- |
-| Permissions | The deployer's | `get` and `list`; none with `--from <build>` |
-| Field changes | Live object against the dry-run result | Build against the Kix-owned view of the live object |
-| Ownership conflicts, webhooks, admission policies, validation, RBAC | Checked | `not_checked` (`read_only`) |
-| Prune fates | Checked | `not_checked` |
-| Drift | Fields the deploy touches | Every drifted field, with whether the deploy reverts it |
-| `made_by` | `dry_run` (`builds` with `--current-activation`) | `live_read`, or `builds` with `--from <build>` |
+| | `kix plan` | `kix plan --read-only` | `kix diff` |
+| --- | --- | --- | --- |
+| Reads | The cluster, and sends dry-run writes | The cluster, with `get` and `list` | Two builds or a saved directory; never the cluster |
+| Permissions | The deployer's | `get` and `list` | None |
+| Field changes | Live object against the dry-run result | Build against the Kix-owned view of the live object | Build against build |
+| Ownership conflicts, webhooks, admission policies, validation, RBAC | Checked | `not_checked` (`read_only`) | `not_checked` |
+| Prune fates | Checked | `not_checked` | `not_checked` |
+| Drift | Fields the deploy touches | Every drifted field, with whether the deploy reverts it | Not checked |
+| `made_by` | `dry_run` (`builds` with `--offline`) | `live_read` | `builds`, or `live_read` with a snapshot |
 
-Use `kix plan` to preview a deploy you are about to run. Use `kix diff` when
-the job has read-only credentials or no cluster at all, such as a pull
-request check against a snapshot.
+Use `kix plan` to preview a deploy you are about to run. Use
+`kix plan --read-only` when the job has read-only credentials. Use
+`kix diff` when the job has no cluster at all, such as a pull request check
+against a snapshot.
 
 `kix deploy` makes the same plan before it asks for confirmation. Under
 `--on-error stop`, the default, it stops before applying anything when the
-plan shows a refused write. See [`kix deploy`](/docs/reference/cli/deploy-apply/).
+plan shows a refused write. See [`kix deploy`](/docs/reference/cli/deploy/).
 
 ## Examples
 
 <Command commands={[
   "kix plan demo",
   "kix plan demo --prune --reconcile",
-  "kix plan demo --save plan.kixplan",
+  "kix plan demo --out plan.kixplan",
   "kix plan demo -o markdown > plan.md",
+  "kix plan demo --read-only",
+  "kix plan demo --read-only -o json --detail fields",
 ]} />
 
 :::tip[Use it in a task]
-See [Preview changes with `kix plan` and `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+See [Preview changes with `kix plan`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-plan/)
 for when to use each preview.
 :::
