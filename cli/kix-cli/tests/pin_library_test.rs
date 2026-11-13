@@ -158,13 +158,13 @@ fn an_input_without_a_ref_is_locked_to_the_tag() {
         .arg("--dry-run")
         .assert()
         .success()
-        .stdout(predicate::str::contains(format!(
-            "Kix library: v0.0.1 -> {VERSION}. This was a dry run, so Kix changed no files."
-        )));
+        .stdout(format!(
+            "Kix library: 0.0.1 -> {VERSION}. This was a dry run, so Kix changed no files.\nNext: run `kix upgrade --to {VERSION}` to make these changes.\n"
+        ));
     assert_eq!(locked_rev(&proj, "kix"), old_rev);
 
     repair(&proj).assert().success().stdout(format!(
-        "Kix library: v0.0.1 -> {VERSION}.\nCommit flake.lock.\n"
+        "Kix library: 0.0.1 -> {VERSION}.\nCommit flake.lock.\n"
     ));
     assert_eq!(locked_rev(&proj, "kix"), lib.release_rev);
     assert_eq!(
@@ -196,7 +196,7 @@ fn a_version_tag_is_changed_in_flake_nix() {
     nix(&proj, &["flake", "lock"]);
 
     repair(&proj).assert().success().stdout(format!(
-        "Kix library: v0.0.1 -> {VERSION}. Kix changed the tag in flake.nix.\nCommit flake.nix and flake.lock.\n"
+        "Kix library: 0.0.1 -> {VERSION}. Kix changed the tag in flake.nix.\nCommit flake.nix and flake.lock.\n"
     ));
     assert!(
         std::fs::read_to_string(proj.join("flake.nix"))
@@ -289,7 +289,7 @@ fn two_library_names_need_the_setting() {
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(
-            "Kix library: v0.0.1 -> {VERSION}. Kix changed the tag in flake.nix."
+            "Kix library: 0.0.1 -> {VERSION}. Kix changed the tag in flake.nix."
         )));
 }
 
@@ -304,6 +304,19 @@ fn lib_update_is_refused_with_the_new_command() {
         .stderr(predicate::str::contains(format!(
             "[K6054] `kix lib update` was removed. Use `kix upgrade --to {VERSION}` instead."
         )));
+}
+
+#[test]
+fn secret_hash_is_refused_with_its_change_record() {
+    Command::cargo_bin("kix")
+        .unwrap()
+        .env("NO_COLOR", "true")
+        .args(["secret", "hash", "secrets/db.yaml"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "[K4732] `kix secret hash` was removed. Kix now records the SHA-256",
+        ));
 }
 
 #[test]

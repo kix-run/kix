@@ -229,6 +229,10 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
             known,
             without_notes: &without_notes,
             verbose,
+            command: &match args.to.as_deref() {
+                None | Some("latest") => "kix upgrade".to_string(),
+                Some(text) => format!("kix upgrade --to {text}"),
+            },
         });
         return Ok(());
     }
@@ -550,9 +554,7 @@ fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<V
     }
     super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
     kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
-    if let kix::library::LibraryVersion::Known(v) = kix::library::eval_version(dir, &[])
-        && let Ok(version) = v.parse()
-    {
+    if let Some(version) = library_version(dir) {
         return Ok(version);
     }
     refuse(&format!(
@@ -560,6 +562,15 @@ fn current_version(dir: &Path, config: &kix::project::ProjectConfig) -> Result<V
         kix::version::running().release()
     ))?;
     unreachable!("refuse exits")
+}
+
+/// Return the version of the Kix library the project in `dir` builds with,
+/// or `None` when Kix cannot read it.
+fn library_version(dir: &Path) -> Option<Version> {
+    match kix::library::eval_version(dir, &[]) {
+        kix::library::LibraryVersion::Known(v) => v.parse().ok(),
+        _ => None,
+    }
 }
 
 /// Make `kix.toml`, `flake.nix`, and `flake.lock` of the project in `dir`
@@ -587,13 +598,18 @@ fn repair(
         }
     };
     let mut files: Vec<&str> = Vec::new();
+    let mut would_change = new_toml.is_some();
     let has_flake = dir.join("flake.nix").is_file();
     if has_flake {
         super::select_builder_for(dir).map_err(|e| miette!("{e}"))?;
         kix::runtime::runtime().map_err(|e| miette!("{e}"))?;
+        // Read before the move, so the summary can name the old library by
+        // its version.
+        let library = library_version(dir);
         match kix::pin_library::pin_library(dir, version, dry_run) {
             Ok(pinned) => {
-                println!("{}", pinned.summary());
+                println!("{}", pinned.summary(library.as_ref()));
+                would_change |= pinned.moves();
                 files.extend(pinned.changed);
             }
             Err(e) => {
@@ -632,7 +648,9 @@ fn repair(
             files.insert(0, "kix.toml");
         }
     }
-    if !dry_run && !files.is_empty() {
+    if dry_run && would_change {
+        println!("Next: run `kix upgrade --to {release}` to make these changes.");
+    } else if !dry_run && !files.is_empty() {
         println!("Commit {}.", out::and_list(&files));
     } else if !has_flake && keeps {
         println!("kix.toml already names Kix {release}. Nothing to change.");
@@ -1295,6 +1313,9 @@ struct Preview<'a> {
     known: Known,
     without_notes: &'a [String],
     verbose: bool,
+    /// The command that runs this upgrade, as the person typed it without
+    /// `--dry-run`.
+    command: &'a str,
 }
 
 fn preview(p: &Preview) {
@@ -1383,7 +1404,7 @@ fn preview(p: &Preview) {
             many.join("], [")
         ),
     }
-    println!("Next: run `kix upgrade`.");
+    println!("Next: run `{}`.", p.command);
 }
 
 /// Add `refs` to the acknowledged data changes in `kix-upgrade.json`.

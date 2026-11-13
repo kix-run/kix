@@ -464,7 +464,9 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   (`repair`) runs before the release index is fetched: it sets `kix` in
   `kix.toml` when the setting does not match and calls
   `pin_library::pin_library`, and builds nothing; `--dry-run` makes it a
-  dry run. An exact prerelease in `--to` is a target, found in the full
+  dry run that ends with the command to run. `repair` evaluates the library
+  version first, so the summary names the old library by its version, else
+  by its tag or commit. A dry run's `Next:` line repeats `--to` as typed. An exact prerelease in `--to` is a target, found in the full
   index, and its own change records count.
   Exit 2 on a failed build or lock, 3 when a person should read the result
   or edit `flake.nix`, and the versions this run downloaded, other than

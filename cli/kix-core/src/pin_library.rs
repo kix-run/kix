@@ -220,10 +220,33 @@ pub struct Pinned {
 }
 
 impl Pinned {
+    /// Return whether Kix moved the library input, or with a dry run would
+    /// move it.
+    pub fn moves(&self) -> bool {
+        if self.dry_run {
+            self.follows.moves() && self.before != format!("v{}", self.version.release())
+        } else {
+            !self.changed.is_empty()
+        }
+    }
+
+    /// Return how a message names the library the project had before:
+    /// `library`, its version when the caller read it, or else the release
+    /// tag without its `v`, or else the commit.
+    fn before_name(&self, library: Option<&Version>) -> String {
+        match library {
+            Some(v) if *v != self.version => v.release(),
+            _ if is_release_tag(&self.before) => self.before[1..].to_string(),
+            _ => self.before.clone(),
+        }
+    }
+
     /// Return the sentences that say what Kix did, without the files to
-    /// commit.
-    pub fn summary(&self) -> String {
+    /// commit. `library` is the version of the library before, when the
+    /// caller read it.
+    pub fn summary(&self, library: Option<&Version>) -> String {
         let to = self.version.release();
+        let before = self.before_name(library);
         if let Some(alone) = self.follows.left_alone(&self.input) {
             return format!(
                 "{alone} It holds the Kix library {}.",
@@ -241,8 +264,7 @@ impl Pinned {
                 ""
             };
             return format!(
-                "Kix library: {} -> {to}.{edit} This was a dry run, so Kix changed no files.",
-                self.before
+                "Kix library: {before} -> {to}.{edit} This was a dry run, so Kix changed no files."
             );
         }
         if self.changed.is_empty() {
@@ -253,7 +275,7 @@ impl Pinned {
         } else {
             ""
         };
-        format!("Kix library: {} -> {to}.{edit}", self.before)
+        format!("Kix library: {before} -> {to}.{edit}")
     }
 }
 
@@ -1107,8 +1129,16 @@ mod tests {
     #[test]
     fn the_summary_says_what_kix_did() {
         assert_eq!(
-            pinned(Follows::NoRef, "v0.9.1", vec!["flake.lock"], false).summary(),
-            "Kix library: v0.9.1 -> 0.10.0."
+            pinned(Follows::NoRef, "v0.9.1", vec!["flake.lock"], false).summary(None),
+            "Kix library: 0.9.1 -> 0.10.0."
+        );
+        assert_eq!(
+            pinned(Follows::NoRef, "207ef75", vec![], true).summary(Some(&v("0.9.2"))),
+            "Kix library: 0.9.2 -> 0.10.0. This was a dry run, so Kix changed no files."
+        );
+        assert_eq!(
+            pinned(Follows::NoRef, "207ef75", vec![], true).summary(None),
+            "Kix library: 207ef75 -> 0.10.0. This was a dry run, so Kix changed no files."
         );
         assert_eq!(
             pinned(
@@ -1117,19 +1147,19 @@ mod tests {
                 vec!["flake.nix", "flake.lock"],
                 false
             )
-            .summary(),
-            "Kix library: v0.9.1 -> 0.10.0. Kix changed the tag in flake.nix."
+            .summary(None),
+            "Kix library: 0.9.1 -> 0.10.0. Kix changed the tag in flake.nix."
         );
         assert_eq!(
-            pinned(Follows::Tag("v0.9.1".into()), "v0.9.1", vec![], true).summary(),
-            "Kix library: v0.9.1 -> 0.10.0. Kix would change the tag in flake.nix. This was a dry run, so Kix changed no files."
+            pinned(Follows::Tag("v0.9.1".into()), "v0.9.1", vec![], true).summary(None),
+            "Kix library: 0.9.1 -> 0.10.0. Kix would change the tag in flake.nix. This was a dry run, so Kix changed no files."
         );
         assert_eq!(
-            pinned(Follows::NoRef, "v0.10.0", vec![], false).summary(),
+            pinned(Follows::NoRef, "v0.10.0", vec![], false).summary(None),
             "Kix library is already 0.10.0."
         );
         assert_eq!(
-            pinned(Follows::Branch("main".into()), "abc1234", vec![], false).summary(),
+            pinned(Follows::Branch("main".into()), "abc1234", vec![], false).summary(None),
             "The input kix follows the branch main, so Kix leaves it alone. It holds the Kix library 0.10.0."
         );
     }

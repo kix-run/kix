@@ -68,8 +68,8 @@ does depends on what `flake.nix` says the input follows:
 
 | `flake.nix` says | Kix does | Kix prints |
 | --- | --- | --- |
-| No ref, such as `github:kix-run/kix` | Locks the tag in `flake.lock`. `flake.nix` stays as it is. | `Kix library: v0.9.1 -> 0.10.0.` |
-| A version tag, such as `github:kix-run/kix/v0.9.1` | Changes that tag in `flake.nix`, then locks it. When more than one URL in `flake.nix` names the tag, Kix changes nothing and lists the lines. | `Kix library: v0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.` |
+| No ref, such as `github:kix-run/kix` | Locks the tag in `flake.lock`. `flake.nix` stays as it is. | `Kix library: 0.9.1 -> 0.10.0.` |
+| A version tag, such as `github:kix-run/kix/v0.9.1` | Changes that tag in `flake.nix`, then locks it. When more than one URL in `flake.nix` names the tag, Kix changes nothing and lists the lines. | `Kix library: 0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.` |
 | A branch or a commit | Nothing. You chose it. | `The input kix follows the branch main, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
 | A local folder | Nothing. | `The input kix is the local folder ../kix, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
 
@@ -80,10 +80,12 @@ library can come from another input that brings its own Kix library, and
 the message names the `follows` line to add to `flake.nix`. When the
 library is an input of another flake only, Kix changes nothing and names the
 lines to add. With `--dry-run`, Kix evaluates the project with the input on
-the tag and writes no file. Commit the files Kix names:
+the tag, writes no file, and names the command that makes the change. Kix
+names the library by its version, or by its commit when it cannot read the
+version. Commit the files Kix names:
 
 ```text
-Kix library: v0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.
+Kix library: 0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.
 Commit flake.nix and flake.lock.
 ```
 
