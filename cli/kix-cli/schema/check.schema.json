@@ -8,7 +8,7 @@
           "type": "string"
         },
         "findings": {
-          "description": "The scorecard's findings, on the scorecard row only.",
+          "description": "The scorecard's findings on the scorecard row, and the Kix library's\nerrors on the eval row, which its details already show as text.",
           "items": true,
           "type": "array"
         },
