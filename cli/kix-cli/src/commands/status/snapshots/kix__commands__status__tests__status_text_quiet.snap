@@ -1,0 +1,9 @@
+---
+source: kix-cli/src/commands/status/tests.rs
+expression: "text::render(&doc, text::Detail::Problems, &two_days_ago)"
+---
+db/postgres
+  ConfigMap db/pg-config        changed since deploy (data.max_connections by kubectl-edit)
+vault/vaultwarden
+  Deployment vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
+  Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden

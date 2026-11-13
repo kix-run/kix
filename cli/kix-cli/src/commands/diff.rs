@@ -471,7 +471,7 @@ fn check_drift(objects: &[DynamicObject]) -> (Vec<(DriftReport, DynamicObject)>,
             DriftVerdict::Drifted { .. } => drifted.push((report, obj.clone())),
             DriftVerdict::Unstamped | DriftVerdict::NoFieldset => unchecked += 1,
             // `check_object` reports only on live objects, so never `Missing`.
-            DriftVerdict::InSync | DriftVerdict::Missing { .. } => {}
+            DriftVerdict::InSync => {}
         }
     }
     (drifted, unchecked)

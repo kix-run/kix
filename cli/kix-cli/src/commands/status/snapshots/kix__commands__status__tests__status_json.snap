@@ -1,0 +1,135 @@
+---
+source: kix-cli/src/commands/status/tests.rs
+expression: "serde_json::to_string_pretty(&doc).unwrap()"
+---
+{
+  "schema_version": "2026-11-13",
+  "kubernetes": {
+    "context": "prod",
+    "uid": "4d7b1c2e",
+    "version": "v1.33.1"
+  },
+  "checks": [
+    "presence",
+    "drift",
+    "readiness"
+  ],
+  "unreadable": [
+    "secrets"
+  ],
+  "clusters": [
+    {
+      "cluster": "shop",
+      "deploy": {
+        "name": "shop-7f3a2b1c0d9e",
+        "phase": "Active",
+        "identity_hash": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+        "deployed_at": "2026-11-11T10:00:00Z",
+        "deployed_with": null
+      },
+      "objects_from": "index",
+      "notes": [],
+      "packages": [
+        {
+          "name": "vault/vaultwarden",
+          "summary": {
+            "resources": 4,
+            "ok": 2,
+            "missing": 1,
+            "changed": 0,
+            "not_ready": 1,
+            "not_checked": 2
+          },
+          "resources": [
+            {
+              "kind": "Deployment",
+              "namespace": "vault",
+              "name": "vaultwarden",
+              "identity_hash": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+              "named": true,
+              "present": "yes",
+              "drift": {
+                "verdict": "in_sync",
+                "foreign_owners": [],
+                "unrecorded_scale": null
+              },
+              "ready": false,
+              "not_ready_reason": "0/1 ready, 0/1 updated",
+              "needed_by": [],
+              "problems": [
+                "not_ready"
+              ],
+              "not_checked": false
+            },
+            {
+              "kind": "ConfigMap",
+              "namespace": "vault",
+              "name": "vaultwarden-env",
+              "identity_hash": "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu",
+              "named": true,
+              "present": "yes",
+              "drift": {
+                "verdict": "unstamped",
+                "foreign_owners": [],
+                "unrecorded_scale": null
+              },
+              "ready": null,
+              "not_ready_reason": null,
+              "needed_by": [],
+              "problems": [],
+              "not_checked": true
+            },
+            {
+              "kind": "Secret",
+              "namespace": "vault",
+              "name": "vaultwarden-db",
+              "identity_hash": "ssssssssssssssssssssssssssssssss",
+              "named": true,
+              "present": "no",
+              "drift": null,
+              "ready": null,
+              "not_ready_reason": null,
+              "needed_by": [
+                "Deployment vault/vaultwarden"
+              ],
+              "problems": [
+                "missing"
+              ],
+              "not_checked": false
+            },
+            {
+              "kind": "Secret",
+              "namespace": "vault",
+              "name": "vaultwarden-admin",
+              "identity_hash": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+              "named": true,
+              "present": "unknown",
+              "drift": null,
+              "ready": null,
+              "not_ready_reason": null,
+              "needed_by": [],
+              "problems": [],
+              "not_checked": true
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "resources": 4,
+        "ok": 2,
+        "missing": 1,
+        "changed": 0,
+        "not_ready": 1,
+        "not_checked": 2
+      }
+    }
+  ],
+  "summary": {
+    "resources": 4,
+    "ok": 2,
+    "missing": 1,
+    "changed": 0,
+    "not_ready": 1,
+    "not_checked": 2
+  }
+}

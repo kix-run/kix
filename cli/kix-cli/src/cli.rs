@@ -186,7 +186,17 @@ pub enum Command {
     #[command(alias = "apply")]
     Deploy(DeployArgs),
 
-    /// Resource health table
+    /// Check that what Kix deployed is present, unchanged, and ready
+    ///
+    /// Reads the cluster's deploy records and Kix's objects, and runs three
+    /// checks on every object of the current deploy: presence (is it on the
+    /// cluster), drift (does it still hold what Kix applied), and readiness
+    /// (is it ready by the rules `kix deploy` waits on). Needs only a
+    /// kubeconfig, no project or build. Objects of a kind this account may
+    /// not list are counted as not checked.
+    ///
+    /// Exits 0 when every selected check passes, 2 when an object is
+    /// missing, changed, or not ready, and 1 when Kix could not answer.
     Status(StatusArgs),
 
     /// List clusters, packages, or other resources
@@ -226,12 +236,6 @@ pub enum Command {
     /// Port-forward to a package's primary workload
     #[command(alias = "port-forward")]
     Pf(PortForwardArgs),
-
-    /// Cluster integrity walk: dependency-presence check via identity-hashes
-    Health(HealthArgs),
-
-    /// Content drift check via applied-hash stamps (cluster-only, no build)
-    Drift(DriftArgs),
 
     /// Manage cluster snapshots for CI/offline use
     Snapshot(SnapshotArgs),
@@ -313,13 +317,12 @@ impl Command {
             Command::Plan(a) => Some(&a.plan.cluster),
             Command::Check(a) => Some(&a.cluster),
             Command::Deploy(a) => Some(&a.plan.cluster),
-            Command::Status(a) => Some(&a.cluster),
+            Command::Status(a) => a.cluster.as_deref(),
             Command::Graph(a) => Some(&a.cluster),
             Command::Bundle(a) => Some(&a.cluster),
             Command::Inspect(a) => Some(&a.cluster),
             Command::Gc(a) => Some(&a.cluster),
             Command::Migrate(MigrateCommand::Domain(a)) => Some(&a.cluster),
-            Command::Health(a) => Some(&a.cluster),
             Command::Rollback(a) => Some(&a.cluster),
             Command::Export(a) => Some(&a.cluster),
             Command::Logs(a) => Some(&a.cluster),
@@ -339,7 +342,6 @@ impl Command {
             },
             Command::Completions(_)
             | Command::Doctor
-            | Command::Drift(_)
             | Command::Pin(_)
             | Command::Lib(_)
             | Command::Secret(_)

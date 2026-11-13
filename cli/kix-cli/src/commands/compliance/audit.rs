@@ -365,7 +365,7 @@ static SOC2: &[Control] = &[
     Control {
         id: "cc7.1",
         title: "Detection of Unauthorized Changes",
-        narrative: "`kix health` compares live-cluster content hashes against the intended activation. Any drift is surfaced with the exact fields that changed.",
+        narrative: "`kix status --check drift` compares each live object with what Kix applied, and names the fields that changed and the tool that changed them.",
         required_rules: &[],
     },
     Control {
@@ -431,7 +431,7 @@ static DORA: &[Control] = &[
     Control {
         id: "art.9.4.c",
         title: "Detection of Anomalous Activities",
-        narrative: "`kix health` content-hash drift detection; operator reconcile heals drift automatically.",
+        narrative: "`kix status --check drift` detects changes to what Kix applied; operator reconcile heals drift automatically.",
         required_rules: &[],
     },
     Control {

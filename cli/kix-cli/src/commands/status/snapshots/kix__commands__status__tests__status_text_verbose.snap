@@ -1,0 +1,30 @@
+---
+source: kix-cli/src/commands/status/tests.rs
+expression: "text::render(&doc, text::Detail::Everything, &two_days_ago)"
+---
+Cluster shop on Kubernetes v1.33.1 (context prod)
+Kubernetes cluster ID: 4d7b1c2e
+Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
+
+  db/postgres              2 resources  1 changed
+  ingress/ingress-nginx    1 resource   ok
+  vault/vaultwarden        4 resources  1 not ready, 1 missing
+  (cluster-level)          1 resource   ok
+
+db/postgres
+  ConfigMap db/pg-config            changed since deploy (data.max_connections by kubectl-edit)
+  StatefulSet db/postgres           ok
+ingress/ingress-nginx
+  Deployment ingress/ingress-nginx  ok
+vault/vaultwarden
+  Deployment vault/vaultwarden      not ready (0/1 ready, 0/1 updated)
+  ConfigMap vault/vaultwarden-env   not checked for changes: no applied-hash stamp yet, the next deploy adds it
+  Secret vault/vaultwarden-db       missing, needed by Deployment vault/vaultwarden
+  Secret vault/vaultwarden-admin    not checked: this account may not list its kind
+(cluster-level)
+  Namespace vault                   ok
+
+8 resources: 5 ok, 1 changed, 1 not ready, 1 missing. 2 not checked.
+Next: run `kix deploy shop --reconcile` to put back what is missing or changed. `kix plan shop --reconcile` shows what it would change first.
+
+This account may not list secrets, so Kix did not check objects of those kinds.

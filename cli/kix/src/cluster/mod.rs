@@ -17,6 +17,7 @@ pub mod inventory;
 pub mod kept;
 pub mod kubernetes_version;
 pub mod migrate;
+pub mod observe;
 pub(crate) mod ops;
 pub mod owned_view;
 pub mod preview;

@@ -1,0 +1,517 @@
+{
+  "$defs": {
+    "ClusterStatus": {
+      "description": "One Kix cluster.",
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "deploy": {
+          "$ref": "#/$defs/Deploy"
+        },
+        "notes": {
+          "description": "Warnings about the cluster, such as a platform interface that\nchanged.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "objects_from": {
+          "$ref": "#/$defs/ObjectsFrom",
+          "description": "Where Kix found the list of objects the deploy made."
+        },
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/PackageStatus"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "required": [
+        "cluster",
+        "deploy",
+        "objects_from",
+        "notes",
+        "packages",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "Deploy": {
+      "description": "The current deploy record.",
+      "properties": {
+        "deployed_at": {
+          "description": "When the deploy finished (RFC 3339).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deployed_with": {
+          "description": "The version of Kix that made the deploy, when the record says.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "phase": {
+          "description": "`Active`, or `Degraded` when some objects failed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "phase",
+        "identity_hash",
+        "deployed_at",
+        "deployed_with"
+      ],
+      "type": "object"
+    },
+    "Drift": {
+      "description": "The drift check of one object.",
+      "properties": {
+        "foreign_owners": {
+          "description": "Other field managers that own fields of the object.",
+          "items": {
+            "$ref": "#/$defs/Owner"
+          },
+          "type": "array"
+        },
+        "unrecorded_scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Scale"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A replica count changed through `/scale` that Kubernetes recorded no\nowner for."
+        },
+        "verdict": {
+          "$ref": "#/$defs/DriftState"
+        }
+      },
+      "required": [
+        "verdict",
+        "foreign_owners",
+        "unrecorded_scale"
+      ],
+      "type": "object"
+    },
+    "DriftState": {
+      "oneOf": [
+        {
+          "enum": [
+            "in_sync",
+            "changed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unstamped",
+          "description": "The object has no applied-hash stamp yet. The next deploy adds it.",
+          "type": "string"
+        },
+        {
+          "const": "no_fieldset",
+          "description": "The object has no field ownership entry for Kix.",
+          "type": "string"
+        }
+      ]
+    },
+    "Kubernetes": {
+      "description": "The Kubernetes cluster `kix status` read.",
+      "properties": {
+        "context": {
+          "description": "The kubeconfig context, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uid": {
+          "description": "The UID of the `kube-system` Namespace, which `cluster.kubernetes.uid`\nnames. `null` when this account may not read it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The version the API server reports, such as `v1.33.1`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "uid",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ObjectsFrom": {
+      "description": "Where Kix found the list of objects a deploy made.",
+      "oneOf": [
+        {
+          "const": "index",
+          "description": "The deploy record's package index.",
+          "type": "string"
+        },
+        {
+          "const": "depends_on",
+          "description": "The depends-on annotations of the deploy's live objects, for a record\nwritten before Kix stored an index.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Nowhere: the record has no index and its own object is gone. No\nobject was checked.",
+          "type": "string"
+        }
+      ]
+    },
+    "Owner": {
+      "properties": {
+        "manager": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subresource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "time": {
+          "description": "When the manager last wrote (RFC 3339), when Kubernetes recorded it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "manager",
+        "operation",
+        "subresource",
+        "time",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "PackageStatus": {
+      "description": "One package, or the cluster-level objects.",
+      "properties": {
+        "name": {
+          "description": "`namespace/instance`, or `null` for the objects no package owns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resources": {
+          "items": {
+            "$ref": "#/$defs/ResourceStatus"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "required": [
+        "name",
+        "summary",
+        "resources"
+      ],
+      "type": "object"
+    },
+    "Present": {
+      "description": "Whether an object is on the cluster.",
+      "oneOf": [
+        {
+          "enum": [
+            "yes",
+            "no"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "external",
+          "description": "An import marker, which stands for an object Kix does not manage.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "This account may not list the object's kind.",
+          "type": "string"
+        }
+      ]
+    },
+    "Problem": {
+      "description": "Something a check found wrong with an object.",
+      "oneOf": [
+        {
+          "enum": [
+            "not_ready"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "The object is not on the cluster. Every check reports it, because\nnone can run on an object that is gone.",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "description": "The object no longer holds what Kix applied.",
+          "type": "string"
+        }
+      ]
+    },
+    "ResourceStatus": {
+      "description": "One object of the deploy.",
+      "properties": {
+        "drift": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Drift"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The drift check, or `null` when it did not run or the object is not\non the cluster."
+        },
+        "identity_hash": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "The kind, or `Unknown` when Kix cannot name a missing object.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "named": {
+          "description": "`false` when Kix could not name a missing object. The deploy record\nnames its objects from Kix 0.10, and the local Nix store names them\nwhen it holds the build.",
+          "type": "boolean"
+        },
+        "namespace": {
+          "description": "`null` for a cluster-scoped object.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "needed_by": {
+          "description": "The objects that depend on this one, as `Kind namespace/name`, when\nit is missing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "not_checked": {
+          "description": "Whether a selected check could not run on the object.",
+          "type": "boolean"
+        },
+        "not_ready_reason": {
+          "description": "Why the object is not ready, such as `0/1 ready, 0/1 updated`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "present": {
+          "$ref": "#/$defs/Present"
+        },
+        "problems": {
+          "description": "What the checks found wrong. Empty when the object is fine.",
+          "items": {
+            "$ref": "#/$defs/Problem"
+          },
+          "type": "array"
+        },
+        "ready": {
+          "description": "Whether the object is ready. `null` when the readiness check did not\nrun, the kind has no readiness (such as a ConfigMap), or the object is\nnot on the cluster.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "namespace",
+        "name",
+        "identity_hash",
+        "named",
+        "present",
+        "drift",
+        "ready",
+        "not_ready_reason",
+        "needed_by",
+        "problems",
+        "not_checked"
+      ],
+      "type": "object"
+    },
+    "Scale": {
+      "properties": {
+        "deployed": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "live": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "deployed",
+        "live"
+      ],
+      "type": "object"
+    },
+    "StatusCheck": {
+      "description": "One check of `kix status`.",
+      "oneOf": [
+        {
+          "const": "presence",
+          "description": "Is every object of the current deploy on the cluster?",
+          "type": "string"
+        },
+        {
+          "const": "drift",
+          "description": "Does each object still hold what Kix applied?",
+          "type": "string"
+        },
+        {
+          "const": "readiness",
+          "description": "Is each object ready, by the rules a deploy waits on?",
+          "type": "string"
+        }
+      ]
+    },
+    "StatusDocument": {
+      "description": "What `kix status` found. Programs that read it must skip fields they do\nnot know.",
+      "properties": {
+        "checks": {
+          "description": "The checks that ran.",
+          "items": {
+            "$ref": "#/$defs/StatusCheck"
+          },
+          "type": "array"
+        },
+        "clusters": {
+          "items": {
+            "$ref": "#/$defs/ClusterStatus"
+          },
+          "type": "array"
+        },
+        "kubernetes": {
+          "$ref": "#/$defs/Kubernetes"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary",
+          "description": "The counts over every cluster."
+        },
+        "unreadable": {
+          "description": "Resource types this account may not list, such as `secrets`. Objects\nof these kinds that Kix cannot see are not checked.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kubernetes",
+        "checks",
+        "unreadable",
+        "clusters",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "Summary": {
+      "description": "Counts of objects. An object with two problems counts under both.",
+      "properties": {
+        "changed": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "missing": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "not_checked": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "not_ready": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ok": {
+          "description": "Objects with no problem, including those not checked.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resources": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "resources",
+        "ok",
+        "missing",
+        "changed",
+        "not_ready",
+        "not_checked"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/StatusDocument",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What `kix status` prints: the document, and how much of it the text\nform shows.",
+  "title": "StatusResponse"
+}

@@ -24,7 +24,6 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "graph",
             "inspect",
             "rollback",
-            "drift",
             "images",
             "compliance sbom",
             "compliance attest",
@@ -43,8 +42,6 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "rollback",
             "logs",
             "pf",
-            "health",
-            "drift",
             "snapshot",
             "compliance attest",
         ],
@@ -57,14 +54,12 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "plan",
             "check",
             "deploy",
-            "status",
             "list",
             "graph",
             "inspect",
             "gc",
             "migrate",
             "rollback",
-            "health",
             "export",
             "logs",
             "pf",
@@ -82,7 +77,6 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
         &[
             "build",
             "check",
-            "status",
             "list",
             "graph",
             "inspect",
@@ -98,14 +92,12 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "plan",
             "check",
             "deploy",
-            "status",
             "list",
             "graph",
             "inspect",
             "gc",
             "migrate",
             "rollback",
-            "health",
             "export",
             "logs",
             "pf",
@@ -232,9 +224,10 @@ mod tests {
         let gc = long_help(&["gc"]);
         assert!(!gc.contains("--output"));
 
-        let drift = long_help(&["drift"]);
-        assert!(drift.contains("--context") && drift.contains("--output"));
-        assert!(!drift.contains("--flake"));
+        // `status` reads only the cluster, so it takes no project flags.
+        let status = long_help(&["status"]);
+        assert!(status.contains("--context") && status.contains("--output"));
+        assert!(!status.contains("--flake"));
 
         let sbom = long_help(&["compliance", "sbom"]);
         assert!(sbom.contains("--output") && !sbom.contains("--context"));
@@ -264,7 +257,7 @@ mod tests {
     #[test]
     fn a_hidden_global_is_still_accepted() {
         let matches = command()
-            .try_get_matches_from(["kix", "--flake", "x", "drift"])
+            .try_get_matches_from(["kix", "--flake", "x", "status"])
             .expect("parses");
         let cli = Cli::from_arg_matches(&matches).expect("converts");
         assert_eq!(cli.global.flake, "x");

@@ -10,6 +10,11 @@
 //! path, which Kix also stamps on every object as `kix.run/identity-hash`.
 //! It carries a format number. A reader that does not know the format
 //! ignores the index and places objects the way it would without one.
+//!
+//! The index also names each object (`names`), so `kix status` can say which
+//! object is missing on a machine that does not have the build. Records
+//! written before 0.10 have no `names`, and readers before 0.10 skip the
+//! field.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -17,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::store_graph::{StoreGraph, store_hash};
+use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 /// The format this release writes and reads.
 pub const FORMAT: u64 = 1;
@@ -29,6 +35,10 @@ pub const FORMAT: u64 = 1;
 /// 512 KiB cap would allow 25 MB. An index costs about 42 bytes an object
 /// (9.4 KB for the 223 objects of `test-cnpg`, measured on kind), so 150 KiB
 /// still fits some 3,600 objects, more than any build Kix has measured.
+///
+/// The names of the objects cost about 80 bytes more an object, so an index
+/// with names fits some 1,200 objects. Past that, a deploy writes the index
+/// without its names ([`RecordPackageIndex::without_names`]).
 pub const MAX_BYTES: usize = 150 * 1024;
 
 /// Which package each resource of a build belongs to.
@@ -41,6 +51,41 @@ pub struct RecordPackageIndex {
     pub packages: BTreeMap<String, IndexedPackage>,
     /// Identity hashes of the resources no package lists, sorted.
     pub cluster_level: Vec<String>,
+    /// The kind, namespace, and name of each resource, keyed by identity
+    /// hash. Empty in an index written before 0.10, or one too large to
+    /// store with its names.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub names: BTreeMap<String, ObjectName>,
+}
+
+/// The kind, namespace, and name of one object, stored as a JSON array of
+/// three strings. The namespace of a cluster-scoped object is `""`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectName(pub String, pub String, pub String);
+
+impl ObjectName {
+    /// Return the name of the object `rid` names.
+    pub fn of(rid: &ResourceId) -> ObjectName {
+        let namespace = if rid.namespace == CLUSTER_SCOPED {
+            String::new()
+        } else {
+            rid.namespace.clone()
+        };
+        ObjectName(rid.kind.clone(), namespace, rid.name.clone())
+    }
+
+    /// Return the object's [`ResourceId`].
+    pub fn resource_id(&self) -> ResourceId {
+        ResourceId {
+            kind: self.0.clone(),
+            namespace: if self.1.is_empty() {
+                CLUSTER_SCOPED.to_string()
+            } else {
+                self.1.clone()
+            },
+            name: self.2.clone(),
+        }
+    }
 }
 
 /// One package of a [`RecordPackageIndex`].
@@ -75,11 +120,36 @@ impl RecordPackageIndex {
             .map(|p| store_hash(p))
             .collect();
         cluster_level.sort();
+        let names = graph
+            .resources
+            .iter()
+            .map(|(path, node)| {
+                (
+                    store_hash(path),
+                    ObjectName::of(&ResourceId::from_value(&node.manifest)),
+                )
+            })
+            .collect();
         RecordPackageIndex {
             format: FORMAT,
             packages,
             cluster_level,
+            names,
         }
+    }
+
+    /// Return the index without the names of its objects.
+    pub fn without_names(&self) -> RecordPackageIndex {
+        RecordPackageIndex {
+            names: BTreeMap::new(),
+            ..self.clone()
+        }
+    }
+
+    /// Return the name of the object with identity hash `hash`, when the
+    /// index has names.
+    pub fn name_of(&self, hash: &str) -> Option<ResourceId> {
+        self.names.get(hash).map(ObjectName::resource_id)
     }
 
     /// Return the identity hash of every resource the index lists: each
@@ -193,6 +263,12 @@ mod tests {
                     "default/web": { "instance": a("1"), "resources": [a("3"), a("2")] },
                 },
                 "clusterLevel": [a("4")],
+                "names": {
+                    a("1"): ["PackageInstance", "default", "web"],
+                    a("2"): ["ConfigMap", "default", "a"],
+                    a("3"): ["ConfigMap", "default", "b"],
+                    a("4"): ["Namespace", "", "default"],
+                },
             })
         );
         assert_eq!(
@@ -210,6 +286,27 @@ mod tests {
             index.hashes(),
             expected.iter().map(String::as_str).collect::<HashSet<_>>()
         );
+    }
+
+    /// The names give each object's identity, and an index without them,
+    /// as one written before 0.10, reads with no names.
+    #[test]
+    fn names_give_each_object_its_identity() {
+        let index = RecordPackageIndex::of(&graph());
+        let a = |c: &str| format!("{c:a>32}");
+        assert_eq!(
+            index.name_of(&a("4")).map(|r| r.to_string()).as_deref(),
+            Some("Namespace/default")
+        );
+        assert_eq!(
+            index.name_of(&a("2")).map(|r| r.to_string()).as_deref(),
+            Some("ConfigMap/a@default")
+        );
+        let old = index.without_names();
+        assert!(!old.to_value().as_object().unwrap().contains_key("names"));
+        let read = RecordPackageIndex::from_value(&old.to_value()).unwrap();
+        assert_eq!(read.name_of(&a("2")), None);
+        assert_eq!(read.hashes(), index.hashes());
     }
 
     /// An index in a format this release does not know, or with no format,
