@@ -9,7 +9,7 @@
 
 mod observer;
 mod saved_plan;
-mod stops;
+pub(crate) mod stops;
 #[cfg(test)]
 mod tests;
 
@@ -80,11 +80,12 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
         return Ok(());
     };
-    // A cluster that has never run a required stop must deploy it first. A
-    // cluster with no receipt (a first deploy, or an operator deploy) passes.
-    if let Some(last) = p.baseline.active().and_then(|r| r.deployed_with.as_deref()) {
-        stops::check(&args.plan.cluster, last);
-    }
+    // A cluster that has never run a required stop must deploy it first.
+    stops::check(
+        &args.plan.cluster,
+        p.baseline.active().and_then(|r| r.deployed_with.as_deref()),
+        stops::Writer::Deploy,
+    );
     let sops = p.sops_sources(false).map_err(|e| miette!("{e}"))?;
     p.annotate_record(&args.record_annotations)
         .map_err(|e| miette!("{e}"))?;

@@ -150,8 +150,15 @@ Next: check out the commit where this project was pinned to Kix 0.11.x (for exam
 ```
 
 A deploy with a Kix of the release's own minor passes, and so does a cluster
-with no receipt: a first deploy, or one the in-cluster operator applied.
-`kix deploy --dry-run` and `kix plan` do not check. [`kix upgrade`](/docs/reference/cli/upgrade/)
+with no receipt, such as one never deployed. `kix deploy --dry-run` and
+`kix plan` do not check.
+
+`kix rollback` makes the same check, since the Kix that runs it writes to the
+cluster. It refuses with `Rollback blocked:` and tells you to roll back from
+the commit pinned to the required stop's minor. The in-cluster operator checks
+its own Kix version the same way. It marks the queued Activation `Failed` with
+the reason and emits a `RequiredStopSkipped` event, so `kix deploy --operator`
+and `kix rollback --operator` stop there too. [`kix upgrade`](/docs/reference/cli/upgrade/)
 stops at such a release, so a project normally deploys it on the way.
 
 ## Deploy a reviewed plan

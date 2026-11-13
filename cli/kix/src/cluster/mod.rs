@@ -30,6 +30,7 @@ pub(crate) mod secrets;
 pub use secrets::{hash_mismatch_next, sops_file_hash, sops_file_name};
 #[cfg(test)]
 mod state_fixtures;
+pub mod stops;
 pub mod stream;
 pub mod tenancy;
 pub mod topology;

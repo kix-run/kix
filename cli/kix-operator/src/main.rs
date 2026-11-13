@@ -133,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
     let ctx = Arc::new(Context {
         client: client.clone(),
         records,
+        required_stops: kix::cluster::stops::required_stops(),
     });
 
     // Build the watcher stream with generation-based dedup.
