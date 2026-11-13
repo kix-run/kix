@@ -2,7 +2,7 @@
 //!
 //! A removed command or flag keeps working for at least one minor release as
 //! a refusal: Kix prints what replaces it and the id of the change record
-//! that removed it, and exits with [`Exit::Usage`]. To remove one, add it to
+//! that removed it, and exits with [`Exit::Failure`]. To remove one, add it to
 //! [`COMMANDS`] or [`FLAGS`]. `cli::command` registers each as a hidden stub,
 //! so clap still parses it, `kix <old command>` does not go looking for a
 //! plugin, and `--help` does not list it.
@@ -64,7 +64,7 @@ impl Removed {
     /// longer accepts.
     pub fn refuse(&self) -> Exit {
         eprintln!("{} {}", crate::output::red("error:"), self.message());
-        Exit::Usage
+        Exit::Failure
     }
 }
 
@@ -188,7 +188,7 @@ mod tests {
         let message = FLAGS[0].removed.message();
         assert!(message.starts_with("[K9002] "), "{message}");
         assert!(message.contains("`kix gc --full-scan`"), "{message}");
-        assert_eq!(FLAGS[0].removed.refuse(), Exit::Usage);
+        assert_eq!(FLAGS[0].removed.refuse(), Exit::Failure);
     }
 
     /// Without the stub, clap would hand `kix lint` to the plugin lookup.
