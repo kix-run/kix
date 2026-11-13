@@ -177,15 +177,19 @@ pub enum ProjectError {
     RemoteUnsupported { origin: BuilderSource },
 
     /// `version` is the value when it names a version, such as `"0.9"`.
+    /// `old_input` is whether `flake.lock` names the Kix library input
+    /// `kixpkgs`, so the same steps also rename it.
     #[error(
-        "[{KIX_SETTING_ID}] {} sets kix = {value}, but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml, then {}",
+        "[{KIX_SETTING_ID}] {} sets kix = {value}, but Kix now takes this project's version from the Kix library tag in flake.lock. Run these steps with this Kix, not Kix 0.9, because the `kix upgrade` of Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, {}then {}",
         path.display(),
+        if *old_input { "rename the flake input kixpkgs to kix in flake.nix, " } else { "" },
         crate::flake_lock::pin_then_upgrade(version.as_deref())
     )]
     KixSettingRemoved {
         path: PathBuf,
         value: String,
         version: Option<String>,
+        old_input: bool,
     },
 
     #[error(
@@ -357,7 +361,23 @@ fn refuse_kix_setting(path: &Path, table: &toml::Table) -> Result<(), ProjectErr
         path: path.to_path_buf(),
         value: toml_text(value),
         version: version.map(str::to_string),
+        old_input: path.parent().is_some_and(names_old_input),
     })
+}
+
+/// Return whether the `flake.lock` in `dir` names the Kix library input
+/// `kixpkgs`. A missing or unreadable lock names no input.
+fn names_old_input(dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(dir.join(crate::flake_lock::FILE)) else {
+        return false;
+    };
+    let Ok(lock) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    matches!(
+        crate::flake_lock::kix_input(&lock),
+        Err(crate::flake_lock::InputError::OldName { .. })
+    )
 }
 
 /// Read `library` from a `kix.toml`. A missing key is [`Library::Input`].
@@ -711,10 +731,10 @@ mod tests {
     fn the_kix_key_is_refused_with_its_id() {
         let named = |v: &str| {
             format!(
-                "Delete the kix line from kix.toml, then run `kix upgrade --to {v}` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes."
+                "Run these steps with this Kix, not Kix 0.9, because the `kix upgrade` of Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to {v}` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes."
             )
         };
-        let unnamed = "Delete the kix line from kix.toml, then run `kix upgrade --to <version>` with the version of Kix this project uses now, then run `kix upgrade` to move to a newer version and review what changes.";
+        let unnamed = "Run these steps with this Kix, not Kix 0.9, because the `kix upgrade` of Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to <version>` with the version of Kix this project uses now, then run `kix upgrade` to move to a newer version and review what changes.";
         for (text, shown, next) in [
             ("kix = \"0.10\"\n", "kix = \"0.10\"", named("0.10")),
             (
@@ -739,6 +759,21 @@ mod tests {
             // Selection reads kix.toml leniently, but still refuses the key.
             assert_eq!(kix_setting(dir.path()).unwrap_err().to_string(), expected);
         }
+    }
+
+    #[test]
+    fn the_kix_key_also_renames_the_old_input() {
+        let dir = project(Some("kix = \"0.9\"\n"));
+        std::fs::write(
+            dir.path().join(crate::flake_lock::FILE),
+            r#"{"nodes":{"root":{"inputs":{"kixpkgs":"kixpkgs"}},"kixpkgs":{"original":{"type":"github","owner":"kix-run","repo":"kix"}}},"root":"root","version":7}"#,
+        )
+        .unwrap();
+        let err = kix_setting(dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("Delete the kix line from kix.toml, rename the flake input kixpkgs to kix in flake.nix, then run `kix upgrade --to 0.9`"),
+            "{err}"
+        );
     }
 
     #[test]

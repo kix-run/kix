@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix-cli/src/commands/upgrade/out.rs` · The upgrade output prints all 66 package names of `[K0549]` on one line before the useful text.
+
+`kix upgrade --dry-run`, and the release notes printed after a build stops, put the whole `packages` list of a change record in front of its text on every run. For `[K0549]` that is 66 names, so the reader scrolls past a wall of names to reach what to do. Records that name no package also print `(0.10.0-rc.3)` under a heading that already gives the version. One option: when a record names more than about five packages, print only the ones the project uses and "and N more", and drop the version after a record when its heading already shows it.
