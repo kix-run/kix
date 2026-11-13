@@ -94,11 +94,11 @@ impl NixCommandError {
     }
 
     /// Shorten this error for a reader who did not ask for `-v`: show Nix's
-    /// error without the command line, and cut the stack trace
-    /// ([`shorten_trace`]).
-    fn brief(&mut self) {
+    /// error without the command line, and cut the stack trace to the frames
+    /// in the project at `flake_path` ([`shorten_trace`]).
+    fn brief(&mut self, flake_path: &Path) {
         self.brief = true;
-        self.stderr = shorten_trace(&self.stderr);
+        self.stderr = shorten_trace(&self.stderr, &project_roots(flake_path));
     }
 
     /// Return whether stderr matches Nix's message for a missing flake attribute.
@@ -275,21 +275,18 @@ pub fn eval_with_helm(
     status_fn: &dyn Fn(&str),
 ) -> Result<String, KixEvalError> {
     if runtime::nix_runner() == runtime::NixRunner::System {
-        let mut error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
+        let error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
             Ok(stdout) => return Ok(stdout),
             Err(error) => error,
         };
         if let Some(e) = system_eval_error(&error.stderr) {
             return Err(e);
         }
-        if !tracing::enabled!(tracing::Level::INFO) {
-            error.brief();
-        }
-        return Err(error.into());
+        return Err(failed_evaluation(error, flake_path));
     }
     let mut realised = std::collections::HashSet::new();
     for _ in 0..MAX_EVALUATIONS {
-        let mut error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
+        let error = match eval_raw(flake_path, args, input_overrides, status_fn)? {
             Ok(stdout) => return Ok(stdout),
             Err(error) => error,
         };
@@ -299,10 +296,7 @@ pub fn eval_with_helm(
             super::helm::pending(&error.stderr)?
         };
         if pending.is_empty() {
-            if !tracing::enabled!(tracing::Level::INFO) {
-                error.brief();
-            }
-            return Err(error.into());
+            return Err(failed_evaluation(error, flake_path));
         }
         // Check every Helm version before running any, so a project whose
         // library and Kix disagree learns which to move.
@@ -334,6 +328,24 @@ pub fn eval_with_helm(
             args.join(" ")
         ),
     })
+}
+
+/// Return the error for an evaluation that failed for a reason Kix does not
+/// handle itself. Errors the Kix library wrote for a person come back from
+/// their fields. Any other error is Nix's, shortened unless the reader asked
+/// for `-v`.
+fn failed_evaluation(mut error: NixCommandError, flake_path: &Path) -> KixEvalError {
+    let verbose = tracing::enabled!(tracing::Level::INFO);
+    if let Some(mut errors) = super::library_error::parse(&error.stderr) {
+        if verbose {
+            errors.trace = Some(error.stderr);
+        }
+        return KixEvalError::Library(errors);
+    }
+    if !verbose {
+        error.brief(flake_path);
+    }
+    error.into()
 }
 
 /// Run `nix eval --raw <args>` in `flake_path`. Return its output, or the
@@ -474,6 +486,28 @@ struct LibraryFacts {
     builder: Option<String>,
     /// The library's version (`kixLibrary.version`).
     version: Option<String>,
+    /// The project's own files, as the library sees them
+    /// (`kixLibrary.projectRoot`).
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+/// The project root the Kix library published in this run, once
+/// [`library_facts`] has read it.
+static PROJECT_ROOT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Return the paths under which a stack frame is in the project: the
+/// project at `flake_path`, as given and with links resolved, and the copy
+/// of it the Kix library reported. Nix names a file of the project by its
+/// path in the checkout, and the library knows the copy in Kix's local store.
+fn project_roots(flake_path: &Path) -> Vec<String> {
+    let mut roots = vec![flake_path.to_string_lossy().into_owned()];
+    if let Ok(real) = flake_path.canonicalize() {
+        roots.push(real.to_string_lossy().into_owned());
+    }
+    roots.extend(PROJECT_ROOT.get().cloned());
+    roots.retain(|r| r.starts_with('/'));
+    roots
 }
 
 /// Return the builder the project's Kix library read from `kix.toml` and the
@@ -490,7 +524,7 @@ fn library_facts(
         "--json",
         &attr,
         "--apply",
-        "lp: { builder = lp.kixConfig.builder or null; version = lp.kixLibrary.version or null; }",
+        "lp: { builder = lp.kixConfig.builder or null; version = lp.kixLibrary.version or null; project_root = lp.kixLibrary.projectRoot or null; }",
         "--extra-experimental-features",
         "nix-command flakes pipe-operators",
     ]);
@@ -498,11 +532,18 @@ fn library_facts(
         cmd.arg("--override-input").arg(name).arg(url);
     }
     match output(cmd.current_dir(flake_path)) {
-        Ok(out) => serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
-            summary: "could not read the Kix library's settings",
-            library: true,
-            detail: format!("the Kix library's settings are not the expected JSON: {e}"),
-        }),
+        Ok(out) => {
+            let facts: LibraryFacts =
+                serde_json::from_slice(&out).map_err(|e| KixEvalError::Internal {
+                    summary: "could not read the Kix library's settings",
+                    library: true,
+                    detail: format!("the Kix library's settings are not the expected JSON: {e}"),
+                })?;
+            if let Some(root) = &facts.project_root {
+                let _ = PROJECT_ROOT.set(root.clone());
+            }
+            Ok(facts)
+        }
         Err(e) if e.missing_attribute() => {
             match system_not_provided(".", "legacyPackages", Some(flake_path), input_overrides) {
                 Some(err) => Err(err),
@@ -524,12 +565,13 @@ const SHORT_TRACE_FRAMES: usize = 3;
 /// for `-v`.
 ///
 /// It drops Nix's dirty-tree warning and the `trace:` lines the library
-/// printed on the way. A Kix message that carries a change record id, such as
-/// `[K0549]`, or that lists a cluster's problems, names what to fix, so the
-/// stack trace goes. Any other error keeps the [`SHORT_TRACE_FRAMES`] frames
-/// nearest to it, which point at the code that failed. Text that is not such
-/// a trace comes back unchanged.
-fn shorten_trace(stderr: &str) -> String {
+/// printed on the way. When the place nearest the error is in the project
+/// (under one of `roots`), the error keeps the [`SHORT_TRACE_FRAMES`]
+/// project frames nearest to it, which point at the code to change.
+/// Otherwise the error was raised in the Kix library, a package, or
+/// nixpkgs, whose frames rarely show a reader what to change, so Nix's
+/// message stands alone. Text that is not such a trace comes back unchanged.
+fn shorten_trace(stderr: &str, roots: &[String]) -> String {
     let lines: Vec<&str> = stderr
         .lines()
         .filter(|l| !l.starts_with("warning: Git tree ") && !l.starts_with("trace: "))
@@ -547,14 +589,7 @@ fn shorten_trace(stderr: &str) -> String {
         return lines.join("\n");
     };
     let indent = &lines[last][..lines[last].len() - lines[last].trim_start().len()];
-    let message: Vec<String> = lines[last..]
-        .iter()
-        .map(|l| l.strip_prefix(indent).unwrap_or(l).to_string())
-        .collect();
-    if names_its_fix(&message.join("\n")) {
-        return message.join("\n");
-    }
-    let message: Vec<String> = lines[last..].iter().map(|l| l.to_string()).collect();
+    let message = &lines[last..];
     // Each frame runs from its `…` line to the next one.
     let starts: Vec<usize> = (first..last)
         .filter(|&i| lines[i].trim_start().starts_with('…'))
@@ -564,30 +599,40 @@ fn shorten_trace(stderr: &str) -> String {
         .enumerate()
         .map(|(n, &start)| &lines[start..starts.get(n + 1).copied().unwrap_or(last)])
         .collect();
-    let kept: Vec<&[&str]> = frames
-        .iter()
-        .copied()
-        .filter(|frame| !frame.iter().any(|l| in_library(l)))
-        .collect();
-    let kept = &kept[kept.len().saturating_sub(SHORT_TRACE_FRAMES)..];
-    // A Kix package or contract checks what an instance gave it and throws a
-    // message that names the instance. The frames above it only show where
-    // the cluster definition starts, so the message is all a reader can act
-    // on. The same holds when every frame is in Kix or nixpkgs.
-    let thrown_by_kix_package = frames
-        .last()
-        .is_some_and(|frame| frame.iter().any(|l| in_kix_level_folder(l)));
-    if (kept.is_empty() || thrown_by_kix_package) && !frames.is_empty() {
+    let location = |block: &[&str]| -> Option<String> {
+        block
+            .iter()
+            .find_map(|l| l.trim_start().strip_prefix("at "))
+            .map(str::to_string)
+    };
+    // The message names its own place for an error in Nix syntax, such as
+    // a missing attribute. A `throw` has its place in the last frame.
+    let nearest = location(message).or_else(|| frames.iter().rev().find_map(|f| location(f)));
+    let in_project = |at: &str| {
+        roots.iter().any(|root| {
+            at.strip_prefix(root.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+    };
+    if !nearest.as_deref().is_some_and(in_project) {
         let mut alone: Vec<String> = message
             .iter()
             .map(|l| l.strip_prefix(indent).unwrap_or(l).to_string())
             .collect();
-        alone.push(format!(
-            "({} stack frame(s) hidden; run with -v to show them)",
-            frames.len()
-        ));
+        if !frames.is_empty() {
+            alone.push(format!(
+                "({} stack frame(s) hidden; run with -v to show them)",
+                frames.len()
+            ));
+        }
         return alone.join("\n");
     }
+    let kept: Vec<&[&str]> = frames
+        .iter()
+        .copied()
+        .filter(|frame| location(frame).as_deref().is_some_and(in_project))
+        .collect();
+    let kept = &kept[kept.len().saturating_sub(SHORT_TRACE_FRAMES)..];
     let mut short = vec!["error:".to_string()];
     for frame in kept {
         short.extend(frame.iter().map(|l| l.to_string()));
@@ -599,51 +644,8 @@ fn shorten_trace(stderr: &str) -> String {
         ));
         short.push(String::new());
     }
-    short.extend(message);
+    short.extend(message.iter().map(|l| l.to_string()));
     short.join("\n")
-}
-
-/// Return whether a trace line places its frame in nixpkgs or in Kix's own
-/// library, packages, contracts, or modules, which rarely shows a reader what
-/// to change. Kix's packages, contracts, and modules sit in `stable/` and
-/// `experimental/` folders, which tells them apart from a project's own
-/// `kix/packages/` folder.
-fn in_library(line: &str) -> bool {
-    let at = line.trim_start();
-    at.starts_with("at ")
-        && (at.contains("«github:NixOS/nixpkgs")
-            || at.contains("/kix/lib/")
-            || in_kix_level_folder(line))
-}
-
-/// Return whether a trace line places its frame in a Kix package, contract,
-/// or module, which sit in `stable/` and `experimental/` folders.
-fn in_kix_level_folder(line: &str) -> bool {
-    let at = line.trim_start();
-    at.starts_with("at ")
-        && ["packages", "contracts", "modules"].iter().any(|dir| {
-            ["stable", "experimental"]
-                .iter()
-                .any(|level| at.contains(&format!("/kix/{dir}/{level}/")))
-        })
-}
-
-/// Return whether a Nix error `message` is one of Kix's own that says what to
-/// change: it carries a change record id, lists a cluster's problems, names
-/// an unknown option, or gives a `Fix:` line.
-fn names_its_fix(message: &str) -> bool {
-    let has_id = message.match_indices("[K").any(|(i, _)| {
-        let rest = &message.as_bytes()[i + 2..];
-        rest.len() >= 5 && rest[..4].iter().all(u8::is_ascii_digit) && rest[4] == b']'
-    });
-    let unknown_option =
-        message.starts_with("error: The option `") && message.contains("' does not exist.");
-    // Kix's dependency errors end with `Fix:` and the lines to add.
-    let gives_fix = message.lines().any(|l| l.trim_start().starts_with("Fix: "));
-    has_id
-        || unknown_option
-        || gives_fix
-        || (message.starts_with("error: cluster '") && message.contains(" problem(s):"))
 }
 
 fn index_path(cluster_name: &str, stdout: &str) -> Result<PathBuf, KixEvalError> {
@@ -865,8 +867,16 @@ pub fn version() -> Option<String> {
 mod tests {
     use super::*;
 
+    fn roots() -> Vec<String> {
+        vec!["/p".to_string()]
+    }
+
     fn frame(what: &str) -> String {
-        format!("       … {what}\n         at /f.nix:1:1:\n            1| x\n")
+        frame_at(what, "/p/f.nix")
+    }
+
+    fn frame_at(what: &str, at: &str) -> String {
+        format!("       … {what}\n         at {at}:1:1:\n            1| x\n")
     }
 
     #[test]
@@ -878,7 +888,7 @@ mod tests {
             frame("while evaluating the attribute 'a'"),
             frame("while calling 'h'"),
         );
-        let short = shorten_trace(&full);
+        let short = shorten_trace(&full, &roots());
         assert!(
             short.starts_with("error:\n       … while evaluating the attribute 'y'"),
             "{short}"
@@ -891,91 +901,105 @@ mod tests {
         assert!(short.ends_with("       error: boom"), "{short}");
     }
 
+    /// A missing attribute in a cluster file names its place in the message.
+    /// The frames outside the project go.
     #[test]
-    fn a_kix_message_with_an_id_stands_alone() {
+    fn frames_outside_the_project_are_hidden() {
+        let lib = frame_at("while calling 'mkCluster'", "/x/kix/lib/modules.nix");
         let full = format!(
-            "warning: Git tree '/p' is dirty\nerror:\n{}\n       error: [K9503] db: password was removed.\n       Set the dependency.",
-            frame("while calling anonymous lambda"),
-        );
-        assert_eq!(
-            shorten_trace(&full),
-            "error: [K9503] db: password was removed.\nSet the dependency."
-        );
-    }
-
-    #[test]
-    fn frames_in_the_library_are_hidden() {
-        let lib = "       … while calling 'throw'\n         at /x/kix/lib/modules.nix:1:1:\n";
-        let full = format!(
-            "error:\n{}\n{lib}\n       error: attribute 'b' missing",
+            "error:\n{}\n{lib}\n       error: attribute 'b' missing\n       at /p/cluster.nix:3:5:\n            3| a.b",
             frame("while evaluating the file"),
         );
-        let short = shorten_trace(&full);
+        let short = shorten_trace(&full, &roots());
         assert!(!short.contains("kix/lib"), "{short}");
         assert!(short.contains("while evaluating the file"), "{short}");
         assert!(short.contains("(1 more stack frame(s) hidden"), "{short}");
+        assert!(short.ends_with("            3| a.b"), "{short}");
     }
 
+    /// A `throw` in a package outside the project shows Nix's message alone,
+    /// though the frames of the cluster definition led there.
     #[test]
-    fn a_throw_from_a_kix_package_stands_alone() {
-        let pkg = "       … while calling 'throw'\n         at «github:kix-run/kix/abc»/kix/packages/experimental/cnpg-database/default.nix:280:11:\n";
-        let contract = "       … while calling 'use'\n         at /nix/store/x-source/kix/contracts/stable/secret.nix:73:9:\n";
-        let full =
-            format!("error:\n{pkg}{contract}\n       error: app-db: has no `password` dependency.");
-        assert_eq!(
-            shorten_trace(&full),
-            "error: app-db: has no `password` dependency.\n(2 stack frame(s) hidden; run with -v to show them)"
+    fn a_throw_outside_the_project_stands_alone() {
+        let pkg = frame_at(
+            "while calling 'throw'",
+            "«github:kix-run/kix/abc»/kix/packages/experimental/cnpg-database/default.nix",
         );
-        // The frames of the cluster definition that led there go too.
         let full = format!(
             "error:\n{}\n{pkg}\n       error: app-db: has no `password` dependency.",
             frame("while calling anonymous lambda"),
         );
-        assert!(
-            shorten_trace(&full)
-                .starts_with("error: app-db: has no `password` dependency.\n(2 stack"),
-            "{}",
-            shorten_trace(&full)
+        assert_eq!(
+            shorten_trace(&full, &roots()),
+            "error: app-db: has no `password` dependency.\n(2 stack frame(s) hidden; run with -v to show them)"
         );
     }
 
-    #[test]
-    fn a_projects_own_packages_folder_is_not_the_library() {
-        let own = "       … while calling 'throw'\n         at /nix/store/x-source/src/kix/packages/site/default.nix:3:1:\n";
-        let short = shorten_trace(&format!("error:\n{own}\n       error: boom"));
-        assert!(short.contains("src/kix/packages/site"), "{short}");
-    }
-
+    /// nixpkgs raises an unknown option, and its message names the option.
     #[test]
     fn an_unknown_option_stands_alone() {
         let full = format!(
-            "error:\n{}\n       error: The option `a.b' does not exist. Definition values:\n       - In `x': 1",
+            "error:\n{}\n{}\n       error: The option `a.b' does not exist. Definition values:\n       - In `x': 1",
             frame("while calling anonymous lambda"),
+            frame_at(
+                "while evaluating the module",
+                "«github:NixOS/nixpkgs/abc»/lib/modules.nix"
+            ),
         );
         assert_eq!(
-            shorten_trace(&full),
-            "error: The option `a.b' does not exist. Definition values:\n- In `x': 1"
+            shorten_trace(&full, &roots()),
+            "error: The option `a.b' does not exist. Definition values:\n- In `x': 1\n(2 stack frame(s) hidden; run with -v to show them)"
         );
     }
 
+    /// A project's own folder named like a Kix folder is still the project,
+    /// and a sibling folder whose name starts the same is not.
     #[test]
-    fn a_message_with_a_fix_line_stands_alone() {
-        let full = format!(
-            "error:\n{}\n       error: gw: dependency 'backend' is missing.\n       Fix: declare an instance named 'backend'.",
-            frame("while calling anonymous lambda"),
-        );
-        assert_eq!(
-            shorten_trace(&full),
-            "error: gw: dependency 'backend' is missing.\nFix: declare an instance named 'backend'."
-        );
+    fn a_frame_is_in_the_project_by_its_path() {
+        let own = frame_at("while calling 'throw'", "/p/kix/packages/site/default.nix");
+        let short = shorten_trace(&format!("error:\n{own}\n       error: boom"), &roots());
+        assert!(short.contains("/p/kix/packages/site"), "{short}");
+        let sibling = frame_at("while calling 'throw'", "/p2/default.nix");
+        let short = shorten_trace(&format!("error:\n{sibling}\n       error: boom"), &roots());
+        assert!(short.starts_with("error: boom\n(1 stack"), "{short}");
     }
 
     #[test]
     fn a_short_error_is_left_alone() {
         let text = "error: attribute 'c' missing\n       at «string»:1:24:\n       Did you mean b?";
-        assert_eq!(shorten_trace(text), text);
-        assert_eq!(shorten_trace("not a nix error"), "not a nix error");
+        assert_eq!(shorten_trace(text, &roots()), text);
+        assert_eq!(
+            shorten_trace("not a nix error", &roots()),
+            "not a nix error"
+        );
     }
+
+    /// An error from `kix.fail` comes back as its fields, without the trace.
+    #[test]
+    fn a_library_error_is_read_from_its_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("flake.nix"),
+            r#"{
+              outputs = _: let c.kixClusters.c.activationIndex = throw ''
+                [K0001] app/web: replicas was removed.
+                kix-error/1 {"errors":[{"id":"K0001","instance":"app/web","message":"replicas was removed.","fix":"Set \"replicas\"."}]}''; in {
+                legacyPackages = { x86_64-linux = c; aarch64-linux = c; x86_64-darwin = c; aarch64-darwin = c; };
+              };
+            }"#,
+        )
+        .unwrap();
+        let err = eval_activation_index(dir.path(), "c", &[], &|_| {}).unwrap_err();
+        let KixEvalError::Library(errors) = &err else {
+            panic!("{err}");
+        };
+        assert_eq!(errors.errors[0].id.as_deref(), Some("K0001"));
+        assert_eq!(
+            err.to_string(),
+            "[K0001] app/web: replicas was removed.\nFix: Set \"replicas\"."
+        );
+    }
+
     use serde_json::json;
 
     #[test]

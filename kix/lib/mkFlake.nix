@@ -263,9 +263,12 @@ let
           inherit builder;
         };
         # Kix reads this to name the library release in its
-        # messages and to compare it with its own version.
+        # messages and to compare it with its own version. Kix shows the
+        # stack frames of an error that sit under `projectRoot`, the
+        # project's own files, and hides the rest.
         kixLibrary = {
           inherit (kix) version;
+          projectRoot = if self == null then null else toString self;
         };
         # The library and package set the flake's builder uses, in the shape
         # a cluster function receives them. A project that merges these

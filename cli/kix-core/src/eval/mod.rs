@@ -26,6 +26,7 @@ pub(crate) mod evaluator;
 pub mod fixtures;
 pub mod helm;
 pub mod helm_yaml;
+pub mod library_error;
 pub mod manifest_json;
 #[cfg(test)]
 mod mock;

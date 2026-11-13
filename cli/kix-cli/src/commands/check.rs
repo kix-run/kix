@@ -11,7 +11,8 @@ struct CheckResult {
     tool: String,
     result: String,
     details: String,
-    /// The scorecard's findings, on the scorecard row only.
+    /// The scorecard's findings on the scorecard row, and the Kix library's
+    /// errors on the eval row, which its details already show as text.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     findings: Vec<serde_json::Value>,
 }
@@ -47,7 +48,7 @@ impl CommandResponse for CheckResponse {
             text.push_str("\n\n");
             text.push_str(&detail);
         }
-        for r in &self.results {
+        for r in self.results.iter().filter(|r| r.tool != "eval") {
             let listed = list_findings(&r.findings, self.verbose);
             if !listed.is_empty() {
                 text.push_str("\n\n");
@@ -275,11 +276,20 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
             return Err(miette::miette!("{}", ctx.cluster_not_found(name)));
         }
         Err(e) => {
+            // Errors the Kix library raised keep their fields in `-o json`.
+            let findings = match &e {
+                kix::eval::error::KixEvalError::Library(errors) => errors
+                    .errors
+                    .iter()
+                    .filter_map(|e| serde_json::to_value(e).ok())
+                    .collect(),
+                _ => Vec::new(),
+            };
             results.push(CheckResult {
                 tool: "eval".into(),
                 result: "fail".into(),
                 details: e.to_string(),
-                findings: Vec::new(),
+                findings,
             });
             None
         }
