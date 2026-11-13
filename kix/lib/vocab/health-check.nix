@@ -99,13 +99,15 @@ in
       checkedRequired = builtins.filter (
         r: hasContentHash r && r.outPath or null != rootRes.outPath
       ) required;
-      # A root without a content hash is required unless `userEnv` already
-      # references it, which would trigger a redundant-requires warning.
-      requireRoot =
-        !(hasContentHash rootRes)
-        && !(builtins.hasAttr (builtins.unsafeDiscardStringContext rootRes.outPath) (
-          builtins.getContext (builtins.toJSON userEnv)
-        ));
+      # A resource without a content hash is required unless `userEnv`
+      # already references it, which would trigger a redundant-requires
+      # warning. A secret-ref the probe reads through `env` is one.
+      envContext = builtins.getContext (builtins.toJSON userEnv);
+      waitsFor =
+        r:
+        !(hasContentHash r)
+        && !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) envContext);
+      requireRoot = waitsFor rootRes;
       checksums = {
         "checksum/script" = self.${scriptPart}.out.contentHash;
       }
@@ -137,7 +139,7 @@ in
         ${partName} =
           {
             name = "${name}-health";
-            requires = builtins.filter (r: !(hasContentHash r)) required ++ lib.optional requireRoot rootRes;
+            requires = builtins.filter waitsFor required ++ lib.optional requireRoot rootRes;
             annotations.${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
             spec = {
               backoffLimit = 0;

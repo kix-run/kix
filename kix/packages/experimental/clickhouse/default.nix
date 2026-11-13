@@ -642,6 +642,9 @@ in
     )
 
     (kix.healthCheck {
+      # The probe logs in with the credentials, so a new password runs it
+      # again.
+      requires = { self, ... }: [ self.root.out.credentials ];
       env =
         { self, config, ... }:
         {

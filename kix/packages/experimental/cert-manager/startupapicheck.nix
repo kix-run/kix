@@ -67,6 +67,7 @@ in
           inherit labels;
           annotations = {
             "checksum/webhook" = self.webhookDeployment.out.contentHash;
+            "checksum/webhook-service" = self.webhookService.out.contentHash;
             "checksum/cainjector" = self.cainjectorDeployment.out.contentHash;
             "checksum/mutating-webhook" = self.mutatingWebhookConfiguration.out.contentHash;
             "checksum/validating-webhook" = self.validatingWebhookConfiguration.out.contentHash;

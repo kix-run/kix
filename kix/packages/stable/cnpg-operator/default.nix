@@ -794,6 +794,8 @@ in
                     "checksum/manifest" = self.webhookCheckManifest.out.contentHash;
                     "checksum/operator" = self.operatorDeployment.out.contentHash;
                     "checksum/webhook-service" = self.webhookService.out.contentHash;
+                    "checksum/mutating-webhook" = self.mutatingWebhook.out.contentHash;
+                    "checksum/validating-webhook" = self.validatingWebhook.out.contentHash;
                     "checksum/crd" = self.crds.clusters.out.contentHash;
                   };
                 };
