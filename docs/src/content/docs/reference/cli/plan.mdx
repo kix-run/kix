@@ -245,8 +245,9 @@ this deploy writes that Service or another object of its package. Otherwise
 nothing in the deploy repairs the webhook, so the deploy would fail at the
 first object the webhook checks. The plan lists the object as a refusal with
 reason `other`, and the deploy stops before it writes anything. Get the
-webhook's backend running again, or, if someone deleted the Service, run
-`kix deploy <cluster> --reconcile` to create it again.
+webhook's backend running again. If someone deleted the Service, or scaled
+the workload behind it to 0 replicas, run `kix deploy <cluster> --reconcile`
+to restore what the build defines.
 
 | `reason` | Meaning |
 | --- | --- |

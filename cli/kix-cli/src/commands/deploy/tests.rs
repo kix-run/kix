@@ -455,6 +455,35 @@ mod run_end_tests {
         );
         assert!(stopped.contains("4 object(s) did not finish"), "{stopped}");
     }
+
+    /// A reconcile of an unchanged build reuses the Active record, which a
+    /// failure leaves Active.
+    #[test]
+    fn a_failed_run_that_reused_the_active_record_says_it_stays_active() {
+        let counts = DeployResult {
+            configured: 1,
+            failed: 1,
+            ..DeployResult::default()
+        };
+        let closing = Closing {
+            cluster: "prod",
+            record: Some("prod-4be1c09a"),
+            previous: Previous::Active("prod-4be1c09a".into()),
+            interrupted: None,
+            current: false,
+            on_error_continue: false,
+        };
+        let text = super::observer::closing(&counts, &closing);
+        assert!(!text.contains("marked Failed"), "{text}");
+        assert!(
+            text.contains("Deployment record prod-4be1c09a remains the Active deployment record, because this run applied the build it already holds."),
+            "{text}"
+        );
+        assert!(
+            text.contains("will compare against deployment record prod-4be1c09a, which holds the build this failed run applied."),
+            "{text}"
+        );
+    }
 }
 
 mod operator_tests {
@@ -490,5 +519,71 @@ mod operator_tests {
             "x.kixbundle",
         ]);
         assert!(parsed.is_err());
+    }
+}
+
+mod stop_advice_tests {
+    use kix::eval::store_graph::StoreGraph;
+    use kix::plan::document::{
+        AdmissionRefusal, Build, Checked, Conflict, Detail, MadeBy, NotCheckedReason, Plan,
+        RefusalReason,
+    };
+
+    fn plan(conflicts: Vec<Conflict>, admission: Vec<AdmissionRefusal>) -> Plan {
+        let graph = StoreGraph::empty("c");
+        let mut plan = Plan::new(
+            crate::plan::kix_build(),
+            MadeBy::DryRun,
+            "c",
+            Build::of(&graph),
+            &kix::plan::diff_graphs(&graph, &graph),
+            Detail::Plain,
+            &[],
+            NotCheckedReason::BuildsOnly,
+        );
+        plan.conflicts = Checked::found(conflicts);
+        plan.admission = Checked::found(admission);
+        plan
+    }
+
+    fn conflict() -> Conflict {
+        Conflict {
+            resource: "Deployment/web@app".into(),
+            owners: Vec::new(),
+            message: "conflict".into(),
+        }
+    }
+
+    fn refusal(reason: RefusalReason, webhook: Option<&str>) -> AdmissionRefusal {
+        AdmissionRefusal {
+            resource: "Certificate/web@app".into(),
+            reason,
+            webhook: webhook.map(str::to_string),
+            message: "refused".into(),
+        }
+    }
+
+    #[test]
+    fn a_conflict_stop_points_to_force_conflicts_and_cede() {
+        let text = super::super::stop_advice(&plan(vec![conflict()], Vec::new())).join("\n");
+        assert!(text.contains("--force-conflicts"), "{text}");
+        assert!(text.contains("`ownership.cede`"), "{text}");
+        assert!(!text.contains("--on-error continue"), "{text}");
+    }
+
+    #[test]
+    fn a_webhook_stop_points_to_the_backend() {
+        let unreachable = refusal(RefusalReason::Other, Some("cert-manager-webhook"));
+        let text = super::super::stop_advice(&plan(Vec::new(), vec![unreachable])).join("\n");
+        assert!(text.contains("get its backend running again"), "{text}");
+        assert!(!text.contains("--on-error continue"), "{text}");
+    }
+
+    #[test]
+    fn a_refused_write_still_offers_on_error_continue() {
+        let invalid = refusal(RefusalReason::Invalid, None);
+        let text = super::super::stop_advice(&plan(Vec::new(), vec![invalid])).join("\n");
+        assert!(text.contains("Fix the refused writes."), "{text}");
+        assert!(text.contains("--on-error continue"), "{text}");
     }
 }

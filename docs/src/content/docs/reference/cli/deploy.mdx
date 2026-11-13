@@ -200,7 +200,9 @@ made, for example a `kix plan` document with prune marked not checked, was
 edited after it was written and is refused. The deploy prints the file's
 SHA-256 so an approval system can check it used the file it approved.
 
-A refusal lists what differs and exits `4`. `kix deploy --plan plan.kixplan
+A refusal lists what differs and exits `4`. The comparison runs before the
+check for stateful migrations, so a plan that no longer matches exits `4`
+even when the new build would also stop on a migration. `kix deploy --plan plan.kixplan
 --dry-run` makes the same comparison without deploying. It exits `4` when the
 plan no longer matches, `3` when it matches but the deploy would stop on a
 refused write or a migration not accepted, and `0` otherwise. With

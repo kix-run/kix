@@ -1,0 +1,4 @@
++++
+kind = "fixed"
++++
+`kix deploy` no longer fails a rollout because of pods from the template it is replacing. It now waits until the controller has seen the new spec, and it judges only the pods of the current template. This includes a `--reconcile` that restores an earlier template after someone set a bad image. `kix deploy --plan` now reports a stale saved plan (exit 4) before it checks for migrations. When a dry run stops a deploy, the advice now fits the cause: `--force-conflicts` or `ownership.cede` for field ownership conflicts, and the webhook's backend for an unreachable webhook. The dry-run progress line and the plan's object count now count the same objects, and the count says "to write". A failed run that reused the Active deployment record now says that the record stays Active.

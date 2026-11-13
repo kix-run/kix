@@ -2,6 +2,8 @@
 //! These invoke the real binary with `assert_cmd`, so they need a Kix runtime.
 //! The development shell names one in `KIX_RUNTIME_DIR`.
 
+mod common;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -113,7 +115,9 @@ fn list_resources_text() {
 /// plan has changes.
 #[test]
 fn deploy_dry_run() {
+    let cache = common::tempdir();
     kix()
+        .env("XDG_CACHE_HOME", cache.path())
         .args(["deploy", "example", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(2)
