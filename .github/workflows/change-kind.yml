@@ -76,8 +76,11 @@ jobs:
         run: |
           nix develop --command bash -c '
             set -euo pipefail
-            (cd "$RUNNER_TEMP/base/cli" && cargo build -p kix-cli --bin kix)
-            cp "${CARGO_TARGET_DIR:-$RUNNER_TEMP/base/cli/target}/debug/kix" "$RUNNER_TEMP/kix-base"
+            # The base builds into its own target directory. When the two
+            # builds shared the dev shell target directory, the head linked
+            # against the base copy of a workspace crate.
+            (cd "$RUNNER_TEMP/base/cli" && CARGO_TARGET_DIR="$RUNNER_TEMP/base-target" cargo build -p kix-cli --bin kix)
+            cp "$RUNNER_TEMP/base-target/debug/kix" "$RUNNER_TEMP/kix-base"
             (cd cli && cargo build -p kix-cli --bin kix)
             KIX="${CARGO_TARGET_DIR:-$PWD/cli/target}/debug/kix"
             python3 scripts/change-kind.py --base "$RUNNER_TEMP/base" --head . \
