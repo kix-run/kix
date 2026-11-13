@@ -98,6 +98,17 @@ rewrites the later ones.
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource
   of a kind without it fails to build.
+- Admission webhooks: the package sets the order, because the engine has no
+  rule that applies webhook configurations last. When the operator does not
+  read or patch its webhook configuration at startup, the configuration
+  `requires` the workload that serves it, so the API server never calls a
+  webhook whose pods are not ready. When it does (it writes its certificate
+  into `caBundle` at startup, as CloudNativePG does), the workload requires
+  the configuration, and every CRD handle makes its custom resources wait for
+  a check Job (`cnpg-operator`, C21). Either way, the deploy's dry run treats
+  an unreachable webhook as not checked only when the deploy writes the
+  webhook's Service or another object of the package; otherwise the deploy
+  stops before it starts (C26).
 
 ### 2. Upstream research
 
@@ -116,6 +127,7 @@ named decision; record the fact and its upstream path in the pull request.
 | Metrics | port, whether on the public port, auth, the flag that enables them | `kix.monitor` wiring (Mo11, Mo12) |
 | Clustering and HA, in source | in-memory state, sessions, caches, job queues, leader election, peer discovery, cron singletons | the `pick` table and any ceiling (step 3) |
 | Monitoring material and failure reports | shipped rules or mixins, outage threads | alerts (step 9) |
+| Admission webhook configurations (chart templates, `config/webhook/`, the controller's startup code) | whether the controller reads or patches its own configuration at startup (certificate injection into `caBundle`), and whether it fails to start without it | which object requires which, and whether CRD handles need a check Job (C21, C26) |
 | CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types and which of them the controller sets for a spec it rejects and does not revisit, what the operator deletes with each custom resource (its volumes, its backup files) | `crds/sources.txt`, readiness (C5) and its `failed` list (C6a), `holdsData` (C24) |
 | Kubernetes client calls, for a program that calls the API with RBAC not vendored from upstream (crd-vendoring covers vendored roles) | every call (list, get, watch, create, update, patch, delete, deletecollection) on every resource and subresource (`pods/log`, `<kind>/status`), at startup and in every code path | the Role: one rule per call, nothing extra (C10, C23) |
 
@@ -552,8 +564,11 @@ deploy is the slowest and most informative step.
    facade's grants) leaves the consumer's pod template unchanged, so delete
    the crash-looping pod once the dependency's Job completes. A first deploy
    halted part way (a transient image pull error) can leave a webhook
-   configuration without its Service, and the next deploy's dry run refuses
-   the custom resources it guards; rerun with `--on-error continue`.
+   configuration without its Service. The next deploy writes the Service
+   again, so its plan lists the custom resources the webhook guards as not
+   checked. If the Service was deleted by hand and the build did not change,
+   the plan refuses them instead; `kix deploy <cluster> --reconcile` writes
+   the Service again.
    End with one request through the real path (an event in, a row out), not
    only green probes. At a genuine environment wall (a kernel module,
    read-only sysfs, hugepages) use an upstream knob, confine the part in the
