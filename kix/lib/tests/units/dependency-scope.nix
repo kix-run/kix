@@ -200,7 +200,7 @@ in
       ];
       warnings = cluster.instances.a.consumer._diagnostics.warnings;
       message = "optional dependency 'svc' has no instance in namespace 'a', so Kix skipped it. b/svc matches in another namespace.\nFix: To use it, add this line to instances.a.consumer:\n  deps.svc = ref.b.svc;";
-      expected = "a/consumer: ${message}";
+      expected = "[a/consumer] ${message}";
       # The cluster lists the warning in the file the CLI reads, so `kix
       # check` shows it.
       listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);

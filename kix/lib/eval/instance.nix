@@ -819,7 +819,7 @@ in
         structuralWarnings =
           let
             res = r: "${r.kind}/${r.name}";
-            warn = msg: items: map (x: "[${instanceName}] ${msg x}") items;
+            warn = msg: items: map msg items;
           in
           lib.concatLists [
             resolutionWarnings

@@ -350,7 +350,9 @@ in
         workload
         // {
           outPath = builtins.foldl' (acc: warning: builtins.trace warning acc) workload.outPath (
-            interceptorWarnings ++ ceilingWarnings ++ map (w: "[${instanceName}] ${w}") edgeReport.warnings
+            interceptorWarnings
+            ++ ceilingWarnings
+            ++ map (w: "[${namespaceName}/${instanceName}] ${w}") edgeReport.warnings
           );
           _injectedResources = interceptorResources;
           rawSelector = selector;

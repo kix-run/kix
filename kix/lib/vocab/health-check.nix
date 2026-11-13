@@ -94,7 +94,9 @@ in
       # template. That annotation already makes the Job depend on the
       # resource, so only the required values without a content hash stay
       # in `requires`.
-      required = requires ctx;
+      # `mkResource` skips `requires` entries that are not resources, so the
+      # probe skips them too.
+      required = builtins.filter (r: builtins.isAttrs r && r ? outPath) (requires ctx);
       hasContentHash = r: (r.out or { }) ? contentHash;
       checkedRequired = builtins.filter (
         r: hasContentHash r && r.outPath or null != rootRes.outPath
@@ -108,6 +110,19 @@ in
         !(hasContentHash r)
         && !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) envContext);
       requireRoot = waitsFor rootRes;
+      # Name a required resource's checksum annotation after its kind and
+      # name, so a plan shows which resource changed. Kubernetes allows at
+      # most 63 characters after the `/`, so a longer name is cut and ends
+      # in a hash of the full name.
+      checksumName =
+        r:
+        let
+          full = builtins.unsafeDiscardStringContext "${lib.toLower r.kind}-${r.name}";
+        in
+        if builtins.stringLength full <= 63 then
+          full
+        else
+          "${builtins.substring 0 54 full}-${builtins.substring 0 8 (builtins.hashString "sha256" full)}";
       checksums = {
         "checksum/script" = self.${scriptPart}.out.contentHash;
       }
@@ -115,9 +130,7 @@ in
         "checksum/root" = rootRes.out.contentHash;
       }
       // builtins.listToAttrs (
-        lib.imap0 (
-          i: r: lib.nameValuePair "checksum/requires-${toString i}" r.out.contentHash
-        ) checkedRequired
+        map (r: lib.nameValuePair "checksum/${checksumName r}" r.out.contentHash) checkedRequired
       );
     in
     if !(when ctx) then

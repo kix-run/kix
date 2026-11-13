@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix/lib` · Three functions work out which Secrets and ConfigMaps a pod spec reads, and each covers different fields.
+
+`kix/lib/eval/validate-keys.nix` (about lines 97 to 145), `kix/lib/helm-dag.nix` (about lines 120 to 229), and `podSpecReads` in `kix/lib/plugins/rerun/module.nix` (about lines 21 to 51) each walk a pod spec. The rerun one covers `initContainers` and `ephemeralContainers`, and validate-keys skips references marked `optional`. A fix to one of them does not reach the others, so the key check, the Helm ordering, and the rerun warning can disagree about the same pod. One shared `podSpecReads` in `kix/lib/core` that returns `{ kind; name; key ? null; optional; where; }` for each reference would give all three the same answer.

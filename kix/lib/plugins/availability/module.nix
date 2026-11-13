@@ -245,7 +245,7 @@ in
           let
             m = r.rawManifest;
           in
-          "[${ctx.instanceName}] ${m.kind} '${m.metadata.name}' sets its own "
+          "${m.kind} '${m.metadata.name}' sets its own "
           + "topologySpreadConstraints, so the compiler derives neither spread nor a "
           + "PodDisruptionBudget for it, and no PodDisruptionBudget in this instance "
           + "selects its pods: a drain can take every replica at once. Write one, or "
@@ -268,7 +268,7 @@ in
         ) ctx.allPartResources;
         shortfallWarnings = map (
           r:
-          "[${ctx.instanceName}] ${r.rawManifest.kind} '${r.rawManifest.metadata.name}' runs "
+          "${r.rawManifest.kind} '${r.rawManifest.metadata.name}' runs "
           + "${toString r.rawManifest.spec.replicas} replica under availability \"${levelOf r}\": "
           + "losing its node would cause downtime. Map the replica count with kix.availability.pick, "
           + "or, if the workload cannot run more than one pod, set availability.max = \"none\" "

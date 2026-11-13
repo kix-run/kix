@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix/lib/meta.nix` · Library warnings are plain strings, so a reader finds the instance only by parsing a `[namespace/instance]` prefix.
+
+`combineDiagnostics` adds `[namespace/instance]` to the start of every warning an instance raises, and `kix-warnings.json` holds a list of those strings. Cluster-wide warnings start with `[kix]`, and the rerun warning starts with the instance that built the Job. The CLI and the SARIF output cannot group or filter warnings by instance without parsing that text. Warnings could be records with `instance`, `message`, and `fix` fields, as errors are in `kix/lib/core/error.nix`.

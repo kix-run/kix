@@ -12,6 +12,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  meta = import ../meta.nix { inherit lib; };
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s)
@@ -669,6 +670,11 @@ rec {
         inherit instanceName namespaceName;
         namespace = namespaceName;
         aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
+        version = meta.instanceVersion {
+          inherit instCfg;
+          packageOut = out;
+          packageMeta = { };
+        };
       };
     };
 }

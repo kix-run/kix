@@ -8,6 +8,7 @@
 {
   lib,
   kixlib,
+  eval,
   mkCluster,
   manifests,
   ofKind,
@@ -155,6 +156,48 @@ in
       })
     )
     || throw "compatibleWith did not follow the instance's version";
+
+  # An import's `version` overrides the `out.version` it states, as for a
+  # package.
+  lib-package-version-compatible-with-reads-import-version =
+    let
+      package = eval.mkImport { out.version = "1.0.0"; };
+    in
+    (
+      consumerBuilds { inherit package; }
+      && !(consumerBuilds {
+        inherit package;
+        version = "2.0.0";
+      })
+      && consumerBuilds {
+        package = eval.mkImport { out.version = "2.0.0"; };
+        version = "1.2.3";
+      }
+    )
+    || throw "compatibleWith did not follow the import's version";
+
+  # A warning about a dependency's version names the instance that checks
+  # it, with its namespace, in the same form as every instance warning.
+  lib-package-version-compatible-with-warning-names-instance =
+    let
+      cluster = mkCluster [
+        (
+          { ref, ... }:
+          {
+            namespaces.x = { };
+            namespaces.y = { };
+            instances.y.dep.package = mkPackage { };
+            instances.x.consumer = {
+              package = mkPackage { metaExtra.compatibleWith.dep.maxVersion = "1.5"; };
+              deps.dep = ref.y.dep;
+            };
+          }
+        )
+      ];
+      expected = "[x/consumer] cannot check meta.compatibleWith.dep: dependency 'dep' reports no version. Kix skipped the check.";
+      listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);
+    in
+    builtins.elem expected listed || throw "warnings: ${builtins.toJSON listed}";
 
   lib-package-version-image-version =
     let

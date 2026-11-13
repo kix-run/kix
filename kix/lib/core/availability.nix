@@ -222,11 +222,11 @@ let
       substrate = sub;
       warnings =
         lib.optional (overSubstrate && !sub.certain) (
-          "[${where}] ${requestedFrom} = \"${requested}\" needs ${needs}, which this cluster has not declared. "
+          "${requestedFrom} = \"${requested}\" needs ${needs}, which this cluster has not declared. "
           + "Set the capability to match your environment, or lower the availability level. Kix cannot verify the requested availability without this information."
         )
         ++ lib.optional capped (
-          "[${where}] availability \"${requested}\" was requested but the package declares "
+          "availability \"${requested}\" was requested but the package declares "
           + "meta.availability.max = \"${packageCeiling}\", so it runs at \"${packageCeiling}\". "
           + "This instance does not meet the requested availability level."
         );

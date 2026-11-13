@@ -416,7 +416,7 @@ in
             clusterOption = "cluster.capabilities.multiNode";
           }
         else if multiNode == null then
-          builtins.trace "[kix] warning: [${instanceName}] ${message} ${fix}" null
+          builtins.trace "[kix] warning: [${namespaceName}/${instanceName}] ${message} ${fix}" null
         else
           null;
 
