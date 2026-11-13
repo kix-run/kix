@@ -147,7 +147,9 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
     if let Some((_, url)) = overrides.iter().rev().find(|(name, _)| name == INPUT) {
         return Ok(ProjectKix::Development(Development::Override(url.clone())));
     }
-    if crate::project::library_is_self(dir).map_err(|e| LockError::Setting(e.to_string()))? {
+    let library =
+        crate::project::library_setting(dir).map_err(|e| LockError::Setting(e.to_string()))?;
+    if library == crate::project::Library::OwnFlake {
         return Ok(ProjectKix::Development(Development::OwnLibrary));
     }
     let path = dir.join(FILE);

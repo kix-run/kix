@@ -102,9 +102,20 @@ pub struct ProjectConfig {
     pub builder_source: BuilderSource,
     /// `min-age` in the `[upgrade]` table, in days.
     pub upgrade_min_age: Option<u32>,
-    /// `library = "self"`: the project's flake provides the Kix library
-    /// itself, so the project uses a development library.
-    pub library_self: bool,
+    /// Where the project takes its Kix library from, from the `library` key.
+    pub library: Library,
+}
+
+/// Where a project takes its Kix library from (`library` in `kix.toml`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Library {
+    /// `library = "input"`, the default: the flake input named `kix`, whose
+    /// tag in `flake.lock` is the project's version of Kix.
+    #[default]
+    Input,
+    /// `library = "self"`: the project's own flake provides the Kix library,
+    /// so the project uses a development library.
+    OwnFlake,
 }
 
 impl Default for ProjectConfig {
@@ -113,7 +124,7 @@ impl Default for ProjectConfig {
             builder: BuilderKind::Kix,
             builder_source: BuilderSource::Default,
             upgrade_min_age: None,
-            library_self: false,
+            library: Library::Input,
         }
     }
 }
@@ -172,7 +183,7 @@ pub enum ProjectError {
     KixSettingRemoved { path: PathBuf, value: String },
 
     #[error(
-        "{} sets library = {value}. The one value is library = \"self\", for a flake that provides the Kix library itself. Remove the line otherwise.",
+        "{} sets library = {value}, which Kix does not know. Write library = \"input\" (the default: the flake input named kix holds the Kix library) or library = \"self\" (this flake provides the Kix library itself).",
         path.display()
     )]
     BadLibrary { path: PathBuf, value: String },
@@ -289,11 +300,11 @@ impl ProjectConfig {
             });
         }
         let upgrade_min_age = parse_upgrade(path, table.get("upgrade"))?;
-        let library_self = parse_library(path, table.get("library"))?;
+        let library = parse_library(path, table.get("library"))?;
         let Some(value) = table.get("builder") else {
             return Ok(Self {
                 upgrade_min_age,
-                library_self,
+                library,
                 ..Self::default()
             });
         };
@@ -318,7 +329,7 @@ impl ProjectConfig {
             builder,
             builder_source: origin,
             upgrade_min_age,
-            library_self,
+            library,
         })
     }
 
@@ -332,11 +343,12 @@ impl ProjectConfig {
     }
 }
 
-/// Read `library` from a `kix.toml`: `true` for `library = "self"`.
-fn parse_library(path: &Path, value: Option<&toml::Value>) -> Result<bool, ProjectError> {
+/// Read `library` from a `kix.toml`. A missing key is [`Library::Input`].
+fn parse_library(path: &Path, value: Option<&toml::Value>) -> Result<Library, ProjectError> {
     match value {
-        None => Ok(false),
-        Some(toml::Value::String(s)) if s == "self" => Ok(true),
+        None => Ok(Library::Input),
+        Some(toml::Value::String(s)) if s == "input" => Ok(Library::Input),
+        Some(toml::Value::String(s)) if s == "self" => Ok(Library::OwnFlake),
         Some(value) => Err(ProjectError::BadLibrary {
             path: path.to_path_buf(),
             value: toml_text(value),
@@ -344,19 +356,19 @@ fn parse_library(path: &Path, value: Option<&toml::Value>) -> Result<bool, Proje
     }
 }
 
-/// Return whether the `kix.toml` in `flake_dir` sets `library = "self"`.
+/// Return where the project in `flake_dir` takes its Kix library from, as
+/// its `kix.toml` says.
 ///
 /// Kix reads this before it knows which version runs the command, so a
-/// missing or unreadable file and invalid TOML count as no setting and are
-/// left to [`ProjectConfig::read`]. A `library` value other than `"self"` is
-/// an error.
-pub fn library_is_self(flake_dir: &Path) -> Result<bool, ProjectError> {
+/// missing or unreadable file and invalid TOML count as the default and are
+/// left to [`ProjectConfig::read`]. An unknown `library` value is an error.
+pub fn library_setting(flake_dir: &Path) -> Result<Library, ProjectError> {
     let path = flake_dir.join(FILE);
     let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(false);
+        return Ok(Library::Input);
     };
     let Ok(table) = toml::from_str::<toml::Table>(&text) else {
-        return Ok(false);
+        return Ok(Library::Input);
     };
     parse_library(&path, table.get("library"))
 }
@@ -628,18 +640,35 @@ mod tests {
     }
 
     #[test]
-    fn library_takes_only_self() {
-        assert!(read(Some("library = \"self\"\n")).unwrap().library_self);
-        assert!(!read(Some("")).unwrap().library_self);
+    fn library_is_the_input_unless_set_to_self() {
+        assert_eq!(read(Some("")).unwrap().library, Library::Input);
+        assert_eq!(
+            read(Some("library = \"input\"\n")).unwrap().library,
+            Library::Input
+        );
+        assert_eq!(
+            read(Some("library = \"self\"\n")).unwrap().library,
+            Library::OwnFlake
+        );
+        let dir = project(Some("library = \"self\"\n"));
+        assert_eq!(library_setting(dir.path()).unwrap(), Library::OwnFlake);
+        assert_eq!(
+            library_setting(Path::new("/nonexistent/project")).unwrap(),
+            Library::Input
+        );
+    }
+
+    #[test]
+    fn an_unknown_library_names_both_values() {
         let dir = project(Some("library = \"kix\"\n"));
         let expected = format!(
-            "{} sets library = \"kix\". The one value is library = \"self\", for a flake that provides the Kix library itself. Remove the line otherwise.",
+            "{} sets library = \"kix\", which Kix does not know. Write library = \"input\" (the default: the flake input named kix holds the Kix library) or library = \"self\" (this flake provides the Kix library itself).",
             dir.path().join(FILE).display()
         );
         let err = ProjectConfig::read(Some(dir.path()), None).unwrap_err();
         assert_eq!(err.to_string(), expected);
         assert_eq!(
-            library_is_self(dir.path()).unwrap_err().to_string(),
+            library_setting(dir.path()).unwrap_err().to_string(),
             expected
         );
     }

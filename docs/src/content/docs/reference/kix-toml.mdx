@@ -39,14 +39,17 @@ A `kix` line in `kix.toml` stops every command with error [K4476]. Delete the li
 
 ## The `library` setting
 
-`library = "self"` says that the project's own flake provides the Kix library, as the Kix repository does:
+`library` says where the project's Kix library comes from. It takes two values:
+
+- `library = "input"`, the default: the Kix library is the flake input named `kix`, and its release tag in `flake.lock` is the project's version of Kix. Leaving the setting out means the same.
+- `library = "self"`: the project's own flake provides the Kix library, as the Kix repository does.
 
 ```toml
 # kix.toml
 library = "self"
 ```
 
-The project then has no `kix` input and no release version. Kix runs the version you started, prints a note that the project uses a [development Kix library](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#work-on-the-kix-library-itself), and compares no versions. `"self"` is the only value. Without the setting, a project needs a `kix` input in `flake.lock`.
+With `"self"` the project has no `kix` input and no release version. Kix runs the version you started, prints a note that the project uses a [development Kix library](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#work-on-the-kix-library-itself), and compares no versions. Any other value stops the command with an error that names both values.
 
 ## The `builder` setting
 
@@ -189,7 +192,7 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | --- | --- |
 | Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
 | Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder, library, upgrade). Check the spelling, or upgrade Kix if the project needs a newer version `` |
-| `library` is not `"self"` | `<path> sets library = <value>. The one value is library = "self", for a flake that provides the Kix library itself. Remove the line otherwise.` |
+| `library` is neither `"input"` nor `"self"` | `<path> sets library = <value>, which Kix does not know. Write library = "input" (the default: the flake input named kix holds the Kix library) or library = "self" (this flake provides the Kix library itself).` |
 | `kix.toml` sets `kix` | `[K4476] <path> sets kix = "<value>", but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml.` |
 | The version of Kix that `flake.lock` names is not installed, with `KIX_AUTO_INSTALL=0` | `` This project uses Kix <version> (flake.lock), and Kix <version> is not installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <version>`. `` |
 | Unknown `builder` value | `<path> sets builder = "<value>", which is not a known builder (Kix <version> supports: kix, nix, remote). Check the spelling, or upgrade Kix if the project needs a newer version` |
