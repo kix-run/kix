@@ -17,8 +17,7 @@ If a stateful resource is removed without a replacement, Kix treats it as an
 ordinary orphan. Running with `--prune` deletes it without a migration prompt.
 See
 [Deploy with dry-run, timeouts, pruning, and log/TUI output modes](/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/)
-to see how the plan reports orphans before deletion. A renamed Job or CronJob
-never triggers the gate, because it holds no data of its own.
+to see how the plan reports orphans before deletion.
 
 The example changes the `data/volume` package from
 `PersistentVolumeClaim/media-v1` at `5Gi` to
