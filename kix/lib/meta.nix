@@ -246,8 +246,7 @@ rec {
           depTarget:
           let
             dep = depTarget.instance;
-            # An import has no `_meta.version` and reports its `out.version`.
-            depVersion = if dep._meta ? version then dep._meta.version else dep.out.version or null;
+            depVersion = dep._meta.version;
           in
           constraintDiagnostics {
             field = "meta.compatibleWith.${depName}";
@@ -339,9 +338,7 @@ rec {
         scopeAssertions
         unsafeAssertions
       ];
-      warnings =
-        deprecationWarnings
-        ++ map (w: "[${instanceName}] ${w}") (builtins.concatMap (d: d.warnings) versionDiags);
+      warnings = deprecationWarnings ++ builtins.concatMap (d: d.warnings) versionDiags;
     };
 
   evaluatePackageDiagnostics =
@@ -388,7 +385,9 @@ rec {
 
   # An assertion is `{ assertion; message; fix ? null; id ? null; option ?
   # null; }`, with the fields `kix.fail` takes (`core/error.nix`). Each one
-  # gets `instance` set to the instance that raised it.
+  # gets `instance` set to the instance that raised it. Every warning gets the
+  # prefix `[namespace/instance]` here, so the code that raises a warning
+  # leaves the instance out of its text.
   #
   # `scorecardWarnings` are traced but left out of `allWarnings`, because the
   # scorecard report already carries them as findings and the CLI shows that
@@ -404,11 +403,9 @@ rec {
     }:
     let
       instance = "${namespaceName}/${instanceName}";
-      allWarnings = lib.concatLists [
-        metaResult.warnings
-        structuralWarnings
-        (map (w: "[${instanceName}] ${w}") packageResult.warnings)
-      ];
+      allWarnings = map (w: "[${instance}] ${w}") (
+        metaResult.warnings ++ structuralWarnings ++ packageResult.warnings
+      );
       allAssertions = map (a: { inherit instance; } // a) (
         metaResult.assertions ++ packageResult.assertions
       );

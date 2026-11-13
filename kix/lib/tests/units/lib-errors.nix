@@ -183,6 +183,7 @@ in
             id = "[K0001]";
           }
         ];
+        strict = true;
       }
     )
     && !fails (
@@ -222,7 +223,14 @@ in
   # with spaces, a dependency path, and a cluster option inside an instance.
   lib-errors-setting-form =
     let
-      refused = e: fails (errors.text { errors = [ ({ message = "m"; } // e) ]; });
+      refused =
+        e:
+        fails (
+          errors.text {
+            errors = [ ({ message = "m"; } // e) ];
+            strict = true;
+          }
+        );
     in
     refused { option = "config.tls.secretName"; }
     && refused { option = "deps.database"; }
@@ -235,6 +243,39 @@ in
       dependency = "database";
       clusterOption = "cluster.domain";
     };
+
+  # Outside kix.fail, an error with a field in the wrong form keeps its
+  # place in the list and says what is wrong in its message, so the other
+  # errors still show.
+  lib-errors-bad-field-not-strict =
+    let
+      text = errors.text {
+        cluster = "prod";
+        errors = [
+          {
+            message = "first";
+            option = "config.x";
+          }
+          {
+            message = "second";
+            id = "[K0001]";
+          }
+          { message = "third"; }
+        ];
+      };
+      payload = payloadOf text;
+      messages = map (e: e.message) payload.errors;
+    in
+    (
+      builtins.length messages == 3
+      && lib.hasPrefix "first\n" (builtins.elemAt messages 0)
+      && lib.hasInfix "starts with `config.`" (builtins.elemAt messages 0)
+      && (builtins.elemAt payload.errors 0).option == "config.x"
+      && lib.hasInfix "is not a change record id" (builtins.elemAt messages 1)
+      && !((builtins.elemAt payload.errors 1) ? id)
+      && builtins.elemAt messages 2 == "third"
+    )
+    || throw "bad field outside kix.fail: ${text}";
 
   # scope.fail stops the build of the instance that calls it.
   lib-errors-scope-fail = evalFails (mkCluster [ { instances.app.bad.package = failingPackage; } ]);

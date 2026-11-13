@@ -283,9 +283,7 @@ rec {
         {
           found = false;
           warnings = lib.optional (nameable != [ ]) (
-            "${
-              lib.optionalString (requester != null) "${requester}: "
-            }optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
+            "optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
             + (
               if builtins.length nameable == 1 then
                 "${labels nameable} matches in another namespace.\nFix: To use it, add this line to ${consumerPath}:"

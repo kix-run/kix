@@ -46,7 +46,8 @@ The Kix library warns about problems that do not stop the build. For example,
 it warns when it skips a `meta.compatibleWith` check because a dependency
 reports no version, or when an instance cannot reach the availability you asked
 for. A package's own `warnings` and its structural warnings are listed here
-too. When `eval` passes, text output lists these warnings under the table. In
+too. A warning about one instance starts with its namespace and name in
+brackets, such as `[monitoring/prometheus]`. When `eval` passes, text output lists these warnings under the table. In
 `json` and `yaml`, the `eval` entry lists each one in `findings` with a
 `severity` of `warning` and its `message`.
 

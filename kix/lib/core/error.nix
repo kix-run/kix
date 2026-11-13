@@ -58,13 +58,20 @@ let
       null;
 
   # Return `e` as an error record with only string fields. A string is the
-  # message. `strict` refuses fields outside `fields`.
+  # message. `strict` refuses fields outside `fields`, a malformed `id`, and a
+  # setting in the wrong form. Without `strict`, a malformed `id` is dropped
+  # and the problem goes into the message, so one badly written error does
+  # not hide the others it is reported with.
   toRecord =
     strict: e:
     let
       r = if builtins.isString e then { message = e; } else e;
       unknown = lib.subtractLists fields (builtins.attrNames r);
       record = lib.mapAttrs (_: plain) (lib.filterAttrs (n: v: v != null && builtins.elem n fields) r);
+      badId = record ? id && builtins.match "K[0-9]{4}" record.id == null;
+      problems =
+        lib.optional badId "id \"${record.id}\" is not a change record id, so Kix left it out."
+        ++ lib.optional (badSetting record != null) (badSetting record);
     in
     if !builtins.isAttrs r then
       throw "kix.fail takes a message or an attribute set with `message`, and got a ${builtins.typeOf r}."
@@ -74,10 +81,18 @@ let
       }."
     else if (r.message or null) == null then
       throw "kix.fail needs a `message`."
-    else if record ? id && builtins.match "K[0-9]{4}" record.id == null then
+    else if strict && badId then
       throw "kix.fail: id \"${record.id}\" is not a change record id. Write `K` and four digits, such as \"K0001\"."
-    else if badSetting record != null then
+    else if strict && badSetting record != null then
       throw "kix.fail: ${badSetting record}"
+    else if problems != [ ] then
+      removeAttrs record (lib.optional badId "id")
+      // {
+        message =
+          record.message
+          + "\nThe code that raised this error passed kix.fail a field in the wrong form: "
+          + lib.concatStringsSep " " problems;
+      }
     else
       record;
 
