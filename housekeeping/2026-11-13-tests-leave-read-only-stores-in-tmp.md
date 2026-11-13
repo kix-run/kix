@@ -1,0 +1,3 @@
+# 2026-11-13 · Rust tests · Each test run leaves Kix local stores in the temp folder, which used up the disk's inodes.
+
+Tests that build into a Kix local store put it in a temporary folder (`$TMPDIR/.tmpXXXX/kix/store/nix/store/...`, under the dev shell's `/tmp/nix-shell.*`). The store's files are read-only, so the temporary folder cannot delete them when the test ends. Each run left about 175,000 files, and on 2026-11-13 about 5,000 such folders filled the root disk's inodes, so Nix could not unpack nixpkgs. The fix is to make the store writable before the folder is dropped, or to give these tests one shared store.
