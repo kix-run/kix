@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix rollback` / `cluster/stops.rs` · A rollback keeps the old receipt, so a later deploy can be refused a required stop the cluster already made.
+
+`kix rollback` keeps the receipt the target record was first deployed with (`rollback.rs`, "Pass `None` for the receipt"). The required-stop check reads the Kix version from the Active record's receipt (`Record::deployed_with`). So a cluster deployed with the stop release, then rolled back to a build an older Kix deployed, reports the older Kix. The next deploy past the stop is refused, and the user has to deploy with the stop release again. The check fails safe, but the refusal is wrong.
