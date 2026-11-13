@@ -35,8 +35,8 @@ pub enum TransitionKind {
     Skip,
     /// Delete the live object, then apply. Tagged `recreate` because that
     /// is the act, whatever the trigger. The current producer is the
-    /// rerun rule: a manifest carrying the rerun annotation (a probe Job) whose
-    /// identity hash changed is run again, never patched, and the reason
+    /// rerun rule: a Job carrying the rerun annotation whose rerun hash
+    /// changed is run again, never patched, and the reason
     /// rides [`NodeDetail::Rerun`]. The executor applies plainly when
     /// nothing is live.
     Recreate,
@@ -195,7 +195,7 @@ pub enum NodeDetail {
     /// In-place recreate consumed the immutable-field conflict.
     RecreatedInPlace { reason: String },
     /// A resource carrying `kix.run/rerun` was deleted and created again
-    /// under the rerun rule (its identity changed, or its last run failed).
+    /// under the rerun rule (its own content changed, or its last run failed).
     Rerun { reason: String },
     /// An `OnDelete` DaemonSet is ready, and `stale` of its pods run the
     /// previous pod template until someone deletes them.

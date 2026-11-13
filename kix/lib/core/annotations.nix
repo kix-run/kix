@@ -78,6 +78,10 @@ rec {
     dependsOn = key "depends-on";
     readiness = key "readiness";
     rerun = key "rerun";
+    # The resource's `out.contentHash`. `mkResource` writes it on every
+    # resource that carries `rerun`, and the deploy engine compares it to
+    # decide whether a Job runs again.
+    rerunHash = key "rerun-hash";
     # Field paths a resource cedes to another manager after creation.
     cedeFields = key "cede-fields";
     # Comma-separated `apiVersion|Kind|name` entries for external objects that

@@ -21,13 +21,14 @@ pub struct PlanNodeEntry {
     pub kind: TransitionKind,
     /// The concrete change to apply. For [`TransitionKind::Skip`] this carries
     /// the `ResourceId`. For [`TransitionKind::Apply`] and
-    /// [`TransitionKind::Recreate`] it carries the manifest.
+    /// [`TransitionKind::Recreate`] it carries the manifest, as
+    /// [`ChangeAction::Apply`] and [`ChangeAction::Recreate`].
     pub action: ChangeAction,
     pub meta: NodeMeta,
-    /// The manifest when it carries the `kix.run/rerun` annotation. A changed
-    /// resource is tagged `Recreate`. An unchanged resource keeps its `Skip`
-    /// tag, but still runs a task to recreate the live object if its previous
-    /// run failed.
+    /// The manifest when it carries the `kix.run/rerun` annotation. A Job
+    /// whose own content changed is tagged `Recreate`. Any other keeps its
+    /// `Apply` or `Skip` tag, but still runs a task to recreate the live
+    /// object if its previous run failed.
     pub rerun: Option<Value>,
 }
 
@@ -58,7 +59,7 @@ impl DeployPlan {
         let mut by_id: HashMap<String, &ChangeAction> = HashMap::new();
         for action in changes {
             let rid = match action {
-                ChangeAction::Apply(m) => ResourceId::from_value(m),
+                ChangeAction::Apply(m) | ChangeAction::Recreate(m) => ResourceId::from_value(m),
                 ChangeAction::Skip(rid) => rid.clone(),
                 ChangeAction::Orphan(_) => continue,
             };
@@ -99,14 +100,16 @@ impl DeployPlan {
             }
             let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
             let action = match by_id.get(&k8s_id) {
-                Some(ChangeAction::Apply(m)) => ChangeAction::Apply((*m).clone()),
+                Some(action @ (ChangeAction::Apply(_) | ChangeAction::Recreate(_))) => {
+                    (*action).clone()
+                }
                 Some(ChangeAction::Skip(rid)) => ChangeAction::Skip(rid.clone()),
                 // Default to Skip if a graph node has no matching change action.
                 None | Some(ChangeAction::Orphan(_)) => ChangeAction::Skip(node.id.clone()),
             };
             let rerun = wants_rerun(&node.manifest).then(|| node.manifest.clone());
             let kind = match &action {
-                ChangeAction::Apply(_) if rerun.is_some() => TransitionKind::Recreate,
+                ChangeAction::Recreate(_) => TransitionKind::Recreate,
                 ChangeAction::Apply(_) => TransitionKind::Apply,
                 ChangeAction::Skip(_) => TransitionKind::Skip,
                 ChangeAction::Orphan(_) => TransitionKind::Delete,
@@ -155,12 +158,14 @@ impl DeployPlan {
         &self.nodes
     }
 
-    /// Build a test plan that applies every manifest.
+    /// Build a test plan that applies every manifest as a new object.
     #[cfg(any(test, feature = "test-util"))]
     pub fn applying(manifests: &[Value]) -> Self {
         let graph = ResourceGraph::from_manifests(manifests).expect("a test plan's graph");
-        let changes: Vec<ChangeAction> =
-            manifests.iter().cloned().map(ChangeAction::Apply).collect();
+        let changes: Vec<ChangeAction> = manifests
+            .iter()
+            .map(|m| super::super::apply::changed(m, None))
+            .collect();
         Self::from_graph_and_changes(&graph, &changes).expect("a test plan's markers")
     }
 

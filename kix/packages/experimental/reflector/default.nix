@@ -90,8 +90,9 @@ let
         };
       };
       # The Job keeps its name across changes and a Job's pod template is
-      # immutable, so the deploy engine replaces it when its content or
-      # anything upstream changes. Annotating a Secret again is harmless.
+      # immutable, so the deploy engine replaces it when its own content
+      # changes. The Secret's name and the namespace patterns are that
+      # content. Annotating a Secret again is harmless.
       jobRes = consumerScope.mkJob {
         name = jobName;
         inherit labels;

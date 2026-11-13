@@ -2,7 +2,8 @@
 //!
 //! Uses server-side apply (`Patch::Apply`) with `kix` as the field manager.
 //! Change detection diffs two sets of stamped manifests locally by comparing
-//! identity-hashes, without querying the live cluster.
+//! identity-hashes, without querying the live cluster. A Job under the rerun
+//! rule is recreated only when its content hash changed (see [`changed`]).
 
 mod ssa;
 #[cfg(test)]
@@ -47,11 +48,24 @@ pub(crate) fn wants_rerun(manifest: &Value) -> bool {
 pub enum ChangeAction {
     /// Resource is new or changed and needs to be applied.
     Apply(Value),
+    /// Job under the rerun rule that is new or whose own content changed. It
+    /// is deleted and created again so that it runs again.
+    Recreate(Value),
     /// Resource has the same identity-hash and can be skipped.
     Skip(ResourceId),
     /// Resource exists in the old activation but not the new one and is a
     /// candidate for pruning.
     Orphan(ResourceId),
+}
+
+impl ChangeAction {
+    /// Return the manifest this action writes, if it writes one.
+    pub fn written(&self) -> Option<&Value> {
+        match self {
+            ChangeAction::Apply(m) | ChangeAction::Recreate(m) => Some(m),
+            ChangeAction::Skip(_) | ChangeAction::Orphan(_) => None,
+        }
+    }
 }
 
 /// Return the `kix.run/identity-hash` annotation from a manifest, if present.
@@ -60,6 +74,32 @@ fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
         .pointer("/metadata/annotations")
         .and_then(|a| a.get(keys::IDENTITY_HASH))
         .and_then(Value::as_str)
+}
+
+/// Return the `kix.run/rerun-hash` annotation from a manifest, if present.
+fn manifest_rerun_hash(manifest: &Value) -> Option<&str> {
+    manifest
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(keys::RERUN_HASH))
+        .and_then(Value::as_str)
+}
+
+/// Return the action for `manifest`, which is new or differs from what was
+/// last deployed. This is the one place that decides whether a Job under the
+/// rerun rule runs again.
+///
+/// Such a Job is recreated when its `kix.run/rerun-hash` differs from
+/// `old_content`, the value it was last deployed with. A change that leaves
+/// its own content alone, such as a new label on its namespace, applies it
+/// in place. A Job that is new, or that a release before 0.10 deployed, has
+/// no old value and is recreated.
+pub(crate) fn changed(manifest: &Value, old_content: Option<&str>) -> ChangeAction {
+    let content = manifest_rerun_hash(manifest);
+    if wants_rerun(manifest) && (old_content.is_none() || content != old_content) {
+        ChangeAction::Recreate(manifest.clone())
+    } else {
+        ChangeAction::Apply(manifest.clone())
+    }
 }
 
 /// Annotations the CLI stamps from the build's package index. They are not
@@ -127,12 +167,12 @@ pub(crate) fn detect_changes(
                 matched_old_ids.insert(k8s_id);
                 actions.push(ChangeAction::Skip(rid));
             }
-            (Some(_), _) => {
+            (Some(old), _) => {
                 matched_old_ids.insert(k8s_id);
-                actions.push(ChangeAction::Apply(manifest.clone()));
+                actions.push(changed(manifest, manifest_rerun_hash(old)));
             }
             (None, _) => {
-                actions.push(ChangeAction::Apply(manifest.clone()));
+                actions.push(changed(manifest, None));
             }
         }
     }
@@ -163,8 +203,10 @@ pub(crate) fn detect_changes(
 ///
 /// For each resource in `failed_closures`:
 /// * A [`ChangeAction::Skip`] whose resource appears in a failed closure with a
-///   different identity hash is promoted to [`ChangeAction::Apply`] so the
-///   desired manifest is re-asserted if the failed deploy overwrote it.
+///   different identity hash is promoted to [`changed`] so the desired
+///   manifest is re-asserted if the failed deploy overwrote it. A Job under
+///   the rerun rule keeps its last run only when every failed closure holds
+///   it with the content hash the new build gives it.
 /// * A stamped, prunable resource that appears only in `failed_closures` and
 ///   not in `new_manifests` is added as [`ChangeAction::Orphan`].
 pub(crate) fn fold_failed_closures(
@@ -182,6 +224,7 @@ pub(crate) fn fold_failed_closures(
     };
 
     let mut uncertain: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut failed_content: HashMap<String, HashSet<Option<&str>>> = HashMap::new();
     let mut failed_manifest: HashMap<String, &Value> = HashMap::new();
     for closure in failed_closures {
         for manifest in closure {
@@ -193,6 +236,10 @@ pub(crate) fn fold_failed_closures(
                 .entry(id.clone())
                 .or_default()
                 .insert(hash.to_string());
+            failed_content
+                .entry(id.clone())
+                .or_default()
+                .insert(manifest_rerun_hash(manifest));
             failed_manifest.entry(id).or_insert(manifest);
         }
     }
@@ -216,7 +263,18 @@ pub(crate) fn fold_failed_closures(
                     out.push(ChangeAction::Skip(rid));
                 } else {
                     match new_by_id.get(&id) {
-                        Some(manifest) => out.push(ChangeAction::Apply((*manifest).clone())),
+                        Some(manifest) => {
+                            // The live Job holds the content of one of the
+                            // failed closures, so it is known only when they
+                            // all agree with the new build.
+                            let content = manifest_rerun_hash(manifest);
+                            let old_content = failed_content
+                                .get(&id)
+                                .is_some_and(|c| c.iter().all(|h| *h == content))
+                                .then_some(content)
+                                .flatten();
+                            out.push(changed(manifest, old_content));
+                        }
                         None => out.push(ChangeAction::Skip(rid)),
                     }
                 }
@@ -344,6 +402,7 @@ pub(crate) fn detect_changes_live(
     // Keep live Activation records in the index so an unchanged record produces
     // Skip; records are excluded from the orphan set via `live_prunable` below.
     let mut live_by_k8s_id: HashMap<String, Option<&str>> = HashMap::new();
+    let mut live_content: HashMap<String, Option<&str>> = HashMap::new();
     let mut live_stamps: HashMap<String, [Option<&str>; 3]> = HashMap::new();
     let mut live_rids: HashMap<String, ResourceId> = HashMap::new();
     let mut live_prunable: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -370,6 +429,13 @@ pub(crate) fn detect_changes_live(
             .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH));
 
         live_by_k8s_id.insert(k8s_id.clone(), hash);
+        live_content.insert(
+            k8s_id.clone(),
+            obj.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| keys::get_meta(a, keys::RERUN_HASH)),
+        );
         live_stamps.insert(k8s_id.clone(), live_owner_stamps(obj));
         if lifecycle_of_live(obj).prunable() {
             live_prunable.insert(k8s_id.clone());
@@ -406,11 +472,12 @@ pub(crate) fn detect_changes_live(
                 actions.push(ChangeAction::Skip(rid));
             }
             (Some(_), _) => {
+                let old_content = live_content.get(&k8s_id).copied().flatten();
                 matched_live_ids.insert(k8s_id);
-                actions.push(ChangeAction::Apply(manifest.clone()));
+                actions.push(changed(manifest, old_content));
             }
             (None, _) => {
-                actions.push(ChangeAction::Apply(manifest.clone()));
+                actions.push(changed(manifest, None));
             }
         }
     }

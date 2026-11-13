@@ -466,6 +466,9 @@ rec {
         }
         // lib.optionalAttrs (expectEntries != [ ]) {
           ${kixKeys.expects} = builtins.concatStringsSep "," expectEntries;
+        }
+        // lib.optionalAttrs ((rawManifest.metadata.annotations or { }) ? ${kixKeys.rerun}) {
+          ${kixKeys.rerunHash} = contentHashOf rawManifest;
         };
 
       rawManifestStamped =

@@ -439,7 +439,9 @@ impl Planned {
         self.new_manifests.iter_mut().for_each(annotate);
         self.checked.record.iter_mut().for_each(annotate);
         for node in self.checked.plan.nodes.iter_mut() {
-            if let ChangeAction::Apply(manifest) = &mut node.action {
+            if let ChangeAction::Apply(manifest) | ChangeAction::Recreate(manifest) =
+                &mut node.action
+            {
                 annotate(manifest);
             }
         }

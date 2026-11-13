@@ -653,8 +653,8 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     plan::print_package_plan(p.checked.pkg_diff(), verbose);
     plan::print_plan_summary(p.checked.pkg_diff());
 
-    // Jobs under the rerun rule that changed: the engine deletes and
-    // recreates them, so the preview says so.
+    // Jobs under the rerun rule whose own content changed: the engine
+    // deletes and recreates them, so the preview says so.
     let reruns: Vec<String> = p
         .checked
         .plan()
@@ -668,7 +668,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         .collect();
     if !reruns.is_empty() {
         crate::say!(
-            "  {} {} Job(s) with {} will be deleted and recreated so they run again: {}",
+            "  {} {} Job(s) with {} changed their own content and will be deleted and recreated so they run again: {}",
             output::yellow("↻"),
             reruns.len(),
             kix::manifest::keys::RERUN,

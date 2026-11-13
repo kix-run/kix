@@ -109,20 +109,23 @@ fn plan_refuses_crd_ref_marker_without_served_versions() {
     assert_eq!(target.served_versions, vec!["v1alpha1"]);
 }
 
-/// A manifest carrying `kix.run/rerun` is tagged Recreate when it
-/// changed and keeps its Skip tag, with the manifest attached, when it
-/// did not.
+/// A manifest carrying `kix.run/rerun` is tagged Recreate when the diff
+/// recreates it, keeps its Apply tag when the diff applies it in place, and
+/// keeps its Skip tag, with the manifest attached, when it did not change.
 #[test]
 fn plan_tags_rerun_manifests() {
     let mut changed = manifest("Job", "probe", "default", "h_probe", "");
     changed["metadata"]["annotations"][keys::RERUN] = json!("on-change");
+    let mut moved = manifest("Job", "moved-probe", "default", "h_moved", "");
+    moved["metadata"]["annotations"][keys::RERUN] = json!("on-change");
     let mut same = manifest("Job", "old-probe", "default", "h_old", "");
     same["metadata"]["annotations"][keys::RERUN] = json!("on-change");
     let plain = manifest("ConfigMap", "cm", "default", "h_cm", "");
-    let manifests = vec![changed.clone(), same.clone(), plain.clone()];
+    let manifests = vec![changed.clone(), moved.clone(), same.clone(), plain.clone()];
     let graph = ResourceGraph::from_manifests(&manifests).unwrap();
     let changes = vec![
-        ChangeAction::Apply(changed),
+        ChangeAction::Recreate(changed),
+        ChangeAction::Apply(moved),
         ChangeAction::Skip(ResourceId::from_value(&same)),
         ChangeAction::Skip(ResourceId::from_value(&plain)),
     ];
@@ -135,6 +138,8 @@ fn plan_tags_rerun_manifests() {
     };
     assert!(matches!(by_name("probe").kind, TransitionKind::Recreate));
     assert!(by_name("probe").rerun.is_some());
+    assert!(matches!(by_name("moved-probe").kind, TransitionKind::Apply));
+    assert!(by_name("moved-probe").rerun.is_some());
     assert!(matches!(by_name("old-probe").kind, TransitionKind::Skip));
     assert!(by_name("old-probe").rerun.is_some());
     assert!(matches!(by_name("cm").kind, TransitionKind::Skip));
@@ -149,7 +154,11 @@ fn plan_ignores_rerun_on_non_jobs() {
     deploy["metadata"]["annotations"][keys::RERUN] = json!("on-change");
     let manifests = vec![deploy.clone()];
     let graph = ResourceGraph::from_manifests(&manifests).unwrap();
-    let plan = DeployPlan::from_graph_and_changes(&graph, &[ChangeAction::Apply(deploy)]).unwrap();
+    let plan = DeployPlan::from_graph_and_changes(
+        &graph,
+        &[crate::cluster::apply::changed(&deploy, None)],
+    )
+    .unwrap();
     assert!(matches!(plan.nodes[0].kind, TransitionKind::Apply));
     assert!(plan.nodes[0].rerun.is_none());
 }

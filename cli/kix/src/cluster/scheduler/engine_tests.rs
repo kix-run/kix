@@ -78,7 +78,7 @@ fn plan_with_skips(manifests: &[Value], skip: &[&str]) -> DeployPlan {
             if skip.contains(&rid.name.as_str()) {
                 ChangeAction::Skip(rid)
             } else {
-                ChangeAction::Apply(m.clone())
+                crate::cluster::apply::changed(m, None)
             }
         })
         .collect();
@@ -1145,6 +1145,69 @@ async fn skipped_rerun_job_that_failed_is_recreated() {
     .unwrap();
     assert_eq!(result.configured, 1);
     assert_eq!(result.unchanged, 0);
+    assert!(
+        ops.calls()
+            .contains(&Call::RecreateStart(rid("Job", "probe")))
+    );
+    assert_eq!(rerun_details(&rec), vec!["the last run failed"]);
+}
+
+/// Build a plan that applies `manifests` in place, as the diff does for a
+/// rerun Job whose own content did not change.
+fn plan_in_place(manifests: &[Value]) -> DeployPlan {
+    let graph = ResourceGraph::from_manifests(manifests).unwrap();
+    let changes: Vec<ChangeAction> = manifests
+        .iter()
+        .map(|m| ChangeAction::Apply(m.clone()))
+        .collect();
+    DeployPlan::from_graph_and_changes(&graph, &changes).unwrap()
+}
+
+/// A rerun Job whose own content did not change, and whose last run
+/// succeeded, is applied in place and does not run again.
+#[tokio::test(start_paused = true)]
+async fn rerun_job_with_the_same_content_is_applied_in_place() {
+    let manifests = vec![rerun_m("Job", "probe", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Job", "probe"),
+        NodeScript::default().live(Behaviour::Now(Ok(Some(live_job(false))))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_in_place(&manifests),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 0);
+    let calls = ops.calls();
+    assert!(calls.contains(&Call::ApplyStart(rid("Job", "probe"))));
+    assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+    assert!(rerun_details(&rec).is_empty());
+}
+
+/// A rerun Job applied in place whose last run failed runs again, as an
+/// unchanged one does.
+#[tokio::test(start_paused = true)]
+async fn rerun_job_applied_in_place_that_failed_is_recreated() {
+    let manifests = vec![rerun_m("Job", "probe", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Job", "probe"),
+        NodeScript::default().live(Behaviour::Now(Ok(Some(live_job(true))))),
+    );
+    let rec = Arc::new(Recorder::default());
+    run(
+        &ops,
+        plan_in_place(&manifests),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
     assert!(
         ops.calls()
             .contains(&Call::RecreateStart(rid("Job", "probe")))

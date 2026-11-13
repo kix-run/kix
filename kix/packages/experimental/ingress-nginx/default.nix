@@ -597,10 +597,11 @@ in
         };
 
         # The Jobs keep the chart's fixed names and a Job's pod template is
-        # immutable, so the deploy engine replaces one when its content or
-        # anything upstream changes instead of failing on the patch.
+        # immutable, so the deploy engine replaces one when its own content
+        # changes instead of failing on the patch. `checksums` puts the
+        # content of the objects a Job writes to into that content.
         certgenJob =
-          jobName: container: requires:
+          jobName: container: requires: checksums:
           scope.mkJob {
             name = jobName;
             labels = admissionLabels;
@@ -608,7 +609,10 @@ in
             annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             spec = {
               template = {
-                metadata.labels = admissionLabels;
+                metadata = {
+                  labels = admissionLabels;
+                  annotations = checksums;
+                };
                 spec = {
                   serviceAccount = self.admissionServiceAccount;
                   restartPolicy = "OnFailure";
@@ -811,7 +815,8 @@ in
             [
               self.admissionRole
               self.admissionRoleBinding
-            ];
+            ]
+            { };
 
         admissionPatch =
           certgenJob "${name}-admission-patch"
@@ -825,7 +830,9 @@ in
               self.admissionCreate
               self.admissionClusterRole
               self.admissionClusterRoleBinding
-            ];
+            ]
+            # A changed webhook configuration gets its CA bundle again.
+            { "checksum/webhook" = self.admissionWebhook.out.contentHash; };
 
         admissionWebhook = scope.mkClusterResource {
           apiVersion = "admissionregistration.k8s.io/v1";

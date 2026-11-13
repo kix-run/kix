@@ -8,9 +8,11 @@
 # all privileges on it (and ownership with `owner`), and creates the
 # requested extensions. The Job logs in with the superuser Secret StackGres
 # creates next to the SGCluster. The Job carries `kix.run/rerun: on-change`,
-# so the deploy runs it again when anything it references changes: the
-# password's SOPS file, the options, or the PostgreSQL cluster. Every step
-# is idempotent, so running it again is harmless.
+# so the deploy runs it again when its own content changes. Its pod template
+# carries the content hashes of the password Secret, the superuser Secret,
+# and the SGCluster, so a new SOPS file, a changed option, or a changed
+# PostgreSQL cluster runs it again. Every step is idempotent, so running it
+# again is harmless.
 #
 # The app depends on this instance rather than on the cluster: a Secret is
 # readable only in its own namespace, and the cluster's holds the superuser.
@@ -444,8 +446,9 @@ in
         echo "stackgres-database bootstrap complete for ${userName}@${dbName}"
       '';
 
-      # A new SOPS file changes bootstrapPassword, which the Job references,
-      # so the Job's identity changes too and the rerun annotation applies.
+      # The deploy reruns the Job when its own content changes. The checksum
+      # annotations put the content of what it reads into that content. A
+      # secret-ref or an imported cluster has no content hash.
       bootstrapJob = backendScope.mkJob {
         name = "${serverSideName}-bootstrap";
         labels = labels;
@@ -453,7 +456,14 @@ in
         spec = {
           backoffLimit = 20;
           template = {
-            metadata.labels = labels;
+            metadata = {
+              inherit labels;
+              annotations = lib.filterAttrs (_: v: v != null) {
+                "checksum/password" = bootstrapPassword.out.contentHash or null;
+                "checksum/superuser" = superuser.out.contentHash or null;
+                "checksum/server" = postgres.out.contentHash or null;
+              };
+            };
             spec = {
               restartPolicy = "OnFailure";
               # The Job runs psql, a client, which needs no root. 70 is the

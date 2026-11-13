@@ -123,7 +123,7 @@ pub(super) async fn execute_node(
     // Reason a rerun node is deleted before apply. `None` means a standard apply.
     let mut rerun_reason: Option<&'static str> = None;
     let manifest = match (&entry.action, &entry.rerun) {
-        (ChangeAction::Apply(m), _) => m.clone(),
+        (ChangeAction::Apply(m) | ChangeAction::Recreate(m), _) => m.clone(),
         (ChangeAction::Skip(rid), rerun) if super::plan::skip_reads_live(entry) => {
             // An unchanged Job is never applied again, so its last run is
             // read back. A failed run is recreated under `kix.run/rerun` when
@@ -226,9 +226,29 @@ pub(super) async fn execute_node(
         manifest
     };
 
-    // Changed resources carrying `kix.run/rerun` are never patched in place.
-    // Delete the live object in the foreground first so its pods are removed
-    // before recreating it, or apply directly if no live object exists.
+    // A Job under `kix.run/rerun` whose own content is unchanged is patched
+    // in place. If its last run failed, it is recreated instead, as an
+    // unchanged one is.
+    if entry.kind == TransitionKind::Apply && entry.rerun.is_some() && ctx.rerun_failed {
+        match ctx.resources.get_live(&rid).await {
+            Ok(Some(obj)) if readiness::classify_workload_terminal(&obj, &rid.kind).is_some() => {
+                rerun_reason = Some("the last run failed");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                let message = format!("could not read the live object: {e}");
+                return NodeOutcome::Failed {
+                    detail: NodeDetail::ApplyFailed(message.clone()),
+                    message,
+                };
+            }
+        }
+    }
+
+    // Jobs carrying `kix.run/rerun` whose own content changed are never
+    // patched in place. Delete the live object in the foreground first so its
+    // pods are removed before recreating it, or apply directly if no live
+    // object exists.
     if matches!(entry.kind, TransitionKind::Recreate) && rerun_reason.is_none() {
         match ctx.resources.get_live(&rid).await {
             Ok(Some(_)) => rerun_reason = Some("changed since the last run"),

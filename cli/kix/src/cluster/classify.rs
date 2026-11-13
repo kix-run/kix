@@ -113,7 +113,7 @@ impl<'a> Context<'a> {
             .nodes()
             .iter()
             .filter_map(|n| match &n.action {
-                ChangeAction::Apply(m) => Some(m),
+                ChangeAction::Apply(m) | ChangeAction::Recreate(m) => Some(m),
                 ChangeAction::Skip(_) | ChangeAction::Orphan(_) => None,
             })
             .collect();

@@ -281,7 +281,7 @@ For packages that define `PrometheusRule` alerts without a `ServiceMonitor` (for
 
 ## healthCheck
 
-`kix.healthCheck` is a composable `build` list entry that returns two parts: `${partName}` (default `"healthCheck"`, a `batch/v1` `Job` named `"${scope.instanceName}-health"`) and `${partName}Script` (default `"healthCheckScript"`, a `v1/ConfigMap` mounted into the Job at `/probe`). Because the Job depends on `self.root` and nothing in the package's forward closure depends on the Job, Kix classifies it in `inverseDeps` (`kix.run/inverse-deps`) and deploys it after `self.root` is ready, re-running it automatically whenever its inputs change (`kix.run/rerun: on-change`). It pairs with `healthCheck = kix.options.healthCheck;` in `options`.
+`kix.healthCheck` is a composable `build` list entry that returns two parts: `${partName}` (default `"healthCheck"`, a `batch/v1` `Job` named `"${scope.instanceName}-health"`) and `${partName}Script` (default `"healthCheckScript"`, a `v1/ConfigMap` mounted into the Job at `/probe`). Because the Job depends on `self.root` and nothing in the package's forward closure depends on the Job, Kix classifies it in `inverseDeps` (`kix.run/inverse-deps`) and deploys it after `self.root` is ready. It runs again when its own content changes (`kix.run/rerun: on-change`): the script, the `env` values, or the content of `self.root` or of a resource that `requires` returns. The Job carries a `checksum/*` annotation for each of these on its pod template, so they need no other entry in `requires`. It pairs with `healthCheck = kix.options.healthCheck;` in `options`.
 
 ```nix
 options = {

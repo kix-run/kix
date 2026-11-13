@@ -3968,6 +3968,7 @@ let
         jobA != null
         && jobB != null
         && partHash a "healthCheck" != partHash b "healthCheck"
+        && jobA.metadata.annotations.${kixKeys.rerunHash} != jobB.metadata.annotations.${kixKeys.rerunHash}
         && jobA.metadata.name == jobB.metadata.name
         && (jobA.metadata.annotations.${kixKeys.rerun} or "") == "on-change"
       )
@@ -4105,8 +4106,9 @@ let
         ]
       }";
 
-    # The script lives in a stable-name ConfigMap the Job mounts; a script
-    # change changes the Job's identity hash but not its name.
+    # The script lives in a stable-name ConfigMap the Job mounts. A script
+    # change changes the Job's identity hash and its rerun hash, so the
+    # probe runs again, but not its name.
     t64-healthcheck-script-configmap =
       let
         build =
@@ -4134,6 +4136,7 @@ let
         && volume.configMap.name == "app-health-script"
         && lib.hasInfix (partHash a "healthCheckScript") (dependsOn jobA)
         && partHash a "healthCheck" != partHash b "healthCheck"
+        && jobA.metadata.annotations.${kixKeys.rerunHash} != jobB.metadata.annotations.${kixKeys.rerunHash}
         && jobA.metadata.name == jobB.metadata.name
       )
       || throw "script ConfigMap wiring wrong";
@@ -4157,8 +4160,9 @@ let
       || throw "the package Service selects the probe pod: ${builtins.toJSON podLabels}";
 
     # The probe waits for the package root without being told: a Job whose
-    # env dials nothing of the package still lists the root in requires.
-    # When the env already dials the root, it is not listed twice.
+    # env dials nothing of the package still depends on the root, through
+    # the root's content hash on its pod template, and lists it in requires
+    # in neither case.
     t67-healthcheck-waits-for-root =
       let
         depsCluster = mkCluster [
@@ -4176,7 +4180,9 @@ let
       in
       (
         depsJob != null
-        && lib.hasInfix "requires:${rootHash}" (dependsOn depsJob)
+        && lib.hasInfix rootHash (dependsOn depsJob)
+        && !(lib.hasInfix "requires:${rootHash}" (dependsOn depsJob))
+        && depsJob.spec.template.metadata.annotations ? "checksum/root"
         && dialJob != null
         && lib.hasInfix svcHash (dependsOn dialJob)
         && !(lib.hasInfix "requires:${svcHash}" (dependsOn dialJob))
