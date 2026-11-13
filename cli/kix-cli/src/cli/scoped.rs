@@ -148,7 +148,6 @@ const COMMAND_GROUPS: &[(&str, &[&str])] = &[
             "self",
             "doctor",
             "pin",
-            "secret",
             "compliance",
             "completions",
         ],
