@@ -34,13 +34,13 @@ pub struct ManagedSweep {
     /// Objects Kix applied, each carrying `kix.run/identity-hash`.
     pub managed: Vec<DynamicObject>,
     /// Objects that carry the Kix label without an identity hash or owner.
-    /// Kix never applied them. `kix gc --hard` reports them, and nothing
+    /// Kix never applied them. `kix gc --full-scan` reports them, and nothing
     /// deletes them unless requested.
     pub unstamped: Vec<DynamicObject>,
     /// Stamped objects that Kix never wrote: no `managedFields` entry names
     /// the `kix` field manager. A controller copied Kix's labels and
     /// annotations onto them, whether or not it set an owner reference.
-    /// They are excluded from every [`SweepScope`]. `kix gc --hard` reports
+    /// They are excluded from every [`SweepScope`]. `kix gc --full-scan` reports
     /// them, and nothing deletes them unless requested.
     pub copies: Vec<DynamicObject>,
     /// Resource types this account cannot list (403). Callers report these so a

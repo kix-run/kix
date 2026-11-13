@@ -1,6 +1,6 @@
 //! Runtime-switchable tracing writer.
 //!
-//! By default writes to stderr. When the `--tui` deploy renderer is active it
+//! By default writes to stderr. When the `--log-format tui` deploy view is active it
 //! would otherwise overwrite the ratatui viewport, so we redirect all tracing
 //! output to a per-invocation log file for the lifetime of the TUI session.
 
