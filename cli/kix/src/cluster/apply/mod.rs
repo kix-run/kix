@@ -3,7 +3,8 @@
 //! Uses server-side apply (`Patch::Apply`) with `kix` as the field manager.
 //! Change detection diffs two sets of stamped manifests locally by comparing
 //! identity-hashes, without querying the live cluster. A Job under the rerun
-//! rule is recreated only when its content hash changed (see [`changed`]).
+//! rule is recreated only when its content hash changed or its last run
+//! failed (see [`changed`]).
 
 mod ssa;
 #[cfg(test)]
@@ -43,14 +44,35 @@ pub(crate) fn wants_rerun(manifest: &Value) -> bool {
             == Some(keys::RERUN_ON_CHANGE)
 }
 
+/// Why a Job under the rerun rule runs again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RerunReason {
+    /// Its `kix.run/rerun-hash` differs from the one it was last deployed
+    /// with, or Kix has no record of that value.
+    Changed,
+    /// Its live object shows that its last run failed.
+    LastRunFailed,
+}
+
+impl RerunReason {
+    /// Return the reason as the deploy log and the plan state it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RerunReason::Changed => "changed since the last run",
+            RerunReason::LastRunFailed => "the last run failed",
+        }
+    }
+}
+
 /// Change action determined by diffing the old and new activations.
 #[derive(Debug, Clone)]
 pub enum ChangeAction {
     /// Resource is new or changed and needs to be applied.
     Apply(Value),
-    /// Job under the rerun rule that is new or whose own content changed. It
-    /// is deleted and created again so that it runs again.
-    Recreate(Value),
+    /// Job under the rerun rule that is new, whose own content changed, or
+    /// whose last run failed. It is deleted and created again so that it
+    /// runs again.
+    Recreate(Value, RerunReason),
     /// Resource has the same identity-hash and can be skipped.
     Skip(ResourceId),
     /// Resource exists in the old activation but not the new one and is a
@@ -62,7 +84,7 @@ impl ChangeAction {
     /// Return the manifest this action writes, if it writes one.
     pub fn written(&self) -> Option<&Value> {
         match self {
-            ChangeAction::Apply(m) | ChangeAction::Recreate(m) => Some(m),
+            ChangeAction::Apply(m) | ChangeAction::Recreate(m, _) => Some(m),
             ChangeAction::Skip(_) | ChangeAction::Orphan(_) => None,
         }
     }
@@ -84,19 +106,29 @@ fn manifest_rerun_hash(manifest: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// Return the action for `manifest`, which is new or differs from what was
-/// last deployed. This is the one place that decides whether a Job under the
-/// rerun rule runs again.
+/// Return the action for `manifest`, which is new, differs from what was
+/// last deployed, or is a Job whose last run failed. This is the one place
+/// that decides whether a Job under the rerun rule runs again.
 ///
-/// Such a Job is recreated when its `kix.run/rerun-hash` differs from
-/// `old_content`, the value it was last deployed with. A change that leaves
-/// its own content alone, such as a new label on its namespace, applies it
-/// in place. A Job that is new, or that a release before 0.10 deployed, has
-/// no old value and is recreated.
-pub(crate) fn changed(manifest: &Value, old_content: Option<&str>) -> ChangeAction {
+/// Such a Job is recreated when `last_run_failed` says its live object
+/// failed, which the plan reads from the cluster (see
+/// `DeployPlan::rerun_failed`). Otherwise it is recreated when its
+/// `kix.run/rerun-hash` differs from `old_content`, the value it was last
+/// deployed with. A change that leaves its own content alone, such as a new
+/// label on its namespace, applies it in place. A Job that is new, or that a
+/// release before 0.10 deployed, has no old value and is recreated.
+pub(crate) fn changed(
+    manifest: &Value,
+    old_content: Option<&str>,
+    last_run_failed: bool,
+) -> ChangeAction {
     let content = manifest_rerun_hash(manifest);
-    if wants_rerun(manifest) && (old_content.is_none() || content != old_content) {
-        ChangeAction::Recreate(manifest.clone())
+    if !wants_rerun(manifest) {
+        ChangeAction::Apply(manifest.clone())
+    } else if last_run_failed {
+        ChangeAction::Recreate(manifest.clone(), RerunReason::LastRunFailed)
+    } else if old_content.is_none() || content != old_content {
+        ChangeAction::Recreate(manifest.clone(), RerunReason::Changed)
     } else {
         ChangeAction::Apply(manifest.clone())
     }
@@ -169,10 +201,10 @@ pub(crate) fn detect_changes(
             }
             (Some(old), _) => {
                 matched_old_ids.insert(k8s_id);
-                actions.push(changed(manifest, manifest_rerun_hash(old)));
+                actions.push(changed(manifest, manifest_rerun_hash(old), false));
             }
             (None, _) => {
-                actions.push(changed(manifest, None));
+                actions.push(changed(manifest, None, false));
             }
         }
     }
@@ -273,7 +305,7 @@ pub(crate) fn fold_failed_closures(
                                 .is_some_and(|c| c.iter().all(|h| *h == content))
                                 .then_some(content)
                                 .flatten();
-                            out.push(changed(manifest, old_content));
+                            out.push(changed(manifest, old_content, false));
                         }
                         None => out.push(ChangeAction::Skip(rid)),
                     }
@@ -474,10 +506,10 @@ pub(crate) fn detect_changes_live(
             (Some(_), _) => {
                 let old_content = live_content.get(&k8s_id).copied().flatten();
                 matched_live_ids.insert(k8s_id);
-                actions.push(changed(manifest, old_content));
+                actions.push(changed(manifest, old_content, false));
             }
             (None, _) => {
-                actions.push(changed(manifest, None));
+                actions.push(changed(manifest, None, false));
             }
         }
     }

@@ -17,7 +17,10 @@ use std::path::Path;
 
 use miette::miette;
 
+use kix::cluster::apply::{ChangeAction, RerunReason};
 use kix::cluster::inventory::SharedOrphan;
+use kix::cluster::scheduler::DeployPlan;
+use kix::cluster::stream::NodeId;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::DiffConfig;
 use kix::manifest::diff::display::format_diffs;
@@ -584,6 +587,38 @@ pub fn render_plan_orphans(orphans: &[ResourceId], fate: &str) -> String {
 pub fn print_shared(shared: &[SharedOrphan]) {
     for s in shared {
         crate::say!("  {} prune: {}", output::yellow("="), s.describe());
+    }
+}
+
+/// Print the Jobs under `kix.run/rerun` that `plan` deletes and recreates so
+/// they run again for one of `reasons`, grouped by the reason.
+pub fn print_reruns(plan: &DeployPlan, reasons: &[RerunReason]) {
+    for (reason, why) in [
+        (RerunReason::Changed, "changed their own content"),
+        (RerunReason::LastRunFailed, "failed on their last run"),
+    ] {
+        if !reasons.contains(&reason) {
+            continue;
+        }
+        let jobs: Vec<String> = plan
+            .nodes()
+            .iter()
+            .filter_map(|n| match (&n.action, &n.id) {
+                (ChangeAction::Recreate(_, r), NodeId::Resource(rid)) if *r == reason => {
+                    Some(rid.to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        if !jobs.is_empty() {
+            crate::say!(
+                "  {} {} Job(s) with {} {why} and will be deleted and recreated so they run again: {}",
+                output::yellow("↻"),
+                jobs.len(),
+                kix::manifest::keys::RERUN,
+                jobs.join(", "),
+            );
+        }
     }
 }
 

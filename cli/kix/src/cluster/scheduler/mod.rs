@@ -60,7 +60,7 @@ use node::recreate_refusal;
 use node::{NodeCtx, NodeOutcome, execute_node, prune_order, with_sentence};
 use plan::{SchedulerState, is_crd_like, runs_task};
 
-pub use plan::{DeployPlan, PlanNodeEntry, failed_skipped_jobs};
+pub use plan::{DeployPlan, PlanNodeEntry};
 
 /// Policy for handling a node that reaches `Verdict::Failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,12 +105,6 @@ pub struct SchedulerConfig {
     pub concurrency: usize,
     /// Thresholds for progress watchdog warnings and aborts.
     pub stall: StallPolicy,
-    /// Recreate an unchanged `kix.run/rerun` node if its live object failed.
-    /// `kix deploy` and `kix rollback` enable this so explicit CLI runs retry
-    /// failed probes. The operator disables this because it diffs against live
-    /// objects and requeues failed runs every 30 seconds, which would otherwise
-    /// recreate a failing probe Job in an infinite loop.
-    pub rerun_failed: bool,
     /// Read the live object of every unchanged node that a node with work
     /// depends on before its dependents run, and fail the deploy on it when
     /// it is not ready. `kix deploy` and the operator's deploy of a new build
@@ -350,7 +344,6 @@ impl<'a> Run<'a> {
             // Preauthorized delete set for immutable-conflict recovery.
             orphan_set: orphan_rids.iter().cloned().collect(),
             dry_run,
-            rerun_failed: config.rerun_failed,
             progress: progress.clone(),
             observer: observer.clone(),
         });

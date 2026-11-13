@@ -130,9 +130,10 @@ pub struct PlanArgs {
     pub force_conflicts: bool,
 
     /// Acknowledge detected stateful migration pairs. Without this flag, a
-    /// deploy that would remove and add stateful resources in the same
-    /// logical slot is rejected (even with --yes) to prevent silent data
-    /// loss, and `kix plan` exits 3. Kix does not copy data between them.
+    /// deploy that would remove an object that holds data from a stateful
+    /// package and add another in its place is rejected (even with --yes)
+    /// to prevent silent data loss, and `kix plan` exits 3. Kix does not
+    /// copy data between them.
     #[arg(long)]
     pub accept_migrations: bool,
 

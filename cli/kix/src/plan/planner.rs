@@ -154,6 +154,10 @@ pub struct CheckedPlan {
     /// What the checks a run makes when it connects after the plan
     /// (`--offline`) read from the new build.
     target_checks: TargetChecks,
+    /// The Jobs the plan leaves unchanged whose last run failed, which the
+    /// run reports as failed. `None` until the plan reads them from the
+    /// cluster ([`CheckedPlan::read_last_runs`]).
+    failed_jobs: Option<Vec<ResourceId>>,
 }
 
 /// What the checks a command makes when it connects read from the new
@@ -271,6 +275,49 @@ impl CheckedPlan {
     /// after the plan was made without connecting.
     pub fn target_checks(&self) -> &TargetChecks {
         &self.target_checks
+    }
+
+    /// Return the Jobs the plan leaves unchanged whose last run failed, or
+    /// `None` when the plan has not read them from the cluster. A Job under
+    /// `kix.run/rerun` whose last run failed is not among them, because the
+    /// plan runs it again.
+    pub fn failed_jobs(&self) -> Option<&[ResourceId]> {
+        self.failed_jobs.as_deref()
+    }
+
+    /// Return whether a run of the plan would change nothing and report no
+    /// failure: it writes nothing, prunes nothing, and every Job whose last
+    /// run matters is known not to have failed.
+    pub fn nothing_to_do(&self) -> bool {
+        let jobs_known_good = match &self.failed_jobs {
+            Some(failed) => failed.is_empty(),
+            None => !self.plan.reads_last_runs(),
+        };
+        jobs_known_good
+            && self.orphans.is_empty()
+            && !self
+                .plan
+                .nodes()
+                .iter()
+                .any(|n| n.action.written().is_some())
+    }
+
+    /// Read the last runs of the plan's Jobs on the cluster behind `client`.
+    /// A Job under `kix.run/rerun` whose last run failed runs again, and an
+    /// unchanged Job without it is listed in [`CheckedPlan::failed_jobs`]. A
+    /// plan made with a client has read them already; one made without
+    /// (`--offline`) reads them here once the run connects.
+    pub async fn read_last_runs(&mut self, client: &Client) -> Result<(), PlanError> {
+        let failed = if self.plan.reads_last_runs() {
+            let discovery = discovery::discover_resources(client)
+                .await
+                .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+            self.plan.read_last_runs(client, &discovery).await
+        } else {
+            Vec::new()
+        };
+        self.failed_jobs = Some(failed);
+        Ok(())
     }
 
     /// Remove orphans that another Kix cluster still deploys ([`keep_shared`])
@@ -439,7 +486,7 @@ impl Planned {
         self.new_manifests.iter_mut().for_each(annotate);
         self.checked.record.iter_mut().for_each(annotate);
         for node in self.checked.plan.nodes.iter_mut() {
-            if let ChangeAction::Apply(manifest) | ChangeAction::Recreate(manifest) =
+            if let ChangeAction::Apply(manifest) | ChangeAction::Recreate(manifest, _) =
                 &mut node.action
             {
                 annotate(manifest);
@@ -618,7 +665,7 @@ impl<'a> Planner<'a> {
         )
         .map_err(PlanError::Unshown)?;
 
-        Ok(CheckedPlan {
+        let mut checked = CheckedPlan {
             flags: self.flags,
             plan,
             orphans,
@@ -634,7 +681,12 @@ impl<'a> Planner<'a> {
             old_manifests: baseline.manifests(),
             package_index: RecordPackageIndex::of(new_graph),
             target_checks: TargetChecks::of(new_graph),
-        })
+            failed_jobs: None,
+        };
+        if let Some(client) = client {
+            checked.read_last_runs(client).await?;
+        }
+        Ok(checked)
     }
 }
 

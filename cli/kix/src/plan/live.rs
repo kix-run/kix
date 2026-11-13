@@ -92,6 +92,11 @@ impl LivePlan {
     /// ([`cluster_of`]), compare `desired` with them, and plan the changes.
     /// A record that names no cluster sweeps under the empty name, under
     /// which no record counts as this cluster's own.
+    ///
+    /// The plan does not read the last runs of Jobs, so a Job under
+    /// `kix.run/rerun` whose last run failed does not run again, and the run
+    /// reports it as failed. The operator requeues every 30 seconds, and
+    /// would otherwise delete and recreate a failing Job in a loop.
     pub async fn sweep(
         client: &Client,
         activation: &DynamicObject,

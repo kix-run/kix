@@ -16,6 +16,7 @@ use miette::{Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
+use kix::cluster::apply::RerunReason;
 use kix::cluster::classify::{ChangedCrds, DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
@@ -238,7 +239,6 @@ pub(crate) fn dry_run(
             cancel: kix::cluster::cancel::CancelToken::new(),
             concurrency: scheduler::CONCURRENCY,
             stall: StallPolicy::from_env(),
-            rerun_failed: true,
             check_unchanged: true,
             names_flags: true,
         };
@@ -653,28 +653,10 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     plan::print_package_plan(p.checked.pkg_diff(), verbose);
     plan::print_plan_summary(p.checked.pkg_diff());
 
-    // Jobs under the rerun rule whose own content changed: the engine
-    // deletes and recreates them, so the preview says so.
-    let reruns: Vec<String> = p
-        .checked
-        .plan()
-        .nodes()
-        .iter()
-        .filter(|n| matches!(n.kind, TransitionKind::Recreate))
-        .map(|n| match &n.id {
-            NodeId::Resource(rid) => rid.to_string(),
-            NodeId::Synthetic(s) => s.clone(),
-        })
-        .collect();
-    if !reruns.is_empty() {
-        crate::say!(
-            "  {} {} Job(s) with {} changed their own content and will be deleted and recreated so they run again: {}",
-            output::yellow("↻"),
-            reruns.len(),
-            kix::manifest::keys::RERUN,
-            reruns.join(", "),
-        );
-    }
+    plan::print_reruns(
+        p.checked.plan(),
+        &[RerunReason::Changed, RerunReason::LastRunFailed],
+    );
 
     let deletes = p.checked.flags().prune_policy() == PrunePolicy::Delete;
     let fate = if p.checked.flags().prune_mode == Some(PruneModeFlag::No) {
