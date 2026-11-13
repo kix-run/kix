@@ -62,7 +62,6 @@ kix.buildCluster {
           aliases = [ "password" ];
           config = {
             source = ./dev-secrets/n8n-db.sops.yaml;
-            hash = "sha256-c/LhiT1y1tj/rrThho5Q6XdskPC0Kt1DbkruTzTUfI0=";
             keys = [ "password" ];
           };
         };

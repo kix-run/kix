@@ -15,6 +15,7 @@
 
 let
   rules = import ../../rules { inherit lib; };
+  pkg = name: (import ../../../packages/by-level.nix { inherit lib; }).byName.${name};
 
   # A package that builds one Secret from `args` (merged into mkSecret) in
   # namespace `a`.
@@ -106,6 +107,63 @@ in
   # file fills is sops.
   secret-sources-stamp-inline-and-sops =
     stampOf inlineAndSops == "username=inline,password=sops" || throw "stamp: ${stampOf inlineAndSops}";
+
+  # A SOPS Secret records the SHA-256 of its encrypted file, and publishes it
+  # as out.sops.digest. `hash` on scope.mkSecret or on a secret instance, and
+  # reading out.sops.hash, fail the build.
+  secret-sources-sops-digest =
+    let
+      digest = builtins.hashFile "sha256" ./secret-sources.nix;
+      secret = lib.findFirst (m: m.kind == "Secret" && m.metadata.name == "s") null (
+        manifests (clusterOf (secretPackage inlineAndSops) null)
+      );
+      annotations = secret.metadata.annotations;
+      reading = field: {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            secret = scope.mkSecret ({ name = "s"; } // inlineAndSops);
+            config = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "c";
+              extra.data.d = self.secret.out.sops.${field};
+            };
+            root = self.secret;
+          };
+      };
+      published = lib.findFirst (m: m.kind == "ConfigMap" && m.metadata.name == "c") null (
+        manifests (clusterOf (reading "digest") null)
+      );
+      secretInstance =
+        config:
+        mkCluster [
+          {
+            instances.a.s = {
+              package = pkg "secret";
+              inherit config;
+            };
+          }
+        ];
+    in
+    (
+      annotations.${kixKeys.sopsDigest} == digest
+      && !(builtins.any (lib.hasSuffix "/content-hash") (builtins.attrNames annotations))
+      && published.data.d == digest
+      && evalFails (clusterOf (reading "hash") null)
+      && evalFails (clusterOf (secretPackage (inlineAndSops // { hash = "sha256-x"; })) null)
+      && !(evalFails (secretInstance {
+        source = ./secret-sources.nix;
+        keys = [ "password" ];
+      }))
+      && evalFails (secretInstance {
+        source = ./secret-sources.nix;
+        hash = "sha256-x";
+        keys = [ "password" ];
+      })
+    )
+    || throw "sops digest: ${builtins.toJSON annotations}";
 
   # plainKeys marks a valued key as plain; a basic-auth username is plain by
   # type; a plain key with no value is refused.

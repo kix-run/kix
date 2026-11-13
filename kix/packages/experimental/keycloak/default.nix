@@ -54,14 +54,13 @@
 #     keycloak-db-password = {
 #       package = packages.secret;
 #       aliases = [ "password" ];
-#       config = { source = ./secrets/keycloak-db.yaml; hash = "..."; keys = [ "password" ]; };
+#       config = { source = ./secrets/keycloak-db.yaml; keys = [ "password" ]; };
 #     };
 #     keycloak-admin = {
 #       package = packages.secret;
 #       aliases = [ "bootstrapAdmin" ];
 #       config.source = ./secrets/keycloak-admin.sops.yaml;
 #       config.keys = [ "username" "password" ];
-#       config.hash = "...";
 #     };
 #   };
 #

@@ -822,8 +822,7 @@
       ],
       "liveCaptures": [
         "how-to/platform-sops-secrets/secret"
-      ],
-      "unverifiedNixBlocks": 1
+      ]
     },
     {
       "page": "policy-ci-and-compliance/add-scorecard-rules",

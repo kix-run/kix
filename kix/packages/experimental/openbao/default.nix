@@ -36,7 +36,6 @@
 #       aliases = [ "unsealKey" ];
 #       config.source = ./secrets/openbao-unseal.sops.yaml;
 #       config.keys = [ "key" ];
-#       config.hash = "...";
 #     };
 #   };
 #

@@ -27,7 +27,7 @@
 #     vaultwarden-db-password = {
 #       package = packages.secret;
 #       aliases = [ "password" ];
-#       config = { source = ./secrets/vaultwarden-db.yaml; hash = "..."; keys = [ "password" ]; };
+#       config = { source = ./secrets/vaultwarden-db.yaml; keys = [ "password" ]; };
 #     };
 #     vaultwarden.package = packages.experimental.vaultwarden;   # takes deps.storage
 #   };                                              # and deps.database

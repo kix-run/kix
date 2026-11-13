@@ -111,12 +111,6 @@ pub enum Refusal {
     Hydration {
         message: String,
     },
-    /// A SOPS Secret's decrypted values do not match its declared `hash`, so
-    /// nothing was sent. `sops_source` is the Secret's `kix.run/sops-source`.
-    HashMismatch {
-        sops_source: String,
-        message: String,
-    },
     Other {
         message: String,
     },
@@ -141,7 +135,6 @@ impl Refusal {
             | Refusal::Forbidden { message }
             | Refusal::NamespaceMissing { message, .. }
             | Refusal::Hydration { message }
-            | Refusal::HashMismatch { message, .. }
             | Refusal::Other { message } => message.clone(),
             Refusal::UnknownKind { kind } => {
                 format!("the apiserver does not serve kind {kind}")
@@ -180,20 +173,8 @@ impl Refusal {
 
     /// Classify a secret hydration failure.
     pub(crate) fn of_hydration(err: &SecretError) -> Refusal {
-        match err {
-            SecretError::HashMismatch {
-                name, sops_source, ..
-            } => Refusal::HashMismatch {
-                message: format!(
-                    "the values in SOPS file {} do not match the `hash` declared for Secret '{name}'. {}",
-                    super::secrets::sops_file_name(sops_source),
-                    super::secrets::hash_mismatch_next(sops_source, None)
-                ),
-                sops_source: sops_source.clone(),
-            },
-            _ => Refusal::Hydration {
-                message: err.to_string(),
-            },
+        Refusal::Hydration {
+            message: err.to_string(),
         }
     }
 

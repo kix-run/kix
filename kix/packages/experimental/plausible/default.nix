@@ -49,7 +49,7 @@
 #     };
 #     plausible-db-password = {
 #       package = packages.secret;
-#       config = { source = ./secrets/plausible-db.yaml; hash = "..."; keys = [ "password" ]; };
+#       config = { source = ./secrets/plausible-db.yaml; keys = [ "password" ]; };
 #     };
 #     plausible-events = {
 #       package = packages.experimental.clickhouse-database;
@@ -57,14 +57,13 @@
 #     };
 #     plausible-events-password = {
 #       package = packages.secret;
-#       config = { source = ./secrets/plausible-events.yaml; hash = "..."; keys = [ "password" ]; };
+#       config = { source = ./secrets/plausible-events.yaml; keys = [ "password" ]; };
 #     };
 #     plausible-secret-key-base = {
 #       package = packages.secret;
 #       aliases = [ "secretKeyBase" ];
 #       config.source = ./secrets/plausible-key.sops.yaml;
 #       config.keys = [ "key" ];   # a SOPS source must declare its keys
-#       config.hash = "...";
 #     };
 #   };
 #

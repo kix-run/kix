@@ -1,9 +1,8 @@
 //! Arguments of the commands that manage the project and Kix itself: `upgrade`,
-//! `lib`, `secret`, `self`, and `completions`.
+//! `lib`, `self`, and `completions`.
 
 use clap::Subcommand;
 use clap_complete::Shell;
-use std::path::PathBuf;
 
 #[derive(clap::Args)]
 pub struct UpgradeArgs {
@@ -33,21 +32,6 @@ pub enum LibCommand {
     /// does not change flake.nix. When flake.nix pins another release, or the
     /// input is a local path or a fork, it says what to change by hand.
     Update(LibUpdateArgs),
-}
-
-/// Work with the SOPS files that Secrets are made from.
-#[derive(Subcommand)]
-pub enum SecretCommand {
-    /// Print the `hash` of a SOPS file's values
-    ///
-    /// Decrypts FILE with the sops in the Kix runtime, as `kix deploy` does,
-    /// and prints the value to set as `hash` beside `source` on a secret
-    /// instance or in `scope.mkSecret`. It prints only the hash, never the
-    /// values. Decrypting needs the same key that `kix deploy` uses.
-    Hash {
-        /// The SOPS file, such as secrets/app-db.sops.yaml
-        file: PathBuf,
-    },
 }
 
 /// Install, list, and remove versions of Kix.

@@ -153,7 +153,6 @@ let
               package = secretPackage;
               config = {
                 source = ./log-agents.nix;
-                hash = "hash";
                 keys = [ "password" ];
               };
             };

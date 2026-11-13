@@ -127,7 +127,6 @@ let
         package = secretPackage;
         config = {
           source = ./clickhouse.nix;
-          hash = "hash";
           keys = [ "password" ];
         };
       },

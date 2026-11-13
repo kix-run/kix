@@ -91,7 +91,7 @@ A secret dependency has no fixed name: Grafana's is `grafanaAdmin`, caddy's is `
 | `envFrom` | Yes | `attrset` | An `envFrom` entry for the whole Secret. |
 | `volume` | Yes | `name -> volume` | A volume that mounts the Secret. |
 | `keys` | No | `list` of `str` or `null` | The keys the Secret holds. |
-| `sops` | No | `{ source; hash; }` | The SOPS file and hash that Kix fills the Secret from, set only when it does. |
+| `sops` | No | `{ source; digest; }` | The SOPS file that Kix fills the Secret from, and its SHA-256, set only when it does. |
 
 A consumer checks the dependency with `kix.contracts.secret.helpers.use { who; arg; dep; keys ? [ ]; anyOf ? null; }`, which returns `dep` or throws an error that names `deps.<arg>`. See [`kix.contracts.secret.helpers.use`](/docs/reference/package-anatomy/#kixcontractssecrethelpersuse).
 

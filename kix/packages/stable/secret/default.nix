@@ -37,10 +37,13 @@
       default = null;
       description = "Path to SOPS-encrypted file. kix-deploy hydrates from this at apply time.";
     };
+    # Refused, so a definition that still sets it gets an error that says
+    # what to do instead of an unknown-option error.
     hash = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Content hash of decrypted values (like fetchurl's sha256).";
+      visible = false;
+      description = "Removed. Kix computes a digest of the SOPS file itself.";
     };
     type = lib.mkOption {
       type = lib.types.str;
@@ -56,16 +59,25 @@
       ...
     }:
     let
-      secret = scope.mkSecret {
-        name = scope.instanceName;
-        keys = if config.keys != [ ] then config.keys else null;
-        inherit (config)
-          stringData
-          source
-          hash
-          type
-          ;
-      };
+      secret =
+        if config.hash != null then
+          scope.fail {
+            id = "K4732";
+            package = "secret";
+            option = "config.hash";
+            message = "`hash` was removed. Kix now computes a digest of the SOPS file itself.";
+            fix = "Delete the `hash` line from the instance's config.";
+          }
+        else
+          scope.mkSecret {
+            name = scope.instanceName;
+            keys = if config.keys != [ ] then config.keys else null;
+            inherit (config)
+              stringData
+              source
+              type
+              ;
+          };
     in
     {
       root = secret;

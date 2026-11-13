@@ -167,7 +167,6 @@ kix.buildCluster {
             # Test values only.
             config = {
               source = ./dev-secrets/cnpg-app-db.sops.yaml;
-              hash = "sha256-M4b7ISu/Z6SShWDjhi3Hn8OAfI6U8VTLWyiI7J7vNvg=";
               keys = [ "password" ];
             };
           };

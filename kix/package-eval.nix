@@ -113,7 +113,6 @@ let
     aliases = [ "password" ];
     config = {
       source = ./package-eval-password.sops.yaml;
-      hash = "sha256-CZBEBEf3F4x4XixP50/aHYHOipR3x139Cz4T9XyYqpw=";
       keys = [ "password" ];
     };
   };

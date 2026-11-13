@@ -80,7 +80,6 @@ kix.buildCluster {
             aliases = [ "password" ];
             config = {
               source = ./dev-secrets/immich-db.sops.yaml;
-              hash = "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=";
               keys = [ "password" ];
             };
           };

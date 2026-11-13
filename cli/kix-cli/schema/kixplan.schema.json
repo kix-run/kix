@@ -28,13 +28,6 @@
         "resource": {
           "type": "string"
         },
-        "sops_source": {
-          "description": "The SOPS file the Secret is made from, for `hash_mismatch`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "webhook": {
           "description": "The admission webhook or ValidatingAdmissionPolicy that answered,\nwhen one did.",
           "type": [
@@ -1272,11 +1265,6 @@
         {
           "const": "other",
           "description": "The deploy refuses it before sending, or the apiserver gave another\nerror.",
-          "type": "string"
-        },
-        {
-          "const": "hash_mismatch",
-          "description": "Kix decrypted a SOPS Secret, but its values do not match the `hash`\ndeclared for it. `sops_source` names the SOPS file.",
           "type": "string"
         }
       ]

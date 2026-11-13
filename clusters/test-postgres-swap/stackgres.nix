@@ -23,7 +23,6 @@ kix.buildCluster {
           # Test values only.
           config = {
             source = ../dev-secrets/swap-fixture-db.sops.yaml;
-            hash = "sha256-S6OA4+BOL7HbLYUJCq1lhtu/Z8pg2Um/ws0nhRFUSWc=";
             keys = [ "password" ];
           };
         };

@@ -111,7 +111,6 @@ kix.buildCluster {
             package = packages.secret;
             config = {
               source = ./dev-secrets/clickhouse-writer.sops.yaml;
-              hash = "sha256-3SzwB0cSxd5FydzhTnlpDbzeo5RVDcyKAYozycJTFjM=";
               keys = [ "password" ];
             };
           };
@@ -119,7 +118,6 @@ kix.buildCluster {
             package = packages.secret;
             config = {
               source = ./dev-secrets/clickhouse-reader.sops.yaml;
-              hash = "sha256-dmv/EC/7xd7edSv4+fNenSCjIX4tphprqkcNLmDH/zE=";
               keys = [ "password" ];
             };
           };
@@ -151,7 +149,6 @@ kix.buildCluster {
             aliases = [ "password" ];
             config = {
               source = ./dev-secrets/clickhouse-logs-writer.sops.yaml;
-              hash = "sha256-5VldXrruCH+ik7THWptuUkRraB5hs2yD5LN4ElBNQQU=";
               keys = [ "password" ];
             };
           };
@@ -171,7 +168,6 @@ kix.buildCluster {
           aliases = [ "password" ];
           config = {
             source = ./dev-secrets/clickhouse-logs-reader.sops.yaml;
-            hash = "sha256-MLJxrpprts1rhcwcWhUK7+11Dfknfm02ALwcUnYQ5l4=";
             keys = [ "password" ];
           };
         };
@@ -233,7 +229,6 @@ kix.buildCluster {
           aliases = [ "password" ];
           config = {
             source = ./dev-secrets/clickhouse-ha-writer.sops.yaml;
-            hash = "sha256-hDC5NC5WiiYwb6xbofK+j/LaBpZ5P/a+ni8ttdUnevs=";
             keys = [ "password" ];
           };
         };

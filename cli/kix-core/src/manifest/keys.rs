@@ -214,7 +214,13 @@ pub const OPERATOR_GC_FINALIZER: &str = key!("operator-gc");
 /// Store path of the SOPS file a Secret is decrypted from at apply time.
 pub const SOPS_SOURCE: &str = key!("sops-source");
 
-/// Hash of a Secret's decrypted content.
+/// SHA-256 of the encrypted SOPS file a Secret is decrypted from, in hex.
+/// The deploy checks the file against it before decrypting.
+pub const SOPS_DIGEST: &str = key!("sops-digest");
+
+/// Hash of a Secret's decrypted values. Builds from Kix 0.9 and earlier carry
+/// it. Plans hide it, and a bundle with no [`SOPS_DIGEST`] is checked against
+/// it.
 pub const CONTENT_HASH: &str = key!("content-hash");
 
 /// Comma-separated keys a Secret carries. The deploy takes the keys from the

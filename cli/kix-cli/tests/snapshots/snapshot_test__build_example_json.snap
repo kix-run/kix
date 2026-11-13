@@ -11504,8 +11504,8 @@ expression: stable
     "kind": "Deployment",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "87an52f6lmn5vyb0vbg2bljg94107cib,8z65syp5466zacm8zmgyj8phfjl4h0sm,9dmds1idpbw69nllaj4jk5cyxc1hya50,awzwpm53w1kb4ysngrwmj47whaddgkih,c073szfvlp53msl934m074dhgy8issg3,k7x17sc733q2jxarkgk3x95hi9il1m2l,l0i4jhq0fafvzzgsak5lsmkvzppzw5ny,x0i1407l4qpzq5k6gx4d5iicd8vb81np,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z",
-        "kix.run/identity-hash": "k2f768qfsn3glyn2k8jwnj8wixfq5f7c",
+        "kix.run/depends-on": "87an52f6lmn5vyb0vbg2bljg94107cib,9gsmcaxjpnf0hi4b32i1dlas0v8ymmrb,awzwpm53w1kb4ysngrwmj47whaddgkih,c073szfvlp53msl934m074dhgy8issg3,chzjyyh4lw12a8giil0n4vlzvhihhhar,k7x17sc733q2jxarkgk3x95hi9il1m2l,l0i4jhq0fafvzzgsak5lsmkvzppzw5ny,x0i1407l4qpzq5k6gx4d5iicd8vb81np,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z",
+        "kix.run/identity-hash": "c8yvnl7j9w3al7y4crii2l089jp0xar6",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },
@@ -11533,7 +11533,7 @@ expression: stable
       "template": {
         "metadata": {
           "annotations": {
-            "checksum/database": "9dmds1idpbw69nllaj4jk5cyxc1hya50",
+            "checksum/database": "chzjyyh4lw12a8giil0n4vlzvhihhhar",
             "checksum/valkey-password": "k7x17sc733q2jxarkgk3x95hi9il1m2l"
           },
           "labels": {
@@ -12712,8 +12712,8 @@ expression: stable
     "kind": "Job",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "7vbv1m75c3v9v12560ap82vikz33f80s,awzwpm53w1kb4ysngrwmj47whaddgkih,rjjazprkx996xnks8ambgnbg08w9qcii,x0i1407l4qpzq5k6gx4d5iicd8vb81np",
-        "kix.run/identity-hash": "8z65syp5466zacm8zmgyj8phfjl4h0sm",
+        "kix.run/depends-on": "76cazchqn1zkj7fr61j3zfasf8pdjk99,7vbv1m75c3v9v12560ap82vikz33f80s,awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np",
+        "kix.run/identity-hash": "9gsmcaxjpnf0hi4b32i1dlas0v8ymmrb",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "immich-db",
         "kix.run/package-namespace": "immich"
@@ -12726,7 +12726,7 @@ expression: stable
         "kix.run/db-cluster": "postgres",
         "team": "platform"
       },
-      "name": "immich-db-immich-bootstrap-3cfc1bd884",
+      "name": "immich-db-immich-bootstrap-9d4afd7bad",
       "namespace": "immich"
     },
     "spec": {
@@ -12937,9 +12937,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/71fq84i3zrw3pm72d7wdcf4rg3pffsk9-kix-activation-example.json",
-        "kix.run/depends-on": "0x9r939vb7jd9ywk36x8vx16x66j5g00,1jzz129jvmcmjy2kqv96dh42izrj8za2,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,5rp3y433nvfw2jdkfvnwmr9ny6b0lvia,75ycv8hc66j8z6w4v1wzvd05ly9qx70z,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "mb8f70hcf8yb683ajxbmi4f0f35p3xm1",
+        "kix.run/built-via": "/nix/store/yj5nm9qq6bh8rp41fdc6b4bgx11ih287-kix-activation-example.json",
+        "kix.run/depends-on": "0x9r939vb7jd9ywk36x8vx16x66j5g00,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,9nvkd56qfxsb4b2ir0jylv49n9aga7ql,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,g3zasy3kwgjbj7r1svck4j5vpphm6sjh,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kxp256xpy6sfk61m1c61g58a82niijxk,mqkvb4gkbbims44vshnri15s6vivrs76,spi8qjq6x9y4l363wip2342h53n7r7pa,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "f62ig4wcf8b1cbdzj7gxiavlwgjv7b8v",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -12947,7 +12947,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-mb8f70hcf8yb"
+      "name": "example-f62ig4wcf8b1"
     },
     "spec": {
       "instances": {
@@ -13009,8 +13009,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,x5js50kc2vfw4r7vcn04ng3rhmsyf3hr,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "5rp3y433nvfw2jdkfvnwmr9ny6b0lvia",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,p17dsa1nm1lnsiq393lccjvdbi6vnw1s,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "g3zasy3kwgjbj7r1svck4j5vpphm6sjh",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/root": "immich-server"
@@ -13035,11 +13035,11 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "8z65syp5466zacm8zmgyj8phfjl4h0sm,9dmds1idpbw69nllaj4jk5cyxc1hya50,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "75ycv8hc66j8z6w4v1wzvd05ly9qx70z",
+        "kix.run/depends-on": "9gsmcaxjpnf0hi4b32i1dlas0v8ymmrb,awzwpm53w1kb4ysngrwmj47whaddgkih,chzjyyh4lw12a8giil0n4vlzvhihhhar,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "mqkvb4gkbbims44vshnri15s6vivrs76",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
-        "kix.run/post-hooks": "Job/immich-db-immich-bootstrap-3cfc1bd884",
+        "kix.run/post-hooks": "Job/immich-db-immich-bootstrap-9d4afd7bad",
         "kix.run/root": "immich-db-credentials"
       },
       "labels": {
@@ -13062,8 +13062,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,mp42slksf8jbj56wfvvki9b6vqvs7dq0,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "1jzz129jvmcmjy2kqv96dh42izrj8za2",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,axm8vs7p1dmky030xvp32sq6z0jbk9ii,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "spi8qjq6x9y4l363wip2342h53n7r7pa",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/root": "immich-db-password"
@@ -16664,15 +16664,15 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/classification": "credential",
-        "kix.run/content-hash": "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=",
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np,z6va4ipl6hqciqdfm57i81bx6wil9nb4",
-        "kix.run/identity-hash": "9dmds1idpbw69nllaj4jk5cyxc1hya50",
+        "kix.run/identity-hash": "chzjyyh4lw12a8giil0n4vlzvhihhhar",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "immich-db",
         "kix.run/package-namespace": "immich",
         "kix.run/rotation-policy": "manual",
         "kix.run/secret-keys": "username,password,database,host,port",
         "kix.run/secret-sources": "username=inline,password=sops,database=inline,host=inline,port=inline",
+        "kix.run/sops-digest": "a133f5cc348eb2a6ed993cc3f7f67cc27f9bb25ced92c715a2e9568a6953d954",
         "kix.run/sops-source": "/nix/store/z6va4ipl6hqciqdfm57i81bx6wil9nb4-immich-db.sops.yaml"
       },
       "labels": {
@@ -16700,15 +16700,15 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/classification": "credential",
-        "kix.run/content-hash": "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=",
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,x0i1407l4qpzq5k6gx4d5iicd8vb81np,z6va4ipl6hqciqdfm57i81bx6wil9nb4",
-        "kix.run/identity-hash": "rjjazprkx996xnks8ambgnbg08w9qcii",
+        "kix.run/identity-hash": "76cazchqn1zkj7fr61j3zfasf8pdjk99",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "immich-db",
         "kix.run/package-namespace": "immich",
         "kix.run/rotation-policy": "manual",
         "kix.run/secret-keys": "password",
         "kix.run/secret-sources": "password=sops",
+        "kix.run/sops-digest": "a133f5cc348eb2a6ed993cc3f7f67cc27f9bb25ced92c715a2e9568a6953d954",
         "kix.run/sops-source": "/nix/store/z6va4ipl6hqciqdfm57i81bx6wil9nb4-immich-db.sops.yaml"
       },
       "labels": {
@@ -16729,14 +16729,14 @@ expression: stable
     "kind": "Secret",
     "metadata": {
       "annotations": {
-        "kix.run/content-hash": "sha256-vwbLaeeessNjQjxi7gXuctFP+UjgTrRHzy8XO/cXeTc=",
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,z6va4ipl6hqciqdfm57i81bx6wil9nb4",
-        "kix.run/identity-hash": "mp42slksf8jbj56wfvvki9b6vqvs7dq0",
+        "kix.run/identity-hash": "axm8vs7p1dmky030xvp32sq6z0jbk9ii",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "immich-db-password",
         "kix.run/package-namespace": "immich",
         "kix.run/secret-keys": "password",
         "kix.run/secret-sources": "password=sops",
+        "kix.run/sops-digest": "a133f5cc348eb2a6ed993cc3f7f67cc27f9bb25ced92c715a2e9568a6953d954",
         "kix.run/sops-source": "/nix/store/z6va4ipl6hqciqdfm57i81bx6wil9nb4-immich-db.sops.yaml"
       },
       "labels": {
@@ -16820,8 +16820,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,k2f768qfsn3glyn2k8jwnj8wixfq5f7c",
-        "kix.run/identity-hash": "x5js50kc2vfw4r7vcn04ng3rhmsyf3hr",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,c8yvnl7j9w3al7y4crii2l089jp0xar6",
+        "kix.run/identity-hash": "p17dsa1nm1lnsiq393lccjvdbi6vnw1s",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },

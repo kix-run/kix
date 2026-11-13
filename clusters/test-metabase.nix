@@ -63,7 +63,6 @@ kix.buildCluster {
             # Dev-only value; it protects nothing.
             config = {
               source = ./dev-secrets/metabase-db.sops.yaml;
-              hash = "sha256-k0pdgI1oX0m5LiEyPB32gfh3QgB7yTQZPRyNBtkmqpM=";
               keys = [ "password" ];
             };
           };

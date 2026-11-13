@@ -259,10 +259,6 @@ pub enum Command {
     #[command(subcommand)]
     Lib(LibCommand),
 
-    /// Work with the SOPS files that Secrets are made from
-    #[command(subcommand)]
-    Secret(SecretCommand),
-
     /// Move this project to a newer version of Kix
     ///
     /// Builds every cluster with the current Kix, pins the project to the
@@ -335,7 +331,6 @@ impl Command {
             | Command::Doctor
             | Command::Pin(_)
             | Command::Lib(_)
-            | Command::Secret(_)
             | Command::Upgrade(_)
             | Command::SelfCmd(_)
             | Command::Plugin(_) => None,

@@ -59,7 +59,6 @@ kix.buildCluster {
           # Dev-only value; it protects nothing.
           config = {
             source = ./dev-secrets/keycloak-db.sops.yaml;
-            hash = "sha256-rgn6JZpWdY4hK9Cs6xIUUsG71gsVbab0Da/CZ0N4kRA=";
             keys = [ "password" ];
           };
         };
