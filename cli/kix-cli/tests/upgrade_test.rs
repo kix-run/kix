@@ -1361,6 +1361,23 @@ fn a_project_that_pins_no_version_is_pinned_without_builds() {
 }
 
 #[test]
+fn pinning_lists_kix_toml_when_the_kix_line_was_deleted() {
+    let s = Setup::new();
+    s.flake(&s.library);
+    s.write("kix.toml", "kix = \"9.1\"\n");
+    git(&s.project, &["init", "-q"]);
+    git(&s.project, &["add", "-A"]);
+    git(&s.project, &["commit", "-q", "-m", "0.9"]);
+    s.write("kix.toml", "");
+    let (code, out) = s.upgrade(&["--to", "9.3.0"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.ends_with("Commit flake.nix, flake.lock, and kix.toml.\n"),
+        "{out}"
+    );
+}
+
+#[test]
 fn the_old_input_name_and_the_kix_setting_are_refused() {
     let s = Setup::new();
     let url = format!("{}?ref=refs/tags/v9.1.0", s.library);

@@ -656,6 +656,18 @@ fn tag_moved(dir: &Path) -> bool {
     )
 }
 
+/// Return whether git shows the file `rel` in `dir` changed since the last
+/// commit. Moving a project from Kix 0.9 deletes the `kix` line of
+/// `kix.toml`, so that file is committed with the pin.
+fn modified(dir: &Path, rel: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["status", "--porcelain", "--", rel])
+        .current_dir(dir)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
+}
+
 /// Pin the project in `dir`, whose `flake.lock` pins no version of Kix, to
 /// `version`. There is no version to build and compare against, so Kix
 /// only moves the Kix library. With `dry_run`, change nothing.
@@ -679,7 +691,11 @@ fn pin_only(dir: &Path, version: &Version, dry_run: bool) -> Result<()> {
                 "Pinned the Kix library to {release} (updated {}). This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.",
                 out::list(&files)
             );
-            println!("Commit {}.", out::and_list(&files));
+            let mut commit: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+            if modified(dir, kix::project::FILE) {
+                commit.push(kix::project::FILE.to_string());
+            }
+            println!("Commit {}.", out::and_list(&commit));
             Ok(())
         }
         Err(pin::PinError::Edit(edit)) => refuse(&edit_message(

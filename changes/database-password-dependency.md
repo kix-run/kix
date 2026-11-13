@@ -11,6 +11,10 @@ keep your SOPS file, add a `packages.secret` instance beside the database
 with `source` set to the old `passwordSource` and `keys = [ "password" ]`.
 Leave out the old `passwordHash`, because Kix computes the digest of the
 file itself (see `[K4732]`).
+A password secret that Kix does not fill from a SOPS file, such as a
+`secret-ref`, an `external-secret`, or a `packages.secret` with `stringData`,
+is also the Secret the application reads. So it must hold `username`, equal
+to the database's `user`, as well as `password`, and list both in `keys`.
 Give it `aliases = [ "password" ]`, or set `deps.password` on the database
 when a namespace has more than one. The database's Secrets keep their
 names and values, and the deploy also creates the new instance's own Secret. A

@@ -62,6 +62,10 @@ database on the cluster and puts the credentials in the app's namespace. Its
 which the packages that take a `database` dependency check at evaluation. The
 role's password is a secret dependency named `password`, such as a
 `packages.secret` instance with a SOPS `source` and `keys = [ "password" ]`.
+A secret that Kix does not fill from a SOPS file, such as a `secret-ref` or
+an `external-secret`, is also the Secret the app reads. It must hold
+`username`, equal to the database's `user`, as well as `password`, with
+`keys = [ "username" "password" ]`.
 
 ## Back up to object storage
 

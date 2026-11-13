@@ -246,7 +246,7 @@ in
         else
           null;
 
-      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
+      passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>. A secret that Kix does not fill from a SOPS file, such as a secret-ref or an external-secret, must also hold `username`, equal to the database's user, and list it in keys.";
 
       _passwordCheck =
         if config.password != null then

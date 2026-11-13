@@ -50,10 +50,17 @@ now reads the version from `flake.lock`, and every command stops with error
 `[K4476]` while the `kix` line is there. Move the project over in this order,
 so that the last step shows what the new version changes.
 
-First, note the version in the `kix` line, such as `kix = "0.9"`, and delete
+First, install Kix 0.10 or later and check that `kix --version` prints it.
+Kix 0.9 installs it with `kix self update`. You can also use the install script from
+[Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/).
+Run every step below with the new version of Kix. `kix upgrade` in Kix 0.9 writes
+the `kix` line back into `kix.toml`, so the next command stops with
+`[K4476]` again.
+
+Next, note the version in the `kix` line, such as `kix = "0.9"`, and delete
 the line from `kix.toml`.
 
-Next, if `flake.nix` names the Kix library input `kixpkgs`, rename it to
+Then, if `flake.nix` names the Kix library input `kixpkgs`, rename it to
 `kix`. Kix stops with error `[K9179]` until you do. Rename every use of the
 input, including `inputs.kixpkgs.lib.mkFlake` and any
 `kixpkgs.inputs.nixpkgs.follows` line:
@@ -73,7 +80,7 @@ input, including `inputs.kixpkgs.lib.mkFlake` and any
 }
 ```
 
-Then pin the project to the version it uses now, the one the `kix` line
+After that, pin the project to the version it uses now, the one the `kix` line
 named. A minor version such as `0.9` pins its newest release:
 
 <Command commands={["kix upgrade --to 0.9"]} cwd="my-project/" />

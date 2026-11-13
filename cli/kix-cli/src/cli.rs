@@ -274,9 +274,9 @@ pub enum Command {
     /// Exits 0 when the project builds on the target, no object changed in any
     /// cluster, and nothing needs review; 1 when Kix refused or could not start
     /// (bad input, network error, missing baseline builds, or unacknowledged
-    /// data migrations from the last upgrade); 2 when a build failed (with the
-    /// current Kix or at a step) or the library could not be locked at the new
-    /// tag; and 3 when a person must review: any object changed in any cluster,
+    /// data migrations from the last upgrade), a cluster did not build (with
+    /// the current Kix or at a step), or the library could not be locked at
+    /// the new tag; and 3 when a person must review: any object changed in any cluster,
     /// a breaking change that shows no build error, a release every cluster
     /// must deploy before upgrading further, or a flake.nix edit you must make
     /// by hand.
