@@ -90,7 +90,7 @@
 #       Builds an ExternalSecret. Sets `spec.target.template.metadata` to `{ }`
 #       unless the spec sets it: without a template the controller copies the
 #       ExternalSecret's labels and annotations, Kix's identity annotation
-#       included, onto the Secret it writes, and `kix gc --hard` lists that
+#       included, onto the Secret it writes, and `kix gc --full-scan` lists that
 #       Secret as a copy. Refuses `spec.target.manifest`
 #       (generic targets), which the controller runs only with
 #       `--unsafe-allow-generic-targets` and RBAC the package does not grant.
