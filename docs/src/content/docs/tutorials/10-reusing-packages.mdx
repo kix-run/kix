@@ -36,7 +36,7 @@ Inside `reverseProxyPackage`, the `build` function still reads `backend.out.fqdn
 
 Run `kix check` and `kix graph` on `10-reuse-packages`:
 
-<Command commands={["kix check 10-reuse-packages", "kix graph 10-reuse-packages --format tree"]} cwd="kix-examples/" />
+<Command commands={["kix check 10-reuse-packages", "kix graph 10-reuse-packages -o tree"]} cwd="kix-examples/" />
 
 In the dependency tree output, verify that the two proxy chains are isolated in their respective namespaces:
 

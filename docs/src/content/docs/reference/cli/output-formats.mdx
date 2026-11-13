@@ -1,53 +1,57 @@
 ---
 title: "Output formats"
-description: "Which `kix` commands honour `-o text`, `json`, `yaml`, and `markdown`, what each command prints by default, and what happens with a format a command does not support."
+description: "Which formats each `kix` command prints with `-o`, what each command prints by default, and what happens with a format a command does not print."
 ---
 
-The global `-o`/`--output` flag takes `text`, `json`, `yaml`, or `markdown`.
-Each command chooses its own default and decides which values it supports. A
-value a command does not support is not an error: the command falls back to
-the output shown in the table below. Add `-q` when a script parses the result, so
-that progress lines do not mix with it. `kix plan` sends its progress lines to
-stderr for `markdown`, and refuses `json` and `yaml`: it keeps a plan as data
-in a [plan file](/docs/reference/cli/plan/#plan-file) (`--save`).
+The global `-o`/`--output` flag takes `text`, `json`, `yaml`, `markdown`,
+`sarif`, `dot`, or `tree`. The `KIX_OUTPUT` environment variable sets the same
+value. Each command prints some of these formats and has its own default. A
+format the command does not print is an error: Kix stops before the command
+runs, exits `1`, and lists the formats the command prints.
 
-This page is hand-maintained. Check the `output_format` and
-`global.output` reads in `cli/kix-cli/src/commands/` when in doubt.
+```text
+Error:   × [K2184] `kix list clusters` cannot print sarif output.
+  help: Use -o text, -o json, or -o yaml.
+```
 
-## Commands that honour `-o`
+Add `-q` when a script parses the result, so that progress lines do not mix
+with it.
 
-| Command | Default | `text` | `json` | `yaml` | `markdown` |
-| --- | --- | --- | --- | --- | --- |
-| `build` | `yaml` | YAML | JSON | YAML | YAML |
-| `diff` | `text` | Text | `Plan` document as JSON | `Plan` document as YAML | Markdown for pull request comments |
-| `plan`, `deploy --dry-run` | `text` | Text | Refused: use `--save` | Refused: use `--save` | Markdown for pull request comments |
-| `check` | `text` | Text | JSON | YAML | Text |
-| `list clusters`, `list packages` | `text` | Text | JSON | YAML | Text |
-| `graph` | `text` (tree) | Tree | JSON | YAML | Tree |
-| `inspect` | `text` | Text | JSON | YAML | Text |
-| `status` | `text` | Table | JSON | YAML | Table |
-| `rollback --list` | `text` | Text | JSON | YAML | Text |
-| `images` | `text` | One image per line | JSON | YAML | Text |
-| `drift` | `text` | Text | JSON | Text | Text |
-| `pin set`, `pin check`, `pin list` | `text` | Text | JSON | Text | Text |
-| `compliance sbom`, `compliance attest` | `json` | JSON | JSON | YAML | JSON |
+## Formats each command prints
 
-Command-specific flags take priority over `-o`:
+The first format listed is the default.
 
-- `kix check --sarif` prints SARIF 2.1.0 whatever `-o` says.
-- `kix graph --format tree|dot|json` overrides `-o`; `dot` is only available
-  through `--format`.
-
-## Commands that ignore `-o`
-
-| Command | Output |
+| Command | Formats |
 | --- | --- |
-| `deploy` (without `--dry-run`) | A deploy event stream selected by `--log-format pretty\|line\|json`. See [`kix deploy`](/docs/reference/cli/deploy-apply/). |
-| `rollback` (without `--list`), `gc`, `migrate domain` | Plan, prompt, and progress text |
-| `health`, `doctor`, `lib` | Text |
-| `export`, `snapshot save`, `compliance audit` | Files in a directory |
-| `logs`, `pf` | kubectl's own output |
-| `completions` | A shell script |
+| `build` | `yaml` (one document per manifest), `json` (one array) |
+| `check` | `text`, `json`, `yaml`, `sarif` (SARIF 2.1.0, for code scanning) |
+| `graph` | `tree`, `dot` (Graphviz), `json`, `yaml` |
+| `diff` | `text`, `json`, `yaml` (the `Plan` document), `markdown` (for pull request comments) |
+| `plan`, `deploy --dry-run` | `text`, `markdown`. A plan kept as data is a [plan file](/docs/reference/cli/plan/#plan-file) (`--save`). |
+| `deploy --plan FILE --dry-run` | `text`, `json`, `yaml` (the comparison with the saved plan) |
+| `list clusters`, `list packages` | `text`, `json`, `yaml` |
+| `inspect`, `images`, `status` | `text`, `json`, `yaml` |
+| `rollback --list` | `text`, `json`, `yaml` |
+| `pin set`, `pin rm`, `pin check`, `pin list` | `text`, `json`, `yaml` |
+| `drift` | `text`, `json` |
+| `compliance sbom`, `compliance attest` | `json`, `yaml` |
+| Every other command | `text` |
+
+A plugin (`kix NAME`) gets the format in `KIX_OUTPUT` and decides for itself.
+
+`deploy` without `--dry-run` prints its progress as text. Its
+`--log-format pretty|line|json` flag picks how; see
+[`kix deploy`](/docs/reference/cli/deploy-apply/).
+
+## JSON Schemas
+
+The JSON and YAML output of most commands has a JSON Schema in
+`cli/kix-cli/schema/` in the Kix repository, one file per command, such as
+`check.schema.json` and `list-packages.schema.json`. `kix diff` prints the
+document `plan.schema.json` describes. A new release may add fields, so a
+program that reads the output must skip fields it does not know.
+`compliance sbom` prints CycloneDX and `compliance attest` prints an in-toto
+statement, which their own specifications describe.
 
 ## Colour
 

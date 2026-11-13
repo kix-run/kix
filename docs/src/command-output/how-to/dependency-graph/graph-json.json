@@ -8,7 +8,7 @@
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix graph 08-namespace-deps --format json",
+      "command": "kix graph 08-namespace-deps -o json",
       "stdout": "{\n  \"nodes\": 16,\n  \"edges\": 27,\n  \"sample\": {\n    \"id\": \"CustomResourceDefinition/activations.kix.run\",\n    \"identityHash\": \"gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj\",\n    \"isImport\": false,\n    \"kind\": \"CustomResourceDefinition\",\n    \"name\": \"activations.kix.run\",\n    \"namespace\": \"_cluster\"\n  }\n}\n",
       "stderr": "16 resources, 27 dependencies\n",
       "stdoutDrift": "\"edges\": 27,\n\"id\": \"CustomResourceDefinition/activations.kix.run\",\n\"identityHash\": \"<identity-hash>\",\n\"isImport\": false,\n\"kind\": \"CustomResourceDefinition\",\n\"name\": \"activations.kix.run\",\n\"namespace\": \"_cluster\"\n\"nodes\": 16,\n\"sample\": {\n{\n}\n",

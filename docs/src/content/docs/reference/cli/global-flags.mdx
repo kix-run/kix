@@ -20,7 +20,7 @@ for plugins.
 
 | Flag | Variable | Default | Meaning |
 | --- | --- | --- | --- |
-| `-o`, `--output <FORMAT>` | `KIX_OUTPUT` | Varies by command | `text`, `json`, `yaml`, or `markdown`. See [Output formats](/docs/reference/cli/output-formats/) for which commands honour which values. |
+| `-o`, `--output <FORMAT>` | `KIX_OUTPUT` | Varies by command | `text`, `json`, `yaml`, `markdown`, `sarif`, `dot`, or `tree`. A command refuses a format it does not print. See [Output formats](/docs/reference/cli/output-formats/) for the formats of each command. |
 | `-v`, `--verbose` | `KIX_VERBOSE`, a count | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. Without it, warnings are logged, except those the Kubernetes client writes for an error response it then returns to Kix. |
 | `-q`, `--quiet` | `KIX_QUIET` | Off | Suppress progress and informational output, and log errors only. Results still print. |
 | `--no-color` | `NO_COLOR`, below | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
@@ -34,7 +34,8 @@ for plugins.
 ## Which commands read which flag
 
 `-v`, `-q`, and `--no-color` apply to every command. The other flags apply only
-where the table shows them; elsewhere they are accepted and have no effect.
+where the table shows them. Elsewhere `-o` accepts only `text`, and the other
+flags are accepted and have no effect.
 
 | Command | `-o` | `--context` | `--flake` | `--no-cache` | `--override-input` |
 | --- | --- | --- | --- | --- | --- |

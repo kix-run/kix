@@ -42,7 +42,7 @@ Redirect it into a file and render it with Graphviz:
 
 <Command
   commands={[
-    "kix graph 08-namespace-deps --format dot > kix-graph.dot",
+    "kix graph 08-namespace-deps -o dot > kix-graph.dot",
     "dot -Tsvg kix-graph.dot > kix-graph.svg",
   ]}
   cwd="kix-examples/"

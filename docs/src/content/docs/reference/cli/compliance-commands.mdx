@@ -37,7 +37,7 @@ component per package (`pkg:kix/<namespace>/<name>@<version>`), one
 `container` component per unique image, and one `library` component per
 flake input in `flake.lock` (`pkg:nix/<name>@<rev>`). Dependencies follow the
 packages' cross-package references and image use. Output is JSON by default,
-YAML with `-o yaml`; `text` and `markdown` print JSON.
+YAML with `-o yaml`. Other formats are refused.
 
 ## `kix compliance attest <CLUSTER>`
 

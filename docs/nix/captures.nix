@@ -239,7 +239,7 @@
           "kix"
           "graph"
           "04-from-scratch"
-          "--format"
+          "-o"
           "tree"
         ];
       }
@@ -350,7 +350,7 @@
           "kix"
           "graph"
           "06-service-dep"
-          "--format"
+          "-o"
           "tree"
         ];
       }
@@ -499,7 +499,7 @@
           "kix"
           "graph"
           "08-namespace-deps"
-          "--format"
+          "-o"
           "tree"
         ];
       }
@@ -509,14 +509,14 @@
           "kix"
           "graph"
           "08-namespace-deps"
-          "--format"
+          "-o"
           "dot"
         ];
       }
       {
         # The DOT and JSON forms are what the reader redirects into a
         # file. Run the redirect itself so the docs cannot outlive it.
-        prepare = "kix graph 08-namespace-deps --format dot > kix-graph.dot";
+        prepare = "kix graph 08-namespace-deps -o dot > kix-graph.dot";
       }
       {
         capture = "graph-json";
@@ -524,7 +524,7 @@
           "kix"
           "graph"
           "08-namespace-deps"
-          "--format"
+          "-o"
           "json"
         ];
         stdoutJq = "{ nodes: (.nodes | length), edges: (.edges | length), sample: .nodes[0] }";
@@ -551,7 +551,7 @@
           "kix"
           "graph"
           "how-to-auto-instantiation"
-          "--format"
+          "-o"
           "tree"
         ];
       }
@@ -614,7 +614,8 @@
           "kix"
           "check"
           "19-scorecards"
-          "--sarif"
+          "-o"
+          "sarif"
         ];
         stdoutJq = ''
           {
@@ -632,7 +633,7 @@
                   }'';
       }
       {
-        prepare = "kix check 19-scorecards --sarif > kix-results.sarif";
+        prepare = "kix check 19-scorecards -o sarif > kix-results.sarif";
       }
       {
         prepare = ''jq -e '.version == "2.1.0" and (.runs | length) > 0' kix-results.sarif > /dev/null'';
@@ -1136,7 +1137,7 @@
           "kix"
           "graph"
           "how-to-platform-secrets"
-          "--format"
+          "-o"
           "tree"
         ];
       }
@@ -2358,7 +2359,7 @@
           "kix"
           "graph"
           "how-to-adoption"
-          "--format"
+          "-o"
           "tree"
         ];
         stdoutGrep = "legacy-api-contract|PackageInstance/legacy-api@legacy";

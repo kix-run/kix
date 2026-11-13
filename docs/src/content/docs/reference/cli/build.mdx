@@ -21,7 +21,7 @@ kix build <CLUSTER> [-o yaml|json] [--flake <FLAKE>] [--no-cache]
 | Argument or flag | Default | Meaning |
 | --- | --- | --- |
 | `<CLUSTER>` | | Cluster name to evaluate. An unknown name fails with the list of available clusters. |
-| `-o`, `--output` | `yaml` | `yaml` prints multi-document YAML. `json` prints one JSON array of manifests. `text` and `markdown` print YAML. |
+| `-o`, `--output` | `yaml` | `yaml` prints multi-document YAML. `json` prints one JSON array of manifests. Other formats are refused. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate. |
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
 

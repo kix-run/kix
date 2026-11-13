@@ -23,7 +23,7 @@ kix status <CLUSTER> [--operator] [-o text|json|yaml]
 | --- | --- |
 | `<CLUSTER>` | Cluster name. The flat view evaluates it from the flake first; `--operator` uses existing Activation records when any carry `<CLUSTER>`, and otherwise evaluates the cluster name from the flake. |
 | `--operator` | Package-grouped view built from the Active Activation record. |
-| `-o`, `--output` | `text` (default), `json`, or `yaml`. `markdown` prints text. |
+| `-o`, `--output` | `text` (default), `json`, or `yaml`. Other formats are refused. |
 | `--flake`, `--override-input` | Select and evaluate the cluster in the flat view, or resolve `<CLUSTER>` with `--operator` when no Activation record in the context carries `<CLUSTER>`. |
 | `--no-cache` | Bypass the eval cache in the flat view. Ignored with `--operator`. |
 | `--context` | Select the kubeconfig context in either view. |

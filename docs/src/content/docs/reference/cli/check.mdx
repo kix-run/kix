@@ -15,15 +15,14 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>]
+kix check <CLUSTER> [-o text|json|yaml|sarif] [--flake <FLAKE>]
           [--override-input <INPUT> <URL>]... [--no-cache]
 ```
 
 | Argument or flag | Default | Meaning |
 | --- | --- | --- |
 | `<CLUSTER>` | | Cluster name to evaluate. |
-| `--sarif` | Off | Print SARIF 2.1.0 JSON instead of the table. Overrides `-o`. |
-| `-o`, `--output` | `text` | `text` prints a `TOOL`, `RESULT`, `DETAILS` table, then the scorecard findings. `json` and `yaml` print an array of `{ tool, result, details }`, and the `scorecard` entry also has `findings`. |
+| `-o`, `--output` | `text` | `text` prints a `TOOL`, `RESULT`, `DETAILS` table, then the scorecard findings. `json` and `yaml` print an array of `{ tool, result, details }`, and the `scorecard` entry also has `findings`. `sarif` prints SARIF 2.1.0 JSON, described below. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate. |
 | `--override-input <INPUT> <URL>` | None | Override a flake input for the evaluation. Repeatable. |
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
@@ -47,7 +46,7 @@ OpenAPI schemas or check for deprecated API versions.
 
 ## SARIF output
 
-With `--sarif`, each scorecard finding becomes a SARIF result with its rule
+With `-o sarif`, each scorecard finding becomes a SARIF result with its rule
 ID, level (`error`, `warning`, or `note`), message, and a logical location of
 the form `namespace/instance/resource`. A cluster with no findings, or with
 the scorecard disabled, produces an empty run.
@@ -61,7 +60,7 @@ Kix then writes the evaluation failure as one error result. Its rule ID is
 
 <Command commands={[
   "kix check demo",
-  "kix check demo --sarif > kix-results.sarif",
+  "kix check demo -o sarif > kix-results.sarif",
 ]} />
 
 ## Exit status
@@ -69,7 +68,7 @@ Kix then writes the evaluation failure as one error result. Its rule ID is
 | Code | Meaning |
 | --- | --- |
 | `0` | No step reported `fail` |
-| `1` | A step reported `fail`, or the cluster was not found. With `--sarif`, a failed step exits `1` after printing the SARIF document, whereas an unknown cluster errors on stderr before printing any SARIF. |
+| `1` | A step reported `fail`, or the cluster was not found. With `-o sarif`, a failed step exits `1` after printing the SARIF document, whereas an unknown cluster errors on stderr before printing any SARIF. |
 
 :::note[Reference]
 See [Finding schema](/docs/reference/scorecard-and-rules/#finding-schema) for the
@@ -77,6 +76,6 @@ fields each scorecard finding carries.
 :::
 
 :::tip[Use it in a task]
-See [Run `kix check --sarif` in CI](/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/)
+See [Run `kix check -o sarif` in CI](/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/)
 for a CI job that uploads the SARIF file.
 :::

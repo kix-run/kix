@@ -26,7 +26,7 @@ kix drift [--cluster <CLUSTER>] [--context <CONTEXT>] [-o text|json] [-q]
 | --- | --- |
 | `--cluster <CLUSTER>` | Check only this Kix cluster's resources. Kix finds them through the cluster's Activation records, so no flake is needed. Fails when the cluster has no records while other Kix clusters do. |
 | `--context <CONTEXT>` | Kubeconfig context to check. Defaults to the current context. |
-| `-o`, `--output` | `text` (default) or `json`. Other values print text. |
+| `-o`, `--output` | `text` (default) or `json`. Other formats are refused. |
 | `-q`, `--quiet` | Omit the connection and count lines. |
 
 `--flake` and `--no-cache` have no effect. See

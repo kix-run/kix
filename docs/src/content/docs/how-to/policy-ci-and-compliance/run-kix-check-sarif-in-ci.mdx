@@ -1,12 +1,12 @@
 ---
-title: "Run `kix check --sarif` in CI"
+title: "Run `kix check -o sarif` in CI"
 description: "Write Kix scorecard findings as SARIF for a CI code-scanning step."
 ---
 
 import Command from '/src/components/Command.astro';
 import sarif from '/src/command-output/how-to/policy-sarif/check.json';
 
-Use `kix check --sarif` when your CI system accepts SARIF 2.1.0 findings. The
+Use `kix check -o sarif` when your CI system accepts SARIF 2.1.0 findings. The
 command still runs cluster evaluation and the normal checks, but writes SARIF
 instead of the terminal summary.
 
@@ -18,7 +18,7 @@ available.
 Redirect stdout to a file:
 
 <Command
-  commands={["kix check 19-scorecards --sarif > kix-results.sarif"]}
+  commands={["kix check 19-scorecards -o sarif > kix-results.sarif"]}
   cwd="kix-examples/"
 />
 
