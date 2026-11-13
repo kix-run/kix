@@ -319,7 +319,7 @@ alertmanager, victoria-metrics-alert). Discrete variables take
 `keyRef` values; a URL-shaped credential takes `credentials.out.mkEnv` for the
 parts and `$(VAR)` expansion in an owned variable. That leaves the password
 unescaped inside the URL, so it is a `Limits:` line (vaultwarden:36-38).
-Rollout through `checksum/<name>` or `reloader.out.withReloadOn` (S10). The
+Rollout through `"checksum/<name>" = <res>.out.contentHash` or `reloader.out.withReloadOn` (S10). The
 pattern table has each form.
 
 ### 7. Escape hatches and locks
@@ -423,7 +423,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `kix.monitor` with alerts | openbao:392; clickhouse:608-618 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
 | `kix.healthCheck` with a script file | victoria-metrics-agent:355-372 |
-| Checksum annotations, `enableServiceLinks = false` | metabase:257-270 |
+| Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:257-270 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:357 (`serverSideName`) |
 | A Job that runs again when its content changes: a fixed name and `kix.run/rerun` (never a hash in the name) | stackgres-database:446-452; clickhouse-database:508-510 |
