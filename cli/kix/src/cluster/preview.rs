@@ -80,7 +80,8 @@ pub enum Refusal {
     },
     /// The apiserver could not reach the Service behind an admission
     /// webhook: the Service does not exist, has no endpoints, or refused the
-    /// connection. The webhook did not answer, so the object was not checked.
+    /// connection. The webhook did not answer. [`super::classify`] decides
+    /// whether the deploy repairs it.
     WebhookUnreachable {
         webhook: Option<String>,
         service: ResourceId,
@@ -145,20 +146,6 @@ impl Refusal {
             Refusal::UnknownKind { kind } => {
                 format!("the apiserver does not serve kind {kind}")
             }
-        }
-    }
-
-    /// Return the webhook's Service when this refusal says only that an
-    /// admission webhook could not reach it, and `writes` says the deploy
-    /// writes that Service. Such a write is not checked, and it does not stop
-    /// the deploy, which creates the Service.
-    pub fn unreachable_service_written(
-        &self,
-        writes: impl Fn(&ResourceId) -> bool,
-    ) -> Option<&ResourceId> {
-        match self {
-            Refusal::WebhookUnreachable { service, .. } if writes(service) => Some(service),
-            _ => None,
         }
     }
 
@@ -476,31 +463,6 @@ mod tests {
                     if s == service("cnpg-system", "cnpg-webhook-service")
             ));
         }
-    }
-
-    #[test]
-    fn an_unreachable_webhook_waits_only_for_a_service_the_deploy_writes() {
-        let msg = "Internal error occurred: failed calling webhook \"mcluster.cnpg.io\": failed to call webhook: Post \"https://cnpg-webhook-service.cnpg-system.svc:443/m?timeout=10s\": service \"cnpg-webhook-service\" not found";
-        let refusal = Refusal::of_status(500, msg).unwrap();
-        let built = std::collections::HashSet::from([
-            service("cnpg-system", "cnpg-webhook-service"),
-            service("data", "pg-rw"),
-        ]);
-        assert_eq!(
-            refusal.unreachable_service_written(|rid| built.contains(rid)),
-            Some(&service("cnpg-system", "cnpg-webhook-service"))
-        );
-        let elsewhere = std::collections::HashSet::from([service("data", "pg-rw")]);
-        assert_eq!(
-            refusal.unreachable_service_written(|rid| elsewhere.contains(rid)),
-            None
-        );
-        let denied = Refusal::of_status(
-            400,
-            "admission webhook \"vcluster.cnpg.io\" denied the request: bad",
-        )
-        .unwrap();
-        assert_eq!(denied.unreachable_service_written(|_| true), None);
     }
 
     #[test]

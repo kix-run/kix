@@ -591,6 +591,10 @@ pub enum PruneFate {
 pub struct UncheckedObject {
     pub resource: String,
     pub reason: UncheckedReason,
+    /// The Namespace, CustomResourceDefinition, or Service whose change by
+    /// this deploy makes the answer not final, when Kix knows which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub because: Option<String>,
     pub detail: String,
 }
 
@@ -611,8 +615,9 @@ pub enum UncheckedReason {
     /// still tries the dependents of a refused object.
     DependencyNotChecked,
     /// An admission webhook that would be called could not reach its
-    /// Service, and this deploy writes that Service.
-    WebhookServiceWrittenByThisDeploy,
+    /// Service, and this deploy writes that Service or another object of
+    /// the package that owns it.
+    WebhookBackendWrittenByThisDeploy,
 }
 
 /// How much the `packages` section says about each change.

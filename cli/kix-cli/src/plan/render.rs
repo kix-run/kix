@@ -281,7 +281,8 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
         }
         (RefusalReason::Decryption, _) => "could not decrypt the SOPS Secret".into(),
         (RefusalReason::HashMismatch, _) => "its SOPS file does not match its `hash`".into(),
-        (RefusalReason::Other, _) => "refused".into(),
+        (RefusalReason::Other, Some(w)) => format!("admission webhook {w} did not answer"),
+        (RefusalReason::Other, None) => "refused".into(),
     }
 }
 
@@ -585,8 +586,8 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                 UncheckedReason::WebhookNoDryRun => {
                     "calls an admission webhook that does not support dry run"
                 }
-                UncheckedReason::WebhookServiceWrittenByThisDeploy => {
-                    "calls an admission webhook whose Service is missing or not ready, and this deploy writes that Service"
+                UncheckedReason::WebhookBackendWrittenByThisDeploy => {
+                    "calls an admission webhook whose Service is missing or not ready, and this deploy writes that Service or the package that serves it"
                 }
                 UncheckedReason::DependencyNotChecked => {
                     "not reached by the dry run (for example, cancelled early)"

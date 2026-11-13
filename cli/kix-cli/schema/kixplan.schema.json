@@ -1368,6 +1368,13 @@
     },
     "UncheckedObject": {
       "properties": {
+        "because": {
+          "description": "The Namespace, CustomResourceDefinition, or Service whose change by\nthis deploy makes the answer not final, when Kix knows which.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "detail": {
           "type": "string"
         },
@@ -1413,8 +1420,8 @@
           "type": "string"
         },
         {
-          "const": "webhook_service_written_by_this_deploy",
-          "description": "An admission webhook that would be called could not reach its\nService, and this deploy writes that Service.",
+          "const": "webhook_backend_written_by_this_deploy",
+          "description": "An admission webhook that would be called could not reach its\nService, and this deploy writes that Service or another object of\nthe package that owns it.",
           "type": "string"
         }
       ]

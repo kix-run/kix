@@ -53,9 +53,13 @@ build before applying anything (with `--operator`, the operator refuses it).
 Deploy a fresh build instead.
 
 Before it writes anything, the rollback sends its writes to the apiserver as a
-dry run, as `kix plan` does. When the apiserver would refuse one, such as for a
-field ownership conflict, Kix lists the refused writes and stops, so the cluster
-is never left between two builds. `--dry-run` shows the same list.
+dry run, as `kix plan` does, and sorts the answers by the same rules. When the
+apiserver would refuse one, such as for a field ownership conflict, Kix lists
+the refused writes and stops, so the cluster is never left between two builds.
+An object that `kix plan` would list as
+[not checked](/docs/reference/cli/plan/#objects-not-checked), such as one in a
+Namespace the rollback creates, does not stop it. `--dry-run` shows the same
+list.
 
 The rollback waits up to 180 seconds for each resource to become ready and
 stops at the first failure.

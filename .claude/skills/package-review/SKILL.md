@@ -207,6 +207,7 @@ when a check fails or the path is not evaluated by default.
 - C23. Does a program that calls the Kubernetes API, with RBAC not vendored from upstream, lack a rule for a call it makes (a list or watch at startup, a subresource such as `pods/log` or `<kind>/status`, a `deletecollection`)? Detect: list every client call in the pinned source, at startup and in every code path, and match each to a rule; the pull request reports `kubectl auth can-i <verb> <resource> -n <ns> --as system:serviceaccount:<ns>:<sa>` for each on kind, with the program running as that ServiceAccount. Fix: one rule per call, nothing extra (C10). Vendored roles follow the crd-vendoring skill.
 - C24. Does a CRD declaration (`scope.mkCRD`, `scope.mkCRDRef`, a `kix.mkImport` `crds` entry) lack `holdsData`, or set it wrong? `true` when deleting a custom resource of the kind loses data: the operator deletes its volumes, or the backup files it names (SGCluster, CNPG Cluster, RabbitmqCluster, DiskPool, SGBackup). `false` for monitoring, certificate, policy, and configuration kinds. *(lib: a stateful package that renders a custom resource without it fails to build)* Detection: read what the operator's delete path removes, in source at the pinned release. Fix: declare it; when unsure, `true`, since a wrong `true` costs a deploy flag and a wrong `false` hides a data migration.
 - C25. Does the controller's workload lack `requires` on the CRDs the package ships, with the CRDs listed only in `root.requires`? *(scorecard: `architecture.controllerRequiresCrds`, warning)* `root.requires` orders the package's consumers after the CRDs, not the controller, so on a first deploy the controller starts before the API server serves its kinds and crashes until it does. Fix: `requires = builtins.attrValues self.crds;` on the controller's `mkDeployment` call, leaving out `mkCRDRef` markers for definitions the operator installs itself (kubevirt, cdi).
+- C26. Can the API server call an admission webhook before the pods behind it are ready, when the operator does not need its configuration at startup? Detection: the webhook configuration has no `requires` on the workload, and the controller's startup code neither reads nor patches the configuration (no `caBundle` injection). Fix: `requires = [ self.<workload> ];` on the configuration. When the operator needs the configuration first, the workload requires it instead and every CRD handle waits for a check Job (C21, `cnpg-operator`). A deploy's dry run refuses an object whose webhook is down unless the deploy writes the webhook's Service or another object of its package, so a wrong order shows up as a deploy that stops before it writes anything.
 
 ### Workloads and availability (W)
 
@@ -503,7 +504,7 @@ list outside the public repository; ask for it when you do not have it.
 
 **3. Read the code once, for the judgement items.** Read the package in
 checklist order and judge only what the automation and the grep hits do not
-settle: M2 to M15, O6 to O24, D, S, C4 to C24, W, I, N, Mo, E, Na, L, Pr, and
+settle: M2 to M15, O6 to O24, D, S, C4 to C24, C26, W, I, N, Mo, E, Na, L, Pr, and
 T. Skip an item marked *(lib)* unless its check failed or its path is off by
 default. Evaluate the package once with every toggle on, once with each
 optional dependency present, and once with two instances in two namespaces

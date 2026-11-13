@@ -786,6 +786,7 @@ mod tests {
         let unchecked = UncheckedObject {
             resource: "Deployment/a@app".into(),
             reason: UncheckedReason::WebhookNoDryRun,
+            because: None,
             detail: "webhook w does not support dry run".into(),
         };
         let mut fresh = plan();
