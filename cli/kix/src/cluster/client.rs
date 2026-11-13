@@ -266,6 +266,7 @@ struct RequestShape {
     headers: HeaderMap,
     is_watch: bool,
     idempotent: bool,
+    dry_run: bool,
     first_contact: bool,
 }
 
@@ -278,6 +279,7 @@ impl RequestShape {
             headers: parts.headers.clone(),
             is_watch: is_watch_uri(&parts.uri),
             idempotent: is_idempotent(&parts.method),
+            dry_run: is_dry_run_uri(&parts.uri),
             first_contact: parts.extensions.get::<FirstContact>().is_some(),
         }
     }
@@ -301,6 +303,12 @@ pub(crate) fn is_watch_uri(uri: &Uri) -> bool {
         q.split('&')
             .any(|pair| pair == "watch=true" || pair == "watch=1")
     })
+}
+
+/// Return whether `uri` asks for a dry run (`dryRun=All` in the query).
+pub(crate) fn is_dry_run_uri(uri: &Uri) -> bool {
+    uri.query()
+        .is_some_and(|q| q.split('&').any(|pair| pair == "dryRun=All"))
 }
 
 /// Return whether `method` can be repeated without changing the outcome.
@@ -333,9 +341,15 @@ pub enum Verdict {
 
 /// Decide whether to retry or finish after `attempt` (starting at 1), given
 /// `elapsed` since the first attempt started.
+///
+/// A dry run is not retried after HTTP 500. The apiserver answers a dry run
+/// with 500 when an admission webhook cannot be reached, and that does not
+/// change within the retry budget. A real write keeps the retry, which helps
+/// while a webhook's pod starts.
 pub fn decide(
     policy: &ResiliencePolicy,
     shape_idempotent: bool,
+    dry_run: bool,
     observed: Observed<'_>,
     attempt: usize,
     elapsed: Duration,
@@ -343,7 +357,8 @@ pub fn decide(
     let retryable = match &observed {
         Observed::Status(status, _) => match classify_status(status.as_u16()) {
             FailureClass::RateLimited => true,
-            FailureClass::Unavailable | FailureClass::ServerError => shape_idempotent,
+            FailureClass::Unavailable => shape_idempotent,
+            FailureClass::ServerError => shape_idempotent && !dry_run,
             _ => false,
         },
         // Do not extend a connect timeout across the full retry budget.
@@ -449,6 +464,7 @@ where
             decide(
                 &policy,
                 shape.idempotent,
+                shape.dry_run,
                 observed,
                 attempt,
                 started.elapsed(),
@@ -839,6 +855,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_dry_run_500_is_returned_at_once() {
+        let (mut svc, log) = harness(vec![Step::Reply(500), Step::Reply(200)], policy());
+        let resp = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request(
+                Method::PATCH,
+                "/apis/postgresql.cnpg.io/v1/namespaces/x/clusters/y?dryRun=All&fieldManager=kix",
+                "{}",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 500);
+        assert_eq!(log.lock().unwrap().methods.len(), 1);
+    }
+
+    #[tokio::test]
     async fn gives_up_after_max_attempts_and_returns_the_last_response() {
         let mut p = policy();
         p.max_attempts = 3;
@@ -1036,39 +1070,64 @@ mod tests {
         let p = policy();
         let headers = HeaderMap::new();
         let ok = |code| Observed::Status(StatusCode::from_u16(code).unwrap(), &headers);
-        assert_eq!(decide(&p, true, ok(200), 1, Duration::ZERO), Verdict::Done);
-        assert_eq!(decide(&p, true, ok(404), 1, Duration::ZERO), Verdict::Done);
-        assert_eq!(decide(&p, true, ok(409), 1, Duration::ZERO), Verdict::Done);
+        assert_eq!(
+            decide(&p, true, false, ok(200), 1, Duration::ZERO),
+            Verdict::Done
+        );
+        assert_eq!(
+            decide(&p, true, false, ok(404), 1, Duration::ZERO),
+            Verdict::Done
+        );
+        assert_eq!(
+            decide(&p, true, false, ok(409), 1, Duration::ZERO),
+            Verdict::Done
+        );
         assert!(matches!(
-            decide(&p, true, ok(429), 1, Duration::ZERO),
+            decide(&p, true, false, ok(429), 1, Duration::ZERO),
             Verdict::Retry(_)
         ));
         assert!(matches!(
-            decide(&p, false, ok(429), 1, Duration::ZERO),
+            decide(&p, false, false, ok(429), 1, Duration::ZERO),
             Verdict::Retry(_)
         ));
         assert!(matches!(
-            decide(&p, true, ok(503), 1, Duration::ZERO),
+            decide(&p, true, false, ok(503), 1, Duration::ZERO),
             Verdict::Retry(_)
         ));
-        assert_eq!(decide(&p, false, ok(503), 1, Duration::ZERO), Verdict::Done);
+        assert_eq!(
+            decide(&p, false, false, ok(503), 1, Duration::ZERO),
+            Verdict::Done
+        );
         assert!(matches!(
-            decide(&p, true, ok(500), 1, Duration::ZERO),
+            decide(&p, true, false, ok(500), 1, Duration::ZERO),
+            Verdict::Retry(_)
+        ));
+        // A dry run keeps its retries for 429 and 503, and not for 500.
+        assert_eq!(
+            decide(&p, true, true, ok(500), 1, Duration::ZERO),
+            Verdict::Done
+        );
+        assert!(matches!(
+            decide(&p, true, true, ok(503), 1, Duration::ZERO),
+            Verdict::Retry(_)
+        ));
+        assert!(matches!(
+            decide(&p, true, true, ok(429), 1, Duration::ZERO),
             Verdict::Retry(_)
         ));
         // Attempt cap and budget both end the loop.
         assert_eq!(
-            decide(&p, true, ok(429), p.max_attempts, Duration::ZERO),
+            decide(&p, true, false, ok(429), p.max_attempts, Duration::ZERO),
             Verdict::Done
         );
-        assert_eq!(decide(&p, true, ok(429), 1, p.budget), Verdict::Done);
+        assert_eq!(decide(&p, true, false, ok(429), 1, p.budget), Verdict::Done);
         let io: BoxError = Box::new(std::io::Error::other("reset"));
         assert!(matches!(
-            decide(&p, true, Observed::Error(&io), 1, Duration::ZERO),
+            decide(&p, true, false, Observed::Error(&io), 1, Duration::ZERO),
             Verdict::Retry(_)
         ));
         assert_eq!(
-            decide(&p, false, Observed::Error(&io), 1, Duration::ZERO),
+            decide(&p, false, false, Observed::Error(&io), 1, Duration::ZERO),
             Verdict::Done
         );
     }
@@ -1091,7 +1150,14 @@ mod tests {
         // And a plain io error on an idempotent request is still retried.
         let p = policy();
         assert!(matches!(
-            decide(&p, true, Observed::Error(&timed_out), 1, Duration::ZERO),
+            decide(
+                &p,
+                true,
+                false,
+                Observed::Error(&timed_out),
+                1,
+                Duration::ZERO
+            ),
             Verdict::Retry(_)
         ));
     }
@@ -1145,6 +1211,16 @@ mod tests {
             &"/api/v1/pods?labelSelector=watch%3Dtrue".parse().unwrap()
         ));
         assert!(!is_watch_uri(&"/api/v1/pods".parse().unwrap()));
+        assert!(is_dry_run_uri(
+            &"/api/v1/namespaces/x/services/y?dryRun=All&fieldManager=kix"
+                .parse()
+                .unwrap()
+        ));
+        assert!(!is_dry_run_uri(
+            &"/api/v1/namespaces/x/services/y?fieldManager=kix"
+                .parse()
+                .unwrap()
+        ));
         assert!(is_idempotent(&Method::GET));
         assert!(is_idempotent(&Method::PATCH));
         assert!(is_idempotent(&Method::DELETE));

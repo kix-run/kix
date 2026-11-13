@@ -1,0 +1,5 @@
++++
+kind = "fixed"
+cli = ["kix plan", "kix deploy", "kix rollback"]
++++
+When an admission webhook cannot reach its Service and the deploy does not write that Service or anything else of its package, `kix plan` now reports a refusal and `kix deploy` stops before it writes anything. Before, the plan listed the object as not checked and said the deploy writes the Service, and the deploy then failed at that object partway through. The message says that the webhook's backend is down and that `kix deploy <cluster> --reconcile` creates a deleted Service again. `kix rollback` now decides which objects stop it by the same rules as `kix plan`, so an object in a Namespace or of a CustomResourceDefinition that the rollback creates no longer stops it. The dry run no longer retries a request that a webhook could not answer, which took about 20 seconds for each object. Each entry under `not_checked` in the plan document has a new field, `because`, that names the Namespace, CustomResourceDefinition, or Service the answer depends on.
