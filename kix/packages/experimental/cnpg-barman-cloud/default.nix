@@ -57,6 +57,7 @@
 #                   Deployment, so a resource that names it waits for the
 #                   plugin.
 #   out.extraImages the sidecar image.
+#   out.version     the plugin version `image.tag` names.
 #
 # Limits: the plugin's metrics endpoint stays off and the package ships no
 # alerts. The vendored ClusterRole lets the plugin read and write Secrets
@@ -132,7 +133,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Barman Cloud plugin for CloudNativePG: WAL archiving and base backups to object storage";
     owner = "platform";
     defaultAliases = [ "barmanCloud" ];
@@ -548,6 +549,7 @@ in
           inherit mkObjectStore;
           pluginName = scope.augmentEdge [ self.deployment ] pluginName;
           extraImages = [ sidecarImage ];
+          version = kix.image.version config.image;
         };
       };
     };

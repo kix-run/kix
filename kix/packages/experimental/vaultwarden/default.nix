@@ -1,6 +1,8 @@
 # vaultwarden: Vaultwarden, a Bitwarden-compatible password manager
 # server, on PostgreSQL.
 #
+# `out`: `version`, the Vaultwarden version `image.tag` names.
+#
 # Installs a Deployment and a Service on port 8080, and a route through
 # `kix.expose` when the cluster has an ingress controller or a gateway.
 # Vaultwarden's `DOMAIN` is the route's URL unless `domain` is set.
@@ -346,7 +348,10 @@ in
 
         service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
 
-        root = self.service;
+        root = {
+          resource = self.service;
+          out.version = kix.image.version config.image;
+        };
       }
     )
     (kix.expose { service = "service"; })

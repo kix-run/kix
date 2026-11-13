@@ -78,7 +78,8 @@
 # gets egress to any address on its port, because the network policy cannot
 # name a host outside the cluster.
 #
-# `out`: Service `name`, `fqdn`, and `port` (80).
+# `out`: Service `name`, `fqdn`, and `port` (80), and `version`, the Grafana
+# version `image.tag` names.
 # Limits: single replica (`availability.max = "none"` on the Deployment).
 
 {
@@ -616,6 +617,7 @@ in
 
         root = {
           resource = self.service;
+          out.version = kix.image.version config.image;
           requires = [
             self.serviceAccount
             self.configMap

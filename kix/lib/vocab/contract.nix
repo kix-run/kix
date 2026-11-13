@@ -114,7 +114,7 @@ in
         else
           fail {
             message = "${who}: root.out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
-            fix = "set the missing fields in the out of the package's root resource.";
+            fix = "Correct the fields named above where the package sets `out` on its `root`. If the package reads one from a setting of the instance, change that setting.";
           };
 
       # Build dependency assertions for a consumer of `dep`.

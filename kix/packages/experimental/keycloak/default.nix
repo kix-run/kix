@@ -566,6 +566,7 @@ in
           resource = self.service;
           requires = builtins.filter (p: p != null) [ self.peers ];
           out = kix.contracts.experimental.oidcProvider.check who {
+            version = kix.image.version config.image;
             url = hostname;
             issuerUrl = realm: "${hostname}${realmPath "out.issuerUrl" realm}";
             # Keycloak computes every URL it issues from KC_HOSTNAME, so a

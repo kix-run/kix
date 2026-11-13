@@ -346,7 +346,7 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 ## Image and pin helpers
 
-### `kix.image.ref` and `kix.image.isPinned`
+### `kix.image.ref`, `kix.image.version`, and `kix.image.isPinned`
 
 Pair `kix.options.image` in `options` with `kix.image.ref` in container specs:
 
@@ -358,6 +358,7 @@ imagePullPolicy = config.image.pullPolicy;
 | Function | Signature | Behavior |
 | --- | --- | --- |
 | `kix.image.ref` | `{ repository, tag, digest ? null, ... } -> string` | Formats a container image reference from an image attribute set. Both `repository` and `tag` are required and must be non-empty strings (throws an evaluation error if either is missing or `""`). Renders `"${repository}:${tag}@${digest}"` when `digest` is non-null, or `"${repository}:${tag}"` when `digest` is `null`. |
+| `kix.image.version` | `{ tag ? null, ... } -> string or null` | Returns the version the image's tag names, without a leading `v`, a digest, or a vendor suffix: `"v1.37.1-alpine"` gives `"1.37.1"`. A pre-release suffix stays: `"2.0.0-rc1"` gives `"2.0.0-rc1"`. Returns `null` when the tag names no version, such as `"latest"`. A package publishes the result as `out.version` so that an instance reports the version it runs. |
 | `kix.image.isPinned` | `{ digest ? null, ... } -> bool` | Takes an image attribute set and returns `true` when `image.digest` is non-null (`(image.digest or null) != null`). |
 
 ### `kix.pins`

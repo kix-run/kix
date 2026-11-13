@@ -44,8 +44,9 @@
 #     valkey-password = { package = packages.secret; aliases = [ "valkeyPassword" ]; config.stringData.password = "<password>"; };
 #   };
 #
-# `out`: the `<instance>-server` Service on port 2283. The public URL is the
-# instance's `exposure` part.
+# `out`: the `<instance>-server` Service on port 2283, and `version`, the
+# Immich release `image.tag` names. The public URL is the instance's
+# `exposure` part.
 #
 # Escape hatches: `env` takes any server variable outside the groups the
 # package derives (database, valkey, machine learning, config file, ports,
@@ -374,13 +375,14 @@ in
         };
 
         # A worker from another release answers the server's newer jobs with
-        # 500s. `out.version` is the worker's release (release.nix `of`), so
-        # hardware variants and digest pins compare by release. It is absent
-        # for a tag that names no release and on a dependency that is not the
-        # immich-machine-learning package; either skips the check.
+        # 500s. `out.version` is the worker's release, read from its image
+        # tag, so hardware variants and digest pins compare by release. It is
+        # null for a tag that names no release and absent on a dependency
+        # that is not the immich-machine-learning package. Either skips the
+        # check.
         mlVersion = machineLearning.out.version or null;
         imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-        serverVersion = release.of imageTag;
+        serverVersion = kix.image.version config.image;
         mlUrl =
           if mlVersion != null && serverVersion != null && mlVersion != serverVersion then
             scope.fail {
@@ -853,7 +855,10 @@ in
         service =
           self.deployment |> kix.service.fromWorkload { name = "${name}-server"; } |> scope.mkResource;
 
-        root = self.service;
+        root = {
+          resource = self.service;
+          out.version = serverVersion;
+        };
       }
     )
     (kix.expose {

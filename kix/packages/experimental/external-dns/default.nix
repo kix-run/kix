@@ -67,7 +67,8 @@
 # (domain filters, TXT prefix, provider endpoints), `env`, and the
 # instance's `partsOverlays` for pod labels, placement, and extra RBAC rules.
 #
-# `out`: root is the Deployment, and `out` adds nothing beyond root's defaults.
+# `out`: root is the Deployment, and `out` adds `version`, the external-dns
+# version `image.tag` names.
 
 {
   scope,
@@ -619,7 +620,10 @@ in
           };
         };
 
-        root = self.deployment;
+        root = {
+          resource = self.deployment;
+          out.version = kix.image.version config.image;
+        };
       }
       // clusterRoles
       // crdRefParts

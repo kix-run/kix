@@ -140,6 +140,7 @@
 #   out.credentials     the default-user Secret (keys `username` and
 #                       `password`), for `out.keyRef` and `out.mkEnv`.
 #   out.extraImages     the RabbitMQ image.
+#   out.version         the RabbitMQ version `image.tag` names.
 #
 # root = the RabbitmqCluster.
 
@@ -651,6 +652,7 @@ in
             vhost = if config.settings ? default_vhost then renderValue config.settings.default_vhost else "/";
             credentials = self.defaultUser;
             extraImages = [ (kix.image.ref config.image) ];
+            version = kix.image.version config.image;
           };
         };
       }

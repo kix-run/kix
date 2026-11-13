@@ -63,6 +63,7 @@
 #   out.podSelector        Labels of proxy pods managed by the operator.
 #   out.podNamespace       Namespace of proxy pods managed by the operator.
 #   out.extraImages        Digest-pinned operand image references.
+#   out.version            The Tailscale operator version `image.tag` names.
 
 {
   scope,
@@ -629,6 +630,7 @@ in
           ++ policies;
 
           out = {
+            version = kix.image.version config.image;
             crds = {
               Connector = self.crds.connectors;
               DNSConfig = self.crds.dnsConfigs;

@@ -26,6 +26,7 @@
 # `out`:
 #   out.serviceUrl  "http://<name>.<ns>.svc.<clusterDomain>:3100"
 #   out.url { }     the same address, from the root Service
+#   out.version     the Loki version `image.tag` names
 #
 # Both are the base of Loki's HTTP API; a consumer appends the path
 # (`/loki/api/v1/push`, `/ready`). `auth_enabled` is locked to false, so
@@ -450,6 +451,7 @@ in
         root = {
           resource = self.service;
           out.serviceUrl = self.service.out.url { };
+          out.version = kix.image.version config.image;
         };
       }
     )

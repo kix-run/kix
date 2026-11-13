@@ -10,7 +10,8 @@
 #
 #   instances.monitoring.dns-exporter.package = packages.experimental.dns-exporter;
 #
-# `out`: the Service's `name`, `fqdn`, and `port` (15353).
+# `out`: the Service's `name`, `fqdn`, and `port` (15353), and `version`, the
+# dns_exporter version `image.tag` names.
 #
 # Escape hatches: the instance's `partsOverlays`, for example to mount a
 # dns_exporter config file.
@@ -153,6 +154,9 @@ in
         }
         |> scope.mkResource;
 
-      root = self.service;
+      root = {
+        resource = self.service;
+        out.version = kix.image.version config.image;
+      };
     };
 }

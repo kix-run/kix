@@ -177,6 +177,30 @@ in
     )
     || throw "clickhouse-keeper: an even replica count rendered, or an odd one was refused";
 
+  # Both server packages publish the version the image tag names, and
+  # refuse a tag that names none.
+  clickhouse-version-from-image-tag =
+    let
+      recordOf = cluster: byName "ch" (ofKind "PackageInstance" (manifests cluster));
+      tagged = tag: { image = { inherit tag; }; };
+    in
+    (
+      (recordOf (bare {
+        config = tagged "25.8.4.13";
+      })).spec.version == "25.8.4.13"
+      &&
+        (recordOf (replicated {
+          clusterConfig = tagged "25.8.4.13";
+        })).spec.version == "25.8.4.13"
+      && evalFails (bare {
+        config = tagged "latest";
+      })
+      && evalFails (replicated {
+        clusterConfig = tagged "latest";
+      })
+    )
+    || throw "clickhouse: the record does not carry the image tag's version, or `latest` rendered";
+
   # The default memory limit renders; removing it is refused.
   clickhouse-cluster-memory-limit =
     (

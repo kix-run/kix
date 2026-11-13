@@ -15,7 +15,8 @@
 #
 #   instances.monitoring.node-exporter.package = packages.node-exporter;
 #
-# `out`: the Service's `name`, `fqdn`, and `port`.
+# `out`: the Service's `name`, `fqdn`, and `port`, and `version`, the
+# node_exporter version `image.tag` names.
 #
 # Alerts, scoped to this instance's Service: no exporter target has been
 # scraped for 10 minutes (`NodeExporterDown`, warning). With
@@ -49,7 +50,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Prometheus Node Exporter: host-level metrics";
     owner = "platform";
     defaultAliases = [ "nodeExporter" ];
@@ -251,6 +252,7 @@ in
             self.serviceAccount
             self.daemonset
           ];
+          out.version = kix.image.version config.image;
         };
       }
     )

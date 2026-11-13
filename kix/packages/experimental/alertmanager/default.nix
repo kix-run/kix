@@ -44,8 +44,9 @@
 # `out`: the Service's `name` and `fqdn`, plus `namespace` and
 # `portName`, which a Prometheus resource's `spec.alerting` names (the
 # prometheus package reads them), and `serviceUrl`, the base URL of the API
-# (Grafana's datasource). Each instance has its own Service, so two
-# instances in one namespace do not share one.
+# (Grafana's datasource), and `version`, the Alertmanager version
+# `image.tag` names. Each instance has its own Service, so two instances in
+# one namespace do not share one.
 #
 # Replicas follow the instance's availability: one at `none`, two above,
 # gossiping silences and the notification log. With
@@ -114,7 +115,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Alertmanager: alert routing and deduplication";
     owner = "platform";
     defaultAliases = [ "alertmanager" ];
@@ -426,6 +427,7 @@ in
           self.podDisruptionBudget
         ];
         out = {
+          version = kix.image.version config.image;
           namespace = ns;
           portName = "web";
           serviceUrl = self.service.out.url { };

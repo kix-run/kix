@@ -682,6 +682,8 @@ in
         scorecardFindings = ruleFindings ++ resolutionFindings;
         scorecardDiag = scorecard.scorecardToWarnings ruleFindings;
 
+        instanceVersion = meta.instanceVersion { inherit instCfg packageOut packageMeta; };
+
         packageInstance = mkPackageInstance {
           inherit instanceName namespaceName;
           namespace = recordNamespace;
@@ -689,19 +691,9 @@ in
           inherit packageRequires postHooks;
           inverseDeps = inverseDeps ++ processorResources;
           lifecycle = packageMeta.lifecycle or null;
-          # Packages whose software version varies per instance, such as a
-          # database cluster, report it through `out.version`. A package
-          # that deploys no software has none, and the record then omits it.
-          version =
-            let
-              v = instCfg.version or null;
-            in
-            if v != null then
-              v
-            else if (packageMeta.version or null) != null then
-              packageMeta.version
-            else
-              packageOut.version or null;
+          # A package that deploys no software has no version, and the
+          # record then omits it.
+          version = instanceVersion;
           labels = clusterLabels // {
             "app.kubernetes.io/instance" = instanceName;
             "app.kubernetes.io/managed-by" = "kix";
@@ -889,6 +881,7 @@ in
                   packageInstance
                   evaluatedConfig
                   ;
+                version = instanceVersion;
                 rootOut = (rootRes.out or { }) // packageOut;
                 aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
               };

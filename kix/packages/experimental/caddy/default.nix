@@ -37,7 +37,8 @@
 # Network: egress to anywhere, for the upstreams a Caddyfile can name and
 # for ACME.
 #
-# `out`: the main Service's `name`, `fqdn`, and `port`.
+# `out`: the main Service's `name`, `fqdn`, and `port`, and `version`, the
+# Caddy version `image.tag` names.
 #
 # Escape hatches: `image` for a build with plugins, and the instance's
 # `partsOverlays`.
@@ -468,6 +469,9 @@ in
       # every workload above a single replica, and an explicit
       # minAvailable = 1 blocked eviction outright on a single-replica
       # cluster.
-      root = self.service;
+      root = {
+        resource = self.service;
+        out.version = kix.image.version config.image;
+      };
     };
 }

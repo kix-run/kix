@@ -50,7 +50,9 @@ resolve, search for the behaviour, then fix this file in the same change
    `apiVersion` (P4, P7).
 10. **Images and versions have one source of truth.** One `release` binding
     feeds `meta.version`, image tags, and vendored CRDs; every default image
-    is digest pinned (P3).
+    is digest pinned (P3). An instance reports the version it runs: the
+    package publishes `out.version`, read from the image of its main
+    software (I11).
 11. **Two instances never collide.** Names derive from `scope.instanceName`;
     one-per-cluster packages say so in `meta` and fail clearly when doubled.
 12. **No feature without a consumer.** Options, outputs, builders, checks,
@@ -77,8 +79,8 @@ when a check fails or the path is not evaluated by default.
 ### Meta (M)
 
 - M1. Is `meta.description` or `meta.owner` (`"platform"` or `"app-team"`) missing? *(lib: `governance.hasDescription`, `hasOwner`)*
-- M2. Is `meta.version` a placeholder (`1.0.0`, `bundled`) or different from the image tag? Fix: one `let release = "...";` feeding `meta.version`, `image.tag`, and `crds/sources.txt`. A `v` prefix is fine when upstream tags carry it (package-eval accepts `"v1.19.6"`).
-- M3. Is `meta.version` set on a package that deploys no upstream software (it only writes a built-in kind or CRs of another package's operator without pinning an image)? Fix: omit it. A package whose CR pins the image an operator runs (arc-runner-set) does deploy upstream software. The PackageInstance record then omits `spec.version`; do not add a placeholder. A package whose software version varies per instance (stackgres-cluster, cnpg-cluster) reports it through `out.version`, which the record uses when `meta.version` is unset.
+- M2. Is `meta.version` a placeholder (`1.0.0`, `bundled`) or different from the image tag? Fix: one `let release = "...";` feeding `meta.version`, `image.tag`, and `crds/sources.txt`. `meta.version` has no `v` prefix, so it reads like the `out.version` that `kix.image.version` gives. When upstream tags carry a `v`, keep it in `release` and write `version = lib.removePrefix "v" release;`. *(lib: package-eval refuses `"v1.19.6"`)*
+- M3. Is `meta.version` set on a package that deploys no upstream software (it only writes a built-in kind or CRs of another package's operator without pinning an image)? Fix: omit it. A package whose CR pins the image an operator runs (arc-runner-set) does deploy upstream software. The PackageInstance record then omits `spec.version`; do not add a placeholder. A package whose software version is an option with no package default (stackgres-cluster, cnpg-cluster) reports it through `out.version` alone. The record and a consumer's `compatibleWith` check read `out.version` before `meta.version`.
 - M4. Is the version string typed in more than one place, including a `v`-prefixed tag beside an unprefixed version? `grep -c '<version>'` in the package. Fix: derive both from `release`.
 - M5. Does `meta` restate a default (`lifecycle = "stateless"`, `availability.max` at its default)? Fix: delete.
 - M6. Does a package that holds state others depend on (a volume, a database inside another server, a Secret) lack `meta.lifecycle = "stateful"`, or does a package that only consumes state claim it? Fix: match what it provides.
@@ -250,6 +252,8 @@ when a check fails or the path is not evaluated by default.
 - I8. Is a version label hardcoded apart from the tag? Fix: derive from `release`.
 - I9. Is the same image, type, or builder copied in two sibling packages (a toleration submodule, a VolumeSnapshotClass submodule)? Fix: one shared file both import, living in the older user, whose header names both users.
 - I10. Is the default version out of upstream support, or far behind sibling packages? Fix: bump.
+- I11. Does a package with a `meta.version` and an image the user can change publish no `out.version`, so an instance that runs another image still reports the package's release? *(lib: package-eval `checkPublishedVersion`, when a default tag names `meta.version`)* Fix: `out.version = kix.image.version config.image;` on `root`, and name it in the header's `out` paragraph. Publish the null it returns for a tag that names no version: do not wrap it in `optionalAttrs` and do not fall back to `release`, because the record would then name a version that is not running.
+- I12. Is `out.version` read from a helper's image (an exporter, a sidecar, an init container, a config reloader) or from a hand-written match on the tag? No check sees which image a package chose. Fix: read the image of the software the package is named after, with `kix.image.version`. When several images come from one upstream release, read the main controller or server, and refuse a mix where the software needs one release (immich refuses a machine-learning worker of another release). A tag scheme `kix.image.version` cannot read (ClickHouse's four-part versions read fine; a tag with a name before the version does not) gets its own mapping with a comment that says why.
 
 ### Network policy (N)
 
@@ -429,7 +433,7 @@ any Nix evaluation, and never use a `path:` flakeref.
 
 | Check | Command | Catches |
 |---|---|---|
-| every-package-evaluates | `nix build .#checks.x86_64-linux.every-package-evaluates --extra-experimental-features pipe-operators` | eval errors on defaults (plus the `settings` entry) in a synthetic kind cluster with a non-default cluster domain, at availability `none` and `zone`; error-severity scorecard rules; `cluster.local` in source; `meta.version` parse; the option contract (O2), once per package and availability level and first, so a violation fails in seconds; stale `knownFailures` and exceptions |
+| every-package-evaluates | `nix build .#checks.x86_64-linux.every-package-evaluates --extra-experimental-features pipe-operators` | eval errors on defaults (plus the `settings` entry) in a synthetic kind cluster with a non-default cluster domain, at availability `none` and `zone`; error-severity scorecard rules; `cluster.local` in source; `meta.version` parse and no `v` prefix; `out.version` published when a default tag names `meta.version` (I11); the option contract (O2), once per package and availability level and first, so a violation fails in seconds; stale `knownFailures` and exceptions |
 | kix-lib-tests | `nix build .#checks.x86_64-linux.kix-lib-tests --extra-experimental-features pipe-operators` | lib helpers and the tests under `kix/lib/tests/units/` |
 | scorecard | part of the eval; `kix check <cluster>` | probes, resources, non-root, `latest`, placeholders, owner, description, `monitorSelectorMatchesService`, `clusterDomainLiteral`, `selectorCoherence`, `unsafeGrants`, `volumeHasSource` |
 | validate and cross-resource checks | part of the eval | SA and roleRef exist, Service selectors, unique names, CR-to-CRD declarations and served versions, declared Secret keys, managed Secret keys without values, one default class, claim and class references |

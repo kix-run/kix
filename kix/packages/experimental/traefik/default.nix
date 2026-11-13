@@ -36,6 +36,7 @@
 #                     renders.
 #   out.listeners     the rendered listeners, from which kix.expose picks a
 #                     route's URL scheme and port.
+#   out.version       the Traefik version `image.tag` names.
 #   out.podSelector, out.podNamespace
 #                     the Traefik pods, for the policy kix.expose writes so
 #                     they can reach each exposed backend.
@@ -137,7 +138,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Traefik proxy as a Gateway API implementation (GatewayClass, Gateway, and data plane)";
     owner = "platform";
     defaultAliases = [ "gateway" ];
@@ -753,6 +754,7 @@ in
               # already depends on this instance through gatewayRef.
               podSelector = selectorLabels;
               podNamespace = scope.namespaceName;
+              version = kix.image.version config.image;
             };
           };
         }

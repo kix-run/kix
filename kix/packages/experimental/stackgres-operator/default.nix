@@ -75,6 +75,7 @@
 #                     every manually created SGBackup, in a namespace.
 #   out.podSelector   the operator pods' labels.
 #   out.release       the StackGres release.
+#   out.version       the StackGres version `image.tag` names.
 #   out.resolvePostgres { who; version; }
 #                     { major; minor; images } for an SGCluster at `version`,
 #                     with images from this operator's registry. Throws,
@@ -999,6 +1000,7 @@ in
           ++ builtins.filter (r: r != null) [ self.metricsService ];
           postHooks = [ self.webhookCheck ];
           out = {
+            version = kix.image.version config.image;
             crds = lib.mapAttrs (_: k: self.crds.${k.part}) referencedKinds;
             inherit operandSelectors release;
             podSelector = self.operatorDeployment.out.selector;

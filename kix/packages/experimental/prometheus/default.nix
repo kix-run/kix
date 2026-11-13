@@ -34,8 +34,9 @@
 #
 #   instances.monitoring-system.prometheus-server.package = packages.experimental.prometheus;
 #
-# `out`: the Service's `name` and `fqdn`, its `namespace`, and `serviceUrl`,
-# the base URL of the HTTP API (Grafana's datasource). Each instance has its
+# `out`: the Service's `name` and `fqdn`, its `namespace`, `serviceUrl`, the
+# base URL of the HTTP API (Grafana's datasource), and `version`, the
+# Prometheus version `image.tag` names. Each instance has its
 # own Service, so two instances in one namespace do not share one, and the
 # self-scrape of each lands in a job named after the instance.
 #
@@ -78,7 +79,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Prometheus time-series database";
     owner = "platform";
     defaultAliases = [ "prometheusServer" ];
@@ -392,6 +393,7 @@ in
           self.podDisruptionBudget
         ];
         out = {
+          version = kix.image.version config.image;
           namespace = ns;
           serviceUrl = self.service.out.url { };
           # The operator runs this image in a StatefulSet that Kix does not

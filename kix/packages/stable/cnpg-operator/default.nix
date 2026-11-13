@@ -64,6 +64,7 @@
 #                     the labels of a Cluster's instance and Job pods.
 #   out.podSelector   the operator pods' labels.
 #   out.release       the CloudNativePG release.
+#   out.version       the CloudNativePG version `image.tag` names.
 #
 # Network policy: the webhook intent admits the API server on TCP 9443 to
 # every pod of the package, the webhook-check Job's included, where nothing
@@ -883,6 +884,7 @@ in
               ClusterImageCatalog = self.crds.clusterImageCatalogs;
             };
             inherit operandSelectors release;
+            version = kix.image.version config.image;
             podSelector = self.operatorDeployment.out.selector;
           };
         };

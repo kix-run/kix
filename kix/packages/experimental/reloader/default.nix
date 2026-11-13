@@ -1,7 +1,8 @@
 # reloader: Stakater Reloader, which restarts a Deployment, DaemonSet, or
 # StatefulSet when a Secret it names in `secret.reloader.stakater.com/reload`
 # changes. `out.withReloadOn` writes that annotation for Secrets Kix does not
-# build (scope.mkSecretRef, a secret-ref dependency). A workload rolls on a
+# build (scope.mkSecretRef, a secret-ref dependency). `out.version` is the
+# Reloader version `image.tag` names. A workload rolls on a
 # change to a Kix-built Secret or ConfigMap through a `checksum/<name>` pod
 # annotation instead, which the deploy plan shows.
 #
@@ -116,7 +117,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Stakater Reloader, which restarts workloads when a Secret they reference changes outside Kix";
     owner = "platform";
     defaultAliases = [ "reloader" ];
@@ -534,7 +535,10 @@ in
 
         root = {
           resource = self.deployment;
-          out = { inherit withReloadOn; };
+          out = {
+            inherit withReloadOn;
+            version = kix.image.version config.image;
+          };
         };
       }
       // workloadRbac

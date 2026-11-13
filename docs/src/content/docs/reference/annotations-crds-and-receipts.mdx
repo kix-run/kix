@@ -211,7 +211,7 @@ spec:
 | --- | --- | --- |
 | `spec.instanceName` | Managed and import instances | Name of the instance within its namespace. |
 | `spec.namespaceName` | Managed and import instances | Namespace of the instance, or its `_`-prefixed key such as `_cluster`. Kix groups a package's resources by this value, not by the record's own namespace. |
-| `spec.version` | Managed and import instances | The instance's `version` override, else the package's `meta.version`, else the `out.version` the package builds. Left out when none is set. |
+| `spec.version` | Managed and import instances | The instance's `version` option, else the `out.version` the package builds, else the package's `meta.version`. Left out when none is set, or when `out.version` is `null` because the image tag names no version. |
 | `spec.lifecycle` | When `meta.lifecycle` is set | Workload lifecycle (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes build validation and deploy behavior; other values are informational. |
 | `kix.run/root` | Managed instances | Name of the package's `root` resource. |
 | `kix.run/package-requires` | When non-empty | Comma-separated `<Kind>/<name>` entries that the package's `root` resource transitively depends on. |

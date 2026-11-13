@@ -99,7 +99,8 @@
 # with `namespaces.<ns>.networkPolicies.directions` plus an ingress intent
 # on the target.
 #
-# `out`: `out.name`, `out.fqdn`, `out.port` (the main instance's Service).
+# `out`: `out.name`, `out.fqdn`, `out.port` (the main instance's Service), and
+# `out.version`, the n8n version `image.tag` names.
 # root = that Service; it requires the worker Deployment.
 #
 # Escape hatches: `env` (both n8n containers), `runners.env` (the sidecar),
@@ -705,6 +706,7 @@ in
         root = {
           resource = self.service;
           requires = [ self.worker ];
+          out.version = kix.image.version config.image;
         };
       }
     )

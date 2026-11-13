@@ -264,6 +264,7 @@ in
       port = toString ports.api;
       caSecret = tlsSecretElsewhere;
       inherit externalSecretsProvider;
+      version = kix.image.version config.image;
     };
   };
 }

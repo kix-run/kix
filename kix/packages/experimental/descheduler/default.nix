@@ -28,8 +28,8 @@
 #     # config.policy.profiles.default.pluginConfig.LowNodeUtilization.thresholds.cpu = 30;
 #   };
 #
-# `out`: none beyond what root (the Deployment) provides; no package depends
-# on the descheduler.
+# `out`: `version`, the descheduler version `image.tag` names, beyond what
+# root (the Deployment) provides; no package depends on the descheduler.
 #
 # Alerts: with a prometheus dependency and `metrics.enabled`, a
 # PrometheusRule `<instance>-alerts` selects the metrics Service's series.
@@ -370,7 +370,10 @@ in
           else
             null;
 
-        root = self.deployment;
+        root = {
+          resource = self.deployment;
+          out.version = kix.image.version config.image;
+        };
       }
       // mkClusterRoleSet scope {
         inherit subjects;

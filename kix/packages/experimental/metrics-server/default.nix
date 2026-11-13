@@ -35,8 +35,9 @@
 # approve their CSRs, or add `extraArgs = [ "--kubelet-insecure-tls" ];`
 # (clusters/test-metrics-server.nix).
 #
-# `out`: none beyond what root (the Deployment) provides; consumers find the
-# API through the cluster's metricsApi role.
+# `out`: `version`, the metrics-server version `image.tag` names, beyond what
+# root (the Deployment) provides; consumers find the API through the
+# cluster's metricsApi role.
 #
 # Alerts: none. metrics-server serves /metrics only on its secure port,
 # behind delegated authentication and authorization, so a scrape must send
@@ -367,6 +368,7 @@ in
           self.apiService
           self.aggregatedReader
         ];
+        out.version = kix.image.version config.image;
       };
     }
     // mkClusterRoleSet scope {

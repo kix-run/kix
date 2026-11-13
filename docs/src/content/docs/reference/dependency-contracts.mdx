@@ -277,4 +277,4 @@ When the external identity provider has a single issuer URL, declare a `kix.mkIm
 
 ## ClickHouse (`kix.contracts.experimental.clickhouse`)
 
-`kix.contracts.experimental.clickhouse` (`kix/contracts/experimental/clickhouse.nix`) defines the contract for ClickHouse servers that answer the `clickhouse` alias. Both single-node `clickhouse` and operator-managed `clickhouse-cluster` provide it, and `clickhouse-database` consumes it. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (`"YY.M"`), `replicas`, and `replicaHosts`.
+`kix.contracts.experimental.clickhouse` (`kix/contracts/experimental/clickhouse.nix`) defines the contract for ClickHouse servers that answer the `clickhouse` alias. Both single-node `clickhouse` and operator-managed `clickhouse-cluster` provide it, and `clickhouse-database` consumes it. It requires `httpUrl`, `nativeEndpoint`, `host`, `ports` (`{ http; native; }`), `username`, `credentials` (a secret with key `"password"`), `clusterName`, `version` (the server version, `"YY.M"` or longer), `replicas`, and `replicaHosts`.

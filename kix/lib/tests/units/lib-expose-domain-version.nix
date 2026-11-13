@@ -297,7 +297,7 @@ let
       instanceName = "consumer";
       namespaceName = "app";
       clusterConfig.k8sVersion = null;
-      resolvedDepMeta.dep.targets = [ { instance._meta.packageMeta.version = depVersion; } ];
+      resolvedDepMeta.dep.targets = [ { instance._meta.version = depVersion; } ];
       resolutionIndex.byKey = { };
     }).assertions;
 

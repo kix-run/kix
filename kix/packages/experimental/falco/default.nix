@@ -34,7 +34,8 @@
 #
 #   instances.security.falco.package = packages.experimental.falco;
 #
-# `out`: nothing beyond the DaemonSet's own; no package consumes Falco.
+# `out`: `version`, the Falco version `image.tag` names. No package consumes
+# Falco.
 #
 # Prometheus alerts, scoped to this instance's metrics Service: Falco is not
 # scraped for 5 minutes, or it drops alerts because its outputs queue is full.
@@ -603,6 +604,7 @@ in
           requires = builtins.filter (p: p != null) [
             self.metricsService
           ];
+          out.version = kix.image.version config.image;
         };
       }
     )

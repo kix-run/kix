@@ -70,6 +70,8 @@
 #       no handles for InfisicalSecret and InfisicalStaticSecret, so their
 #       managed objects always go through the builders above, and none for
 #       InfisicalAuth, which `mkInfisicalAuth` covers.
+#   out.version
+#       The Infisical operator version `image.tag` names.
 #
 # Consumer pattern, in an instance that depends on `infisicalOperator`:
 #
@@ -194,7 +196,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Infisical Kubernetes operator, which syncs secrets between Infisical and Kubernetes Secrets";
     owner = "platform";
     defaultAliases = [ "infisicalOperator" ];
@@ -735,6 +737,8 @@ in
           postHooks = [ self.connection ];
 
           out = {
+            version = kix.image.version config.image;
+
             crds = {
               ClusterGenerator = self.crds.clusterGenerators;
               InfisicalConnection = self.crds.infisicalConnections;

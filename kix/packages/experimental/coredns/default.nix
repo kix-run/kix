@@ -34,7 +34,8 @@
 #
 # `out`: root is the Service, so `out.name`, `out.fqdn`, `out.selector`, and
 # `out.port` (53) are the Service's. `out.scrapedByPrometheus` is true while
-# the instance's own ServiceMonitor scrapes it.
+# the instance's own ServiceMonitor scrapes it. `out.version` is the CoreDNS
+# version `image.tag` names.
 #
 # Escape hatches: `servers` takes any plugin with its arguments and block
 # lines; `env` sets Go runtime variables such as GOMEMLIMIT; the instance's
@@ -580,6 +581,7 @@ in
           # prometheus-default-rules reads it to skip its own CoreDNS
           # monitor, which would scrape these pods a second time.
           out.scrapedByPrometheus = scrape;
+          out.version = kix.image.version config.image;
         };
       }
     )

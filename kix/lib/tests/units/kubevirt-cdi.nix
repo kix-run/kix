@@ -644,7 +644,7 @@ in
         let
           release = (metaOf package).version;
         in
-        builtins.filter (u: !(lib.hasInfix "/${release}/" u)) (
+        builtins.filter (u: !(lib.hasInfix "/v${release}/" u)) (
           urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
         );
       got = {

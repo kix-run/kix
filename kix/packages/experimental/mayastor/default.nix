@@ -39,6 +39,7 @@
 # Exposes (`root.out`, `root` = `csi-controller`):
 #   out.provisioner, out.storageClasses, out.storageClassName,
 #   out.volumeSnapshotClasses, out.diskPools, and out.crds.DiskPool.
+#   out.version is the Mayastor version `image.tag` names.
 
 {
   scope,
@@ -403,6 +404,7 @@ in
             volumeSnapshotClasses = self.snapshotClasses;
             diskPools = self.pools;
             crds.DiskPool = self.diskPoolCrd;
+            version = kix.image.version config.image;
           };
         };
       }
