@@ -175,7 +175,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         // `Skip` path to read the live Job.
         let has_skipped_jobs = p.checked.plan().has_skipped_jobs();
         let failed_jobs = match &p.client {
-            Some(client) if has_skipped_jobs => ctx.runtime.block_on(async {
+            Some(client) if has_skipped_jobs => ctx.runtime()?.block_on(async {
                 let discovery = discovery::discover_resources(client)
                     .await
                     .map_err(|e| miette!("{e}"))?;
@@ -265,7 +265,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         }
     };
     let global = ctx.global.clone();
-    let end = ctx.runtime.block_on(run_deploy_async(
+    let end = ctx.runtime()?.block_on(run_deploy_async(
         args,
         &global,
         p.checked,
@@ -489,7 +489,11 @@ fn supersede_consumed(ctx: &CommandContext, client: &kube::Client, consumed: &[S
     if consumed.is_empty() {
         return;
     }
-    let done = ctx.runtime.block_on(async {
+    // The caller made a client, so the runtime exists and this cannot fail.
+    let Ok(runtime) = ctx.runtime() else {
+        return;
+    };
+    let done = runtime.block_on(async {
         let Ok(discovery) = discovery::discover_resources(client).await else {
             return 0usize;
         };
@@ -528,7 +532,11 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
     if keys.is_empty() {
         return;
     }
-    match ctx.runtime.block_on(list_nodes(client)) {
+    // The caller made a client, so the runtime exists and this cannot fail.
+    let Ok(runtime) = ctx.runtime() else {
+        return;
+    };
+    match runtime.block_on(list_nodes(client)) {
         Ok(NodesOutcome::Listed(nodes)) => {
             for finding in assess(&keys, &nodes) {
                 let tag = if finding.is_warning() {
@@ -853,7 +861,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let global = ctx.global.clone();
     let source_path = result_path.display().to_string();
 
-    let reconciled = ctx.runtime.block_on(async {
+    let reconciled = ctx.runtime()?.block_on(async {
         let (client, records) =
             super::operator::connect_and_verify(global.context.as_deref()).await?;
         if let Some(checks) = &target_checks {

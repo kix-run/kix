@@ -22,7 +22,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     let crds = kix_crds_from_build(args, ctx)?;
 
     let client = ctx
-        .runtime
+        .runtime()?
         .block_on(client::make_client(ctx.global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let ops = KubeMigrationOps::new(client);
@@ -30,7 +30,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     // Run a dry-run pass first so we can display the migration plan before
     // prompting for confirmation.
     let plan = ctx
-        .runtime
+        .runtime()?
         .block_on(migrate::run(&ops, &args.cluster, &crds, true))
         .map_err(|e| miette!("{e}"))?;
 
@@ -53,7 +53,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let report = ctx
-        .runtime
+        .runtime()?
         .block_on(migrate::run(&ops, &args.cluster, &crds, false))
         .map_err(|e| miette!("{e}"))?;
 

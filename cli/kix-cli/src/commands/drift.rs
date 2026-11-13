@@ -12,12 +12,15 @@ use kix::cluster::activation::Records;
 use kix::cluster::discovery;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner, UnrecordedScale};
 
-use crate::cli::{DriftArgs, GlobalArgs, OutputFormat};
+use crate::cli::{DriftArgs, OutputFormat};
 use crate::exit::Exit;
 use crate::output;
 
-pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<Exit> {
-    let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
+use super::CommandContext;
+
+pub fn run(args: &DriftArgs, ctx: &CommandContext) -> Result<Exit> {
+    let global = &ctx.global;
+    let runtime = ctx.runtime()?;
 
     let json = output::format() == OutputFormat::Json;
     if !json {

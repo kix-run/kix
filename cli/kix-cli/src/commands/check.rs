@@ -256,7 +256,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // `buildCluster` runs constructor validators, error-severity scorecard
     // rules, and cross-resource resolution checks (`kix/lib/eval/validate.nix`)
     // as assertions, so a failure in any of them surfaces here as an eval error.
-    let eval_result = ctx.evaluator.eval_cluster(&args.cluster);
+    let eval_result = ctx.evaluator()?.eval_cluster(&args.cluster);
 
     if let Some(sp) = &spinner {
         sp.finish_and_clear();

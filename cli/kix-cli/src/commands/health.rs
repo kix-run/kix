@@ -105,7 +105,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<Exit> {
 
     crate::say!("Connecting to cluster...");
 
-    let (activation, resources) = ctx.runtime.block_on(async {
+    let (activation, resources) = ctx.runtime()?.block_on(async {
         let client = client::make_client(ctx.global.context.as_deref())
             .await
             .map_err(|e| miette!("failed to connect: {e}"))?;

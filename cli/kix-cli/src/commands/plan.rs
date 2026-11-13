@@ -149,7 +149,7 @@ pub(crate) fn prepare(
     }
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let planned = ctx
-        .runtime
+        .runtime()?
         .block_on(Planner::new(flags, &report).run(build, &old_side(args, ctx)))
         .map_err(|e| miette!("{e}"))?;
     Ok(Some(planned))
@@ -231,7 +231,7 @@ pub(crate) fn dry_run(
 ) -> Result<DryRunReport> {
     let sops = p.sops_sources(placeholders).map_err(|e| miette!("{e}"))?;
     let p = &*p;
-    ctx.runtime.block_on(async {
+    ctx.runtime()?.block_on(async {
         let target = Target::connect(client, sops)
             .await
             .map_err(|e| miette!("{e}"))?;

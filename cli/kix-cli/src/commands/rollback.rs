@@ -43,16 +43,16 @@ pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let cluster = ctx.cluster_identity(&args.cluster, lookup)?;
     if args.list {
         return ctx
-            .runtime
+            .runtime()?
             .block_on(run_list_async(&cluster, ctx))
             .map(Exit::from);
     }
     if args.operator {
         return ctx
-            .runtime
+            .runtime()?
             .block_on(run_operator_async(args, &cluster, ctx));
     }
-    ctx.runtime.block_on(run_async(args, &cluster, ctx))
+    ctx.runtime()?.block_on(run_async(args, &cluster, ctx))
 }
 
 /// Connect to the cluster, list superseded activations, and print the rollback

@@ -52,23 +52,47 @@ pub trait ReceiptMaker {
     fn warnings(&self, receipt: &serde_json::Value) -> Vec<String>;
 }
 
+/// What a command reads from its surroundings: the global flags, and an
+/// evaluator and a Tokio runtime that are made on first use.
+///
+/// A command that never evaluates the project or talks to a cluster pays for
+/// neither.
 pub struct CommandContext {
-    pub evaluator: kix::eval::KixEvaluator,
     pub global: GlobalArgs,
-    pub runtime: tokio::runtime::Runtime,
     pub receipts: &'static dyn ReceiptMaker,
+    evaluator: Option<kix::eval::KixEvaluator>,
+    runtime: std::sync::OnceLock<tokio::runtime::Runtime>,
 }
 
 impl CommandContext {
-    pub fn new(global: &GlobalArgs, receipts: &'static dyn ReceiptMaker) -> miette::Result<Self> {
-        let evaluator = create_evaluator(&global.flake, global.no_cache, global.input_overrides())?;
-        let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
-        Ok(Self {
-            evaluator,
+    pub fn new(global: &GlobalArgs, receipts: &'static dyn ReceiptMaker) -> Self {
+        Self {
             global: global.clone(),
-            runtime,
             receipts,
-        })
+            evaluator: None,
+            runtime: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Return the evaluator for `--flake`, making it on first use.
+    pub fn evaluator(&mut self) -> miette::Result<&mut kix::eval::KixEvaluator> {
+        if self.evaluator.is_none() {
+            self.evaluator = Some(create_evaluator(
+                &self.global.flake,
+                self.global.no_cache,
+                self.global.input_overrides(),
+            )?);
+        }
+        Ok(self.evaluator.as_mut().expect("set above"))
+    }
+
+    /// Return the Tokio runtime, making it on first use.
+    pub fn runtime(&self) -> miette::Result<&tokio::runtime::Runtime> {
+        if let Some(runtime) = self.runtime.get() {
+            return Ok(runtime);
+        }
+        let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
+        Ok(self.runtime.get_or_init(|| runtime))
     }
 
     /// Resolve the cluster name used to look up records on the Kubernetes
@@ -101,7 +125,7 @@ impl CommandContext {
             return Ok(arg.to_string());
         }
         let context = self.global.context.clone();
-        let has_records = self.runtime.block_on(async {
+        let has_records = self.runtime()?.block_on(async {
             let client = crate::client::make_client(context.as_deref()).await.ok()?;
             kix::cluster::activation::records_exist(&client, arg)
                 .await
@@ -119,7 +143,10 @@ impl CommandContext {
     /// Return the error for a cluster name the project does not define,
     /// listing the clusters it does define when the flake can list them.
     pub fn cluster_not_found(&mut self, name: String) -> String {
-        let clusters = self.evaluator.list_clusters().unwrap_or_default();
+        let clusters = match self.evaluator() {
+            Ok(evaluator) => evaluator.list_clusters().unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
         if clusters.is_empty() {
             return kix::eval::error::KixEvalError::ClusterNotFound { name }.to_string();
         }
@@ -134,8 +161,7 @@ impl CommandContext {
         &mut self,
         name: &str,
     ) -> miette::Result<kix::eval::ClusterOutput> {
-        use miette::IntoDiagnostic;
-        match self.evaluator.eval_cluster(name) {
+        match self.evaluator()?.eval_cluster(name) {
             Ok(o) => Ok(o),
             Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
                 Err(miette::miette!("{}", self.cluster_not_found(name)))
@@ -303,7 +329,7 @@ mod tests {
     fn context(flake: &str) -> CommandContext {
         let cli = crate::cli::Cli::try_parse_from(["kix", "--flake", flake, "health", "x"])
             .expect("arguments parse");
-        CommandContext::new(&cli.global, &compliance::receipt::ComplianceReceipts).expect("context")
+        CommandContext::new(&cli.global, &compliance::receipt::ComplianceReceipts)
     }
 
     fn eval_error() -> kix::eval::error::KixEvalError {

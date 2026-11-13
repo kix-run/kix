@@ -224,13 +224,14 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
         None => ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?,
     };
     let global = ctx.global.clone();
-    ctx.runtime.block_on(run_flat_async(&cluster, &global))
+    ctx.runtime()?.block_on(run_flat_async(&cluster, &global))
 }
 
 fn run_operator(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
     let global = ctx.global.clone();
-    ctx.runtime.block_on(run_operator_async(&cluster, &global))
+    ctx.runtime()?
+        .block_on(run_operator_async(&cluster, &global))
 }
 
 async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs) -> Result<()> {

@@ -115,7 +115,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
         let spinner = output::spinner("Fetching live cluster state...");
         let global = ctx.global.clone();
         let live = ctx
-            .runtime
+            .runtime()?
             .block_on(fetch_live_manifests(&global, &new_graph))?;
         clear_spinner(&spinner);
         // The current record's package index places each live object where

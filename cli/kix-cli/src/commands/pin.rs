@@ -21,18 +21,21 @@ use crate::cli::{
 use crate::exit::Exit;
 use crate::output;
 
+use super::CommandContext;
+
 mod locate;
 
-pub fn run(command: &PinCommand, global: &GlobalArgs) -> Result<Exit> {
+pub fn run(command: &PinCommand, ctx: &CommandContext) -> Result<Exit> {
     match command {
-        PinCommand::Set(args) => set(args, global).map(Exit::from),
-        PinCommand::Rm(args) => rm(args, global).map(Exit::from),
-        PinCommand::Check(args) => check(args, global),
-        PinCommand::List(args) => list(args, global).map(Exit::from),
+        PinCommand::Set(args) => set(args, ctx).map(Exit::from),
+        PinCommand::Rm(args) => rm(args, &ctx.global).map(Exit::from),
+        PinCommand::Check(args) => check(args, ctx),
+        PinCommand::List(args) => list(args, &ctx.global).map(Exit::from),
     }
 }
 
-fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
+fn set(args: &PinSetArgs, ctx: &CommandContext) -> Result<()> {
+    let global = &ctx.global;
     // Only `--init` may create a new pin file. Without it, a mistyped path or
     // working directory must fail rather than create a second pin file that no
     // cluster reads.
@@ -107,7 +110,7 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         None
     } else {
         crate::say!("Resolving {reference}...");
-        Some(resolve(&reference)?)
+        Some(resolve(&reference, ctx.runtime()?)?)
     };
 
     if digest.is_none() {
@@ -291,7 +294,8 @@ impl Verdict {
     }
 }
 
-fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<Exit> {
+fn check(args: &PinCheckArgs, ctx: &CommandContext) -> Result<Exit> {
+    let global = &ctx.global;
     let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
     let pins_file = located.path.as_path();
     let file = PinFile::read(pins_file).into_diagnostic()?;
@@ -320,7 +324,7 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<Exit> {
         }
     }
 
-    let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
+    let runtime = ctx.runtime()?;
     let client = if args.offline {
         None
     } else {
@@ -330,10 +334,7 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<Exit> {
     let mut results: Vec<(PinKey, Verdict)> = Vec::new();
 
     for (key, pin) in &selected {
-        results.push((
-            key.clone(),
-            judge(key, pin, args, client.as_ref(), &runtime),
-        ));
+        results.push((key.clone(), judge(key, pin, args, client.as_ref(), runtime)));
     }
 
     // Check source-revision freshness separately from registry existence: a
@@ -558,8 +559,7 @@ fn option_of(key: &PinKey) -> Option<&str> {
     }
 }
 
-fn resolve(reference: &Reference) -> Result<String> {
-    let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
+fn resolve(reference: &Reference, runtime: &tokio::runtime::Runtime) -> Result<String> {
     let client = RegistryClient::new().into_diagnostic()?;
     let resolved = runtime
         .block_on(client.resolve(reference))

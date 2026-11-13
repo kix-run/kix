@@ -104,7 +104,7 @@ pub fn run(args: &ListArgs, ctx: &mut CommandContext) -> Result<()> {
 }
 
 fn run_clusters(ctx: &mut CommandContext) -> Result<()> {
-    let clusters = ctx.evaluator.list_clusters().into_diagnostic()?;
+    let clusters = ctx.evaluator()?.list_clusters().into_diagnostic()?;
 
     if clusters.is_empty() {
         eprintln!("No clusters found in this flake.");
@@ -121,7 +121,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
 
     if let Some(cluster_name) = cluster {
         let cluster_info = ctx
-            .evaluator
+            .evaluator()?
             .list_cluster_packages(cluster_name)
             .into_diagnostic()?;
 
@@ -157,7 +157,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
             });
         }
     } else {
-        let global_packages = ctx.evaluator.list_packages().into_diagnostic()?;
+        let global_packages = ctx.evaluator()?.list_packages().into_diagnostic()?;
 
         for (name, info) in &global_packages {
             rows.insert(
