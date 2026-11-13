@@ -43,7 +43,7 @@ Each build of Kix is compiled against the exact tool versions in `cli/kix-core/r
 ### Version update policy
 
 - **Patch and minor updates:** A patch update of a program in the Kix runtime (for example, `2.35.3` to `2.35.4`) can ship in a Kix patch release. A minor update of a program in the Kix runtime ships in a Kix minor release.
-- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the Kix library and Kix both name the exact Helm versions. A Kix minor release can change a Helm version in the Kix runtime. A patch release can only add one, so it still renders charts for a Kix library of an earlier patch in the same minor. After you upgrade Kix to a new minor release, run [`kix lib update`](/docs/reference/cli/lib/) to align `flake.lock` with your installed Kix. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
+- **Helm version alignment:** Kix ships both Helm 4 (`4.3.1`, the default) and Helm 3 (`3.19.1`, upstream security fixes until 10 February 2027). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the Kix library and Kix both name the exact Helm versions. A Kix minor release can change a Helm version in the Kix runtime. A patch release can only add one, so it still renders charts for a Kix library of an earlier patch in the same minor. [`kix upgrade`](/docs/reference/cli/upgrade/) moves the Kix library in `flake.lock` with the project's version of Kix. See [Helm and imports](/docs/reference/helm-and-imports/#helm-versions).
 
 ## Third-party licenses and LGPL components
 

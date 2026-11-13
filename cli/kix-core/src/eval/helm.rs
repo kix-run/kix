@@ -46,7 +46,7 @@ pub enum HelmError {
          Why:\n    \
          Each version of the Kix library is paired with the Helm versions in that version's Kix runtime.\n\n  \
          Next (choose one):\n    \
-         - Run `kix lib update` to move the project to the {kix} library and commit `flake.lock`.\n    \
+         - Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.\n    \
          - {KEEP_LIBRARY}",
         shipped_text(shipped),
         kix = crate::version::running().release()
@@ -65,7 +65,7 @@ pub enum HelmError {
          Why:\n    \
          The Kix library pinned in `flake.lock` and Kix {kix} come from different versions and use incompatible Helm chart formats.\n\n  \
          Next (choose one):\n    \
-         - Run `kix lib update` to move the project to the {kix} library and commit `flake.lock`.\n    \
+         - Run `kix upgrade --to {kix}` to move the project to the {kix} library, then commit the files it changes.\n    \
          - {KEEP_LIBRARY}",
         kix = crate::version::running().release()
     )]

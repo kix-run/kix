@@ -291,8 +291,9 @@ pub enum LegacyDomainError {
          Why:\n    \
          Kix now stores deployment records under `{current}`, and deploying this build would put the retired `{group}` resource types back on the cluster.\n\n  \
          Next:\n    \
-         Update the Kix library in `flake.lock` to match this version of Kix, commit `flake.lock`, and run the command again:\n      \
-         kix lib update"
+         Move the Kix library in `flake.lock` to this version of Kix, commit the files that change, and run the command again:\n      \
+         kix upgrade --to {kix}",
+        kix = crate::version::running().release()
     )]
     StalePin { group: String, current: String },
 }

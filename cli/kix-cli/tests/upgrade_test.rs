@@ -989,30 +989,76 @@ fn an_interrupted_run_leaves_a_state_and_resumes() {
     assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
 }
 
+/// Run `git` in `dir` with an identity and without signing.
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgSign=false",
+            "-c",
+            "tag.gpgSign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// Make a Kix library repository in `dir` with a tag `v<version>` for each
+/// of `versions`, and return its flake url.
+fn library_repo(dir: &Path, versions: &[&str]) -> String {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(
+        dir.join("flake.nix"),
+        "{ outputs = _: { version = builtins.readFile ./VERSION; }; }\n",
+    )
+    .unwrap();
+    for version in versions {
+        std::fs::write(dir.join("VERSION"), version).unwrap();
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", version]);
+        git(dir, &["tag", &format!("v{version}")]);
+    }
+    format!("git+file://{}", dir.display())
+}
+
+/// Lock the project's flake with the Nix in the Kix runtime.
+fn lock_flake(dir: &Path) {
+    let nix =
+        kix::runtime::program_path(kix::runtime::Tool::Nix, kix::runtime::Want::Shipped).unwrap();
+    let out = std::process::Command::new(nix)
+        .args([
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "flake",
+            "lock",
+        ])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "nix flake lock: {out:?}");
+}
+
+/// Needs a Kix runtime (`KIX_RUNTIME_DIR` in the development shell), since
+/// Kix reads the library input with Nix.
 #[test]
 fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
     let s = Setup::new();
     s.releases(vec![]);
-    let url = "git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v9.1.0";
+    let repo = library_repo(&s.project.join("../library"), &["9.1.0", "9.3.0"]);
+    let url = format!("{repo}?ref=refs/tags/v9.1.0");
     let flake = format!(
-        "{{\n  inputs = {{\n    kixpkgs.url = \"{url}\";\n    image-kix = {{ url = \"{url}\"; flake = false; }};\n  }};\n}}\n"
+        "{{\n  inputs = {{\n    kixpkgs.url = \"{url}\";\n    image-kix = {{ url = \"{url}\"; flake = false; }};\n  }};\n  outputs = inputs: {{\n    legacyPackages = builtins.listToAttrs (map (system: {{\n      name = system;\n      value.kixLibrary.version = inputs.kixpkgs.version;\n    }}) [ \"x86_64-linux\" \"aarch64-linux\" \"x86_64-darwin\" \"aarch64-darwin\" ]);\n  }};\n}}\n"
     );
-    let node = serde_json::json!({
-        "locked": {"type": "git", "url": "ssh://git@git.example:30232/org/kixpkgs.git", "rev": "abc", "ref": "refs/tags/v9.1.0"},
-        "original": {"type": "git", "url": "ssh://git@git.example:30232/org/kixpkgs.git", "ref": "refs/tags/v9.1.0"},
-    });
-    let lock = serde_json::json!({
-        "root": "root",
-        "version": 7,
-        "nodes": {
-            "root": {"inputs": {"kixpkgs": "kixpkgs", "image-kix": "image-kix"}},
-            "kixpkgs": node.clone(),
-            "image-kix": node,
-        }
-    })
-    .to_string();
     s.write("flake.nix", &flake);
-    s.write("flake.lock", &lock);
+    lock_flake(&s.project);
+    let lock = s.read("flake.lock");
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 3, "{out}");
     assert!(
@@ -1036,14 +1082,19 @@ fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
     assert_eq!(s.installed(), ["9.1.0"]);
 
     // After the person's edit, the rerun resumes from the version the
-    // project is still on. Moving flake.lock needs Nix, which this test
-    // does not have, so only the opening line is checked.
+    // project is still on, locks the tag, and finishes.
     s.write("flake.nix", &flake.replacen("v9.1.0", "v9.3.0", 1));
-    let (_, out) = s.upgrade(&[]);
+    let (code, out) = s.upgrade(&[]);
     assert!(
         out.starts_with("Resuming upgrade Kix 9.1.0 -> 9.3.0 (reusing 9.1.0 baseline)\n"),
         "{out}"
     );
+    assert!(
+        out.contains("Pinned project to Kix 9.3.0 (updated kix.toml, flake.lock)"),
+        "{out}"
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(s.read("kix.toml"), "kix = \"9.3.0\"\n");
 }
 
 #[test]
@@ -1143,21 +1194,35 @@ fn the_kix_toml_delay_names_itself_when_nothing_is_old_enough() {
 }
 
 #[test]
-fn upgrading_to_a_prerelease_says_how_to_try_it() {
+fn a_prerelease_named_in_full_is_a_target() {
     let s = Setup::new();
     s.publish("9.1.0", "2026-01-01", None);
     s.publish("9.2.0-rc.1", "2026-01-02", None);
     s.write("kix.toml", "kix = \"9.1.0\"\n");
     let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with("Upgrading Kix 9.1.0 -> 9.2.0-rc.1\n"),
+        "{out}"
+    );
+    assert_eq!(s.read("kix.toml"), "kix = \"9.2.0-rc.1\"\n");
+
+    // Without its full name, a prerelease is never chosen.
+    let (code, out) = s.upgrade(&["--to", "9.2"]);
     assert_eq!(code, 1, "{out}");
-    assert!(
-        out.starts_with(
-            "Kix 9.2.0-rc.1 is a prerelease, and `kix upgrade` moves only to releases."
-        ),
-        "{out}"
+}
+
+#[test]
+fn the_version_the_project_is_on_needs_no_release_index() {
+    let s = Setup::new();
+    // No release site: the repair must not read the index.
+    s.write("kix.toml", "kix = \"9.1.0\"\n");
+    let (code, out) = s.upgrade(&["--to", "9.1.0"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "kix.toml already names Kix 9.1.0. Nothing to change.\n"
     );
-    assert!(
-        out.contains("set kix = \"9.2.0-rc.1\" in kix.toml and run `kix lib update`"),
-        "{out}"
-    );
+    assert_eq!(s.read("kix.toml"), "kix = \"9.1.0\"\n");
+    assert!(!s.project.join("kix-upgrade.json").exists());
 }

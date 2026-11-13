@@ -255,10 +255,6 @@ pub enum Command {
     #[command(subcommand)]
     Pin(PinCommand),
 
-    /// Manage the Kix library this project pins in flake.lock
-    #[command(subcommand)]
-    Lib(LibCommand),
-
     /// Move this project to a newer version of Kix
     ///
     /// Builds every cluster with the current Kix, pins the project to the
@@ -330,7 +326,6 @@ impl Command {
             Command::Completions(_)
             | Command::Doctor
             | Command::Pin(_)
-            | Command::Lib(_)
             | Command::Upgrade(_)
             | Command::SelfCmd(_)
             | Command::Plugin(_) => None,

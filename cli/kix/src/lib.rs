@@ -19,8 +19,8 @@
 //! client types to the `kix-core` modules of the same name.
 
 pub use kix_core::{
-    VERSION, build_source, changes, eval, library, project, runtime, system_nix, text, version,
-    yaml,
+    VERSION, build_source, changes, eval, library, pin_library, project, runtime, system_nix, text,
+    version, yaml,
 };
 
 pub mod cluster;

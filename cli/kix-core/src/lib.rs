@@ -26,6 +26,7 @@ pub mod eval;
 pub mod legacy_domain;
 pub mod library;
 pub mod manifest;
+pub mod pin_library;
 pub mod project;
 pub mod runtime;
 pub mod system_nix;

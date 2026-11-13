@@ -7,6 +7,7 @@
 //! ```toml
 //! builder = "kix"   # "kix" (the default), "nix", or "remote"
 //! kix = "0.8"       # a minor such as "0.8", or an exact version such as "0.8.3"
+//! library-input = "kix"  # the flake input that holds the Kix library
 //!
 //! [upgrade]
 //! min-age = "7d"    # `kix upgrade` picks only releases at least this old
@@ -33,7 +34,7 @@ pub const FILE: &str = "kix.toml";
 pub const TEST_BUILDER_VAR: &str = "KIX_TEST_BUILDER";
 
 /// The keys this version of Kix reads from `kix.toml`.
-const KNOWN_KEYS: &[&str] = &["builder", "kix", "upgrade"];
+const KNOWN_KEYS: &[&str] = &["builder", "kix", "library-input", "upgrade"];
 
 /// The keys of the `[upgrade]` table.
 const UPGRADE_KEYS: &[&str] = &["min-age"];
@@ -106,6 +107,9 @@ pub struct ProjectConfig {
     pub kix_source: Option<PathBuf>,
     /// `min-age` in the `[upgrade]` table, in days.
     pub upgrade_min_age: Option<u32>,
+    /// The name of the `flake.nix` input that holds the Kix library, from
+    /// the `library-input` key.
+    pub library_input: Option<String>,
 }
 
 impl Default for ProjectConfig {
@@ -116,6 +120,7 @@ impl Default for ProjectConfig {
             kix: None,
             kix_source: None,
             upgrade_min_age: None,
+            library_input: None,
         }
     }
 }
@@ -193,6 +198,12 @@ pub enum ProjectError {
         crate::version::running().release()
     )]
     BadUpgrade { path: PathBuf, problem: String },
+
+    #[error(
+        "{} sets library-input = {value}. Write the name of the flake.nix input that holds the Kix library in quotes, such as library-input = \"kix\"",
+        path.display()
+    )]
+    BadLibraryInput { path: PathBuf, value: String },
 }
 
 /// Parse a minimum release age such as `7d` into days.
@@ -317,11 +328,22 @@ impl ProjectConfig {
         };
         let kix_source = kix.is_some().then(|| path.to_path_buf());
         let upgrade_min_age = parse_upgrade(path, table.get("upgrade"))?;
+        let library_input = match table.get("library-input") {
+            None => None,
+            Some(toml::Value::String(name)) if !name.trim().is_empty() => Some(name.clone()),
+            Some(value) => {
+                return Err(ProjectError::BadLibraryInput {
+                    path: path.to_path_buf(),
+                    value: toml_text(value),
+                });
+            }
+        };
         let Some(value) = table.get("builder") else {
             return Ok(Self {
                 kix,
                 kix_source,
                 upgrade_min_age,
+                library_input,
                 ..Self::default()
             });
         };
@@ -348,6 +370,7 @@ impl ProjectConfig {
             kix,
             kix_source,
             upgrade_min_age,
+            library_input,
         })
     }
 
@@ -443,9 +466,10 @@ pub enum ProjectMismatch {
          Why:\n    \
          Either the Kix library pinned in `flake.lock` is older than the `builder` setting, or `flake.nix` builds Kix outputs directly instead of calling `kix.lib.mkFlake`.\n\n  \
          Next (choose one):\n    \
-         - If `flake.nix` already calls `kix.lib.mkFlake`, update the Kix library in `flake.lock` and run the command again:\n        \
-         kix lib update\n    \
-         - If `flake.nix` builds Kix outputs another way (for example with `kix.lib.forPkgs`), switch to `kix.lib.mkFlake` as shown in the `builder` section at https://kix.run/docs/reference/kix-toml/."
+         - If `flake.nix` already calls `kix.lib.mkFlake`, move the Kix library in `flake.lock` to this version of Kix, then run the command again:\n        \
+         kix upgrade --to {kix}\n    \
+         - If `flake.nix` builds Kix outputs another way (for example with `kix.lib.forPkgs`), switch to `kix.lib.mkFlake` as shown in the `builder` section at https://kix.run/docs/reference/kix-toml/.",
+        kix = crate::version::running().release()
     )]
     NoBuilderSetting { origin: BuilderSource },
 
@@ -591,6 +615,25 @@ mod tests {
     }
 
     #[test]
+    fn library_input_names_an_input() {
+        assert_eq!(
+            read(Some("library-input = \"kixpkgs\"\n"))
+                .unwrap()
+                .library_input
+                .as_deref(),
+            Some("kixpkgs")
+        );
+        assert_eq!(read(Some("")).unwrap().library_input, None);
+        for bad in ["library-input = 1\n", "library-input = \"\"\n"] {
+            let err = read(Some(bad)).unwrap_err();
+            assert!(
+                matches!(err, ProjectError::BadLibraryInput { .. }),
+                "{bad}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn an_unknown_key_names_the_known_ones() {
         let err = read(Some("builder = \"kix\"\nbuidler = \"nix\"\n"))
             .unwrap_err()
@@ -663,7 +706,13 @@ mod tests {
             err.contains("which this project's flake did not configure"),
             "{err}"
         );
-        assert!(err.contains("kix lib update"), "{err}");
+        assert!(
+            err.contains(&format!(
+                "kix upgrade --to {}",
+                crate::version::running().release()
+            )),
+            "{err}"
+        );
         assert!(err.contains("mkFlake"), "{err}");
 
         let err = check_agreement(BuilderKind::Nix, &file, Some("kix"))

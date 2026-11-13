@@ -45,8 +45,7 @@ impl Command {
             // Reads only the cluster, so it works from a bare kubeconfig
             // outside any project.
             Command::Status(_) => Needs::Nothing,
-            Command::Lib(_)
-            | Command::Build(_)
+            Command::Build(_)
             | Command::Diff(_)
             | Command::Plan(_)
             | Command::Check(_)
@@ -104,7 +103,6 @@ impl Command {
             | Command::SelfCmd(_)
             | Command::Doctor
             | Command::Upgrade(_)
-            | Command::Lib(_)
             | Command::Bundle(_)
             | Command::Gc(_)
             | Command::Migrate(_)
@@ -167,7 +165,6 @@ pub fn run(cli: &Cli) -> Result<Exit> {
         Command::Doctor => commands::doctor::run(global).map(Exit::from),
         Command::Pin(command) => commands::pin::run(command, ctx),
         Command::Upgrade(args) => commands::upgrade::run(args, global).map(Exit::from),
-        Command::Lib(command) => commands::library::run(command, global).map(Exit::from),
         Command::Build(args) => commands::build::run(args, ctx).map(Exit::from),
         Command::Diff(args) => commands::diff::run(args, ctx),
         Command::Plan(args) if args.read_only => commands::diff::run_read_only(args, ctx),
@@ -276,7 +273,6 @@ mod tests {
             &["kix", "build", "c"][..],
             &["kix", "plan", "c"],
             &["kix", "deploy", "c"],
-            &["kix", "lib", "update"],
             &["kix", "history", "c"],
             &["kix", "list", "clusters"],
         ] {

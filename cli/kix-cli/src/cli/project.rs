@@ -1,13 +1,15 @@
-//! Arguments of the commands that manage the project and Kix itself: `upgrade`,
-//! `lib`, `self`, and `completions`.
+//! Arguments of the commands that manage the project and Kix itself:
+//! `upgrade`, `self`, and `completions`.
 
 use clap::Subcommand;
 use clap_complete::Shell;
 
 #[derive(clap::Args)]
 pub struct UpgradeArgs {
-    /// The version to move to: an exact version such as 0.12.1, a minor such as
-    /// 0.12 (its newest patch), or `latest`
+    /// The version to move to: an exact version such as 0.12.1, a prerelease
+    /// named in full such as 0.12.0-rc.1, a minor such as 0.12 (its newest
+    /// patch), or `latest`. The version the project is on already makes
+    /// kix.toml, flake.nix, and flake.lock agree, and builds nothing
     #[arg(long, value_name = "VERSION")]
     pub to: Option<String>,
 
@@ -20,18 +22,6 @@ pub struct UpgradeArgs {
     /// do nothing else
     #[arg(long, value_name = "ID", num_args = 1.., conflicts_with_all = ["to", "dry_run"])]
     pub acknowledge: Vec<String>,
-}
-
-/// Manage the Kix library this project pins in flake.lock.
-#[derive(Subcommand)]
-pub enum LibCommand {
-    /// Move this project's Kix library to the version of the installed Kix
-    ///
-    /// Locks the project's Kix library input (github:kix-run/kix) to the
-    /// tag `v<version>` of the installed Kix and writes flake.lock. It
-    /// does not change flake.nix. When flake.nix pins another release, or the
-    /// input is a local path or a fork, it says what to change by hand.
-    Update(LibUpdateArgs),
 }
 
 /// Install, list, and remove versions of Kix.
@@ -70,13 +60,6 @@ pub enum SelfCommand {
     /// Works when the install script installed this Kix. Otherwise it says
     /// how to upgrade Kix the way it was installed.
     Upgrade,
-}
-
-#[derive(clap::Args)]
-pub struct LibUpdateArgs {
-    /// Show what would change without writing flake.lock
-    #[arg(long)]
-    pub dry_run: bool,
 }
 
 #[derive(clap::Args)]
