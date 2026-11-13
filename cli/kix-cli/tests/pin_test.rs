@@ -34,12 +34,12 @@ fn digest(c: char) -> String {
     format!("sha256:{}", c.to_string().repeat(64))
 }
 
-/// A fresh directory for one test's pin file.
-fn pins_file(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kix-pin-test-{}-{test}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join("pins.json")
+/// Return a fresh directory and the path of a pin file in it. The directory
+/// is deleted when the returned `TempDir` is dropped.
+fn pins_file() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("pins.json");
+    (dir, file)
 }
 
 fn read(path: &PathBuf) -> serde_json::Value {
@@ -48,7 +48,7 @@ fn read(path: &PathBuf) -> serde_json::Value {
 
 #[test]
 fn set_writes_an_instance_pin_as_version_2() {
-    let file = pins_file("set");
+    let (_dir, file) = pins_file();
     kix()
         .args(["pin", "set", "monitoring/grafana", "--init"])
         .args([
@@ -86,7 +86,7 @@ fn set_writes_an_instance_pin_as_version_2() {
 
 #[test]
 fn set_names_another_option_with_option() {
-    let file = pins_file("option");
+    let (_dir, file) = pins_file();
     std::fs::write(
         &file,
         "{\"version\":1,\"managedBy\":\"kix pin\",\"images\":{}}\n",
@@ -122,7 +122,7 @@ fn set_names_another_option_with_option() {
 
 #[test]
 fn option_is_refused_for_a_pin_name() {
-    let file = pins_file("refuse");
+    let (_dir, file) = pins_file();
     kix()
         .args(["pin", "set", "web", "--option", "image", "--init"])
         .args([
@@ -142,7 +142,7 @@ fn option_is_refused_for_a_pin_name() {
 
 #[test]
 fn list_and_check_cover_both_maps() {
-    let file = pins_file("list");
+    let (_dir, file) = pins_file();
     for (key, repo) in [("web", "r/web"), ("apps/api", "r/api")] {
         kix()
             .args([
@@ -212,7 +212,7 @@ fn list_and_check_cover_both_maps() {
 /// move sets the new one.
 #[test]
 fn moving_a_pin_drops_its_note() {
-    let file = pins_file("note");
+    let (_dir, file) = pins_file();
     let set = |tag: &str, d: char, note: Option<&str>| {
         let mut cmd = kix();
         cmd.args(["pin", "set", "monitoring/grafana", "--init"])
@@ -246,7 +246,7 @@ fn moving_a_pin_drops_its_note() {
 
 #[test]
 fn rm_removes_package_and_instance_pins_and_reverts_version_to_1() {
-    let file = pins_file("rm");
+    let (_dir, file) = pins_file();
     for (key, repo) in [("nginx", "docker.io/library/nginx"), ("ns/app", "r/app")] {
         kix()
             .args([
