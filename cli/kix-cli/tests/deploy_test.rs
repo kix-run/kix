@@ -30,7 +30,9 @@ fn kix() -> Command {
 /// is 2 because the plan has changes.
 #[test]
 fn deploy_dry_run_shows_plan() {
+    let cache = common::tempdir();
     kix()
+        .env("XDG_CACHE_HOME", cache.path())
         .args(["deploy", "example", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(2)
@@ -57,7 +59,9 @@ fn apply_is_refused() {
 fn plan_save_writes_the_plan_file() {
     let dir = common::tempdir();
     let path = dir.path().join("plan.kixplan");
+    let cache = common::tempdir();
     kix()
+        .env("XDG_CACHE_HOME", cache.path())
         .args(["plan", "example", "--offline", "--out"])
         .arg(&path)
         .assert()
@@ -120,7 +124,9 @@ fn deploy_plan_refuses_json_and_a_changed_plan_file() {
         .stderr(predicate::str::contains("not a valid `.kixplan` archive"));
 
     let saved = dir.path().join("plan.kixplan");
+    let cache = common::tempdir();
     kix()
+        .env("XDG_CACHE_HOME", cache.path())
         .args(["plan", "example", "--offline", "--out"])
         .arg(&saved)
         .assert()
