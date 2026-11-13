@@ -147,20 +147,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let active_hash = p.baseline.active_hash().map(str::to_string);
 
     if p.checked.nothing_to_do() {
-        // Supersede folded-in failed records even when their resources
-        // need no changes or pruning, because the scheduler will not run
-        // `finalize_deploy` on this early-return path.
-        if let Some(client) = &p.client {
-            supersede_consumed(ctx, client, &p.baseline.failed().consumed);
-        }
-        match (p.checked.activation_identity_hash(), active_hash.as_deref()) {
-            (Some(new), Some(old)) if new == old => crate::say!(
-                "{} activation identical to active ({}...). Nothing to apply.",
-                output::dim("="),
-                &new[..8.min(new.len())],
-            ),
-            _ => crate::say!("Nothing to apply."),
-        }
+        ctx.runtime()?.block_on(say_nothing_to_apply(
+            p.client.as_ref(),
+            &p.checked,
+            active_hash.as_deref(),
+        ));
         return Ok(Exit::Success);
     }
     if total_apply == 0 && p.checked.orphans().is_empty() {
@@ -256,7 +247,7 @@ pub(crate) fn say_failed_jobs(failed: Option<&[ResourceId]>) {
             );
         }
         None => crate::say!(
-            "{} nothing changed; Kix checks the live Jobs once connected, reruns any failed Job with {}, and reports any other failed Job",
+            "{} nothing changed; Kix checks the live Jobs during the deploy, reruns any failed Job with {}, and reports any other failed Job",
             output::yellow("↻"),
             kix::manifest::keys::RERUN,
         ),
@@ -446,38 +437,48 @@ pub(super) fn refuse_namespaceless(
     ))
 }
 
-/// Mark `consumed` failed Activation records as Superseded when a deploy
-/// returns early without running the scheduler.
-///
-/// Normal deploys supersede consumed records during `finalize_deploy`. Failures
-/// here are logged and retried on the next deploy.
-fn supersede_consumed(ctx: &CommandContext, client: &kube::Client, consumed: &[String]) {
+/// Say that the deploy has nothing to apply. With a client, first mark the
+/// failed Activation records the plan folded in as Superseded. The scheduler
+/// does that when it finalizes a run, and here it does not run. Failures are
+/// logged and retried on the next deploy.
+async fn say_nothing_to_apply(
+    client: Option<&kube::Client>,
+    checked: &CheckedPlan,
+    active_hash: Option<&str>,
+) {
+    if let Some(client) = client {
+        supersede_consumed(client, checked.consumed_failed()).await;
+    }
+    match (checked.activation_identity_hash(), active_hash) {
+        (Some(new), Some(old)) if new == old => crate::say!(
+            "{} activation identical to active ({}...). Nothing to apply.",
+            output::dim("="),
+            &new[..8.min(new.len())],
+        ),
+        _ => crate::say!("Nothing to apply."),
+    }
+}
+
+async fn supersede_consumed(client: &kube::Client, consumed: &[String]) {
     if consumed.is_empty() {
         return;
     }
-    // The caller made a client, so the runtime exists and this cannot fail.
-    let Ok(runtime) = ctx.runtime() else {
+    let Ok(discovery) = discovery::discover_resources(client).await else {
         return;
     };
-    let done = runtime.block_on(async {
-        let Ok(discovery) = discovery::discover_resources(client).await else {
-            return 0usize;
-        };
-        let Some(records) = Records::open(client, &discovery)
-            .ok()
-            .and_then(OpenedRecords::into_records)
-        else {
-            return 0;
-        };
-        let mut done = 0;
-        for name in consumed {
-            match records.supersede(name).await {
-                Ok(()) => done += 1,
-                Err(e) => tracing::warn!(activation = %name, error = %e, "could not supersede"),
-            }
+    let Some(records) = Records::open(client, &discovery)
+        .ok()
+        .and_then(OpenedRecords::into_records)
+    else {
+        return;
+    };
+    let mut done = 0;
+    for name in consumed {
+        match records.supersede(name).await {
+            Ok(()) => done += 1,
+            Err(e) => tracing::warn!(activation = %name, error = %e, "could not supersede"),
         }
-        done
-    });
+    }
     if done > 0 {
         crate::say!(
             "  {} {done} failed deploy record(s) had nothing left to reconcile; marked superseded",
@@ -613,6 +614,17 @@ async fn run_deploy_async(
             binding::Connection::InCluster => None,
         };
         check_cached_baseline(records.as_ref(), cluster_name, hash, context).await?;
+    }
+
+    // A plan made without connecting (`--offline`) learns only now whether
+    // it has anything to do: it had not read its Jobs, and orphans another
+    // Kix cluster deploys were still in its prune.
+    if checked.nothing_to_do() {
+        say_nothing_to_apply(Some(target.client()), &checked, cached_baseline).await;
+        return Ok(RunEnd {
+            succeeded: true,
+            current: false,
+        });
     }
 
     refuse_before_writing(&checked, records.as_ref(), discovery).await?;
