@@ -1,0 +1,3 @@
+# 2026-11-13 · `docs/nix/captures-lib.nix` · kix-examples still names the Kix library input `kixpkgs`, so the captures pipeline renames it.
+
+Kix now reads the library only from an input named `kix`, and refuses `kixpkgs` with [K9179]. The kix-examples flake still declares `kixpkgs.url = "github:kix-run/kix"` with no tag, so `workspaceSetupShell` rewrites the word in the workspace copy of `flake.nix`, and `docs/flake.nix` still says `kix-examples.inputs.kixpkgs.follows`. Once kix-examples renames the input to `kix` and pins a tag, drop the rename, change the `follows` line, and move `docs/flake.lock` to that kix-examples commit.

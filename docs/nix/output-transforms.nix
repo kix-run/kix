@@ -118,6 +118,16 @@ let
       s/.*\r//
     '';
 
+    # Drop the lines Kix prints when a project uses a development Kix
+    # library: the note before a command and the line of `kix --version`.
+    # The captures pipeline points the workspace's `kix` input at the Kix
+    # source in the store with `--override-input`, so every command prints
+    # one. A reader whose flake.lock pins a release never sees it.
+    drop-development-library-note = ''
+      /^note: this project uses a development Kix library /d
+      /^ *this project uses a development Kix library: /d
+    '';
+
     # Strip SGR (colour / weight) escapes entirely. Used only for drift
     # comparison: colour is purely presentational and shouldn't trigger
     # false drift if e.g. the CLI changes a span from green to bright-green.
@@ -179,6 +189,7 @@ let
   # verbatim in docs. Keep minimal.
   displayTransforms = [
     "normalize-tty-output"
+    "drop-development-library-note"
   ];
 
   # Applied additionally for drift-only comparison; baked into the

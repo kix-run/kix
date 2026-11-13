@@ -187,9 +187,14 @@ that affect their output, or the site build fails.
 Both drivers share `docs/nix/captures-lib.nix` (workspace setup,
 mutate / capture step shells, drift comparison) and consume the
 declarative manifest at `docs/nix/captures.nix`. The workspace's
-`kixpkgs` input is overridden via the Kix CLI's `--override-input`
+`kix` input is overridden via the Kix CLI's `--override-input`
 flag to a known store path, so the eval never has to re-fetch the
-private kixpkgs repo from GitHub.
+private kixpkgs repo from GitHub. A kix-examples flake that still names
+the input `kixpkgs` has it renamed to `kix` in the workspace copy, since
+Kix reads the library only from an input named `kix`. Kix treats the
+overridden input as a development library and prints a note on each
+command, which the `drop-development-library-note` display transform
+removes from the captures.
 
 ## Plugins
 
