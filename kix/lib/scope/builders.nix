@@ -965,7 +965,12 @@ in
             if hash == null then
               null
             else
-              throw "[K4732] mkSecret \"${name}\" in ${namespaceName}/${instanceName}: `hash` was removed. Kix now computes a digest of the SOPS file itself. Delete the `hash` line.";
+              fail {
+                id = "K4732";
+                instance = builtBy;
+                message = "mkSecret \"${name}\": `hash` was removed. Kix now computes a digest of the SOPS file itself.";
+                fix = "Delete the `hash` line.";
+              };
 
           # A digest of the encrypted file, so the deploy can check that the
           # file it decrypts is the one this build read.
@@ -1031,7 +1036,12 @@ in
             // lib.optionalAttrs (source != null) {
               sops = {
                 inherit source digest;
-                hash = throw "[K4732] mkSecret \"${name}\" in ${namespaceName}/${instanceName}: `out.sops.hash` was removed. Read `out.sops.digest`, the SHA-256 of the encrypted file, instead.";
+                hash = fail {
+                  id = "K4732";
+                  instance = builtBy;
+                  message = "mkSecret \"${name}\": `out.sops.hash` was removed.";
+                  fix = "Read `out.sops.digest`, the SHA-256 of the encrypted file, instead.";
+                };
               };
             };
         };

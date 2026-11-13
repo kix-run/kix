@@ -1,5 +1,5 @@
 //! Arguments of the commands that manage the project and Kix itself: `upgrade`,
-//! `lib`, `secret`, `self`, and `completions`.
+//! `lib`, `self`, and `completions`.
 
 use clap::Subcommand;
 use clap_complete::Shell;

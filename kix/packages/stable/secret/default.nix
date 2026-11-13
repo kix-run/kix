@@ -61,7 +61,13 @@
     let
       secret =
         if config.hash != null then
-          throw "[K4732] secret instance ${scope.namespaceName}/${scope.instanceName}: `hash` was removed. Kix now computes a digest of the SOPS file itself. Delete the `hash` line from the instance's config."
+          scope.fail {
+            id = "K4732";
+            package = "secret";
+            option = "config.hash";
+            message = "`hash` was removed. Kix now computes a digest of the SOPS file itself.";
+            fix = "Delete the `hash` line from the instance's config.";
+          }
         else
           scope.mkSecret {
             name = scope.instanceName;
