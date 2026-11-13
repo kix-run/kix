@@ -9,7 +9,7 @@ core/     Ring 0: the artifact. Sealing, string-context machinery, and PackageIn
 eval/     Ring 1: the pipeline. Module eval, DI, fixpoints, edge analysis, hooks, and validation.
 scope/    Ring 1: the authoring surface. Builders, validators, and labels.
 vocab/    Open vocabulary: pure helper libraries, importable without the core.
-plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability).
+plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability, rerun).
 ```
 
 Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema + hook options + plugin imports), `mkFlake.nix`, `meta.nix`, `env.nix`, `scorecard.nix`, `unsafe.nix`, `rules/`, `flavors/`, `helm.nix` + `helm-dag.nix`. The monitoring module lives outside the library, in `kix/modules/` (`kix/modules/default.nix` builds `kix.modules` with `core/levels.nix`).
@@ -22,7 +22,7 @@ Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema 
 
 ```
 flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
-  1. evalModules (modules.nix, imports plugins/netpol/module.nix + plugins/availability/module.nix)
+  1. evalModules (modules.nix, imports plugins/netpol/module.nix + plugins/availability/module.nix + plugins/rerun/module.nix)
   2. computeAutoInstances (eval/auto.nix)      # explicit wins
   3. namespaces: real vs sentinel (`_`-prefixed); a sentinel instance's PI goes to cluster.recordNamespace
   4. resolution index (eval/resolve.nix)       # DNS-like DI map
@@ -79,6 +79,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `plugins/netpol/scrape.nix` | Derives scrape egress and ingress policies by joining scrapers (Prometheus and VMAgent CRs) with the scrape objects they select: ServiceMonitors, PodMonitors, VMServiceScrapes, VMPodScrapes, the operators' own scrape objects from `factBehavior.selfScrapes`, and Alertmanager endpoints. |
 | `plugins/netpol/interface.nix` | Network policy enforcer contract (`out.netpol`). |
 | `plugins/availability/module.nix` | Declares `cluster.availability.*` and `cluster.topology.*` options; injects `topologySpreadConstraints`, derives PodDisruptionBudgets, and enforces replica/ceiling invariants. |
+| `plugins/rerun/module.nix` | Registers a `clusterProcessors` hook that warns when a Job under `kix.run/rerun` reads a Kix-built Secret or ConfigMap (volumes, projected sources, `env`, `envFrom`) and its pod template has no `checksum/*` annotation whose string context carries that object's store path. |
 | `vocab/default.nix` | Assembles the public `kix.*` helper library from the `vocab/` modules, `core/availability.nix`, and `scorecard.nix`. |
 | `vocab/compose.nix` | Core composition helpers (`image`, `port`, `mkEnvVars`, `mkEnv`, `mergeGuarded`, `mergeEnv`, `guardArgs`, `checkSecretKeys` (keys only; packages call `kix.contracts.secret.helpers.use`, which adds the contract check), `operandPolicy`, `service.*`) and re-exports of the split `vocab/` modules. |
 | `vocab/expose.nix` | `ingress`, `httpRoute`, `gatewayPathType`, and `expose` (Gateway API HTTPRoute / Ingress routing, `exposure` URL resolution, and ingress-controller/gateway network policy edges). |

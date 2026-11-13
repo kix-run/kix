@@ -424,6 +424,9 @@ includes the `checksum/*` annotations on its pod template. Give it one for
 each resource it reads or acts on whose change must run it again (the
 password Secret, the server it bootstraps, the webhook it checks), from that
 resource's `out.contentHash`, and drop those resources from `requires`.
+`kix check` warns when the Job reads a Kix-built Secret or ConfigMap
+without one. It cannot see the objects the Job acts on, so list those
+yourself.
 A change elsewhere in the graph, such as a namespace label, does not run it.
 
 ### Pattern to reference package
