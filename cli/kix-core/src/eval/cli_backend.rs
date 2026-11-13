@@ -564,11 +564,35 @@ mod tests {
         assert_ne!(backend.source_fingerprint(&flake), Some(before));
     }
 
+    /// An evaluation with an overridden input reads the override, and
+    /// neither returns a cached result nor leaves one.
     #[test]
-    fn an_overridden_input_has_no_fingerprint() {
-        let root = tempfile::tempdir().unwrap();
-        let flake = flake_reading_a_file(root.path(), false);
-        let mut backend = LocalBuilder::with_overrides(vec![("lib".into(), "path:/x".into())]);
-        assert_eq!(backend.source_fingerprint(&flake), None);
+    fn an_overridden_input_never_uses_the_cache() {
+        let (root, cache_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let proj = flake_reading_a_file(root.path(), true);
+        let other = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            root.path().join("lib/flake.nix"),
+            other.path().join("flake.nix"),
+        )
+        .unwrap();
+        std::fs::write(other.path().join("name.txt"), "two").unwrap();
+        let overridden = || {
+            let overrides = vec![("lib".into(), format!("path:{}", other.path().display()))];
+            crate::eval::KixEvaluator::new(
+                LocalBuilder::with_overrides(overrides),
+                &proj,
+                cache_dir.path(),
+            )
+            .unwrap()
+            .list_clusters()
+            .unwrap()
+        };
+
+        assert_eq!(list_cached(&proj, cache_dir.path()), ["one"]);
+        assert_eq!(overridden(), ["two"]);
+        std::fs::write(other.path().join("name.txt"), "three").unwrap();
+        assert_eq!(overridden(), ["three"]);
+        assert_eq!(list_cached(&proj, cache_dir.path()), ["one"]);
     }
 }
