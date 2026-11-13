@@ -157,7 +157,7 @@ fn every_test_cluster_bundles() {
     let mut failed = Vec::new();
     for name in &clusters {
         let out = kix()
-            .args(["--quiet", "bundle", name])
+            .args(["--quiet", "bundle", name, "--out"])
             .arg(dir.path().join(format!("{name}.kixbundle")))
             .output()
             .unwrap();
