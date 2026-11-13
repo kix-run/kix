@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check 06-service-dep",
-      "stdout": "tutorial-06/gateway: dependency 'backend' has no matching instance in namespace 'tutorial-06'.\nFix: declare an instance named 'backend' in namespace 'tutorial-06':\ninstances.tutorial-06.backend.package = packages.<package>;\nIf another instance in 'tutorial-06' provides 'backend', wire it in instances.tutorial-06.gateway:\ndeps.backend = ref.tutorial-06.<instance>;\n",
+      "stdout": "tutorial-06/gateway: dependency 'backend' has no matching instance in namespace 'tutorial-06'.\nFix: Declare an instance named 'backend' in namespace 'tutorial-06':\ninstances.tutorial-06.backend.package = packages.<package>;\nIf another instance in 'tutorial-06' provides 'backend', wire it in instances.tutorial-06.gateway:\ndeps.backend = ref.tutorial-06.<instance>;\n",
       "stderr": "",
-      "stdoutDrift": "Fix: declare an instance named 'backend' in namespace 'tutorial-06':\nIf another instance in 'tutorial-06' provides 'backend', wire it in instances.tutorial-06.gateway:\ndeps.backend = ref.tutorial-06.<instance>;\ninstances.tutorial-06.backend.package = packages.<package>;\ntutorial-06/gateway: dependency 'backend' has no matching instance in namespace 'tutorial-06'.\n",
+      "stdoutDrift": "Fix: Declare an instance named 'backend' in namespace 'tutorial-06':\nIf another instance in 'tutorial-06' provides 'backend', wire it in instances.tutorial-06.gateway:\ndeps.backend = ref.tutorial-06.<instance>;\ninstances.tutorial-06.backend.package = packages.<package>;\ntutorial-06/gateway: dependency 'backend' has no matching instance in namespace 'tutorial-06'.\n",
       "stderrDrift": "",
       "exitCode": 1
     }
