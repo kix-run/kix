@@ -98,17 +98,16 @@ rewrites the later ones.
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource
   of a kind without it fails to build.
-- Admission webhooks: the package sets the order, because the engine has no
-  rule that applies webhook configurations last. When the operator does not
-  read or patch its webhook configuration at startup, the configuration
-  `requires` the workload that serves it, so the API server never calls a
-  webhook whose pods are not ready. When it does (it writes its certificate
-  into `caBundle` at startup, as CloudNativePG does), the workload requires
-  the configuration, and every CRD handle makes its custom resources wait for
-  a check Job (`cnpg-operator`, C21). Either way, the deploy's dry run treats
-  an unreachable webhook as not checked only when the deploy writes the
-  webhook's Service or another object of the package; otherwise the deploy
-  stops before it starts (C26).
+- Admission webhooks: Kix applies webhook configurations in `requires` order,
+  so the package sets the order. When the operator does not read or patch its
+  webhook configuration at startup, the configuration `requires` the workload
+  that serves it, so the API server never calls a webhook whose pods are not
+  ready. When it does (it writes its certificate into `caBundle` at startup,
+  as CloudNativePG does), the workload requires the configuration, and every
+  CRD handle makes its custom resources wait for a check Job (`cnpg-operator`,
+  C21). Either way, the deploy's dry run treats an unreachable webhook as not
+  checked only when the deploy writes the webhook's Service or another object
+  of the package; otherwise the deploy stops before it writes anything (C26).
 
 ### 2. Upstream research
 
@@ -566,9 +565,9 @@ deploy is the slowest and most informative step.
    halted part way (a transient image pull error) can leave a webhook
    configuration without its Service. The next deploy writes the Service
    again, so its plan lists the custom resources the webhook guards as not
-   checked. If the Service was deleted by hand and the build did not change,
-   the plan refuses them instead; `kix deploy <cluster> --reconcile` writes
-   the Service again.
+   checked. If the Service was deleted and the build did not change, the plan
+   refuses them instead; `kix deploy <cluster> --reconcile` writes the Service
+   again.
    End with one request through the real path (an event in, a row out), not
    only green probes. At a genuine environment wall (a kernel module,
    read-only sysfs, hugepages) use an upstream knob, confine the part in the
