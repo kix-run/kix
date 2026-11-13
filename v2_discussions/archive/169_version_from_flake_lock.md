@@ -1,6 +1,6 @@
 # 169: Take the Kix version from flake.lock
 
-**Status:** Draft (direction agreed with Adam on 2026-11-13)
+**Status:** Implemented (kix#88, kix-examples#9, kix#90, 2026-11-13)
 **Related:** `168_0_10_cleanup.md`, `163_cli_install_versions_and_upgrades.md`
 **Supersedes:** the part of 163 where `kix.toml` names the project's Kix
 
