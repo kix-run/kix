@@ -73,7 +73,8 @@
 # CiliumNetworkPolicy that selects this instance's pods and allows egress to
 # its data sources.
 #
-# `out`: the Service's `name`, `fqdn`, and `port` (3000).
+# `out`: the Service's `name`, `fqdn`, and `port` (3000), and `version`, the
+# Metabase version `image.tag` names.
 #
 # Escape hatches: `env` for Metabase settings, and the instance's
 # `partsOverlays` for probes, strategy, replicas, and placement.
@@ -359,7 +360,10 @@ in
           }
           |> scope.mkResource;
 
-        root = self.service;
+        root = {
+          resource = self.service;
+          out.version = kix.image.version config.image;
+        };
       }
     )
     (kix.expose { service = "service"; })

@@ -73,6 +73,8 @@
 #       Pod labels of the virt-launcher pods that run each VM.
 #   out.extraImages
 #       Every image virt-operator runs, digest-pinned.
+#   out.version
+#       The KubeVirt version `image.tag` names.
 #
 # root = the virt-operator Deployment.
 
@@ -163,7 +165,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "KubeVirt, for running virtual machines on Kubernetes: virt-operator and a KubeVirt resource";
     owner = "platform";
     defaultAliases = [ "kubevirt" ];
@@ -742,6 +744,7 @@ in
         ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
 
         out = {
+          version = kix.image.version config.image;
           crds.VirtualMachine = self.crds.virtualMachines;
           inherit mkVirtualMachine;
           operandSelectors.virtLauncher = podLabels "virt-launcher";

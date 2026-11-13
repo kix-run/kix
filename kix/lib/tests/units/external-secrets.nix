@@ -465,7 +465,7 @@ in
         )
       );
     in
-    (urls != [ ] && lib.all (lib.hasInfix "/${release}/") urls)
+    (urls != [ ] && lib.all (lib.hasInfix "/v${release}/") urls)
     || throw "external-secrets sources.txt is not at ${release}: ${builtins.toJSON urls}";
 
   # The assertions name the tag, the release minor, and the fix, and refuse

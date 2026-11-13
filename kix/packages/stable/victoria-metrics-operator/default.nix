@@ -21,6 +21,7 @@
 #     used by the victoria-metrics-{cluster,agent,alert} packages
 #   out.mkVMServiceScrape / mkVMPodScrape / mkVMRule / mkVMProbe
 #     native scrape/rule CRs
+#   out.version the operator version `image.tag` names
 #
 # Alerts (a VMRule `<instance>-alerts`, which vmalert evaluates and a
 # prometheus-operator Prometheus does not load). They render with
@@ -53,7 +54,7 @@ in
 
 {
   meta = {
-    version = "v0.74.1";
+    version = "0.74.1";
     description = "VictoriaMetrics Operator: operator.victoriametrics.com CRD controller";
     owner = "platform";
     defaultAliases = [
@@ -271,6 +272,7 @@ in
           # Expose CRD builders; packages depend on these via DI
           # Usage: prometheus.out.mkServiceMonitor scope { ... }
           out = {
+            version = kix.image.version config.image;
             inherit (self.crds.serviceMonitors.out) mkCR;
             # prometheus-operator-compatible surface (converter input)
             mkServiceMonitor = self.crds.serviceMonitors.out.mkCR;

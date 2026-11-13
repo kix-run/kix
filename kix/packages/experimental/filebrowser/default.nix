@@ -53,7 +53,8 @@
 #     };
 #   };
 #
-# `out`: the Service's `name`, `fqdn`, and `port` (80).
+# `out`: the Service's `name`, `fqdn`, and `port` (80), and `version`, the File
+# Browser version `image.tag` names.
 #
 # Escape hatches: `ingress` for the route's host and annotations, and the
 # instance's `partsOverlays`.
@@ -71,7 +72,7 @@ let
 in
 {
   meta = {
-    version = "v2.63.18";
+    version = "2.63.18";
     description = "Filebrowser: web-based file manager";
     owner = "app-team";
   };
@@ -324,7 +325,10 @@ in
 
         service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
 
-        root = self.service;
+        root = {
+          resource = self.service;
+          out.version = kix.image.version config.image;
+        };
       }
     )
     (kix.expose { service = "service"; })

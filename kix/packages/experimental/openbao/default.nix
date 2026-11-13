@@ -75,6 +75,7 @@
 # `out`:
 #   url, fqdn, port   the Service, as `https://<fqdn>:8200`.
 #   caSecret          the Secret whose `ca.crt` signs the server certificate.
+#   version           the OpenBao version `image.tag` names.
 #   externalSecretsProvider scope { serviceAccount; role; mount; }
 #       Returns `{ vault = ...; }` for the `spec.provider` of a
 #       ClusterSecretStore built with external-secrets'

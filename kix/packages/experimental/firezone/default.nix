@@ -64,6 +64,8 @@
 # Resources: ConfigMap (env), Deployment, Service.
 #
 # root = Service (port 13000 http + 51820 wireguard/UDP).
+#
+# `out`: `version`, the Firezone version `image.tag` names.
 
 {
   scope,
@@ -507,7 +509,10 @@ in
           }
           |> scope.mkResource;
 
-        root = self.service;
+        root = {
+          resource = self.service;
+          out.version = kix.image.version config.image;
+        };
       }
     )
     (kix.expose {

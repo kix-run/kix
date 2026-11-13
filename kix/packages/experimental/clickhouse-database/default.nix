@@ -110,7 +110,7 @@
 #                       renders, with keys username, password, database,
 #                       host, httpPort, and nativePort, or the password
 #                       dependency, with username and password
-#   out.version         the server release as YY.M, forwarded from the
+#   out.version         the server version, forwarded from the
 #                       contract, for a consumer with a requirement of its own
 #   out.replicas        the shard's replica count, forwarded from the
 #                       contract
@@ -151,7 +151,6 @@ let
 in
 {
   meta = {
-    version = "0.1.0";
     description = "A database and a user on a ClickHouse server, credentials in the consumer's namespace";
     lifecycle = "stateful";
     scope = "namespace";

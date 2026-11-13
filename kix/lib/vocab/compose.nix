@@ -10,6 +10,7 @@ let
   kixKeys = kixAnnotations.keys;
 
   normalize = import ../core/normalize.nix { inherit lib; };
+  versions = import ../core/version.nix { inherit lib; };
 
   quantity = import ./quantity.nix { inherit lib; };
 
@@ -61,6 +62,16 @@ rec {
           "${needField image "repository"}:${needField image "tag"}"
           + lib.optionalString (image.digest or null != null) "@${image.digest}"
         );
+
+      # Return the version the image's tag names, or null when the tag names
+      # none. A package publishes it as `out.version`, so an instance that
+      # runs another image reports the version it runs.
+      version =
+        image:
+        let
+          tag = image.tag or null;
+        in
+        if tag == null then null else versions.ofTag (builtins.unsafeDiscardStringContext tag);
 
       # Return true when `image.digest` is present and non-null.
       isPinned = image: (image.digest or null) != null;

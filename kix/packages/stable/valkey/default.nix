@@ -13,7 +13,8 @@
 # Sentinel `{ port; primarySet; }`. It also keeps the Service's `name` and `fqdn`.
 # Consumers run in this namespace (`meta.scope`). With Sentinel the Service
 # also reaches replicas, so a client that writes asks Sentinel for the
-# primary, without AUTH.
+# primary, without AUTH. It also carries `version`, the Valkey version
+# `image.tag` names.
 
 {
   scope,
@@ -636,6 +637,7 @@ in
             port = toString ports.valkey;
             credentials = password;
             tls = false;
+            version = kix.image.version config.image;
             sentinel =
               if sentinel then
                 {

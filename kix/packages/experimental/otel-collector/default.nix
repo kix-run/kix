@@ -60,7 +60,8 @@
 #     deps.otlp = ref.observability.tempo;
 #   };
 #
-# `out`: `otlpGrpcUrl` and `otlpHttpUrl`, the Service's OTLP addresses
+# `out`: `version`, the collector version `image.tag` names, `otlpGrpcUrl` and
+# `otlpHttpUrl`, the Service's OTLP addresses
 # (`http://<service fqdn>:4317` and `:4318`) for instrumented workloads, and
 # `tls = false`. The collector opens the `otlp` receiver only when a
 # pipeline lists it, so in an instance where none does (only
@@ -645,11 +646,15 @@ in
                   otlpHttpUrl = self.service.out.url { port = httpPort; };
                   tls = false;
                 }
+                // {
+                  version = kix.image.version config.image;
+                }
               else
                 {
                   otlpGrpcUrl = notServed;
                   otlpHttpUrl = notServed;
                   tls = false;
+                  version = kix.image.version config.image;
                 };
           };
         }

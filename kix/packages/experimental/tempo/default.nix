@@ -32,6 +32,7 @@
 #
 # Exposes (`root.out`, checked by `kix.contracts.experimental.otlpEndpoint`):
 #   out.otlpGrpcUrl, out.otlpHttpUrl, out.tls (false), out.queryUrl.
+#   out.version, the Tempo version `image.tag` names.
 #
 # Limits: single replica (`meta.availability.max = "none"`) and single tenant.
 
@@ -692,6 +693,7 @@ in
             otlpHttpUrl = self.otlpService.out.url { port = otlpHttpPort; };
             tls = false;
             queryUrl = self.service.out.url { port = httpPort; };
+            version = kix.image.version config.image;
           };
         };
       }

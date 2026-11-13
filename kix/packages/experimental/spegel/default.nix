@@ -2,6 +2,8 @@
 # node pulls image layers that another node already holds from that node
 # instead of the upstream registry.
 #
+# `out`: `version`, the Spegel version `image.tag` names.
+#
 # Installs a DaemonSet, a ServiceAccount with no API access, the headless
 # Service <name>-bootstrap that the pods find each other through, and the
 # NodePort Service <name>-registry. Each pod's init container writes a
@@ -103,7 +105,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Spegel, a peer-to-peer OCI registry mirror that serves image layers from the nodes that already hold them";
     owner = "platform";
     roles = [ "registryMirror" ];
@@ -485,6 +487,7 @@ in
             self.bootstrap
             self.registryService
           ];
+          out.version = kix.image.version config.image;
         };
       }
     )

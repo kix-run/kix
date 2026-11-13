@@ -22,6 +22,7 @@
 # `out`:
 #   out.metricsUrl  every agent's Prometheus endpoint, through the headless
 #                   metrics Service (root)
+#   out.version     the Vector version `image.tag` names
 #
 # Escape hatches: `settings` (Vector's own config, merged over the
 # package's; a null removes an unlocked key), `extraArgs`, `env`, and the
@@ -191,7 +192,10 @@ in
 
         root = {
           resource = self.service;
-          out.metricsUrl = "${self.service.out.url { }}/metrics";
+          out = {
+            metricsUrl = "${self.service.out.url { }}/metrics";
+            version = kix.image.version config.image;
+          };
         };
       }
       // vectorAgent.rbac { inherit scope self name; }

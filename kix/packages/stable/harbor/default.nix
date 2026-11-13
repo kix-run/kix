@@ -137,6 +137,8 @@
 # `extra` for the rest.
 #
 # root = the route when exposed, otherwise the core Service.
+#
+# `out`: `version`, the Harbor version `core.image.tag` names.
 
 {
   scope,
@@ -472,7 +474,7 @@ in
     ./jobservice.nix
 
     (
-      { self, ... }:
+      { self, config, ... }:
       {
         # Reachable through the route: the core and portal Services.
         # Neither the core nor the jobservice Service carries a workload
@@ -486,6 +488,7 @@ in
             self.jobserviceDeployment
             self.exporterService
           ];
+          out.version = kix.image.version config.core.image;
         };
       }
     )

@@ -52,6 +52,7 @@
 #                             the labels of a RabbitmqCluster's pods.
 #   out.podSelector           the operator pods' labels.
 #   out.release               the operator release.
+#   out.version               the operator version `image.tag` names.
 #
 # Network policy: the webhook intent admits the API server on TCP 9443 to
 # every pod of the package, the webhook-check Job's included, where nothing
@@ -716,6 +717,7 @@ in
           out = {
             crds.RabbitmqCluster = self.crds.rabbitmqClusters;
             inherit operandSelectors release;
+            version = kix.image.version config.image;
             podSelector = self.deployment.out.selector;
           };
         };

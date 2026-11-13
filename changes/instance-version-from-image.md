@@ -1,0 +1,5 @@
++++
+kind = "fixed"
+library = ["kix.image.version"]
++++
+Kix now shows the version an instance runs. Before, it showed the version the package ships by default, even when you had set another image. For example, a `keycloak` instance with `image.tag = "26.6.2"` was listed as 26.8.0. `kix plan`, the PackageInstance record in the cluster, and `kix compliance sbom` now show 26.6.2. A `meta.compatibleWith` check on a dependency also compares the version the dependency runs. If the image tag does not contain a version, such as `latest`, Kix shows no version and skips the check with a warning. To give the version yourself, set `version` on the instance. Versions no longer start with `v`, so the first `kix plan` after you upgrade shows changes such as `v1.21.2` to `1.21.2`. They need no action. `kix list` still shows the package's default version. To get this in your own package, add `out.version = kix.image.version config.image;` to its `root`. If your package already sets both `meta.version` and `out.version`, Kix now uses `out.version`.

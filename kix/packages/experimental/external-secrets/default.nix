@@ -106,6 +106,8 @@
 #       for ExternalSecret, SecretStore, and ClusterSecretStore, which go
 #       through the builders above, and none for GeneratorState, which the
 #       controller manages.
+#   out.version
+#       The External Secrets Operator version `image.tag` names.
 #
 # Consumer pattern, in an instance that depends on `externalSecrets` and on
 # a secret dependency `vaultToken` declaring key `token`:
@@ -193,7 +195,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "External Secrets Operator, which syncs secrets from external stores into Kubernetes Secrets";
     owner = "platform";
     defaultAliases = [ "externalSecrets" ];
@@ -327,7 +329,7 @@ in
     ./webhook.nix
 
     (
-      { self, ... }:
+      { self, config, ... }:
       let
         # Builder errors name this instance (`who`) and the consumer's
         # custom resource.
@@ -481,6 +483,8 @@ in
           postHooks = [ self.webhookCheck ];
 
           out = {
+            version = kix.image.version config.image;
+
             crds = builtins.listToAttrs (
               map (spec: lib.nameValuePair (kindOf spec) self.crds.${pluralOf spec}) (
                 builtins.filter (spec: !(builtins.elem (kindOf spec) unexposedKinds)) crdSpecs

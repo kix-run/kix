@@ -193,6 +193,24 @@ rec {
     in
     lib.unique (explicitAliases ++ shelfRoles ++ (packageMeta.defaultAliases or [ ]));
 
+  # Return the version an instance reports on its PackageInstance and to the
+  # `meta.compatibleWith` checks of its consumers. The instance's `version`
+  # option wins. Next comes the `out.version` the package builds, which may
+  # be null when the instance runs an image whose tag names no version.
+  # A package that builds no `out.version` reports its `meta.version`.
+  instanceVersion =
+    {
+      instCfg,
+      packageOut,
+      packageMeta,
+    }:
+    if (instCfg.version or null) != null then
+      instCfg.version
+    else if packageOut ? version then
+      packageOut.version
+    else
+      packageMeta.version or null;
+
   checkMetaStatic =
     {
       packageMeta,
@@ -228,7 +246,8 @@ rec {
           depTarget:
           let
             dep = depTarget.instance;
-            depVersion = dep._meta.packageMeta.version or (dep.out.version or null);
+            # An import has no `_meta.version` and reports its `out.version`.
+            depVersion = if dep._meta ? version then dep._meta.version else dep.out.version or null;
           in
           constraintDiagnostics {
             field = "meta.compatibleWith.${depName}";

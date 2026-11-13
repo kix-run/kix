@@ -48,7 +48,7 @@
 #
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
-#   out.version                   PostgreSQL major version, read from the image tag.
+#   out.version                   The PostgreSQL version `image.tag` names, such as "18.6".
 #   out.clusterName               The Cluster's name.
 #   out.selector                  Instance pod labels.
 #   out.tls                       true (PostgreSQL always serves TLS).
@@ -265,14 +265,9 @@ in
             };
         crds = operator.crds;
 
-        # Null when the tag carries no version, so the assertion on the tag
-        # reports it instead of a match error here. The context is dropped
-        # so the record does not depend on the image pin.
-        postgresMajor =
-          let
-            m = builtins.match "([0-9]+).*" (builtins.unsafeDiscardStringContext config.image.tag);
-          in
-          if m == null then null else builtins.head m;
+        # Null when the tag carries no version. The assertion on the tag
+        # then fails the build with its own message.
+        postgresVersion = kix.image.version config.image;
 
         operandSelector = operator.operandSelectors.cluster name;
         instanceSelector = operandSelector // {
@@ -781,8 +776,8 @@ in
             selector = instanceSelector;
             tls = true;
             extraImages = [ (kix.image.ref config.image) ];
-          }
-          // lib.optionalAttrs (postgresMajor != null) { version = postgresMajor; };
+            version = postgresVersion;
+          };
         };
       }
     )

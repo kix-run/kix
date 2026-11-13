@@ -22,6 +22,9 @@
 # out instead of deriving. Two static checks cover what never renders: the package's source
 # must not contain `cluster.local` outside comments, and `meta.version`
 # must parse as a version (kix/lib/core/version.nix).
+#
+# A package whose default image tag names its `meta.version` must publish
+# that version as `out.version` (`checkPublishedVersion`).
 # `sourceDomainLiteralExceptions` and `versionExceptions` list the packages
 # known to fail them; like `knownFailures`, a listed package that passes
 # fails the check until its entry is removed.
@@ -703,12 +706,62 @@ let
           inherit (kix) kixlib;
         }).version or null;
       ok = version == null || versions.isVersion version;
+      # `kix.image.version` returns a version without a leading `v`, and
+      # `meta.version` is written the same way so both read alike.
+      bare = version == null || !(lib.hasPrefix "v" version || lib.hasPrefix "V" version);
     in
     if versionExceptions ? ${name} then
       lib.assertMsg (!ok)
         "${folderOf name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
     else
-      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
+      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\"."
+      && lib.assertMsg bare "${folderOf name}: meta.version ${builtins.toJSON version} starts with \"v\". Write it without, e.g. `version = lib.removePrefix \"v\" release;`.";
+
+  # Collect the image options of an instance's config: every attribute set
+  # with a `repository` and a `tag`, up to three levels deep.
+  imagesOf =
+    depth: value:
+    if !builtins.isAttrs value || value ? _type then
+      [ ]
+    else if value ? repository && value ? tag then
+      [ value ]
+    else if depth == 0 then
+      [ ]
+    else
+      lib.concatMap (imagesOf (depth - 1)) (builtins.attrValues value);
+
+  # Check that a package whose default image tag names its `meta.version`
+  # publishes that version as `out.version`. The package reads it from the
+  # image of its main software with `kix.image.version`, so an instance that
+  # runs another image reports the version it runs.
+  checkPublishedVersion =
+    name: package: cluster:
+    let
+      metaVersion =
+        (kix.peekPackageMeta {
+          inherit package;
+          inherit (kix) kixlib;
+        }).version or null;
+      instance = cluster.instances.${name}.${name};
+      tagNamesVersion =
+        image:
+        let
+          v = kix.image.version image;
+        in
+        v != null && versions.compare v metaVersion == 0;
+      applies =
+        metaVersion != null
+        && versions.isVersion metaVersion
+        && builtins.any tagNamesVersion (imagesOf 3 instance._meta.config);
+      published = instance.out.version or null;
+    in
+    if !applies then
+      true
+    else if !(instance.out ? version) then
+      throw "${folderOf name}: an image's default tag names meta.version ${metaVersion}, and the package publishes no out.version. Add `out.version = kix.image.version config.<image option>;` to `root`, reading the image of the main software."
+    else
+      lib.assertMsg (published != null && versions.compare published metaVersion == 0)
+        "${folderOf name}: on its defaults the package publishes out.version ${builtins.toJSON published}, and meta.version is ${metaVersion}. Publish the full version of the main software's image.";
 
   checkOptions =
     name: package:
@@ -782,6 +835,7 @@ let
       (
         builtins.deepSeq cluster.rawManifests (
           builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
+            assert checkPublishedVersion name package cluster;
             builtins.deepSeq cluster.scorecardReport (
               builtins.foldl' (
                 acc: f:

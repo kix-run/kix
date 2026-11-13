@@ -28,6 +28,7 @@
 #   out.database, out.table   where the rows land
 #   out.metricsUrl            every agent's Prometheus endpoint, through the
 #                             headless metrics Service (root)
+#   out.version               the Vector version `image.tag` names
 #
 # Escape hatches: `settings` (Vector's own config, merged over the
 # package's; a null removes an unlocked key), `extraArgs`, `env`, and the
@@ -309,6 +310,7 @@ in
             inherit (db) database;
             inherit table;
             metricsUrl = "${self.service.out.url { }}/metrics";
+            version = kix.image.version config.image;
           };
         };
       }

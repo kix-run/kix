@@ -67,6 +67,26 @@ let
         fix = "Use numbers separated by dots, optionally with a leading \"v\", a \"-suffix\", and a \"+build\" suffix (for example \"1.19.6\", \"v2.12.2\", \"1.31.2+rke2r1\", \"1.31.2-gke.1209000\").";
       };
 
+  # Return the version an image tag names, or null when it names none, such
+  # as `latest`. The result has no leading `v`, no digest, and no vendor
+  # suffix, so `v1.37.1-alpine@sha256:...` gives `1.37.1`. A prerelease
+  # suffix stays, so `2.0.0-rc1` gives `2.0.0-rc1`.
+  ofTag =
+    tag:
+    let
+      m =
+        if builtins.isString tag then
+          builtins.match grammar (builtins.head (lib.splitString "@" tag))
+        else
+          null;
+      suffix = builtins.elemAt m 3;
+    in
+    if m == null then
+      null
+    else
+      builtins.elemAt m 0
+      + lib.optionalString (suffix != null && prereleaseOf suffix != [ ]) "-${suffix}";
+
   cmp =
     a: b:
     if a < b then
@@ -194,6 +214,7 @@ in
     isVersion
     tryParse
     parse
+    ofTag
     compare
     atLeast
     atMost

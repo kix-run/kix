@@ -29,8 +29,9 @@
 #     };
 #   };
 #
-# `out`: the Deployment's `name`. The default alias `tunnel` lets other
-# packages depend on it.
+# `out`: the Deployment's `name`, and `version`, the cloudflared version
+# `image.tag` names. The default alias `tunnel` lets other packages depend on
+# it.
 #
 # Escape hatches: the instance's `partsOverlays`.
 #
@@ -180,6 +181,9 @@ in
         |> withReload
         |> scope.mkDeployment;
 
-      root = self.deployment;
+      root = {
+        resource = self.deployment;
+        out.version = kix.image.version config.image;
+      };
     };
 }

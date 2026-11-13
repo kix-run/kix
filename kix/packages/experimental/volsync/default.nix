@@ -76,6 +76,7 @@
 #   out.crds.{ReplicationSource,ReplicationDestination}
 #       For `scope.mkCR`, with the readiness and mover selectors above.
 #   out.extraImages  the operator and mover image.
+#   out.version      the VolSync version `image.tag` names.
 #
 # Escape hatches: `extraArgs` and `env` for the operator, `extraSpec` on
 # mkReplicationSource (`restic.retain`, `restic.pruneIntervalDays`,
@@ -553,6 +554,7 @@ in
           resource = self.deployment;
           requires = crds;
           out = {
+            version = kix.image.version config.image;
             crds = {
               ReplicationSource = self.crds.replicationSources;
               ReplicationDestination = self.crds.replicationDestinations;

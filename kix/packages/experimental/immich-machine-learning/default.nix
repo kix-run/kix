@@ -25,7 +25,7 @@
 # with Recreate. To run several pods, leave it unset.
 #
 # `out`: the Service's `name`, `fqdn`, and `port`, and `version`, the release
-# the image tag names (absent for a tag that names none).
+# the image tag names (null for a tag that names none).
 #
 # Escape hatches: `env` takes the worker's `MACHINE_LEARNING_*` settings;
 # `partsOverlays` patches the rendered resources.
@@ -127,7 +127,6 @@ in
         failureThreshold = 3;
       };
       cached = modelCache != null;
-      version = release.of (builtins.unsafeDiscardStringContext config.image.tag);
     in
     {
       cacheMount =
@@ -236,7 +235,7 @@ in
 
       root = {
         resource = self.service;
-        out = lib.optionalAttrs (version != null) { inherit version; };
+        out.version = kix.image.version config.image;
       };
     };
 }

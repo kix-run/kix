@@ -25,7 +25,8 @@
 # CRDs are not installed and the feature gate keeps its default.
 #
 # out.crds.<Kind>: handles for VolumeSnapshotClass, VolumeSnapshotContent,
-#   and VolumeSnapshot, passed to `scope.mkCR`.
+#   and VolumeSnapshot, passed to `scope.mkCR`. out.version: the
+#   snapshot-controller version `image.tag` names.
 #
 # Alerts: with a prometheus dependency and `metrics.enabled`, a
 # PrometheusRule `<instance>-alerts` selects the metrics Service's series.
@@ -281,6 +282,7 @@ in
         root = {
           resource = self.deployment;
           requires = crds;
+          out.version = kix.image.version config.image;
           out.crds = {
             VolumeSnapshotClass = self.crds.volumeSnapshotClasses;
             VolumeSnapshotContent = self.crds.volumeSnapshotContents;

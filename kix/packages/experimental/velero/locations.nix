@@ -218,6 +218,7 @@ in
           );
       in
       {
+        version = kix.image.version config.image;
         crds = {
           Backup = self.crds.backups;
           BackupRepository = self.crds.backupRepositories;

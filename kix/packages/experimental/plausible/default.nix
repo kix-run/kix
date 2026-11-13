@@ -123,7 +123,8 @@
 # errors. Add a NetworkPolicy or a CiliumNetworkPolicy that selects this
 # instance's pods to allow them.
 #
-# `out`: the Service's `name`, `fqdn`, and `port` (8000).
+# `out`: the Service's `name`, `fqdn`, and `port` (8000), and `version`, the
+# Plausible version `image.tag` names.
 #
 # Escape hatches: `env` for Plausible settings, and the instance's
 # `partsOverlays` for probes, placement, and resources of the init
@@ -202,7 +203,7 @@ let
 in
 {
   meta = {
-    version = "v${release}";
+    version = release;
     description = "Plausible Analytics Community Edition, web analytics on PostgreSQL and ClickHouse";
     owner = "app-team";
     # See Limits in the header.
@@ -756,7 +757,10 @@ in
             }
             |> scope.mkResource;
 
-          root = self.service;
+          root = {
+            resource = self.service;
+            out.version = kix.image.version config.image;
+          };
         }
     )
     (kix.expose { service = "service"; })

@@ -9,7 +9,8 @@
 # metrics; with the optional `prometheus` dep it also adds Service
 # <name>-metrics and a ServiceMonitor.
 #
-# root = the Deployment. The controller exits at startup when its
+# root = the Deployment, whose `out` adds `version`, the controller version
+# `image.tag` names. The controller exits at startup when its
 # `--publish-service` Service does not exist. The argument reads the
 # Service's name, which orders the Service first, so the Service selects the
 # pods through `rawSelector`, which does not wait for the Deployment.
@@ -97,7 +98,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "NGINX Ingress controller (legacy: upstream retired after v1.15.1; prefer envoy-gateway)";
     owner = "platform";
     defaultAliases = [ "ingressNginx" ];
@@ -867,6 +868,8 @@ in
         root = {
           resource = self.deployment;
           out = {
+            version = kix.image.version config.image;
+
             # Consumers depend through string context. The class name carries
             # the Deployment's and the patch Job's context as well as the
             # IngressClass's, so an Ingress that reads it applies after the

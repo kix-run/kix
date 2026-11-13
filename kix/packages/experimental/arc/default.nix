@@ -67,6 +67,8 @@
 #             EphemeralRunner}
 #   out.operandSelectors.runner <runner set name>, out.operandSelectors.listener
 #       Labels the controller puts on runner pods and listener pods.
+#   out.version
+#       The controller version `image.tag` names.
 #
 # root = the controller Deployment.
 
@@ -622,6 +624,7 @@ in
             self.listenerEgress
           ];
           out = {
+            version = kix.image.version config.image;
             crds = {
               AutoscalingRunnerSet = self.crds.autoscalingRunnerSets;
               AutoscalingListener = self.crds.autoscalingListeners;

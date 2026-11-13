@@ -12938,9 +12938,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/s14f997mmg3kphxk6gchsyzrgw25wgn1-kix-activation-example.json",
-        "kix.run/depends-on": "1mca17qqf22pd9n20lvscfj5f8ybw65r,3b11q1i641ygddq559h5ww077bqqvj20,4l42y305cgxwy3wbr0mrasihca5zczix,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,dd0si3rkg4yak9q2hpnb29g4spj7grzs,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,kxp256xpy6sfk61m1c61g58a82niijxk,ljsl8hzpyip89yvlcv1ngbyz335bdfld,njkwydx2cac9nkh1c92kzicm8qzgxviz,pvv7pxv13vmrf17v5qlzs9i4jsy6ws47,spi8qjq6x9y4l363wip2342h53n7r7pa,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "1vrvgcxhh7mic128jjvix8f0frqmlys8",
+        "kix.run/built-via": "/nix/store/n20d2r8h5gckzgic0z80q4d8c74lpxp7-kix-activation-example.json",
+        "kix.run/depends-on": "1mca17qqf22pd9n20lvscfj5f8ybw65r,4l42y305cgxwy3wbr0mrasihca5zczix,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,dd0si3rkg4yak9q2hpnb29g4spj7grzs,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,kxp256xpy6sfk61m1c61g58a82niijxk,ljsl8hzpyip89yvlcv1ngbyz335bdfld,mkx9g051hr0nm6hcra8690895ix24yr1,njkwydx2cac9nkh1c92kzicm8qzgxviz,pvv7pxv13vmrf17v5qlzs9i4jsy6ws47,spi8qjq6x9y4l363wip2342h53n7r7pa,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "w8cdxsgzyxvp2gnrw5w4hdsgwkxmvm0b",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -12948,7 +12948,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-1vrvgcxhh7mi"
+      "name": "example-w8cdxsgzyxvp"
     },
     "spec": {
       "instances": {
@@ -12982,7 +12982,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "1v1rljz257vz44ssjhmi09p6zclyy4yh,1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b,2whrwyc5wyvg221blz0iq713snf7mj2q,58c399fcph1y90b7jjb7igrmamqid6s5,5g06mjghl1f5bnzcbhphd3g47p1img5a,7dxbym3zymk6rjcygmvycz5bf7psqdvn,80pbxqcgz1j3w410hxpz3dp0f8iwy7z4,93c70jfy3wb5mhw2cb3c843gpkkjds33,994cw2jrj49k7yd1bcscq82p0crzffyc,apirskai5ryrgsxxa9y71c1856qryflh,cszy78ybis945fhdi5040gs1lzj6gbxl,d2c2s43n4cs1qyz08rnnnviwjfd67sdp,iarlrbcqhf08j8k9qdq70n7c1v9ndfr0,j3jyyqi6j8lakmbb5q9yrjyhpy6la3mq,la13yl63d4bm8nrmyrnygiq88bh53zdg,n9c8fsq1l3x86ak3nwalrs594k5rgw6p,njmlyc3iqyqj4984qklxxjp7xqjbrm0q,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,nxmwb9c04vrqlc9ry6is95js51yjybi9,pd95bcz6nk42rh5z8mp4rdqvcwx3aix6,ph7p720s1s7jlmghh944dn23brpkv09a,pkxjy11rizcf97w0m6gjqvhmvb00117z,rn40hbw8756809l5h5bwh65g8klv5bg3,v4fwdrj1684aii6rsjzb7qa2xhxql9kw,vhsclsf63hxyf8m5j6wgpb60gli2n6ya,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l,vwyxcijlivbbbdjp3nhyhsjkycwnmqc3,wizcll2p6n5dnvlqc8q4p2683fp8rp6j,ymp48ax32997b9l8w3bbr6c277hyzsg6,zwrbxl73zgh1kqmsz4pl1gv9cyg1f27y,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "3b11q1i641ygddq559h5ww077bqqvj20",
+        "kix.run/identity-hash": "mkx9g051hr0nm6hcra8690895ix24yr1",
         "kix.run/inverse-deps": "ClusterRoleBinding/cert-manager-cainjector,RoleBinding/cert-manager-cainjector:leaderelection,ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io,ClusterRoleBinding/cert-manager-controller-certificates,ClusterRoleBinding/cert-manager-controller-certificatesigningrequests,ClusterRoleBinding/cert-manager-controller-challenges,ClusterRoleBinding/cert-manager-controller-clusterissuers,ClusterRoleBinding/cert-manager-controller-ingress-shim,ClusterRoleBinding/cert-manager-controller-issuers,ClusterRoleBinding/cert-manager-controller-orders,RoleBinding/cert-manager-webhook:dynamic-serving,ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews,RoleBinding/cert-manager:leaderelection,PodDisruptionBudget/cert-manager-cainjector,PodDisruptionBudget/cert-manager,PodDisruptionBudget/cert-manager-webhook",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -13002,7 +13002,7 @@ expression: stable
     "spec": {
       "instanceName": "cert-manager",
       "namespaceName": "cert-manager",
-      "version": "v1.21.2"
+      "version": "1.21.2"
     }
   },
   {

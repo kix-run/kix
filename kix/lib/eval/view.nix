@@ -15,6 +15,7 @@ in
       packageMeta,
       namespaceName,
       aliases,
+      version ? null,
       evaluatedConfig ? { },
     }:
     let
@@ -47,6 +48,7 @@ in
             namespaceName
             aliases
             packageMeta
+            version
             ;
           namespace = namespaceName;
           config = evaluatedConfig;

@@ -43,6 +43,8 @@
 # out.extraImages: the runner image, which only the runner set's pod template
 # names.
 #
+# out.version: the actions-runner version `image.tag` names.
+#
 # root = the AutoscalingRunnerSet.
 
 {
@@ -301,6 +303,7 @@ in
         ++ lib.optional (config.rules != [ ]) self.runnerRoleBinding
         ++ lib.optional (self.runnerEgress != null) self.runnerEgress;
         out.extraImages = [ (kix.image.ref config.image) ];
+        out.version = kix.image.version config.image;
       };
     };
 }

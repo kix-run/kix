@@ -59,6 +59,7 @@
 # `out`:
 #   out.host    "keeper-<name>.<ns>.svc..." (the operator's Service)
 #   out.port    "2181"
+#   out.version the Keeper version `image.tag` names
 #
 # root = the ServiceRef.
 
@@ -68,6 +69,9 @@
   kix,
 }:
 let
+  # ClickHouse versions have four parts, and the image tag is the version.
+  release = "26.3.32.14";
+
   name = scope.instanceName;
   clientPort = 2181;
   metricsPort = 7000;
@@ -76,7 +80,7 @@ let
 in
 {
   meta = {
-    version = "26.3.32";
+    version = release;
     description = "ClickHouse Keeper quorum via a ClickHouseKeeperInstallation CR";
     lifecycle = "stateful";
     defaultAliases = [ "clickhouseKeeper" ];
@@ -86,7 +90,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-keeper";
-      tag = "26.3.32.14";
+      tag = release;
       digest = "sha256:8dd3ed81719ae9467ad659d86b7af53a9ec5be6b50320f9ca84cf9c31dc7ccc8";
     };
 
@@ -332,6 +336,7 @@ in
             out = {
               host = self.service.out.fqdn;
               port = toString clientPort;
+              version = kix.image.version config.image;
               extraImages = [ (kix.image.ref config.image) ];
             };
           };

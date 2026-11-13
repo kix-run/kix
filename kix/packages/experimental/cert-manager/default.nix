@@ -63,6 +63,8 @@
 #       The labels of the ACME HTTP-01 solver pods.
 #   out.extraImages
 #       The ACME HTTP-01 solver image.
+#   out.version
+#       The cert-manager version `image.tag` names.
 
 { lib, kix, ... }:
 
@@ -88,7 +90,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "cert-manager: X.509 certificate management for Kubernetes";
     owner = "platform";
     defaultAliases = [ "certManager" ];
@@ -307,6 +309,7 @@ in
           ]);
           postHooks = [ self.apiCheck ];
           out = {
+            version = kix.image.version config.image;
             crds = {
               Certificate = self.crds.certificates;
               Issuer = self.crds.issuers;

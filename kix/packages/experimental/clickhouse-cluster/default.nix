@@ -77,6 +77,9 @@
   kix,
 }:
 let
+  # ClickHouse versions have four parts, and the image tag is the version.
+  release = "26.3.33.24";
+
   name = scope.instanceName;
   passwordKey = "password";
   ports = {
@@ -99,7 +102,7 @@ let
 in
 {
   meta = {
-    version = "26.3.33";
+    version = release;
     description = "Replicated ClickHouse via a ClickHouseInstallation CR";
     lifecycle = "stateful";
     defaultAliases = [ "clickhouse" ];
@@ -120,7 +123,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-server";
-      tag = "26.3.33.24";
+      tag = release;
       digest = "sha256:810861a2e2d0188744f5f23b2d3ec9ff95812bcb9ddbb8fed13a377a7f305893";
     };
 
@@ -216,6 +219,21 @@ in
         ...
       }:
       let
+        # Consumers check the server's version, so a tag that names none is
+        # refused here with the option to change.
+        serverVersion =
+          let
+            v = kix.image.version config.image;
+          in
+          if v == null then
+            scope.fail {
+              package = "clickhouse-cluster";
+              option = "config.image.tag";
+              message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" names no ClickHouse version. Packages that use this server check its version.";
+              fix = "Set config.image.tag to a tag that starts with the version, such as \"${release}\".";
+            }
+          else
+            v;
         # What the operator stamps on every pod of this installation.
         podSelector = clickhouseOperator.out.operandSelector.clickHouseInstallations name;
 
@@ -562,7 +580,7 @@ in
               username = "default";
               inherit credentials;
               inherit (config) clusterName;
-              version = builtins.unsafeDiscardStringContext (lib.versions.majorMinor config.image.tag);
+              version = serverVersion;
               replicas = toString config.replicas;
               replicaHosts = map (svc: svc.out.fqdn) self.replicaServices;
               extraImages = [ (kix.image.ref config.image) ];

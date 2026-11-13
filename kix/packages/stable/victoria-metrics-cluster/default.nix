@@ -38,6 +38,7 @@
 #     /api/v1/write itself).
 #   out.scrapeInterval: the interval dedup is calibrated to; scrapers
 #     must use it.
+#   out.version: the VictoriaMetrics version `clusterVersion` names.
 #
 # Alerts (a VMRule `<instance>-alerts`, which vmalert evaluates and a
 # prometheus-operator Prometheus does not load). They render only when the
@@ -76,7 +77,7 @@ let
 in
 {
   meta = {
-    version = "v1.150.0";
+    version = "1.150.0";
     description = "VictoriaMetrics cluster: vmstorage, vmselect and vminsert through a VMCluster CR";
     owner = "platform";
     defaultAliases = [
@@ -591,6 +592,7 @@ in
             remoteWriteUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus/api/v1/write";
             insertBaseUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus";
             inherit (config) scrapeInterval;
+            version = kix.image.version { tag = config.clusterVersion; };
             # Operand images are reconciled by the operator, not in any
             # Kix-generated pod spec.
             extraImages = [

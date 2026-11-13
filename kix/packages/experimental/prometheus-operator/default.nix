@@ -26,6 +26,7 @@
 #                              `priorityClass.out.name`.
 #
 # `out`:
+#   version                      the operator version `image.tag` names.
 #   crds.<Kind>                  the ten CRD handles, for
 #                                `scope.mkCR prometheusOperator.out.crds.Prometheus { ... }`.
 #                                Prometheus, Alertmanager, PrometheusAgent, and
@@ -101,7 +102,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     # The operator has no leader election upstream, so a second replica
     # reconciles everything twice.
     availability.max = "none";
@@ -215,6 +216,7 @@ in
             mkProbe = self.crds.probes.out.mkCR;
             inherit operandSelectors kubeletService;
             namespace = scope.namespaceName;
+            version = kix.image.version config.image;
             extraImages = [ (kix.image.ref config.operandImages.prometheus-config-reloader) ];
           };
         };

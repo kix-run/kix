@@ -74,6 +74,7 @@
 #   out.tls                       true: PgBouncer serves TLS with the
 #                                 Cluster's server certificate.
 #   out.extraImages               the PgBouncer image.
+#   out.version                   the PgBouncer version `image.tag` names.
 #
 # Limits: one pooler type, `rw`, which sends every connection to the
 # primary. The package ships no alerts.
@@ -376,6 +377,7 @@ in
           selector = poolerSelector;
           tls = true;
           extraImages = [ (kix.image.ref config.image) ];
+          version = kix.image.version config.image;
         };
       };
     };

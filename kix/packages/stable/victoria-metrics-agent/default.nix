@@ -7,6 +7,8 @@
 # Sharding (shardCount) is deliberately out of scope until target counts
 # demand it.
 #
+# `out`: `version`, the vmagent version `image.tag` names.
+#
 # Watch-everything default: selectAllByDefault = true, so every
 # VMServiceScrape / VMPodScrape (and, via the operator's converter,
 # every ServiceMonitor / PodMonitor) in the cluster is scraped, matching
@@ -56,7 +58,7 @@ let
 in
 {
   meta = {
-    version = "v1.150.0";
+    version = "1.150.0";
     description = "VictoriaMetrics agent: a metrics scraper run through a VMAgent CR";
     owner = "platform";
     defaultAliases = [ "vmAgent" ];
@@ -265,6 +267,7 @@ in
           resource = self.vmAgent;
           requires = lib.optional (self.agentEgress != null) self.agentEgress;
           out = {
+            version = kix.image.version config.image;
             # Operand pods are operator-created; image not in any Kix manifest.
             extraImages = [ (kix.image.ref config.image) ];
           };

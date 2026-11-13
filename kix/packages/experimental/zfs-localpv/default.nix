@@ -25,7 +25,7 @@
 #
 # `out.storageClassName`: the class annotated
 # `storageclass.kubernetes.io/is-default-class`, or the sole class; reading it
-# throws otherwise.
+# throws otherwise. `out.version`: the driver version `image.tag` names.
 #
 # Alerts: none. The ZFS driver registers no Prometheus metrics. The CSI
 # sidecars serve operation-latency metrics on their health ports, which the
@@ -607,7 +607,10 @@ in
         ]
         ++ builtins.attrValues self.classes
         ++ builtins.attrValues self.snapshotClasses;
-        out = { inherit (sc) storageClassName; };
+        out = {
+          inherit (sc) storageClassName;
+          version = kix.image.version config.image;
+        };
       };
     }
     // import ./rbac.nix {

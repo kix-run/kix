@@ -95,7 +95,7 @@ let
 in
 {
   meta = {
-    version = "v1.150.0";
+    version = "1.150.0";
     description = "VictoriaMetrics alerting: VMAlert and VMAlertmanager";
     owner = "platform";
     defaultAliases = [ "vmAlert" ];
@@ -506,6 +506,7 @@ in
           resource = self.vmAlert;
           requires = builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
           out = {
+            version = kix.image.version config.image;
             extraImages = [
               (kix.image.ref config.image)
               (kix.image.ref config.alertmanager.image)

@@ -181,7 +181,7 @@ meta = {
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `version` | string | None | Upstream software version (`[vV]?<digits>(.<digits>)*[-<suffix>][+<build>]`). Checked by `meta.compatibleWith` and recorded on the `PackageInstance`. |
+| `version` | string | None | Upstream software version the package deploys by default (`[vV]?<digits>(.<digits>)*[-<suffix>][+<build>]`). An instance reports it unless the package builds an `out.version`. See [The version an instance reports](#the-version-an-instance-reports). |
 | `description` | string | None | Non-empty one-line summary of the package. Checked by the `governance.hasDescription` scorecard rule (`info` severity). |
 | `roles` | list of strings | `[ ]` | Platform capabilities provided by this package. |
 | `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
@@ -206,6 +206,27 @@ When comparing versions in `compatibleWith` and `k8s`:
 - Numeric segments are compared as integers from left to right.
 - A `-<suffix>` whose first dot-separated identifier starts with `alpha`, `beta`, `rc`, `pre`, `dev`, or `preview` is treated as a pre-release and sorts **before** the corresponding release (`1.0.0-rc1 < 1.0.0`).
 - All other `-<suffix>` values (such as `-r0`, `-debian-12`, or `-gke.1209000`) and `+<build>` suffixes are treated as vendor build metadata and compare **equal** to the base version (`1.0.0-debian-12 == 1.0.0`).
+
+### The version an instance reports
+
+`meta.version` is fixed for the package, and an instance can run another image. Kix works out one version for each instance and uses it in two places: `spec.version` on the instance's `PackageInstance` record, which `kix plan` shows, and the `meta.compatibleWith` checks of the packages that depend on the instance. Kix takes the first of these that is set:
+
+1. The instance's [`version`](/docs/reference/instances-and-composition/) option.
+2. The `out.version` the package builds on its `root`.
+3. The package's `meta.version`.
+
+A package whose image a user can change publishes `out.version` with [`kix.image.version`](/docs/reference/composition-helpers/#image-and-pin-helpers), which reads the version from the image tag:
+
+```nix
+root = {
+  resource = self.service;
+  out.version = kix.image.version config.image;
+};
+```
+
+A package that runs several images reads the image of its main software. When the tag names no version, such as `latest`, `out.version` is `null`. The record then carries no version, and a `meta.compatibleWith` check warns that it cannot compare. Set the instance's `version` option to state the version yourself.
+
+`kix list` shows the package's `meta.version`, because it reads packages without building instances.
 
 ### `meta.roles` and `meta.defaultAliases`
 

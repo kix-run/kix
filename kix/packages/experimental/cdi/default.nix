@@ -96,6 +96,8 @@
 #       the cdi-deployment and cdi-uploadproxy pods.
 #   out.extraImages
 #       Every image cdi-operator runs, digest-pinned.
+#   out.version
+#       The CDI version `image.tag` names.
 #
 # root = the cdi-operator Deployment.
 
@@ -190,7 +192,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "KubeVirt Containerized Data Importer: the cdi-operator and a CDI resource; CDI imports disk images into PVCs";
     owner = "platform";
     defaultAliases = [ "cdi" ];
@@ -689,6 +691,7 @@ in
 
         out = {
           crds.DataVolume = self.crds.dataVolumes;
+          version = kix.image.version config.image;
           inherit
             mkDataVolume
             mkImporterPolicy

@@ -59,6 +59,8 @@
 #       kinds.nix, for the policies the CR packages write over them.
 #   out.podSelector
 #       The operator's own pods, with dependency context.
+#   out.version
+#       The operator version `image.tag` names.
 #
 # root = the operator Deployment.
 
@@ -198,7 +200,7 @@ in
     ./crds.nix
     ./operator.nix
     (
-      { self, ... }:
+      { self, config, ... }:
       let
         # The typed builder already makes the CR wait for its CRD and stamps
         # readiness and fact behavior on it. The CR also has to wait for the
@@ -220,6 +222,7 @@ in
           requires = [ self.operatorService ];
 
           out = {
+            version = kix.image.version config.image;
             mkClickHouseInstallation = mkOperand "clickHouseInstallations";
             mkKeeperInstallation = mkOperand "clickHouseKeeperInstallations";
             # The pods of an installation, by the label kinds.nix says the

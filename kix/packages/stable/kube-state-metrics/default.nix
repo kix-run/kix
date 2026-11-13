@@ -13,7 +13,8 @@
 #
 #   instances.monitoring.kube-state-metrics.package = packages.kube-state-metrics;
 #
-# `out`: the Service's `name`, `fqdn`, and `port`. The Service name is the
+# `out`: the Service's `name`, `fqdn`, and `port`, and `version`, the
+# kube-state-metrics version `image.tag` names. The Service name is the
 # `job` label of every series, which the kube-state-metrics rules of
 # prometheus-default-rules read through its `kubeStateMetrics` dependency.
 #
@@ -38,7 +39,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
@@ -267,6 +268,7 @@ in
 
         root = {
           resource = self.service;
+          out.version = kix.image.version config.image;
           requires = [
             self.serviceAccount
             self.deployment

@@ -179,14 +179,14 @@ is a finding from the upstream source, not a default.
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
-   volume as the state (immich:156-158); one owner of an OS resource
-   (firezone:83-85). For each piece of in-memory state, also note what a
+   volume as the state (immich:157-159); one owner of an OS resource
+   (firezone:85-87). For each piece of in-memory state, also note what a
    restart loses (sessions, buffered events), since Recreate and a singleton
    make every deploy a restart; the header's `Limits:` says it.
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,
    header 74-81).
 4. A ceiling needs evidence from upstream source, in the comment beside it
-   and in the header's `Limits:` line (grafana:67, 424; tempo:36). A
+   and in the header's `Limits:` line (grafana:67, 425; tempo:37). A
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
    builder (pattern table, "Ceilings"). W4 and W5 cover the singleton form:
@@ -195,7 +195,7 @@ is a finding from the upstream source, not a default.
    "`pick`" row). Strategy: W8.
 6. Operator-placed operands map the level into the CR (`instances`,
    `podDistribution`) and use `kix.availability.spreadConstraints` where the
-   CR takes a spread list (cnpg-cluster:281); never raw anti-affinity (W2).
+   CR takes a spread list (cnpg-cluster:276); never raw anti-affinity (W2).
 7. Dependencies resolve their own level from the cluster default
    (`kix/lib/eval/instance.nix:74-85`); no consumer channel raises a
    provider's level. So check the mapping of each provider the package can
@@ -249,7 +249,7 @@ the defaults fails there.
 - A package that renames a dependency sets `deps.<arg>.renamedFrom = { name
   = "<old name>"; id = "K1234"; }`, with the id of the `error` change
   record. The error for a missing dependency then carries the id and says
-  what the dependency was called before (immich:191-194).
+  what the dependency was called before (immich:192-195).
 - A consumer that reads an optional field (`username`, `extensions`, `tls`)
   handles its absence on a `kix.mkImport` stand-in
   (`kix/contracts/stable/postgresDatabase.nix:1-8`, D22), and acts on it where the
@@ -257,7 +257,7 @@ the defaults fails there.
   (keycloak's `KC_DB_URL_PROPERTIES`, plausible's `sslmode=require`).
 - A facade with no contract file (clickhouse-database) is held through
   `deps.<x>.assertions` on the `out` fields the consumer needs
-  (clickhouse-logs:103-114, plausible:212-252).
+  (clickhouse-logs:104-115, plausible:213-253).
 - Config the consumer injects (`deps.<x>.config`) is ignored by a
   `kix.mkImport` stand-in, so the consumer also asserts on the `out` field
   that reports the injected value (plausible checks `out.grants`).
@@ -298,6 +298,12 @@ the defaults fails there.
   renders is built with `scope.mkCR` from a declaration with `holdsData`; `meta.conflictsWith` only for a
   genuine one-per-cluster package (M9).
 - Publish every `out` field at every toggle, null when off (D25).
+- Publish `out.version = kix.image.version config.image;` when the package
+  has a `meta.version` and an image the user can change (I11). Read the
+  image of the main software, never a helper's (I12). The PackageInstance
+  record, `kix plan`, and a consumer's `compatibleWith` check then report
+  what the instance runs. `meta.version` is the default release, without a
+  `v` prefix (M2).
 
 ### 6. Secrets
 
@@ -318,7 +324,7 @@ beside the rendered Secret, which is classified `configuration` (S15;
 alertmanager, victoria-metrics-alert). Discrete variables take
 `keyRef` values; a URL-shaped credential takes `credentials.out.mkEnv` for the
 parts and `$(VAR)` expansion in an owned variable. That leaves the password
-unescaped inside the URL, so it is a `Limits:` line (vaultwarden:36-38).
+unescaped inside the URL, so it is a `Limits:` line (vaultwarden:38-40).
 Rollout through `"checksum/<name>" = <res>.out.contentHash` or `reloader.out.withReloadOn` (S10). The
 pattern table has each form.
 
@@ -371,14 +377,14 @@ The header is the package's contract for a reader who will not open the code
 5. `` `out`: `` the fields consumers read.
 6. `Escape hatches:` the hatches and their locked paths.
 7. `Limits:` ceilings with the upstream reason and where each is declared,
-   what a restart loses, untested paths, host prerequisites (tempo:36,
-   falco:45).
+   what a restart loses, untested paths, host prerequisites (tempo:37,
+   falco:46).
 
 A comment that states an upstream fact names the upstream path, and copies
 numbers from the source rather than memory (a reviewer found "65536
 matches compose" where compose says 65535). A behaviour observed only on a
 deploy says where it was observed. Operators add
-   `Replicas:` and `Moving to another release:` (cnpg-operator:49, 98).
+   `Replicas:` and `Moving to another release:` (cnpg-operator:49, 99).
    A version that existing installs cannot take with a plain deploy adds
    `Upgrades:`, saying what an operator does first (clickhouse-cluster:28).
 
@@ -402,39 +408,40 @@ The only place in this skill with package line numbers. `pkg:N` is
 
 | Pattern | Reference |
 |---|---|
-| Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:88-96 |
-| Shared release file for a release group | `immich/release.nix`, immich:106 |
-| Follower image tag with `tagText` and `mkDefault` | n8n:267-274, 307 |
-| `kix.contracts.secret.helpers.use`, read through the binding | metabase:157-162, 207, 263 |
-| `mergeEnv` defaults and owned groups | metabase:167-231 |
-| Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:186-202 |
-| URL-shaped credential through `$(VAR)` | vaultwarden:141-145, 210-231 |
+| Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:89-97 |
+| Shared release file for a release group | `immich/release.nix`, immich:107 |
+| Running version published from the image (`out.version`) | echo-server:228; among several images, valkey |
+| Follower image tag with `tagText` and `mkDefault` | n8n:268-275, 308 |
+| `kix.contracts.secret.helpers.use`, read through the binding | metabase:158-163, 208, 264 |
+| `mergeEnv` defaults and owned groups | metabase:168-232 |
+| Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
+| URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
 | `guardArgs`, owned flags from owned env groups | keycloak:376 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:385; cnpg-cluster:328, 435, 519 |
-| Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:93-96, 251-255, 283-303 |
-| Config injection into a dependency | metabase:108-111; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:111; stackgres-database:554; keycloak:537; tempo:630 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:386; cnpg-cluster:323, 430, 514 |
+| Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
+| Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:537; tempo:631 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:234, header 74-76 |
-| `atLeast` | valkey:106 |
-| Ceilings: package-wide, per builder | tempo:275; valkey:545, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
-| `kix.expose`, `exposure.urlOrNull` | metabase:171-174, 363 |
-| Metrics toggle that does not restart the workload | metabase:151-156; keycloak header 30-35 |
-| `kix.monitor` with alerts | openbao:392; clickhouse:608-618 and `alerts.nix` |
+| `atLeast` | valkey:107 |
+| Ceilings: package-wide, per builder | tempo:276; valkey:546, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
+| Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
+| `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
-| `kix.healthCheck` with a script file | victoria-metrics-agent:355-372 |
-| Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:257-270 |
+| `kix.healthCheck` with a script file | victoria-metrics-agent:358-375 |
+| Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
-| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:357 (`serverSideName`) |
-| A Job that runs again when its content changes: a fixed name and `kix.run/rerun` (never a hash in the name) | stackgres-database:446-452; clickhouse-database:508-510 |
-| Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:182-194, 212-252 |
-| Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:619-625, 692; vaultwarden:178-200, 275 |
-| One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:498-512, 678-679 |
-| Literal credentials refused in `env` | plausible:337-357 |
-| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:711-736; cnpg-cluster:596-661 |
-| A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:517-560, 604-605; `plausible/replicate.py` |
-| One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:98, clickhouse-cluster:87 |
-| Renamed dependency with `renamedFrom` | immich:191-194; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
+| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:356 (`serverSideName`) |
+| A Job that runs again when its content changes: a fixed name and `kix.run/rerun` (never a hash in the name) | stackgres-database:446-452; clickhouse-database:507-509 |
+| Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:183-195, 213-253 |
+| Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
+| One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
+| Literal credentials refused in `env` | plausible:338-358 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:591-656 |
+| A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
+| One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
+| Renamed dependency with `renamedFrom` | immich:192-195; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone

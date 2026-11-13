@@ -13,8 +13,8 @@
 #   };
 #
 # `out`: the Service's `name`, `fqdn`, and `port` (`config.service.port`,
-# 80 by default). `/healthz` answers "ok"; every other path returns
-# `config.message`.
+# 80 by default), and `version`, the nginx version `image.tag` names.
+# `/healthz` answers "ok"; every other path returns `config.message`.
 #
 # Escape hatches: none of its own. Use the instance's `partsOverlays` for
 # anything the options do not cover (placement, extra labels).
@@ -223,6 +223,9 @@ in
         }
         |> scope.mkResource;
 
-      root = self.service;
+      root = {
+        resource = self.service;
+        out.version = kix.image.version config.image;
+      };
     };
 }

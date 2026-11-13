@@ -18,9 +18,9 @@
 }:
 let
   isString = builtins.isString;
-  # A ClickHouse release is YY.M.patch.build; the contract carries YY.M,
-  # which is what a consumer's requirement compares against.
-  isVersion = v: isString v && builtins.match "[0-9]+\\.[0-9]+" v != null;
+  # A ClickHouse release is YY.M.patch.build. A provider gives at least
+  # YY.M, which is what a consumer's requirement compares against.
+  isVersion = v: isString v && builtins.match "[0-9]+(\\.[0-9]+)+" v != null;
 
   fields = {
     httpUrl = {
@@ -50,7 +50,7 @@ let
       test = isString;
     };
     version = {
-      shape = "the server release as YY.M";
+      shape = "the server version, YY.M or longer";
       test = isVersion;
     };
     # A consumer whose upstream creates plain MergeTree tables can run only

@@ -82,6 +82,7 @@
 # (KubeDaemonSetRolloutStuck).
 #
 # `out`:
+#   out.version                  the Velero version `image.tag` names.
 #   out.crds.<Kind>              the 13 CRDs. Velero reads its CRs only in
 #                                its own namespace, so build one there:
 #                                (scope.forService velero).mkCR
@@ -141,7 +142,7 @@ let
 in
 {
   meta = {
-    version = release;
+    version = lib.removePrefix "v" release;
     description = "Velero backup and restore: server, node-agent, a default backup location, and scheduled backups";
     owner = "platform";
     defaultAliases = [ "velero" ];
