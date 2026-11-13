@@ -81,21 +81,10 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     p.annotate_record(&args.record_annotations)
         .map_err(|e| miette!("{e}"))?;
 
-    if !p.migration_pairs.is_empty() {
-        let pairs = plan::migrations::of_pairs(&p.migration_pairs);
-        let prune = p.checked.flags().prune;
-        if !p.checked.flags().accept_migrations {
-            let fate = if prune {
-                plan::migrations::SourceFate::Pruned
-            } else {
-                plan::migrations::SourceFate::Kept
-            };
-            let cluster = &p.build.graph().cluster_name;
-            eprintln!();
-            eprint!("{}", plan::migrations::stop(cluster, &pairs, fate));
-            return Ok(Exit::Failure);
-        }
-        output::progress_text(&format!("\n{}", plan::migrations::accepted(&pairs, prune)));
+    // A saved plan is compared first, because a stale plan is exit 4 whatever
+    // the current build would migrate.
+    if saved.is_none() && !migration_gate(&p) {
+        return Ok(Exit::Failure);
     }
 
     // When connected and changes exist, run a server-side dry run so any
@@ -131,6 +120,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         );
         if !comparison.matches {
             return Ok(Exit::StalePlan);
+        }
+        if !migration_gate(&p) {
+            return Ok(Exit::Failure);
         }
     }
 
@@ -745,6 +737,29 @@ async fn run_deploy_async(
         eprintln!("{} {e}", output::red("error:"));
     }
     Ok(end)
+}
+
+/// Report the stateful migrations the plan makes. Return false, after saying
+/// why, when the deploy must stop because `--accept-migrations` is not set.
+fn migration_gate(p: &kix::plan::Planned) -> bool {
+    if p.migration_pairs.is_empty() {
+        return true;
+    }
+    let pairs = plan::migrations::of_pairs(&p.migration_pairs);
+    let prune = p.checked.flags().prune;
+    if !p.checked.flags().accept_migrations {
+        let fate = if prune {
+            plan::migrations::SourceFate::Pruned
+        } else {
+            plan::migrations::SourceFate::Kept
+        };
+        let cluster = &p.build.graph().cluster_name;
+        eprintln!();
+        eprint!("{}", plan::migrations::stop(cluster, &pairs, fate));
+        return false;
+    }
+    output::progress_text(&format!("\n{}", plan::migrations::accepted(&pairs, prune)));
+    true
 }
 
 /// Say what to do about the writes the dry run says the cluster would refuse,
