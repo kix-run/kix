@@ -16,6 +16,7 @@ use miette::{Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
+use kix::cluster::apply::ChangeAction;
 use kix::cluster::classify::{ChangedCrds, DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
@@ -245,13 +246,21 @@ pub(crate) fn dry_run(
         let cancel = config.cancel.clone();
         cancel.cancel_on_interrupt();
 
-        let writes = p
+        // Count the writes the plan's `objects` lists, so the progress line
+        // and the plan's object count agree. That includes an unchanged Job
+        // under `kix.run/rerun`, which the deploy runs again if its last run
+        // failed.
+        let writes: HashSet<ResourceId> = p
             .checked
             .plan()
             .nodes()
             .iter()
-            .filter(|n| !matches!(n.kind, TransitionKind::Skip))
-            .count();
+            .filter_map(|n| match (&n.action, &n.rerun) {
+                (ChangeAction::Apply(m), _) => Some(ResourceId::from_value(m)),
+                (ChangeAction::Skip(id), Some(_)) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
         let observer = Arc::new(DryRunObserver::new(writes));
         let (result, answers) = p.checked.dry_run(target, config, observer.clone()).await;
         // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
@@ -288,7 +297,7 @@ pub(crate) fn dry_run(
 struct Seen {
     failed: HashMap<ResourceId, String>,
     cancelled: HashMap<ResourceId, Option<ResourceId>>,
-    done: usize,
+    done: HashSet<ResourceId>,
 }
 
 /// Collects the engine's verdicts in a dry run, and shows a progress line
@@ -296,10 +305,13 @@ struct Seen {
 struct DryRunObserver {
     seen: Mutex<Seen>,
     bar: Option<indicatif::ProgressBar>,
+    /// The writes the progress line counts.
+    writes: HashSet<ResourceId>,
 }
 
 impl DryRunObserver {
-    fn new(writes: usize) -> Self {
+    fn new(counted: HashSet<ResourceId>) -> Self {
+        let writes = counted.len();
         let quiet = output::quiet();
         let bar = (!quiet && std::io::stderr().is_terminal() && writes > 0).then(|| {
             let bar = indicatif::ProgressBar::new(writes as u64);
@@ -317,6 +329,7 @@ impl DryRunObserver {
         DryRunObserver {
             seen: Mutex::new(Seen::default()),
             bar,
+            writes: counted,
         }
     }
 
@@ -345,12 +358,21 @@ impl DeployObserver for DryRunObserver {
         else {
             return;
         };
-        if matches!(kind, TransitionKind::Delete | TransitionKind::Skip) || !verdict.is_terminal() {
+        if matches!(kind, TransitionKind::Delete) || !verdict.is_terminal() {
             return;
         }
         let Ok(mut seen) = self.seen.lock() else {
             return;
         };
+        if self.writes.contains(rid)
+            && seen.done.insert(rid.clone())
+            && let Some(bar) = &self.bar
+        {
+            bar.set_position(seen.done.len() as u64);
+        }
+        if matches!(kind, TransitionKind::Skip) {
+            return;
+        }
         match verdict {
             Verdict::Failed { message } => {
                 seen.failed.insert(rid.clone(), message.clone());
@@ -363,10 +385,6 @@ impl DeployObserver for DryRunObserver {
                 seen.cancelled.insert(rid.clone(), by);
             }
             _ => {}
-        }
-        seen.done += 1;
-        if let Some(bar) = &self.bar {
-            bar.set_position(seen.done as u64);
         }
     }
 }

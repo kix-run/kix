@@ -42,8 +42,8 @@ pub fn render_text(plan: &Plan) -> String {
     out
 }
 
-/// Write the object write/delete summary, plan digest, and count of unchanged
-/// objects re-applied from earlier builds.
+/// Write the counts of objects the deploy would write and delete, the plan
+/// digest, and the count of unchanged objects re-applied from earlier builds.
 fn write_objects(out: &mut String, plan: &Plan) {
     let (Some(objects), Some(digest)) = (&plan.objects, &plan.objects_digest) else {
         return;
@@ -51,7 +51,7 @@ fn write_objects(out: &mut String, plan: &Plan) {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "{} {} written, {} deleted {}",
+        "{} {} to write, {} to delete {}",
         output::bold("Objects:"),
         objects.writes.len(),
         objects.deletes.len(),
