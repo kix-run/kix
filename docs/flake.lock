@@ -85,17 +85,17 @@
     },
     "kix-examples": {
       "inputs": {
-        "kixpkgs": [
+        "kix": [
           "kixpkgs"
         ],
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1794472706,
-        "narHash": "sha256-+/j0D6bgkyLqWVFeO36RpFJZD4XyPucCG0KXY5B81/w=",
+        "lastModified": 1794584897,
+        "narHash": "sha256-mGOTO+wdRL1u3YMphyTDpbTBksMyOiVsPz2avCdB/QM=",
         "owner": "kix-run",
         "repo": "kix-examples",
-        "rev": "a4f23504ec151604a217c25c5a3c3ff3a47e0683",
+        "rev": "f7035300e30c3c29bb7b3feafeaede312516dcf1",
         "type": "github"
       },
       "original": {
