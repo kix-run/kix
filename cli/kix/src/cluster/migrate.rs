@@ -18,8 +18,7 @@
 //!
 //! The mark is stamped on every object of a stateful package, so it does not
 //! say which objects hold data. Import markers and the deploy record never
-//! pair, since they have no content of their own. Jobs and CronJobs never
-//! pair either, since they keep their data in the volumes they mount. Two objects of the same kind
+//! pair, since they have no content of their own. Two objects of the same kind
 //! pair, as a renamed object usually takes its data with it. Two objects of
 //! different kinds pair only when both may hold data (see [`may_hold_data`]).
 //! That covers moving a database from a StatefulSet to an operator's custom
@@ -93,30 +92,15 @@ fn slot_of(manifest: &Value) -> Option<String> {
 }
 
 /// Return whether the resource can be one side of a migration pair: its
-/// package is classified `lifecycle = "stateful"`, it is desired state, not
-/// an import marker or the deploy record, and it is not a task (see
-/// [`is_task`]).
+/// package is classified `lifecycle = "stateful"` and it is desired state,
+/// not an import marker or the deploy record.
 fn is_stateful(manifest: &Value) -> bool {
     lifecycle_of(manifest) == Lifecycle::Desired
-        && !is_task(manifest)
         && manifest
             .pointer("/metadata/annotations")
             .and_then(|a| a.get(keys::LIFECYCLE))
             .and_then(Value::as_str)
             == Some(LIFECYCLE_STATEFUL)
-}
-
-/// Return whether the manifest is a Job or a CronJob without a
-/// `kix.run/holds-data = "true"` mark. A task keeps its data in the volumes
-/// it mounts, which pair on their own. Packages often put a hash of a
-/// password or a script in a task's name, so a renamed task is routine.
-fn is_task(manifest: &Value) -> bool {
-    let batch = manifest
-        .get("apiVersion")
-        .and_then(Value::as_str)
-        .is_some_and(|v| v.starts_with("batch/"));
-    let kind = manifest.get("kind").and_then(Value::as_str);
-    batch && matches!(kind, Some("Job" | "CronJob")) && marked_holds_data(manifest) != Some(true)
 }
 
 /// Return whether the manifest declares storage of its own. That is a
@@ -437,30 +421,6 @@ mod tests {
             None,
             identity_hash,
         )
-    }
-
-    #[test]
-    fn a_renamed_job_is_not_a_migration() {
-        // A database package names its bootstrap Job after a hash of the
-        // password, so changing the password renames the Job.
-        let job = |name: &str, hash: &str| with_api(in_postgres("Job", name, hash), "batch/v1");
-        let cron =
-            |name: &str, hash: &str| with_api(in_postgres("CronJob", name, hash), "batch/v1");
-        let old = vec![job("bootstrap-aaaa", "aaaa"), cron("backup-aaaa", "aaaa")];
-        let new = vec![job("bootstrap-bbbb", "bbbb"), cron("backup-bbbb", "bbbb")];
-        assert!(detect_migration_pairs(&new, &old).is_empty());
-    }
-
-    #[test]
-    fn a_job_marked_as_holding_data_still_pairs() {
-        let job = |name: &str, hash: &str| {
-            let mut m = with_api(in_postgres("Job", name, hash), "batch/v1");
-            m["metadata"]["annotations"][keys::HOLDS_DATA] = json!("true");
-            m
-        };
-        let pairs =
-            detect_migration_pairs(&[job("load-bbbb", "bbbb")], &[job("load-aaaa", "aaaa")]);
-        assert_eq!(pairs.len(), 1);
     }
 
     #[test]

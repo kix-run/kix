@@ -16,7 +16,6 @@ use miette::{Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
-use kix::cluster::apply::ChangeAction;
 use kix::cluster::classify::{ChangedCrds, DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
@@ -247,18 +246,16 @@ pub(crate) fn dry_run(
         cancel.cancel_on_interrupt();
 
         // Count the writes the plan's `objects` lists, so the progress line
-        // and the plan's object count agree. That includes an unchanged Job
-        // under `kix.run/rerun`, which the deploy runs again if its last run
-        // failed.
+        // and the plan's object count agree.
         let writes: HashSet<ResourceId> = p
             .checked
-            .plan()
-            .nodes()
+            .objects()
+            .writes
             .iter()
-            .filter_map(|n| match (&n.action, &n.rerun) {
-                (ChangeAction::Apply(m), _) => Some(ResourceId::from_value(m)),
-                (ChangeAction::Skip(id), Some(_)) => Some(id.clone()),
-                _ => None,
+            .map(|w| ResourceId {
+                kind: w.kind.clone(),
+                namespace: w.namespace.clone(),
+                name: w.name.clone(),
             })
             .collect();
         let observer = Arc::new(DryRunObserver::new(writes));
