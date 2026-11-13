@@ -31,9 +31,10 @@
 #      database and the user, sets the password, grants the privileges, and
 #      then runs the schema files in name order. Every statement is
 #      idempotent. The Job carries `kix.run/rerun: on-change`, so the deploy
-#      runs it again when anything it references changes: the password's
-#      SOPS file, the options, the schema files, or the server itself.
-#      That is why each schema file must be safe to run again.
+#      runs it again when its own content changes. Its pod template carries
+#      the content hashes of what it reads, so a new SOPS file, a changed
+#      option or schema file, or a changed server runs it again. That is
+#      why each schema file must be safe to run again.
 #
 # Two users on one database (a writer and a reader, say) are two instances
 # with the same `database` and different `user` and `privileges`.
@@ -510,7 +511,19 @@ in
             spec = {
               backoffLimit = 10;
               template = {
-                metadata.labels = labels;
+                metadata = {
+                  inherit labels;
+                  # The deploy reruns the Job when its own content changes.
+                  # These put the content of what it reads into it. A
+                  # secret-ref or an imported server has no content hash.
+                  annotations = lib.filterAttrs (_: v: v != null) {
+                    "checksum/bootstrap" = self.bootstrapFiles.out.contentHash;
+                    "checksum/schema" = if hasSchema then self.schemaFiles.out.contentHash else null;
+                    "checksum/password" = self.bootstrapPassword.out.contentHash or null;
+                    "checksum/admin" = server.credentials.out.contentHash or null;
+                    "checksum/server" = server.contentHash or null;
+                  };
+                };
                 spec = {
                   restartPolicy = "OnFailure";
                   automountServiceAccountToken = false;

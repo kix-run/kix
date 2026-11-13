@@ -91,7 +91,7 @@ pub(crate) fn of<'a>(
     let mut writes = Vec::new();
     for node in &plan.nodes {
         let id = match (&node.action, &node.rerun) {
-            (ChangeAction::Apply(m), _) => ResourceId::from_value(m),
+            (ChangeAction::Apply(m) | ChangeAction::Recreate(m), _) => ResourceId::from_value(m),
             (ChangeAction::Skip(id), Some(_)) => id.clone(),
             _ => continue,
         };

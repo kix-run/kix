@@ -454,19 +454,12 @@ in
       {
         name = checkName;
         labels = checkLabels;
-        # A Job's pod template is immutable, so a changed check
-        # replaces the Job.
+        # A Job's pod template is immutable, so the deploy replaces the Job
+        # when its own content changes. The checksum annotations below put
+        # the content of the webhook and of what serves it into that content,
+        # so the check runs again when any of them changes.
         annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-        requires = [
-          self.webhookDeployment
-          self.webhookService
-          self.certControllerDeployment
-          self.secretStoreWebhook
-          self.externalSecretWebhook
-          (crdOf self "ExternalSecret")
-          (crdOf self "SecretStore")
-        ]
-        ++ builtins.attrValues self.webhookCheckRbac;
+        requires = builtins.attrValues self.webhookCheckRbac;
         spec = {
           # The container restarts with the kubelet's back-off (10 s,
           # doubling, capped at 300 s), so six restarts wait about ten
@@ -475,7 +468,16 @@ in
           template = {
             metadata = {
               labels = checkLabels;
-              annotations."checksum/manifest" = self.webhookCheckManifest.out.contentHash;
+              annotations = {
+                "checksum/manifest" = self.webhookCheckManifest.out.contentHash;
+                "checksum/webhook-deployment" = self.webhookDeployment.out.contentHash;
+                "checksum/webhook-service" = self.webhookService.out.contentHash;
+                "checksum/cert-controller" = self.certControllerDeployment.out.contentHash;
+                "checksum/secretstore-webhook" = self.secretStoreWebhook.out.contentHash;
+                "checksum/externalsecret-webhook" = self.externalSecretWebhook.out.contentHash;
+                "checksum/externalsecret-crd" = (crdOf self "ExternalSecret").out.contentHash;
+                "checksum/secretstore-crd" = (crdOf self "SecretStore").out.contentHash;
+              };
             };
             spec = {
               restartPolicy = "OnFailure";

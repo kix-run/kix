@@ -26,7 +26,6 @@ use crate::exit::Exit;
 use crate::output;
 use crate::plan;
 use kix::cluster::activation::{OpenedRecords, Records};
-use kix::cluster::apply::ChangeAction;
 use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::readiness;
@@ -94,7 +93,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         .plan()
         .nodes()
         .iter()
-        .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
+        .filter(|n| n.action.written().is_some())
         .count();
     let report = match &p.client {
         Some(client) if total_apply > 0 || !p.checked.orphans().is_empty() => {

@@ -616,23 +616,28 @@ in
           {
             name = checkName;
             labels = checkLabels;
-            # A Job's pod template is immutable, so a changed check replaces
-            # the Job.
+            # A Job's pod template is immutable, so the deploy replaces the
+            # Job when its own content changes. The checksum annotations below
+            # put the content of the webhook and of what serves it into that
+            # content, so the check runs again when any of them changes.
             annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-            requires = [
-              self.deployment
-              self.webhookService
-              self.mutatingWebhook
-              self.validatingWebhook
-              self.crds.rabbitmqClusters
-            ]
-            ++ builtins.attrValues self.webhookCheckRole;
+            requires = builtins.attrValues self.webhookCheckRole;
             spec = {
               # The kubelet restarts the container with a growing delay (10 s
               # doubling to 5 min), so eight attempts span about 15 minutes.
               backoffLimit = 8;
               template = {
-                metadata.labels = checkLabels;
+                metadata = {
+                  labels = checkLabels;
+                  annotations = {
+                    "checksum/manifest" = self.webhookCheckManifest.out.contentHash;
+                    "checksum/operator" = self.deployment.out.contentHash;
+                    "checksum/webhook-service" = self.webhookService.out.contentHash;
+                    "checksum/mutating-webhook" = self.mutatingWebhook.out.contentHash;
+                    "checksum/validating-webhook" = self.validatingWebhook.out.contentHash;
+                    "checksum/crd" = self.crds.rabbitmqClusters.out.contentHash;
+                  };
+                };
                 spec = {
                   restartPolicy = "OnFailure";
                   serviceAccount = self.webhookCheckServiceAccount;

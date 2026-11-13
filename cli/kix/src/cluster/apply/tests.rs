@@ -1014,3 +1014,128 @@ async fn an_apply_reports_the_fields_the_server_did_not_keep() {
             .unwrap();
     assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
 }
+
+/// A Job under the rerun rule with `identity_hash` and, when given, the
+/// rerun hash the library stamps.
+fn rerun_job(identity_hash: &str, rerun_hash: Option<&str>) -> Value {
+    let mut job = manifest("Job", "bootstrap", "db", identity_hash);
+    job["apiVersion"] = json!("batch/v1");
+    job["metadata"]["annotations"][keys::RERUN] = json!(keys::RERUN_ON_CHANGE);
+    if let Some(hash) = rerun_hash {
+        job["metadata"]["annotations"][keys::RERUN_HASH] = json!(hash);
+    }
+    job
+}
+
+/// A change below the Job in the graph, such as a namespace label, moves its
+/// identity hash and leaves its rerun hash alone. The Job is applied in
+/// place and does not run again.
+#[test]
+fn rerun_job_with_the_same_content_is_applied_in_place() {
+    let old = vec![rerun_job("id1", Some("c1"))];
+    let new = vec![rerun_job("id2", Some("c1"))];
+    let actions = detect_changes(&new, &old);
+    assert!(matches!(&actions[..], [ChangeAction::Apply(_)]));
+}
+
+/// A change to the Job's own content, such as a new password checksum,
+/// recreates it.
+#[test]
+fn rerun_job_with_new_content_is_recreated() {
+    let old = vec![rerun_job("id1", Some("c1"))];
+    let new = vec![rerun_job("id2", Some("c2"))];
+    let actions = detect_changes(&new, &old);
+    assert!(matches!(&actions[..], [ChangeAction::Recreate(_)]));
+}
+
+/// A new Job, and a Job deployed by a release that wrote no rerun hash, have
+/// nothing to compare with and are recreated.
+#[test]
+fn rerun_job_without_an_old_rerun_hash_is_recreated() {
+    let new = vec![rerun_job("id2", Some("c1"))];
+    assert!(matches!(
+        &detect_changes(&new, &[])[..],
+        [ChangeAction::Recreate(_)]
+    ));
+    let old = vec![rerun_job("id1", None)];
+    assert!(matches!(
+        &detect_changes(&new, &old)[..],
+        [ChangeAction::Recreate(_)]
+    ));
+}
+
+/// An unchanged Job is skipped whatever its rerun hash says.
+#[test]
+fn unchanged_rerun_job_is_skipped() {
+    let old = vec![rerun_job("id1", Some("c1"))];
+    let new = vec![rerun_job("id1", Some("c1"))];
+    assert!(matches!(
+        &detect_changes(&new, &old)[..],
+        [ChangeAction::Skip(_)]
+    ));
+}
+
+/// The rerun hash only matters to a Job under the rerun rule.
+#[test]
+fn rerun_hash_on_a_plain_resource_is_ignored() {
+    let mut old = manifest("Deployment", "app", "default", "id1");
+    old["metadata"]["annotations"][keys::RERUN_HASH] = json!("c1");
+    let mut new = manifest("Deployment", "app", "default", "id2");
+    new["metadata"]["annotations"][keys::RERUN_HASH] = json!("c2");
+    assert!(matches!(
+        &detect_changes(&[new], &[old])[..],
+        [ChangeAction::Apply(_)]
+    ));
+}
+
+/// The operator compares with the rerun hash on the live Job.
+#[test]
+fn live_rerun_job_compares_the_live_rerun_hash() {
+    let live_with = |rerun_hash: &str| {
+        let mut obj = live_object("Job", "bootstrap", "db", "id1");
+        obj.metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(keys::RERUN_HASH.to_string(), rerun_hash.to_string());
+        obj
+    };
+    let desired = vec![rerun_job("id2", Some("c1"))];
+    assert!(matches!(
+        &detect_changes_live(&desired, &[live_with("c1")])[..],
+        [ChangeAction::Apply(_)]
+    ));
+    assert!(matches!(
+        &detect_changes_live(&desired, &[live_with("c0")])[..],
+        [ChangeAction::Recreate(_)]
+    ));
+    assert!(matches!(
+        &detect_changes_live(&desired, &[live_object("Job", "bootstrap", "db", "id1")])[..],
+        [ChangeAction::Recreate(_)]
+    ));
+}
+
+/// A failed deploy may have recreated the Job with other content. The Job
+/// keeps its last run only when every failed closure agrees with the new
+/// build's rerun hash.
+#[test]
+fn rerun_job_a_failed_deploy_touched_follows_its_content() {
+    let active = vec![rerun_job("id1", Some("c1"))];
+    let new = vec![rerun_job("id1", Some("c1"))];
+    let same_content = vec![rerun_job("id2", Some("c1"))];
+    let other_content = vec![rerun_job("id3", Some("c2"))];
+
+    let folded = fold_failed_closures(
+        detect_changes(&new, &active),
+        &new,
+        std::slice::from_ref(&same_content),
+    );
+    assert!(matches!(&folded[..], [ChangeAction::Apply(_)]));
+
+    let folded = fold_failed_closures(
+        detect_changes(&new, &active),
+        &new,
+        &[same_content, other_content],
+    );
+    assert!(matches!(&folded[..], [ChangeAction::Recreate(_)]));
+}

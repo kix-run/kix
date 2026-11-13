@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kubectl cluster-info",
-      "stdout": "Kubernetes control plane is running at https://127.0.0.1:35829\nCoreDNS is running at https://127.0.0.1:35829/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\n\nTo further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.\n",
+      "stdout": "Kubernetes control plane is running at https://127.0.0.1:40693\nCoreDNS is running at https://127.0.0.1:40693/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\n\nTo further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.\n",
       "stderr": "",
-      "stdoutDrift": "\nCoreDNS is running at https://127.0.0.1:35829/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\nKubernetes control plane is running at https://127.0.0.1:35829\nTo further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.\n",
+      "stdoutDrift": "\nCoreDNS is running at https://127.0.0.1:40693/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\nKubernetes control plane is running at https://127.0.0.1:40693\nTo further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.\n",
       "stderrDrift": "",
       "exitCode": 0
     }

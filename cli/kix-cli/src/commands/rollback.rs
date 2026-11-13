@@ -16,7 +16,6 @@ use serde_json::Value;
 use crate::client;
 use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
-use kix::cluster::apply::ChangeAction;
 use kix::cluster::binding;
 use kix::cluster::classify::{DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::discovery;
@@ -376,7 +375,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         .plan()
         .nodes()
         .iter()
-        .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
+        .filter(|n| n.action.written().is_some())
         .count();
 
     if args.dry_run {

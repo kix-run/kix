@@ -130,7 +130,7 @@ impl LivePlan {
         let applies = plan
             .nodes()
             .iter()
-            .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
+            .filter(|n| n.action.written().is_some())
             .count();
         let unchanged = actions.len() - applies - orphans.len();
 

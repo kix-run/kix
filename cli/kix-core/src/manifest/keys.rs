@@ -200,11 +200,18 @@ pub const CEDE_FIELDS: &str = key!("cede-fields");
 pub const EXPECTS: &str = key!("expects");
 
 /// A Job carrying `rerun: on-change` is deleted and created again rather than
-/// patched. See [`RERUN_ON_CHANGE`].
+/// patched when its [`RERUN_HASH`] changes. See [`RERUN_ON_CHANGE`].
 pub const RERUN: &str = key!("rerun");
 
 /// The only value [`RERUN`] honours.
 pub const RERUN_ON_CHANGE: &str = "on-change";
+
+/// The hash of a resource's own manifest, without Kix's annotations and
+/// without what it depends on (the library's `out.contentHash`). The library
+/// writes it on every resource that carries [`RERUN`], and the deploy engine
+/// reruns a Job only when it differs from the value the Job was last
+/// deployed with.
+pub const RERUN_HASH: &str = key!("rerun-hash");
 
 /// Finalizer the operator holds on records it reconciles.
 pub const OPERATOR_GC_FINALIZER: &str = key!("operator-gc");

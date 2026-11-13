@@ -1230,7 +1230,7 @@ fn plan_and_check(
     let mut written: BTreeMap<(String, String, String, String), &Value> = BTreeMap::new();
     for node in plan.nodes() {
         let (id, files): (ResourceId, Vec<(&PathBuf, &Value)>) = match (&node.action, &node.rerun) {
-            (ChangeAction::Apply(m), _) => (
+            (ChangeAction::Apply(m) | ChangeAction::Recreate(m), _) => (
                 ResourceId::from_value(m),
                 new_graph
                     .resources

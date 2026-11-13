@@ -89,10 +89,33 @@ in
           r = self.root;
         in
         r.resource or r;
-      # Avoid adding `rootRes` to `requires` when `userEnv` already
+      # The probe reruns when the own content of the root or of a required
+      # resource changes, through a `checksum/*` annotation on its pod
+      # template. That annotation already makes the Job depend on the
+      # resource, so only the required values without a content hash stay
+      # in `requires`.
+      required = requires ctx;
+      hasContentHash = r: (r.out or { }) ? contentHash;
+      checkedRequired = builtins.filter (
+        r: hasContentHash r && r.outPath or null != rootRes.outPath
+      ) required;
+      # A root without a content hash is required unless `userEnv` already
       # references it, which would trigger a redundant-requires warning.
-      dialsRoot = builtins.hasAttr (builtins.unsafeDiscardStringContext rootRes.outPath) (
-        builtins.getContext (builtins.toJSON userEnv)
+      requireRoot =
+        !(hasContentHash rootRes)
+        && !(builtins.hasAttr (builtins.unsafeDiscardStringContext rootRes.outPath) (
+          builtins.getContext (builtins.toJSON userEnv)
+        ));
+      checksums = {
+        "checksum/script" = self.${scriptPart}.out.contentHash;
+      }
+      // lib.optionalAttrs (hasContentHash rootRes) {
+        "checksum/root" = rootRes.out.contentHash;
+      }
+      // builtins.listToAttrs (
+        lib.imap0 (
+          i: r: lib.nameValuePair "checksum/requires-${toString i}" r.out.contentHash
+        ) checkedRequired
       );
     in
     if !(when ctx) then
@@ -114,7 +137,7 @@ in
         ${partName} =
           {
             name = "${name}-health";
-            requires = requires ctx ++ lib.optional (!dialsRoot) rootRes;
+            requires = builtins.filter (r: !(hasContentHash r)) required ++ lib.optional requireRoot rootRes;
             annotations.${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
             spec = {
               backoffLimit = 0;
@@ -124,6 +147,7 @@ in
                   "app.kubernetes.io/name" = "${name}-health";
                   "app.kubernetes.io/component" = "health-check";
                 };
+                metadata.annotations = checksums;
                 spec = {
                   restartPolicy = "Never";
                   automountServiceAccountToken = false;

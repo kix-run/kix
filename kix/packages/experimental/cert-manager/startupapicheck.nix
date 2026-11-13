@@ -54,20 +54,25 @@ in
   apiCheck = scope.mkJob {
     name = "${name}-startupapicheck";
     inherit labels;
-    # A Job's pod template is immutable, so a new image replaces the Job.
+    # A Job's pod template is immutable, so the deploy replaces the Job when
+    # its own content changes. The checksum annotations below put the
+    # content of the webhook and of what serves it into that content, so the
+    # check runs again when any of them changes.
     annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-    requires = [
-      self.webhookDeployment
-      self.cainjectorDeployment
-      self.mutatingWebhookConfiguration
-      self.validatingWebhookConfiguration
-      self.crds.certificateRequests
-    ]
-    ++ builtins.attrValues apiCheckRoles;
+    requires = builtins.attrValues apiCheckRoles;
     spec = {
       backoffLimit = 4;
       template = {
-        metadata.labels = labels;
+        metadata = {
+          inherit labels;
+          annotations = {
+            "checksum/webhook" = self.webhookDeployment.out.contentHash;
+            "checksum/cainjector" = self.cainjectorDeployment.out.contentHash;
+            "checksum/mutating-webhook" = self.mutatingWebhookConfiguration.out.contentHash;
+            "checksum/validating-webhook" = self.validatingWebhookConfiguration.out.contentHash;
+            "checksum/crd" = self.crds.certificateRequests.out.contentHash;
+          };
+        };
         spec = {
           restartPolicy = "OnFailure";
           serviceAccount = self.apiCheckServiceAccount;

@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "find ./audit-export -name 'Activation-*.yaml' -o -name 'PackageInstance-*.yaml'",
-      "stdout": "./audit-export/how-to-app/PackageInstance-production.yaml\n./audit-export/how-to-app/PackageInstance-preview.yaml\n./audit-export/kube-system/PackageInstance-platform-dns.yaml\n./audit-export/kube-system/PackageInstance-platform-storage.yaml\n./audit-export/_cluster/Activation-how-to-application-6rhi3wpk9iml.yaml\n",
+      "stdout": "./audit-export/how-to-app/PackageInstance-production.yaml\n./audit-export/how-to-app/PackageInstance-preview.yaml\n./audit-export/kube-system/PackageInstance-platform-dns.yaml\n./audit-export/kube-system/PackageInstance-platform-storage.yaml\n./audit-export/_cluster/Activation-how-to-application-wyxqsbir9yjj.yaml\n",
       "stderr": "",
       "stdoutDrift": "./audit-export/_cluster/Activation-how-to-application-<activation-id>.yaml\n./audit-export/how-to-app/PackageInstance-preview.yaml\n./audit-export/how-to-app/PackageInstance-production.yaml\n./audit-export/kube-system/PackageInstance-platform-dns.yaml\n./audit-export/kube-system/PackageInstance-platform-storage.yaml\n",
       "stderrDrift": "",

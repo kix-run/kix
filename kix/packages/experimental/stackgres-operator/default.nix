@@ -824,22 +824,26 @@ in
         webhookCheck = scope.mkJob {
           name = checkName;
           labels = checkLabels;
-          # A Job's pod template is immutable, so a changed check replaces the
-          # Job.
+          # A Job's pod template is immutable, so the deploy replaces the Job
+          # when its own content changes. The checksum annotations below put
+          # the content of the webhook and of what serves it into that
+          # content, so the check runs again when any of them changes.
           annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-          requires = [
-            self.operatorDeployment
-            self.operatorService
-            self.validatingWebhook
-            self.mutatingWebhook
-            self.crds.${kinds.SGInstanceProfile.part}
-          ]
-          ++ builtins.attrValues self.webhookCheckClusterRole
-          ++ builtins.attrValues self.webhookCheckRole;
+          requires =
+            builtins.attrValues self.webhookCheckClusterRole ++ builtins.attrValues self.webhookCheckRole;
           spec = {
             backoffLimit = 1;
             template = {
-              metadata.labels = checkLabels;
+              metadata = {
+                labels = checkLabels;
+                annotations = {
+                  "checksum/operator" = self.operatorDeployment.out.contentHash;
+                  "checksum/operator-service" = self.operatorService.out.contentHash;
+                  "checksum/validating-webhook" = self.validatingWebhook.out.contentHash;
+                  "checksum/mutating-webhook" = self.mutatingWebhook.out.contentHash;
+                  "checksum/crd" = self.crds.${kinds.SGInstanceProfile.part}.out.contentHash;
+                };
+              };
               spec = {
                 restartPolicy = "Never";
                 serviceAccount = self.webhookCheckServiceAccount;

@@ -559,7 +559,7 @@
         },
         {
           "const": "recreate",
-          "description": "Delete the live object, then apply. Tagged `recreate` because that\nis the act, whatever the trigger. The current producer is the\nrerun rule: a manifest carrying the rerun annotation (a probe Job) whose\nidentity hash changed is run again, never patched, and the reason\nrides [`NodeDetail::Rerun`]. The executor applies plainly when\nnothing is live.",
+          "description": "Delete the live object, then apply. Tagged `recreate` because that\nis the act, whatever the trigger. The current producer is the\nrerun rule: a Job carrying the rerun annotation whose rerun hash\nchanged is run again, never patched, and the reason\nrides [`NodeDetail::Rerun`]. The executor applies plainly when\nnothing is live.",
           "type": "string"
         },
         {
