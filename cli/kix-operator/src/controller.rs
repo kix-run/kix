@@ -43,6 +43,7 @@ use kix::cluster::graph::ResourceGraph;
 use kix::cluster::kubernetes_version;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
+use kix::cluster::stops;
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::{KixPackageIndex, read_index};
@@ -51,6 +52,7 @@ use kix::manifest::lifecycle::{
 };
 use kix::manifest::types::ResourceId;
 use kix::plan::live::{LivePlan, LivePlanError, cluster_of};
+use kix::version::Version;
 
 use crate::k8s_events::{CompositeObserver, K8sEventObserver};
 use crate::observer::OperatorObserver;
@@ -79,6 +81,9 @@ const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(30);
 pub struct Context {
     pub client: Client,
     pub records: Records,
+    /// The required stops a Queued record must not skip, normally
+    /// [`stops::required_stops`].
+    pub required_stops: Vec<Version>,
 }
 
 /// Errors from the operator reconcile loop.
@@ -316,6 +321,29 @@ pub async fn reconcile_activation(
                 }
             }
 
+            // The operator writes this deploy with its own Kix, so a cluster
+            // that Kix last deployed before a required stop fails here when
+            // the operator's Kix is past that stop's minor.
+            let old_active = ctx
+                .records
+                .active(&cluster)
+                .await
+                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+            if let Err(refusal) = stops::check(
+                old_active.as_ref().and_then(|r| r.deployed_with.as_deref()),
+                kix::version::running(),
+                &ctx.required_stops,
+            ) {
+                let reason = refusal.to_string();
+                tracing::warn!(name, %reason, "Refusing the Queued activation");
+                ctx.records
+                    .fail_queued(name, &reason)
+                    .await
+                    .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+                events().warn_now("RequiredStopSkipped", &reason).await;
+                return Ok(Action::await_change());
+            }
+
             let queued = ctx
                 .records
                 .queued(&cluster)
@@ -348,12 +376,6 @@ pub async fn reconcile_activation(
                         .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
                 }
             }
-
-            let old_active = ctx
-                .records
-                .active(&cluster)
-                .await
-                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
             if let Some(ref old) = old_active {
                 tracing::info!(name, old = %old.name, "Superseding current Active activation");
@@ -748,7 +770,11 @@ mod tests {
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         let resource = records.watch_resource().clone();
-        let ctx = Arc::new(Context { client, records });
+        let ctx = Arc::new(Context {
+            client,
+            records,
+            required_stops: stops::required_stops(),
+        });
         let activation: DynamicObject = serde_json::from_value(queued).unwrap();
         reconcile_activation(Arc::new(activation), ctx.clone())
             .await
@@ -830,7 +856,11 @@ mod tests {
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         let resource = records.watch_resource().clone();
-        let ctx = Arc::new(Context { client, records });
+        let ctx = Arc::new(Context {
+            client,
+            records,
+            required_stops: stops::required_stops(),
+        });
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
         let err = reconcile_activation(Arc::new(activation), ctx.clone())
             .await
@@ -850,11 +880,25 @@ mod tests {
     /// Reconcile `record` on `api`, which may fail, and return the record
     /// afterwards.
     async fn reconcile_on(api: &FakeApi, record: Value) -> (Result<Action, OperatorError>, Value) {
+        reconcile_with_stops(api, record, stops::required_stops()).await
+    }
+
+    /// As [`reconcile_on`], with `required_stops` in place of the built-in
+    /// list.
+    async fn reconcile_with_stops(
+        api: &FakeApi,
+        record: Value,
+        required_stops: Vec<Version>,
+    ) -> (Result<Action, OperatorError>, Value) {
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         let resource = records.watch_resource().clone();
-        let ctx = Arc::new(Context { client, records });
+        let ctx = Arc::new(Context {
+            client,
+            records,
+            required_stops,
+        });
         let name = record["metadata"]["name"].as_str().unwrap().to_string();
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
         let result = reconcile_activation(Arc::new(activation), ctx.clone()).await;
@@ -942,6 +986,51 @@ mod tests {
             .filter(|r| r.starts_with("POST ") && r.contains("/events"))
             .collect();
         assert_eq!(events.len(), 1, "{:?}", api.requests());
+    }
+
+    /// A Queued build on a cluster that an older Kix last deployed fails
+    /// when the operator's Kix would skip a required stop, and the Active
+    /// record is left alone.
+    #[tokio::test]
+    async fn a_queued_build_that_skips_a_required_stop_fails_before_anything_is_superseded() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-old",
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): "a",
+                },
+            },
+            "status": {
+                "phase": PHASE_ACTIVE,
+                (keys::RECEIPT_FIELD): { "builder": { "kixVersion": "0.8.0" } },
+            },
+        });
+        let record = queued(dir.path(), Some(HERE), None);
+        let api = FakeApi::new(vec![kube_system(HERE), active, record.clone()]);
+        // The running Kix is 0.10 or newer, past the stop's minor.
+        let stop: Version = "0.9.0".parse().unwrap();
+        let (result, after) = reconcile_with_stops(&api, record, vec![stop]).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(after["status"]["phase"], PHASE_FAILED);
+        let reason = after["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains("last deployed with Kix 0.8.0")
+                && reason.contains("required stop Kix 0.9.0")
+                && reason.contains("Nothing was applied"),
+            "{reason}"
+        );
+        let supersedes: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.contains("a-old"))
+            .collect();
+        assert!(supersedes.is_empty(), "{supersedes:?}");
     }
 
     /// A Queued build whose definition leaves `k8sVersion` unset is not asked

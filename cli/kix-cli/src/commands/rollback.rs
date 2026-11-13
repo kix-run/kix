@@ -229,6 +229,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     print_current(&current);
 
+    // A rollback writes to the cluster with this Kix, so it must not skip a
+    // required stop either. With `--operator`, the operator checks instead.
+    super::deploy::stops::check(
+        cluster,
+        current.deployed_with.as_deref(),
+        super::deploy::stops::Writer::Rollback,
+    );
+
     let superseded = records
         .rollback_targets(cluster)
         .await
