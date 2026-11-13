@@ -126,11 +126,11 @@ in
   content-hash-ignores-kix-annotations =
     (
       (hashes { cmAnnotations.${kixKeys.cedeFields} = "data"; } "cm").content == base.content
-      || throw "a kix.run annotation should not change the content hash"
+      || throw "a Kix annotation should not change the content hash"
     )
     && (
       (hashes { cmAnnotations."example.com/note" = "x"; } "cm").content != base.content
-      || throw "an annotation outside kix.run should change the content hash"
+      || throw "an annotation of another domain should change the content hash"
     );
 
   # Reading out.contentHash makes the reader depend on the resource, the
