@@ -8,11 +8,11 @@
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix export how-to-application --for audit --out ./audit-export",
+      "command": "kix export how-to-application --with-kix-metadata --out ./audit-export",
       "stdout": "",
-      "stderr": "Building cluster 'how-to-application'...\n  Evaluating cluster 'how-to-application'...\n  Reading package index...\n  Loading store graph...\n  Reading 4 packages...\n  Computing cross-package dependencies...\n\n  Exported 17 resources to ./audit-export (audit (kix provenance preserved))\n",
+      "stderr": "Building cluster 'how-to-application'...\n  Evaluating cluster 'how-to-application'...\n  Reading package index...\n  Loading store graph...\n  Reading 4 packages...\n  Computing cross-package dependencies...\n\n  Exported 17 resources to ./audit-export (with Kix metadata)\n",
       "stdoutDrift": "",
-      "stderrDrift": "\nBuilding cluster 'how-to-application'...\nComputing cross-package dependencies...\nEvaluating cluster 'how-to-application'...\nExported 17 resources to ./audit-export (audit (kix provenance preserved))\nLoading store graph...\nReading 4 packages...\nReading package index...\n",
+      "stderrDrift": "\nBuilding cluster 'how-to-application'...\nComputing cross-package dependencies...\nEvaluating cluster 'how-to-application'...\nExported 17 resources to ./audit-export (with Kix metadata)\nLoading store graph...\nReading 4 packages...\nReading package index...\n",
       "exitCode": 0
     }
   ]

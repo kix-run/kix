@@ -8,7 +8,7 @@
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix images how-to-application",
+      "command": "kix list images how-to-application",
       "stdout": "docker.io/curlimages/curl:8.14.1@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b\ndocker.io/library/nginx:1.27-alpine\n",
       "stderr": "",
       "stdoutDrift": "docker.io/curlimages/curl:8.14.1@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b\ndocker.io/library/nginx:1.27-alpine\n",

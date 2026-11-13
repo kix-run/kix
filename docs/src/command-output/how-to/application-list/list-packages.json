@@ -8,7 +8,7 @@
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix list packages --cluster how-to-application",
+      "command": "kix list packages how-to-application",
       "stdout": " NAME              VERSION  STATUS                 \n platform-dns      -        import [kube-system]   \n platform-storage  -        import [kube-system]   \n preview           1.0.0    installed [how-to-app] \n production        1.0.0    installed [how-to-app] \n",
       "stderr": "",
       "stdoutDrift": "NAME VERSION STATUS\nplatform-dns - import [kube-system]\nplatform-storage - import [kube-system]\npreview 1.0.0 installed [how-to-app]\nproduction 1.0.0 installed [how-to-app]\n",
