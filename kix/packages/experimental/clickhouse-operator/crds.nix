@@ -154,17 +154,18 @@ let
     else
       { };
 
-  # Read the vendored upstream CRD document, or throw if the file is missing.
+  # Read the vendored upstream CRD document, or fail if the file is missing.
   vendored =
     def:
     let
       path = ./schemas + "/${def.plural}.json";
     in
     if !builtins.pathExists path then
-      throw (
-        "clickhouse-operator: ${def.kind} has no vendored CRD document at "
-        + "schemas/${def.plural}.json. Run scripts/vendor-clickhouse-crd-schemas.py."
-      )
+      scope.fail {
+        package = "clickhouse-operator";
+        message = "${def.kind} has no vendored CRD document at schemas/${def.plural}.json.";
+        fix = "Run scripts/vendor-clickhouse-crd-schemas.py.";
+      }
     else
       builtins.fromJSON (builtins.readFile path);
 
@@ -186,11 +187,11 @@ let
     if agree then
       version
     else
-      throw (
-        "clickhouse-operator: kinds.nix and schemas/${def.plural}.json disagree on "
-        + "${def.kind} (group, kind, plural, short names or version). Fix kinds.nix "
-        + "to match the vendored upstream document."
-      );
+      scope.fail {
+        package = "clickhouse-operator";
+        message = "kinds.nix and schemas/${def.plural}.json disagree on ${def.kind} (group, kind, plural, short names or version).";
+        fix = "Fix kinds.nix to match the vendored upstream document.";
+      };
 
   mkKindCRD =
     def:

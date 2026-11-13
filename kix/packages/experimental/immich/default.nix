@@ -132,8 +132,11 @@ let
   };
   depOut =
     depName: dep: field:
-    dep.out.${field}
-      or (throw "${who}: deps.${depName} publishes no out.${field}. An import standing in for it sets ${importFields.${depName}}.");
+    dep.out.${field} or (scope.fail {
+      package = "immich";
+      message = "deps.${depName} publishes no out.${field}.";
+      fix = "An import standing in for it sets ${importFields.${depName}}.";
+    });
 
   mlFix = "Add an immich-machine-learning instance to this namespace, or a kix.mkImport aliased machineLearning whose out sets fqdn and port.";
 
@@ -333,7 +336,11 @@ in
         # STARTTLS.
         relayCheck =
           if mailLogin && relay.tls == "starttls" then
-            throw "${who}: deps.smtp uses tls = \"starttls\" with credentials. Immich's mailer (nodemailer) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way. Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance."
+            scope.fail {
+              package = "immich";
+              message = "deps.smtp uses tls = \"starttls\" with credentials. Immich's mailer (nodemailer) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way.";
+              fix = "Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance.";
+            }
           else
             null;
         mailSettings = lib.optionalAttrs (relay != null) {
@@ -376,7 +383,12 @@ in
         serverVersion = release.of imageTag;
         mlUrl =
           if mlVersion != null && serverVersion != null && mlVersion != serverVersion then
-            throw "${who}: immich-server runs release ${serverVersion} (image.tag ${imageTag}) but its machineLearning dependency runs ${mlVersion}. Immich publishes both images under one tag; set image.tag to the same release on both instances."
+            scope.fail {
+              package = "immich";
+              option = "config.image.tag";
+              message = "immich-server runs release ${serverVersion} (image.tag ${imageTag}) but its machineLearning dependency runs ${mlVersion}. Immich publishes both images under one tag.";
+              fix = "Set image.tag to the same release on both instances.";
+            }
           else
             "http://${depOut "machineLearning" machineLearning "fqdn"}:${
               toString (depOut "machineLearning" machineLearning "port")
@@ -484,25 +496,47 @@ in
             mailHits = builtins.filter (p: lib.hasAttrByPath p config.settings) mailOwnedSettings;
           in
           if lib.hasAttrByPath [ "notifications" "smtp" "transport" "password" ] config.settings then
-            throw "${who}: settings sets notifications.smtp.transport.password, which the config ConfigMap would hold. Wire the mail server through deps.smtp instead, whose credentials hold the username and password."
+            scope.fail {
+              package = "immich";
+              option = "config.settings";
+              message = "settings sets notifications.smtp.transport.password, which the config ConfigMap would hold.";
+              fix = "Wire the mail server through deps.smtp instead, whose credentials hold the username and password.";
+            }
           else if mailHits != [ ] then
-            throw "${who}: settings sets ${
-              lib.concatMapStringsSep ", " (lib.concatStringsSep ".") mailHits
-            }, which deps.smtp sets. Set the server on the SMTP instance, and the sender there or in mail.from."
+            scope.fail {
+              package = "immich";
+              option = "config.settings";
+              message = "settings sets ${
+                lib.concatMapStringsSep ", " (lib.concatStringsSep ".") mailHits
+              }, which deps.smtp sets.";
+              fix = "Set the server on the SMTP instance, and the sender there or in mail.from.";
+            }
           else if lib.hasAttrByPath [ "oauth" "clientSecret" ] config.settings then
-            throw "${who}: settings sets oauth.clientSecret, which the config ConfigMap would hold. Wire the client through deps.oidc instead, whose credentials hold the client id and secret."
+            scope.fail {
+              package = "immich";
+              option = "config.settings";
+              message = "settings sets oauth.clientSecret, which the config ConfigMap would hold.";
+              fix = "Wire the client through deps.oidc instead, whose credentials hold the client id and secret.";
+            }
           else if oidcHits != [ ] then
-            throw "${who}: settings sets ${
-              lib.concatMapStringsSep ", " (lib.concatStringsSep ".") oidcHits
-            }, which deps.oidc sets. Use the oidc option and the oidc dependency instead."
+            scope.fail {
+              package = "immich";
+              option = "config.settings";
+              message = "settings sets ${
+                lib.concatMapStringsSep ", " (lib.concatStringsSep ".") oidcHits
+              }, which deps.oidc sets.";
+              fix = "Use the oidc option and the oidc dependency instead.";
+            }
           else if hits == [ ] then
             null
           else
-            throw (
-              lib.concatMapStringsSep "\n" (
-                p:
-                "${who}: settings sets ${lib.concatStringsSep "." p}, which follows the optional machineLearning dependency. Remove it from settings. ${mlFix}"
-              ) hits
+            scope.fail (
+              map (p: {
+                package = "immich";
+                option = "config.settings";
+                message = "settings sets ${lib.concatStringsSep "." p}, which follows the optional machineLearning dependency.";
+                fix = "Remove it from settings. ${mlFix}";
+              }) hits
             );
 
         env = kix.mergeEnv {
@@ -726,7 +760,11 @@ in
                 };
                 ${if config.initChownData then "initContainers" else null} = lib.singleton (
                   if nonRootFailsBuild clusterConfig then
-                    throw "${who}: ${chownHint}"
+                    scope.fail {
+                      package = "immich";
+                      option = "config.initChownData";
+                      message = chownHint;
+                    }
                   else
                     {
                       name = "init-chown-data";

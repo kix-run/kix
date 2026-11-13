@@ -143,7 +143,6 @@ let
   c = import ./common.nix { inherit lib kix scope; };
   inherit (c)
     release
-    who
     ports
     crdSpecs
     kindOf
@@ -351,9 +350,17 @@ in
             firstNoNamespace = builtins.head noNamespace;
           in
           if literal != [ ] then
-            throw "${who}: ${what} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\". Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }."
+            scope.fail {
+              package = "external-secrets";
+              message = "${what} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\".";
+              fix = "Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }.";
+            }
           else if needNamespace && noNamespace != [ ] then
-            throw "${who}: ${what} names Secret \"${firstNoNamespace.name}\" at ${firstNoNamespace.path} without a namespace, so the controller reads it from the namespace of each ExternalSecret that uses the store, and Kix can neither order the store after it nor check its keys. Add namespace = scope.namespaceName to the selector (the namespace of this instance's secret dependency)."
+            scope.fail {
+              package = "external-secrets";
+              message = "${what} names Secret \"${firstNoNamespace.name}\" at ${firstNoNamespace.path} without a namespace, so the controller reads it from the namespace of each ExternalSecret that uses the store, and Kix can neither order the store after it nor check its keys.";
+              fix = "Add namespace = scope.namespaceName to the selector (the namespace of this instance's secret dependency).";
+            }
           else
             result;
 
@@ -367,7 +374,11 @@ in
             what = crName consumerScope "ExternalSecret" args;
           in
           if target ? manifest then
-            throw "${who}: ${what} sets spec.target.manifest, a generic target. The controller writes one only with --unsafe-allow-generic-targets, and the package grants it no RBAC for ConfigMaps or custom resources. Write a Secret target, or create this ExternalSecret outside Kix."
+            scope.fail {
+              package = "external-secrets";
+              message = "${what} sets spec.target.manifest, a generic target. The controller writes one only with --unsafe-allow-generic-targets, and the package grants it no RBAC for ConfigMaps or custom resources.";
+              fix = "Write a Secret target, or create this ExternalSecret outside Kix.";
+            }
           else
             args
             // {
@@ -413,9 +424,17 @@ in
                 unknown = if knownKeys == null then [ ] else builtins.filter (k: !(builtins.elem k knownKeys)) keys;
               in
               if policy == "None" then
-                throw "${who}: out.secretRef of ${what}: creationPolicy None writes no Secret. Use another creationPolicy, or reference the Secret through its own dependency."
+                scope.fail {
+                  package = "external-secrets";
+                  message = "out.secretRef of ${what} is not available, because creationPolicy None writes no Secret.";
+                  fix = "Use another creationPolicy, or reference the Secret through its own dependency.";
+                }
               else if unknown != [ ] then
-                throw "${who}: out.secretRef of ${what} declares ${lib.concatStringsSep ", " unknown}, which the ExternalSecret does not write; it writes ${lib.concatStringsSep ", " knownKeys}. Declare only those keys, or add the missing ones to spec.data or spec.target.template.data."
+                scope.fail {
+                  package = "external-secrets";
+                  message = "out.secretRef of ${what} declares ${lib.concatStringsSep ", " unknown}, which the ExternalSecret does not write. It writes ${lib.concatStringsSep ", " knownKeys}.";
+                  fix = "Declare only those keys, or add the missing ones to spec.data or spec.target.template.data.";
+                }
               else
                 consumerScope.mkSecretRef {
                   name = secretName;

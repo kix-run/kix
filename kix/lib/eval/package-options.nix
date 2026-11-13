@@ -11,6 +11,7 @@
 }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   availabilityLib = import ../core/availability.nix { inherit lib; };
 
   # Return the checked availability `levels` and deduplicated option contract
@@ -100,7 +101,7 @@ in
     if violations == [ ] then
       null
     else
-      throw (
+      fail (
         "the options of ${who} break the option contract (docs: reference/package-schema/options, \"Option contract\"):\n"
         + lib.concatMapStringsSep "\n" (v: "  - ${v.message}${levelNote v}") violations
       );

@@ -75,11 +75,12 @@ rec {
       tag = builtins.unsafeDiscardStringContext image.tag;
     in
     if minor tag != minor release then
-      throw (
-        "${who}: image tag \"${tag}\" is not a ${lib.concatStringsSep "." (minor release)} release, "
-        + "and the DiskPool CRD version and the RBAC in kix/packages/experimental/mayastor are written for ${release}. "
-        + "To move to another release, change release in kix/packages/experimental/mayastor/common.nix."
-      )
+      scope.fail {
+        package = "mayastor";
+        option = "image.tag";
+        message = "image tag \"${tag}\" is not a ${lib.concatStringsSep "." (minor release)} release, and the DiskPool CRD version and the RBAC in kix/packages/experimental/mayastor are written for ${release}.";
+        fix = "To move to another release, change release in kix/packages/experimental/mayastor/common.nix.";
+      }
     else
       kix.image.ref image;
 

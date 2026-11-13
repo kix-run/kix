@@ -4,7 +4,7 @@
 #   VM-native CRDs: every kind in ./kinds.nix, derived from that table so
 #     the set stays complete: the operator crashes at startup if any kind
 #     it indexes is missing (see the invariant note in kinds.nix; enforced
-#     below with an eval-time throw).
+#     below with an eval-time failure).
 #   prometheus-operator compat CRDs: ServiceMonitor, PodMonitor,
 #     PrometheusRule, Probe (monitoring.coreos.com). CRDs only, no
 #     prometheus-operator controller: the VM operator's built-in converter
@@ -50,12 +50,11 @@ let
     if missingIndexed == [ ] then
       null
     else
-      throw (
-        "victoria-metrics-operator: kinds.nix no longer covers the operator's "
-        + "startup indexer set. Missing: ${builtins.concatStringsSep ", " missingIndexed}. "
-        + "The operator crashes at startup (\"cannot register status condition "
-        + "indexers\") when any of these CRDs is absent; restore them in kinds.nix."
-      );
+      scope.fail {
+        package = "victoria-metrics-operator";
+        message = "kinds.nix no longer covers the operator's startup indexer set. Missing: ${builtins.concatStringsSep ", " missingIndexed}.";
+        fix = "The operator crashes at startup (\"cannot register status condition indexers\") when any of these CRDs is absent; restore them in kinds.nix.";
+      };
 
   imageTag = builtins.unsafeDiscardStringContext config.image.tag;
 
@@ -416,11 +415,11 @@ let
     if !(def.consumer or false) then
       null
     else if !builtins.pathExists path then
-      throw (
-        "victoria-metrics-operator: ${def.kind} has a consumer surface but no "
-        + "vendored schema at crds/${def.plural}.${vmGroup}.json. Add it to "
-        + "crds/sources.txt and run scripts/vendor-crds.py."
-      )
+      scope.fail {
+        package = "victoria-metrics-operator";
+        message = "${def.kind} has a consumer surface but no vendored schema at crds/${def.plural}.${vmGroup}.json.";
+        fix = "Add it to crds/sources.txt and run scripts/vendor-crds.py.";
+      }
     else
       (builtins.elemAt (builtins.fromJSON (builtins.readFile path)).spec.versions 0)
       .schema.openAPIV3Schema.properties.spec;

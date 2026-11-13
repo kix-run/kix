@@ -3,6 +3,7 @@
   lib,
   kix,
   who,
+  fail,
   httpPort,
   paths,
   config,
@@ -24,8 +25,12 @@ let
       inherit (config.prometheusDatasource) name uid;
       type = "prometheus";
       url =
-        prometheusServer.out.serviceUrl
-          or (throw "${who}: deps.prometheusServer resolved to an instance without out.serviceUrl, the base URL of the Prometheus HTTP API. Wire a prometheus instance, or set out.serviceUrl in the kix.mkImport that answers prometheusServer.");
+        prometheusServer.out.serviceUrl or (fail {
+          package = "grafana";
+          option = "deps.prometheusServer";
+          message = "deps.prometheusServer resolved to an instance without out.serviceUrl, the base URL of the Prometheus HTTP API.";
+          fix = "Wire a prometheus instance, or set out.serviceUrl in the kix.mkImport that answers prometheusServer.";
+        });
       access = "proxy";
       isDefault = true;
       jsonData.httpMethod = "POST";
@@ -34,8 +39,12 @@ let
       inherit (config.alertmanagerDatasource) name uid;
       type = "alertmanager";
       url =
-        alertmanager.out.serviceUrl
-          or (throw "${who}: deps.alertmanager resolved to an instance without out.serviceUrl, the base URL of Alertmanager's API. Wire an alertmanager instance, or set out.serviceUrl in the kix.mkImport that answers alertmanager.");
+        alertmanager.out.serviceUrl or (fail {
+          package = "grafana";
+          option = "deps.alertmanager";
+          message = "deps.alertmanager resolved to an instance without out.serviceUrl, the base URL of Alertmanager's API.";
+          fix = "Wire an alertmanager instance, or set out.serviceUrl in the kix.mkImport that answers alertmanager.";
+        });
       access = "proxy";
       jsonData = {
         handleGrafanaManagedAlerts = false;
@@ -46,16 +55,24 @@ let
       inherit (config.lokiDatasource) name uid;
       type = "loki";
       url =
-        loki.out.serviceUrl
-          or (throw "${who}: deps.loki resolved to an instance without out.serviceUrl, the base URL of Loki's HTTP API. Wire a loki instance, or set out.serviceUrl in the kix.mkImport that answers loki.");
+        loki.out.serviceUrl or (fail {
+          package = "grafana";
+          option = "deps.loki";
+          message = "deps.loki resolved to an instance without out.serviceUrl, the base URL of Loki's HTTP API.";
+          fix = "Wire a loki instance, or set out.serviceUrl in the kix.mkImport that answers loki.";
+        });
       access = "proxy";
     }
     ++ lib.optional (tempo != null) {
       inherit (config.tempoDatasource) name uid;
       type = "tempo";
       url =
-        tempo.out.queryUrl
-          or (throw "${who}: deps.tempo resolved to an instance without out.queryUrl, the base URL of Tempo's query API. Wire a tempo instance, or set out.queryUrl in the kix.mkImport that answers tempo.");
+        tempo.out.queryUrl or (fail {
+          package = "grafana";
+          option = "deps.tempo";
+          message = "deps.tempo resolved to an instance without out.queryUrl, the base URL of Tempo's query API.";
+          fix = "Wire a tempo instance, or set out.queryUrl in the kix.mkImport that answers tempo.";
+        });
       access = "proxy";
       jsonData =
         lib.optionalAttrs (prometheusServer != null) {
@@ -111,11 +128,21 @@ let
 
   datasources =
     if inlineSecrets != [ ] then
-      throw "${who}: ${lib.concatStringsSep ", " inlineSecrets} holds a value written inline, and the datasources ConfigMap would carry it. Write a reference that Grafana expands: $NAME with NAME in `env` from a secretKeyRef, or $__file{<path>} for a mounted file, and put it under secureJsonData."
+      fail {
+        package = "grafana";
+        option = "datasources";
+        message = "${lib.concatStringsSep ", " inlineSecrets} holds a value written inline, and the datasources ConfigMap would carry it.";
+        fix = "Write a reference that Grafana expands: $NAME with NAME in `env` from a secretKeyRef, or $__file{<path>} for a mounted file, and put it under secureJsonData.";
+      }
     else if clashing != [ ] then
-      throw "${who}: datasources reuses ${
-        lib.concatMapStringsSep ", " (v: "\"${v}\"") clashing
-      }, the name or uid of a datasource wired from a dependency. Rename the entry, or change prometheusDatasource, alertmanagerDatasource, lokiDatasource, or tempoDatasource."
+      fail {
+        package = "grafana";
+        option = "datasources";
+        message = "datasources reuses ${
+          lib.concatMapStringsSep ", " (v: "\"${v}\"") clashing
+        }, the name or uid of a datasource wired from a dependency.";
+        fix = "Rename the entry, or change prometheusDatasource, alertmanagerDatasource, lokiDatasource, or tempoDatasource.";
+      }
     else
       wiredDatasources ++ map (lib.filterAttrs (_: v: v != null)) config.datasources;
 
@@ -226,7 +253,12 @@ let
 
   oidcRootUrlCheck =
     if oidcOn && (ini.server.root_url or null) == null then
-      throw "${who}: deps.oidc is wired, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth. Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open."
+      fail {
+        package = "grafana";
+        option = "settings.server.root_url";
+        message = "deps.oidc is wired, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth.";
+        fix = "Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open.";
+      }
     else
       null;
 
@@ -255,7 +287,12 @@ let
     if oidcRootUrlCheck != null then
       oidcRootUrlCheck
     else if iniProblems != [ ] then
-      throw "${who}: settings: ${lib.concatStringsSep ", " iniProblems} would break a grafana.ini line, so the file would carry sections or keys that settings does not show. Keep values on one line, and leave line breaks and `]` out of section names and line breaks and `=` out of keys."
+      fail {
+        package = "grafana";
+        option = "settings";
+        message = "settings: ${lib.concatStringsSep ", " iniProblems} would break a grafana.ini line, so the file would carry sections or keys that settings does not show.";
+        fix = "Keep values on one line, and leave line breaks and `]` out of section names and line breaks and `=` out of keys.";
+      }
     else
       lib.concatStringsSep "\n" (
         lib.mapAttrsToList (

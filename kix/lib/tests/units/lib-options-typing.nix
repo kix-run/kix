@@ -365,8 +365,12 @@ in
       };
       guard = kixlib.guardArgs guardArgs;
       # compose.nix with `throw` replaced, so the message can be read.
-      caught = builtins.scopedImport { throw = message: { thrown = message; }; };
-      refusal = (caught ../../vocab/compose.nix { inherit lib; }).guardArgs guardArgs;
+      helpers = import ../caught.nix { inherit lib; };
+      refusal =
+        args:
+        helpers.records (
+          ((helpers.caught ../../vocab/compose.nix { inherit lib; }).guardArgs guardArgs args).thrown
+        );
       allowed = {
         "dedup.minScrapeIntervalExtra" = "1m";
         "search.maxQueryDuration" = "60s";
@@ -387,9 +391,12 @@ in
       &&
         refusal {
           "dedup.minScrapeInterval" = "1m";
-        } == {
-          thrown = "pkg ns/inst: vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
-        }
+        } == [
+          {
+            option = "vmstorage.extraArgs";
+            message = "pkg ns/inst: vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
+          }
+        ]
     )
     || throw "guardArgs attrset: ${
       builtins.toJSON (refusal {

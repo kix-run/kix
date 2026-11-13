@@ -3,6 +3,7 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   markers = import ../core/markers.nix { inherit lib; };
 
   kixAnnotations = import ../core/annotations.nix;
@@ -42,7 +43,10 @@ rec {
           v = image.${field} or null;
         in
         if v == null || v == "" then
-          throw "kix.image.ref: image reference has no '${field}'. An image needs at least { repository, tag }, and got: ${builtins.toJSON image}"
+          fail {
+            message = "kix.image.ref: image reference has no '${field}', and got: ${builtins.toJSON image}";
+            fix = "An image needs at least { repository, tag }.";
+          }
         else
           v;
     in
@@ -80,12 +84,15 @@ rec {
       else if value ? valueFrom then
         value // { inherit name; }
       else
-        throw "kix.mkEnvVars: ${name} is an attrset with no `valueFrom`, which would render as an env var whose value is an object. Pass a string, or a source such as `secret.out.keyRef \"key\"`. Got: ${builtins.toJSON (builtins.attrNames value)}"
+        fail {
+          message = "kix.mkEnvVars: ${name} is an attrset with no `valueFrom`, which would render as an env var whose value is an object. Got: ${builtins.toJSON (builtins.attrNames value)}";
+          fix = "Pass a string, or a source such as `secret.out.keyRef \"key\"`.";
+        }
     ) (lib.filterAttrs (_: v: v != null) attrs);
 
   mkEnv = attrs: raw: (mkEnvVars attrs) ++ raw;
 
-  # Merge `overrides` into `base` with `lib.recursiveUpdate`, throwing if
+  # Merge `overrides` into `base` with `lib.recursiveUpdate`, failing if
   # `overrides` touches any attribute path in `locked` or replaces a parent of
   # a locked path with a non-attrset value.
   mergeGuarded =
@@ -124,7 +131,11 @@ rec {
       touched = builtins.filter (d: d != null) (map describe locked);
     in
     if touched != [ ] then
-      throw "${who}: ${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness. Use the option that owns it."
+      fail {
+        option = what;
+        message = "${who}: ${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness.";
+        fix = "Use the option that owns it.";
+      }
     else
       lib.recursiveUpdate base overrides;
 
@@ -159,14 +170,17 @@ rec {
         let
           h = hits group;
         in
-        lib.optional (h != [ ])
-          "${who}: env sets ${lib.concatStringsSep ", " h}, which ${
+        lib.optional (h != [ ]) {
+          option = "env";
+          message = "${who}: env sets ${lib.concatStringsSep ", " h}, which ${
             if builtins.length h == 1 then "comes" else "come"
-          } from ${group.from}. ${group.fix}"
+          } from ${group.from}.";
+          fix = group.fix;
+        }
       ) owned;
     in
     if lines != [ ] then
-      throw (lib.concatStringsSep "\n" lines)
+      fail lines
     else
       defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
 
@@ -225,10 +239,13 @@ rec {
           ) args;
       lines = map (
         { written, flag }:
-        "${who}: ${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}"
+        {
+          inherit option;
+          message = "${who}: ${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}";
+        }
       ) hits;
     in
-    if lines != [ ] then throw (lib.concatStringsSep "\n" lines) else args;
+    if lines != [ ] then fail lines else args;
 
   # Validate that a secret dependency `dep` declares all required `keys` (and
   # at least one key group in `anyOf` when set) in `dep.out.keys`, then return
@@ -255,7 +272,10 @@ rec {
     if dep == null || wanted == [ ] then
       dep
     else
-      throw "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}. Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
+      fail {
+        message = "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}.";
+        fix = "Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
+      };
 
   # Build a network policy for operand pods created at runtime by an operator,
   # or return null when no policy is needed.
@@ -373,10 +393,13 @@ rec {
         ) finalPorts;
         _portCheck =
           if ports != null && badTargets != [ ] then
-            throw "service.fromWorkload '${name}': targetPort(s) [${
-              builtins.concatStringsSep ", " (map (p: "\"${p.targetPort}\"") badTargets)
-            }] do not match any named container port on the workload. "
-            + "Declared container ports: [${builtins.concatStringsSep ", " workloadPortNames}]."
+            fail {
+              message =
+                "service.fromWorkload '${name}': targetPort(s) [${
+                  builtins.concatStringsSep ", " (map (p: "\"${p.targetPort}\"") badTargets)
+                }] do not match any named container port on the workload. "
+                + "Declared container ports: [${builtins.concatStringsSep ", " workloadPortNames}].";
+            }
           else
             null;
       in

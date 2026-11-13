@@ -570,8 +570,12 @@ in
               removeAttrs connector [ "proxyClass" ]
               // lib.optionalAttrs (connector.proxyClass != null) {
                 proxyClass =
-                  (self.proxyClasses.${connector.proxyClass}
-                    or (throw "${who}: connectors.${cName}.proxyClass = \"${connector.proxyClass}\" names no entry in proxyClasses (declared: ${declaredProxyClasses config}). Declare proxyClasses.${connector.proxyClass}, or build the Connector with out.mkConnector and a ProxyClass passed as <resource>.out.name.")
+                  (self.proxyClasses.${connector.proxyClass} or (scope.fail {
+                    package = "tailscale";
+                    option = "config.connectors.${cName}.proxyClass";
+                    message = "connectors.${cName}.proxyClass = \"${connector.proxyClass}\" names no entry in proxyClasses (declared: ${declaredProxyClasses config}).";
+                    fix = "Declare proxyClasses.${connector.proxyClass}, or build the Connector with out.mkConnector and a ProxyClass passed as <resource>.out.name.";
+                  })
                   ).out.name;
               };
             requires = [ self.deployment ];

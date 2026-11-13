@@ -8,6 +8,7 @@
 
 let
   helpers = import ./lib/eval/helpers.nix { inherit lib; };
+  inherit (import ./lib/core/error.nix { inherit lib; }) fail;
 in
 rec {
 
@@ -111,7 +112,7 @@ rec {
           "'${v.resource}' in instance '${v.instance}' depends on the PackageInstance record for '${v.piInstance}'"
         ) violations;
       in
-      throw "cluster '${clusterName}' has invalid package dependencies: resources must depend on the resources they use, not PackageInstance records: ${lib.concatStringsSep "; " msgs}";
+      fail "cluster '${clusterName}' has invalid package dependencies: resources must depend on the resources they use, not PackageInstance records: ${lib.concatStringsSep "; " msgs}";
 
   # Verify that each PackageInstance references its resources via annotation string context (invariant 3).
   checkPIReferencesResources =
@@ -145,7 +146,7 @@ rec {
           v: "PackageInstance '${v.instance}' does not reference any of its own resources"
         ) violations;
       in
-      throw "cluster '${clusterName}' has invalid package dependencies: package resource references are missing: ${lib.concatStringsSep "; " msgs}";
+      fail "cluster '${clusterName}' has invalid package dependencies: package resource references are missing: ${lib.concatStringsSep "; " msgs}";
 
   # Verify that each PackageInstance closure covers all non-orphaned package resources (invariant 4).
   checkPIClosureComplete =
@@ -218,7 +219,7 @@ rec {
           v: "'${v.resource}' in '${v.instance}' is not referenced by its PackageInstance or its dependencies"
         ) violations;
       in
-      throw "cluster '${clusterName}' has invalid package dependencies: package dependencies do not include all resources: ${lib.concatStringsSep "; " msgs}";
+      fail "cluster '${clusterName}' has invalid package dependencies: package dependencies do not include all resources: ${lib.concatStringsSep "; " msgs}";
 
   # Verify that Activation references only PackageInstances (invariant 5).
   checkActivationOnlyReferencesPIs =
@@ -239,7 +240,7 @@ rec {
           r: "'${r.kind}/${r.name}' is referenced by Activation but is not a PackageInstance"
         ) nonPIResources;
       in
-      throw "cluster '${clusterName}' has invalid package dependencies: Activation must reference PackageInstance records: ${lib.concatStringsSep "; " msgs}";
+      fail "cluster '${clusterName}' has invalid package dependencies: Activation must reference PackageInstance records: ${lib.concatStringsSep "; " msgs}";
 
   # Validate all PackageInstance wiring invariants for a cluster.
   validatePIWiring =

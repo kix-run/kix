@@ -96,8 +96,11 @@ in
       }:
       let
         lokiUrl =
-          loki.out.serviceUrl
-            or (throw "${who}: deps.loki resolved to an instance with no out.serviceUrl (the base URL of Loki's HTTP API), so the agent has nowhere to push. Point deps.loki at a loki instance.");
+          loki.out.serviceUrl or (scope.fail {
+            package = "loki-logs";
+            message = "deps.loki resolved to an instance with no out.serviceUrl (the base URL of Loki's HTTP API), so the agent has nowhere to push.";
+            fix = "Point deps.loki at a loki instance.";
+          });
 
         builtinSettings = lib.recursiveUpdate vectorAgent.baseConfig {
           # Loki rejects lines older than reject_old_samples_max_age (168h

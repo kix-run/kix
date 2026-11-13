@@ -196,7 +196,10 @@ rec {
       };
     in
     if problem != null then
-      throw "${who}: AutoscalingRunnerSet ${namespace}/${name}: ${problem}"
+      consumerScope.fail {
+        package = "arc";
+        message = "AutoscalingRunnerSet ${namespace}/${name}: ${problem}";
+      }
     else
       {
         inherit

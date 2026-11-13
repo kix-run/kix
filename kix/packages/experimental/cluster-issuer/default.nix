@@ -72,7 +72,6 @@
 
 let
   ns = scope.namespaceName;
-  who = "cluster-issuer ${ns}/${scope.instanceName}";
   accountKeyPath = "spec.acme.privateKeySecretRef";
 
   listOrNone = xs: if xs == [ ] then "none" else lib.concatStringsSep ", " xs;
@@ -288,7 +287,11 @@ in
         then
           out
         else
-          throw "${who}: deps.certManager resolved to an instance whose out has no clusterIssuerSpecSchema, clusterResourceNamespace, or crds.ClusterIssuer, such as a kix.mkImport. This package needs the cert-manager package. For a cert-manager installed outside Kix, declare the existing ClusterIssuer as a kix.mkImport { out.withCert = ...; } instance with aliases = [ \"clusterIssuer\" ] instead.";
+          scope.fail {
+            package = "cluster-issuer";
+            message = "deps.certManager resolved to an instance whose out has no clusterIssuerSpecSchema, clusterResourceNamespace, or crds.ClusterIssuer, such as a kix.mkImport. This package needs the cert-manager package.";
+            fix = "For a cert-manager installed outside Kix, declare the existing ClusterIssuer as a kix.mkImport { out.withCert = ...; } instance with aliases = [ \"clusterIssuer\" ] instead.";
+          };
       schema = cmOut.clusterIssuerSpecSchema;
       cmNs = cmOut.clusterResourceNamespace;
       issuerTypes = builtins.attrNames schema.properties;

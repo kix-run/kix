@@ -363,7 +363,12 @@ in
         ];
       in
       if (config.resources.limits.memory or null) == null then
-        throw "clickhouse-cluster (${name}): resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one. Set config.resources.limits.memory."
+        scope.fail {
+          package = "clickhouse-cluster";
+          option = "config.resources.limits.memory";
+          message = "resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one.";
+          fix = "Set config.resources.limits.memory.";
+        }
       else
         {
           installation = clickhouseOperator.out.mkClickHouseInstallation scope {

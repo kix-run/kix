@@ -19,6 +19,7 @@
   ...
 }:
 let
+  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
   isFunction = builtins.isFunction;
 
   fields = {
@@ -92,7 +93,10 @@ let
         if dep == null then
           null
         else if found != [ ] then
-          throw "${who}: deps.${arg} must be a secret, but it is ${what}. Wire a secret instance, such as packages.secret (plain text or a SOPS file) or packages.secret-ref (a Secret something else writes), with deps.${arg} = ref.<ns>.<instance>."
+          fail {
+            message = "${who}: deps.${arg} must be a secret, but it is ${what}.";
+            fix = "Wire a secret instance, such as packages.secret (plain text or a SOPS file) or packages.secret-ref (a Secret something else writes), with deps.${arg} = ref.<ns>.<instance>.";
+          }
         else
           compose.checkSecretKeys {
             inherit

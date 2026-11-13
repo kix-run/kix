@@ -81,7 +81,12 @@
       };
     in
     if config.classes == { } then
-      throw "${who}: config.classes is empty. Declare at least one StorageClass, for example classes.local-path = { provisioner = \"rancher.io/local-path\"; volumeBindingMode = \"WaitForFirstConsumer\"; }."
+      scope.fail {
+        package = "storage-classes";
+        option = "config.classes";
+        message = "config.classes is empty.";
+        fix = "Declare at least one StorageClass, for example classes.local-path = { provisioner = \"rancher.io/local-path\"; volumeBindingMode = \"WaitForFirstConsumer\"; }.";
+      }
     else
       {
         classes = sc.resources;

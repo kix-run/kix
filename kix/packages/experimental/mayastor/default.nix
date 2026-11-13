@@ -277,7 +277,12 @@ in
           if !checkNodes then
             pool
           else if !(nodes ? ${pool.node}) then
-            throw "${who}: diskPools.${poolName}.node is \"${pool.node}\", which is not in cluster.nodes (${lib.concatStringsSep ", " (builtins.attrNames nodes)}). Name the node that holds the pool's disk."
+            scope.fail {
+              package = "mayastor";
+              option = "diskPools.${poolName}.node";
+              message = "diskPools.${poolName}.node is \"${pool.node}\", which is not in cluster.nodes (${lib.concatStringsSep ", " (builtins.attrNames nodes)}).";
+              fix = "Name the node that holds the pool's disk.";
+            }
           else
             let
               missing = lib.filterAttrs (k: v: (nodes.${pool.node}.labels.${k} or null) != v) ioEngineLabels;
@@ -362,7 +367,12 @@ in
                   // lib.optionalAttrs pool.encrypted {
                     encryptionConfig.source.secret.name =
                       if key == null then
-                        throw "${who}: diskPools.${poolName}.encrypted is true, but the poolEncryptionKey dependency is not wired. Wire a secret with key encryption_parameters through deps.poolEncryptionKey = ref.<ns>.<instance>, or set encrypted = false."
+                        scope.fail {
+                          package = "mayastor";
+                          option = "diskPools.${poolName}.encrypted";
+                          message = "diskPools.${poolName}.encrypted is true, but the poolEncryptionKey dependency is not wired.";
+                          fix = "Wire a secret with key encryption_parameters through deps.poolEncryptionKey = ref.<ns>.<instance>, or set encrypted = false.";
+                        }
                       else
                         key.out.name;
                   }

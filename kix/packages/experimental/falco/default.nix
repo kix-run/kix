@@ -384,7 +384,10 @@ in
         # mergeGuarded.
         falcoConfig =
           if refusals != [ ] then
-            throw "${who}: ${lib.concatStringsSep " " refusals}"
+            scope.fail {
+              package = "falco";
+              message = "${lib.concatStringsSep " " refusals}";
+            }
           else
             kix.mergeGuarded {
               inherit who;
@@ -447,7 +450,10 @@ in
 
         daemonset =
           if refusal != null then
-            throw refusal
+            scope.fail {
+              package = "falco";
+              message = refusal;
+            }
           else
             {
               inherit name;

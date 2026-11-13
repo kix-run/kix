@@ -60,12 +60,12 @@ let
       tag = builtins.unsafeDiscardStringContext image.tag;
     in
     if minorOf tag != releaseMinor then
-      throw (
-        "${who}: image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
-        + "and the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}. To move to "
-        + "another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run "
-        + "uv run scripts/vendor-crds.py zfs-localpv."
-      )
+      scope.fail {
+        package = "zfs-localpv";
+        option = "config.image.tag";
+        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}.";
+        fix = "To move to another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
+      }
     else
       kix.image.ref image;
 

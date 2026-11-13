@@ -5,6 +5,7 @@
 }:
 
 let
+  inherit (import ../../core/error.nix { inherit lib; }) fail;
   cfg = config.networkPolicy;
 
   interface = import ./interface.nix { inherit lib; };
@@ -203,15 +204,16 @@ in
         checks = [
           (
             if provider == null then
-              throw (
-                "kix: `networkPolicy.enable = true` but no instance declares "
-                + "`meta.roles = [\"network-policy-enforcer\"]`. Declare a `cilium` "
-                + "instance. Where the environment installs Cilium, a flavour sets "
-                + "cluster.roles.cni.binding = \"shadowable\" and declares a "
-                + "platform-cilium import (on RKE2: "
-                + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
-                + "configures or uses that Cilium instead of installing one."
-              )
+              fail {
+                option = "networkPolicy.enable";
+                message = "`networkPolicy.enable = true` but no instance declares `meta.roles = [\"network-policy-enforcer\"]`.";
+                fix =
+                  "Declare a `cilium` instance. Where the environment installs Cilium, a flavour sets "
+                  + "cluster.roles.cni.binding = \"shadowable\" and declares a "
+                  + "platform-cilium import (on RKE2: "
+                  + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
+                  + "configures or uses that Cilium instead of installing one.";
+              }
             else
               null
           )
@@ -219,10 +221,12 @@ in
             if scrapePolicies.errors == [ ] then
               null
             else
-              throw (
-                "kix netpol: networkPolicy.defaultDeny is on, and Kix cannot derive these scrape paths:\n"
-                + lib.concatMapStringsSep "\n" (e: "- ${e}") scrapePolicies.errors
-              )
+              fail {
+                option = "networkPolicy.defaultDeny";
+                message =
+                  "networkPolicy.defaultDeny is on, and Kix cannot derive these scrape paths:\n"
+                  + lib.concatMapStringsSep "\n" (e: "- ${e}") scrapePolicies.errors;
+              }
           )
           (
             if enforcerOut == null then

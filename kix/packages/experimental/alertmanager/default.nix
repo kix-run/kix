@@ -104,10 +104,12 @@ let
 
   # The ports Alertmanager dials to deliver notifications (see the header).
   receiverPorts = import ../../stable/victoria-metrics-alert/alertmanager-receiver-ports.nix {
-    inherit lib who;
+    inherit lib;
+    inherit (scope) fail;
   };
   refuseInlineSecrets = import ../../stable/victoria-metrics-alert/alertmanager-inline-secrets.nix {
-    inherit lib who;
+    inherit lib;
+    inherit (scope) fail;
   };
 in
 {
@@ -191,7 +193,11 @@ in
     let
       configDep =
         if alertmanagerConfig != null && config.settings != null then
-          throw "${who}: both settings and the alertmanagerConfig dependency are set, and each supplies the whole configuration file. Remove one."
+          scope.fail {
+            package = "alertmanager";
+            message = "both settings and the alertmanagerConfig dependency are set, and each supplies the whole configuration file.";
+            fix = "Remove one.";
+          }
         else
           kix.contracts.secret.helpers.use {
             inherit who;

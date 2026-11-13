@@ -19,6 +19,7 @@
 { lib }:
 
 let
+  inherit (import ../../../lib/core/error.nix { inherit lib; }) fail;
   release = "1.19.2";
 
   text = builtins.readFile ./versions.properties;
@@ -45,7 +46,10 @@ let
       m = builtins.match "([0-9][0-9.]*)-build-([0-9.]+)" entry;
     in
     if m == null then
-      throw "kix/packages/experimental/stackgres-operator/versions.properties: \"${entry}\" is not <version>-build-<build>."
+      fail {
+        package = "stackgres-operator";
+        message = "kix/packages/experimental/stackgres-operator/versions.properties: \"${entry}\" is not <version>-build-<build>.";
+      }
     else
       {
         version = builtins.elemAt m 0;
@@ -134,16 +138,24 @@ in
       pgbouncer = newest (entries "pgbouncer");
     in
     if version == "latest" then
-      throw "${who}: postgres.version \"latest\" would move the cluster to a new major when the operator is upgraded, and a major upgrade needs an SGDbOps of type majorVersionUpgrade. Pin a major such as \"17\"."
+      fail {
+        message = "${who}: postgres.version \"latest\" would move the cluster to a new major when the operator is upgraded, and a major upgrade needs an SGDbOps of type majorVersionUpgrade.";
+        fix = "Pin a major such as \"17\".";
+      }
     else if matching == [ ] then
-      throw "${who}: postgres.version \"${version}\" is not a PostgreSQL release that StackGres ${release} ships. ${
-        if builtins.elem askedMajor majors then
-          "PostgreSQL ${askedMajor} minors it ships: ${minorsOf askedMajor}."
-        else
-          "Use a major (${lib.concatStringsSep ", " majors}) or one of its minors."
-      }"
+      fail {
+        message = "${who}: postgres.version \"${version}\" is not a PostgreSQL release that StackGres ${release} ships.";
+        fix =
+          if builtins.elem askedMajor majors then
+            "PostgreSQL ${askedMajor} minors it ships: ${minorsOf askedMajor}."
+          else
+            "Use a major (${lib.concatStringsSep ", " majors}) or one of its minors.";
+      }
     else if builtins.elem pg.version unpublished then
-      throw "${who}: postgres.version \"${version}\" selects PostgreSQL ${pg.version} (build ${pg.build}), whose StackGres images quay.io does not publish, so the pods could not start. Pin another minor: ${minorsOf pg.major}."
+      fail {
+        message = "${who}: postgres.version \"${version}\" selects PostgreSQL ${pg.version} (build ${pg.build}), whose StackGres images quay.io does not publish, so the pods could not start.";
+        fix = "Pin another minor: ${minorsOf pg.major}.";
+      }
     else
       {
         inherit (pg) major;

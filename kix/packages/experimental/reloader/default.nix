@@ -101,7 +101,12 @@ let
       set = builtins.filter (lib.hasPrefix "${flag}=") extraArgs;
     in
     if bare != [ ] then
-      throw "${who}: extraArgs passes ${flag} without \"=\"; write ${flag}=<a,b>."
+      scope.fail {
+        package = "reloader";
+        option = "config.extraArgs";
+        message = "extraArgs passes ${flag} without \"=\".";
+        fix = "Write ${flag}=<a,b>.";
+      }
     else
       builtins.filter (v: v != "") (
         lib.concatMap (arg: lib.splitString "," (lib.removePrefix "${flag}=" arg)) set
@@ -245,7 +250,12 @@ in
         # workload calls withReloadOn.
         _flagsCheck = builtins.deepSeq read (
           if watched != [ ] && ignored != [ ] then
-            throw "${who}: extraArgs sets both --namespaces and --namespaces-to-ignore; reloader ignores --namespaces-to-ignore when --namespaces is set. Remove one."
+            scope.fail {
+              package = "reloader";
+              option = "config.extraArgs";
+              message = "extraArgs sets both --namespaces and --namespaces-to-ignore. reloader ignores --namespaces-to-ignore when --namespaces is set.";
+              fix = "Remove one.";
+            }
           else
             null
         );
@@ -260,7 +270,12 @@ in
           then
             kix.image.ref config.image
           else
-            throw "${who}: image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor (lib.removePrefix "v" release)} release, and the flags and RBAC rules of this package follow reloader ${release}. To move to another release, change `release` in kix/packages/experimental/reloader/default.nix and check the flags against that release's internal/pkg/util/util.go and the rules against its chart clusterrole.yaml.";
+            scope.fail {
+              package = "reloader";
+              option = "config.image.tag";
+              message = "image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor (lib.removePrefix "v" release)} release, and the flags and RBAC rules of this package follow reloader ${release}.";
+              fix = "To move to another release, change `release` in kix/packages/experimental/reloader/default.nix and check the flags against that release's internal/pkg/util/util.go and the rules against its chart clusterrole.yaml.";
+            };
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
@@ -314,25 +329,41 @@ in
             shown = "'${namespace}/${r.out.name or "?"}'";
           in
           if kind == "Secret" || kind == "ConfigMap" then
-            throw "${prefix} got ${kind} '${r.out.name or "?"}', whose content is part of the build. Put \"checksum/<name>\" = <ref>.out.identityHash on the pod template instead, so the rollout appears in the deploy plan; reloader would restart the workload a second time."
+            scope.fail {
+              package = "reloader";
+              message = "${prefix} got ${kind} '${r.out.name or "?"}', whose content is part of the build.";
+              fix = "Put \"checksum/<name>\" = <ref>.out.identityHash on the pod template instead, so the rollout appears in the deploy plan. reloader would restart the workload a second time.";
+            }
           else if !(kind == "PackageInstance" && r ? out.keyRef) then
-            throw "${prefix} takes Secrets from scope.mkSecretRef or a secret-ref dependency; got ${
-              if kind != null then kind else r._type or (builtins.typeOf r)
-            }."
+            scope.fail {
+              package = "reloader";
+              message = "${prefix} takes Secrets from scope.mkSecretRef or a secret-ref dependency; got ${
+                if kind != null then kind else r._type or (builtins.typeOf r)
+              }.";
+            }
           else if labelSelector != [ ] then
-            throw "${prefix}: reloader watches only Secrets labelled ${lib.concatStringsSep "," labelSelector}, and Kix cannot check that Secret ${shown}, created outside Kix, carries them. Remove --resource-label-selector to use withReloadOn."
+            scope.fail {
+              package = "reloader";
+              option = "config.extraArgs";
+              message = "${prefix}: reloader watches only Secrets labelled ${lib.concatStringsSep "," labelSelector}, and Kix cannot check that Secret ${shown}, created outside Kix, carries them.";
+              fix = "Remove --resource-label-selector to use withReloadOn.";
+            }
           else if (watched != [ ] && !builtins.elem namespace watched) || builtins.elem namespace ignored then
-            throw "${prefix}: Secret ${shown} is in a namespace this reloader does not watch (extraArgs ${
-              if watched != [ ] then
-                "--namespaces=${lib.concatStringsSep "," watched}"
-              else
-                "--namespaces-to-ignore=${lib.concatStringsSep "," ignored}"
-            }). ${
-              if watched != [ ] then
-                "Add ${namespace} to --namespaces."
-              else
-                "Remove ${namespace} from --namespaces-to-ignore."
-            }"
+            scope.fail {
+              package = "reloader";
+              option = "config.extraArgs";
+              message = "${prefix}: Secret ${shown} is in a namespace this reloader does not watch (extraArgs ${
+                if watched != [ ] then
+                  "--namespaces=${lib.concatStringsSep "," watched}"
+                else
+                  "--namespaces-to-ignore=${lib.concatStringsSep "," ignored}"
+              }).";
+              fix =
+                if watched != [ ] then
+                  "Add ${namespace} to --namespaces."
+                else
+                  "Remove ${namespace} from --namespaces-to-ignore.";
+            }
           else
             r.out.name;
 
@@ -341,7 +372,7 @@ in
         withReloadOn =
           refs: args:
           let
-            prefix = "${who}: withReloadOn for '${args.name or "?"}'";
+            prefix = "withReloadOn for '${args.name or "?"}'";
             existing = (args.annotations or { }).${reloadAnnotation} or null;
             existingNames = lib.optionals (existing != null) (
               lib.splitString "," (builtins.unsafeDiscardStringContext existing)
@@ -352,13 +383,26 @@ in
             restartPolicy = args.spec.template.spec.restartPolicy or null;
           in
           if !builtins.isList refs || refs == [ ] then
-            throw "${prefix} needs a non-empty list of Secrets."
+            scope.fail {
+              package = "reloader";
+              message = "${prefix} needs a non-empty list of Secrets.";
+            }
           else if args ? _type then
-            throw "${prefix} takes builder args; pipe them through it before scope.mkDeployment."
+            scope.fail {
+              package = "reloader";
+              message = "${prefix} takes builder args; pipe them through it before scope.mkDeployment.";
+            }
           else if args ? spec.jobTemplate || restartPolicy == "Never" || restartPolicy == "OnFailure" then
-            throw "${prefix}: Job and CronJob pods read the Secret when they start; this reloader ignores them (--ignored-workload-types)."
+            scope.fail {
+              package = "reloader";
+              message = "${prefix}: Job and CronJob pods read the Secret when they start; this reloader ignores them (--ignored-workload-types).";
+            }
           else if !(args ? spec.template) then
-            throw "${prefix}: reloader restarts only Deployments, DaemonSets, and StatefulSets, and these args have no spec.template. Pass the builder args of one of those kinds."
+            scope.fail {
+              package = "reloader";
+              message = "${prefix}: reloader restarts only Deployments, DaemonSets, and StatefulSets, and these args have no spec.template.";
+              fix = "Pass the builder args of one of those kinds.";
+            }
           else
             args
             // {

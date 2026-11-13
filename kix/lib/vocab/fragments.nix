@@ -1,5 +1,8 @@
 { lib }:
 
+let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+in
 rec {
 
   deepMergeNs =
@@ -11,7 +14,7 @@ rec {
       else if builtins.all builtins.isAttrs values then
         deepMergeNs values
       else
-        throw "namespace policy conflict on key '${k}': multiple fragments define a leaf value"
+        fail "namespace policy conflict on key '${k}': multiple fragments define a leaf value"
     ) attrsList;
 
   mergeFragments =
@@ -41,7 +44,7 @@ rec {
           builtins.zipAttrsWith (
             instName: defs:
             if builtins.length defs > 1 then
-              throw "instance collision in namespace '${nsName}': '${instName}' defined by multiple fragments"
+              fail "instance collision in namespace '${nsName}': '${instName}' defined by multiple fragments"
             else
               builtins.head defs
           ) nsInstanceSets

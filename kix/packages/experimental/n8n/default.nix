@@ -163,7 +163,11 @@ let
         else if builtins.match "[0-9]+" v != null then
           lib.toIntBase10 v
         else
-          throw "${who}: env.${var} is \"${v}\"; n8n reads it as a whole number of MiB (for example \"64\").";
+          scope.fail {
+            package = "n8n";
+            option = "config.env.${var}";
+            message = "env.${var} is \"${v}\". n8n reads it as a whole number of MiB (for example \"64\").";
+          };
     in
     lib.max (sizeMiB "N8N_PAYLOAD_SIZE_MAX" 16) (sizeMiB "N8N_FORMDATA_FILE_SIZE_MAX" 200);
 

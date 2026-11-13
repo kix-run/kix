@@ -10,6 +10,9 @@
 # Service's `spec.loadBalancerClass`.
 { lib }:
 
+let
+  inherit (import ./error.nix { inherit lib; }) fail;
+in
 rec {
   # Strip the 44-character "/nix/store/<32-char-hash>-" prefix from a store path.
   pathName = p: builtins.substring 44 (builtins.stringLength p) p;
@@ -92,7 +95,7 @@ rec {
     let
       spec = if builtins.isString ref then { name = ref; } else ref;
       name =
-        spec.name or (throw "kix.untrackedRef: expected a name, or { name; kind?; apiVersion?; by? }");
+        spec.name or (fail "kix.untrackedRef: expected a name, or { name; kind?; apiVersion?; by? }.");
       kind = spec.kind or null;
       apiVersion = spec.apiVersion or "v1";
       by = spec.by or null;
@@ -106,15 +109,15 @@ rec {
       unknown = builtins.filter (k: !(builtins.elem k known)) (builtins.attrNames spec);
       _check =
         if !(builtins.isString name) then
-          throw "kix.untrackedRef: name must be a string"
+          fail "kix.untrackedRef: name must be a string."
         else if unknown != [ ] then
-          throw "kix.untrackedRef (${name}): unknown attribute(s) ${builtins.concatStringsSep ", " unknown}; takes name, kind, apiVersion, by"
+          fail "kix.untrackedRef (${name}): unknown attribute(s) ${builtins.concatStringsSep ", " unknown}. It takes name, kind, apiVersion and by."
         else if kind != null && !(builtins.isString kind) then
-          throw "kix.untrackedRef (${name}): kind must be a string, e.g. \"Secret\""
+          fail "kix.untrackedRef (${name}): kind must be a string, such as \"Secret\"."
         else if bySelf && (spec ? kind || spec ? apiVersion) then
-          throw "kix.untrackedRef (${name}): `by = \"self\"` takes no kind or apiVersion. The resource holding the reference creates the object, so deploy cannot wait for it before applying that resource"
+          fail "kix.untrackedRef (${name}): `by = \"self\"` takes no kind or apiVersion. The resource holding the reference creates the object, so deploy cannot wait for it before applying that resource."
         else if by != null && !bySelf && !(builtins.isAttrs by && by ? outPath) then
-          throw "kix.untrackedRef (${name}): `by` must be a resource, the Job or workload that creates the object, or \"self\" when the resource holding the reference creates it"
+          fail "kix.untrackedRef (${name}): `by` must be a resource, the Job or workload that creates the object, or \"self\" when the resource holding the reference creates it."
         else if
           by != null
           && !bySelf
@@ -123,7 +126,10 @@ rec {
             kind = by.kind or "";
           }
         then
-          throw "kix.untrackedRef (${name}): `by` is ${by.kind} '${by.name or ""}', a built-in kind that creates no object a manifest refers to by name. Name the Job, workload or operator custom resource that creates '${name}'"
+          fail {
+            message = "kix.untrackedRef (${name}): `by` is ${by.kind} '${by.name or ""}', a built-in kind that creates no object a manifest refers to by name.";
+            fix = "Name the Job, workload or operator custom resource that creates '${name}'.";
+          }
         else
           null;
       content =
@@ -156,8 +162,9 @@ rec {
     args:
     let
       who = "kix.providedLoadBalancerClass";
-      class = args.class or (throw "${who}: expected { class; by; }");
-      by = args.by or (throw "${who} (${class}): `by` is required: the resource that serves the class");
+      class = args.class or (fail "${who}: expected { class; by; }.");
+      by =
+        args.by or (fail "${who} (${class}): `by` is required. It is the resource that serves the class.");
       unknown = builtins.attrNames (
         removeAttrs args [
           "class"
@@ -166,11 +173,11 @@ rec {
       );
       _check =
         if !(builtins.isString class) || class == "" then
-          throw "${who}: class must be a non-empty string"
+          fail "${who}: class must be a non-empty string."
         else if unknown != [ ] then
-          throw "${who} (${class}): unknown attribute(s) ${builtins.concatStringsSep ", " unknown}; takes class and by"
+          fail "${who} (${class}): unknown attribute(s) ${builtins.concatStringsSep ", " unknown}. It takes class and by."
         else if !(builtins.isAttrs by && by ? outPath) then
-          throw "${who} (${class}): `by` must be a resource, the controller that serves the class"
+          fail "${who} (${class}): `by` must be a resource, the controller that serves the class."
         else
           null;
       marker = builtins.toFile loadBalancerClassName (builtins.unsafeDiscardStringContext class);

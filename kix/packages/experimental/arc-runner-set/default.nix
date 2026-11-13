@@ -249,7 +249,7 @@ in
 
       parts =
         if problem != null then
-          throw "${who}: ${problem}"
+          scope.fail problem
         else
           arc.out.mkAutoscalingRunnerSet scope { inherit name spec; };
 

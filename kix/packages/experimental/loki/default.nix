@@ -481,7 +481,11 @@ in
           if check v then
             v
           else
-            throw "${who}: settings.${lib.concatStringsSep "." path} must be ${expected} (it is ${builtins.toJSON v}).";
+            scope.fail {
+              package = "loki";
+              option = "settings.${lib.concatStringsSep "." path}";
+              message = "settings.${lib.concatStringsSep "." path} must be ${expected} (it is ${builtins.toJSON v}).";
+            };
         isRatio = v: (builtins.isInt v || builtins.isFloat v) && v >= 0 && v <= 1;
         walEnabled = setting [ "ingester" "wal" "enabled" ] true builtins.isBool "true or false";
         # Loki's default. At this share of the volume the ingester refuses

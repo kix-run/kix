@@ -1,7 +1,7 @@
 { lib }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail failFor;
   # Coerce null to an empty list because Helm charts often render unset list
   # fields such as `volumes` or `env` as null.
   lst = v: if v == null then [ ] else v;
@@ -67,6 +67,9 @@ in
       unsafeGrants ? [ ],
     }:
     let
+      # Fail with `e`, naming this instance.
+      failHere = failFor "${namespaceName}/${instanceName}";
+
       # Validate a required cluster capability. Throw when the capability is
       # false, warn when it is null, and skip checks when `capabilities` is empty
       # in standalone test scopes.
@@ -74,6 +77,8 @@ in
         {
           cap,
           message,
+          fix ? null,
+          option ? "cluster.capabilities.${cap}",
         }:
         let
           value = capabilities.${cap} or null;
@@ -81,7 +86,7 @@ in
         if capabilities == { } then
           null
         else if value == false then
-          throw message
+          failHere { inherit message fix option; }
         else if value == null then
           builtins.trace (
             "warning: instance '${instanceName}': requires cluster.capabilities.${cap} = true, which is not set in the cluster definition, so Kix skipped verifying this requirement."
@@ -158,10 +163,9 @@ in
               [ ]
             else
               [
-                (throw (
-                  "[${instanceName}] Container '${c.name}' has duplicate env var name(s): "
-                  + "[${builtins.concatStringsSep ", " d}]."
-                ))
+                (failHere {
+                  message = "Container '${c.name}' has duplicate env var name(s): [${builtins.concatStringsSep ", " d}].";
+                })
               ]
           ) allContainers;
 
@@ -175,31 +179,27 @@ in
               [ ]
             else
               [
-                (throw (
-                  "[${instanceName}] Container '${c.name}' has duplicate named port(s): "
-                  + "[${builtins.concatStringsSep ", " d}]."
-                ))
+                (failHere {
+                  message = "Container '${c.name}' has duplicate named port(s): [${builtins.concatStringsSep ", " d}].";
+                })
               ]
           ) allContainers;
 
           containerNameCheck =
             if containerNameDups != [ ] then
-              throw (
-                "[${instanceName}] Pod has duplicate container name(s): "
-                + "[${builtins.concatStringsSep ", " containerNameDups}]. "
-                + "Container names must be unique within a pod."
-              )
+              failHere {
+                message = "Pod has duplicate container name(s): [${builtins.concatStringsSep ", " containerNameDups}].";
+                fix = "Container names must be unique within a pod.";
+              }
             else
               null;
 
           volumeNameCheck =
             if volumeNameDups != [ ] then
-              throw (
-                "[${instanceName}] Pod has duplicate volume name(s): "
-                + "[${builtins.concatStringsSep ", " volumeNameDups}]. "
-                + "Volume names must be unique within a pod (common cause: "
-                + "multiple mounts auto-derived from resources with the same name)."
-              )
+              failHere {
+                message = "Pod has duplicate volume name(s): [${builtins.concatStringsSep ", " volumeNameDups}].";
+                fix = "Volume names must be unique within a pod. A common cause is multiple mounts auto-derived from resources with the same name.";
+              }
             else
               null;
 
@@ -242,11 +242,13 @@ in
         if kind == "" || name == "" || exempt then
           null
         else if tooLong then
-          throw "[${instanceName}] ${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind${
-            lib.optionalString (rule ? maxReason) ", because ${rule.maxReason}"
-          }."
+          failHere {
+            message = "${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind${
+              lib.optionalString (rule ? maxReason) ", because ${rule.maxReason}"
+            }.";
+          }
         else if malformed then
-          throw "[${instanceName}] ${kind} name '${name}' is not valid. It must be ${rule.desc}.${hint}"
+          failHere { message = "${kind} name '${name}' is not valid. It must be ${rule.desc}.${hint}"; }
         else
           null;
 
@@ -256,14 +258,15 @@ in
       checkRawPvc =
         args:
         if (args.kind or "") == "PersistentVolumeClaim" && !(builtins.elem "raw-pvc" unsafeGrants) then
-          throw (
-            "[${instanceName}] PersistentVolumeClaim '${args.name or "unknown"}' is built directly by this package. "
-            + "Declare a `storage` dependency and mount it with "
-            + "`kix.mount.pvc storage { mountPath = ...; }`, and add a "
-            + "`persistent-volume-claim` instance in the cluster definition. Packages that must author "
-            + "claims themselves, such as Helm charts with persistence, must declare "
-            + "`meta.unsafe = [ \"raw-pvc\" ]`. The scorecard will report this exception."
-          )
+          failHere {
+            message = "PersistentVolumeClaim '${args.name or "unknown"}' is built directly by this package.";
+            fix =
+              "Declare a `storage` dependency and mount it with "
+              + "`kix.mount.pvc storage { mountPath = ...; }`, and add a "
+              + "`persistent-volume-claim` instance in the cluster definition. Packages that must author "
+              + "claims themselves, such as Helm charts with persistence, must declare "
+              + "`meta.unsafe = [ \"raw-pvc\" ]`. The scorecard will report this exception.";
+          }
         else
           null;
 
@@ -355,10 +358,8 @@ in
         if hasPrivileged || hasHostNetwork || hasHostPID || hasHostPath then
           checkCapability {
             cap = "privilegedContainers";
-            message =
-              "[${instanceName}] Workload uses ${reason} "
-              + "but cluster.capabilities.privilegedContainers is false. "
-              + "Remove the privileged settings or use a cluster that supports them.";
+            message = "Workload uses ${reason} but cluster.capabilities.privilegedContainers is false.";
+            fix = "Remove the privileged settings or use a cluster that supports them.";
           }
         else
           null;
@@ -368,10 +369,8 @@ in
         if kind == "DaemonSet" then
           checkCapability {
             cap = "daemonSets";
-            message =
-              "[${instanceName}] DaemonSet cannot be deployed: "
-              + "cluster.capabilities.daemonSets is false. "
-              + "Remove this DaemonSet or use a cluster that supports it.";
+            message = "DaemonSet cannot be deployed: cluster.capabilities.daemonSets is false.";
+            fix = "Remove this DaemonSet or use a cluster that supports it.";
           }
         else
           null;
@@ -404,17 +403,20 @@ in
               null;
           multiNode = capabilities.multiNode or null;
           message =
-            "[${instanceName}] ${kind} '${name}' requests ${toString replicas} replicas with ${toString rule}, "
+            "${kind} '${name}' requests ${toString replicas} replicas with ${toString rule}, "
             + "and cluster.capabilities.multiNode is ${if multiNode == null then "unknown" else "false"}. "
-            + "This placement rule may prevent replicas from starting on a single node. "
-            + "Use preferred anti-affinity or ScheduleAnyway, set replicas to 1, or set multiNode = true if the cluster has multiple nodes.";
+            + "This placement rule may prevent replicas from starting on a single node.";
+          fix = "Use preferred anti-affinity or ScheduleAnyway, set replicas to 1, or set multiNode = true if the cluster has multiple nodes.";
         in
         if capabilities == { } || rule == null || !(builtins.isInt replicas) || replicas <= 1 then
           null
         else if multiNode == false then
-          throw message
+          failHere {
+            inherit message fix;
+            option = "cluster.capabilities.multiNode";
+          }
         else if multiNode == null then
-          builtins.trace "[kix] warning: ${message}" null
+          builtins.trace "[kix] warning: [${instanceName}] ${message} ${fix}" null
         else
           null;
 
@@ -541,19 +543,20 @@ in
             "{ ${builtins.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${toString v}") labels)} }";
         in
         if missingKeys != [ ] then
-          throw (
-            "[${instanceName}] ${kind} pod labels do not include all labels in spec.selector.matchLabels: "
-            + "selector key(s) ${builtins.concatStringsSep ", " missingKeys} are missing from template labels. "
-            + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}. "
-            + "Add the missing selector labels to spec.template.metadata.labels. "
-            + "Kubernetes requires every selector label to match the pod template."
-          )
+          failHere {
+            message =
+              "${kind} pod labels do not include all labels in spec.selector.matchLabels: "
+              + "selector key(s) ${builtins.concatStringsSep ", " missingKeys} are missing from template labels. "
+              + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}.";
+            fix = "Add the missing selector labels to spec.template.metadata.labels. Kubernetes requires every selector label to match the pod template.";
+          }
         else if mismatchedKeys != [ ] then
-          throw (
-            "[${instanceName}] ${kind} spec.selector.matchLabels value mismatch on key(s) "
-            + "${builtins.concatStringsSep ", " mismatchedKeys}: "
-            + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}."
-          )
+          failHere {
+            message =
+              "${kind} spec.selector.matchLabels value mismatch on key(s) "
+              + "${builtins.concatStringsSep ", " mismatchedKeys}: "
+              + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}.";
+          }
         else
           null;
 
@@ -606,12 +609,13 @@ in
                 [ ]
               else if !(builtins.elem portName names) then
                 [
-                  (throw (
-                    "[${instanceName}] Container '${c.name}' ${p.name} references named port "
-                    + "\"${portName}\" which is not declared by the container. "
-                    + "Declared named ports: [${builtins.concatStringsSep ", " names}]. "
-                    + "Add `ports = [ (kix.port \"${portName}\" <N>) ]` or use a numeric port."
-                  ))
+                  (failHere {
+                    message =
+                      "Container '${c.name}' ${p.name} references named port "
+                      + "\"${portName}\" which is not declared by the container. "
+                      + "Declared named ports: [${builtins.concatStringsSep ", " names}].";
+                    fix = "Add `ports = [ (kix.port \"${portName}\" <N>) ]` or use a numeric port.";
+                  })
                 ]
               else
                 [ null ]
@@ -647,23 +651,23 @@ in
                       if reason == null then
                         null
                       else
-                        "[${instanceName}] Container '${c.name}' resources.${field}.${res} (${toString values.${res}}) cannot be computed exactly: ${reason}. Kix computes quantities as 64-bit integers.";
+                        "Container '${c.name}' resources.${field}.${res} (${toString values.${res}}) cannot be computed exactly: ${reason}. Kix computes quantities as 64-bit integers.";
                     limitProblem = problem "limits" limits;
                     requestProblem = problem "requests" requests;
                     l = quantity.parse res limits.${res};
                     r = quantity.parse res requests.${res};
                   in
                   if limitProblem != null then
-                    throw limitProblem
+                    failHere { message = limitProblem; }
                   else if requestProblem != null then
-                    throw requestProblem
+                    failHere { message = requestProblem; }
                   else if l == null || r == null then
                     null
                   else if l < r then
-                    throw (
-                      "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) is lower than resources.requests.${res} (${toString requests.${res}}). "
-                      + "Increase the limit or lower the request. Kubernetes requires the limit to be at least the request."
-                    )
+                    failHere {
+                      message = "Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) is lower than resources.requests.${res} (${toString requests.${res}}).";
+                      fix = "Increase the limit or lower the request. Kubernetes requires the limit to be at least the request.";
+                    }
                   else
                     null;
             in
@@ -705,12 +709,12 @@ in
                 in
                 if fp != null && !(isAllowed fp) then
                   [
-                    (throw (
-                      "[${instanceName}] env '${e.name}' in container '${c.name}' uses "
-                      + "unsupported fieldRef.fieldPath \"${fp}\". Allowed: "
-                      + "${builtins.concatStringsSep ", " _allowedFieldPaths}, "
-                      + "metadata.labels['<key>'], metadata.annotations['<key>']."
-                    ))
+                    (failHere {
+                      message = "env '${e.name}' in container '${c.name}' uses unsupported fieldRef.fieldPath \"${fp}\".";
+                      fix =
+                        "Use one of: ${builtins.concatStringsSep ", " _allowedFieldPaths}, "
+                        + "metadata.labels['<key>'], metadata.annotations['<key>'].";
+                    })
                   ]
                 else
                   [ null ]

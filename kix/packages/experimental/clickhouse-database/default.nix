@@ -333,7 +333,11 @@ in
           if dep.out ? sops || builtins.elem "username" declared then
             dep
           else
-            throw "${who}: deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads. Add `username` (equal to user, \"${config.user}\") to that secret and to its keys, or use a packages.secret with a SOPS source."
+            scope.fail {
+              package = "clickhouse-database";
+              message = "deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads.";
+              fix = "Add `username` (equal to user, \"${config.user}\") to that secret and to its keys, or use a packages.secret with a SOPS source.";
+            }
         );
 
       badGrantKeys = builtins.filter (
@@ -341,7 +345,11 @@ in
       ) (builtins.attrNames config.grants);
       _grantsCheck =
         if badGrantKeys != [ ] then
-          throw "${who}: grants keys must be `<database>.<table>`, each side `*` or a plain identifier, and these are not: ${lib.concatStringsSep ", " badGrantKeys}."
+          scope.fail {
+            package = "clickhouse-database";
+            option = "grants";
+            message = "grants keys must be `<database>.<table>`, each side `*` or a plain identifier, and these are not: ${lib.concatStringsSep ", " badGrantKeys}.";
+          }
         else
           null;
 

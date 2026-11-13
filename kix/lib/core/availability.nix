@@ -26,11 +26,11 @@ let
       i = lib.lists.findFirstIndex (l: l == level) null levels;
     in
     if i == null then
-      throw "availability: '${toString level}' is not one of ${lib.concatStringsSep ", " levels}"
+      fail "availability: '${toString level}' is not one of ${lib.concatStringsSep ", " levels}"
     else
       i;
 
-  # Validate that `value` is a known availability level, or throw an error
+  # Validate that `value` is a known availability level, or fail with an error
   # pointing at `where` and `what`.
   checkCeiling =
     {
@@ -44,9 +44,11 @@ let
     if builtins.isString value && builtins.elem value levels then
       value
     else
-      throw "[${where}] ${what} = ${shown} is not an availability level. Use one of ${
-        lib.concatMapStringsSep ", " (l: "\"${l}\"") levels
-      }.";
+      fail {
+        instance = where;
+        message = "${what} = ${shown} is not an availability level.";
+        fix = "Use one of ${lib.concatMapStringsSep ", " (l: "\"${l}\"") levels}.";
+      };
 
   # Return true when `level` is at least `min`.
   atLeast = min: level: rank level >= rank min;
@@ -61,7 +63,10 @@ let
       missing = builtins.filter (l: !(table ? ${l})) levels;
     in
     missing == [ ]
-    || throw "kix.availability.pick: table is missing ${lib.concatStringsSep ", " missing} (need every level: ${lib.concatStringsSep ", " levels})";
+    || fail {
+      message = "kix.availability.pick: table is missing ${lib.concatStringsSep ", " missing}.";
+      fix = "Give an entry for every level: ${lib.concatStringsSep ", " levels}.";
+    };
 
   # Extract `max` from a package's `meta.availability` attrset, or return null.
   ceilingOfMeta =
@@ -72,14 +77,21 @@ let
     if value == null then
       null
     else if !builtins.isAttrs value then
-      throw "[${where}] meta.availability is a ${builtins.typeOf value}. Write meta.availability.max = \"<level>\"."
+      fail {
+        instance = where;
+        message = "meta.availability is a ${builtins.typeOf value}.";
+        fix = "Write meta.availability.max = \"<level>\".";
+      }
     else if unknown != [ ] then
-      throw "[${where}] meta.availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max."
+      fail {
+        instance = where;
+        message = "meta.availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max.";
+      }
     else
       value.max or null;
 
   # Return `{ pick, atLeast }` scoped to `ceiling` (`meta.availability.max`).
-  # Throw when a package tests `atLeast` for a level above its own ceiling.
+  # Fail when a package tests `atLeast` for a level above its own ceiling.
   underCeiling =
     { ceiling, where }:
     if ceiling == null then
@@ -90,11 +102,11 @@ let
         atLeast =
           min: level:
           if rank min > rank ceiling then
-            throw (
-              "[${where}] kix.availability.atLeast \"${min}\": meta.availability.max is \"${ceiling}\", "
-              + "so this test is always false. Put the ceiling on the builder calls of the workloads that "
-              + "cannot reach \"${min}\", or remove the test."
-            )
+            fail {
+              instance = where;
+              message = "kix.availability.atLeast \"${min}\": meta.availability.max is \"${ceiling}\", so this test is always false.";
+              fix = "Put the ceiling on the builder calls of the workloads that cannot reach \"${min}\", or remove the test.";
+            }
           else
             atLeast min level;
       };

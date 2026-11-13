@@ -9,12 +9,14 @@
   self,
 }:
 let
+  inherit (import ../../../lib/core/error.nix { inherit lib; }) fail;
+
   isTracked = v: builtins.isString v && builtins.hasContext v;
   trackedFix = "pass <resource>.out.name, which also orders the custom resource after it, or kix.untrackedRef \"<name>\" for an object Kix does not build.";
 
   callSite =
     builder: consumerScope: subject:
-    "${who}: ${builder} ${subject}, called by ${consumerScope.namespaceName}/${consumerScope.instanceName}";
+    "${builder} ${subject}, called by ${consumerScope.namespaceName}/${consumerScope.instanceName}";
 
   # Return the Service ports matching `refs` (by port number or name), or all
   # ports when `refs` is null.
@@ -28,9 +30,12 @@ let
           matched = builtins.filter (p: (p.port or null) == ref || (p.name or null) == ref) declared;
         in
         if matched == [ ] then
-          throw "${what}: Service ${service.name} has no port ${toString ref}; its ports are ${
-            builtins.toJSON (map (p: p.port or null) declared)
-          }."
+          fail {
+            package = "tailscale";
+            message = "${what}: Service ${service.name} has no port ${toString ref}. Its ports are ${
+              builtins.toJSON (map (p: p.port or null) declared)
+            }.";
+          }
         else
           matched;
     in
@@ -44,7 +49,11 @@ let
       selector = service.rawManifest.spec.selector or null;
     in
     if selector == null || selector == { } then
-      throw "${what}: Service ${service.name} has no selector, so a policy over its pods would admit the proxies to every pod in its namespace. Pass a Service that selects its backend pods."
+      fail {
+        package = "tailscale";
+        message = "${what}: Service ${service.name} has no selector, so a policy over its pods would admit the proxies to every pod in its namespace.";
+        fix = "Pass a Service that selects its backend pods.";
+      }
     else
       selector;
 
@@ -119,7 +128,11 @@ let
     else if builtins.length declared == 1 then
       (builtins.head declared).port
     else
-      throw "${what}: Service ${service.name} has ${toString (builtins.length declared)} ports; pass port.";
+      fail {
+        package = "tailscale";
+        message = "${what}: Service ${service.name} has ${toString (builtins.length declared)} ports.";
+        fix = "Pass port.";
+      };
 
   mkIngress =
     consumerScope:
@@ -162,13 +175,20 @@ let
         then
           [ ]
         else if portRef == null then
-          throw "${what}: a path to Service ${serviceName} names no port; set backend.service.port.number or .name."
+          fail {
+            package = "tailscale";
+            message = "${what}: a path to Service ${serviceName} names no port.";
+            fix = "Set backend.service.port.number or .name.";
+          }
         else
           [ portRef ]
       ) (builtins.concatMap (rule: (rule.http or { }).paths or [ ]) (spec.rules or [ ]));
     in
     if refusal != null then
-      throw "${what}: ${refusal}"
+      fail {
+        package = "tailscale";
+        message = "${what}: ${refusal}";
+      }
     else
       {
         ingress = consumerScope.mkResource {
@@ -196,7 +216,11 @@ let
   refuseUntracked =
     what: field: value: fix:
     if value != null && !(isTracked value) then
-      throw "${what}: ${field} = \"${value}\" is a plain string; ${fix}"
+      fail {
+        package = "tailscale";
+        message = "${what}: ${field} = \"${value}\" is a plain string.";
+        inherit fix;
+      }
     else
       null;
 
@@ -222,7 +246,11 @@ let
       if
         (spec.type or null) == "kube-apiserver" && ((spec.kubeAPIServer or { }).mode or "auth") != "noauth"
       then
-        throw "${what}: a kube-apiserver ProxyGroup runs in auth mode unless kubeAPIServer.mode is set. Auth mode needs the kube-apiserver-auth-proxy ServiceAccount and impersonation RBAC, which this package does not create. Set spec.kubeAPIServer.mode = \"noauth\"."
+        fail {
+          package = "tailscale";
+          message = "${what}: a kube-apiserver ProxyGroup runs in auth mode unless kubeAPIServer.mode is set. Auth mode needs the kube-apiserver-auth-proxy ServiceAccount and impersonation RBAC, which this package does not create.";
+          fix = "Set spec.kubeAPIServer.mode = \"noauth\".";
+        }
       else
         null
     );
@@ -249,7 +277,11 @@ let
       )
       (
         if otherNamespace then
-          throw "${what}: ${field} names a Secret, which the operator reads from namespace ${ns}, so a Recorder with S3 credentials is built by an instance in ${ns}. Call mkRecorder from an instance in ${ns} and pass the out.name of a Secret it builds or depends on, or kix.untrackedRef \"<name>\" for a Secret there that Kix does not build."
+          fail {
+            package = "tailscale";
+            message = "${what}: ${field} names a Secret, which the operator reads from namespace ${ns}, so a Recorder with S3 credentials is built by an instance in ${ns}.";
+            fix = "Call mkRecorder from an instance in ${ns} and pass the out.name of a Secret it builds or depends on, or kix.untrackedRef \"<name>\" for a Secret there that Kix does not build.";
+          }
         else
           self.crds.recorders.out.mkCR consumerScope (
             args

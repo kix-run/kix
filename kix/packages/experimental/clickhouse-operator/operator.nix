@@ -454,11 +454,15 @@ let
   portOpen = port: probeTiming // { tcpSocket.port = port; };
 in
 if unknownFragmentDirs != [ ] then
-  throw "clickhouse-operator (${name}): config.files names ${lib.concatStringsSep ", " unknownFragmentDirs}, which the operator does not read. The directories are ${
-    lib.concatStringsSep ", " (
-      lib.concatLists (lib.mapAttrsToList (family: map (dir: "${family}.${dir}")) fragmentDirs)
-    )
-  }."
+  scope.fail {
+    package = "clickhouse-operator";
+    option = "config.files";
+    message = "config.files names ${lib.concatStringsSep ", " unknownFragmentDirs}, which the operator does not read. The directories are ${
+      lib.concatStringsSep ", " (
+        lib.concatLists (lib.mapAttrsToList (family: map (dir: "${family}.${dir}")) fragmentDirs)
+      )
+    }.";
+  }
 else
   {
     operatorServiceAccount = scope.mkResource {

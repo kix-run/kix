@@ -271,11 +271,19 @@ in
             if validUrl config.env.KC_HOSTNAME then
               lib.removeSuffix "/" config.env.KC_HOSTNAME
             else
-              throw "${who}: env.KC_HOSTNAME must be a URL with a scheme, such as \"https://auth.example.com\"; got ${builtins.toJSON config.env.KC_HOSTNAME}. Keycloak builds its issuer URLs from it."
+              scope.fail {
+                package = "keycloak";
+                option = "env.KC_HOSTNAME";
+                message = "env.KC_HOSTNAME must be a URL with a scheme, such as \"https://auth.example.com\"; got ${builtins.toJSON config.env.KC_HOSTNAME}. Keycloak builds its issuer URLs from it.";
+              }
           else if self.exposure.urlOrNull != null then
             self.exposure.urlOrNull
           else
-            throw "${who}: Keycloak needs its public URL, and nothing routes to this instance. Set ingress.host (or cluster.domain) with an ingress controller or a gateway in the cluster, or set env.KC_HOSTNAME to the URL clients reach, such as \"https://auth.example.com\".";
+            scope.fail {
+              package = "keycloak";
+              message = "Keycloak needs its public URL, and nothing routes to this instance.";
+              fix = "Set ingress.host (or cluster.domain) with an ingress controller or a gateway in the cluster, or set env.KC_HOSTNAME to the URL clients reach, such as \"https://auth.example.com\".";
+            };
 
         # The contract's `tls` is true, false, or null (the provider cannot
         # tell). Only true is acted on: `prefer` would accept a plaintext
@@ -401,7 +409,10 @@ in
           if builtins.isString realm && builtins.match "[^/?#[:space:]]+" realm != null then
             "/realms/${realm}"
           else
-            throw "${who}: ${field} takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
+            scope.fail {
+              package = "keycloak";
+              message = "${field} takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
+            };
 
         httpProbe = path: {
           httpGet = {

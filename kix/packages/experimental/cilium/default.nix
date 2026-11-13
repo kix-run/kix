@@ -255,25 +255,72 @@ in
 
       checks =
         if binding == null then
-          throw "${who}: installs or uses Cilium as the pod network, but cluster.roles.cni.binding is unset, so Kix cannot tell whether the cluster already runs a CNI. Use a flavour, or set cluster.roles.cni.binding = \"absent\" on a cluster created without a CNI (kind with disableDefaultCNI)."
+          scope.fail {
+            package = "cilium";
+            option = "cluster.roles.cni.binding";
+            message = "installs or uses Cilium as the pod network, but cluster.roles.cni.binding is unset, so Kix cannot tell whether the cluster already runs a CNI.";
+            fix = "Use a flavour, or set cluster.roles.cni.binding = \"absent\" on a cluster created without a CNI (kind with disableDefaultCNI).";
+          }
         else if platform-cilium != null && !(environmentOut ? helmChartConfig) then
-          throw "${who}: dependency platform-cilium has no out.helmChartConfig. Set it to { name; namespace; }, the HelmChartConfig the environment's helm-controller merges into its Cilium chart, or to null if the environment reads none."
+          scope.fail {
+            package = "cilium";
+            message = "dependency platform-cilium has no out.helmChartConfig.";
+            fix = "Set it to { name; namespace; }, the HelmChartConfig the environment's helm-controller merges into its Cilium chart, or to null if the environment reads none.";
+          }
         else if helmChartConfigRef != null && !(isHelmChartConfigRef helmChartConfigRef) then
-          throw "${who}: dependency platform-cilium has out.helmChartConfig = ${builtins.toJSON helmChartConfigRef}; it takes { name; namespace; } as strings, or null."
+          scope.fail {
+            package = "cilium";
+            message = "dependency platform-cilium has out.helmChartConfig = ${builtins.toJSON helmChartConfigRef}.";
+            fix = "It takes { name; namespace; } as strings, or null.";
+          }
         else if platform-cilium != null && binding != "shadowable" then
-          throw "${who}: dependency platform-cilium says the environment installed Cilium, but cluster.roles.cni.binding is ${builtins.toJSON binding}. An environment-installed Cilium is a shadowable cni binding: the environment runs the CNI and this instance configures or uses it. Set cluster.roles.cni.binding = \"shadowable\", or remove the platform-cilium import so the instance installs the chart."
+          scope.fail {
+            package = "cilium";
+            option = "cluster.roles.cni.binding";
+            message = "dependency platform-cilium says the environment installed Cilium, but cluster.roles.cni.binding is ${builtins.toJSON binding}. An environment-installed Cilium is a shadowable cni binding: the environment runs the CNI and this instance configures or uses it.";
+            fix = "Set cluster.roles.cni.binding = \"shadowable\", or remove the platform-cilium import so the instance installs the chart.";
+          }
         else if binding == "shadowable" && platform-cilium == null then
-          throw "${who}: cluster.roles.cni.binding is \"shadowable\", but no platform-cilium dependency says the environment's CNI is Cilium. If it is, declare it: on RKE2 set cluster.flavor.rke2.cni = [ \"cilium\" ]; elsewhere add instances.<namespace>.platform-cilium.package = kix.mkImport { roles = [ \"cni\" ]; out.helmChartConfig = null; }. If an import for the environment's Cilium already exists under another name, point this instance at it with deps.platform-cilium = ref.<namespace>.<instance> instead of adding a second import. An import declared with optional = true answers this optional dependency only after something else activates it, so remove optional = true from it. If it is another CNI, a cilium instance cannot stand for it: remove the instance, or set the binding to \"exclusive\"."
+          scope.fail {
+            package = "cilium";
+            option = "cluster.roles.cni.binding";
+            message = "cluster.roles.cni.binding is \"shadowable\", but no platform-cilium dependency says the environment's CNI is Cilium.";
+            fix = "If it is, declare it: on RKE2 set cluster.flavor.rke2.cni = [ \"cilium\" ]; elsewhere add instances.<namespace>.platform-cilium.package = kix.mkImport { roles = [ \"cni\" ]; out.helmChartConfig = null; }. If an import for the environment's Cilium already exists under another name, point this instance at it with deps.platform-cilium = ref.<namespace>.<instance> instead of adding a second import. An import declared with optional = true answers this optional dependency only after something else activates it, so remove optional = true from it. If it is another CNI, a cilium instance cannot stand for it: remove the instance, or set the binding to \"exclusive\".";
+          }
         else if delivery == "helmChartConfig" && scope.namespaceName != helmChartConfigRef.namespace then
-          throw "${who}: writes HelmChartConfig ${helmChartConfigRef.name}, which the environment reads only in namespace ${helmChartConfigRef.namespace}. Declare the instance under instances.${helmChartConfigRef.namespace}."
+          scope.fail {
+            package = "cilium";
+            message = "writes HelmChartConfig ${helmChartConfigRef.name}, which the environment reads only in namespace ${helmChartConfigRef.namespace}.";
+            fix = "Declare the instance under instances.${helmChartConfigRef.namespace}.";
+          }
         else if delivery == "none" && config.values != { } then
-          throw "${who}: does not install or configure Cilium: the platform-cilium dependency's out.helmChartConfig is null, so the environment's Cilium keeps its own settings and `values` would be ignored. Remove `values`, or set the import's out.helmChartConfig if the environment merges a HelmChartConfig into its Cilium chart (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ])."
+          scope.fail {
+            package = "cilium";
+            option = "config.values";
+            message = "does not install or configure Cilium: the platform-cilium dependency's out.helmChartConfig is null, so the environment's Cilium keeps its own settings and `values` would be ignored.";
+            fix = "Remove `values`, or set the import's out.helmChartConfig if the environment merges a HelmChartConfig into its Cilium chart (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ]).";
+          }
         else if !(builtins.elem effectiveEnforcement enforcementModes) then
-          throw "${who}: values.policyEnforcementMode is ${builtins.toJSON effectiveEnforcement}; Cilium accepts \"default\", \"always\", or \"never\"."
+          scope.fail {
+            package = "cilium";
+            option = "config.values.policyEnforcementMode";
+            message = "values.policyEnforcementMode is ${builtins.toJSON effectiveEnforcement}.";
+            fix = "Cilium accepts \"default\", \"always\", or \"never\".";
+          }
         else if !(builtins.isBool effectiveAudit) then
-          throw "${who}: values.policyAuditMode is ${builtins.toJSON effectiveAudit}; it takes true or false."
+          scope.fail {
+            package = "cilium";
+            option = "config.values.policyAuditMode";
+            message = "values.policyAuditMode is ${builtins.toJSON effectiveAudit}.";
+            fix = "It takes true or false.";
+          }
         else if delivery == "chart" && ipamMode == "cluster-pool" && podCidr == null then
-          throw "${who}: installs Cilium with cluster-pool IPAM and needs the pod range. Set cluster.network.podCidr to the range the cluster assigns pods: kind's networking.podSubnet, RKE2's cluster-cidr (default 10.42.0.0/16), kubeadm's --pod-network-cidr. The kind, k3s, and rke2 flavours set their defaults. Or select another IPAM mode in values.ipam.mode."
+          scope.fail {
+            package = "cilium";
+            option = "cluster.network.podCidr";
+            message = "installs Cilium with cluster-pool IPAM and needs the pod range.";
+            fix = "Set cluster.network.podCidr to the range the cluster assigns pods: kind's networking.podSubnet, RKE2's cluster-cidr (default 10.42.0.0/16), kubeadm's --pod-network-cidr. The kind, k3s, and rke2 flavours set their defaults. Or select another IPAM mode in values.ipam.mode.";
+          }
         else
           null;
 

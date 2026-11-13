@@ -3,6 +3,8 @@
 { lib }:
 
 let
+  inherit (import ../../../lib/core/error.nix { inherit lib; }) fail;
+
   # The upstream release. meta.version and every image tag default read it,
   # and crds/sources.txt fetches the CRDs of the same tag.
   release = "v1.21.2";
@@ -75,12 +77,12 @@ in
         if m != null && lib.take 2 m == releaseMinor then
           true
         else
-          throw (
-            "${who}: ${option} \"${tag}\" is not a ${minor} release, and the CRDs and RBAC in "
-            + "kix/packages/experimental/cert-manager are vendored from ${release}. ${fix} To move the package to "
-            + "another release, change release in kix/packages/experimental/cert-manager/common.nix and run "
-            + "uv run scripts/vendor-crds.py cert-manager."
-          );
+          fail {
+            package = "cert-manager";
+            inherit option;
+            message = "${who}: ${option} \"${tag}\" is not a ${minor} release, and the CRDs and RBAC in kix/packages/experimental/cert-manager are vendored from ${release}.";
+            fix = "${fix} To move the package to another release, change release in kix/packages/experimental/cert-manager/common.nix and run uv run scripts/vendor-crds.py cert-manager.";
+          };
       image = lib.getAttrFromPath path config;
     in
     assert check "image.tag" config.image.tag;

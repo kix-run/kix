@@ -463,9 +463,17 @@ in
               };
           in
           if spec ? managedSecretReference then
-            throw "${who}: ${what} sets managedSecretReference, which upstream is deprecating and rejects alongside managedKubeSecretReferences. Move it into managedKubeSecretReferences."
+            scope.fail {
+              package = "infisical-operator";
+              message = "${what} sets managedSecretReference, which upstream is deprecating and rejects alongside managedKubeSecretReferences.";
+              fix = "Move it into managedKubeSecretReferences.";
+            }
           else if secretRefs == [ ] && configMapRefs == [ ] then
-            throw "${who}: ${what} sets no managedKubeSecretReferences or managedKubeConfigMapReferences, so the operator has nowhere to write. Add one."
+            scope.fail {
+              package = "infisical-operator";
+              message = "${what} sets no managedKubeSecretReferences or managedKubeConfigMapReferences, so the operator has nowhere to write.";
+              fix = "Add one.";
+            }
           else
             args
             // {
@@ -489,9 +497,13 @@ in
             spec = args.spec or { };
           in
           if (spec.targets or [ ]) == [ ] then
-            throw "${who}: ${
-              crName consumerScope "InfisicalStaticSecret" args
-            } sets no targets, so the operator has nowhere to write. Add one."
+            scope.fail {
+              package = "infisical-operator";
+              message = "${
+                crName consumerScope "InfisicalStaticSecret" args
+              } sets no targets, so the operator has nowhere to write.";
+              fix = "Add one.";
+            }
           else
             args
             // {
@@ -518,19 +530,32 @@ in
               let
                 target =
                   if targets == [ ] then
-                    throw "${who}: ${what} writes no Secret, so its out.secretRef has nothing to reference. Add a Secret target."
+                    scope.fail {
+                      package = "infisical-operator";
+                      message = "${what} writes no Secret, so its out.secretRef has nothing to reference.";
+                      fix = "Add a Secret target.";
+                    }
                   else if name == null then
                     if builtins.length targets == 1 then
                       builtins.head targets
                     else
-                      throw "${who}: out.secretRef of ${what} needs a name, because the custom resource has more than one Secret target; pass name = one of: ${listed}."
+                      scope.fail {
+                        package = "infisical-operator";
+                        message = "out.secretRef of ${what} needs a name, because the custom resource has more than one Secret target.";
+                        fix = "Pass name = one of: ${listed}.";
+                      }
                   else
-                    lib.findFirst (t: t.name == name)
-                      (throw "${who}: out.secretRef of ${what} names Secret \"${name}\", which is not one of its targets; targets are: ${listed}.")
-                      targets;
+                    lib.findFirst (t: t.name == name) (scope.fail {
+                      package = "infisical-operator";
+                      message = "out.secretRef of ${what} names Secret \"${name}\", which is not one of its targets; targets are: ${listed}.";
+                    }) targets;
               in
               if target.namespace != consumerScope.namespaceName then
-                throw "${who}: out.secretRef of ${what} builds a reference in ${consumerScope.namespaceName}; the target ${target.name} is in ${target.namespace}. Build the reference from an instance in ${target.namespace}."
+                scope.fail {
+                  package = "infisical-operator";
+                  message = "out.secretRef of ${what} builds a reference in ${consumerScope.namespaceName}; the target ${target.name} is in ${target.namespace}.";
+                  fix = "Build the reference from an instance in ${target.namespace}.";
+                }
               else
                 consumerScope.mkSecretRef {
                   inherit (target) name;
@@ -758,7 +783,11 @@ in
 
             mkInfisicalDynamicSecret =
               _: _:
-              throw "${who}: there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it. Create InfisicalDynamicSecrets outside Kix.";
+              scope.fail {
+                package = "infisical-operator";
+                message = "there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it.";
+                fix = "Create InfisicalDynamicSecrets outside Kix.";
+              };
           };
         };
       }

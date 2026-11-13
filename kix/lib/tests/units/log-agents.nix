@@ -7,7 +7,8 @@
 #
 # builtins.tryEval drops the text of a `throw`. To read a refusal's message,
 # `caught` loads a file through builtins.scopedImport with `throw` bound to
-# a function that returns `{ thrown = <message>; }`. The packages are loaded
+# a function that returns `{ thrown = <message>; }`, and so does the
+# `kix.fail` they call (see caught.nix). The packages are loaded
 # that way and given a kix whose mergeGuarded, guardArgs and mergeEnv come
 # from vocab/compose.nix loaded the same way, so a refusal renders its
 # message into the manifests: the ConfigMap's vector.yaml becomes
@@ -18,6 +19,7 @@
 {
   lib,
   eval,
+  k8s,
   kixlib,
   kixKeys,
   mkCluster,
@@ -30,7 +32,9 @@
 }:
 
 let
-  caught = builtins.scopedImport { throw = message: { thrown = message; }; };
+  helpers = import ../caught.nix { inherit lib; };
+  inherit (helpers) loadCaught;
+  caught = helpers.caughtSentences;
 
   compose = caught ../../vocab/compose.nix { inherit lib; };
   renderingKix = {
@@ -49,7 +53,8 @@ let
       if r ? thrown then { REFUSED = r.thrown; } else r;
   };
   # The package in `dir`, with its own throws and the three kix helpers
-  # above rendering their messages.
+  # above rendering their messages. `scope.fail` still throws, so a cluster
+  # that builds it with `rendered = true` uses `evalCaught`.
   rendering =
     dir:
     {
@@ -60,6 +65,19 @@ let
     caught dir {
       inherit scope lib;
       kix = kix // renderingKix;
+    };
+
+  # The evaluator loaded so that `scope.fail` and `kix.fail` return
+  # `{ thrown = ...; }` instead of throwing.
+  evalCaught = loadCaught ../../eval {
+    inherit lib k8s;
+    self = ../../../..;
+  };
+  mkClusterCaught =
+    modules:
+    evalCaught.buildCluster {
+      name = "test";
+      inherit modules;
     };
 
   lokiLogsDir = ../../../packages/experimental/loki-logs;
@@ -75,12 +93,13 @@ let
   lokiLogsCluster =
     {
       package ? lokiLogsPackage,
+      rendered ? false,
       config ? { },
       loki ? import ../../../packages/experimental/loki,
       instance ? { },
       extra ? { },
     }:
-    mkCluster [
+    (if rendered then mkClusterCaught else mkCluster) [
       {
         instances.logs = {
           loki.package = loki;
@@ -104,9 +123,10 @@ let
   clickhouseLogsCluster =
     {
       package ? clickhouseLogsPackage,
+      rendered ? false,
       config ? { },
     }:
-    mkCluster [
+    (if rendered then mkClusterCaught else mkCluster) [
       (
         { ref, ... }:
         {
@@ -159,6 +179,7 @@ let
     let
       cluster = lokiLogsCluster {
         package = rendering lokiLogsDir;
+        rendered = true;
         inherit config;
       };
       container = containerOf "loki-logs" cluster;
@@ -193,6 +214,7 @@ let
     let
       settings = vectorConfigOf "clickhouse-logs" (clickhouseLogsCluster {
         package = rendering clickhouseLogsDir;
+        rendered = true;
         inherit config;
       });
     in
@@ -381,6 +403,7 @@ in
       message =
         (vectorConfigOf "loki-logs" (lokiLogsCluster {
           package = rendering lokiLogsDir;
+          rendered = true;
           inherit loki;
         })).sinks.loki.endpoint.thrown or null;
     in
@@ -389,7 +412,7 @@ in
         inherit loki;
       })
       && message != null
-      && lib.hasInfix "${lokiWho}deps.loki resolved to an instance with no out.serviceUrl" message
+      && lib.hasInfix "deps.loki resolved to an instance with no out.serviceUrl" message
       && lib.hasInfix "Point deps.loki at a loki instance." message
     )
     || throw "loki-logs deps.loki guard: ${builtins.toJSON message}";

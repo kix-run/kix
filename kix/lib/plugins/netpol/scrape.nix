@@ -42,6 +42,7 @@
 { lib }:
 
 let
+  inherit (import ../../core/error.nix { inherit lib; }) fail;
   kixKeys = (import ../../core/annotations.nix).keys;
   core = import ../../core/default.nix { inherit lib; };
   inherit (import ../../eval/edges.nix { k8s = core; }) isWorkload isServiceRef;
@@ -91,7 +92,7 @@ let
         else if e.operator == "DoesNotExist" then
           !has
         else
-          throw "kix netpol: label selector operator '${toString e.operator}' is not one of In, NotIn, Exists, DoesNotExist";
+          fail "netpol: label selector operator '${toString e.operator}' is not one of In, NotIn, Exists, DoesNotExist";
     in
     builtins.all (k: (labels.${k} or null) == matchLabels.${k}) (builtins.attrNames matchLabels)
     && builtins.all exprHolds (selector.matchExpressions or [ ]);

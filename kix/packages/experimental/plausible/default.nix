@@ -308,7 +308,12 @@ in
 
         relay =
           if smtpPassword != null then
-            throw "${who}: deps.smtpPassword was replaced by deps.smtp. Declare the mail server as a kix.mkImport in this namespace whose out sets host, port, tls, from, and credentials = ref.<ns>.<secret>, a secret with keys `username` and `password`. Remove the SMTP_* variables from env."
+            scope.fail {
+              package = "plausible";
+              option = "deps.smtpPassword";
+              message = "deps.smtpPassword was replaced by deps.smtp.";
+              fix = "Declare the mail server as a kix.mkImport in this namespace whose out sets host, port, tls, from, and credentials = ref.<ns>.<secret>, a secret with keys `username` and `password`. Remove the SMTP_* variables from env.";
+            }
           else
             kix.contracts.smtp.helpers.settings {
               inherit who smtp;
@@ -320,7 +325,12 @@ in
         # would see the password. Implicit TLS has no plain phase.
         _relayCheck =
           if relay != null && relay.credentials != null && relay.tls == "starttls" then
-            throw "${who}: deps.smtp uses tls = \"starttls\" with credentials. Plausible's mailer (Bamboo.Mua) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way. Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance."
+            scope.fail {
+              package = "plausible";
+              option = "deps.smtp";
+              message = "deps.smtp uses tls = \"starttls\" with credentials. Plausible's mailer (Bamboo.Mua) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way.";
+              fix = "Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance.";
+            }
           else
             null;
 
@@ -341,7 +351,12 @@ in
         ) credentialNames;
         _credentialCheck =
           if literalCredentials != [ ] then
-            throw "${who}: env sets ${lib.concatStringsSep ", " literalCredentials} to a literal string, which would land in Kix's local store and the rendered Deployment. Pass a secretKeyRef source to a Secret managed outside Kix (kix.untrackedRef)."
+            scope.fail {
+              package = "plausible";
+              option = "env";
+              message = "env sets ${lib.concatStringsSep ", " literalCredentials} to a literal string, which would land in Kix's local store and the rendered Deployment.";
+              fix = "Pass a secretKeyRef source to a Secret managed outside Kix (kix.untrackedRef).";
+            }
           else
             null;
 

@@ -181,9 +181,19 @@ in
         # Refusals for nodes that cannot serve; see the header.
         nodeCheck =
           if containerd.discardUnpackedLayers == true then
-            throw "${who}: cluster.containerd.discardUnpackedLayers is true, so containerd deletes each image's layers once it has unpacked them and Spegel has nothing to serve. Set discard_unpacked_layers = false in containerd's config on every node, in the same table the node image sets it in (on kind, a containerdConfigPatches entry for [plugins.\"io.containerd.grpc.v1.cri\".containerd]), then set cluster.containerd.discardUnpackedLayers = false."
+            scope.fail {
+              package = "spegel";
+              option = "cluster.containerd.discardUnpackedLayers";
+              message = "cluster.containerd.discardUnpackedLayers is true, so containerd deletes each image's layers once it has unpacked them and Spegel has nothing to serve.";
+              fix = "Set discard_unpacked_layers = false in containerd's config on every node, in the same table the node image sets it in (on kind, a containerdConfigPatches entry for [plugins.\"io.containerd.grpc.v1.cri\".containerd]), then set cluster.containerd.discardUnpackedLayers = false.";
+            }
           else if multiNode == false then
-            throw "${who}: cluster.capabilities.multiNode is false. A Spegel pod reports ready only once it has a peer, so on one node the DaemonSet never becomes ready. Remove the instance, or set multiNode = true on a cluster with two or more nodes."
+            scope.fail {
+              package = "spegel";
+              option = "cluster.capabilities.multiNode";
+              message = "cluster.capabilities.multiNode is false. A Spegel pod reports ready only once it has a peer, so on one node the DaemonSet never becomes ready.";
+              fix = "Remove the instance, or set multiNode = true on a cluster with two or more nodes.";
+            }
           else
             lib.warnIf (containerd.discardUnpackedLayers == null)
               "${who}: cluster.containerd.discardUnpackedLayers is not set, so Kix cannot tell whether containerd keeps the layers Spegel serves. Set it to match the nodes' containerd config; Spegel needs discard_unpacked_layers = false."

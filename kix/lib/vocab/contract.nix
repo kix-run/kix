@@ -41,7 +41,7 @@ in
   #   checks on optional fields when present).
   # - `assertions who dep`: build the module assertion list for a consumer
   #   dependency `dep`.
-  # - `require who dep`: validate `dep` eagerly and return `dep`, or throw.
+  # - `require who dep`: validate `dep` eagerly and return `dep`, or fail.
   # - `helpers`: the functions and values this contract gives its consumers.
   # - `options`: the option set, or the function that builds one, that a
   #   consumer adds to its own options. Null when the contract has none.
@@ -125,7 +125,7 @@ in
         in
         lib.optional (found != [ ]) ({ assertion = false; } // consumerError who dep found);
 
-      # Validate a consumer dependency `dep` eagerly and return `dep`, or throw.
+      # Validate a consumer dependency `dep` eagerly and return `dep`, or fail.
       require =
         who: dep:
         let

@@ -133,7 +133,11 @@ let
           );
         in
         if builtins.length versions > 1 then
-          throw "${who}: extension ${extName} is requested at versions ${lib.concatStringsSep " and " versions}, by the instance's `extensions` and a consumer's deps.database.config.extensions. Request one version, or none to take the operand image's default."
+          scope.fail {
+            package = "cnpg-database";
+            message = "extension ${extName} is requested at versions ${lib.concatStringsSep " and " versions}, by the instance's `extensions` and a consumer's deps.database.config.extensions.";
+            fix = "Request one version, or none to take the operand image's default.";
+          }
         else
           { name = extName; } // lib.optionalAttrs (versions != [ ]) { version = builtins.head versions; };
     in
@@ -262,12 +266,20 @@ in
         if postgres.out ? clusterName then
           postgres.out
         else
-          throw "${who}: the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. This package creates a DatabaseRole and a Database for a cnpg-cluster; wire one, or a cnpg-pooler in front of one, with deps.postgres = ref.<namespace>.<instance>.";
+          scope.fail {
+            package = "cnpg-database";
+            message = "the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. This package creates a DatabaseRole and a Database for a cnpg-cluster.";
+            fix = "Wire one, or a cnpg-pooler in front of one, with deps.postgres = ref.<namespace>.<instance>.";
+          };
       crds =
         if cnpgOperator.out ? crds then
           cnpgOperator.out.crds
         else
-          throw "${who}: the cnpgOperator dependency publishes no out.crds, as with an import. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
+          scope.fail {
+            package = "cnpg-database";
+            message = "the cnpgOperator dependency publishes no out.crds, as with an import.";
+            fix = "Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
+          };
 
       passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, hash set to its content hash, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>.";
 
@@ -317,7 +329,11 @@ in
           if dep.out ? sops || builtins.elem "username" declared then
             dep
           else
-            throw "${who}: deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads. Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source."
+            scope.fail {
+              package = "cnpg-database";
+              message = "deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads.";
+              fix = "Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source.";
+            }
         );
 
       # The cluster's namespace, for the role, the database, and the

@@ -1,6 +1,7 @@
 { lib, helpers }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   inherit (helpers) mergeCollide collectTypedAttrs knownFolders;
 in
 
@@ -58,7 +59,11 @@ in
           v = parts.${folderName} or null;
         in
         if v != null && builtins.isAttrs v && v ? _type then
-          throw "${ctx}: '${folderName}' must be an attribute set of resources, not a resource directly. Use '${folderName}.someName = ...' instead."
+          fail {
+            instance = "${namespaceName}/${instanceName}";
+            message = "'${folderName}' must be an attribute set of resources, not a resource directly.";
+            fix = "Use '${folderName}.someName = ...' instead.";
+          }
         else
           acc
       ) null (builtins.attrNames knownFolders);

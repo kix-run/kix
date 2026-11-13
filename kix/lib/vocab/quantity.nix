@@ -9,6 +9,7 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   pattern = "([0-9]+)?(\\.([0-9]+))?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?";
 
   pow = base: n: if n == 0 then 1 else base * pow base (n - 1);
@@ -173,7 +174,7 @@ let
   scaleOf = resource: if resource == "cpu" then 1000 else 1;
   unitOf = resource: if resource == "cpu" then "millicores" else "bytes";
 
-  # Return the overflow reason why `parse resource q` would throw, or null when
+  # Return the overflow reason why `parse resource q` would fail, or null when
   # `q` is valid or outside the grammar.
   problem =
     resource: q:
@@ -194,7 +195,7 @@ let
 
   # Parse `q` into millicores when `resource` is "cpu" and into bytes (or base
   # units) otherwise, rounded down. Return null when `q` is outside the
-  # grammar, or throw when the value overflows 64-bit integer arithmetic.
+  # grammar, or fail when the value overflows 64-bit integer arithmetic.
   parse =
     resource: q:
     let
@@ -206,7 +207,7 @@ let
     if p == null then
       null
     else if reason != null then
-      throw "${resource} quantity \"${asString q}\" cannot be computed exactly: ${reason}. Kix computes quantities as 64-bit integers."
+      fail "${resource} quantity \"${asString q}\" cannot be computed exactly: ${reason}. Kix computes quantities as 64-bit integers."
     else
       toInt n.mantissa * f.num * f.scale / (f.den * pow 10 (builtins.stringLength n.frac));
 in

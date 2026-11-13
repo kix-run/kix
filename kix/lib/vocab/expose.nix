@@ -2,6 +2,7 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   gatewayContract = (import ../../contracts { inherit lib; }).gateway;
@@ -13,7 +14,10 @@ let
     else if svc ? out.port then
       builtins.fromJSON (builtins.unsafeDiscardStringContext svc.out.port)
     else
-      throw "${caller}: service '${svc.name or "unknown"}' has no out.port. Specify port explicitly";
+      fail {
+        message = "${caller}: service '${svc.name or "unknown"}' has no out.port.";
+        fix = "Specify port explicitly.";
+      };
 
   # Select the Gateway listener that an HTTPRoute for `host` in `scope` attaches
   # to, returning `{ scheme; port; }` or null when the gateway does not publish
@@ -94,9 +98,12 @@ let
     if listeners == null then
       null
     else if candidates == [ ] then
-      throw "kix.expose (${name}): ${gwLabel} has no HTTP or HTTPS listener that accepts host \"${host}\" from namespace \"${routeNs}\", so the HTTPRoute would not attach. Checked: ${
-        if judged == [ ] then "no listeners" else checked
-      }. Add a listener for this host with allowedRoutes.namespaces.from = \"All\" to the gateway instance, or set ingress.host to a name one of its listeners accepts."
+      fail {
+        message = "kix.expose (${name}): ${gwLabel} has no HTTP or HTTPS listener that accepts host \"${host}\" from namespace \"${routeNs}\", so the HTTPRoute would not attach. Checked: ${
+          if judged == [ ] then "no listeners" else checked
+        }.";
+        fix = "Add a listener for this host with allowedRoutes.namespaces.from = \"All\" to the gateway instance, or set ingress.host to a name one of its listeners accepts.";
+      }
     else
       (
         if chosen.v == "unverified" then
@@ -154,7 +161,10 @@ let
       mode =
         if hasGateway then
           if hasIngress then
-            throw "kix.expose (${name}): both 'gateway' and 'ingressNginx' are present. Wire exactly one via deps in the cluster definition."
+            fail {
+              message = "kix.expose (${name}): both 'gateway' and 'ingressNginx' are present.";
+              fix = "Wire exactly one via deps in the cluster definition.";
+            }
           else
             "gateway"
         else if hasIngress then
@@ -217,7 +227,10 @@ let
         if urlOrNull != null then
           urlOrNull
         else
-          throw "kix.expose (${scope.namespaceName}/${name}): the package reads the instance's public URL (exposure.url), but ${missing}. If the package has an option for its URL, set that instead.";
+          fail {
+            message = "kix.expose (${scope.namespaceName}/${name}): the package reads the instance's public URL (exposure.url), but ${missing}.";
+            fix = "If the package has an option for its URL, set that instead.";
+          };
     };
 in
 rec {
@@ -283,7 +296,10 @@ rec {
     else if t == "Exact" then
       "Exact"
     else
-      throw "${caller}: pathType \"${toString t}\" has no Gateway API equivalent (use Prefix or Exact)";
+      fail {
+        message = "${caller}: pathType \"${toString t}\" has no Gateway API equivalent.";
+        fix = "Use Prefix or Exact.";
+      };
 
   httpRoute = {
     fromService =
@@ -434,9 +450,9 @@ rec {
 
       _modeCheck =
         if service == null && paths == null then
-          throw "kix.expose (${name}): one of `service` or `paths` must be set."
+          fail "kix.expose (${name}): one of `service` or `paths` must be set."
         else if service != null && paths != null then
-          throw "kix.expose (${name}): `service` and `paths` are mutually exclusive."
+          fail "kix.expose (${name}): `service` and `paths` are mutually exclusive."
         else
           null;
 
@@ -474,7 +490,10 @@ rec {
                 if backendSvc ? out.port then
                   builtins.fromJSON (builtins.unsafeDiscardStringContext backendSvc.out.port)
                 else
-                  throw "kix.expose (${name}): paths entry for service '${p.service}' has no out.port. Specify `port` explicitly.";
+                  fail {
+                    message = "kix.expose (${name}): paths entry for service '${p.service}' has no out.port.";
+                    fix = "Specify `port` explicitly.";
+                  };
               svcPort = p.port or autoPort;
             in
             {

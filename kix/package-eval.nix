@@ -829,7 +829,7 @@ in
   evaluate = level: name: evaluatePackage level name packages.${name};
 
   # The option contract of one package: null when its options pass, a
-  # throw listing each violation otherwise.
+  # failure listing each violation otherwise.
   checkOptionContract = name: checkOptions name packages.${name};
 
   inherit checkOptionContracts;

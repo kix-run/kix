@@ -235,7 +235,11 @@ in
           missing = builtins.filter (n: !(builtins.elem n published)) extensionNames;
         in
         if missing != [ ] then
-          throw "${who}: needs extensions ${lib.concatStringsSep ", " missing} on its postgres dependency, which publishes out.extensions = [ ${lib.concatStringsSep " " published} ]. On a stackgres-cluster they are forwarded automatically; on an import, install them and list them in its out.extensions."
+          scope.fail {
+            package = "stackgres-database";
+            message = "needs extensions ${lib.concatStringsSep ", " missing} on its postgres dependency, which publishes out.extensions = [ ${lib.concatStringsSep " " published} ].";
+            fix = "On a stackgres-cluster they are forwarded automatically. On an import, install them and list them in its out.extensions.";
+          }
         else
           null;
 
@@ -287,7 +291,11 @@ in
           if dep.out ? sops || builtins.elem "username" declared then
             dep
           else
-            throw "${who}: deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads. Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source."
+            scope.fail {
+              package = "stackgres-database";
+              message = "deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads.";
+              fix = "Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source.";
+            }
         );
 
       # These carry the context of the cluster's Service reference, so the

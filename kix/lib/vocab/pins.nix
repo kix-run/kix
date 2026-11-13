@@ -19,6 +19,7 @@
 
 source:
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   isPath = builtins.isPath source;
   parsed = if isPath then builtins.fromJSON (builtins.readFile source) else source;
 
@@ -47,9 +48,15 @@ let
 
   checkedEnvelope =
     if !(builtins.elem version SCHEMA_VERSIONS) then
-      throw "kix.pins: ${where} declares version ${builtins.toString version}, and Kix reads versions 1 and 2. Upgrade Kix, or check the file."
+      fail {
+        message = "kix.pins: ${where} declares version ${builtins.toString version}, and Kix reads versions 1 and 2.";
+        fix = "Upgrade Kix, or check the file.";
+      }
     else if version == 1 && parsed ? instances then
-      throw "kix.pins: ${where} has instance pins (`instances`) but declares version 1. A file with instance pins declares version 2."
+      fail {
+        message = "kix.pins: ${where} has instance pins (`instances`) but declares version 1.";
+        fix = "Declare version 2 in a file with instance pins.";
+      }
     else
       parsed;
 
@@ -70,7 +77,10 @@ let
     if !isEnvelope then
       parsed
     else if unknownEnvelopeFields != [ ] then
-      throw "kix.pins: ${where} has top-level fields Kix does not know: ${builtins.concatStringsSep ", " unknownEnvelopeFields}. Known fields are ${builtins.concatStringsSep ", " envelopeFields}. Upgrade Kix, or check the file."
+      fail {
+        message = "kix.pins: ${where} has top-level fields Kix does not know: ${builtins.concatStringsSep ", " unknownEnvelopeFields}. Known fields are ${builtins.concatStringsSep ", " envelopeFields}.";
+        fix = "Upgrade Kix, or check the file.";
+      }
     else
       checkedEnvelope.images or { };
 
@@ -113,19 +123,34 @@ let
       tagOk = builtins.isString pin.tag && builtins.match tagRe pin.tag != null;
     in
     if !(builtins.isAttrs pin) then
-      throw "kix.pins: ${label} in ${where} is not an attribute set."
+      fail "kix.pins: ${label} in ${where} is not an attribute set."
     else if missing != [ ] then
-      throw "kix.pins: ${label} in ${where} is missing ${builtins.concatStringsSep " and " missing}. Every pin needs a repository and a tag."
+      fail {
+        message = "kix.pins: ${label} in ${where} is missing ${builtins.concatStringsSep " and " missing}.";
+        fix = "Give every pin a repository and a tag.";
+      }
     else if unknown != [ ] then
-      throw "kix.pins: ${label} in ${where} has fields Kix does not know: ${builtins.concatStringsSep ", " unknown}. Known fields are ${builtins.concatStringsSep ", " known}."
+      fail "kix.pins: ${label} in ${where} has fields Kix does not know: ${builtins.concatStringsSep ", " unknown}. Known fields are ${builtins.concatStringsSep ", " known}."
     else if !repositoryOk then
-      throw "kix.pins: ${label} in ${where} has a repository that is not an image repository: '${toString pin.repository}'. A repository is an optional registry host, then lower-case path components separated by `/`, such as docker.io/library/nginx."
+      fail {
+        message = "kix.pins: ${label} in ${where} has a repository that is not an image repository: '${toString pin.repository}'.";
+        fix = "Write the repository as an optional registry host, then lower-case path components separated by `/`, such as docker.io/library/nginx.";
+      }
     else if builtins.isString pin.tag && lib.hasInfix "@" pin.tag then
-      throw "kix.pins: ${label} in ${where} has a digest in its tag: '${pin.tag}'. Put the tag in `tag` and the digest in `digest`, or re-resolve it with `kix pin set ${setArgs}`."
+      fail {
+        message = "kix.pins: ${label} in ${where} has a digest in its tag: '${pin.tag}'.";
+        fix = "Put the tag in `tag` and the digest in `digest`, or re-resolve it with `kix pin set ${setArgs}`.";
+      }
     else if !tagOk then
-      throw "kix.pins: ${label} in ${where} has a tag that is not an image tag: '${toString pin.tag}'. A tag is up to 128 letters, digits, `_`, `.` and `-`, and does not start with `.` or `-`."
+      fail {
+        message = "kix.pins: ${label} in ${where} has a tag that is not an image tag: '${toString pin.tag}'.";
+        fix = "Use a tag of up to 128 letters, digits, `_`, `.` and `-` that does not start with `.` or `-`.";
+      }
     else if !digestOk then
-      throw "kix.pins: ${label} in ${where} has a digest that is not sha256: followed by 64 hexadecimal characters: '${digest}'. Re-resolve it with `kix pin set ${setArgs}`."
+      fail {
+        message = "kix.pins: ${label} in ${where} has a digest that is not sha256: followed by 64 hexadecimal characters: '${digest}'.";
+        fix = "Re-resolve it with `kix pin set ${setArgs}`.";
+      }
     else
       # Set `digest` explicitly (even when null) so an unresolved pin overrides
       # the package's default digest when their tags happen to match.
@@ -138,26 +163,24 @@ let
     if raw ? ${key} then
       checkShape key raw.${key}
     else
-      throw ''
-        kix.pins: ${where} has no pin named '${key}'.
-        Pins in that file: ${
+      fail {
+        message = "kix.pins: ${where} has no pin named '${key}'. Pins in that file: ${
           if raw == { } then "none yet" else builtins.concatStringsSep ", " (builtins.attrNames raw)
-        }
-        Add it with:
-          kix pin set ${key} --repository <registry/repository> --tag <tag> --init
-      '';
+        }.";
+        fix = "Add it with:\n  kix pin set ${key} --repository <registry/repository> --tag <tag> --init";
+      };
   # Validate the option-path map for a single `<namespace>/<instance>` entry.
   checkInstance =
     instance: byOption:
     if builtins.match "[^/]+/[^/]+" instance == null then
-      throw "kix.pins: instance pin '${instance}' in ${where} is not <namespace>/<instance>."
+      fail "kix.pins: instance pin '${instance}' in ${where} is not <namespace>/<instance>."
     else if !(builtins.isAttrs byOption) || byOption == { } then
-      throw "kix.pins: instance pin '${instance}' in ${where} must map option paths, such as `image`, to pins."
+      fail "kix.pins: instance pin '${instance}' in ${where} must map option paths, such as `image`, to pins."
     else
       lib.mapAttrs (
         option: pin:
         if builtins.match "[A-Za-z0-9_-]+([.][A-Za-z0-9_-]+)*" option == null then
-          throw "kix.pins: instance pin '${instance}' in ${where} names option '${option}', which is not an option path such as `image` or `server.image`."
+          fail "kix.pins: instance pin '${instance}' in ${where} names option '${option}', which is not an option path such as `image` or `server.image`."
         else
           checkShapeAs "instance pin '${instance}' option '${option}'" (
             instance + lib.optionalString (option != "image") " --option ${option}"

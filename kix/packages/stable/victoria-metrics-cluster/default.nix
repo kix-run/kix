@@ -373,7 +373,12 @@ in
             inherit (config.vmstorage) replicaCount resources;
             storage.volumeClaimTemplate.spec =
               if config.vmstorage.storage ? storageClassName then
-                throw "${who}: vmstorage.storage sets storageClassName, which the package derives from vmstorage.storageClassName, the storageClasses dependency, or the cluster default. Set vmstorage.storageClassName instead."
+                scope.fail {
+                  package = "victoria-metrics-cluster";
+                  option = "vmstorage.storage.storageClassName";
+                  message = "vmstorage.storage sets storageClassName, which the package derives from vmstorage.storageClassName, the storageClasses dependency, or the cluster default.";
+                  fix = "Set vmstorage.storageClassName instead.";
+                }
               else
                 lib.recursiveUpdate { resources.requests.storage = "20Gi"; } config.vmstorage.storage
                 // lib.optionalAttrs (effectiveStorageClass != null) {
@@ -443,7 +448,12 @@ in
           else if endpoint == null then
             443
           else if m == null then
-            throw "${who}: extraSpec.vmstorage.vmBackup.customS3Endpoint \"${endpoint}\" is not an http or https URL, so the package cannot tell which port vmbackupmanager reaches. Write it as https://<host>[:<port>]."
+            scope.fail {
+              package = "victoria-metrics-cluster";
+              option = "extraSpec.vmstorage.vmBackup.customS3Endpoint";
+              message = "extraSpec.vmstorage.vmBackup.customS3Endpoint \"${endpoint}\" is not an http or https URL, so the package cannot tell which port vmbackupmanager reaches.";
+              fix = "Write it as https://<host>[:<port>].";
+            }
           else if builtins.elemAt m 3 != null then
             lib.toInt (builtins.elemAt m 3)
           else if builtins.elemAt m 0 == "https" then

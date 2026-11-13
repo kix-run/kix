@@ -155,9 +155,19 @@ in
           if r == null then
             null
           else if r.tls == "implicit" && r.portNumber != 465 then
-            throw "${who}: deps.smtp uses tls = \"implicit\" on port ${r.port}. Grafana's mailer uses implicit TLS only on port 465, so it would speak plain SMTP to this port. Use the server's port 465, or its STARTTLS port with tls = \"starttls\"."
+            scope.fail {
+              package = "grafana";
+              option = "deps.smtp";
+              message = "deps.smtp uses tls = \"implicit\" on port ${r.port}. Grafana's mailer uses implicit TLS only on port 465, so it would speak plain SMTP to this port.";
+              fix = "Use the server's port 465, or its STARTTLS port with tls = \"starttls\".";
+            }
           else if r.tls != "implicit" && r.portNumber == 465 then
-            throw "${who}: deps.smtp uses tls = \"${r.tls}\" on port 465. Grafana's mailer always uses implicit TLS on port 465. Set tls = \"implicit\" on the SMTP instance."
+            scope.fail {
+              package = "grafana";
+              option = "deps.smtp";
+              message = "deps.smtp uses tls = \"${r.tls}\" on port 465. Grafana's mailer always uses implicit TLS on port 465.";
+              fix = "Set tls = \"implicit\" on the SMTP instance.";
+            }
           else
             r;
 
@@ -192,6 +202,7 @@ in
         datasourcesOn = config.sidecar.datasources.enabled;
 
         prov = import ./provisioning.nix {
+          fail = scope.fail;
           inherit
             lib
             kix

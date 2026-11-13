@@ -42,7 +42,11 @@ in
       # by it, so it must stay the same for the life of the cluster.
       # `mkFlake` supplies the cluster's `clusters` key when the definition
       # sets none.
-      name ? throw "kix.buildCluster needs a name. Kix stores it in the cluster's deploy records, so it must stay the same for the life of the cluster. Set name = \"...\"; or list the cluster in kix.lib.mkFlake, which names it after its key.",
+      name ? fail {
+        message = "kix.buildCluster needs a name. Kix stores it in the cluster's deploy records, so it must stay the same for the life of the cluster.";
+        fix = "Set name = \"...\"; or list the cluster in kix.lib.mkFlake, which names it after its key.";
+        option = "name";
+      },
       # Set by `mkFlake` when it supplies `name` from the cluster's
       # `clusters` key. The index records it so that `kix deploy` and
       # `kix plan` can refuse to deploy a cluster that Kix 0.6 named
@@ -132,14 +136,17 @@ in
               where = if pins.file == null then "the pins attrset" else instancePinsLib.relativeFile pins.file;
             in
             if instCfg == null then
-              throw "kix.pins: ${where} pins instance '${key}', which cluster '${name}' does not have. Instances in namespace '${nsName}': ${
-                let
-                  names = builtins.attrNames (mergedInstances.${nsName} or { });
-                in
-                if names == [ ] then "none" else builtins.concatStringsSep ", " names
-              }. A pin file with instance pins belongs to one cluster; give each cluster that applies instance pins its own file."
+              fail {
+                message = "kix.pins: ${where} pins instance '${key}', which cluster '${name}' does not have. Instances in namespace '${nsName}': ${
+                  let
+                    names = builtins.attrNames (mergedInstances.${nsName} or { });
+                  in
+                  if names == [ ] then "none" else builtins.concatStringsSep ", " names
+                }.";
+                fix = "A pin file with instance pins belongs to one cluster. Give each cluster that applies instance pins its own file.";
+              }
             else if (instCfg.package._type or "") == "kix-import" then
-              throw "kix.pins: ${where} pins instance '${key}', which is an import. An import renders no workloads, so it has no image to pin."
+              fail "kix.pins: ${where} pins instance '${key}', which is an import. An import renders no workloads, so it has no image to pin."
             else
               null
           ) null (builtins.attrNames pins.instances);
@@ -176,10 +183,11 @@ in
           i = lib.lists.findFirstIndex (l: l == level) null podSecurityLevels;
         in
         if i == null then
-          throw (
-            "[${nsName}/${instName}] meta.podSecurity = \"${toString level}\" is not one of "
-            + lib.concatStringsSep ", " podSecurityLevels
-          )
+          fail {
+            instance = "${nsName}/${instName}";
+            option = "meta.podSecurity";
+            message = "meta.podSecurity = \"${toString level}\" is not one of ${lib.concatStringsSep ", " podSecurityLevels}.";
+          }
         else
           i;
 
@@ -335,10 +343,11 @@ in
         let
           _shape =
             if !(lib.hasInfix "/" key) then
-              throw (
-                "kix: cluster.factBehavior key '${key}' must be \"group/Kind\" "
-                + "(e.g. \"stackgres.io/SGCluster\"). bare kinds collide across API groups."
-              )
+              fail {
+                option = "cluster.factBehavior";
+                message = "cluster.factBehavior key '${key}' must be \"group/Kind\", because bare kinds collide across API groups.";
+                fix = "Write the key as, for example, \"stackgres.io/SGCluster\".";
+              }
             else
               null;
         in

@@ -21,6 +21,8 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+
   # Recursive submodule types stop at the first repeated declaration on the
   # current path. This bound guards against recursive types whose options lack
   # declaration positions.
@@ -488,7 +490,7 @@ in
     if violations == [ ] then
       null
     else
-      throw (
+      fail (
         "the options of ${who} break the option contract (docs: reference/package-schema/options, \"Option contract\"):\n"
         + lib.concatMapStringsSep "\n" (v: "  - ${v.message}") violations
       );

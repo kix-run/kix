@@ -58,12 +58,14 @@ in
           kind = args.kind or "";
         in
         if builtins.elem kind workloadKinds then
-          throw (
-            "[${instanceName}] ${kind} '${args.name or "?"}' is built with scope.mkResource, which skips workload-specific processing: "
-            + "pod validation, automatic replica placement and PodDisruptionBudgets, and network "
-            + "policy dependencies. Build it with ${builderFor.${kind}} instead (drop apiVersion and kind; "
-            + "keep the other attributes)."
-          )
+          fail {
+            instance = builtBy;
+            message =
+              "${kind} '${args.name or "?"}' is built with scope.mkResource, which skips workload-specific processing: "
+              + "pod validation, automatic replica placement and PodDisruptionBudgets, and network "
+              + "policy dependencies.";
+            fix = "Build it with ${builderFor.${kind}} instead (drop apiVersion and kind; keep the other attributes).";
+          }
         else
           null;
 
@@ -74,11 +76,11 @@ in
       checkNoHoldsData =
         args:
         if args ? holdsData then
-          throw (
-            "[${instanceName}] ${args.kind or "?"} '${args.name or "?"}' sets holdsData on one object. "
-            + "holdsData is declared once per kind: set it on the scope.mkCRD or scope.mkCRDRef of the kind and build the resource with scope.mkCR. "
-            + "Kix decides whether a built-in object holds data from its shape."
-          )
+          fail {
+            instance = builtBy;
+            message = "${args.kind or "?"} '${args.name or "?"}' sets holdsData on one object. holdsData is declared once per kind.";
+            fix = "Set holdsData on the scope.mkCRD or scope.mkCRDRef of the kind and build the resource with scope.mkCR. Kix decides whether a built-in object holds data from its shape.";
+          }
         else
           null;
 
@@ -189,15 +191,15 @@ in
           if svc == null then
             removeAttrs spec [ "headlessService" ]
           else if (svc._type or "") != "k8s-resource" || svc.kind or "" != "Service" then
-            throw (
-              "[${instanceName}] mkStatefulSet headlessService must be a Service resource "
-              + "(got ${svc._type or "non-resource"}, kind=${svc.kind or "?"})"
-            )
+            fail {
+              instance = builtBy;
+              message = "mkStatefulSet headlessService must be a Service resource (got ${svc._type or "non-resource"}, kind=${svc.kind or "?"}).";
+            }
           else if svcNs != null && svcNs != namespaceName then
-            throw (
-              "[${instanceName}] StatefulSet headlessService '${svc.name}' is in namespace "
-              + "\"${svcNs}\" but the StatefulSet is in namespace \"${namespaceName}\"."
-            )
+            fail {
+              instance = builtBy;
+              message = "StatefulSet headlessService '${svc.name}' is in namespace \"${svcNs}\" but the StatefulSet is in namespace \"${namespaceName}\".";
+            }
           else
             (removeAttrs spec [ "headlessService" ])
             // {
@@ -369,11 +371,22 @@ in
         if !(attrs ? availability) then
           null
         else if kind == "DaemonSet" then
-          throw "[${where}] ${subject} sets availability, but a DaemonSet runs one pod per node, so availability.max has no effect on it. Remove it."
+          fail {
+            instance = where;
+            message = "${subject} sets availability, but a DaemonSet runs one pod per node, so availability.max has no effect on it.";
+            fix = "Remove it.";
+          }
         else if !builtins.isAttrs a then
-          throw "[${where}] ${subject} availability is a ${builtins.typeOf a}. Write availability.max = \"<level>\"."
+          fail {
+            instance = where;
+            message = "${subject} availability is a ${builtins.typeOf a}.";
+            fix = "Write availability.max = \"<level>\".";
+          }
         else if unknown != [ ] then
-          throw "[${where}] ${subject} availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max."
+          fail {
+            instance = where;
+            message = "${subject} availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max.";
+          }
         else if (a.max or null) == null then
           null
         else
@@ -501,8 +514,11 @@ in
           # CronJobs have no selector, so use pod-template labels to identify
           # their pods during network-policy analysis.
           selector =
-            templateMeta.labels
-              or (throw "mkCronJob: spec.jobTemplate.spec.template.metadata.labels is required. Use scope.selectorLabels");
+            templateMeta.labels or (fail {
+              instance = builtBy;
+              message = "mkCronJob: spec.jobTemplate.spec.template.metadata.labels is required.";
+              fix = "Use scope.selectorLabels.";
+            });
 
           finalSpec = rawSpec // {
             jobTemplate = (rawSpec.jobTemplate or { }) // {
@@ -552,8 +568,10 @@ in
           apiVersion = "batch/v1";
           rawSpec = attrs.spec or { };
           selector =
-            rawSpec.selector.matchLabels or rawSpec.template.metadata.labels
-              or (throw "mkJob: spec.selector.matchLabels or spec.template.metadata.labels is required");
+            rawSpec.selector.matchLabels or rawSpec.template.metadata.labels or (fail {
+              instance = builtBy;
+              message = "mkJob: spec.selector.matchLabels or spec.template.metadata.labels is required.";
+            });
           templateMeta = rawSpec.template.metadata or { };
           rawTemplateSpec = rawSpec.template.spec or { };
           templateSpec = _expandServiceAccount rawTemplateSpec;
@@ -614,12 +632,18 @@ in
       mkHelmWorkload =
         attrs:
         let
-          kind = attrs.kind or (throw "mkHelmWorkload: kind is required");
+          kind =
+            attrs.kind or (fail {
+              instance = builtBy;
+              message = "mkHelmWorkload: kind is required.";
+            });
           apiVersion = attrs.apiVersion or "apps/v1";
           rawSpec = attrs.spec or { };
           selector =
-            rawSpec.selector.matchLabels or rawSpec.template.metadata.labels
-              or (throw "mkHelmWorkload (${kind}): spec.selector.matchLabels or spec.template.metadata.labels is required");
+            rawSpec.selector.matchLabels or rawSpec.template.metadata.labels or (fail {
+              instance = builtBy;
+              message = "mkHelmWorkload (${kind}): spec.selector.matchLabels or spec.template.metadata.labels is required.";
+            });
           templateMeta = rawSpec.template.metadata or { };
           templateSpec = rawSpec.template.spec or { };
           hostNetwork = templateSpec.hostNetwork or false;
@@ -759,7 +783,11 @@ in
       mkCRD =
         attrs:
         let
-          crdSpec = attrs.spec or (throw "mkCRD: spec is required");
+          crdSpec =
+            attrs.spec or (fail {
+              instance = builtBy;
+              message = "mkCRD: spec is required.";
+            });
           labels = attrs.labels or { };
           annotations = attrs.annotations or { };
           crKind = crdSpec.names.kind;
@@ -871,7 +899,10 @@ in
             if unknownPlain == [ ] then
               null
             else
-              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: plainKeys lists ${builtins.concatStringsSep ", " unknownPlain}, which has no value in stringData or extra.data. plainKeys marks a key whose value is written in the manifest and is not a credential.";
+              fail {
+                instance = builtBy;
+                message = "mkSecret \"${name}\": plainKeys lists ${builtins.concatStringsSep ", " unknownPlain}, which has no value in stringData or extra.data. plainKeys marks a key whose value is written in the manifest and is not a credential.";
+              };
 
           declaredKeys =
             if keys != null then
@@ -879,7 +910,10 @@ in
             else if valuedKeys != [ ] then
               valuedKeys
             else
-              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: either 'keys' or 'stringData' must be provided";
+              fail {
+                instance = builtBy;
+                message = "mkSecret \"${name}\": either 'keys' or 'stringData' must be provided.";
+              };
 
           # Every key with a value must be declared, or the stamp and the
           # security.secretSource rule would miss it.
@@ -888,7 +922,11 @@ in
             if undeclared == [ ] then
               null
             else
-              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: key(s) ${builtins.concatStringsSep ", " undeclared} have a value in stringData or extra.data but are not in 'keys'. List every key the Secret holds, or omit 'keys' to derive them from the values.";
+              fail {
+                instance = builtBy;
+                message = "mkSecret \"${name}\": key(s) ${builtins.concatStringsSep ", " undeclared} have a value in stringData or extra.data but are not in 'keys'.";
+                fix = "List every key the Secret holds, or omit 'keys' to derive them from the values.";
+              };
 
           # Without a SOPS source nothing fills a key at deploy, so a key with
           # no value here would be missing from the live Secret. Kubernetes
@@ -898,7 +936,11 @@ in
             if source != null || type == "kubernetes.io/service-account-token" || unvalued == [ ] then
               declaredKeys
             else
-              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: key(s) ${builtins.concatStringsSep ", " unvalued} have no value and there is no SOPS source, so the Secret would be created without them and a pod that reads them would not start. Give the values in stringData, set source to a SOPS file that holds them, or use scope.mkSecretRef when something outside Kix creates this Secret.";
+              fail {
+                instance = builtBy;
+                message = "mkSecret \"${name}\": key(s) ${builtins.concatStringsSep ", " unvalued} have no value and there is no SOPS source, so the Secret would be created without them and a pod that reads them would not start.";
+                fix = "Give the values in stringData, set source to a SOPS file that holds them, or use scope.mkSecretRef when something outside Kix creates this Secret.";
+              };
 
           # Return the value source for a declared key. Keys without an inline
           # value are populated by SOPS at deploy time, or by Kubernetes for
@@ -997,7 +1039,10 @@ in
         let
           _ =
             if !(builtins.isList keys) then
-              throw "mkSecretRef \"${name}\": 'keys' must be a list of strings (got ${builtins.typeOf keys})"
+              fail {
+                instance = builtBy;
+                message = "mkSecretRef \"${name}\": 'keys' must be a list of strings (got ${builtins.typeOf keys}).";
+              }
             else
               null;
 

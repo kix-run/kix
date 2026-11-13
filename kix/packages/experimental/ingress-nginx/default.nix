@@ -321,7 +321,12 @@ in
             value = "k8s.io/ingress-nginx/${scope.namespaceName}/${config.ingressClassName}";
           in
           if builtins.stringLength value > 250 then
-            throw "${who}: the IngressClass controller value \"${value}\" is longer than the API server's 250-character limit. Shorten ingressClassName."
+            scope.fail {
+              package = "ingress-nginx";
+              option = "config.ingressClassName";
+              message = "The IngressClass controller value \"${value}\" is longer than the API server's 250-character limit.";
+              fix = "Shorten ingressClassName.";
+            }
           else
             value;
         serviceType = config.service.spec.type;
@@ -335,9 +340,19 @@ in
         riskLevel = lib.toLower (config.settings."annotations-risk-level" or "");
         settings =
           if snippets != null && snippets != "true" && snippets != "false" then
-            throw "${who}: settings.\"allow-snippet-annotations\" is \"${snippets}\"; use \"true\" or \"false\"."
+            scope.fail {
+              package = "ingress-nginx";
+              option = "config.settings.\"allow-snippet-annotations\"";
+              message = "settings.\"allow-snippet-annotations\" is \"${snippets}\".";
+              fix = "Use \"true\" or \"false\".";
+            }
           else if snippets == "true" && riskLevel != "critical" then
-            throw "${who}: settings.\"allow-snippet-annotations\" is \"true\", but snippet annotations are Critical risk and the admission webhook rejects them unless settings.\"annotations-risk-level\" is \"Critical\". Set both, or neither."
+            scope.fail {
+              package = "ingress-nginx";
+              option = "config.settings.\"allow-snippet-annotations\"";
+              message = "settings.\"allow-snippet-annotations\" is \"true\", but snippet annotations are Critical risk and the admission webhook rejects them unless settings.\"annotations-risk-level\" is \"Critical\".";
+              fix = "Set both, or neither.";
+            }
           else
             config.settings;
 
@@ -353,15 +368,26 @@ in
         );
         serviceSpec =
           if serviceSpecOwnedHits != [ ] then
-            throw (
-              lib.concatMapStringsSep "\n" (
-                k: "${who}: service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}"
-              ) serviceSpecOwnedHits
+            scope.fail (
+              map (k: {
+                package = "ingress-nginx";
+                option = "config.service.spec.${k}";
+                message = "service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}";
+              }) serviceSpecOwnedHits
             )
           else if serviceType == "ClusterIP" && nodePortsSet != { } then
-            throw "${who}: service.nodePorts sets ${lib.concatStringsSep ", " (builtins.attrNames nodePortsSet)}, which needs service.spec.type NodePort or LoadBalancer; the type is ClusterIP."
+            scope.fail {
+              package = "ingress-nginx";
+              option = "config.service.nodePorts";
+              message = "service.nodePorts sets ${lib.concatStringsSep ", " (builtins.attrNames nodePortsSet)}, which needs service.spec.type NodePort or LoadBalancer; the type is ClusterIP.";
+            }
           else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
-            throw "${who}: service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP. Change service.spec.type or remove it."
+            scope.fail {
+              package = "ingress-nginx";
+              option = "config.service.spec.externalTrafficPolicy";
+              message = "service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP.";
+              fix = "Change service.spec.type or remove it.";
+            }
           else
             kix.mergeGuarded
               {

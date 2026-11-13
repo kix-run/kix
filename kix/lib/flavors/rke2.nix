@@ -22,6 +22,7 @@
   ...
 }:
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   cni = config.cluster.flavor.rke2.cni;
   primaries = builtins.filter (c: c != "multus") cni;
   multusCount = builtins.length cni - builtins.length primaries;
@@ -34,7 +35,11 @@ let
     if validCni then
       builtins.head primaries
     else
-      throw "kix: cluster.flavor.rke2.cni = ${builtins.toJSON cni} is not a valid RKE2 cni list: it takes one primary CNI (canal, calico, cilium, flannel), optionally preceded by multus, or [ \"none\" ].";
+      fail {
+        option = "cluster.flavor.rke2.cni";
+        message = "cluster.flavor.rke2.cni = ${builtins.toJSON cni} is not a valid RKE2 cni list.";
+        fix = "Give one primary CNI (canal, calico, cilium, flannel), optionally preceded by multus, or [ \"none\" ].";
+      };
 
   apiserver = {
     to = "apiserver";

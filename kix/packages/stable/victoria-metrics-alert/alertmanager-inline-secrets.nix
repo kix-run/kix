@@ -5,11 +5,11 @@
 # and the http_config of prometheus/common) and, except sigv4's, has a
 # `_file` twin that reads it from a mounted file instead.
 #
-# Returns `settings` unchanged, or throws listing every inline credential.
+# Returns `settings` unchanged, or fails listing every inline credential.
 #
-#   import ./alertmanager-inline-secrets.nix { inherit lib who; } settings
+#   import ./alertmanager-inline-secrets.nix { inherit lib fail; } settings
 
-{ lib, who }:
+{ lib, fail }:
 settings:
 let
   # Secret keys, wherever they appear, and what to write instead.
@@ -83,6 +83,11 @@ in
 if found == [ ] then
   settings
 else
-  throw "${who}: ${lib.concatStringsSep ", " found} ${
-    if builtins.length found == 1 then "holds a credential" else "hold credentials"
-  } inline. settings lands in a Secret that Kix renders, so the value would sit in the Nix store and the rendered manifests. Put the value in a Secret, mount it through extraSpec.secrets = [ \"<name>\" ] (at /etc/alertmanager/secrets/<name>/<key>), and name that path in the `_file` key."
+  fail {
+    package = "victoria-metrics-alert";
+    option = "settings";
+    message = "${lib.concatStringsSep ", " found} ${
+      if builtins.length found == 1 then "holds a credential" else "hold credentials"
+    } inline. settings lands in a Secret that Kix renders, so the value would sit in the Nix store and the rendered manifests.";
+    fix = "Put the value in a Secret, mount it through extraSpec.secrets = [ \"<name>\" ] (at /etc/alertmanager/secrets/<name>/<key>), and name that path in the `_file` key.";
+  }

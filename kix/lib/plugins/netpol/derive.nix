@@ -1,6 +1,7 @@
 { lib }:
 
 let
+  inherit (import ../../core/error.nix { inherit lib; }) fail;
   kixAnnotations = import ../../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   core = import ../../core/default.nix { inherit lib; };
@@ -68,7 +69,7 @@ in
 
             ingressRules = selfIngress ++ intentRules.ingressRules;
 
-            wName = workloadInput.name or (throw "buildWorkloadCnps: workloadInput.name is required");
+            wName = workloadInput.name or (fail "buildWorkloadCnps: workloadInput.name is required");
 
             # Edges from ServiceRef markers or indirect references have
             # `service = null`. When a backing Service resource exists,

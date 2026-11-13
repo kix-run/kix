@@ -24,12 +24,16 @@ in
   # `--enable-feature=utf8-strict-mode` from the tag (addFeatureFlags in
   # internal/controller/operator/factory/vmalertmanager/statefulset.go) and
   # skips the flag when the parse fails, so neither `tag@digest` nor a bare
-  # digest can carry the pin. `option` names the instance option for the
-  # error.
+  # digest can carry the pin. `fail` is the caller's `scope.fail`, and
+  # `option` names the instance option for the error.
   crImageVersionTag =
-    option: image:
+    fail: option: image:
     if kix.image.isPinned image then
-      throw "${option}: digest ${image.digest} cannot be applied. The VictoriaMetrics operator parses this CR's spec.image.tag as a semantic version to choose Alertmanager feature flags, and a tag carrying a digest fails that parse and silently drops --enable-feature=utf8-strict-mode. Set ${option}.digest = null."
+      fail {
+        option = "${option}.digest";
+        message = "digest ${image.digest} cannot be applied. The VictoriaMetrics operator parses this CR's spec.image.tag as a semantic version to choose Alertmanager feature flags, and a tag carrying a digest fails that parse and silently drops --enable-feature=utf8-strict-mode.";
+        fix = "Set ${option}.digest = null.";
+      }
     else
       crImage image;
 }
