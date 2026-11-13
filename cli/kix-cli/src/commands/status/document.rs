@@ -110,7 +110,7 @@ pub struct ResourceStatus {
     pub name: String,
     pub identity_hash: String,
     /// `false` when Kix could not name a missing object. The deploy record
-    /// names its objects from Kix 0.10, and the local Nix store names them
+    /// names its objects from Kix 0.10, and Kix's local store names them
     /// when it holds the build.
     pub named: bool,
     pub present: Present,

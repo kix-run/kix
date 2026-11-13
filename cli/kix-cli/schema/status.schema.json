@@ -317,7 +317,7 @@
           "type": "string"
         },
         "named": {
-          "description": "`false` when Kix could not name a missing object. The deploy record\nnames its objects from Kix 0.10, and the local Nix store names them\nwhen it holds the build.",
+          "description": "`false` when Kix could not name a missing object. The deploy record\nnames its objects from Kix 0.10, and Kix's local store names them\nwhen it holds the build.",
           "type": "boolean"
         },
         "namespace": {
