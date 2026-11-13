@@ -11,7 +11,7 @@ version, and builds every cluster again. Then it compares the two builds and
 lists the release notes that apply to the project.
 
 `kix upgrade` runs in the Kix version you invoke directly, even when
-`kix.toml` pins an older version. For each version it tests, it installs that
+`flake.lock` pins another version. For each version it tests, it installs that
 version of Kix if needed and runs the build with it. It does not contact any
 cluster.
 
@@ -32,62 +32,54 @@ kix upgrade --acknowledge <ID>...
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--to <VERSION>` | `latest` | The version to move to: an exact version such as `0.10.2`, a prerelease named in full such as `0.11.0-rc.1`, a minor such as `0.10` (its newest patch), or `latest`, the newest release that is not a prerelease. The version the project is on already [moves the Kix library to match it](#move-the-kix-library-to-the-version-the-project-is-on). |
-| `--dry-run` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. With the version the project is on, check the Kix library and change nothing. |
+| `--to <VERSION>` | `latest` | The version to move to: an exact version such as `0.10.2`, a prerelease named in full such as `0.11.0-rc.1`, a minor such as `0.10` (its newest release), or `latest`, the newest release that is not a prerelease. On a project that pins no version, `kix upgrade` [only pins it](#pin-a-project-that-has-no-version). |
+| `--dry-run` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. |
 | `--acknowledge <ID>...` | none | Acknowledge a change to stored data by its id or name, so that `kix deploy` goes ahead. Does nothing else. |
 
 ## The version the project uses
 
-`kix upgrade` starts from the exact version in `kix.toml`, such as
-`kix = "0.9.1"`. When `kix.toml` names a minor or no version, it starts from
-the version of the project's Kix library in `flake.lock`. When the target is
-not newer than that, it prints this and exits `0`:
+`kix upgrade` reads the version the project is on from the tag of the `kix`
+input in `flake.lock`, such as `v0.10.0`. When `--to` names that version, it
+prints this, fetches nothing, and exits `0`:
+
+```text
+Already on Kix 0.10.0. Nothing to upgrade.
+```
+
+When the target is not newer than the project's version, it prints this and
+exits `0`:
 
 ```text
 Already on the latest Kix release (0.12.1). Nothing to upgrade.
 ```
 
-## Move the Kix library to the version the project is on
+## Pin a project that has no version
 
-A project names its version of Kix in three files: `kix` in `kix.toml`, the
-Kix library input in `flake.nix`, and the locked library in `flake.lock`.
-They can disagree, for example after someone edits `kix.toml` or runs
-`nix flake update`. Kix then stops before it builds, and its message names
-the command that makes them agree, such as:
+A project pins no version of Kix when it has no `flake.lock`, when its `kix`
+input has no tag (such as `github:kix-run/kix`), or when the input follows a
+branch or a commit. Then there is no version to build and compare against,
+and `kix upgrade --to 0.10.0` only pins the project. Plain `kix upgrade` pins
+the newest release.
 
-<Command commands={["kix upgrade --to 0.10.0"]} />
-
-When `--to` names the version the project is on, `kix upgrade` builds
-nothing and does not fetch the release index. It sets `kix` in `kix.toml`
-when that setting does not already match, and moves the Kix library input
-to the release tag `v0.10.0`. Kix finds the input by its name in
-`flake.nix`: `kix` or `kixpkgs`, or the name that
-[`library-input`](/docs/reference/kix-toml/#the-library-input-setting) in `kix.toml`
-gives. A mirror or a fork of the Kix library is moved the same way. What Kix
-does depends on what `flake.nix` says the input follows:
-
-| `flake.nix` says | Kix does | Kix prints |
-| --- | --- | --- |
-| No ref, such as `github:kix-run/kix` | Locks the tag in `flake.lock`. `flake.nix` stays as it is. | `Kix library: 0.9.1 -> 0.10.0.` |
-| A version tag, such as `github:kix-run/kix/v0.9.1` | Changes that tag in `flake.nix`, then locks it. When more than one URL in `flake.nix` names the tag, Kix changes nothing and lists the lines. | `Kix library: 0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.` |
-| A branch or a commit | Nothing. You chose it. | `The input kix follows the branch main, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
-| A local folder | Nothing. | `The input kix is the local folder ../kix, so Kix leaves it alone. It holds the Kix library 0.10.0.` |
-
-Kix then evaluates the version of the Kix library that the project builds
-with, and stops with exit status `1` when Kix `0.10.0` cannot build it. When
-it had moved the input, it puts `flake.nix` and `flake.lock` back. Such a
-library can come from another input that brings its own Kix library, and
-the message names the `follows` line to add to `flake.nix`. When the
-library is an input of another flake only, Kix changes nothing and names the
-lines to add. With `--dry-run`, Kix evaluates the project with the input on
-the tag, writes no file, and names the command that makes the change. Kix
-names the library by its version, or by its commit when it cannot read the
-version. Commit the files Kix names:
+Kix writes the tag `v0.10.0` into the url of the `kix` input in `flake.nix`.
+It adds the tag to a url with none, and replaces a branch or a commit. Then it
+creates or updates `flake.lock`. It builds nothing:
 
 ```text
-Kix library: 0.9.1 -> 0.10.0. Kix changed the tag in flake.nix.
+Pinned the Kix library to 0.10.0 (updated flake.nix, flake.lock). This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.
 Commit flake.nix and flake.lock.
 ```
+
+A local folder has no versions, so Kix cannot pin it:
+
+```text
+The input kix is the local folder ../kix, which has no versions. Point the input at the tag v0.10.0, such as github:kix-run/kix/v0.10.0.
+```
+
+When more than one url in `flake.nix` names the Kix library's repository the
+same way, Kix changes nothing, lists the lines, and asks you to change the url
+of the `kix` input yourself. With `--dry-run`, Kix says what it would pin and
+changes nothing.
 
 ## Release notes
 
@@ -155,21 +147,18 @@ range has no breaking, security, or upgrade notes, it says
    it stops with exit status `2`. Fix the project on its current version
    first.
 2. Pins the project to the target, installs it, and builds every cluster.
-   Pinning writes the exact version into `kix.toml` and moves the Kix
-   library input as described in
-   [Move the Kix library](#move-the-kix-library-to-the-version-the-project-is-on).
-   When the library input in `flake.nix` names a tag, such as
-   `github:kix-run/kix/v0.9.1`, `?ref=refs/tags/v0.9.1`, or `?ref=v0.9.1` on
-   any host, Kix changes that tag only when exactly one URL of the library's
-   repository in `flake.nix` names it. When two or more do, such as a second
+   Pinning changes the tag in the url of the `kix` input in `flake.nix`,
+   such as `github:kix-run/kix/v0.9.1` or `?ref=refs/tags/v0.9.1` on any
+   host, and locks it in `flake.lock`. Kix
+   changes the tag only when exactly one URL of the library's repository in
+   `flake.nix` names it. When two or more do, such as a second
    input that pins a version of Kix built into an image, Kix changes
    nothing, names the lines, writes `edit-needed` into `kix-upgrade.json`,
    and exits `3` before it installs the target. Change the library input's
    URL yourself, leave the others, and run `kix upgrade` again. When Kix
    cannot lock the new tag, or the project then builds with a Kix library
-   the target cannot build, Kix puts `kix.toml`, `flake.nix`, and
-   `flake.lock` back as they were before that step, says why, and exits `2`
-   or `3`.
+   the target cannot build, Kix puts `flake.nix` and `flake.lock` back as
+   they were before that step, says why, and exits `2` or `3`.
 3. When a cluster does not build with the target, takes one minor release at
    a time: the newest patch of each minor after the project's, ending with
    the target. A project on a prerelease, such as `0.9.0-rc.1`, takes the
@@ -191,7 +180,7 @@ range has no breaking, security, or upgrade notes, it says
        [K0003] caddy: `replicaCount` was renamed to `replicas`.
 
    Stopped at Kix 0.11.2 (step 1 of 2 toward 0.12.1).
-   kix.toml, flake.nix, and flake.lock are pinned to 0.11.2 so you can fix this step first.
+   flake.nix and flake.lock are pinned to 0.11.2 so you can fix this step first.
    Next: fix the error above, then run `kix upgrade` to continue to 0.12.1.
    ```
 
@@ -242,7 +231,7 @@ at the newest patch of that release's minor, and exits `3`:
 Upgraded to Kix 0.11.2, but review before deploying:
   1. Kix 0.11.0 must be deployed to all clusters before continuing to 0.12.1
      (`kix deploy` on 0.12.1 will refuse any cluster still on 0.10.0).
-     kix.toml, flake.nix, and flake.lock are pinned to 0.11.2.
+     flake.nix and flake.lock are pinned to 0.11.2.
 Next: commit this 0.11.2 step and deploy every cluster with `kix deploy <cluster>`, then run `kix upgrade` to continue to 0.12.1.
 ```
 
@@ -310,6 +299,6 @@ Programs that read the file must skip fields they do not know.
 ## Exit status
 
 - `0` when the project builds with the target, no object changed in any cluster, and nothing needs a person, and with `--dry-run` or `--acknowledge`.
-- `1` when the release index or a release's notes cannot be fetched or verified, a version cannot be installed, or the project cannot be pinned. With the version the project is on, `1` when Kix cannot move the Kix library or the project builds with a library that version cannot build.
+- `1` when the release index or a release's notes cannot be fetched or verified, a version cannot be installed, or the project cannot be pinned.
 - `2` when a cluster does not build, with the version the project used or with a release the upgrade tried.
 - `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first.
