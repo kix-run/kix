@@ -645,13 +645,10 @@ A package is stable or experimental. `packages.<name>` and `packages.stable.<nam
     harbor-db = { package = packages.experimental.stackgres-database;  # answers harbor's `database`
       config = { database = "registry"; user = "harbor"; }; };
     harbor-db-password = { package = packages.secret; aliases = [ "password" ];   # answers stackgres-database's `password`
-      config = { source = ./harbor-db.sops.yaml; hash = "sha256-..."; keys = [ "password" ]; }; };
+      config = { source = ./harbor-db.sops.yaml; keys = [ "password" ]; }; };
   };
 }
 ```
-
-`kix secret hash ./harbor-db.sops.yaml` prints the value for `hash`. Run it
-again after re-encrypting the file, or the deploy stops on a hash mismatch.
 
 CloudNativePG is the alternative PostgreSQL provider: `cnpg-operator` (one
 per cluster), `cnpg-cluster` in place of `stackgres-cluster`, and

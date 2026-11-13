@@ -4,7 +4,7 @@
 
 ## `scope.mkSecret`: Kix-managed secret
 
-Creates a K8s Secret resource with enriched `out`. Accepts inline `stringData` or SOPS `source` + `hash`. A declared key needs a value in `stringData` or the SOPS `source`; the build refuses one with neither.
+Creates a K8s Secret resource with enriched `out`. Accepts inline `stringData` or a SOPS `source`. Kix records the encrypted file's SHA-256 in `kix.run/sops-digest` and publishes it as `out.sops.digest`; there is no `hash` to write (setting one fails with `[K4732]`). A declared key needs a value in `stringData` or the SOPS `source`; the build refuses one with neither.
 
 ```nix
 creds = scope.mkSecret {
@@ -16,7 +16,6 @@ creds = scope.mkSecret {
   # keys auto-derived from stringData. Explicit keys for SOPS mode:
   # keys = [ "username" "password" ];
   # source = ./secrets/creds.yaml;
-  # hash = "sha256-...";
   # type = "Opaque";  # default
 };
 ```
@@ -143,7 +142,6 @@ instances.my-ns.cloudflare-api = {
   config = {
     keys = [ "api-token" ];
     source = ./secrets/cloudflare-api.yaml;
-    hash = "sha256-...";
   };
 };
 

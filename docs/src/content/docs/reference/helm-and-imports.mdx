@@ -199,7 +199,6 @@ Clusters frequently rely on services or platform components that live outside th
   instances.app.rds-login = {
     package = packages.secret;
     config.source = ./secrets/rds-login.sops.yaml;
-    config.hash = "sha256-<base64>";
     config.keys = [ "username" "password" ];
   };
   instances.app.database.package = kix.mkImport {
