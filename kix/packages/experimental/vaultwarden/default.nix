@@ -177,14 +177,14 @@ in
               # A changed database password restarts the pods, which read it
               # once at start. A Secret Kix does not build has no hash.
               template.metadata.annotations =
-                lib.optionalAttrs (database.out.credentials.out ? identityHash) {
-                  "checksum/database" = database.out.credentials.out.identityHash;
+                lib.optionalAttrs (database.out.credentials.out ? contentHash) {
+                  "checksum/database" = database.out.credentials.out.contentHash;
                 }
                 //
                   lib.optionalAttrs
-                    (relay != null && relay.credentials != null && relay.credentials.out ? identityHash)
+                    (relay != null && relay.credentials != null && relay.credentials.out ? contentHash)
                     {
-                      "checksum/smtp" = relay.credentials.out.identityHash;
+                      "checksum/smtp" = relay.credentials.out.contentHash;
                     };
               template.spec = {
                 # Kubernetes default: Rocket's own shutdown grace is a few

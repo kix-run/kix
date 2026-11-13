@@ -492,8 +492,8 @@ in
         # outside Kix; it rolls through reloader's `withReloadOn`.
         depHash =
           n: d:
-          lib.optionalAttrs (d.out ? identityHash) {
-            "checksum/${n}" = d.out.identityHash;
+          lib.optionalAttrs (d.out ? contentHash) {
+            "checksum/${n}" = d.out.contentHash;
           };
         podAnnotations =
           depHash "database" database.out.credentials

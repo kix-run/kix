@@ -475,7 +475,7 @@ in
           template = {
             metadata = {
               labels = checkLabels;
-              annotations."checksum/manifest" = self.webhookCheckManifest.out.identityHash;
+              annotations."checksum/manifest" = self.webhookCheckManifest.out.contentHash;
             };
             spec = {
               restartPolicy = "OnFailure";

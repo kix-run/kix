@@ -436,7 +436,7 @@ in
               # bootstrap secret has no annotation: Keycloak reads it only
               # on the first start, so a restart for it would change nothing.
               template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                "checksum/database" = database.out.credentials.out.identityHash or null;
+                "checksum/database" = database.out.credentials.out.contentHash or null;
               };
               template.spec = {
                 automountServiceAccountToken = false;

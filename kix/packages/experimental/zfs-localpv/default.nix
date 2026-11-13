@@ -427,7 +427,7 @@ in
         spec = {
           selector.matchLabels = component "node";
           template = {
-            metadata.annotations."checksum/zfs-wrapper" = self.zfsWrapper.out.identityHash;
+            metadata.annotations."checksum/zfs-wrapper" = self.zfsWrapper.out.contentHash;
             spec = {
               serviceAccount = self.nodeServiceAccount;
               priorityClassName = "system-node-critical";

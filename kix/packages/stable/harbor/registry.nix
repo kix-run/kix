@@ -254,7 +254,7 @@ in
         strategy.type = "Recreate";
         selector.matchLabels = componentSelector "registry";
         template.metadata.annotations = {
-          "checksum/config" = self.registryConfigMap.out.identityHash;
+          "checksum/config" = self.registryConfigMap.out.contentHash;
         }
         // checksumOf "harbor-secrets" secrets
         // checksumOf "ca-bundle" ca

@@ -232,7 +232,7 @@ in
         revisionHistoryLimit = 5;
         selector.matchLabels = coreSelector;
         template.metadata.annotations = {
-          "checksum/config" = self.coreConfigMap.out.identityHash;
+          "checksum/config" = self.coreConfigMap.out.contentHash;
         }
         // checksumOf "harbor-secrets" secrets
         // checksumOf "ca-bundle" ca
@@ -430,7 +430,7 @@ in
         revisionHistoryLimit = 5;
         selector.matchLabels = componentSelector "portal";
         template.metadata.annotations = {
-          "checksum/config" = self.portalConfigMap.out.identityHash;
+          "checksum/config" = self.portalConfigMap.out.contentHash;
         };
         template.spec = harborPodDefaults // {
           containers = [

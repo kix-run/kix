@@ -516,11 +516,11 @@ else
               inherit labels;
               # Both binaries read the tree once, at startup.
               annotations = {
-                "checksum/config" = self.configMap.out.identityHash;
+                "checksum/config" = self.configMap.out.contentHash;
               }
               // lib.listToAttrs (
                 map (
-                  f: lib.nameValuePair "checksum/${f.key}" self.fragmentConfigMaps.${f.key}.out.identityHash
+                  f: lib.nameValuePair "checksum/${f.key}" self.fragmentConfigMaps.${f.key}.out.contentHash
                 ) fragments
               );
             };

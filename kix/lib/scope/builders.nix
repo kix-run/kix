@@ -1100,6 +1100,9 @@ in
         in
         marker
         // {
+          # The out has no contentHash, because something outside Kix writes
+          # the data. Packages read a missing contentHash as the sign to
+          # restart pods through reloader instead of a checksum annotation.
           out = {
             name = attachCtx name;
           }

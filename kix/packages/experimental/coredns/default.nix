@@ -473,7 +473,7 @@ in
                   # A Corefile change rolls the pods, so the deploy waits for
                   # CoreDNS to load it. `reload` alone would keep the old
                   # config running if the new one fails to parse.
-                  annotations."checksum/corefile" = self.configmap.out.identityHash;
+                  annotations."checksum/corefile" = self.configmap.out.contentHash;
                 };
                 spec = {
                   serviceAccount = self.serviceAccount;

@@ -621,12 +621,12 @@ in
                 # A changed password or key restarts the pod, which reads
                 # them once at start. A `secret-ref` has no content hash.
                 template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                  "checksum/database" = pg.credentials.out.identityHash or null;
-                  "checksum/clickhouse" = ch.credentials.out.identityHash or null;
-                  "checksum/secret-key-base" = skb.out.identityHash or null;
+                  "checksum/database" = pg.credentials.out.contentHash or null;
+                  "checksum/clickhouse" = ch.credentials.out.contentHash or null;
+                  "checksum/secret-key-base" = skb.out.contentHash or null;
                   "checksum/smtp" =
                     if relay != null && relay.credentials != null then
-                      relay.credentials.out.identityHash or null
+                      relay.credentials.out.contentHash or null
                     else
                       null;
                   "checksum/replicate" =

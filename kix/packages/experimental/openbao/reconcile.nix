@@ -170,7 +170,7 @@ in
           template = {
             metadata = {
               labels = labelsFor "reconcile";
-              annotations."checksum/reconcile" = self.reconcileConfigMap.out.identityHash;
+              annotations."checksum/reconcile" = self.reconcileConfigMap.out.contentHash;
             };
             spec = {
               restartPolicy = "OnFailure";

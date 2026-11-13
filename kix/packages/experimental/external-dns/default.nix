@@ -566,10 +566,10 @@ in
                 labels = scope.selectorLabels;
               }
               # Rolls the pod when a Kix-built Secret changes. A secret-ref
-              # names a Secret managed outside Kix, which has no identity
+              # names a Secret managed outside Kix, which has no content
               # hash, so a rotation does not roll the pod.
-              // lib.optionalAttrs (providerCredentials != null && providerCredentials.out ? identityHash) {
-                annotations."checksum/provider-credentials" = providerCredentials.out.identityHash;
+              // lib.optionalAttrs (providerCredentials != null && providerCredentials.out ? contentHash) {
+                annotations."checksum/provider-credentials" = providerCredentials.out.contentHash;
               };
               spec = {
                 serviceAccount = self.serviceAccount;

@@ -297,6 +297,7 @@ All string values inside `resource.out` carry the store-path context of `resourc
 | **All resources** | `out.name` | string | `metadata.name` with store-path context attached. |
 | **All resources** | `out.fqdn` | string | `"${name}.${namespace}.svc.${clusterDomain}"` for namespaced resources (or `name` for cluster-scoped resources), with connect context attached. |
 | **All resources** | `out.identityHash` | string | 32-character store hash of the resource's JSON identity file (`outPath`), with store-path context attached. |
+| **All resources** | `out.contentHash` | string | SHA-256 of the resource's own manifest, in hex, with the same store-path context as `out.identityHash`. It leaves out `kix.run/*` annotations and labels, apart from a Secret's `kix.run/sops-digest`. See [Triggering rollouts on ConfigMap changes](#triggering-rollouts-on-configmap-changes-with-outcontenthash). |
 | **All resources** | `out.selector` | attrset of strings | Derived from `spec.selector.matchLabels` when present, otherwise `metadata.labels`, with the resource's store-path context attached to every label value. |
 | **`v1/Service`** | `out.ports` | list of attrsets | Raw `spec.ports` list (`[ { name?; port; targetPort?; protocol?; } ]`) when `spec.ports` is present. |
 | **`v1/Service`** | `out.port` | string | First port number in `spec.ports` as a string (with connect context attached), added automatically when built via `kix.service.fromWorkload` or `scope.mkServiceRef`. |
@@ -304,15 +305,24 @@ All string values inside `resource.out` carry the store-path context of `resourc
 | **`v1/Secret`** (`mkSecret` / `mkSecretRef`) | `out.keys`, `out.type`, `out.keyRef`, `out.mkEnv`, `out.envFrom`, `out.volume` | various | Secret consumption helpers. See [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/#secrets-and-secret-refs). |
 | **`CustomResourceDefinition`** (`mkCRD` / `mkCRDRef`) | `out.cr`, `out.mkCR` | functions | Custom resource constructors bound to the CRD's `apiVersion`, `kind`, and `readiness`. See [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/#crds-and-crd-refs). |
 
-### Triggering rollouts on ConfigMap changes with `out.identityHash`
+### Triggering rollouts on ConfigMap changes with `out.contentHash`
 
-Kubernetes does not automatically restart pods when a mounted `ConfigMap` changes. Interpolating `self.configMap.out.identityHash` into `spec.template.metadata.annotations` both triggers a rolling update whenever the `ConfigMap` data changes and creates the deployment dependency from the workload to the `ConfigMap`:
+Kubernetes does not restart pods when a `ConfigMap` or `Secret` they read changes. Put `out.contentHash` in a pod template annotation, and the pods roll whenever the data changes:
 
 ```nix
 spec.template.metadata.annotations = {
-  "checksum/config" = self.configMap.out.identityHash;
+  "checksum/config" = self.configMap.out.contentHash;
 };
 ```
+
+Reading `out.contentHash` also makes the workload depend on the `ConfigMap`, so Kix deploys the `ConfigMap` first.
+
+A resource has two hashes, and each one answers a different question:
+
+- `out.contentHash` changes when the resource's own content changes. It leaves out Kix's `kix.run/*` annotations and labels, including `kix.run/depends-on`. A change to something the `ConfigMap` depends on, such as a `Service` whose address it holds, does not change it. Use it for `checksum/*` annotations.
+- `out.identityHash` changes when the resource or anything it depends on changes. Plans and the deploy order use it. In a `checksum/*` annotation it would restart pods when nothing they read has changed.
+
+For a `Secret` that `scope.mkSecret` fills from a SOPS file, Kix reads the values only at deploy time. Its `out.contentHash` includes `kix.run/sops-digest`, the SHA-256 of the encrypted file, so editing the file rolls the pods. A `Secret` from `scope.mkSecretRef` (a `secret-ref` or `external-secret` instance) has no `out.contentHash`, because something outside Kix writes its data. To restart pods when such a `Secret` changes, use the `reloader` package's `out.withReloadOn`.
 
 ### Customizing `.out` with `outputs`
 

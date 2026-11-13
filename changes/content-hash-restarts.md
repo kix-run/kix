@@ -1,0 +1,5 @@
++++
+kind = "note"
+packages = ["grafana", "harbor", "valkey", "echo-server", "experimental/caddy", "experimental/clickhouse", "experimental/clickhouse-logs", "experimental/clickhouse-operator", "experimental/cloudflared", "experimental/coredns", "experimental/descheduler", "experimental/external-dns", "experimental/external-secrets", "experimental/falco", "experimental/firezone", "experimental/immich", "experimental/keycloak", "experimental/loki", "experimental/loki-logs", "experimental/metabase", "experimental/n8n", "experimental/openbao", "experimental/otel-collector", "experimental/plausible", "experimental/tempo", "experimental/vaultwarden", "experimental/velero", "experimental/zfs-localpv"]
++++
+These packages now build their `checksum/*` pod annotations from `out.contentHash`. Their pods no longer restart when only something that a ConfigMap or Secret depends on changes. The first deploy after you upgrade changes every such annotation, so these workloads restart once. The `external-secrets` webhook check Job and the `openbao` reconcile Job run once more.

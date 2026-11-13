@@ -96,8 +96,8 @@ let
     || ((ctx.path or false) && lib.hasPrefix "k8s-" (k8s.markers.pathName path));
 
   # Convert `out` to plain JSON data for an interface file. Drop functions,
-  # typed Kix handles, and `identityHash` (which changes on every edit to the
-  # platform object). Reject strings that reference store paths such as SOPS
+  # typed Kix handles, and `identityHash` and `contentHash` (which change on
+  # edits to the platform object). Reject strings that reference store paths such as SOPS
   # secrets or rendered config files so platform store paths do not leak into
   # the interface.
   plainOut =
@@ -109,7 +109,12 @@ let
         null
       else
         lib.filterAttrs (_: x: x != null) (
-          lib.mapAttrs (k: plainOut "${field}.${k}") (removeAttrs v [ "identityHash" ])
+          lib.mapAttrs (k: plainOut "${field}.${k}") (
+            removeAttrs v [
+              "identityHash"
+              "contentHash"
+            ]
+          )
         )
     else if builtins.isList v then
       lib.imap0 (i: plainOut "${field}.${toString i}") v

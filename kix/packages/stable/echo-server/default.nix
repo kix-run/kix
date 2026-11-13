@@ -133,7 +133,7 @@ in
             selector.matchLabels = scope.selectorLabels;
             # nginx reads its config only at start, so a changed ConfigMap
             # must roll the pods.
-            template.metadata.annotations."checksum/config" = self.configmap.out.identityHash;
+            template.metadata.annotations."checksum/config" = self.configmap.out.contentHash;
             template.spec = {
               # nginx drains open connections on the image's SIGQUIT stop
               # signal; the Kubernetes default bounds that wait.

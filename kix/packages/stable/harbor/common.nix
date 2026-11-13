@@ -180,14 +180,14 @@ rec {
       # hash and gets none; `reloadOn` covers it.
       checksumOf =
         key: s:
-        lib.optionalAttrs (s != null && s.out ? identityHash) { "checksum/${key}" = s.out.identityHash; };
+        lib.optionalAttrs (s != null && s.out ? contentHash) { "checksum/${key}" = s.out.contentHash; };
 
       # Names the secret-ref Secrets among `refs` in reloader's annotation
       # on Deployment builder args, when a reloader is wired.
       reloadOn =
         refs: args:
         let
-          untracked = builtins.filter (s: s != null && !(s.out ? identityHash)) refs;
+          untracked = builtins.filter (s: s != null && !(s.out ? contentHash)) refs;
         in
         if reloader == null || untracked == [ ] then args else reloader.out.withReloadOn untracked args;
 
