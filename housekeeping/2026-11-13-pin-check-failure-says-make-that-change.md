@@ -1,0 +1,3 @@
+# 2026-11-13 · `kix upgrade --to` · A failed library check after pinning reads as one run-on sentence and asks for a change it never named.
+
+When the check after pinning failed, `kix upgrade --to 0.9.2` printed "Kix could not read the version of the project's Kix library: error: attribute 'nixpkgs' missing Kix put flake.nix and flake.lock back." and then "Next: make that change, then run `kix upgrade` again." The Nix error has no period before Kix's sentence, and "that change" refers to nothing the message named. The project's flake lacked the `nixpkgs` input its Kix library needs. See `Plan::check` in `cli/kix-core/src/pin_library.rs` and the `Check` branch in `cli/kix-cli/src/commands/upgrade/pin.rs`.

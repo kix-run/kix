@@ -251,6 +251,7 @@ fn flake_checks_evaluate_with_helm() {
                 "c: builtins.concatStringsSep \" \" (builtins.attrNames c)",
             ],
             &[],
+            &kix::version::policy::LibraryVersion::Unknown,
             &|_| {},
         )
         .unwrap();
@@ -260,7 +261,13 @@ fn flake_checks_evaluate_with_helm() {
         {
             evaluated += 1;
             let attr = format!("{checks}.{name}.drvPath");
-            if let Err(e) = kix::eval::nix::eval_with_helm(&dir, &[&attr], &[], &|_| {}) {
+            if let Err(e) = kix::eval::nix::eval_with_helm(
+                &dir,
+                &[&attr],
+                &[],
+                &kix::version::policy::LibraryVersion::Unknown,
+                &|_| {},
+            ) {
                 failed.push(format!("{flake}#{name}: {e}"));
             }
         }

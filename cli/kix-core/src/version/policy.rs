@@ -1,8 +1,10 @@
-//! Which release a command asks for, and the one check between the running
+//! Which release a command asks for, and the comparisons between the running
 //! Kix and a project's Kix library.
 //!
 //! This is the only place that compares the version of Kix with the version
-//! of a Kix library. A project names its Kix by the release tag its
+//! of a Kix library. It holds the check after evaluation
+//! ([`check_library`]) and the advice for a library that needs a Helm the
+//! running Kix does not ship ([`library_next_step`]). A project names its Kix by the release tag its
 //! `flake.lock` pins (`crate::flake_lock`), and Kix runs exactly that
 //! version, so the library and Kix match by construction. A tag moved by
 //! hand in `flake.nix` stops before evaluation (`LockError::TagMoved`). The
@@ -145,6 +147,48 @@ impl fmt::Display for LibraryMismatch {
 
 impl std::error::Error for LibraryMismatch {}
 
+/// What Kix knows about the version of a project's Kix library.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryVersion {
+    Known(Version),
+    /// The library predates the version output.
+    Older,
+    /// Kix could not read the version.
+    Unknown,
+}
+
+impl LibraryVersion {
+    /// Return the version that `text`, the library's `kixLibrary.version`,
+    /// names, or [`LibraryVersion::Unknown`] when it names none.
+    pub fn parse(text: &str) -> Self {
+        text.parse()
+            .map_or(LibraryVersion::Unknown, LibraryVersion::Known)
+    }
+}
+
+/// Return what to do when a project's Kix library, `library`, needs
+/// something Kix `kix` does not ship, such as a Helm version. An older
+/// library moves to Kix, a newer one needs a newer Kix, and when Kix cannot
+/// tell, the advice gives both.
+pub fn library_next_step(kix: &Version, library: &LibraryVersion) -> String {
+    let release = kix.release();
+    let older = match library {
+        LibraryVersion::Older => Some(true),
+        LibraryVersion::Known(lib) if lib < kix => Some(true),
+        LibraryVersion::Known(lib) if lib > kix => Some(false),
+        LibraryVersion::Known(_) | LibraryVersion::Unknown => None,
+    };
+    match (older, library) {
+        (Some(true), _) => format!(
+            "Run `kix upgrade --to {release}` to move this project to the {release} library, then commit the files it changes."
+        ),
+        (Some(false), LibraryVersion::Known(lib)) => format!("Upgrade Kix to {}.", lib.release()),
+        _ => format!(
+            "Run `kix upgrade --to {release}` to move this project to the {release} library and commit the files it changes, or use the version of Kix that matches the library."
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +264,30 @@ mod tests {
         for library in ["0.10.2", "0.10.4", "0.11.0", "0.10.3-rc.1"] {
             assert!(check_library(&kix, &kix, &v(library)).is_err(), "{library}");
         }
+    }
+
+    #[test]
+    fn a_library_kix_cannot_serve_names_the_side_to_move() {
+        let kix = v("0.8.1+250");
+        let step = |library| library_next_step(&kix, &library);
+        let update = "Run `kix upgrade --to 0.8.1` to move this project to the 0.8.1 library, then commit the files it changes.";
+        assert_eq!(step(LibraryVersion::Known(v("0.8.0"))), update);
+        assert_eq!(step(LibraryVersion::Older), update);
+        assert_eq!(
+            step(LibraryVersion::Known(v("0.8.2"))),
+            "Upgrade Kix to 0.8.2."
+        );
+        for library in [LibraryVersion::Unknown, LibraryVersion::Known(v("0.8.1"))] {
+            assert_eq!(
+                step(library),
+                "Run `kix upgrade --to 0.8.1` to move this project to the 0.8.1 library and commit the files it changes, or use the version of Kix that matches the library."
+            );
+        }
+        assert_eq!(
+            LibraryVersion::parse("0.8.0"),
+            LibraryVersion::Known(v("0.8.0"))
+        );
+        assert_eq!(LibraryVersion::parse("dev"), LibraryVersion::Unknown);
     }
 
     #[test]

@@ -31,13 +31,62 @@ asks you to update the url of the `kix` input yourself.
 
 When `flake.lock` pins no version of Kix, for example because the project has
 no `flake.lock` or its `kix` input has no tag, Kix stops and asks you to pin
-one. Run `kix upgrade --to` with the version you want:
+one. Run `kix upgrade --to` with the version the project uses now:
 
 <Command commands={["kix upgrade --to 0.10.0"]} cwd="my-project/" />
 
 With no version to compare against, `kix upgrade` builds nothing. It writes
 the tag into `flake.nix`, creates or updates `flake.lock`, and names the files
 to commit. To try a prerelease, name it in full, such as `--to 0.11.0-rc.1`.
+Pin the version the project uses now rather than a newer one. A later
+`kix upgrade` then builds the project with both versions and shows what the
+newer one changes.
+
+## Upgrade a project from Kix 0.9
+
+A project set up for Kix 0.9 names its version in a `kix` line in
+`kix.toml`, and the Kix library input in `flake.nix` usually has no tag. Kix
+now reads the version from `flake.lock`, and every command stops with error
+`[K4476]` while the `kix` line is there. Move the project over in this order,
+so that the last step shows what the new version changes.
+
+First, note the version in the `kix` line, such as `kix = "0.9"`, and delete
+the line from `kix.toml`.
+
+Next, if `flake.nix` names the Kix library input `kixpkgs`, rename it to
+`kix`. Kix stops with error `[K9179]` until you do. Rename every use of the
+input, including `inputs.kixpkgs.lib.mkFlake` and any
+`kixpkgs.inputs.nixpkgs.follows` line:
+
+```nix title="flake.nix"
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    kix.url = "github:kix-run/kix";
+    kix.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = inputs: inputs.kix.lib.mkFlake {
+    inherit inputs;
+    clusters.production = ./clusters/production.nix;
+  };
+}
+```
+
+Then pin the project to the version it uses now, the one the `kix` line
+named. A minor version such as `0.9` pins its newest release:
+
+<Command commands={["kix upgrade --to 0.9"]} cwd="my-project/" />
+
+This builds nothing. It adds the tag to the url of the `kix` input and
+writes `flake.lock`. Commit `kix.toml`, `flake.nix`, and `flake.lock`.
+
+Finally, move to the new version:
+
+<Command commands={["kix upgrade"]} cwd="my-project/" />
+
+`kix upgrade` builds every cluster with the version you pinned and with the
+new one, and lists what changed, as in [Run the upgrade](#run-the-upgrade).
 
 ## Preview the upgrade
 

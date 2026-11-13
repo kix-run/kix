@@ -66,6 +66,43 @@ impl fmt::Display for Development {
     }
 }
 
+/// Why a lock does not show the Kix library as the project's input `kix`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputError {
+    /// The lock has no root node, or its `kix` entry is neither a node nor a
+    /// `follows` path.
+    Malformed(&'static str),
+    /// The root of the lock has no input named `kix`.
+    Missing,
+    /// The library input has the name Kix 0.9 also accepted. `version` is
+    /// the release tag it pins, when it pins one.
+    OldName { version: Option<Version> },
+    /// The `kix` input follows an input of another flake.
+    Follows(String),
+}
+
+impl InputError {
+    /// Return what is wrong with the input and the change to `flake.nix`
+    /// that fixes it, without a final period. `version` is the release the
+    /// fixed input should name.
+    pub fn change(&self, version: &str) -> String {
+        match self {
+            InputError::Malformed(message) => {
+                format!("Kix could not read the lock of flake.nix: {message}")
+            }
+            InputError::Missing => format!(
+                "flake.nix has no input named {INPUT}, so Kix cannot tell which Kix library this project uses. Add `inputs.kix.url = \"github:kix-run/kix/v{version}\";` to flake.nix"
+            ),
+            InputError::OldName { .. } => format!(
+                "[{OLD_NAME_ID}] flake.nix names the Kix library input {OLD_NAME}, and Kix now reads only an input named {INPUT}. Rename the input to {INPUT} in flake.nix"
+            ),
+            InputError::Follows(path) => format!(
+                "The input {INPUT} in flake.nix follows {path}, so the Kix library comes from another flake. Set `inputs.kix.url = \"github:kix-run/kix/v{version}\";` in flake.nix"
+            ),
+        }
+    }
+}
+
 /// Why Kix cannot tell which Kix a project uses. Each message names one fix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LockError {
@@ -73,13 +110,8 @@ pub enum LockError {
     Missing,
     /// `flake.lock` is not a lock Kix can read.
     Unreadable { path: PathBuf, message: String },
-    /// The root of the lock has no input named `kix`.
-    NoInput,
-    /// The library input has the name Kix 0.9 also accepted. `version` is
-    /// the release tag it pins, when it pins one.
-    OldName { version: Option<Version> },
-    /// The `kix` input follows an input of another flake.
-    Follows(String),
+    /// The lock does not show the Kix library as the input `kix`.
+    Input(InputError),
     /// The `kix` input names no release tag: it has no ref, or it pins a
     /// commit.
     NoVersion,
@@ -88,7 +120,7 @@ pub enum LockError {
         locked: Box<Version>,
         asked: Box<Version>,
     },
-    /// `kix.toml` sets `library` to a value Kix does not know.
+    /// `kix.toml` has a setting Kix refuses before it chooses a version.
     Setting(String),
 }
 
@@ -103,24 +135,23 @@ impl fmt::Display for LockError {
             LockError::Unreadable { path, message } => {
                 write!(f, "Kix could not read {}: {message}", path.display())
             }
-            LockError::NoInput => write!(
-                f,
-                "flake.lock has no input named kix, so Kix cannot tell which Kix library this project uses. Add `inputs.kix.url = \"github:kix-run/kix/v{v}\";` to flake.nix if it has no such input, then run `kix upgrade --to {v}`."
-            ),
-            LockError::OldName { version } => {
-                let to = version.as_ref().map_or(v, Version::release);
+            LockError::Input(e @ InputError::OldName { version }) => {
+                let current = version.as_ref().map(Version::release);
                 write!(
                     f,
-                    "[{OLD_NAME_ID}] flake.nix names the Kix library input {OLD_NAME}, and Kix now reads only an input named {INPUT}. Rename the input to {INPUT} in flake.nix, then run `kix upgrade --to {to}`."
+                    "{}, then {}",
+                    e.change(&v),
+                    pin_then_upgrade(current.as_deref())
                 )
             }
-            LockError::Follows(path) => write!(
-                f,
-                "The input kix in flake.nix follows {path}, so the Kix library comes from another flake. Set `inputs.kix.url = \"github:kix-run/kix/v{v}\";` in flake.nix, then run `kix upgrade --to {v}`."
-            ),
+            LockError::Input(e @ InputError::Malformed(_)) => write!(f, "{}.", e.change(&v)),
+            LockError::Input(e) => {
+                write!(f, "{}, then run `kix upgrade --to {v}`.", e.change(&v))
+            }
             LockError::NoVersion => write!(
                 f,
-                "flake.nix uses the Kix library without a version. Run `kix upgrade --to {v}` to pin one."
+                "flake.nix uses the Kix library without a version, so Kix cannot tell which version this project uses. To pin it, {}",
+                pin_then_upgrade(None)
             ),
             LockError::TagMoved { locked, asked } => write!(
                 f,
@@ -135,6 +166,24 @@ impl fmt::Display for LockError {
 }
 
 impl std::error::Error for LockError {}
+
+/// Return the steps that pin a project with no version to the one it uses
+/// now, then upgrade it with a review of what changes. `current` is that
+/// version when Kix knows it. The text starts with a lower-case verb so it
+/// can follow another step.
+///
+/// Pinning a project that has no version builds nothing, so the second step
+/// is the one that compares the project before and after.
+pub fn pin_then_upgrade(current: Option<&str>) -> String {
+    let pin = match current {
+        Some(v) => {
+            format!("run `kix upgrade --to {v}` to record the version this project uses now")
+        }
+        None => "run `kix upgrade --to <version>` with the version of Kix this project uses now"
+            .to_string(),
+    };
+    format!("{pin}, then run `kix upgrade` to move to a newer version and review what changes.")
+}
 
 /// Return what to do when `flake.nix` asks for Kix `asked` but `flake.lock`
 /// pins Kix `locked`. `kix upgrade` only moves a project to a newer version,
@@ -164,6 +213,19 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
     if library == crate::project::Library::OwnFlake {
         return Ok(ProjectKix::Development(Development::OwnLibrary));
     }
+    let kix = locked_kix(dir);
+    // When the lock names no release, this Kix judges the project, and it
+    // reads kix.toml before flake.lock. A project on a release hands over to
+    // that release, which judges kix.toml itself.
+    if kix.is_err() {
+        crate::project::kix_setting(dir).map_err(|e| LockError::Setting(e.to_string()))?;
+    }
+    kix
+}
+
+/// Return which Kix the `flake.lock` in `dir` pins, and refuse a tag moved
+/// in `flake.nix` since.
+fn locked_kix(dir: &Path) -> Result<ProjectKix, LockError> {
     let path = dir.join(FILE);
     let unreadable = |message: String| LockError::Unreadable {
         path: path.clone(),
@@ -175,12 +237,12 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
         Err(e) => return Err(unreadable(e.to_string())),
     };
     let lock: Value = serde_json::from_str(&text).map_err(|e| unreadable(e.to_string()))?;
-    let kix = from_lock(&lock).map_err(|e| match e {
-        LockError::Unreadable { message, .. } => unreadable(message),
-        e => e,
+    let original = kix_input(&lock).map_err(|e| match e {
+        InputError::Malformed(message) => unreadable(message.to_string()),
+        e => LockError::Input(e),
     })?;
+    let kix = from_original(original)?;
     if let ProjectKix::Release(locked) = &kix
-        && let Some(original) = input_original(&lock)
         && let Ok(flake) = std::fs::read_to_string(dir.join("flake.nix"))
         && let Some(asked) = crate::pin_library::declared_tag(&flake, original)
         && &asked != locked
@@ -195,57 +257,41 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
 
 /// Return the `original` of the root's `kix` input in `lock`: the input as
 /// `flake.nix` gave it when Nix wrote the lock.
-pub fn input_original(lock: &Value) -> Option<&Value> {
-    let root = lock["root"].as_str().unwrap_or("root");
-    let key = lock["nodes"][root]["inputs"][INPUT].as_str()?;
-    Some(&lock["nodes"][key]["original"])
-}
-
-/// Return which Kix the lock `lock` pins.
-fn from_lock(lock: &Value) -> Result<ProjectKix, LockError> {
+pub fn kix_input(lock: &Value) -> Result<&Value, InputError> {
     let root = lock["root"].as_str().unwrap_or("root");
     let node = &lock["nodes"][root];
     if !node.is_object() {
-        return Err(LockError::Unreadable {
-            path: PathBuf::new(),
-            message: "it has no root node".to_string(),
-        });
+        return Err(InputError::Malformed("it has no root node"));
     }
     let inputs = node["inputs"].as_object();
-    let key = match inputs.and_then(|i| i.get(INPUT)) {
-        None => return no_input(lock, inputs),
-        Some(Value::String(key)) => key,
+    match inputs.and_then(|i| i.get(INPUT)) {
+        Some(Value::String(key)) => Ok(&lock["nodes"][key]["original"]),
         Some(Value::Array(path)) => {
             let path: Vec<&str> = path.iter().filter_map(Value::as_str).collect();
-            return Err(LockError::Follows(path.join("/")));
+            Err(InputError::Follows(path.join("/")))
         }
-        Some(_) => {
-            return Err(LockError::Unreadable {
-                path: PathBuf::new(),
-                message: "the input kix is neither a node nor a follows path".to_string(),
-            });
-        }
-    };
-    match pinned(&lock["nodes"][key]["original"]) {
+        Some(_) => Err(InputError::Malformed(
+            "the input kix is neither a node nor a follows path",
+        )),
+        None => match inputs.and_then(|i| i.get(OLD_NAME)) {
+            Some(Value::String(key)) => Err(InputError::OldName {
+                version: match pinned(&lock["nodes"][key]["original"]) {
+                    Pinned::Tag(v) => Some(v),
+                    _ => None,
+                },
+            }),
+            _ => Err(InputError::Missing),
+        },
+    }
+}
+
+/// Return which Kix the `kix` input's `original` pins.
+fn from_original(original: &Value) -> Result<ProjectKix, LockError> {
+    match pinned(original) {
         Pinned::Tag(v) => Ok(ProjectKix::Release(v)),
         Pinned::Development(d) => Ok(ProjectKix::Development(d)),
         Pinned::Nothing => Err(LockError::NoVersion),
     }
-}
-
-/// Return the error for a lock whose root has no `kix` input.
-fn no_input(
-    lock: &Value,
-    inputs: Option<&serde_json::Map<String, Value>>,
-) -> Result<ProjectKix, LockError> {
-    if let Some(Value::String(key)) = inputs.and_then(|i| i.get(OLD_NAME)) {
-        let version = match pinned(&lock["nodes"][key]["original"]) {
-            Pinned::Tag(v) => Some(v),
-            _ => None,
-        };
-        return Err(LockError::OldName { version });
-    }
-    Err(LockError::NoInput)
 }
 
 /// What an input's `original` in a lock pins.
@@ -264,13 +310,10 @@ fn pinned(original: &Value) -> Pinned {
             s("path").unwrap_or_default().to_string(),
         ));
     }
-    if let Some(r) = s("ref") {
-        let bare = r.strip_prefix("refs/tags/").unwrap_or(r);
-        return match release_tag(bare) {
+    if let Some(r) = s("ref").map(bare_ref) {
+        return match release_tag(r) {
             Some(v) => Pinned::Tag(v),
-            None => Pinned::Development(Development::Branch(
-                r.strip_prefix("refs/heads/").unwrap_or(r).to_string(),
-            )),
+            None => Pinned::Development(Development::Branch(r.to_string())),
         };
     }
     // A Git repository on this machine with no ref follows its checkout.
@@ -281,6 +324,14 @@ fn pinned(original: &Value) -> Pinned {
         return Pinned::Development(Development::Folder(path.to_string()));
     }
     Pinned::Nothing
+}
+
+/// Return a Git ref without `refs/tags/` or `refs/heads/`, as `flake.nix`
+/// writes it.
+pub fn bare_ref(r: &str) -> &str {
+    r.strip_prefix("refs/tags/")
+        .or_else(|| r.strip_prefix("refs/heads/"))
+        .unwrap_or(r)
 }
 
 /// Return the version a release tag such as `v0.10.3` names.
@@ -313,6 +364,12 @@ mod tests {
 
     fn v(s: &str) -> Version {
         s.parse().unwrap()
+    }
+
+    fn from_lock(lock: &Value) -> Result<ProjectKix, LockError> {
+        kix_input(lock)
+            .map_err(LockError::Input)
+            .and_then(from_original)
     }
 
     #[test]
@@ -378,14 +435,17 @@ mod tests {
     #[test]
     fn the_input_must_be_a_direct_input_named_kix() {
         let none = lock(json!({ "nixpkgs": "nixpkgs" }), json!({}));
-        assert_eq!(from_lock(&none), Err(LockError::NoInput));
+        assert_eq!(from_lock(&none), Err(LockError::Input(InputError::Missing)));
         let no_inputs = json!({ "root": "root", "nodes": { "root": {} }, "version": 7 });
-        assert_eq!(from_lock(&no_inputs), Err(LockError::NoInput));
+        assert_eq!(
+            from_lock(&no_inputs),
+            Err(LockError::Input(InputError::Missing))
+        );
 
         let follows = lock(json!({ "kix": ["platform", "kix"] }), json!({}));
         assert_eq!(
             from_lock(&follows),
-            Err(LockError::Follows("platform/kix".into()))
+            Err(LockError::Input(InputError::Follows("platform/kix".into())))
         );
 
         let old = lock(
@@ -394,9 +454,9 @@ mod tests {
         );
         assert_eq!(
             from_lock(&old),
-            Err(LockError::OldName {
+            Err(LockError::Input(InputError::OldName {
                 version: Some(v("0.9.2"))
-            })
+            }))
         );
     }
 
@@ -498,16 +558,60 @@ mod tests {
         );
         assert_eq!(
             LockError::NoVersion.to_string(),
-            format!(
-                "flake.nix uses the Kix library without a version. Run `kix upgrade --to {v}` to pin one."
-            )
+            "flake.nix uses the Kix library without a version, so Kix cannot tell which version this project uses. To pin it, run `kix upgrade --to <version>` with the version of Kix this project uses now, then run `kix upgrade` to move to a newer version and review what changes."
         );
         assert_eq!(
-            LockError::OldName {
+            LockError::Input(InputError::OldName {
                 version: Some("0.9.2".parse().unwrap())
-            }
+            })
             .to_string(),
-            "[K9179] flake.nix names the Kix library input kixpkgs, and Kix now reads only an input named kix. Rename the input to kix in flake.nix, then run `kix upgrade --to 0.9.2`."
+            "[K9179] flake.nix names the Kix library input kixpkgs, and Kix now reads only an input named kix. Rename the input to kix in flake.nix, then run `kix upgrade --to 0.9.2` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes."
+        );
+        assert_eq!(
+            LockError::Input(InputError::Missing).to_string(),
+            format!(
+                "flake.nix has no input named kix, so Kix cannot tell which Kix library this project uses. Add `inputs.kix.url = \"github:kix-run/kix/v{v}\";` to flake.nix, then run `kix upgrade --to {v}`."
+            )
+        );
+    }
+
+    #[test]
+    fn a_lock_kix_cannot_read_names_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        std::fs::write(&path, r#"{"root":"root","nodes":{}}"#).unwrap();
+        assert_eq!(
+            project_kix(dir.path(), &[]),
+            Err(LockError::Unreadable {
+                path,
+                message: "it has no root node".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_ref_loses_its_prefix() {
+        assert_eq!(bare_ref("refs/tags/v0.10.0"), "v0.10.0");
+        assert_eq!(bare_ref("refs/heads/main"), "main");
+        assert_eq!(bare_ref("main"), "main");
+    }
+
+    #[test]
+    fn the_kix_setting_comes_before_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = json!({ "type": "github", "owner": "kix-run", "repo": "kix" });
+        std::fs::write(dir.path().join(FILE), with_kix(original).to_string()).unwrap();
+        assert_eq!(project_kix(dir.path(), &[]), Err(LockError::NoVersion));
+        std::fs::write(dir.path().join("kix.toml"), "kix = \"0.10.0-rc.3\"\n").unwrap();
+        let err = project_kix(dir.path(), &[]).unwrap_err().to_string();
+        assert!(err.starts_with("[K4476] "), "{err}");
+        // A project on a release goes to that release, which reads kix.toml.
+        let original =
+            json!({ "type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.9.2" });
+        std::fs::write(dir.path().join(FILE), with_kix(original).to_string()).unwrap();
+        assert_eq!(
+            project_kix(dir.path(), &[]),
+            Ok(ProjectKix::Release(v("0.9.2")))
         );
     }
 }
