@@ -412,8 +412,8 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `guardArgs`, owned flags from owned env groups | keycloak:376 |
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:385; cnpg-cluster:328, 435, 519 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:93-96, 251-255, 283-303 |
-| Config injection into a dependency | metabase:108-111; stackgres-database:97-102; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:111; stackgres-database:488; keycloak:537; tempo:630 |
+| Config injection into a dependency | metabase:108-111; stackgres-database:120-125; cnpg-database:94-115 |
+| Contracts: consumer `assertions`, provider `check` | metabase:111; stackgres-database:554; keycloak:537; tempo:630 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:234, header 74-76 |
 | `atLeast` | valkey:106 |
@@ -424,8 +424,9 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
 | `kix.healthCheck` with a script file | victoria-metrics-agent:355-372 |
 | Checksum annotations, `enableServiceLinks = false` | metabase:257-270 |
-| Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-40; stackgres-database |
-| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:284 (`serverSideName`) |
+| Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
+| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:357 (`serverSideName`) |
+| A Job that runs again when its content changes: a fixed name and `kix.run/rerun` (never a hash in the name) | stackgres-database:446-452; clickhouse-database:508-510 |
 | Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:182-194, 212-252 |
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:619-625, 692; vaultwarden:178-200, 275 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:498-512, 678-679 |

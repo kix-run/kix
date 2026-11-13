@@ -7,8 +7,10 @@
 # that creates or updates the role, creates the database, grants the role
 # all privileges on it (and ownership with `owner`), and creates the
 # requested extensions. The Job logs in with the superuser Secret StackGres
-# creates next to the SGCluster. Its name carries a hash of its inputs, so a
-# changed password or extension list runs a new Job.
+# creates next to the SGCluster. The Job carries `kix.run/rerun: on-change`,
+# so the deploy runs it again when anything it references changes: the
+# password's SOPS file, the options, or the PostgreSQL cluster. Every step
+# is idempotent, so running it again is harmless.
 #
 # The app depends on this instance rather than on the cluster: a Secret is
 # readable only in its own namespace, and the cluster's holds the superuser.
@@ -81,8 +83,8 @@
 #
 # Limits: Kix copies only a value it decrypts itself, so a password from any
 # other source has to be delivered to both namespaces. With such a source a
-# changed password runs no new Job, because the build cannot see the value;
-# delete the last Job, or change another input, to set the new password.
+# changed password does not run the Job again, because the build cannot see
+# the value. Delete the Job and deploy again to set the new password.
 
 {
   scope,
@@ -309,16 +311,6 @@ in
       # what this package puts in the cluster's namespace carries its own.
       serverSideName = "${name}-${scope.namespaceName}";
 
-      # A Job's pod template is immutable, so a changed input (the
-      # password, the extensions, `owner`) gets a Job with a new name.
-      bootstrapInputs = builtins.toJSON {
-        inherit dbName userName;
-        owner = config.owner;
-        extensions = config.extensions;
-        passwordFingerprint = if fromSops then sops.digest else null;
-      };
-      bootstrapHash = builtins.substring 0 10 (builtins.hashString "sha256" bootstrapInputs);
-
       labels = {
         "app.kubernetes.io/name" = "stackgres-database";
         "app.kubernetes.io/instance" = name;
@@ -452,9 +444,12 @@ in
         echo "stackgres-database bootstrap complete for ${userName}@${dbName}"
       '';
 
+      # A new SOPS file changes bootstrapPassword, which the Job references,
+      # so the Job's identity changes too and the rerun annotation applies.
       bootstrapJob = backendScope.mkJob {
-        name = "${serverSideName}-bootstrap-${bootstrapHash}";
+        name = "${serverSideName}-bootstrap";
         labels = labels;
+        annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
         spec = {
           backoffLimit = 20;
           template = {

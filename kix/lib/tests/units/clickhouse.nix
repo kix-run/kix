@@ -475,9 +475,7 @@ in
           ofKind "PackageInstance" ms
         )
       );
-      job = builtins.head (
-        builtins.filter (m: lib.hasPrefix "app-db-apps-bootstrap-" m.metadata.name) (ofKind "Job" ms)
-      );
+      job = byName "app-db-apps-bootstrap" (ofKind "Job" ms);
       newPassword =
         (lib.findFirst (e: e.name == "NEW_PASSWORD") null
           (builtins.head job.spec.template.spec.containers).env

@@ -284,7 +284,7 @@ Fix all warnings before committing.
 | `scope.mkDeployment` | Create a Deployment: auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
 | `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
-| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used). Never set `spec.ttlSecondsAfterFinished` (the build refuses it): a finished Job stays until a later build drops it and prune deletes it. A Job's pod template is immutable, so give a Job whose content changes a name that changes with it (stackgres-database hashes its inputs) or `annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange` (ingress-nginx, reflector) |
+| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used). Never set `spec.ttlSecondsAfterFinished` (the build refuses it): a finished Job stays until a later build drops it and prune deletes it. A Job's pod template is immutable, so give a Job whose content changes a fixed name and `annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange` (stackgres-database, ingress-nginx, reflector). Never put a hash of the content in the name: in a stateful package the deploy reports the renamed Job as a stateful replacement and stops |
 | `scope.selectorLabels` | Default selector labels for this instance. Overridable per-instance via `selectorLabels` in cluster config. |
 | `scope.mkSecret`, `scope.mkSecretRef` | Secret primitives with enriched `out` API. **Read `SECRETS.md` for the full API, gotchas, and usage patterns.** |
 | `scope.forNamespace nsName` | Get a scope for a different namespace (cross-namespace resources) |
