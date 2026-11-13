@@ -164,8 +164,8 @@ fn render_cluster(
 ///
 /// A deploy stops on a field ownership conflict when another manager owns a
 /// field it applies, so the line adds `--force-conflicts` when a manager
-/// other than Kix changed an object. A replica count changed through `/scale`
-/// with no recorded owner needs only `--reconcile`.
+/// other than Kix owns fields of a changed object. A replica count changed
+/// through `/scale` with no recorded owner needs only `--reconcile`.
 fn next_step(c: &ClusterStatus) -> String {
     let mut managers: Vec<&str> = c
         .packages
@@ -173,7 +173,7 @@ fn next_step(c: &ClusterStatus) -> String {
         .flat_map(|p| &p.resources)
         .filter(|r| r.problems.contains(&Problem::Changed))
         .filter_map(|r| r.drift.as_ref())
-        .flat_map(|d| &d.changed_by)
+        .flat_map(|d| &d.foreign_owners)
         .map(|o| o.manager.as_str())
         .collect();
     managers.sort();
@@ -187,9 +187,10 @@ fn next_step(c: &ClusterStatus) -> String {
     } else {
         format!(
             "Next: run `kix deploy {cluster} --reconcile --force-conflicts` to put back what is \
-             missing or changed and take the changed fields back from {}. \
+             missing or changed and take back the fields that {} {}. \
              `kix plan {cluster} --reconcile --force-conflicts` shows what it would change first.",
-            and_list(&managers)
+            and_list(&managers),
+            if managers.len() == 1 { "owns" } else { "own" }
         )
     }
 }
@@ -338,7 +339,7 @@ fn changed(drift: Option<&Drift>) -> String {
         };
     }
     let fields: Vec<String> = drift
-        .changed_by
+        .foreign_owners
         .iter()
         .flat_map(|o| o.paths.iter().map(move |p| format!("{p} by {}", o.manager)))
         .collect();

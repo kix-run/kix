@@ -1,10 +1,10 @@
 //! Run the parsed command.
 //!
 //! Each command declares what it needs in [`Command::needs`] and the formats
-//! it prints in [`Command::formats`], and [`run`] sets that up before one
-//! `match` calls the command. All three are exhaustive matches, so a new
-//! command does not compile until it says what it needs, what it prints, and
-//! how it runs.
+//! it prints in [`FORMATS`], and [`run`] sets that up before one `match`
+//! calls the command. `needs`, `run`, and the command path that `FORMATS` is
+//! read by are exhaustive matches, so a new command does not compile until it
+//! says what it needs, where its formats are, and how it runs.
 
 use miette::Result;
 
@@ -73,6 +73,54 @@ const TEXT: &[OutputFormat] = &[Text];
 /// Formats of a command whose answer is data.
 const DATA: &[OutputFormat] = &[Text, Json, Yaml];
 
+/// The `-o` formats of every command, the default first. Each row is a
+/// command path, the flags that change the formats as a user types them (as
+/// [`Command::format_flags`] returns them), and the formats.
+///
+/// This is the one list of formats. [`Command::formats`] reads the row of
+/// the command a user ran, and [`Command::help_formats`] gives the help every
+/// row of a command.
+const FORMATS: &[(&str, &str, &[OutputFormat])] = &[
+    ("build", "", &[Yaml, Json]),
+    ("check", "", &[Text, Json, Yaml, Sarif]),
+    ("graph", "", &[Tree, Dot, Json, Yaml]),
+    ("diff", "", &[Text, Json, Yaml, Markdown]),
+    // A plan is data only as a saved plan file (`--out`).
+    ("plan", "", &[Text, Markdown]),
+    ("plan", " --read-only", &[Text, Json, Yaml, Markdown]),
+    ("deploy", "", TEXT),
+    ("deploy", " --dry-run", &[Text, Markdown]),
+    ("deploy", " --plan FILE --dry-run", DATA),
+    ("rollback", "", TEXT),
+    ("history", "", DATA),
+    ("status", "", DATA),
+    ("list", "", DATA),
+    ("pin", "", DATA),
+    ("compliance sbom", "", &[Json, Yaml]),
+    ("compliance attest", "", &[Json, Yaml]),
+    ("compliance audit", "", TEXT),
+    ("completions", "", TEXT),
+    ("self", "", TEXT),
+    ("doctor", "", TEXT),
+    ("upgrade", "", TEXT),
+    ("bundle", "", TEXT),
+    ("gc", "", TEXT),
+    ("migrate", "", TEXT),
+    ("export", "", TEXT),
+    ("logs", "", TEXT),
+    ("port-forward", "", TEXT),
+    ("snapshot", "", TEXT),
+];
+
+/// Return whether `path` is `row` or one of its subcommands, such as
+/// `list clusters` for `list`.
+fn under(path: &str, row: &str) -> bool {
+    path == row
+        || path
+            .strip_prefix(row)
+            .is_some_and(|rest| rest.starts_with(' '))
+}
+
 impl Command {
     /// Return the `-o` formats the command prints, the default first, or
     /// `None` when Kix does not decide.
@@ -80,60 +128,73 @@ impl Command {
     /// `main` refuses any other format before the command runs. A plugin
     /// reads `KIX_OUTPUT` itself, so Kix passes any format on.
     pub fn formats(&self) -> Option<&'static [OutputFormat]> {
+        let path = self.format_path()?;
+        let flags = self.format_flags();
+        let row = |flags: &str| {
+            FORMATS
+                .iter()
+                .find(|(p, f, _)| under(path, p) && *f == flags)
+                .map(|(_, _, formats)| *formats)
+        };
+        Some(row(flags).or_else(|| row("")).unwrap_or(TEXT))
+    }
+
+    /// Return the command path that [`FORMATS`] lists the command under, or
+    /// `None` for a plugin.
+    fn format_path(&self) -> Option<&'static str> {
         Some(match self {
             Command::Plugin(_) => return None,
-            Command::Build(_) => &[Yaml, Json],
-            Command::Check(_) => &[Text, Json, Yaml, Sarif],
-            Command::Graph(_) => &[Tree, Dot, Json, Yaml],
-            Command::Diff(_) => &[Text, Json, Yaml, Markdown],
-            Command::Plan(args) if args.read_only => &[Text, Json, Yaml, Markdown],
-            // A plan is data only as a saved plan file (`--out`).
-            Command::Plan(_) => &[Text, Markdown],
-            Command::Deploy(args) if args.dry_run && args.saved_plan.is_some() => DATA,
-            Command::Deploy(args) if args.dry_run => &[Text, Markdown],
-            Command::Deploy(_) => TEXT,
-            Command::Rollback(_) => TEXT,
-            Command::History(_) => DATA,
             Command::Compliance(args) => match args.command {
-                ComplianceCommand::Sbom(_) | ComplianceCommand::Attest(_) => &[Json, Yaml],
-                ComplianceCommand::Audit(_) => TEXT,
+                ComplianceCommand::Sbom(_) => "compliance sbom",
+                ComplianceCommand::Attest(_) => "compliance attest",
+                ComplianceCommand::Audit(_) => "compliance audit",
             },
-            Command::Status(_) | Command::List(_) | Command::Pin(_) => DATA,
-            Command::Completions(_)
-            | Command::SelfCmd(_)
-            | Command::Doctor
-            | Command::Upgrade(_)
-            | Command::Bundle(_)
-            | Command::Gc(_)
-            | Command::Migrate(_)
-            | Command::Export(_)
-            | Command::Logs(_)
-            | Command::PortForward(_)
-            | Command::Snapshot(_) => TEXT,
+            Command::Build(_) => "build",
+            Command::Check(_) => "check",
+            Command::Graph(_) => "graph",
+            Command::Diff(_) => "diff",
+            Command::Plan(_) => "plan",
+            Command::Deploy(_) => "deploy",
+            Command::Rollback(_) => "rollback",
+            Command::History(_) => "history",
+            Command::Status(_) => "status",
+            Command::List(_) => "list",
+            Command::Pin(_) => "pin",
+            Command::Completions(_) => "completions",
+            Command::SelfCmd(_) => "self",
+            Command::Doctor => "doctor",
+            Command::Upgrade(_) => "upgrade",
+            Command::Bundle(_) => "bundle",
+            Command::Gc(_) => "gc",
+            Command::Migrate(_) => "migrate",
+            Command::Export(_) => "export",
+            Command::Logs(_) => "logs",
+            Command::PortForward(_) => "port-forward",
+            Command::Snapshot(_) => "snapshot",
         })
     }
 
-    /// Return every `-o` format that the command at `path`, such as
-    /// `compliance sbom`, prints with some flags, for its `--help`. The
-    /// default comes first. `None` leaves every format in the help.
-    ///
-    /// A test checks this against [`Command::formats`] for each set of flags
-    /// that changes the formats.
-    pub fn help_formats(path: &str) -> Option<&'static [OutputFormat]> {
-        let command = path.split(' ').next().unwrap_or_default();
-        Some(match (command, path) {
-            (_, "compliance sbom" | "compliance attest") => &[Json, Yaml],
-            (_, "compliance audit") => TEXT,
-            ("compliance", _) => DATA,
-            ("build", _) => &[Yaml, Json],
-            ("check", _) => &[Text, Json, Yaml, Sarif],
-            ("graph", _) => &[Tree, Dot, Json, Yaml],
-            ("diff" | "plan" | "deploy", _) => &[Text, Json, Yaml, Markdown],
-            ("history" | "status" | "list" | "pin", _) => DATA,
-            ("completions" | "self" | "doctor" | "upgrade" | "bundle" | "gc" | "migrate", _)
-            | ("rollback" | "export" | "logs" | "port-forward" | "snapshot", _) => TEXT,
-            _ => return None,
-        })
+    /// Return the formats that the help of the command at `path`, such as
+    /// `compliance sbom`, lists: every format it prints with some flags. The
+    /// second value is the default, or `None` for a command such as
+    /// `compliance` whose subcommands differ. Return `None` for a path
+    /// [`FORMATS`] does not list.
+    pub fn help_formats(path: &str) -> Option<(Vec<OutputFormat>, Option<OutputFormat>)> {
+        let rows: Vec<&(&str, &str, &[OutputFormat])> = FORMATS
+            .iter()
+            .filter(|(row, _, _)| under(path, row) || under(row, path))
+            .collect();
+        let mut formats: Vec<OutputFormat> = Vec::new();
+        for f in rows.iter().flat_map(|(_, _, formats)| formats.iter()) {
+            if !formats.contains(f) {
+                formats.push(*f);
+            }
+        }
+        let default = rows
+            .iter()
+            .find(|(row, flags, _)| under(path, row) && flags.is_empty())
+            .map(|(_, _, formats)| formats[0]);
+        (!formats.is_empty()).then_some((formats, default))
     }
 
     /// Return the flags that changed [`Command::formats`], as a user types
@@ -335,53 +396,42 @@ mod tests {
         assert_eq!(formats(&["kix", "some-plugin"]), None);
     }
 
-    /// The formats the help of a command lists are exactly those it prints
-    /// with some set of flags.
+    /// The help of a command lists every format it prints with some flags,
+    /// and its default first.
     #[test]
     fn help_lists_the_formats_of_every_mode() {
-        let modes: &[(&str, &[&[&str]])] = &[
-            ("build", &[&["kix", "build", "c"]]),
-            ("check", &[&["kix", "check", "c"]]),
-            ("graph", &[&["kix", "graph", "c"]]),
-            ("diff", &[&["kix", "diff", "c"]]),
-            (
-                "plan",
-                &[&["kix", "plan", "c"], &["kix", "plan", "c", "--read-only"]],
-            ),
-            (
-                "deploy",
-                &[
-                    &["kix", "deploy", "c"],
-                    &["kix", "deploy", "c", "--dry-run"],
-                    &["kix", "deploy", "c", "--dry-run", "--plan", "p.kixplan"],
-                ],
-            ),
-            ("rollback", &[&["kix", "rollback", "c"]]),
-            ("history", &[&["kix", "history", "c"]]),
-            ("status", &[&["kix", "status"]]),
-            ("list clusters", &[&["kix", "list", "clusters"]]),
-            ("gc", &[&["kix", "gc", "c"]]),
-            ("compliance sbom", &[&["kix", "compliance", "sbom", "c"]]),
-            ("compliance audit", &[&["kix", "compliance", "audit", "c"]]),
-            ("pin list", &[&["kix", "pin", "list"]]),
-        ];
-        for (path, argvs) in modes {
-            let help = Command::help_formats(path).expect(path);
-            let mut printed: Vec<OutputFormat> = Vec::new();
-            for argv in *argvs {
-                let formats = formats(argv).expect("Kix decides the formats");
-                for f in formats {
-                    assert!(
-                        help.contains(f),
-                        "{argv:?} prints {f:?}, which `{path}` help omits"
-                    );
-                    if !printed.contains(f) {
-                        printed.push(*f);
-                    }
+        let (status, default) = Command::help_formats("status").unwrap();
+        assert_eq!((status, default), (DATA.to_vec(), Some(Text)));
+        let (deploy, _) = Command::help_formats("deploy").unwrap();
+        assert_eq!(deploy, [Text, Markdown, Json, Yaml]);
+        let (list, _) = Command::help_formats("list clusters").unwrap();
+        assert_eq!(list, DATA);
+        let (compliance, default) = Command::help_formats("compliance").unwrap();
+        assert_eq!((compliance, default), (vec![Json, Yaml, Text], None));
+    }
+
+    /// Every command has a row in [`FORMATS`], so none falls back to text
+    /// unnoticed.
+    #[test]
+    fn every_command_has_formats() {
+        fn walk(cmd: &clap::Command, prefix: &str, out: &mut Vec<String>) {
+            for sc in cmd.get_subcommands().filter(|sc| !sc.is_hide_set()) {
+                let path = format!("{prefix}{}", sc.get_name()).trim().to_string();
+                if sc.get_name() != "help" {
+                    out.push(path.clone());
+                    walk(sc, &format!("{path} "), out);
                 }
-                assert_eq!(formats[0], help[0], "{argv:?} has another default");
             }
-            assert_eq!(printed.len(), help.len(), "`{path}` help lists {help:?}");
+        }
+        let mut paths = Vec::new();
+        walk(&crate::cli::command(), "", &mut paths);
+        for path in paths {
+            assert!(
+                FORMATS
+                    .iter()
+                    .any(|(row, _, _)| under(&path, row) || under(row, &path)),
+                "no formats for `{path}`"
+            );
         }
     }
 

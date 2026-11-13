@@ -60,10 +60,7 @@ field Kix never set, such as one a controller adds, does not count. A change
 made through the `/scale` subresource, such as `kubectl scale` or an
 autoscaler, counts when Kix set the replica count. For a changed object, Kix
 reads `metadata.managedFields` to name each changed field and the field
-manager that now owns it. Kix names only the managers that wrote to the object
-after the deploy. A manager that still owns a field from before Kix took it,
-such as kubeadm on the CoreDNS ConfigMap, has changed nothing since and is not
-named. See
+manager that now owns it. See
 [Server-side apply and drift](/docs/explanation/server-side-apply-and-drift/).
 
 A Job that finished counts as present and ready. Jobs that Kix builds do not
@@ -83,10 +80,10 @@ The text output has four parts:
    `kix plan <cluster> --reconcile`, which shows what that deploy would change
    first. A deploy without `--reconcile` skips objects whose build did not
    change, so it does not put back a missing or changed object. When another
-   field manager changed an object, such as `kubectl edit` or `kubectl scale`,
-   that manager now owns the changed fields, and a deploy stops on them with a
-   field ownership conflict. The line then adds `--force-conflicts`, which
-   takes the fields back from that manager.
+   field manager owns fields of a changed object, as after `kubectl edit` or
+   `kubectl scale`, a deploy stops on those fields with a field ownership
+   conflict. The line then adds `--force-conflicts`, which takes the fields
+   back from that manager.
 
 ```text
 Cluster shop on Kubernetes v1.33.1 (context prod)
@@ -104,7 +101,7 @@ vault/vaultwarden
   Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden
 
 8 resources: 3 ok, 1 changed, 1 not ready, 1 missing, 2 not checked.
-Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take the changed fields back from kubectl-edit. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
+Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take back the fields that kubectl-edit owns. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
 
 This account may not list secrets, so Kix did not check objects of those kinds.
 ```
@@ -194,7 +191,7 @@ Each entry of `resources[]`:
 | `identity_hash` | The object's `kix.run/identity-hash`. |
 | `named` | `false` when Kix could not name a missing object. |
 | `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), or `unknown` (the account may not list the kind). |
-| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `changed_by` (the field managers other than Kix that wrote to the object after the deploy, each with `manager`, `operation`, `subresource`, `time`, and `paths`, the fields it owns), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
+| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, and `paths`), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
 | `ready` | `true` or `false`. `null` when the readiness check did not run, the kind has no readiness (such as a ConfigMap), or the object is gone. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
 | `needed_by` | For a missing object, the objects that depend on it, as `Kind namespace/name`. |

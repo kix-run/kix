@@ -45,7 +45,7 @@ kix plan --deployed-bundle <value>
 kix plan --read-only
 kix plan --detail <value> [plain|fields|manifests]
 kix plan --out <value>
-kix plan --output -o <value> [text|json|yaml|markdown]
+kix plan --output -o <value> [text|markdown|json|yaml]
 kix plan --verbose -v
 kix plan --quiet -q
 kix plan --no-color
@@ -80,7 +80,7 @@ kix deploy --operator
 kix deploy --record-annotation <value>
 kix deploy --log-format <value> [pretty|line|json|tui]
 kix deploy --group-by <value> [package|namespace]
-kix deploy --output -o <value> [text|json|yaml|markdown]
+kix deploy --output -o <value> [text|markdown|json|yaml]
 kix deploy --verbose -v
 kix deploy --quiet -q
 kix deploy --no-color
@@ -265,7 +265,7 @@ kix doctor --quiet -q
 kix doctor --no-color
 kix doctor --flake <value>
 kix compliance
-kix compliance --output -o <value> [text|json|yaml]
+kix compliance --output -o <value> [json|yaml|text]
 kix compliance --verbose -v
 kix compliance --quiet -q
 kix compliance --no-color

@@ -207,16 +207,17 @@ fn hide_unread_globals(cmd: clap::Command, parent: &str, globals: &[clap::Arg]) 
         if !reads {
             cmd = cmd.arg(arg.clone().hide(true));
         } else if *id == "output"
-            && let Some(formats) = crate::cli::Command::help_formats(&path)
+            && let Some((formats, default)) = crate::cli::Command::help_formats(&path)
         {
+            let long_help = match default {
+                Some(f) => format!("Output format. The default is {}.", f.name()),
+                None => "Output format".to_string(),
+            };
             cmd = cmd.arg(
                 arg.clone()
                     .value_parser(FormatParser(formats))
                     .help("Output format")
-                    .long_help(format!(
-                        "Output format. The default is {}.",
-                        formats[0].name()
-                    )),
+                    .long_help(long_help),
             );
         }
     }
@@ -229,7 +230,7 @@ fn hide_unread_globals(cmd: clap::Command, parent: &str, globals: &[clap::Arg]) 
 /// The other formats still parse, so that `main` refuses them with a message
 /// that names the formats the command prints.
 #[derive(Clone)]
-struct FormatParser(&'static [OutputFormat]);
+struct FormatParser(Vec<OutputFormat>);
 
 impl clap::builder::TypedValueParser for FormatParser {
     type Value = OutputFormat;

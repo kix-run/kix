@@ -160,10 +160,8 @@ pub enum Problem {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct Drift {
     pub verdict: DriftState,
-    /// The field managers other than Kix that wrote to the object after
-    /// the deploy, with every field each one owns. A write through `/scale`
-    /// has no time and always counts.
-    pub changed_by: Vec<Owner>,
+    /// Other field managers that own fields of the object.
+    pub foreign_owners: Vec<Owner>,
     /// A replica count changed through `/scale` that Kubernetes recorded no
     /// owner for.
     pub unrecorded_scale: Option<Scale>,
@@ -436,7 +434,7 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
     }
     let drift = match (&obj.content, checks.contains(&StatusCheck::Drift)) {
         (Some(verdict), true) => {
-            let d = drift_of(verdict, view.record.deployed_at.as_deref());
+            let d = drift_of(verdict);
             match d.verdict {
                 DriftState::Changed => problems.push(Problem::Changed),
                 DriftState::Unstamped | DriftState::NoFieldset => not_checked = true,
@@ -488,29 +486,7 @@ pub fn label(rid: &ResourceId) -> String {
     }
 }
 
-/// Return whether `owner` may have changed the object since the deploy that
-/// finished at `deployed_at`.
-///
-/// The API server moves a field to the manager that changes its value, and
-/// stamps that manager's entry with the time. A manager whose entry is older
-/// than the deploy has changed nothing since, even when it still owns fields.
-/// Such an entry is left over from before Kix took the fields, as kubeadm's
-/// is on the CoreDNS ConfigMap. A write through `/scale` records no time, so
-/// it always counts, and so does every owner when a time does not parse. The
-/// deploy time comes from Kix's machine and the entry time from the API
-/// server, so a clock difference between the two can hide or add a manager.
-fn wrote_since(owner: &ForeignOwner, deployed_at: Option<&str>) -> bool {
-    let parse = |t: &str| chrono::DateTime::parse_from_rfc3339(t).ok();
-    match (
-        owner.time.as_deref().and_then(parse),
-        deployed_at.and_then(parse),
-    ) {
-        (Some(wrote), Some(deployed)) => wrote > deployed,
-        _ => true,
-    }
-}
-
-fn drift_of(verdict: &DriftVerdict, deployed_at: Option<&str>) -> Drift {
+fn drift_of(verdict: &DriftVerdict) -> Drift {
     let owner = |o: &ForeignOwner| Owner {
         manager: o.manager.clone(),
         operation: o.operation.clone(),
@@ -526,17 +502,17 @@ fn drift_of(verdict: &DriftVerdict, deployed_at: Option<&str>) -> Drift {
     match verdict {
         DriftVerdict::InSync => Drift {
             verdict: DriftState::InSync,
-            changed_by: vec![],
+            foreign_owners: vec![],
             unrecorded_scale: None,
         },
         DriftVerdict::Unstamped => Drift {
             verdict: DriftState::Unstamped,
-            changed_by: vec![],
+            foreign_owners: vec![],
             unrecorded_scale: None,
         },
         DriftVerdict::NoFieldset => Drift {
             verdict: DriftState::NoFieldset,
-            changed_by: vec![],
+            foreign_owners: vec![],
             unrecorded_scale: None,
         },
         DriftVerdict::Drifted {
@@ -544,11 +520,7 @@ fn drift_of(verdict: &DriftVerdict, deployed_at: Option<&str>) -> Drift {
             unrecorded_scale,
         } => Drift {
             verdict: DriftState::Changed,
-            changed_by: foreign
-                .iter()
-                .filter(|o| wrote_since(o, deployed_at))
-                .map(owner)
-                .collect(),
+            foreign_owners: foreign.iter().map(owner).collect(),
             unrecorded_scale: unrecorded_scale.as_ref().map(scale),
         },
     }

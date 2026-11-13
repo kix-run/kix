@@ -50,7 +50,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
               "present": "yes",
               "drift": {
                 "verdict": "in_sync",
-                "changed_by": [],
+                "foreign_owners": [],
                 "unrecorded_scale": null
               },
               "ready": false,
@@ -70,7 +70,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
               "present": "yes",
               "drift": {
                 "verdict": "unstamped",
-                "changed_by": [],
+                "foreign_owners": [],
                 "unrecorded_scale": null
               },
               "ready": null,

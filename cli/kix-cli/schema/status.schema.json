@@ -83,8 +83,8 @@
     "Drift": {
       "description": "The drift check of one object.",
       "properties": {
-        "changed_by": {
-          "description": "The field managers other than Kix that wrote to the object after\nthe deploy, with every field each one owns. A write through `/scale`\nhas no time and always counts.",
+        "foreign_owners": {
+          "description": "Other field managers that own fields of the object.",
           "items": {
             "$ref": "#/$defs/Owner"
           },
@@ -107,7 +107,7 @@
       },
       "required": [
         "verdict",
-        "changed_by",
+        "foreign_owners",
         "unrecorded_scale"
       ],
       "type": "object"

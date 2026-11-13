@@ -1,0 +1,3 @@
+# 2026-11-13 · `cli/kix-cli/tests/` · Four offline deploy tests fail after anyone deploys `example` from the same machine.
+
+`commands_test::deploy_dry_run` and three tests in `deploy_test.rs` (`deploy_dry_run_shows_plan`, `plan_save_writes_the_plan_file`, `deploy_plan_refuses_json_and_a_changed_plan_file`) run `kix deploy example --dry-run --offline` and expect a plan with changes. They read the real activation cache (`$XDG_CACHE_HOME/kix/activations/example.root`). After a kind test deployed `example` on 13 Nov 2026, that cache held the same build, so the plan said "13 unchanged" and the tests got exit 0 instead of 2. The tests should point the cache at a temporary folder.

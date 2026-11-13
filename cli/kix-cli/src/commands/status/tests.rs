@@ -163,24 +163,13 @@ fn shop() -> Observation {
         Presence::Present,
     );
     pg_config.content = Some(DriftVerdict::Drifted {
-        foreign: vec![
-            // Owns a field from before Kix took the object, and has not
-            // written since the deploy.
-            ForeignOwner {
-                manager: "kubeadm".into(),
-                operation: "Update".into(),
-                subresource: None,
-                time: Some("2026-11-01T08:00:00+00:00".into()),
-                paths: vec!["data".into()],
-            },
-            ForeignOwner {
-                manager: "kubectl-edit".into(),
-                operation: "Update".into(),
-                subresource: None,
-                time: Some("2026-11-12T09:00:00+00:00".into()),
-                paths: vec!["data.max_connections".into()],
-            },
-        ],
+        foreign: vec![ForeignOwner {
+            manager: "kubectl-edit".into(),
+            operation: "Update".into(),
+            subresource: None,
+            time: Some("2026-11-12T09:00:00+00:00".into()),
+            paths: vec!["data.max_connections".into()],
+        }],
         unrecorded_scale: None,
     });
     let mut vault = object(
@@ -429,23 +418,8 @@ fn an_unknown_package_names_the_closest_of_many() {
     );
 }
 
-/// A manager whose last write is older than the deploy changed nothing
-/// since, so it is not named.
-#[test]
-fn a_manager_that_wrote_before_the_deploy_is_not_named() {
-    let doc = document(&[], Some("postgres"));
-    let config = &doc.clusters[0].packages[0].resources[0];
-    let drift = config.drift.as_ref().unwrap();
-    let managers: Vec<&str> = drift
-        .changed_by
-        .iter()
-        .map(|o| o.manager.as_str())
-        .collect();
-    assert_eq!(managers, ["kubectl-edit"]);
-}
-
-/// The next step adds `--force-conflicts` only when another manager changed
-/// an object, because a deploy stops on the fields that manager owns.
+/// The next step adds `--force-conflicts` only when another manager owns
+/// fields of a changed object, because a deploy stops on those fields.
 #[test]
 fn the_next_step_forces_conflicts_only_for_another_manager() {
     let text = |seen: &Observation| {
@@ -456,7 +430,7 @@ fn the_next_step_forces_conflicts_only_for_another_manager() {
     assert!(
         changed.contains(
             "Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is \
-             missing or changed and take the changed fields back from kubectl-edit."
+             missing or changed and take back the fields that kubectl-edit owns."
         ),
         "{changed}"
     );
