@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::eval::nix::{NixCommandError, command, output};
-use crate::flake_lock::{INPUT, OLD_NAME, OLD_NAME_ID};
-use crate::library::{LibraryVersion, try_eval_version};
+use crate::eval::nix::{NixCommandError, command, current_system, output};
+use crate::flake_lock::{InputError, bare_ref, kix_input};
 use crate::runtime::Tool;
 use crate::version::Version;
+use crate::version::policy::LibraryVersion;
 
 /// More than one url in `flake.nix` names the library's repository as the
 /// input does, and Kix cannot tell which one is the library input.
@@ -38,20 +38,8 @@ pub enum PinLibraryError {
     #[error("Kix could not read the inputs of flake.nix: {0}")]
     Read(Box<NixCommandError>),
 
-    #[error(
-        "flake.nix has no input named kix, which Kix reads the project's Kix library from. Add `inputs.kix.url = \"github:kix-run/kix/{tag}\";` to flake.nix."
-    )]
-    NotFound { tag: String },
-
-    #[error(
-        "[{OLD_NAME_ID}] flake.nix names the Kix library input {OLD_NAME}, and Kix now reads only an input named {INPUT}. Rename the input to {INPUT} in flake.nix."
-    )]
-    OldName,
-
-    #[error(
-        "The input kix in flake.nix follows {path}, so the Kix library comes from another flake. Set `inputs.kix.url = \"github:kix-run/kix/{tag}\";` in flake.nix."
-    )]
-    Follows { path: String, tag: String },
+    #[error("{}.", .error.change(version))]
+    Input { error: InputError, version: String },
 
     #[error(
         "The input kix is the local folder {path}, which has no versions. Point the input at the tag {tag}, such as github:kix-run/kix/{tag}."
@@ -168,23 +156,10 @@ fn decide(
     version: &Version,
 ) -> Result<Plan, PinLibraryError> {
     let tag = format!("v{}", version.release());
-    let root = locks["root"].as_str().unwrap_or("root");
-    let inputs = locks["nodes"][root]["inputs"].as_object();
-    let node_key = match inputs.and_then(|i| i.get(INPUT)) {
-        Some(Value::String(key)) => key,
-        Some(Value::Array(path)) => {
-            let path: Vec<&str> = path.iter().filter_map(Value::as_str).collect();
-            return Err(PinLibraryError::Follows {
-                path: path.join("/"),
-                tag,
-            });
-        }
-        _ if inputs.is_some_and(|i| i.contains_key(OLD_NAME)) => {
-            return Err(PinLibraryError::OldName);
-        }
-        _ => return Err(PinLibraryError::NotFound { tag }),
-    };
-    let original = &locks["nodes"][node_key]["original"];
+    let original = kix_input(locks).map_err(|error| PinLibraryError::Input {
+        error,
+        version: version.release(),
+    })?;
     let s = |k: &str| original[k].as_str();
     let repo = repo_url(original);
     match s("type") {
@@ -198,7 +173,7 @@ fn decide(
         _ => return Err(PinLibraryError::Unsupported { url: repo, tag }),
     }
     let tag_url = tagged_url(original, &tag);
-    let new_flake = if s("ref").map(|r| r.strip_prefix("refs/tags/").unwrap_or(r)) == Some(&tag) {
+    let new_flake = if s("ref").map(bare_ref) == Some(tag.as_str()) {
         None
     } else {
         Some(
@@ -337,15 +312,8 @@ impl<'a> Url<'a> {
 fn pin_of_original(original: &Value) -> Option<String> {
     let s = |k: &str| original[k].as_str();
     s("ref")
-        .map(bare_ref)
-        .or_else(|| s("rev").map(str::to_string))
-}
-
-fn bare_ref(r: &str) -> String {
-    r.strip_prefix("refs/tags/")
-        .or_else(|| r.strip_prefix("refs/heads/"))
-        .unwrap_or(r)
-        .to_string()
+        .or_else(|| s("rev"))
+        .map(|p| bare_ref(p).to_string())
 }
 
 /// A url in `flake.nix` that names the repository of the library input.
@@ -372,8 +340,8 @@ fn repo_url_of(literal: &str, original: &Value) -> Option<RepoUrl> {
         .any(|p| url.base.starts_with(p));
     let param_pin = || {
         url.param("ref")
-            .map(bare_ref)
-            .or_else(|| url.param("rev").map(str::to_string))
+            .or_else(|| url.param("rev"))
+            .map(|p| bare_ref(p).to_string())
     };
     if forge {
         let (scheme, path) = url.base.split_once(':')?;
@@ -469,7 +437,7 @@ pub fn reset_moved_tag(dir: &Path) -> Result<Option<Version>, PinLibraryError> {
     };
     let lock: Value = serde_json::from_str(&read(dir.join(crate::flake_lock::FILE))?)
         .map_err(|e| PinLibraryError::Check(format!("Kix could not read flake.lock: {e}")))?;
-    let Some(original) = crate::flake_lock::input_original(&lock) else {
+    let Ok(original) = kix_input(&lock) else {
         return Ok(None);
     };
     let flake_path = dir.join("flake.nix");
@@ -525,6 +493,32 @@ fn retag_flake(flake: &str, original: &Value, tag: &str, git_ref: &str) -> Resul
                 })
                 .collect(),
         )),
+    }
+}
+
+/// Evaluate the version of the Kix library the flake in `dir` uses, without
+/// writing `flake.lock`. Return [`LibraryVersion::Older`] for a library
+/// without the version output, and the Nix error when the evaluation fails
+/// for another reason.
+fn eval_version(dir: &Path) -> Result<LibraryVersion, NixCommandError> {
+    let mut cmd = command(Tool::Nix)?;
+    cmd.args(["eval", "--json", "--no-write-lock-file"])
+        .arg(format!(
+            ".#legacyPackages.{}.kixLibrary.version",
+            current_system()
+        ))
+        .args([
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ])
+        .current_dir(dir);
+    match output(&mut cmd) {
+        Ok(out) => Ok(match serde_json::from_slice::<Value>(&out) {
+            Ok(Value::String(v)) => LibraryVersion::parse(&v),
+            _ => LibraryVersion::Unknown,
+        }),
+        Err(e) if e.missing_attribute() => Ok(LibraryVersion::Older),
+        Err(e) => Err(e),
     }
 }
 
@@ -624,7 +618,7 @@ impl Plan {
     fn check(&self) -> Result<(), String> {
         let kix = self.version.release();
         let tag = format!("v{kix}");
-        let found = match try_eval_version(&self.dir, &[]) {
+        let found = match eval_version(&self.dir) {
             Ok(LibraryVersion::Known(v)) => v,
             Ok(LibraryVersion::Older) => {
                 return Err(format!(
@@ -648,11 +642,12 @@ impl Plan {
                 ));
             }
         };
-        if found.parse::<Version>().is_ok_and(|v| v == self.version) {
+        if found == self.version {
             return Ok(());
         }
         Err(format!(
-            "Kix moved the input kix to {tag}, but the project builds with the Kix library {found}. Check that the tag {tag} of {} holds the Kix library {kix}.",
+            "Kix moved the input kix to {tag}, but the project builds with the Kix library {}. Check that the tag {tag} of {} holds the Kix library {kix}.",
+            found.release(),
             self.repo
         ))
     }
@@ -899,17 +894,23 @@ mod tests {
         locks["nodes"]["root"]["inputs"] = json!({ "kixpkgs": "kix" });
         assert!(matches!(
             plan_for(&locks, ""),
-            Err(PinLibraryError::OldName)
+            Err(PinLibraryError::Input {
+                error: InputError::OldName { version: None },
+                ..
+            })
         ));
         locks["nodes"]["root"]["inputs"] = json!({ "nixpkgs": "nixpkgs" });
         assert_eq!(
             plan_for(&locks, "").unwrap_err().to_string(),
-            "flake.nix has no input named kix, which Kix reads the project's Kix library from. Add `inputs.kix.url = \"github:kix-run/kix/v0.10.0\";` to flake.nix."
+            "flake.nix has no input named kix, so Kix cannot tell which Kix library this project uses. Add `inputs.kix.url = \"github:kix-run/kix/v0.10.0\";` to flake.nix."
         );
         locks["nodes"]["root"]["inputs"] = json!({ "kix": ["platform", "kix"] });
         assert!(matches!(
             plan_for(&locks, ""),
-            Err(PinLibraryError::Follows { .. })
+            Err(PinLibraryError::Input {
+                error: InputError::Follows(_),
+                ..
+            })
         ));
         let folder = json!({ "type": "path", "path": "../kix" });
         assert!(matches!(

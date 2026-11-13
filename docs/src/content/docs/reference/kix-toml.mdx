@@ -35,7 +35,7 @@ builder = "kix"
 
 `kix.toml` does not name a version of Kix. A project's version of Kix is the release tag of the `kix` input in `flake.lock`, such as `v0.10.0` for Kix 0.10.0. Kix reads that tag before it parses its command line and runs the matching version, installing it first when needed. See [Choose the version of Kix for a project](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project).
 
-A `kix` line in `kix.toml` stops every command with error [K4476]. Delete the line, and use [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/) to move the project to another version of Kix.
+A `kix` line in `kix.toml` stops every command with error [K4476]. Delete the line, run [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/) with the version the line named to pin the project to it, then run `kix upgrade` to move to a newer version and see what it changes. [Upgrade a project from Kix 0.9](/docs/how-to/start-and-inspect/upgrade-a-project-to-a-new-kix/#upgrade-a-project-from-kix-09) gives each step.
 
 ## The `library` setting
 
@@ -193,7 +193,7 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
 | Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder, library, upgrade). Check the spelling, or upgrade Kix if the project needs a newer version `` |
 | `library` is neither `"input"` nor `"self"` | `<path> sets library = <value>, which Kix does not know. Write library = "input" (the default: the flake input named kix holds the Kix library) or library = "self" (this flake provides the Kix library itself).` |
-| `kix.toml` sets `kix` | `[K4476] <path> sets kix = "<value>", but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml.` |
+| `kix.toml` sets `kix` | ``[K4476] <path> sets kix = "<value>", but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml, then run `kix upgrade --to <value>` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes.`` |
 | The version of Kix that `flake.lock` names is not installed, with `KIX_AUTO_INSTALL=0` | `` This project uses Kix <version> (flake.lock), and Kix <version> is not installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <version>`. `` |
 | Unknown `builder` value | `<path> sets builder = "<value>", which is not a known builder (Kix <version> supports: kix, nix, remote). Check the spelling, or upgrade Kix if the project needs a newer version` |
 | `builder` without quotes, such as `builder = 3` | `<path> sets builder to a number. Write the builder's name in quotes, such as builder = "kix" (Kix <version> supports: kix, nix, remote)` |

@@ -176,11 +176,17 @@ pub enum ProjectError {
     )]
     RemoteUnsupported { origin: BuilderSource },
 
+    /// `version` is the value when it names a version, such as `"0.9"`.
     #[error(
-        "[{KIX_SETTING_ID}] {} sets kix = {value}, but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml.",
-        path.display()
+        "[{KIX_SETTING_ID}] {} sets kix = {value}, but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml, then {}",
+        path.display(),
+        crate::flake_lock::pin_then_upgrade(version.as_deref())
     )]
-    KixSettingRemoved { path: PathBuf, value: String },
+    KixSettingRemoved {
+        path: PathBuf,
+        value: String,
+        version: Option<String>,
+    },
 
     #[error(
         "{} sets library = {value}, which Kix does not know. Write library = \"input\" (the default: the flake input named kix holds the Kix library) or library = \"self\" (this flake provides the Kix library itself).",
@@ -287,12 +293,7 @@ impl ProjectConfig {
                 .map_or(1, |span| text[..span.start].matches('\n').count() + 1),
             message: e.message().to_string(),
         })?;
-        if let Some(value) = table.get("kix") {
-            return Err(ProjectError::KixSettingRemoved {
-                path: path.to_path_buf(),
-                value: toml_text(value),
-            });
-        }
+        refuse_kix_setting(path, &table)?;
         if let Some(key) = table.keys().find(|k| !KNOWN_KEYS.contains(&k.as_str())) {
             return Err(ProjectError::UnknownKey {
                 path: path.to_path_buf(),
@@ -343,6 +344,22 @@ impl ProjectConfig {
     }
 }
 
+/// Refuse the `kix` key of the `kix.toml` at `path`, which named the
+/// project's version of Kix before `flake.lock` did.
+fn refuse_kix_setting(path: &Path, table: &toml::Table) -> Result<(), ProjectError> {
+    let Some(value) = table.get("kix") else {
+        return Ok(());
+    };
+    let version = value
+        .as_str()
+        .filter(|v| v.parse::<crate::version::policy::Requirement>().is_ok());
+    Err(ProjectError::KixSettingRemoved {
+        path: path.to_path_buf(),
+        value: toml_text(value),
+        version: version.map(str::to_string),
+    })
+}
+
 /// Read `library` from a `kix.toml`. A missing key is [`Library::Input`].
 fn parse_library(path: &Path, value: Option<&toml::Value>) -> Result<Library, ProjectError> {
     match value {
@@ -364,13 +381,30 @@ fn parse_library(path: &Path, value: Option<&toml::Value>) -> Result<Library, Pr
 /// left to [`ProjectConfig::read`]. An unknown `library` value is an error.
 pub fn library_setting(flake_dir: &Path) -> Result<Library, ProjectError> {
     let path = flake_dir.join(FILE);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(Library::Input);
-    };
-    let Ok(table) = toml::from_str::<toml::Table>(&text) else {
+    let Some(table) = lenient_table(&path) else {
         return Ok(Library::Input);
     };
     parse_library(&path, table.get("library"))
+}
+
+/// Refuse a `kix` key in the `kix.toml` of `flake_dir` ([`KIX_SETTING_ID`]),
+/// reading the file as leniently as [`library_setting`] does.
+///
+/// The key marks a project set up for Kix 0.9, and its error gives the steps
+/// that also fix that project's `flake.lock`. So when Kix cannot tell a
+/// project's version from `flake.lock`, it reports this error first.
+pub fn kix_setting(flake_dir: &Path) -> Result<(), ProjectError> {
+    let path = flake_dir.join(FILE);
+    match lenient_table(&path) {
+        Some(table) => refuse_kix_setting(&path, &table),
+        None => Ok(()),
+    }
+}
+
+/// Return the `kix.toml` at `path` as a table, or `None` when it is missing,
+/// unreadable, or not valid TOML.
+fn lenient_table(path: &Path) -> Option<toml::Table> {
+    toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
 /// Why the builder Kix read from `kix.toml` and the one the project's Kix
@@ -675,24 +709,35 @@ mod tests {
 
     #[test]
     fn the_kix_key_is_refused_with_its_id() {
-        for (text, shown) in [
-            ("kix = \"0.10\"\n", "kix = \"0.10\""),
-            ("builder = \"nix\"\nkix = \"0.10.3\"\n", "kix = \"0.10.3\""),
-            ("kix = 0.8\n", "kix = 0.8"),
+        let named = |v: &str| {
+            format!(
+                "Delete the kix line from kix.toml, then run `kix upgrade --to {v}` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes."
+            )
+        };
+        let unnamed = "Delete the kix line from kix.toml, then run `kix upgrade --to <version>` with the version of Kix this project uses now, then run `kix upgrade` to move to a newer version and review what changes.";
+        for (text, shown, next) in [
+            ("kix = \"0.10\"\n", "kix = \"0.10\"", named("0.10")),
+            (
+                "builder = \"nix\"\nkix = \"0.10.0-rc.3\"\n",
+                "kix = \"0.10.0-rc.3\"",
+                named("0.10.0-rc.3"),
+            ),
+            ("kix = 0.8\n", "kix = 0.8", unnamed.to_string()),
+            ("kix = \">=0.8\"\n", "kix = \">=0.8\"", unnamed.to_string()),
         ] {
             let dir = project(Some(text));
+            let expected = format!(
+                "[K4476] {} sets {shown}, but Kix now takes this project's version from the Kix library tag in flake.lock. {next}",
+                dir.path().join(FILE).display()
+            );
             let err = ProjectConfig::read(Some(dir.path()), None).unwrap_err();
             assert!(
                 matches!(err, ProjectError::KixSettingRemoved { .. }),
                 "{err}"
             );
-            assert_eq!(
-                err.to_string(),
-                format!(
-                    "[K4476] {} sets {shown}, but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml.",
-                    dir.path().join(FILE).display()
-                )
-            );
+            assert_eq!(err.to_string(), expected);
+            // Selection reads kix.toml leniently, but still refuses the key.
+            assert_eq!(kix_setting(dir.path()).unwrap_err().to_string(), expected);
         }
     }
 

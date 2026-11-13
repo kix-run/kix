@@ -27,6 +27,8 @@ use super::derivation::{self, Derivation};
 use super::nix::{NixCommandError, command, output};
 use super::store::real_path;
 use crate::runtime::{self, RuntimeError, Tool, Want};
+use crate::version::Version;
+use crate::version::policy::{LibraryVersion, library_next_step};
 
 /// The `system` of a placeholder derivation.
 pub const PLACEHOLDER_SYSTEM: &str = "kix-helm";
@@ -55,7 +57,7 @@ pub enum HelmError {
     },
 
     #[error(transparent)]
-    LibraryMismatch(Box<crate::library::HelmMismatch>),
+    LibraryMismatch(Box<HelmMismatch>),
 
     #[error(
         "this project's Kix library does not match Kix {kix}\n  \
@@ -149,6 +151,69 @@ fn shipped_text(shipped: &[String]) -> String {
         versions => format!("Helm {}", versions.join(" and ")),
     }
 }
+
+/// The project's Kix library renders charts with a Helm version that this
+/// version of Kix does not ship. Kix finds this before it renders any chart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelmMismatch {
+    /// The version of the project's Kix library.
+    pub library: LibraryVersion,
+    /// The Helm version the library renders charts with.
+    pub wanted: String,
+    /// The running Kix.
+    pub kix: Version,
+    /// The Helm versions the running Kix ships.
+    pub shipped: Vec<String>,
+}
+
+impl HelmMismatch {
+    /// Return the shipped Helm of the wanted major version, or all of them
+    /// when none matches.
+    fn shipped_text(&self) -> String {
+        let major = |v: &str| v.split('.').next().map(str::to_string);
+        let same: Vec<String> = self
+            .shipped
+            .iter()
+            .filter(|s| major(s) == major(&self.wanted))
+            .cloned()
+            .collect();
+        shipped_text(if same.is_empty() {
+            &self.shipped
+        } else {
+            &same
+        })
+    }
+}
+
+impl std::fmt::Display for HelmMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let wanted = &self.wanted;
+        match &self.library {
+            LibraryVersion::Known(lib) => write!(
+                f,
+                "This project's Kix library is {} and renders Helm charts with Helm {wanted}",
+                lib.release()
+            )?,
+            LibraryVersion::Older => write!(
+                f,
+                "This project uses an older Kix library, which renders Helm charts with Helm {wanted}"
+            )?,
+            LibraryVersion::Unknown => write!(
+                f,
+                "This project's Kix library renders Helm charts with Helm {wanted}"
+            )?,
+        }
+        write!(
+            f,
+            ", but Kix is {} and ships {}. {}",
+            self.kix.release(),
+            self.shipped_text(),
+            library_next_step(&self.kix, &self.library)
+        )
+    }
+}
+
+impl std::error::Error for HelmMismatch {}
 
 /// A placeholder derivation whose output is not in the store yet.
 #[derive(Debug)]
@@ -795,6 +860,51 @@ mod tests {
             "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
         );
         assert_eq!(hex_to_bytes(&hex(&digest)).unwrap(), digest.to_vec());
+    }
+
+    fn mismatch(library: LibraryVersion, wanted: &str, kix: &str) -> HelmMismatch {
+        HelmMismatch {
+            library,
+            wanted: wanted.into(),
+            kix: kix.parse().unwrap(),
+            shipped: vec!["3.19.1".into(), "4.3.2".into()],
+        }
+    }
+
+    #[test]
+    fn a_helm_mismatch_names_both_sides_and_the_fix() {
+        let older = mismatch(
+            LibraryVersion::Known("0.8.0".parse().unwrap()),
+            "4.3.1",
+            "0.8.1",
+        );
+        assert_eq!(
+            older.to_string(),
+            "This project's Kix library is 0.8.0 and renders Helm charts with Helm 4.3.1, but Kix is 0.8.1 and ships Helm 4.3.2. Run `kix upgrade --to 0.8.1` to move this project to the 0.8.1 library, then commit the files it changes."
+        );
+        let newer = HelmMismatch {
+            shipped: vec!["3.19.1".into(), "4.3.1".into()],
+            ..mismatch(
+                LibraryVersion::Known("0.8.1".parse().unwrap()),
+                "4.3.2",
+                "0.8.0",
+            )
+        };
+        assert_eq!(
+            newer.to_string(),
+            "This project's Kix library is 0.8.1 and renders Helm charts with Helm 4.3.2, but Kix is 0.8.0 and ships Helm 4.3.1. Upgrade Kix to 0.8.1."
+        );
+        assert!(
+            mismatch(LibraryVersion::Older, "4.3.1", "0.8.1")
+                .to_string()
+                .starts_with("This project uses an older Kix library, which renders")
+        );
+        // Without a Helm of the wanted major, every shipped Helm is listed.
+        assert!(
+            mismatch(LibraryVersion::Unknown, "5.0.0", "0.8.1")
+                .to_string()
+                .contains("ships Helm 3.19.1 and 4.3.2.")
+        );
     }
 
     #[test]

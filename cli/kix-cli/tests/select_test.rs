@@ -193,15 +193,15 @@ fn a_project_without_a_versioned_lock_is_refused_with_the_fix() {
     let untagged = lock("v9.9.1").replace(",\"ref\":\"v9.9.1\"", "");
     assert!(!untagged.contains("ref"), "{untagged}");
     std::fs::write(s.project.join("flake.lock"), untagged).unwrap();
-    refused(&format!(
-        "flake.nix uses the Kix library without a version. Run `{running}` to pin one."
-    ));
+    refused(
+        "flake.nix uses the Kix library without a version, so Kix cannot tell which version this project uses. To pin it, run `kix upgrade --to <version>` with the version of Kix this project uses now, then run `kix upgrade` to move to a newer version and review what changes.",
+    );
 
     let old = lock("v9.9.1").replace("{\"kix\":\"kix\"}", "{\"kixpkgs\":\"kix\"}");
     assert!(old.contains("kixpkgs"), "{old}");
     std::fs::write(s.project.join("flake.lock"), old).unwrap();
     refused(
-        "[K9179] flake.nix names the Kix library input kixpkgs, and Kix now reads only an input named kix. Rename the input to kix in flake.nix, then run `kix upgrade --to 9.9.1`.",
+        "[K9179] flake.nix names the Kix library input kixpkgs, and Kix now reads only an input named kix. Rename the input to kix in flake.nix, then run `kix upgrade --to 9.9.1` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes.",
     );
 
     // A directory without flake.nix is no project, so the command runs here.
@@ -257,9 +257,45 @@ fn the_kix_setting_in_kix_toml_is_refused() {
         .code(1)
         .stderr(
             predicate::str::contains("[K4476]").and(predicate::str::contains(
-                "Delete the kix line from kix.toml.",
+                "Delete the kix line from kix.toml, then run `kix upgrade --to 0.9` to record the version this project uses now, then run `kix upgrade`",
             )),
         );
+}
+
+/// A project set up for Kix 0.9 names its version in kix.toml and pins no
+/// version in flake.lock. Every command, `kix doctor` included, reports the
+/// kix.toml error first, because its steps also pin the lock.
+#[test]
+fn a_kix_09_project_gets_the_kix_setting_error_first() {
+    let s = Setup::new(VERSION);
+    let untagged = lock("v0").replace(",\"ref\":\"v0\"", "");
+    assert!(!untagged.contains("ref"), "{untagged}");
+    std::fs::write(s.project.join("flake.lock"), untagged).unwrap();
+    std::fs::write(s.project.join("kix.toml"), "kix = \"0.10.0-rc.3\"\n").unwrap();
+    let path = s.project.join("kix.toml");
+    let expected = format!(
+        "[K4476] {} sets kix = \"0.10.0-rc.3\", but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml, then run `kix upgrade --to 0.10.0-rc.3` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes.",
+        path.display()
+    );
+    for command in [&["list", "clusters"][..], &["doctor"], &["upgrade"]] {
+        let out = s
+            .kix()
+            .arg("--flake")
+            .arg(&s.project)
+            .args(command)
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{command:?}: {out:?}");
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        // miette wraps long lines, so compare the words.
+        let words = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            words(&text).contains(&words(&expected)),
+            "{command:?}: {text}"
+        );
+        assert!(!text.contains("without a version"), "{command:?}: {text}");
+    }
 }
 
 #[test]

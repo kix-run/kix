@@ -8,8 +8,9 @@
 //! - [`build_source`]: loads and validates builds from the local Nix store or
 //!   a carried bundle
 //!
-//! [`project`] reads a project's `kix.toml`, [`library`] manages the Kix
-//! library a project pins, [`runtime`] finds the external programs Kix runs,
+//! [`project`] reads a project's `kix.toml`, [`flake_lock`] reads which Kix
+//! a project uses, [`pin_library`] pins its Kix library to a release,
+//! [`runtime`] finds the external programs Kix runs,
 //! [`system_nix`] checks the machine's Nix for the `nix` builder,
 //! [`legacy_domain`] reads objects stamped under Kix's retired API domains,
 //! [`text`] sanitizes untrusted text for terminal output, [`yaml`] reads and
@@ -25,7 +26,6 @@ pub mod changes;
 pub mod eval;
 pub mod flake_lock;
 pub mod legacy_domain;
-pub mod library;
 pub mod manifest;
 pub mod pin_library;
 pub mod project;

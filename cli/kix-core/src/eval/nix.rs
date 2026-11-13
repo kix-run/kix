@@ -14,6 +14,7 @@ use super::error::KixEvalError;
 use super::store_graph::store_name;
 use crate::project::BuilderKind;
 use crate::runtime::{self, RuntimeError, Tool, Want};
+use crate::version::policy::LibraryVersion;
 
 /// A `nix` or `nix-store` command that did not run, or exited non-zero.
 #[derive(Debug)]
@@ -237,7 +238,7 @@ pub fn eval_activation_index(
         return Err(KixEvalError::not_found(cluster_name));
     }
 
-    check_library(flake_path, input_overrides)?;
+    let library = check_library(flake_path, input_overrides)?;
 
     let flake_ref = format!(".#{}", activation_index_attr(cluster_name));
 
@@ -250,7 +251,13 @@ pub fn eval_activation_index(
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
 
-    match eval_with_helm(flake_path, &[&flake_ref], input_overrides, status_fn) {
+    match eval_with_helm(
+        flake_path,
+        &[&flake_ref],
+        input_overrides,
+        &library,
+        status_fn,
+    ) {
         Ok(index) => index_path(cluster_name, &index),
         // Only Nix's wording for a missing flake output. A stack trace says
         // "while evaluating the attribute", so matching looser words turned
@@ -267,11 +274,13 @@ pub fn eval_activation_index(
 /// fetch or render it ([`super::helm`]) and evaluate again.
 ///
 /// Under the `nix` builder, Nix renders the charts itself, so this runs
-/// `nix eval` once.
+/// `nix eval` once. `library` is the version of the project's Kix library,
+/// which an error about a Helm version names.
 pub fn eval_with_helm(
     flake_path: &Path,
     args: &[&str],
     input_overrides: &[(String, String)],
+    library: &LibraryVersion,
     status_fn: &dyn Fn(&str),
 ) -> Result<String, KixEvalError> {
     if runtime::nix_runner() == runtime::NixRunner::System {
@@ -301,10 +310,10 @@ pub fn eval_with_helm(
         // Check every Helm version before running any, so a project whose
         // library and Kix disagree learns which to move.
         if let Some((wanted, shipped)) = super::helm::unshipped(&pending)? {
-            let mismatch = crate::library::HelmMismatch {
-                library: crate::library::eval_version(flake_path, input_overrides),
+            let mismatch = super::helm::HelmMismatch {
+                library: library.clone(),
                 wanted,
-                program: crate::version::running().release(),
+                kix: crate::version::running().clone(),
                 shipped,
             };
             return Err(super::helm::HelmError::LibraryMismatch(Box::new(mismatch)).into());
@@ -433,21 +442,22 @@ pub(crate) fn clusters_attr() -> &'static str {
 /// Check, once per run, that the project's Kix library read the same
 /// builder from `kix.toml` as Kix did ([`crate::project::check_agreement`]),
 /// and, unless the project uses a development library, that the library is
-/// the running Kix ([`crate::version::policy::check_library`]).
+/// the running Kix ([`crate::version::policy::check_library`]). Return the
+/// library's version for the errors that name it.
 ///
 /// A library too old to publish its version is left to the checks that
 /// catch it later ([`KixEvalError::NoActivationIndex`] and
-/// [`crate::library::HelmMismatch`]).
+/// [`super::helm::HelmMismatch`]).
 fn check_library(
     flake_path: &Path,
     input_overrides: &[(String, String)],
-) -> Result<(), KixEvalError> {
-    static AGREED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    if AGREED.get().is_some() {
-        return Ok(());
+) -> Result<LibraryVersion, KixEvalError> {
+    static CHECKED: std::sync::OnceLock<LibraryVersion> = std::sync::OnceLock::new();
+    if let Some(library) = CHECKED.get() {
+        return Ok(library.clone());
     }
     let Some(origin) = runtime::builder_source() else {
-        return Ok(());
+        return Ok(LibraryVersion::Unknown);
     };
     // Read the lock before Nix evaluates the project, which writes a new
     // lock when `flake.nix` changed. Kix chose its version from this lock
@@ -462,14 +472,17 @@ fn check_library(
     }
     let facts = library_facts(flake_path, input_overrides)?;
     crate::project::check_agreement(runtime::builder(), &origin, facts.builder.as_deref())?;
+    let library = match facts.version.as_deref() {
+        Some(text) => LibraryVersion::parse(text),
+        None => LibraryVersion::Older,
+    };
     if let Ok(crate::flake_lock::ProjectKix::Release(pinned)) = pinned
-        && let Some(library) = facts.version.as_deref().and_then(|v| v.parse().ok())
+        && let LibraryVersion::Known(library) = &library
     {
-        crate::version::policy::check_library(crate::version::running(), &pinned, &library)
+        crate::version::policy::check_library(crate::version::running(), &pinned, library)
             .map_err(KixEvalError::LibraryMismatch)?;
     }
-    let _ = AGREED.set(());
-    Ok(())
+    Ok(CHECKED.get_or_init(|| library).clone())
 }
 
 /// What the project's Kix library publishes about itself.
