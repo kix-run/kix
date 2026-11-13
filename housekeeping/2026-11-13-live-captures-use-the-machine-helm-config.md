@@ -1,0 +1,3 @@
+# 2026-11-13 · `docs/nix/captures-live.nix` · The live captures run Helm with the machine's own Helm config and cache.
+
+The `prepare` steps run `helm upgrade --install ... --repo <url>` with whatever `HELM_CONFIG_HOME`, `HELM_CACHE_HOME` and `HELM_DATA_HOME` the person running it has. On the shared dev machine, the Helm config listed a `grafana` repository whose cached index was missing. Every `--repo` install then failed with `no cached repo found`, and the run stopped partway, at `how-to/adoption-helm-takeover`. Setting the three variables to empty folders made it work. The driver should set them to folders of its own, as it already does for `KUBECONFIG`.

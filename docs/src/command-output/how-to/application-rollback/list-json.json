@@ -8,10 +8,10 @@
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix rollback how-to-application --list --output json",
-      "stdout": "{\n  \"cluster\": \"how-to-application\",\n  \"current\": {\n    \"built_via\": \"/nix/store/x1mf6y01n4i95ds6nyhyy29ayb8w6fhp-kix-activation-how-to-application.json\",\n    \"identity_hash\": \"dq79dkqqcl3n8a78p4a8wrsjczbmdn88\",\n    \"name\": \"how-to-application-dq79dkqqcl3n\"\n  },\n  \"superseded\": [\n    {\n      \"available_locally\": false,\n      \"built_via\": \"/nix/store/kb43x7wid50nygsilzn17z1bll2g2bxh-kix-activation-how-to-application.json\",\n      \"deployed_at\": \"2026-11-11T08:56:18.427540974+00:00\",\n      \"identity_hash\": \"6rhi3wpk9imlx73n8kbcwbmkxmry1744\",\n      \"name\": \"how-to-application-6rhi3wpk9iml\",\n      \"previous_activation\": null\n    }\n  ]\n}\n",
+      "command": "kix history how-to-application --output json",
+      "stdout": "{\n  \"cluster\": \"how-to-application\",\n  \"current\": {\n    \"name\": \"how-to-application-dq79dkqqcl3n\",\n    \"identity_hash\": \"dq79dkqqcl3n8a78p4a8wrsjczbmdn88\",\n    \"built_via\": \"/nix/store/x1mf6y01n4i95ds6nyhyy29ayb8w6fhp-kix-activation-how-to-application.json\"\n  },\n  \"superseded\": [\n    {\n      \"name\": \"how-to-application-6rhi3wpk9iml\",\n      \"identity_hash\": \"6rhi3wpk9imlx73n8kbcwbmkxmry1744\",\n      \"deployed_at\": \"2026-11-13T12:20:55.797914579+00:00\",\n      \"built_via\": \"/nix/store/kb43x7wid50nygsilzn17z1bll2g2bxh-kix-activation-how-to-application.json\",\n      \"previous_activation\": null,\n      \"available_locally\": false\n    }\n  ]\n}\n",
       "stderr": "",
-      "stdoutDrift": "\"available_locally\": false,\n\"built_via\": \"/nix/store/<identity-hash>-kix-activation-how-to-application.json\",\n\"cluster\": \"how-to-application\",\n\"current\": {\n\"deployed_at\": \"<TIME>+00:00\",\n\"identity_hash\": \"<identity-hash>\",\n\"name\": \"how-to-application-<activation-id>\"\n\"name\": \"how-to-application-<activation-id>\",\n\"previous_activation\": null\n\"superseded\": [\n]\n{\n}\n},\n",
+      "stdoutDrift": "\"available_locally\": false\n\"built_via\": \"/nix/store/<identity-hash>-kix-activation-how-to-application.json\"\n\"built_via\": \"/nix/store/<identity-hash>-kix-activation-how-to-application.json\",\n\"cluster\": \"how-to-application\",\n\"current\": {\n\"deployed_at\": \"<TIME>+00:00\",\n\"identity_hash\": \"<identity-hash>\",\n\"name\": \"how-to-application-<activation-id>\",\n\"previous_activation\": null,\n\"superseded\": [\n]\n{\n}\n},\n",
       "stderrDrift": "",
       "exitCode": 0
     }

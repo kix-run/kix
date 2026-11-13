@@ -8,7 +8,7 @@
   "skipDriftCheck": false,
   "commands": [
     {
-      "command": "kix snapshot save how-to-application ./snapshots/how-to-application",
+      "command": "kix snapshot how-to-application --out ./snapshots/how-to-application",
       "stdout": "Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 17 resources\nSaved 17 resources to ./snapshots/how-to-application/\n",
       "stderr": "",
       "stdoutDrift": "Discovering API resources...\nFetched 17 resources\nFetching managed resources (60 resource types)...\nSaved 17 resources to ./snapshots/how-to-application/\n",
