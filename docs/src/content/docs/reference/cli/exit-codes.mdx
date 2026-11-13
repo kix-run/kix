@@ -17,7 +17,7 @@ holds every code Kix ends with.
 | --- | --- |
 | `0` | Success. Also printed help (`-h`, `--help`) and version (`-V`). |
 | `1` | An error, printed on stderr. This includes a command line Kix cannot use: an unknown flag, a missing argument, an invalid value, a command or flag that a release removed, and an [`-o` format](/docs/reference/cli/output-formats/) the command does not print. |
-| `2` | The command finished and found something to look at: changes from `kix diff` and `kix plan`. `kix upgrade` is the one exception, see below. |
+| `2` | The command finished and found something to look at: changes from `kix diff` and `kix plan`, and a problem `kix status` found. `kix upgrade` is the one exception, see below. |
 | `3` | A person must act before a deploy can go ahead. |
 | `4` | The saved plan no longer matches what the deploy would do. |
 
@@ -33,8 +33,7 @@ holds every code Kix ends with.
 | `kix rollback` | `1` when the rollback fails, including a failed prune delete or, with `--operator`, a `Degraded` Activation, or when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix gc` | `1` when any deletion fails, or when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix migrate domain` | `1` when confirmation is needed on a non-interactive terminal without `--yes`. |
-| `kix health` | `1` when any package is not healthy. |
-| `kix drift` | `1` when any resource has drifted. Unstamped resources do not count. |
+| `kix status` | `2` when an object is missing, changed, or not ready under the selected checks. Objects Kix could not check do not count. `1` when Kix could not answer, such as when the named cluster has no current deploy. See [`kix status`](/docs/reference/cli/status/#exit-status). |
 | `kix pin check` | `1` when a pin fails or, with `--source-rev`, records a different source revision. Warnings do not fail. |
 | `kix doctor` | `1` when the runtime directory cannot be found, `manifest.json` does not match the compiled-in program versions, any file fails its SHA-256 check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix. Warnings and `info` lines do not fail. |
 | `kix lib update` | `1` when the flake has no `kixpkgs` input, when `flake.nix` pins a ref, fork, or `path:` input that `kix lib update` cannot update on its own, or when Kix cannot fetch the target release tag. |

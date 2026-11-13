@@ -1,84 +1,221 @@
 ---
 title: "`status`"
-description: "Show readiness for the Kix-managed resources on a cluster, as a flat table or grouped by package under the Active activation."
+description: "Check that every object of a Kix cluster's current deploy is on the Kubernetes cluster, still holds what Kix applied, and is ready."
 ---
 
 import Command from '/src/components/Command.astro';
 
-`kix status` lists live Kix-managed resources with whether each is ready.
-The default view is one flat table. With `--operator` it reads the cluster's
-Active Activation record and groups resources by package.
+`kix status` checks what Kix deployed. For every object of a Kix cluster's
+current deploy, it answers three questions: is the object on the cluster, does
+it still hold what Kix applied, and is it ready. It reads only the Kubernetes
+cluster through your kubeconfig. It does not evaluate or build anything, so it
+works outside a project directory.
 
-This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
-`cli/kix-cli/src/commands/status.rs` when in doubt.
+`kix health`, `kix drift`, and `kix status --operator` were removed in 0.10.
+Use `kix status <cluster> --check presence`, `kix status [cluster] --check drift`,
+and `kix status <cluster>` instead, in that order. The old forms stop with an error that
+prints `[K6116]` and names the replacement.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli/observe.rs` and
+`cli/kix-cli/src/commands/status/` when in doubt.
 
 ## Synopsis
 
 ```text
-kix status <CLUSTER> [--operator] [-o text|json|yaml]
-           [--flake <FLAKE>] [--context <CONTEXT>] [--no-cache]
+kix status [CLUSTER] [--check presence|drift|readiness]... [--package <NAME>]
+           [-o text|json|yaml] [-v] [-q] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `<CLUSTER>` | Cluster name. The flat view evaluates it from the flake first; `--operator` uses existing Activation records when any carry `<CLUSTER>`, and otherwise evaluates the cluster name from the flake. |
-| `--operator` | Package-grouped view built from the Active Activation record. |
+| `[CLUSTER]` | Kix cluster to check. Without it, Kix checks every Kix cluster that has a current deploy on the Kubernetes cluster of the context. |
+| `--check <CHECK>` | Run only this check: `presence`, `drift`, or `readiness`. Repeat it to run more than one. Without it, all three run. |
+| `--package <NAME>` | Show only this package, by instance name (`web`) or `namespace/instance` (`shop/web`). An error when no checked cluster has the package. |
 | `-o`, `--output` | `text` (default), `json`, or `yaml`. Other formats are refused. |
-| `--flake`, `--override-input` | Select and evaluate the cluster in the flat view, or resolve `<CLUSTER>` with `--operator` when no Activation record in the context carries `<CLUSTER>`. |
-| `--no-cache` | Bypass the eval cache in the flat view. Ignored with `--operator`. |
-| `--context` | Select the kubeconfig context in either view. |
+| `-v` | List every object, with or without a problem, and print the Kubernetes cluster ID. |
+| `-q`, `--quiet` | Print only the objects with a problem. |
+| `--context <CONTEXT>` | Kubeconfig context to read. Defaults to the current context. |
 
-## Flat view
+`--flake`, `--no-cache`, and `--override-input` have no effect. See
+[Global flags](/docs/reference/cli/global-flags/).
 
-A table with `NAME`, `NAMESPACE`, `KIND`, `READY`, `STATUS`, and `AGE`, sorted
-by namespace, kind, and name. It includes the resources of `<CLUSTER>`: those
-whose `kix.run/activations` annotation names one of its Activation records,
-including resources it shares with another Kix cluster. Resources of other Kix
-clusters on the same Kubernetes cluster are left out, and a line on stderr
-says how many per cluster.
+## The checks
 
-`STATUS` is kind-specific:
+Each check runs on every object that the cluster's current deploy made. The
+current deploy is the cluster's `Active` or `Degraded`
+[Activation record](/docs/reference/annotations-crds-and-receipts/#activation).
 
-| Kind | `STATUS` |
+| Check | Question | An object fails when |
+| --- | --- | --- |
+| `presence` | Is the object on the cluster? | It is gone, for example after a `kubectl delete`. |
+| `drift` | Does the object still hold what Kix applied? | The fields Kix owns no longer hash to the object's `kix.run/applied-hash` stamp. |
+| `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy-apply/) waits on, such as a Deployment with fewer ready replicas than it wants. |
+
+A missing object is a problem under every check, because no check can run on
+an object that is gone. `kix status --check drift` therefore also reports
+missing objects.
+
+The drift check hashes only the fields Kix owns through server-side apply. A
+field Kix never set, such as one a controller adds, does not count. A change
+made through the `/scale` subresource, such as `kubectl scale` or an
+autoscaler, counts when Kix set the replica count. For a changed object, Kix
+reads `metadata.managedFields` to name each changed field and the field
+manager that now owns it. See
+[Server-side apply and drift](/docs/explanation/server-side-apply-and-drift/).
+
+A Job that finished counts as present and ready. Jobs that Kix builds do not
+delete themselves, so a Job that is gone is missing.
+
+## Text output
+
+The text output has four parts:
+
+1. A line for each package, with its object count and either `ok` or the
+   counts of its problems. Objects that no package owns, such as Namespaces
+   and CustomResourceDefinitions, are listed under `(cluster-level)`.
+2. The objects with a problem, grouped by package.
+3. A summary line with the counts.
+4. When an object is missing or changed, a `Next:` line that names
+   `kix deploy <cluster> --reconcile`, which puts it back, and
+   `kix plan <cluster> --reconcile`, which shows what that deploy would change
+   first. A deploy without `--reconcile` skips objects whose build did not
+   change, so it does not put back a missing or changed object.
+
+```text
+Cluster shop on Kubernetes v1.33.1 (context prod)
+Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
+
+  db/postgres              2 resources  1 changed
+  ingress/ingress-nginx    1 resource   ok
+  vault/vaultwarden        4 resources  1 not ready, 1 missing
+  (cluster-level)          1 resource   ok
+
+db/postgres
+  ConfigMap db/pg-config        changed since deploy (data.max_connections by kubectl-edit)
+vault/vaultwarden
+  Deployment vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
+  Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden
+
+8 resources: 5 ok, 1 changed, 1 not ready, 1 missing. 2 not checked.
+Next: run `kix deploy shop --reconcile` to put back what is missing or changed. `kix plan shop --reconcile` shows what it would change first.
+
+This account may not list secrets, so Kix did not check objects of those kinds.
+```
+
+With `-v`, the second part lists every object, and the header adds the
+Kubernetes cluster ID (the UID of the `kube-system` Namespace, the value
+[`cluster.kubernetes.uid`](/docs/reference/cluster-configuration/) takes):
+
+```text
+Cluster shop on Kubernetes v1.33.1 (context prod)
+Kubernetes cluster ID: 4d7b1c2e
+Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
+...
+vault/vaultwarden
+  Deployment vault/vaultwarden      not ready (0/1 ready, 0/1 updated)
+  ConfigMap vault/vaultwarden-env   not checked for changes: no applied-hash stamp yet, the next deploy adds it
+  Secret vault/vaultwarden-db       missing, needed by Deployment vault/vaultwarden
+  Secret vault/vaultwarden-admin    not checked: this account may not list its kind
+(cluster-level)
+  Namespace vault                   ok
+```
+
+With `-q`, only the second part is printed. When more than one Kix cluster is
+checked, each cluster gets its own block, and a closing line gives the counts
+over all of them.
+
+## Objects that are not checked
+
+Some objects cannot be checked. Kix shows them as "not checked" and they do
+not fail the command:
+
+- **A kind the account may not list.** When listing a resource type returns
+  `403`, Kix cannot tell whether its objects are on the cluster, so it does
+  not report them as missing. A closing line names the resource types.
+- **No applied-hash stamp yet.** The drift check needs the
+  `kix.run/applied-hash` annotation, and the next deploy adds it.
+- **No field ownership entry for Kix.** Kubernetes records no fields that the
+  `kix` field manager owns, so the drift check has nothing to compare.
+
+The summary line counts these objects as `ok` and adds `N not checked`.
+
+## How missing objects are named
+
+A missing object is gone from the cluster, so Kix cannot read its kind or name
+there. Kix names it from the first of these that has it:
+
+1. The deploy record. From Kix 0.10, each deploy stores the kind, namespace,
+   and name of every object in the record's
+   [`status.packageIndex`](/docs/reference/annotations-crds-and-receipts/#activation-spec-and-status-fields).
+2. Kix's local store, when it holds the deployed build.
+3. Neither. The object is shown as `Unknown/(hash: xxxxxxxxxxxx...)`.
+
+The line for a missing object names the objects that depend on it, such as
+`missing, needed by Deployment vault/vaultwarden`.
+
+A record written before Kix stored a package index lists no objects. Kix then
+finds the deploy's objects through the `kix.run/depends-on` annotations of the
+deploy's live objects. When such a record's own object is also gone, Kix cannot
+tell which objects the deploy made, says so, and exits `1`.
+
+## JSON and YAML output
+
+`-o json` and `-o yaml` print one document. Its JSON Schema is
+`cli/kix-cli/schema/status.schema.json`. Programs that read it must skip
+fields and values they do not know.
+
+| Field | Meaning |
 | --- | --- |
-| Deployment, StatefulSet | Ready replicas over desired replicas |
-| DaemonSet | Ready pods over desired scheduled pods |
-| Job | `Complete`, `Running`, or `Pending` |
-| PersistentVolumeClaim | `status.phase` |
-| Other | `Ready` or `Available` when that condition is `True`, otherwise `Active` |
+| `schema_version` | Version of the document's shape. |
+| `kubernetes` | The Kubernetes cluster read: `context`, `uid` (`null` when the account may not read the `kube-system` Namespace), and `version`. |
+| `checks` | The checks that ran: `presence`, `drift`, `readiness`. |
+| `unreadable` | Resource types the account may not list, such as `secrets`. |
+| `clusters[]` | One entry for each Kix cluster checked. |
+| `clusters[].cluster` | The Kix cluster name. |
+| `clusters[].deploy` | The current deploy record: `name`, `phase` (`Active` or `Degraded`), `identity_hash`, `deployed_at`, and `deployed_with` (the version of Kix that deployed, when the record says). |
+| `clusters[].objects_from` | Where Kix found the deploy's objects: `index` (the record's package index), `depends_on` (the live objects' `kix.run/depends-on` annotations), or `unknown` (nowhere; no object was checked). |
+| `clusters[].notes` | Warnings about the cluster, such as a platform interface that changed. |
+| `clusters[].packages[]` | One entry for each package, with `name` (`namespace/instance`, or `null` for the cluster-level objects), `summary`, and `resources`. |
+| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, and `not_checked`. Each cluster and package has the same object. An object with two problems counts under both. |
 
-`READY` uses the same readiness rules as `kix deploy`.
+Each entry of `resources[]`:
 
-## `--operator` view
-
-Prints the Active record's name, phase, identity hash, and age, then one line
-per package with its resource count and `healthy` or `N degraded`. Packages
-with a resource that is not ready are expanded. A resource the build declares
-but the cluster lacks shows as `NotFound`.
-
-The live resources are the same set the flat view shows.
-
-Package grouping needs the Active record's build in Kix's local store.
-Without it every resource is listed under "Unowned resources". When an
-Activation record in the context already carries `<CLUSTER>` as its
-`kix.run/cluster` label, the operator view does not evaluate the flake;
-otherwise it uses `--flake` and `--override-input` to evaluate the cluster
-name. `--no-cache` has no effect with `--operator`.
+| Field | Meaning |
+| --- | --- |
+| `kind`, `namespace`, `name` | The object. `namespace` is `null` for a cluster-scoped object. `kind` is `Unknown` when Kix cannot name a missing object. |
+| `identity_hash` | The object's `kix.run/identity-hash`. |
+| `named` | `false` when Kix could not name a missing object. |
+| `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), or `unknown` (the account may not list the kind). |
+| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, and `paths`), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
+| `ready` | `true` or `false`. `null` when the readiness check did not run, the kind has no readiness (such as a ConfigMap), or the object is gone. |
+| `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
+| `needed_by` | For a missing object, the objects that depend on it, as `Kind namespace/name`. |
+| `problems` | `missing`, `changed`, and `not_ready`. Empty when the object is fine. |
+| `not_checked` | Whether a selected check could not run on the object. |
 
 ## Examples
 
 <Command commands={[
-  "kix status demo",
-  "kix status demo --operator -o json",
+  "kix status shop",
+  "kix status shop --check drift --check presence",
+  "kix status shop --package web -o json",
+  "kix status --context prod -q",
 ]} />
 
 ## Exit status
 
-`0` when the report is printed, whatever the readiness of the resources. `1`
-on an evaluation or cluster error. Use [`kix health`](/docs/reference/cli/health/)
-when a script needs a failing status.
+| Code | Meaning |
+| --- | --- |
+| `0` | Every selected check passed. Objects that were not checked do not count. |
+| `1` | Kix could not answer: no connection to the cluster, no current deploy for the named cluster, no Kix cluster deployed on the Kubernetes cluster, a `--package` that matches no package, or a record that lists no objects and whose own object is gone. |
+| `2` | An object is missing, changed, or not ready. |
+
+A command line Kix cannot use exits `1`, including `kix health`, `kix drift`,
+and `kix status --operator`, which 0.10 removed. So `2` always means that
+`kix status` ran and found a problem.
 
 :::tip[Use it in a task]
-See [Check resource status](/docs/how-to/operate-a-cluster/check-resource-status/)
-for reading the output.
+See [Check a cluster's status](/docs/how-to/operate-a-cluster/check-resource-status/)
+for reading the output, then [Reconcile drift](/docs/how-to/operate-a-cluster/reconcile-drift/)
+to put back what changed.
 :::

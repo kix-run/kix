@@ -42,7 +42,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | `kix.run/holds-data` | `scope.mkResource` / `scope.mkCR` | `"true"` or `"false"`. Indicates whether deleting the resource loses persistent data. Derived automatically for `PersistentVolumeClaim`, `PersistentVolume`, and `StatefulSet` resources with `volumeClaimTemplates`, and required via CRD `holdsData` for custom resources in stateful packages. |
 | `kix.run/built-via` | CLI on `Activation` | Store path of the cluster activation index (`kix-activation-<cluster>.json`), a JSON file that names the store paths of `kix-packages.json`, `kix-image-sources.json`, and related build metadata. Records written by Kix 0.6 and earlier name the activation output directory (`k8s-activation-<cluster>`) instead, and Kix still reads them. |
 | `kix.run/activations` | CLI after apply | Comma-separated `Activation` identity hashes that reference the live object. Used by `kix deploy --prune` and `kix gc`. |
-| `kix.run/applied-hash` | CLI after apply | Hash of the fields owned by the `kix` field manager after apply. Compared against live state by `kix drift` and `kix health`. |
+| `kix.run/applied-hash` | CLI after apply | Hash of the fields owned by the `kix` field manager after apply. Compared against live state by `kix status` and `kix diff`. |
 
 ### Deployment graph and apply behavior annotations
 
@@ -136,8 +136,45 @@ spec:
 | `spec.interfaces` | `object` (optional) | Platform interfaces (`{ <platform>: { consumer, path, sha256 } }`) that a consumer cluster was built against. |
 | `status.phase` | `string` | Lifecycle state: `Queued`, `Deploying`, `Active`, `Degraded`, `Failed`, or `Superseded`. |
 | `status.receipt` | `object` | Provenance record written by `kix deploy` (see [Deploy receipt schema](#deploy-receipt-schema)). |
-| `status.packageIndex` | `object` (optional) | Map of package instances and cluster-level resources to their manifest identity hashes (`format` + per-package hash lists), written when a deploy begins (skipped if larger than 150 KiB). |
+| `status.packageIndex` | `object` (optional) | Map of package instances and cluster-level resources to their manifest identity hashes (`format` + per-package hash lists), written when a deploy begins. From Kix 0.10 it also carries `names`. See [The package index](#the-package-index). |
 | `status.orphansKeptFrom` | `array of string` (optional) | Previous activation build paths whose orphaned resources were kept because `--prune` was not passed, preserved so a later `kix deploy --prune` or `kix gc` can clean them up. |
+
+### The package index
+
+`status.packageIndex` lists the objects a deploy made, grouped by package.
+Commands that read the cluster without building it, such as
+[`kix status`](/docs/reference/cli/status/) and `kix diff`, use it to group
+objects by package and to find objects that are gone from the cluster.
+
+| Path | Type | Meaning |
+| --- | --- | --- |
+| `format` | `integer` | Version of the index's shape. Readers check it before the rest. |
+| `packages` | `object` | Map from `namespace/instance` to `{ instance, resources }`: the identity hash of the package's `PackageInstance`, and the identity hashes of its resources. |
+| `clusterLevel` | `array of string` | Identity hashes of the resources no package lists, such as Namespaces. |
+| `names` | `object` (optional) | Map from each object's identity hash to `[kind, namespace, name]`. `namespace` is `""` for a cluster-scoped object. |
+
+```yaml
+status:
+  packageIndex:
+    format: 1
+    packages:
+      default/web:
+        instance: 1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        resources: [3aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+    clusterLevel: [4aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+    names:
+      1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: [PackageInstance, default, web]
+      3aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: [ConfigMap, default, web-config]
+      4aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: [Namespace, "", default]
+```
+
+Deploys from Kix 0.10 write `names`, so a later `kix status` can name an
+object that is missing from the cluster on a machine that does not have the
+build. Older versions of Kix ignore the field.
+
+The index has a size limit of 150 KiB. When the index with `names` would pass
+it, Kix writes the index without `names`. When the index is still too large,
+Kix does not write it, and the deploy goes on.
 
 ### Activation lifecycle and operator finalizer
 

@@ -7,7 +7,6 @@ import Command from '/src/components/Command.astro';
 import getNamespaces from '/src/command-output/how-to/application-kubectl/get-namespaces.json';
 import getWorkloads from '/src/command-output/how-to/application-kubectl/get-workloads.json';
 import check from '/src/command-output/how-to/application-basics/check.json';
-import status from '/src/command-output/how-to/application-status/status.json';
 import clusterInfo from '/src/command-output/tutorials/02-hello-world/kubectl-cluster-info.json';
 import deployApplication from '/src/command-output/how-to/application-health-check/deploy.json';
 
@@ -67,9 +66,26 @@ Check the namespaces and workloads with kubectl:
 
 <Command {...getWorkloads} />
 
-Use Kix to see the status associated with the cluster definition:
+Use Kix to check that every object of the deploy is on the cluster, unchanged,
+and ready:
 
-<Command {...status} />
+{/* Maintained by hand until the live capture how-to/application-status/status
+    in docs/nix/captures.nix is regenerated against `kix status`. */}
+
+<Command commands={["kix status how-to-application"]} cwd="kix-examples/" />
+
+```text
+Cluster how-to-application on Kubernetes v1.35.0 (context kind-kix-demo)
+Last deploy: how-to-application-6rhi3wpk9iml  Active  2m ago
+
+  how-to-app/preview              4 resources  ok
+  how-to-app/production           6 resources  ok
+  kube-system/platform-dns        1 resource   ok
+  kube-system/platform-storage    1 resource   ok
+  (cluster-level)                 4 resources  ok
+
+16 resources: 16 ok.
+```
 
 ## Remove the local cluster
 
@@ -81,7 +97,7 @@ This removes the local Kubernetes cluster and everything deployed into it. It
 does not change the files in `kix-examples`.
 
 :::note[Next steps]
-See [Check resource status](/docs/how-to/operate-a-cluster/check-resource-status/)
+See [Check a cluster's status](/docs/how-to/operate-a-cluster/check-resource-status/)
 and [Preview changes with `kix plan` and `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
 for the next operational tasks.
 :::

@@ -20,15 +20,17 @@ deleted, so its UID stays the same for the life of the cluster, and every
 cluster has its own: a kind cluster, a k3s cluster, an EKS cluster, and a
 vCluster all differ.
 
-`kix status` prints it in its header:
+`kix status -v` prints it in its header:
 
 ```
-$ kix status production --context prod
+$ kix status production --context prod -v
+Cluster production on Kubernetes v1.31.4+k3s1 (context prod)
 Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
 ...
 ```
 
-`kubectl` gives the same value:
+`kix status` needs a Kix deploy on the cluster before it prints anything.
+`kubectl` gives the same value at any time:
 
 ```
 $ kubectl --context prod get namespace kube-system -o jsonpath='{.metadata.uid}'
@@ -111,12 +113,11 @@ ignored. Write the minor version. A value with a patch number stops the
 deploy after every patch upgrade, and managed clusters (GKE, EKS, AKS) apply
 those on their own.
 
-`kix status` prints the live version under the cluster ID:
+`kix status` prints the live version on its first line:
 
 ```
 $ kix status production --context prod
-Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
-Kubernetes version: v1.31.4+k3s1
+Cluster production on Kubernetes v1.31.4+k3s1 (context prod)
 ...
 ```
 
