@@ -94,61 +94,10 @@ impl Builder for LocalBuilder {
         // print the same order every time.
         raw_manifests.sort_by_cached_key(manifest_sort_key);
 
-        let scorecard_path = files
-            .scorecard
-            .and_then(|p| super::store::disk_path(&p).ok())
-            .unwrap_or_default();
-        let scorecard_report = if scorecard_path.exists() {
-            match std::fs::read_to_string(&scorecard_path) {
-                Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
-                    Ok(val) => {
-                        tracing::debug!(cluster = cluster_name, "scorecard report loaded");
-                        Some(val)
-                    }
-                    Err(e) => {
-                        tracing::warn!(cluster = cluster_name, error = %e, "failed to parse scorecard report");
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(cluster = cluster_name, error = %e, "failed to read scorecard report");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        let extra_images_path = files
-            .extra_images
-            .and_then(|p| super::store::disk_path(&p).ok())
-            .unwrap_or_default();
-        let extra_images = if extra_images_path.exists() {
-            match std::fs::read_to_string(&extra_images_path) {
-                Ok(json_str) => {
-                    match serde_json::from_str::<Vec<super::evaluator::ExtraImage>>(&json_str) {
-                        Ok(imgs) => {
-                            tracing::debug!(
-                                cluster = cluster_name,
-                                count = imgs.len(),
-                                "extra images loaded"
-                            );
-                            Some(imgs)
-                        }
-                        Err(e) => {
-                            tracing::warn!(cluster = cluster_name, error = %e, "failed to parse extra images");
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(cluster = cluster_name, error = %e, "failed to read extra images");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let scorecard_report = read_build_file(files.scorecard, cluster_name, "scorecard report");
+        let extra_images = read_build_file(files.extra_images, cluster_name, "extra images");
+        let warnings =
+            read_build_file(files.warnings, cluster_name, "library warnings").unwrap_or_default();
 
         tracing::info!(
             cluster = cluster_name,
@@ -161,6 +110,7 @@ impl Builder for LocalBuilder {
             raw_manifests,
             scorecard_report,
             extra_images,
+            warnings,
         })
     }
 
@@ -373,6 +323,33 @@ pub fn cluster_name_command(
         cmd.arg("--override-input").arg(name).arg(url);
     }
     Ok(Some(cmd))
+}
+
+/// Read the JSON file a build lists at `path`. A file the build does not list
+/// is `None`, and so is one Kix cannot read, after a warning in the log.
+fn read_build_file<T: serde::de::DeserializeOwned>(
+    path: Option<std::path::PathBuf>,
+    cluster: &str,
+    what: &str,
+) -> Option<T> {
+    let path = super::store::disk_path(&path?).ok()?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => {
+            tracing::warn!(cluster, error = %e, "failed to read {what}");
+            return None;
+        }
+    };
+    match serde_json::from_str(&text) {
+        Ok(value) => {
+            tracing::debug!(cluster, "{what} loaded");
+            Some(value)
+        }
+        Err(e) => {
+            tracing::warn!(cluster, error = %e, "failed to parse {what}");
+            None
+        }
+    }
 }
 
 /// Return a deterministic sort key `(apiVersion, kind, namespace, name)` for `manifest`.

@@ -661,26 +661,8 @@ in
           else
             [ ];
 
-        # Report each skipped optional dependency as a scorecard finding too,
-        # so `kix check`, `kix plan`, and SARIF output show it; the CLI does
-        # not surface Nix trace output on a successful evaluation. The
-        # message keeps the warning text without the requester prefix.
-        # `scorecardDiag` leaves these out because `resolutionWarnings`
-        # already traces them once.
-        resolutionFindings = map (w: {
-          rule = "dependencies.optionalInOtherNamespace";
-          severity = "warning";
-          level = "package";
-          namespace = namespaceName;
-          instance = instanceName;
-          resource = null;
-          message = lib.removePrefix "${requester}: " w;
-          tags = [ "dependencies" ];
-        }) resolutionWarnings;
-
-        ruleFindings = scorecardManifestFindings ++ scorecardPackageFindings;
-        scorecardFindings = ruleFindings ++ resolutionFindings;
-        scorecardDiag = scorecard.scorecardToWarnings ruleFindings;
+        scorecardFindings = scorecardManifestFindings ++ scorecardPackageFindings;
+        scorecardDiag = scorecard.scorecardToWarnings scorecardFindings;
 
         instanceVersion = meta.instanceVersion { inherit instCfg packageOut packageMeta; };
 
@@ -854,7 +836,6 @@ in
               "post-hook '${res r}' has no dependency on root or any resource that root requires. Add a dependency to ensure the hook runs after the resource it needs."
             ) postHookWarnings)
             processorWarnings
-            scorecardDiag.warnings
           ];
 
         diagnostics = meta.combineDiagnostics {
@@ -865,6 +846,7 @@ in
             packageResult
             structuralWarnings
             ;
+          scorecardWarnings = scorecardDiag.warnings;
         };
 
       in

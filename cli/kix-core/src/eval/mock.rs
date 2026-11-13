@@ -54,6 +54,7 @@ impl Builder for MockBuilder {
             raw_manifests: manifests,
             scorecard_report: None,
             extra_images: None,
+            warnings: Vec::new(),
         })
     }
 

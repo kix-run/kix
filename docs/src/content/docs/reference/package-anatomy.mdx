@@ -114,7 +114,7 @@ The package returns an attribute set with the following top-level keys:
 | `config` | attrset or module function | No | Package-level configuration module merged with `options`. Values inside `config` that the author wraps in `lib.mkDefault` are lowered from priority `1000` to `1250` (between option defaults at `1500` and instance or injected `lib.mkDefault` values at `1000`). |
 | `deps` | attrset | No | Per-dependency configuration injection (`config`), `warnings`, and `assertions` keyed by `build` argument name. |
 | `build` | function or list of functions | Yes | One or more functions returning named resource parts and a `root` entry. |
-| `warnings` | `{ config, self, deps }: [ string ]` | No | Evaluation-time warnings collected into `cluster.warnings`. |
+| `warnings` | `{ config, self, deps }: [ string ]` | No | Evaluation-time warnings that `kix check` lists. |
 | `assertions` | `{ config, self, deps }: [ { assertion; message; fix ? null; id ? null; option ? null; } ]` | No | Evaluation-time assertions checked before building manifests. |
 
 ### The `root` entry and part reachability
@@ -592,7 +592,7 @@ assertions =
   ];
 ```
 
-An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, and `option`. Kix adds the instance, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` are collected into `cluster.warnings` and reported by `kix check` and `kix build`.
+An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, and `option`. Kix adds the instance, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table.
 
 ### Raising an error with `scope.fail`
 
@@ -632,7 +632,7 @@ Fix: Give the password as the dependency `password`.
 
 ### Structural build-time warnings
 
-During package evaluation, Kix also emits automatic structural warnings for common wiring mistakes:
+During package evaluation, Kix also gives structural warnings for common wiring mistakes, which `kix check` lists with the package's own warnings:
 
 - **Orphaned resources**: A part defined in `build` is not reachable from `root.resource`, `root.requires`, or `root.postHooks`.
 - **Redundant `requires`**: A resource lists a dependency in `requires = [ ... ]` that is already tracked implicitly through `.out` string context in its manifest.
