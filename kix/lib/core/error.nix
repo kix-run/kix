@@ -15,11 +15,47 @@ let
     "instance"
     "package"
     "option"
+    "dependency"
+    "clusterOption"
     "message"
     "fix"
   ];
 
   plain = v: builtins.unsafeDiscardStringContext (toString v);
+
+  # Return why `record` names its setting in the wrong form, or null. A path
+  # holds no spaces. `option` is a path in the instance's `config`, so it
+  # does not start with `config.`. A dependency goes in `dependency` and a
+  # package's `meta` is no setting of the instance. `clusterOption` is a path
+  # in the cluster definition, and a path into an instance goes in `option`
+  # or `dependency`.
+  badSetting =
+    record:
+    let
+      option = record.option or "";
+      clusterOption = record.clusterOption or "";
+      prefix = lib.findFirst (p: lib.hasPrefix "${p}." option) null [
+        "config"
+        "deps"
+        "meta"
+      ];
+    in
+    if builtins.match ".*[[:space:]].*" (option + clusterOption) != null then
+      "`option` and `clusterOption` are paths and have no spaces."
+    else if prefix == "config" then
+      "option \"${option}\" starts with `config.`. Write the path in the instance's config: \"${lib.removePrefix "config." option}\"."
+    else if prefix == "deps" then
+      "option \"${option}\" names a dependency. Write dependency = \"${lib.removePrefix "deps." option}\"."
+    else if prefix == "meta" then
+      "option \"${option}\" is a field of the package's meta, which is no setting of the instance. Leave `option` out."
+    else if
+      record ? dependency && builtins.match "[A-Za-z_][A-Za-z0-9_'-]*" record.dependency == null
+    then
+      "dependency \"${record.dependency}\" is not the name of a dependency. Write the name alone, such as \"database\"."
+    else if lib.hasPrefix "instances." clusterOption then
+      "clusterOption \"${clusterOption}\" is inside an instance. Set `instance`, and write the path in its config as `option` or the dependency as `dependency`."
+    else
+      null;
 
   # Return `e` as an error record with only string fields. A string is the
   # message. `strict` refuses fields outside `fields`.
@@ -40,6 +76,8 @@ let
       throw "kix.fail needs a `message`."
     else if record ? id && builtins.match "K[0-9]{4}" record.id == null then
       throw "kix.fail: id \"${record.id}\" is not a change record id. Write `K` and four digits, such as \"K0001\"."
+    else if badSetting record != null then
+      throw "kix.fail: ${badSetting record}"
     else
       record;
 
@@ -66,6 +104,8 @@ let
     indent prefix (
       headline r
       + lib.optionalString (r ? option) "\nOption: ${r.option}"
+      + lib.optionalString (r ? dependency) "\nDependency: ${r.dependency}"
+      + lib.optionalString (r ? clusterOption) "\nCluster option: ${r.clusterOption}"
       + lib.optionalString (r ? fix) "\nFix: ${r.fix}"
     );
 
@@ -109,9 +149,12 @@ rec {
 
   # Stop evaluation with an error for a person to fix. `e` is a message, or
   # `{ message; fix ? null; id ? null; instance ? null; package ? null;
-  # option ? null; }`, or a list of them to report several at once. `id` is
-  # the change record id, such as "K0001", and `option` the path of the
-  # setting to change.
+  # option ? null; dependency ? null; clusterOption ? null; }`, or a list of
+  # them to report several at once. `id` is the change record id, such as
+  # "K0001". The last three name what to change. `option` is a path in the
+  # instance's `config`, such as "tls.secretName". `dependency` is the name
+  # of one of the instance's `deps`. `clusterOption` is a path in the cluster
+  # definition, such as "cluster.domain".
   fail =
     e:
     throw (text {

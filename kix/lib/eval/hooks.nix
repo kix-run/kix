@@ -65,7 +65,6 @@ rec {
               if !(lib.hasInfix "." domain) || lib.hasInfix "/" domain then
                 fail {
                   instance = "${entry.ns}/${entry.inst}";
-                  option = "meta.annotationDomains";
                   message = "meta.annotationDomains contains '${domain}', which is not a valid annotation domain.";
                   fix = "Use a domain such as \"reflector.v1.k8s.emberstack.com\".";
                 }
@@ -180,7 +179,7 @@ rec {
             + lib.optionalString (envProvider != null) " (${envProvider})"
             + " (cluster.roles.${role}.binding = \"exclusive\"), so Kix cannot also deploy ${fmt managed}.";
           fix =
-            "remove ${fmt managed} from your cluster definition."
+            "Remove ${fmt managed} from your cluster definition."
             + "\nIf you disabled ${
               if envProvider != null then envProvider else "the environment's '${role}' provider"
             } on this cluster and want ${fmt managed} to replace it, set `cluster.roles.${role}.binding = \"absent\";` in your cluster definition.";
@@ -188,14 +187,14 @@ rec {
       else if builtins.length managed > 1 then
         fail {
           message = "role '${role}' is claimed by multiple instances (via meta.roles = [ \"${role}\" ]): ${fmt managed}. A cluster can have only one active provider per role.";
-          fix = "keep one of these instances in your cluster definition and remove the others.";
+          fix = "Keep one of these instances in your cluster definition and remove the others.";
         }
       else if managed != [ ] then
         builtins.head managed
       else if builtins.length imports > 1 then
         fail {
           message = "role '${role}' is claimed by multiple kix.mkImport instances: ${fmt imports}. A cluster can have only one environment import per role.";
-          fix = "keep one import for role '${role}' and remove the others.";
+          fix = "Keep one import for role '${role}' and remove the others.";
         }
       else if imports != [ ] then
         builtins.head imports

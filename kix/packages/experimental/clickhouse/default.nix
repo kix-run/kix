@@ -241,7 +241,7 @@ in
           if v == null then
             scope.fail {
               package = "clickhouse";
-              option = "config.image.tag";
+              option = "image.tag";
               message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" names no ClickHouse version. Packages that use this server check its version.";
               fix = "Set config.image.tag to a tag that starts with the version, such as \"${release}\".";
             }
@@ -413,7 +413,7 @@ in
       if memoryLimit == null then
         scope.fail {
           package = "clickhouse";
-          option = "config.resources.limits.memory";
+          option = "resources.limits.memory";
           message = "resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one.";
           fix = "Set config.resources.limits.memory.";
         }

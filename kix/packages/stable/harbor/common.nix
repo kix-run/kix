@@ -166,7 +166,7 @@ rec {
         else
           scope.fail {
             package = "harbor";
-            option = "deps.database";
+            dependency = "database";
             message = "the database dependency's credentials Secret \"${creds.out.name}\" declares ${
               if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
             }; this package reads its `username` and `password` keys.";

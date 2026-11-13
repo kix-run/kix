@@ -270,7 +270,7 @@ in
           if (config.extraSpec.postgres or { }) ? flavor then
             scope.fail {
               package = "stackgres-cluster";
-              option = "config.extraSpec";
+              option = "extraSpec";
               message = "postgres.flavor is not supported: the version check and the operand images assume vanilla PostgreSQL.";
             }
           else
@@ -279,7 +279,7 @@ in
           if backupsOn && sgObjectStorage == null then
             scope.fail {
               package = "stackgres-cluster";
-              option = "config.backups";
+              option = "backups";
               message = "backups is set but no sgObjectStorage dependency resolved in namespace ${ns}.";
               fix = "Add a stackgres-object-storage instance there, or set backups = null.";
             }
@@ -357,7 +357,7 @@ in
           if kix.availability.atLeast "node" availability && config.instances > 1 && antiAffinityOff then
             scope.fail {
               package = "stackgres-cluster";
-              option = "config.extraSpec";
+              option = "extraSpec";
               message = "extraSpec turns off StackGres's one-pod-per-node anti-affinity (profile \"${profile}\", nonProductionOptions.disableClusterPodAntiAffinity ${
                 if antiAffinityFlag == null then "unset" else "= true"
               }) with ${toString config.instances} instances at availability ${availability}, which needs the instances on different nodes.";

@@ -456,7 +456,7 @@ in
 if unknownFragmentDirs != [ ] then
   scope.fail {
     package = "clickhouse-operator";
-    option = "config.files";
+    option = "files";
     message = "config.files names ${lib.concatStringsSep ", " unknownFragmentDirs}, which the operator does not read. The directories are ${
       lib.concatStringsSep ", " (
         lib.concatLists (lib.mapAttrsToList (family: map (dir: "${family}.${dir}")) fragmentDirs)

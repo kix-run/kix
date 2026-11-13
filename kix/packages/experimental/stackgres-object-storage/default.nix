@@ -245,7 +245,7 @@ in
         if inCluster && config.type != "s3Compatible" then
           scope.fail {
             package = "stackgres-object-storage";
-            option = "deps.endpointService";
+            dependency = "endpointService";
             message = "deps.endpointService is wired, and type is \"${config.type}\". Only s3Compatible takes an endpoint.";
             fix = "Set type = \"s3Compatible\", or remove the dependency.";
           }
@@ -272,7 +272,7 @@ in
           endpoint =
             (endpointService.out.url or (scope.fail {
               package = "stackgres-object-storage";
-              option = "deps.endpointService";
+              dependency = "endpointService";
               message = "deps.endpointService has no out.url.";
               fix = "Wire an instance whose root is its S3 Service.";
             })

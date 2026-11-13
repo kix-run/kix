@@ -418,7 +418,7 @@ in
           else
             prometheusServer.out.remoteWriteUrl or (scope.fail {
               package = "tempo";
-              option = "deps.prometheusServer";
+              dependency = "prometheusServer";
               message = "deps.prometheusServer resolved to an instance without out.remoteWriteUrl, so the metrics generator has nowhere to write. The prometheus package does not take remote write.";
               fix = "Wire a victoria-metrics-cluster instance with deps.prometheusServer = ref.<namespace>.<instance>, or set out.remoteWriteUrl in the kix.mkImport that answers prometheusServer.";
             });

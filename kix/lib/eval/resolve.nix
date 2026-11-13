@@ -118,11 +118,11 @@ rec {
             else
               fail {
                 instance = "${nsName}/${instName}";
-                option = "instances.${nsName}.${instName}.deps.${arg}";
+                dependency = arg;
                 message = "${
                   if builtins.isList v then "deps.${arg} lists" else "deps.${arg} ="
                 } ref.${r.namespace}.${r.instanceName}, which is not a declared instance. '${r.instanceName}' is in availablePackages, and a ref pointer does not create it automatically.";
-                fix = "declare the instance in your cluster definition:\n  instances.${r.namespace}.${r.instanceName}.package = packages.<package>;";
+                fix = "Declare the instance in your cluster definition:\n  instances.${r.namespace}.${r.instanceName}.package = packages.<package>;";
               }
           ) acc (refsOf v)
         ) acc (instCfg.deps or { })
@@ -184,7 +184,7 @@ rec {
           refuse {
             message = "deps.${argName} = ref.${t.namespace}.${t.instanceName} points to an instance in namespace '${t.namespace}' whose package sets meta.scope = \"namespace\", so it cannot be used from namespace '${requesterNamespace}'.";
             fix =
-              "declare a separate instance in namespace '${requesterNamespace}' and point ${consumerPath}.deps.${argName} to it."
+              "Declare a separate instance in namespace '${requesterNamespace}' and point ${consumerPath}.deps.${argName} to it."
               + "\nIf the package can safely serve every namespace, set meta.scope = \"cluster\" in its package instead.";
           }
         else
@@ -212,7 +212,7 @@ rec {
         else
           refuse {
             message = "${consumerPath}.deps.${argName} is a list that mixes ref.<namespace>.<instance> entries with plain values.";
-            fix = "make every list entry a ref.<namespace>.<instance>, or pass a list of plain values without refs.";
+            fix = "Make every list entry a ref.<namespace>.<instance>, or pass a list of plain values without refs.";
           }
       else
         {
@@ -259,7 +259,7 @@ rec {
         none = "dependency '${argName}' has no instance in namespace '${requesterNamespace}', and";
         several = cs: {
           message = "${none} ${toString (builtins.length cs)} instances in other namespaces match: ${labels cs}.";
-          fix = "choose one by adding one of these lines to ${consumerPath}:\n${depLines cs}";
+          fix = "Choose one by adding one of these lines to ${consumerPath}:\n${depLines cs}";
         };
       in
       if builtins.length own == 1 then
@@ -270,7 +270,7 @@ rec {
           message = "dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
             builtins.concatStringsSep ", " (map (c: c.instName) own)
           }.";
-          fix = "choose one by adding one of these lines to ${consumerPath}:\n${depLines own}";
+          fix = "Choose one by adding one of these lines to ${consumerPath}:\n${depLines own}";
         }
 
       else if builtins.length shared == 1 then
@@ -300,7 +300,7 @@ rec {
         refuse {
           message = "${none} 1 instance in another namespace matches: ${labels nameable}.";
           fix =
-            "to use ${labels nameable}, add this line to ${consumerPath}:"
+            "To use ${labels nameable}, add this line to ${consumerPath}:"
             + "\n${depLines nameable}"
             + "\nIf this package serves every namespace in the cluster, set meta.scope = \"cluster\" in its package instead.";
         }
@@ -322,7 +322,7 @@ rec {
               " This dependency was named '${renamedFrom.name}' in earlier releases. An instance named '${renamedFrom.name}' no longer answers it, and neither does deps.${renamedFrom.name}."
             );
           fix =
-            "declare an instance named '${argName}' in namespace '${requesterNamespace}':"
+            "Declare an instance named '${argName}' in namespace '${requesterNamespace}':"
             + "\n  instances.${requesterNamespace}.${argName}.package = packages.<package>;"
             + "\nIf another instance in '${requesterNamespace}' provides '${argName}', wire it in ${consumerPath}:"
             + "\n  deps.${argName} = ref.${requesterNamespace}.<instance>;"
@@ -445,7 +445,7 @@ rec {
             } cannot be changed by a dependency because ${configPath} locks ${
               if builtins.length lockedConflicts == 1 then "it" else "them"
             } with kix.mkLocked.";
-            fix = "update the locked value in ${configPath} to include what ${
+            fix = "Update the locked value in ${configPath} to include what ${
               builtins.concatStringsSep " and " (lib.unique (map (c: c.source) lockedConflicts))
             } needs, or remove kix.mkLocked so the consumer can set it.";
           }

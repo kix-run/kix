@@ -104,7 +104,7 @@ let
     if bare != [ ] then
       scope.fail {
         package = "reloader";
-        option = "config.extraArgs";
+        option = "extraArgs";
         message = "extraArgs passes ${flag} without \"=\".";
         fix = "Write ${flag}=<a,b>.";
       }
@@ -253,7 +253,7 @@ in
           if watched != [ ] && ignored != [ ] then
             scope.fail {
               package = "reloader";
-              option = "config.extraArgs";
+              option = "extraArgs";
               message = "extraArgs sets both --namespaces and --namespaces-to-ignore. reloader ignores --namespaces-to-ignore when --namespaces is set.";
               fix = "Remove one.";
             }
@@ -273,7 +273,7 @@ in
           else
             scope.fail {
               package = "reloader";
-              option = "config.image.tag";
+              option = "image.tag";
               message = "image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor (lib.removePrefix "v" release)} release, and the flags and RBAC rules of this package follow reloader ${release}.";
               fix = "To move to another release, change `release` in kix/packages/experimental/reloader/default.nix and check the flags against that release's internal/pkg/util/util.go and the rules against its chart clusterrole.yaml.";
             };
@@ -345,14 +345,14 @@ in
           else if labelSelector != [ ] then
             scope.fail {
               package = "reloader";
-              option = "config.extraArgs";
+              option = "extraArgs";
               message = "${prefix}: reloader watches only Secrets labelled ${lib.concatStringsSep "," labelSelector}, and Kix cannot check that Secret ${shown}, created outside Kix, carries them.";
               fix = "Remove --resource-label-selector to use withReloadOn.";
             }
           else if (watched != [ ] && !builtins.elem namespace watched) || builtins.elem namespace ignored then
             scope.fail {
               package = "reloader";
-              option = "config.extraArgs";
+              option = "extraArgs";
               message = "${prefix}: Secret ${shown} is in a namespace this reloader does not watch (extraArgs ${
                 if watched != [ ] then
                   "--namespaces=${lib.concatStringsSep "," watched}"

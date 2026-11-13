@@ -205,7 +205,7 @@ in
           (
             if provider == null then
               fail {
-                option = "networkPolicy.enable";
+                clusterOption = "networkPolicy.enable";
                 message = "`networkPolicy.enable = true` but no instance declares `meta.roles = [\"network-policy-enforcer\"]`.";
                 fix =
                   "Declare a `cilium` instance. Where the environment installs Cilium, a flavour sets "
@@ -222,7 +222,7 @@ in
               null
             else
               fail {
-                option = "networkPolicy.defaultDeny";
+                clusterOption = "networkPolicy.defaultDeny";
                 message =
                   "networkPolicy.defaultDeny is on, and Kix cannot derive these scrape paths:\n"
                   + lib.concatMapStringsSep "\n" (e: "- ${e}") scrapePolicies.errors;

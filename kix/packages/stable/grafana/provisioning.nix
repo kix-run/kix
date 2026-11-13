@@ -27,7 +27,7 @@ let
       url =
         prometheusServer.out.serviceUrl or (fail {
           package = "grafana";
-          option = "deps.prometheusServer";
+          dependency = "prometheusServer";
           message = "deps.prometheusServer resolved to an instance without out.serviceUrl, the base URL of the Prometheus HTTP API.";
           fix = "Wire a prometheus instance, or set out.serviceUrl in the kix.mkImport that answers prometheusServer.";
         });
@@ -41,7 +41,7 @@ let
       url =
         alertmanager.out.serviceUrl or (fail {
           package = "grafana";
-          option = "deps.alertmanager";
+          dependency = "alertmanager";
           message = "deps.alertmanager resolved to an instance without out.serviceUrl, the base URL of Alertmanager's API.";
           fix = "Wire an alertmanager instance, or set out.serviceUrl in the kix.mkImport that answers alertmanager.";
         });
@@ -57,7 +57,7 @@ let
       url =
         loki.out.serviceUrl or (fail {
           package = "grafana";
-          option = "deps.loki";
+          dependency = "loki";
           message = "deps.loki resolved to an instance without out.serviceUrl, the base URL of Loki's HTTP API.";
           fix = "Wire a loki instance, or set out.serviceUrl in the kix.mkImport that answers loki.";
         });
@@ -69,7 +69,7 @@ let
       url =
         tempo.out.queryUrl or (fail {
           package = "grafana";
-          option = "deps.tempo";
+          dependency = "tempo";
           message = "deps.tempo resolved to an instance without out.queryUrl, the base URL of Tempo's query API.";
           fix = "Wire a tempo instance, or set out.queryUrl in the kix.mkImport that answers tempo.";
         });

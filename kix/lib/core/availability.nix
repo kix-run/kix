@@ -206,7 +206,7 @@ let
           fail {
             message = "${where}: ${requestedFrom} = \"${requested}\", which requires ${needs}, and this cluster's capabilities offer at most \"${sub.level}\".";
             fix =
-              "lower ${requestedFrom} to \"${sub.level}\" (or lower)."
+              "Lower ${requestedFrom} to \"${sub.level}\" (or lower)."
               + "\nIf this cluster has the required nodes or zones, declare ${needs} in your cluster definition.";
           }
         else

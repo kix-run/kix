@@ -461,7 +461,7 @@ in
           else
             scope.fail {
               package = "otel-collector";
-              option = "config.settings.service.extensions";
+              option = "settings.service.extensions";
               message = "settings.service.extensions must be a list of extension names; got ${builtins.typeOf userExtensions}.";
             };
 
@@ -559,7 +559,7 @@ in
       if !builtins.isAttrs pipelines then
         scope.fail {
           package = "otel-collector";
-          option = "config.settings.service.pipelines";
+          option = "settings.service.pipelines";
           message = "settings.service.pipelines must be an attribute set of pipelines; got ${builtins.typeOf pipelines}.";
         }
       else if pipelines == { } then

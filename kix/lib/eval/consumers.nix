@@ -129,7 +129,7 @@ let
           message = "${field} contains a file path from Kix's local store (${
             if carried != [ ] then builtins.head carried else text
           }). A consumer interface file can carry only plain strings, numbers, booleans, lists, and attribute sets, because a local store path is not available in the consumer project and may hold a secret.";
-          fix = "change the package or `out` field of the service so ${field} is a plain string value (or Secret name) rather than a file path.";
+          fix = "Change the package or `out` field of the service so ${field} is a plain string value (or Secret name) rather than a file path.";
         }
       else
         text
@@ -253,17 +253,17 @@ in
         if builtins.length parts != 2 || instCfg == null then
           fail {
             message = "cluster '${name}' (platform): consumers.${consumer}.services lists '${key}', which is not an instance in cluster '${name}'.";
-            fix = "write the service as \"<namespace>/<instance>\" matching an instance in `instances.<namespace>.<instance>`, or remove '${key}' from consumers.${consumer}.services.";
+            fix = "Write the service as \"<namespace>/<instance>\" matching an instance in `instances.<namespace>.<instance>`, or remove '${key}' from consumers.${consumer}.services.";
           }
         else if (instCfg.package._type or "") == "kix-import" then
           fail {
             message = "cluster '${name}' (platform): consumers.${consumer}.services lists '${key}', which is a kix.mkImport instance for an external service. Platform interfaces publish only services that cluster '${name}' manages.";
-            fix = "remove '${key}' from consumers.${consumer}.services in cluster '${name}', and declare `kix.mkImport` for '${key}' directly in consumer '${consumer}'s cluster definition.";
+            fix = "Remove '${key}' from consumers.${consumer}.services in cluster '${name}', and declare `kix.mkImport` for '${key}' directly in consumer '${consumer}'s cluster definition.";
           }
         else if !(isActive ns inst) then
           fail {
             message = "cluster '${name}' (platform): consumers.${consumer}.services lists '${key}', which is an optional instance (`optional = true`) that nothing in cluster '${name}' activates.";
-            fix = "set `instances.${ns}.${inst}.optional = false;` in cluster '${name}' so it is always deployed for consumers, or remove '${key}' from consumers.${consumer}.services.";
+            fix = "Set `instances.${ns}.${inst}.optional = false;` in cluster '${name}' so it is always deployed for consumers, or remove '${key}' from consumers.${consumer}.services.";
           }
         else
           {
@@ -363,7 +363,7 @@ in
     in
     if refusals != [ ] then
       fail {
-        option = "consumers";
+        clusterOption = "consumers";
         message = "cluster '${name}' (platform): invalid consumer grant(s) in `consumers`:\n  ${builtins.concatStringsSep "\n  " refusals}";
       }
     else
@@ -550,7 +550,7 @@ in
     else if builtins.length loaded > 1 then
       fail {
         message = "cluster '${name}' (consumer): loads multiple platform interfaces (${builtins.concatStringsSep " and " (builtins.attrNames cfg.interfaces)}). A consumer cluster can belong to only one platform cluster.";
-        fix = "keep one `kix.interface` module in cluster '${name}' and remove the others.";
+        fix = "Keep one `kix.interface` module in cluster '${name}' and remove the others.";
       }
     else
       {

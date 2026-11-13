@@ -587,12 +587,12 @@ assertions =
       assertion = !(config.tls.enable && config.tls.secretName == null);
       message = "config.tls.secretName is not set, and config.tls.enable is true.";
       fix = "Set config.tls.secretName to the Secret that holds the certificate.";
-      option = "config.tls.secretName";
+      option = "tls.secretName";
     }
   ];
 ```
 
-An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, and `option`. Kix adds the instance, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table.
+An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, `option`, `dependency`, and `clusterOption`. Kix adds the instance, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table.
 
 ### Raising an error with `scope.fail`
 
@@ -603,7 +603,7 @@ _passwordCheck =
   if config.password != null then
     scope.fail {
       id = "K9503";
-      option = "config.password";
+      option = "password";
       message = "password was removed, because it put the password in plain text.";
       fix = "Give the password as the dependency `password`.";
     }
@@ -616,9 +616,13 @@ _passwordCheck =
 | `message` | Yes | What is wrong. `scope.fail "text"` is short for `scope.fail { message = "text"; }`. |
 | `fix` | No | What to change. It may span several lines, such as a line to paste into the cluster definition. |
 | `id` | No | The change record id, such as `"K0001"`, when the error refuses something an upgrade removed. |
-| `option` | No | The path of the setting to change. |
+| `option` | No | The option to change, as a path in the instance's `config`, such as `"tls.secretName"`. `kix pin set --option` takes the same form. |
+| `dependency` | No | The dependency to change, as its name in the instance's `deps`, such as `"database"`. |
+| `clusterOption` | No | The cluster option to change, as a path in the cluster definition, such as `"cluster.domain"`. |
 | `instance` | No | Set by `scope.fail` to `<namespace>/<instance>`. |
 | `package` | No | The package's name. |
+
+An error names at most what a person changes in a cluster definition. A package's `meta` is no option, so leave `option` out for an error about it. `kix.fail` refuses an `option` that starts with `config.`, `deps.`, or `meta.`, and a `clusterOption` that starts with `instances.`. A `fix` starts with a capital letter.
 
 `scope.fail` also takes a list of errors, to report several problems at once. A cluster definition, which has no `scope`, uses `kix.fail`, which takes the same arguments and leaves out the instance.
 
@@ -626,7 +630,7 @@ Kix shows the error as:
 
 ```text
 [K9503] shop/db: password was removed, because it put the password in plain text.
-Option: config.password
+Option: password
 Fix: Give the password as the dependency `password`.
 ```
 

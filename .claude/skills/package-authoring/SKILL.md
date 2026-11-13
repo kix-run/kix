@@ -392,11 +392,16 @@ deploy says where it was observed. Operators add
 
 Raise an error a person must fix with `scope.fail`, never a bare `throw`.
 Give `message` (what is wrong), `fix` (what to change), and, when they
-apply, `option` (the setting's path) and `id` (the change record id of a
-removed option, such as `"K9503"`). `scope.fail` adds the instance, so the
-message does not start with a `who` prefix. Pass a list to report several
-problems at once (cluster-issuer). An assertion takes the same `fix`, `id`,
-and `option` fields. Kix shows these errors from their fields, without a
+apply, what to change and `id` (the change record id of a removed option,
+such as `"K9503"`). Name what to change in one field: `option` is a path in
+the instance's `config` without the `config.` prefix (`"tls.secretName"`),
+`dependency` the name in its `deps` (`"database"`), and `clusterOption` a
+path in the cluster definition (`"cluster.roles.cni.binding"`). A `meta`
+field is no option, so leave the field out. Start `fix` with a capital
+letter. `scope.fail` adds the instance, so the message does not start with
+a `who` prefix. Pass a list to report several problems at once
+(cluster-issuer). An assertion takes the same `fix`, `id`, `option`,
+`dependency`, and `clusterOption` fields. Kix shows these errors from their fields, without a
 stack trace (`docs/src/content/docs/reference/package-anatomy.mdx`,
 "Raising an error with `scope.fail`"). The database packages'
 `_passwordCheck` is the model (cnpg-database).

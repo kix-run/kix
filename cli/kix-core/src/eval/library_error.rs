@@ -24,9 +24,19 @@ pub struct LibraryError {
     /// The package of that instance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
-    /// The path of the setting to change.
+    /// The option to change, as a path in the instance's `config`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option: Option<String>,
+    /// The dependency to change, as its name in the instance's `deps`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency: Option<String>,
+    /// The cluster option to change, as a path in the cluster definition.
+    #[serde(
+        default,
+        rename = "clusterOption",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cluster_option: Option<String>,
     pub message: String,
     /// What to change, which may span lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +110,12 @@ impl LibraryError {
         if let Some(option) = &self.option {
             text.push_str(&format!("\nOption: {option}"));
         }
+        if let Some(dependency) = &self.dependency {
+            text.push_str(&format!("\nDependency: {dependency}"));
+        }
+        if let Some(cluster_option) = &self.cluster_option {
+            text.push_str(&format!("\nCluster option: {cluster_option}"));
+        }
         if let Some(fix) = &self.fix {
             text.push_str(&format!("\nFix: {fix}"));
         }
@@ -154,7 +170,7 @@ mod tests {
 
     #[test]
     fn one_error_is_read_with_quotes_and_newlines() {
-        let json = r#"{"errors":[{"id":"K9503","instance":"shop/db","package":"cnpg-database","message":"the \"password\" option was removed.\nIt kept it in plain text.","fix":"Set this line:\n  deps.password = ref.shop.db-login;","option":"instances.shop.db.password"}]}"#;
+        let json = r#"{"errors":[{"id":"K9503","instance":"shop/db","package":"cnpg-database","message":"the \"password\" option was removed.\nIt kept it in plain text.","fix":"Set this line:\n  deps.password = ref.shop.db-login;","option":"password","dependency":"password","clusterOption":"cluster.domain"}]}"#;
         let text = stderr(&[
             "[K9503] shop/db (cnpg-database): the \"password\" option was removed.",
             "It kept it in plain text.",
@@ -167,7 +183,9 @@ mod tests {
                 id: Some("K9503".into()),
                 instance: Some("shop/db".into()),
                 package: Some("cnpg-database".into()),
-                option: Some("instances.shop.db.password".into()),
+                option: Some("password".into()),
+                dependency: Some("password".into()),
+                cluster_option: Some("cluster.domain".into()),
                 message: "the \"password\" option was removed.\nIt kept it in plain text.".into(),
                 fix: Some("Set this line:\n  deps.password = ref.shop.db-login;".into()),
             }]
@@ -176,7 +194,9 @@ mod tests {
             errors.to_string(),
             "[K9503] shop/db (cnpg-database): the \"password\" option was removed.\n\
              It kept it in plain text.\n\
-             Option: instances.shop.db.password\n\
+             Option: password\n\
+             Dependency: password\n\
+             Cluster option: cluster.domain\n\
              Fix: Set this line:\n  deps.password = ref.shop.db-login;"
         );
     }

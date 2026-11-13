@@ -387,7 +387,7 @@ in
           if mlVersion != null && serverVersion != null && mlVersion != serverVersion then
             scope.fail {
               package = "immich";
-              option = "config.image.tag";
+              option = "image.tag";
               message = "immich-server runs release ${serverVersion} (image.tag ${imageTag}) but its machineLearning dependency runs ${mlVersion}. Immich publishes both images under one tag.";
               fix = "Set image.tag to the same release on both instances.";
             }
@@ -500,14 +500,14 @@ in
           if lib.hasAttrByPath [ "notifications" "smtp" "transport" "password" ] config.settings then
             scope.fail {
               package = "immich";
-              option = "config.settings";
+              option = "settings";
               message = "settings sets notifications.smtp.transport.password, which the config ConfigMap would hold.";
               fix = "Wire the mail server through deps.smtp instead, whose credentials hold the username and password.";
             }
           else if mailHits != [ ] then
             scope.fail {
               package = "immich";
-              option = "config.settings";
+              option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (lib.concatStringsSep ".") mailHits
               }, which deps.smtp sets.";
@@ -516,14 +516,14 @@ in
           else if lib.hasAttrByPath [ "oauth" "clientSecret" ] config.settings then
             scope.fail {
               package = "immich";
-              option = "config.settings";
+              option = "settings";
               message = "settings sets oauth.clientSecret, which the config ConfigMap would hold.";
               fix = "Wire the client through deps.oidc instead, whose credentials hold the client id and secret.";
             }
           else if oidcHits != [ ] then
             scope.fail {
               package = "immich";
-              option = "config.settings";
+              option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (lib.concatStringsSep ".") oidcHits
               }, which deps.oidc sets.";
@@ -535,7 +535,7 @@ in
             scope.fail (
               map (p: {
                 package = "immich";
-                option = "config.settings";
+                option = "settings";
                 message = "settings sets ${lib.concatStringsSep "." p}, which follows the optional machineLearning dependency.";
                 fix = "Remove it from settings. ${mlFix}";
               }) hits
@@ -761,7 +761,7 @@ in
                   if nonRootFailsBuild clusterConfig then
                     scope.fail {
                       package = "immich";
-                      option = "config.initChownData";
+                      option = "initChownData";
                       message = chownHint;
                     }
                   else

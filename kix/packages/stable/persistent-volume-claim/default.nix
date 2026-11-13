@@ -115,7 +115,7 @@ in
         else
           scope.fail {
             package = "persistent-volume-claim";
-            option = "config.storageClassName";
+            option = "storageClassName";
             message = "no StorageClass for this claim.";
             fix = "Set config.storageClassName, or give the cluster a storageClasses provider: a flavor whose environment has a default class, a storage-classes instance, a CSI driver instance with aliases = [ \"storageClasses\" ], or an import of the environment's class: instances.kube-system.platform-storage.package = kix.mkImport { kind = \"StorageClass\"; apiVersion = \"storage.k8s.io/v1\"; roles = [ \"storageClasses\" ]; out = { name = \"<class>\"; storageClassName = \"<class>\"; }; }.";
           };

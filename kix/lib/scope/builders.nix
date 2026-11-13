@@ -414,8 +414,9 @@ in
           spec = if kind == "StatefulSet" then _expandHeadlessService rawSpec else rawSpec;
           selector =
             spec.selector.matchLabels or (fail {
-              message = "${namespaceName}/${instanceName}: ${kind} '${attrs.name or "?"}' (built with ${builderFor.${kind}}) is missing spec.selector.matchLabels.";
-              fix = "set `spec.selector.matchLabels = scope.selectorLabels;` in the ${builderFor.${kind}} call.";
+              instance = "${namespaceName}/${instanceName}";
+              message = "${kind} '${attrs.name or "?"}' (built with ${builderFor.${kind}}) is missing spec.selector.matchLabels.";
+              fix = "Set `spec.selector.matchLabels = scope.selectorLabels;` in the ${builderFor.${kind}} call.";
             });
           templateMeta = spec.template.metadata or { };
           rawTemplateSpec = spec.template.spec or { };
