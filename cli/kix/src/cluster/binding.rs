@@ -673,6 +673,16 @@ mod tests {
         })
     }
 
+    /// Return a context with no name or server, as when the kubeconfig
+    /// names none. Tests use it so they never read this machine's
+    /// kubeconfig.
+    fn unnamed_context() -> Connection {
+        Connection::Context {
+            name: None,
+            server: None,
+        }
+    }
+
     fn context(name: &str, server: &str) -> Connection {
         Connection::Context {
             name: Some(name.to_string()),
@@ -848,7 +858,10 @@ mod tests {
         api.fail_next("/api/v1/namespaces/kube-system", 1, 503);
         let err = check(
             &api.client(),
-            &Connection::of_context(Some("prod")),
+            &Connection::Context {
+                name: Some("prod".to_string()),
+                server: None,
+            },
             Action::Deploy,
             "cluster-a",
             Some(HERE),
@@ -906,7 +919,7 @@ mod tests {
         api.fail_next("/api/v1/namespaces/kube-system", 1, 403);
         let err = check(
             &api.client(),
-            &Connection::of_context(None),
+            &unnamed_context(),
             Action::Deploy,
             "cluster-a",
             None,
@@ -968,7 +981,7 @@ mod tests {
     #[tokio::test]
     async fn an_unbound_build_passes_where_nothing_is_bound() {
         let api = FakeApi::new([kube_system(HERE), record("cluster-a", None)]);
-        let connection = Connection::of_context(None);
+        let connection = unnamed_context();
         check(
             &api.client(),
             &connection,
@@ -1064,7 +1077,7 @@ mod tests {
         ]);
         check(
             &api.client(),
-            &Connection::of_context(None),
+            &unnamed_context(),
             Action::Deploy,
             "cluster-a",
             None,
@@ -1090,7 +1103,7 @@ mod tests {
             ]);
             let err = check(
                 &api.client(),
-                &Connection::of_context(None),
+                &unnamed_context(),
                 Action::Deploy,
                 "cluster-a",
                 None,
@@ -1174,7 +1187,7 @@ mod tests {
     /// exists, and when the key is `cluster` itself.
     #[tokio::test]
     async fn a_key_derived_name_passes_otherwise() {
-        let connection = Connection::of_context(None);
+        let connection = unnamed_context();
 
         let api = FakeApi::new([kube_system(HERE), record(OLD_DEFAULT_NAME, None)]);
         check_name(&api.client(), &connection, "prod", false)
@@ -1209,7 +1222,7 @@ mod tests {
     async fn a_failed_record_listing_refuses_a_key_derived_name() {
         let api = FakeApi::new([kube_system(HERE)]);
         api.fail_next(&format!("/apis/{}/activations", keys::API_VERSION), 1, 403);
-        let err = check_name(&api.client(), &Connection::of_context(None), "prod", true)
+        let err = check_name(&api.client(), &unnamed_context(), "prod", true)
             .await
             .unwrap_err();
         assert!(matches!(err, BindingError::NameRecords { .. }), "{err}");
@@ -1223,7 +1236,7 @@ mod tests {
         api.fail_next(&format!("/apis/{}/activations", keys::API_VERSION), 1, 403);
         let err = check(
             &api.client(),
-            &Connection::of_context(None),
+            &unnamed_context(),
             Action::Deploy,
             "cluster-a",
             None,
