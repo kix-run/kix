@@ -274,7 +274,7 @@ fn a_kix_09_project_gets_the_kix_setting_error_first() {
     std::fs::write(s.project.join("kix.toml"), "kix = \"0.10.0-rc.3\"\n").unwrap();
     let path = s.project.join("kix.toml");
     let expected = format!(
-        "[K4476] {} sets kix = \"0.10.0-rc.3\", but Kix now takes this project's version from the Kix library tag in flake.lock. Run these steps with this Kix, not Kix 0.9, because the `kix upgrade` of Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to 0.10.0-rc.3` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes.",
+        "[K4476] {} sets kix = \"0.10.0-rc.3\", but Kix now takes this project's version from the Kix library tag in flake.lock. Run these steps with Kix 0.10 or later, because `kix upgrade` in Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to 0.10.0-rc.3` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes.",
         path.display()
     );
     for command in [&["list", "clusters"][..], &["doctor"], &["upgrade"]] {

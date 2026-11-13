@@ -180,7 +180,7 @@ pub enum ProjectError {
     /// `old_input` is whether `flake.lock` names the Kix library input
     /// `kixpkgs`, so the same steps also rename it.
     #[error(
-        "[{KIX_SETTING_ID}] {} sets kix = {value}, but Kix now takes this project's version from the Kix library tag in flake.lock. Run these steps with this Kix, not Kix 0.9, because the `kix upgrade` of Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, {}then {}",
+        "[{KIX_SETTING_ID}] {} sets kix = {value}, but Kix now takes this project's version from the Kix library tag in flake.lock. Run these steps with Kix 0.10 or later, because `kix upgrade` in Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, {}then {}",
         path.display(),
         if *old_input { "rename the flake input kixpkgs to kix in flake.nix, " } else { "" },
         crate::flake_lock::pin_then_upgrade(version.as_deref())
@@ -731,10 +731,10 @@ mod tests {
     fn the_kix_key_is_refused_with_its_id() {
         let named = |v: &str| {
             format!(
-                "Run these steps with this Kix, not Kix 0.9, because the `kix upgrade` of Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to {v}` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes."
+                "Run these steps with Kix 0.10 or later, because `kix upgrade` in Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to {v}` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes."
             )
         };
-        let unnamed = "Run these steps with this Kix, not Kix 0.9, because the `kix upgrade` of Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to <version>` with the version of Kix this project uses now, then run `kix upgrade` to move to a newer version and review what changes.";
+        let unnamed = "Run these steps with Kix 0.10 or later, because `kix upgrade` in Kix 0.9 writes the kix line back. Delete the kix line from kix.toml, then run `kix upgrade --to <version>` with the version of Kix this project uses now, then run `kix upgrade` to move to a newer version and review what changes.";
         for (text, shown, next) in [
             ("kix = \"0.10\"\n", "kix = \"0.10\"", named("0.10")),
             (
